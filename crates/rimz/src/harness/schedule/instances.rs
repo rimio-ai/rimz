@@ -150,7 +150,7 @@ pub(super) fn insert_delivery(
                 && current
                     .signal
                     .as_deref()
-                    .and_then(|raw| raw.parse::<super::signal::SignalSelector>().ok())
+                    .and_then(|raw| raw.parse::<crate::harness::signal::SignalSelector>().ok())
                     == entry.signal.as_deref().and_then(|raw| raw.parse().ok())
                 && current
                     .matches

@@ -333,7 +333,7 @@ mod tests {
         ] {
             let mut notice = record(result, check(None, false));
             notice.watch =
-                Some(crate::harness::schedule::signal::WatchVerdict::Running { elapsed_ms: 1_000 });
+                Some(crate::harness::signal::WatchVerdict::Running { elapsed_ms: 1_000 });
             assert_eq!(classify(&notice), Signal::Neutral);
             assert_eq!(note_in(dir.path(), key, classify(&notice)).unwrap(), 1);
         }

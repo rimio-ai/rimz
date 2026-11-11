@@ -1,15 +1,13 @@
-//! Signal vocabulary shared by event ingress, lifecycle hooks, and loop firing.
+//! Signal emission, loop watchers, and in-process firing; the vocabulary they carry lives in
+//! `harness::signal`.
 
 mod team;
 pub(crate) use team::team_lifecycle_signals;
 
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, Read, Seek, Write};
-use std::str::FromStr;
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::arming;
@@ -19,235 +17,13 @@ use crate::RuntimePaths;
 use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
 use crate::disk::lease;
 use crate::disk::paths::StatePaths;
-use crate::disk::summary::FileSummary;
-use crate::harness::check_run::{
-    CheckEcho, CheckOutcome, WAIT_TAIL_CAP, WatchDeadline, run_command,
-};
+use crate::harness::check_run::{CheckEcho, WAIT_TAIL_CAP, WatchDeadline, run_command};
 use crate::harness::schedule::runner::RunLockInfo;
+use crate::harness::signal::{Signal, SignalResolution, WatchOutcome, WatchVerdict};
 use crate::store::Store;
-use crate::store::event::{
-    MAX_SIGNAL_NAME_BYTES, SignalEventPayload, SignalName, SignalNameErr, SignalSource,
-};
+use crate::store::event::SignalSource;
 use crate::workspace::ResolvedWorkspace;
 use std::path::{Path, PathBuf};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SignalSelector {
-    Exact(SignalName),
-    Family(String),
-}
-
-impl SignalSelector {
-    pub fn matches(&self, name: &SignalName) -> bool {
-        match self {
-            Self::Exact(expected) => expected == name,
-            Self::Family(family) => family == name.family(),
-        }
-    }
-
-    pub(in crate::harness) fn family(&self) -> &str {
-        match self {
-            Self::Exact(name) => name.family(),
-            Self::Family(family) => family,
-        }
-    }
-}
-
-impl fmt::Display for SignalSelector {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Exact(name) => name.fmt(f),
-            Self::Family(family) => write!(f, "{family}.*"),
-        }
-    }
-}
-
-impl FromStr for SignalSelector {
-    type Err = SignalNameErr;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        if let Some(family) = raw.strip_suffix(".*") {
-            if raw.len() > MAX_SIGNAL_NAME_BYTES || family.contains('.') {
-                return Err(SignalNameErr(raw.to_owned()));
-            }
-            return family
-                .parse::<SignalName>()
-                .map(|name| Self::Family(name.as_str().to_owned()));
-        }
-        raw.parse().map(Self::Exact)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::harness) enum SignalResolution {
-    Ignore,
-    Skip,
-    Deliver,
-}
-
-pub(in crate::harness) fn resolve_subscription(
-    selector: &SignalSelector,
-    matches: &std::collections::BTreeMap<String, String>,
-    signal: &Signal,
-) -> SignalResolution {
-    if selector.family() != signal.name.family()
-        || !matches.iter().all(|(key, expected)| {
-            signal
-                .payload
-                .get(key)
-                .is_some_and(|value| is_match_wildcard(expected) || match_value(value) == *expected)
-        })
-    {
-        return SignalResolution::Ignore;
-    }
-    if selector.matches(&signal.name) {
-        SignalResolution::Deliver
-    } else {
-        SignalResolution::Skip
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Signal {
-    pub name: SignalName,
-    #[serde(default)]
-    pub payload: Map<String, Value>,
-    pub source: SignalSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub watch: Option<WatchOutcome>,
-}
-
-impl From<&Signal> for SignalEventPayload {
-    fn from(signal: &Signal) -> Self {
-        Self {
-            name: signal.name.clone(),
-            payload: signal.payload.clone(),
-            source: signal.source,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "result", rename_all = "snake_case")]
-pub enum WatchVerdict {
-    Running {
-        elapsed_ms: u64,
-    },
-    /// A polled watch saw its condition; `line` is the `--grep` match.
-    Met {
-        elapsed_ms: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        line: Option<String>,
-    },
-    /// A polled watch's check-in: the condition has not held yet.
-    NotMet {
-        elapsed_ms: u64,
-    },
-    Exited {
-        code: Option<i32>,
-        elapsed_ms: u64,
-    },
-    TimedOut {
-        elapsed_ms: u64,
-    },
-    Lost {
-        detail: String,
-        elapsed_ms: u64,
-    },
-}
-
-impl WatchVerdict {
-    pub(super) fn is_terminal(&self) -> bool {
-        !matches!(self, Self::Running { .. } | Self::NotMet { .. })
-    }
-
-    pub fn label(&self) -> String {
-        let elapsed = elapsed_label(self.elapsed_ms());
-        match self {
-            Self::Running { .. } => format!("still running after {elapsed}"),
-            Self::Met { line: None, .. } => format!("met after {elapsed}"),
-            Self::Met {
-                line: Some(line), ..
-            } => format!(
-                "met after {elapsed}: `{}`",
-                crate::theme::fmt::command_preview(line.trim())
-            ),
-            Self::NotMet { .. } => format!("still not met after {elapsed}"),
-            Self::Exited {
-                code: Some(code), ..
-            } => format!("exit {code} after {elapsed}"),
-            Self::Exited { code: None, .. } => format!("killed by signal after {elapsed}"),
-            Self::TimedOut { .. } => format!("timed out after {elapsed}"),
-            Self::Lost { .. } => format!(
-                "watcher died after {elapsed}; the command may still be running or may have died with it"
-            ),
-        }
-    }
-
-    pub fn elapsed_ms(&self) -> u64 {
-        match self {
-            Self::Running { elapsed_ms }
-            | Self::Met { elapsed_ms, .. }
-            | Self::NotMet { elapsed_ms }
-            | Self::Exited { elapsed_ms, .. }
-            | Self::TimedOut { elapsed_ms }
-            | Self::Lost { elapsed_ms, .. } => *elapsed_ms,
-        }
-    }
-
-    fn passed(&self) -> bool {
-        matches!(self, Self::Exited { code: Some(0), .. } | Self::Met { .. })
-    }
-}
-
-pub(super) fn elapsed_label(elapsed_ms: u64) -> String {
-    let seconds = elapsed_ms / 1_000;
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else {
-        crate::theme::fmt::duration_label(seconds / 60)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct WatchOutcome {
-    #[serde(flatten)]
-    pub verdict: WatchVerdict,
-    #[serde(default)]
-    pub output: String,
-    /// The host path to the full output file.
-    pub output_path: Option<PathBuf>,
-    #[serde(default)]
-    pub summary: FileSummary,
-}
-
-impl WatchOutcome {
-    pub(super) fn measured(verdict: WatchVerdict, output: String, path: &Path) -> Self {
-        let summary = FileSummary::measure(path).unwrap_or_else(|err| {
-            tracing::warn!(path = %path.display(), error = %err, "measuring wait output");
-            FileSummary::default()
-        });
-        Self {
-            verdict,
-            output,
-            output_path: Some(path.to_path_buf()),
-            summary,
-        }
-    }
-
-    pub(super) fn to_check_outcome(&self) -> CheckOutcome {
-        let code = match self.verdict {
-            WatchVerdict::Exited { code, .. } => code,
-            _ => None,
-        };
-        CheckOutcome::new(
-            self.verdict.passed(),
-            matches!(self.verdict, WatchVerdict::TimedOut { .. }),
-            self.output.clone(),
-            code,
-        )
-    }
-}
 
 /// Host path of wait `name`'s output, in its arming agent's `out/` directory.
 pub(super) fn wait_output_path(paths: &StatePaths, name: &str, entry: &TaskEntry) -> PathBuf {
@@ -270,19 +46,6 @@ pub(super) fn read_wait_tail(path: &Path) -> std::io::Result<String> {
         start += 1;
     }
     Ok(output[start..].to_owned())
-}
-
-const MATCH_WILDCARD: &str = "*";
-
-pub(crate) fn is_match_wildcard(value: &str) -> bool {
-    value == MATCH_WILDCARD
-}
-
-pub(super) fn match_value(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        other => other.to_string(),
-    }
 }
 
 pub(crate) fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal> {
@@ -891,150 +654,6 @@ mod tests {
     }
 
     #[test]
-    fn watch_verdicts_share_labels_and_check_semantics() {
-        for (verdict, label, passed, timed_out, code) in [
-            (
-                WatchVerdict::Running {
-                    elapsed_ms: 1_800_000,
-                },
-                "still running after 30m",
-                false,
-                false,
-                None,
-            ),
-            (
-                WatchVerdict::NotMet {
-                    elapsed_ms: 1_800_000,
-                },
-                "still not met after 30m",
-                false,
-                false,
-                None,
-            ),
-            (
-                WatchVerdict::Met {
-                    elapsed_ms: 3_000,
-                    line: None,
-                },
-                "met after 3s",
-                true,
-                false,
-                None,
-            ),
-            (
-                WatchVerdict::Met {
-                    elapsed_ms: 3_000,
-                    line: Some("  listening on :3000\n".to_owned()),
-                },
-                "met after 3s: `listening on :3000`",
-                true,
-                false,
-                None,
-            ),
-            (
-                WatchVerdict::Exited {
-                    code: Some(0),
-                    elapsed_ms: 3_000,
-                },
-                "exit 0 after 3s",
-                true,
-                false,
-                Some(0),
-            ),
-            (
-                WatchVerdict::Exited {
-                    code: Some(3),
-                    elapsed_ms: 720_000,
-                },
-                "exit 3 after 12m",
-                false,
-                false,
-                Some(3),
-            ),
-            (
-                WatchVerdict::Exited {
-                    code: None,
-                    elapsed_ms: 3_000,
-                },
-                "killed by signal after 3s",
-                false,
-                false,
-                None,
-            ),
-            (
-                WatchVerdict::TimedOut {
-                    elapsed_ms: 3_540_000,
-                },
-                "timed out after 59m",
-                false,
-                true,
-                None,
-            ),
-            (
-                WatchVerdict::Lost {
-                    detail: "diagnostic".to_owned(),
-                    elapsed_ms: 180_000,
-                },
-                "watcher died after 3m; the command may still be running or may have died with it",
-                false,
-                false,
-                None,
-            ),
-        ] {
-            assert_eq!(verdict.label(), label);
-            assert_eq!(
-                verdict.is_terminal(),
-                !matches!(
-                    verdict,
-                    WatchVerdict::Running { .. } | WatchVerdict::NotMet { .. }
-                )
-            );
-            assert_eq!(verdict.passed(), passed);
-            let outcome = WatchOutcome {
-                verdict,
-                output: "actual tail".to_owned(),
-                output_path: Some(PathBuf::from("/state/out/planner/wait.output")),
-                summary: FileSummary {
-                    bytes: 11,
-                    lines: 1,
-                    tokens: 2,
-                },
-            };
-            let encoded = serde_json::to_string(&outcome).unwrap();
-            assert_eq!(
-                serde_json::from_str::<WatchOutcome>(&encoded).unwrap(),
-                outcome
-            );
-            let mut legacy = serde_json::to_value(&outcome).unwrap();
-            legacy.as_object_mut().unwrap().remove("summary");
-            assert_eq!(
-                serde_json::from_value::<WatchOutcome>(legacy)
-                    .unwrap()
-                    .summary,
-                FileSummary::default()
-            );
-            let mut pre_tokens = serde_json::to_value(&outcome).unwrap();
-            pre_tokens["summary"]
-                .as_object_mut()
-                .unwrap()
-                .remove("tokens");
-            assert_eq!(
-                serde_json::from_value::<WatchOutcome>(pre_tokens)
-                    .unwrap()
-                    .summary,
-                FileSummary {
-                    tokens: 0,
-                    ..outcome.summary
-                }
-            );
-            let check = check_record(&outcome.to_check_outcome());
-            assert_eq!(check.output, "actual tail");
-            assert_eq!(check.timed_out, timed_out);
-            assert_eq!(check.code, code);
-        }
-    }
-
-    #[test]
     fn file_grep_reads_complete_lines_from_the_cursor_and_restarts_on_a_new_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.log");
@@ -1107,27 +726,6 @@ mod tests {
             transition: LifecycleTransition::Normal,
             compaction_closed: false,
             waiting_cleared: false,
-        }
-    }
-
-    #[test]
-    fn signal_names_pin_the_public_grammar() {
-        for valid in [
-            "ci.failed",
-            "ci.*",
-            "deploy.finished",
-            "a.b.c",
-            "deploy_done",
-        ] {
-            let selector = valid.parse::<SignalSelector>().unwrap();
-            assert_eq!(selector.to_string(), valid);
-            assert_eq!(
-                selector.to_string().parse::<SignalSelector>().unwrap(),
-                selector
-            );
-        }
-        for invalid in ["*", "a.b.*", "a*", "A.*", ".*", "a..*"] {
-            assert!(invalid.parse::<SignalSelector>().is_err(), "{invalid}");
         }
     }
 

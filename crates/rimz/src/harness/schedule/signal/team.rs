@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
-use super::Signal;
 use crate::address::{AddressContext, ChannelOrigin, TargetErr, agent_handle, resolve_agents};
 use crate::agents::{
     AgentState, AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition,
 };
+use crate::harness::signal::Signal;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event::SignalSource;
 use crate::store::message::MessageRecord;

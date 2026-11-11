@@ -1,7 +1,7 @@
 //! Shared summaries and stored-run forensics for loop executions.
 
 use super::*;
-use rimz::harness::schedule::signal::WatchVerdict;
+use rimz::harness::signal::WatchVerdict;
 use serde::ser::{SerializeMap, Serializer as _};
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;

@@ -1,10 +1,9 @@
 //! Self-explaining wait headlines, evidence, and verbatim notes.
 
 use jiff::Timestamp;
-use serde_json::{Map, Value};
 
 use crate::config::{TaskEntry, WaitMeta, WatchSpec};
-use crate::harness::schedule::signal::{Signal, elapsed_label, match_value};
+use crate::harness::signal::{Signal, elapsed_label, one_line, signal_details, signal_subject};
 
 pub(super) enum Evidence<'a> {
     Scheduled,
@@ -180,146 +179,13 @@ fn signal_headline(signal: &Signal) -> String {
     }
 }
 
-/// The subject following the name in a delivered signal or event listing.
-pub fn signal_subject(
-    name: &crate::store::event::SignalName,
-    payload: &Map<String, Value>,
-) -> String {
-    let text = |key: &str| payload.get(key).and_then(Value::as_str);
-    let mut headline = String::new();
-    match name.family() {
-        family @ ("ci" | "pr") => {
-            if let Some(branch) = text("branch") {
-                headline.push_str(&format!(" on {}", one_line(branch)));
-            }
-            if let Some(number) = payload.get("number").and_then(Value::as_u64) {
-                headline.push_str(&format!(" #{number}"));
-            }
-            if family == "ci"
-                && let Some(head) = text("head")
-            {
-                headline.push_str(&format!(" @{}", one_line(short_sha(head))));
-            }
-        }
-        "agent" => {
-            let key = if text("handle").is_some() {
-                "handle"
-            } else {
-                "session"
-            };
-            append_identity(&mut headline, payload, key);
-        }
-        "trunk" => {
-            if let Some(trunk) = text("trunk") {
-                headline.push_str(&format!(" on {}", one_line(trunk)));
-            }
-        }
-        "worktree" => append_identity(&mut headline, payload, "name"),
-        "team" => append_identity(&mut headline, payload, "instance"),
-        _ => {}
-    }
-    match name.as_str() {
-        "pr.behind" => {
-            if let Some(behind) = payload.get("behind_by").and_then(Value::as_u64) {
-                headline.push_str(&format!(" · {behind} behind"));
-                append_identity(&mut headline, payload, "base");
-            }
-        }
-        "pr.conflicted" => {
-            if let Some(base) = text("base") {
-                headline.push_str(&format!(" · with {}", one_line(base)));
-            }
-        }
-        "pr.dequeued" => {
-            if let Some(reason) = text("reason") {
-                headline.push_str(&format!(" · {}", one_line(reason)));
-            }
-        }
-        "trunk.moved" => {
-            if let (Some(from), Some(to)) = (text("from"), text("to")) {
-                let (from, to) = (one_line(short_sha(from)), one_line(short_sha(to)));
-                headline.push_str(&format!(" {from}..{to}"));
-            }
-        }
-        "worktree.created" => {
-            if let Some(base) = text("base") {
-                headline.push_str(&format!(" from {}", one_line(base)));
-            }
-        }
-        "worktree.removed" => {
-            if payload.get("branch_deleted").and_then(Value::as_bool) == Some(true) {
-                headline.push_str(" · branch deleted");
-            }
-        }
-        "team.failed" => {
-            if let Some(member) = text("member") {
-                let handle = member.split('#').next().unwrap_or(member);
-                headline.push_str(&format!(" · {}", one_line(handle)));
-            }
-        }
-        "team.stage" => {
-            if let Some(to) = text("to").map(one_line) {
-                match text("from").map(one_line) {
-                    Some(from) => headline.push_str(&format!(" · {from} -> {to}")),
-                    None => headline.push_str(&format!(" · {to}")),
-                }
-            }
-        }
-        _ => {}
-    }
-    headline.strip_prefix(' ').unwrap_or(&headline).to_owned()
-}
-
-/// The lines under the verdict: nothing for a built-in family, whose agent
-/// can ask the CLI, and every top-level field for a custom one.
-pub(in crate::harness) fn signal_details(signal: &Signal) -> Vec<String> {
-    if !signal.name.is_reserved() {
-        return signal
-            .payload
-            .iter()
-            .map(|(key, value)| format!("{}: {}", one_line(key), one_line(&match_value(value))))
-            .collect();
-    }
-    if signal.name.as_str() != "pr.dequeued" {
-        return Vec::new();
-    }
-    // Nothing else names the queue commit, and `#N` cannot find the failed run.
-    signal
-        .payload
-        .get("queue_checks_url")
-        .and_then(Value::as_str)
-        .map(|url| format!("queue checks: {}", one_line(url)))
-        .into_iter()
-        .collect()
-}
-
-/// A key, value, or subject segment bare, or JSON-quoted when it holds a line
-/// break, so it stays on its one line.
-fn one_line(text: &str) -> String {
-    if text.contains(['\n', '\r']) {
-        return Value::from(text).to_string();
-    }
-    text.to_owned()
-}
-
-fn short_sha(sha: &str) -> &str {
-    sha.get(..7).unwrap_or(sha)
-}
-
-fn append_identity(headline: &mut String, payload: &Map<String, Value>, key: &str) {
-    if let Some(identity) = payload.get(key).and_then(Value::as_str) {
-        headline.push(' ');
-        headline.push_str(&one_line(identity));
-    }
-}
-
 fn subscription_scope(task: &TaskEntry) -> String {
     let Some(matches) = &task.matches else {
         return String::new();
     };
     for key in ["branch", "path", "instance", "team", "handle", "session"] {
         if let Some(scope) = matches.get(key)
-            && !crate::harness::schedule::signal::is_match_wildcard(scope)
+            && !crate::harness::signal::is_match_wildcard(scope)
         {
             return format!(" on {scope}");
         }

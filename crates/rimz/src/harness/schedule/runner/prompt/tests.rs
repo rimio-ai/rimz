@@ -1,8 +1,9 @@
 use super::*;
 use crate::config::TaskTarget;
 use crate::disk::summary::FileSummary;
-use crate::harness::schedule::signal::{WatchOutcome, WatchVerdict};
+use crate::harness::signal::{WatchOutcome, WatchVerdict};
 use crate::store::event::SignalSource;
+use serde_json::Value;
 
 fn task() -> TaskEntry {
     TaskEntry {

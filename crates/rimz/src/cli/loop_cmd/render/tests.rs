@@ -4059,7 +4059,7 @@ fn at_lock_fires_wait_for_a_run_in_their_own_checkout_past_other_gates() {
 
 #[test]
 fn typed_run_keys_fold_watch_times_and_gate_reasons_but_keep_identities_and_verdicts() {
-    use rimz::harness::schedule::signal::WatchVerdict;
+    use rimz::harness::signal::WatchVerdict;
     let mut watch = scheduled(10, LoopRunResult::Completed);
     watch.watch = Some(WatchVerdict::Exited {
         code: Some(0),
@@ -4626,7 +4626,7 @@ fn loop_logs_forensics_print_a_signal_payload_under_its_name() {
 
 #[test]
 fn watch_history_uses_verdict_words_and_output_path() {
-    use rimz::harness::schedule::signal::WatchVerdict;
+    use rimz::harness::signal::WatchVerdict;
 
     for (verdict, expected) in [
         (

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::common::Env;
 use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal};
-use rimz::harness::schedule::signal::SignalSelector;
+use rimz::harness::signal::SignalSelector;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::{SignalEventPayload, SignalName, SignalSource};
 use rimz::store::writer::AgentLifecycleIntent;

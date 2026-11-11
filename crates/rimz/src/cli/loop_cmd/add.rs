@@ -5,6 +5,7 @@ use rimz::harness::schedule::arm::{
     self, ArmOutcome, DeliveryCheck, DeliveryName, DeliveryPrompt, DeliveryProvenance,
     DeliverySpec, DeliverySurplus, DeliveryTrigger, SubscriptionLifetime,
 };
+use rimz::harness::signal::{SignalSelector, default_signal_match_key, parse_signal_selector};
 
 struct AddTiming {
     at: Option<String>,
@@ -22,7 +23,7 @@ enum AddTaskAction {
     },
     Deliver {
         target: TaskTarget,
-        selector: Option<schedule::signal::SignalSelector>,
+        selector: Option<SignalSelector>,
         matches: BTreeMap<String, String>,
     },
     CheckOnly,
@@ -155,7 +156,7 @@ fn add_delivery(
     args: &AddArgs,
     workspace: &rimz::ResolvedWorkspace,
     target: TaskTarget,
-    selector: Option<schedule::signal::SignalSelector>,
+    selector: Option<SignalSelector>,
     matches: BTreeMap<String, String>,
     check: Option<DeliveryCheck>,
 ) -> Result<()> {
@@ -526,7 +527,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         }
     }
     for signal in &args.subscribe {
-        schedule::parse_signal_selector(&args.name, signal, None)?;
+        parse_signal_selector(&args.name, signal, None)?;
         if signal == "agent" || signal.starts_with("agent.") {
             bail!(
                 "--subscribe cannot use agent signals without an explicit other-agent match; use a scoped `rimz loop add --wait --signal` instead"
@@ -850,8 +851,8 @@ fn resolve_resident_action(
         .as_ref()
         .and_then(|name| resolved.teams.0.get(name));
     for signal in &args.subscribe {
-        let selector = schedule::parse_signal_selector(&args.name, signal, None)?;
-        match arm::default_signal_match_key(&selector, &BTreeMap::new()) {
+        let selector = parse_signal_selector(&args.name, signal, None)?;
+        match default_signal_match_key(&selector, &BTreeMap::new()) {
             Some("path") if !args.each_worktree && args.worktree.is_none() => {
                 bail!(
                     "--subscribe {signal} needs a checkout scope; use --each-worktree with --when, or --worktree <name>"
@@ -1278,7 +1279,7 @@ fn resolve_delivery_target(
     };
     let mut matches = parse_matches(&args.matches)?;
     let selector = if let Some(raw) = args.signal.as_deref() {
-        let selector = schedule::parse_signal_selector(&args.name, raw, Some(&matches))?;
+        let selector = parse_signal_selector(&args.name, raw, Some(&matches))?;
         arm::default_signal_matches(workspace, &snapshot.agents, scope, &selector, &mut matches)?;
         arm::validate_self_signal(&selector, &matches, &target)?;
         Some(selector)

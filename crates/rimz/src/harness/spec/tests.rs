@@ -731,7 +731,7 @@ fn no_profiles() -> ProfilesConfig {
 #[test]
 fn team_signal_validation_checks_role_selectors_and_matches() {
     use crate::config::TeamSignalBinding;
-    use crate::harness::schedule::ScheduleErr;
+    use crate::harness::signal::SelectorErr;
 
     let mut declared = team(vec![role("reviewer", "claude"), role("coder", "codex")]);
     declared.roles[1].signals.push(TeamSignalBinding {
@@ -765,7 +765,7 @@ fn team_signal_validation_checks_role_selectors_and_matches() {
         Err(LayoutErr::InvalidTeamSignal {
             source,
             ..
-        }) if matches!(*source, ScheduleErr::ObsoleteCiSignal { .. })
+        }) if matches!(*source, SelectorErr::ObsoleteCiSignal { .. })
     ));
     declared.roles[1].signals[1].matches.clear();
     declared.roles[1].signals[1].signal = "agent.idle".to_owned();
@@ -773,7 +773,7 @@ fn team_signal_validation_checks_role_selectors_and_matches() {
     assert!(matches!(
         validate(&declared),
         Err(LayoutErr::InvalidTeamSignal { source, .. })
-            if matches!(*source, ScheduleErr::BlankMatch { .. })
+            if matches!(*source, SelectorErr::BlankMatch { .. })
     ));
     for signal in ["agent.*", "agent.idle"] {
         declared.roles[1].signals[1].signal = signal.to_owned();

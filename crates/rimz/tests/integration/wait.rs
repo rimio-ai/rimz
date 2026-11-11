@@ -2216,7 +2216,7 @@ fn watched_wait_survives_the_arming_process_group_exiting() {
     assert!(killed.is_ok() || killed == Err(nix::errno::Errno::ESRCH));
     let records = wait_for_wait_records(&env, 1);
     assert!(
-        matches!(records[0].watch.as_ref().unwrap(), rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), elapsed_ms } if *elapsed_ms >= 1_000)
+        matches!(records[0].watch.as_ref().unwrap(), rimz::harness::signal::WatchVerdict::Exited { code: Some(0), elapsed_ms } if *elapsed_ms >= 1_000)
     );
     let message = wait_for_wait_messages(&env, 1).pop().unwrap();
     assert!(message.text.starts_with("waited on `"), "{}", message.text);
@@ -2305,7 +2305,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let records = wait_for_wait_records(&env, 1);
     let verdict = records[0].watch.as_ref().unwrap();
     assert!(
-        matches!(verdict, rimz::harness::schedule::signal::WatchVerdict::Lost { elapsed_ms, .. } if *elapsed_ms >= 60_000)
+        matches!(verdict, rimz::harness::signal::WatchVerdict::Lost { elapsed_ms, .. } if *elapsed_ms >= 60_000)
     );
     assert_eq!(
         records[0].check.as_ref().unwrap().output_path.as_ref(),
@@ -2618,7 +2618,7 @@ fn watch_checkin_is_canceled_when_the_final_wake_steers_live() {
     let records = wait_for_wait_records(&env, 2);
     assert!(matches!(
         records[1].watch.as_ref().unwrap(),
-        rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), .. }
+        rimz::harness::signal::WatchVerdict::Exited { code: Some(0), .. }
     ));
     assert_eq!(records[1].result.label(), "delivered");
     wait_for_no_wait_instances(&env);
@@ -2879,7 +2879,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         assert_eq!(records.len(), 2);
         assert!(matches!(
             records[1].watch.as_ref().unwrap(),
-            rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(code), .. }
+            rimz::harness::signal::WatchVerdict::Exited { code: Some(code), .. }
                 if code.to_string() == exit
         ));
         wait_for_no_wait_instances(&env);
@@ -2975,7 +2975,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
         .unwrap();
     assert!(matches!(
         audit.watch.as_ref().unwrap(),
-        rimz::harness::schedule::signal::WatchVerdict::Running { .. }
+        rimz::harness::signal::WatchVerdict::Running { .. }
     ));
     let messages = wait_for_wait_messages(&env, 2);
     let notice = messages
@@ -3018,7 +3018,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
         record.task == name
             && matches!(
                 record.watch.as_ref(),
-                Some(rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), .. })
+                Some(rimz::harness::signal::WatchVerdict::Exited { code: Some(0), .. })
             )
     }));
     assert_eq!(wait_for_wait_messages(&env, 2).len(), 2);
@@ -3028,7 +3028,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
             record.task == name
                 && matches!(
                     record.watch.as_ref(),
-                    Some(rimz::harness::schedule::signal::WatchVerdict::Running { .. })
+                    Some(rimz::harness::signal::WatchVerdict::Running { .. })
                 )
         })
         .unwrap()

@@ -103,7 +103,7 @@ fn listed_second_check_waits_resamples_and_uses_its_own_close_delay() {
         if signal {
             wake(
                 &state,
-                &crate::harness::schedule::signal::Signal {
+                &crate::harness::signal::Signal {
                     name: "review.ready".parse().unwrap(),
                     payload: Default::default(),
                     source: crate::store::event::SignalSource::Cli,

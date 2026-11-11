@@ -38,6 +38,7 @@ pub mod run_wake;
 pub mod runtime_env;
 pub mod schedule;
 pub mod scratch;
+pub mod signal;
 pub mod soft_compact;
 pub mod spec;
 pub mod spend_ladder;

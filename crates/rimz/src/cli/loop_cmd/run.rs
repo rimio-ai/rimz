@@ -9,7 +9,7 @@ use rimz::harness::launch::AgentShellPersistence;
 #[derive(serde::Deserialize)]
 struct FiredSignal {
     #[serde(flatten)]
-    signal: schedule::signal::Signal,
+    signal: rimz::harness::signal::Signal,
     #[serde(default)]
     arrived_at: Option<Timestamp>,
 }

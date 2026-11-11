@@ -811,7 +811,7 @@ pub fn emit_worktree_created(
     if let Some(number) = marker.from_pr {
         payload.insert("from_pr".into(), serde_json::json!(number));
     }
-    let signal = crate::harness::schedule::signal::Signal {
+    let signal = crate::harness::signal::Signal {
         name: "worktree.created"
             .parse()
             .expect("built-in signal name is valid"),
@@ -841,7 +841,7 @@ pub fn retire_removal(
         store.retire_worktree_sessions(&removed.removed_path, Some(removed.branch()));
     let message_archival =
         store.archive_channel_messages(&removed.worktree_name, archive_reason, session_name);
-    let mut signal = crate::harness::schedule::signal::Signal {
+    let mut signal = crate::harness::signal::Signal {
         name: "worktree.removed"
             .parse()
             .expect("built-in signal name is valid"),

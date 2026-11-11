@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::disk::paths;
-use rimz::harness::schedule::signal::Signal;
+use rimz::harness::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
 use rimz::ids::{EventId, WorkflowRunId};
 use rimz::store::workflow::{self as records, RunRecord};

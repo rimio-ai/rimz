@@ -1005,6 +1005,7 @@ upward-dependencies = [
     "harness::budget",
     "harness::name",
     "harness::schedule",
+    "harness::signal",
     "harness::spec",
     "harness::surplus",
     "harness::team_prompt",
@@ -5405,6 +5406,7 @@ allowed-dependencies = [
     "harness::plan",
     "harness::run",
     "harness::schedule",
+    "harness::signal",
     "harness::surplus",
     "harness::workflow",
     "ids",
@@ -5429,7 +5431,7 @@ allowed-dependencies = [
 # A deduping task's run creation records its checkout in the workflow launch memory.
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
 # The CLI hears hold reasons and reports a resident launch through the fire (+2).
-# signal_subject shares delivered headline composition with events list (+1).
+# `harness::signal` now owns signal_subject, the delivered headline the events list shares.
 # TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
 # discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
@@ -5811,17 +5813,17 @@ reason = "Loop show and logs share the history split and wait arming cutoff."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::signal::SignalSelector::matches"
+key = "harness::signal::SignalSelector::matches"
 reason = "Events list, filtered follow, and subscription resolution share selector matching."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::signal::resolve_subscription"
+key = "harness::signal::resolve_subscription"
 reason = "Loop triggers and workflow wakes share signal delivery and sibling-skip matching."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::signal::SignalResolution"
+key = "harness::signal::SignalResolution"
 reason = "Loop triggers and workflow wakes distinguish delivery from sibling skips."
 
 [[verdict]]
@@ -5831,7 +5833,7 @@ reason = "Emit receipts distinguish started subscribers from matching tasks that
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::prompt::signal_subject"
+key = "harness::signal::signal_subject"
 reason = "Event listings and delivered signal headlines share subject composition."
 
 [[verdict]]
@@ -6736,7 +6738,7 @@ reason = "Read by inference through lock rendering in the binary and returned by
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::signal::SignalSelector"
+key = "harness::signal::SignalSelector"
 reason = "Carried by public DeliveryTrigger, Trigger and TaskTimingState; integration vocabulary pins reach this type from the separate test crate (pass 14)."
 
 [[verdict]]
@@ -9171,7 +9173,7 @@ reason = "Field type of the pub Trigger variants (schedule.rs:346-353,401-405); 
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::signal::WatchOutcome"
+key = "harness::signal::WatchOutcome"
 reason = "Carried by the pub Signal.watch field (signal.rs:80-88,184-194); atlas caveat 13 (pass 23b)."
 
 [[verdict]]

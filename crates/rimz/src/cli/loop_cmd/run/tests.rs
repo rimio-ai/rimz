@@ -600,7 +600,7 @@ fn manual_early_exits_explain_what_stays_in_place() {
 
 #[test]
 fn watch_trip_and_summary_use_verdict_elapsed_once() {
-    use rimz::harness::schedule::signal::WatchVerdict;
+    use rimz::harness::signal::WatchVerdict;
 
     for verdict in [
         WatchVerdict::Exited {

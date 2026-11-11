@@ -225,7 +225,7 @@ fn a_held_wait_rechecks_on_a_signal_or_due_tick_and_can_push() {
         if signal {
             wake(
                 &state,
-                &crate::harness::schedule::signal::Signal {
+                &crate::harness::signal::Signal {
                     name: "review.ready".parse().unwrap(),
                     payload: Default::default(),
                     source: crate::store::event::SignalSource::Cli,
@@ -263,7 +263,7 @@ fn a_signal_after_a_held_answer_does_not_get_lost_in_its_wait() {
     host.observed.borrow_mut().turn = Some(turn());
     wake(
         &state,
-        &crate::harness::schedule::signal::Signal {
+        &crate::harness::signal::Signal {
             name: "review.ready".parse().unwrap(),
             payload: Default::default(),
             source: crate::store::event::SignalSource::Cli,

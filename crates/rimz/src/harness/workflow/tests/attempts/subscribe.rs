@@ -1,6 +1,6 @@
 use super::until::{UNTIL, check, turn};
 use super::*;
-use crate::harness::schedule::signal::Signal;
+use crate::harness::signal::Signal;
 
 const STAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}, prompt='redeploy'}]\nthen='@done'\n";
 

@@ -24,9 +24,10 @@ use crate::workspace::ResolvedWorkspace;
 
 use super::assist_log::{self, Assist, AssistRecord};
 use super::board::{BoardErr, LockedBoard, rewrite_board, stamp};
-use super::schedule::signal::{Signal, fire_signal, lifecycle_signal, team_lifecycle_signals};
+use super::schedule::signal::{fire_signal, lifecycle_signal, team_lifecycle_signals};
 use super::schedule::{arm, catalog::TaskCatalog, pending::pending_waits_by_session, team};
 use super::scratch::parse_board_stage;
+use super::signal::Signal;
 
 const STAGE_SIGNAL: &str = "team.stage";
 const REWAKE_BY: &str = "rimz";

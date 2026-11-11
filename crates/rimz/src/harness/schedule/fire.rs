@@ -18,12 +18,12 @@ use super::{
     arming::{self, ArmState, Arming},
     catalog::{LoadedTask, TaskCatalog},
     run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult},
-    signal::Signal,
     when::{self, CiSource, ConditionEvidence, Verdict, WhenState},
 };
 use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::disk::paths::{StatePaths, logs_dir};
+use crate::harness::signal::Signal;
 use crate::ids::WorkspaceId;
 use crate::workspace::record;
 
@@ -526,7 +526,7 @@ fn lost_watch_outcome(
     name: &str,
     arm_stamp: Timestamp,
     now: Timestamp,
-) -> anyhow::Result<super::signal::WatchOutcome> {
+) -> anyhow::Result<crate::harness::signal::WatchOutcome> {
     let paths = StatePaths::for_project_root(&task.entry().resolved_root())?;
     let path = super::signal::wait_output_path(&paths, name, task.entry());
     let armed_at = task
@@ -544,8 +544,8 @@ fn lost_watch_outcome(
             String::new()
         }
     };
-    Ok(super::signal::WatchOutcome::measured(
-        super::signal::WatchVerdict::Lost {
+    Ok(crate::harness::signal::WatchOutcome::measured(
+        crate::harness::signal::WatchVerdict::Lost {
             detail: "watcher process exited without reporting".to_owned(),
             elapsed_ms,
         },
