@@ -626,9 +626,17 @@ pub fn provider_startup_exit(exit: ProviderExit) -> bool {
         && exit.startup <= CARD_EVIDENCE_WINDOW
 }
 
-pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {
+/// Store the first non-blank failure tail on a run. A wrapper passes its `pane`,
+/// and then a run that pane no longer owns ([`RunRecord::superseded_in`]) is
+/// left untouched, as [`fail_if_owned`] leaves it.
+pub fn record_failure_tail(
+    paths: &StatePaths,
+    run_id: &RunId,
+    pane: Option<&PaneId>,
+    tail: &str,
+) -> Result<RunRecord> {
     update_record(paths, run_id, |record, _| {
-        if record.failure_tail.is_some() {
+        if record.failure_tail.is_some() || pane.is_some_and(|pane| record.superseded_in(pane)) {
             return Ok(RecordMutation::Keep(()));
         }
         let Some(tail) = capped_failure_tail(tail) else {

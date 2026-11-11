@@ -2014,7 +2014,7 @@ fn fail_run_if_child_exited_first(
             && record.failure_tail.is_none()
         {
             // The provider exited independently; self-close must not race the waiter's capture.
-            record_own_run_failure_tail(context, globals);
+            record_own_run_failure_tail(context, globals, own_pane);
         }
         return;
     }
@@ -2023,7 +2023,7 @@ fn fail_run_if_child_exited_first(
     if superseded(context, own_pane) {
         return;
     }
-    record_own_run_failure_tail(context, globals);
+    record_own_run_failure_tail(context, globals, own_pane);
     // No reason: the evidence is the pane tail, which the waiter still
     // captures when the read above found none.
     fail_run_if_owned(context, own_pane, "");
@@ -2061,13 +2061,20 @@ fn capture_own_failure_tail(
         .map(|tail| (own, tail))
 }
 
-fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) {
+fn record_own_run_failure_tail(
+    context: &RunExecContext,
+    globals: &GlobalFlags,
+    own_pane: Option<&rimz::ids::PaneId>,
+) {
     let Some((own, tail)) = capture_own_failure_tail(context, globals) else {
         return;
     };
-    if let Err(err) =
-        rimz::harness::run::record_failure_tail(context.store.paths(), &context.run_id, &tail)
-    {
+    if let Err(err) = rimz::harness::run::record_failure_tail(
+        context.store.paths(),
+        &context.run_id,
+        own_pane,
+        &tail,
+    ) {
         tracing::debug!(
             run_id = %context.run_id,
             pane = %own,

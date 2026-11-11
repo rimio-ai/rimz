@@ -461,7 +461,7 @@ fn record_failure_tail_before_cleanup(
     else {
         return record;
     };
-    match rimz::harness::run::record_failure_tail(store.paths(), &record.run_id, &tail) {
+    match rimz::harness::run::record_failure_tail(store.paths(), &record.run_id, None, &tail) {
         Ok(record) => record,
         Err(err) => {
             tracing::debug!(
