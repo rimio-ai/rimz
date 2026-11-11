@@ -246,7 +246,8 @@ impl FireScope {
     }
 
     fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Option<String> {
-        surplus_refusal(entry, self.kind.as_str(), || {
+        let (surplus, after) = (entry.surplus.as_deref(), entry.surplus_after.as_deref());
+        surplus_refusal(surplus, after, self.kind.as_str(), || {
             self.capacity()
                 .and_then(|capacity| capacity.longest_window_surplus(now))
         })
@@ -3624,27 +3625,29 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
     Ok(reserved)
 }
 
-/// Why task `entry`'s surplus setting holds an agent on `kind`'s account back, from that
-/// account's window `reading`, read only when the task sets a surplus gate: a fire's admission
-/// reads the live row, and a workflow judge's spawn the `surplus` and `surplus-after` values
+/// Why a task's `surplus` and `surplus-after` values, as written on its row, hold an agent on
+/// `kind`'s account back, from that account's window `reading`, read only when either is set:
+/// a fire's admission passes the live row's values, and a workflow judge's spawn the values
 /// its run's record kept from the row when the run started.
 pub(in crate::harness) fn surplus_refusal(
-    entry: &TaskEntry,
+    surplus: Option<&str>,
+    surplus_after: Option<&str>,
     kind: &str,
     reading: impl FnOnce() -> Option<WindowSurplus>,
 ) -> Option<String> {
-    if entry.surplus.is_none() && entry.surplus_after.is_none() {
+    if surplus.is_none() && surplus_after.is_none() {
         return None;
     }
-    surplus_gate_in(entry, kind, reading())
+    surplus_gate_in(surplus, surplus_after, kind, reading())
 }
 
 fn surplus_gate_in(
-    entry: &TaskEntry,
+    surplus: Option<&str>,
+    surplus_after: Option<&str>,
     kind: &str,
     reading: Option<WindowSurplus>,
 ) -> Option<String> {
-    if entry.surplus.is_none() && entry.surplus_after.is_none() {
+    if surplus.is_none() && surplus_after.is_none() {
         return None;
     }
     let Some(reading) = reading else {
@@ -3652,11 +3655,7 @@ fn surplus_gate_in(
             "no {kind} budget-window reading; surplus gate stays closed"
         ));
     };
-    let after = match entry
-        .surplus_after
-        .as_deref()
-        .map(super::parse_surplus_after)
-    {
+    let after = match surplus_after.map(super::parse_surplus_after) {
         Some(Ok(after)) => Some(after),
         Some(Err(_)) => {
             return Some("invalid surplus-after gate; surplus gate stays closed".to_owned());
@@ -3670,10 +3669,10 @@ fn surplus_gate_in(
             "{kind} {} window {} elapsed; fires after {}",
             crate::theme::fmt::window_duration_label(reading.duration_mins),
             elapsed_label(reading.elapsed),
-            entry.surplus_after.as_deref().unwrap_or_default().trim(),
+            surplus_after.unwrap_or_default().trim(),
         ));
     }
-    let threshold = match entry.surplus.as_deref().map(super::parse_surplus) {
+    let threshold = match surplus.map(super::parse_surplus) {
         Some(Ok(threshold)) => threshold,
         Some(Err(_)) => return Some("invalid surplus gate; surplus gate stays closed".to_owned()),
         None => 1.0,
