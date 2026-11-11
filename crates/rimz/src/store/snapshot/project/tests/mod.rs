@@ -383,6 +383,7 @@ fn raw_launch_with_description(
 mod background_shells;
 mod capability;
 mod compaction;
+mod lane;
 mod pane_binding;
 mod phase_status;
 mod prompt_task;

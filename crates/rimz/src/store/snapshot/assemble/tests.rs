@@ -601,8 +601,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_recorded_cache_request_contract_is_version_92() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 92);
+fn snapshot_agent_lane_contract_is_version_93() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 93);
+}
+
+#[test]
+fn pre_93_lane_less_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(92);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose agent rows carry no lane must refold"
+    );
 }
 
 #[test]

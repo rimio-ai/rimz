@@ -369,7 +369,9 @@ upward-dependencies = ["address"]
 # AgentState::soft_compact_in_flight shares the open-cycle rest lift with the sub-agent projection (+1).
 # AgentState::last_request_recorded and request_key name the cache clock's source and the
 # request identity pacing compares, which a switch of source does not move (+2).
-surface-budget = 1286
+# AgentState::lane_checkout and project_lane keep derived rows and the fold on the stored lane (+2).
+# AgentState::working_path keeps occupancy, removal protection and activity on the checkout (+1).
+surface-budget = 1289
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2649,7 +2651,8 @@ path = "crates/rimz/src/ids.rs"
 # `MessageId::successor` keeps boundary claim commits in per-card FIFO order.
 # HoldKind and needs_fix share typed throttle causes across records and renderers (+2).
 # HoldKind::deserialize_optional keeps unknown durable hold kinds readable (+1).
-surface-budget = 70
+# Lane, LaneHome, LaneName, InvalidLane, and their readings, builders, and adoption type the stored lane (+18).
+surface-budget = 88
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -10620,6 +10623,16 @@ reason = "Field type of the pub nonce in mux::focus_anchor (focus_anchor.rs:43);
 kind = "item"
 key = "ids::TeamInstanceId"
 reason = "Field type of the pub team field in config::loop_ (loop_.rs:73); private_interfaces floors it at pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::Lane"
+reason = "Field type of the pub lane fields on LaunchParams and AgentState: the one typed lane a fresh launch decides and every relaunch copies."
+
+[[verdict]]
+kind = "item"
+key = "ids::LaneName"
+reason = "A named lane's validated name, read through Lane::name by the harness lane rules and the CLI."
 
 [[verdict]]
 kind = "item"

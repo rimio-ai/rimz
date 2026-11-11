@@ -63,7 +63,7 @@ fn last_activity(agents: &[AgentState], checkouts: &[PathBuf]) -> Option<Timesta
     agents
         .iter()
         .filter(|agent| {
-            agent.lane_path().is_some_and(|path| {
+            agent.working_path().is_some_and(|path| {
                 let path = normalize_path_lexical(Path::new(path));
                 checkouts.iter().any(|checkout| path.starts_with(checkout))
             })
@@ -113,5 +113,23 @@ mod tests {
                 None
             ]
         );
+    }
+
+    #[test]
+    fn activity_follows_the_checkout_a_row_registered_from_not_its_lanes_home() {
+        let mut moved = AgentState::seed(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("moved"),
+            AgentStatus::Idle,
+            Timestamp::from_second(100).unwrap(),
+        );
+        moved.worktree_path = Some("/repo-worktrees/demo".to_owned());
+        moved.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo"));
+        let agents = [moved];
+        assert_eq!(
+            last_activity(&agents, &[PathBuf::from("/repo-worktrees/demo")]),
+            Some(agents[0].last_activity)
+        );
+        assert_eq!(last_activity(&agents, &[PathBuf::from("/repo")]), None);
     }
 }

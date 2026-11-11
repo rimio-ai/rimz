@@ -27,6 +27,7 @@ pub struct SidebarRow {
     pub name: String,
     pub pane: Option<PaneRef>,
     pub worktree_path: Option<String>,
+    /// [`AgentState::lane_checkout`](crate::agents::AgentState::lane_checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<String>,
     pub worktree_branch: Option<String>,
@@ -388,6 +389,7 @@ fn compacted_estimate_pct(row: &SidebarRow) -> Option<f64> {
 /// a wired pane before its session binds carries only its kind and pane.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneAgent {
+    /// [`AgentState::lane_checkout`](crate::agents::AgentState::lane_checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<String>,
     pub kind: AgentKind,

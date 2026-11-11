@@ -616,6 +616,7 @@ pub(in crate::cli) fn relaunch_request(
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),
+        lane: agent.lane.clone(),
         mode: posture.launch.mode,
         isolation: agent.isolation,
         model: posture.launch.model.clone(),

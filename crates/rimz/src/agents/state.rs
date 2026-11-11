@@ -1041,6 +1041,10 @@ pub struct AgentState {
     /// Derived at the store fold exit from the workspace record's project root, never from an event.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
+    /// The lane the fold first saw for this row, never moved after. While it is
+    /// set, `channel` is its stored name and `root_lane` its is-trunk reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<crate::ids::Lane>,
     /// When this session explicitly ended or the store proved its root process
     /// dead. Runtime views hide stamped rows; audit views retain them so an
     /// explicit resume can recover the provider session within retention.
@@ -1490,9 +1494,35 @@ impl AgentState {
         }
     }
 
-    /// Checkout used for lane routing, grouping, and agent-started launch placement.
+    /// Checkout used for lane routing, grouping, and agent-started launch placement:
+    /// the lane's home, else the displaced checkout, else the process directory.
     pub fn lane_path(&self) -> Option<&str> {
+        self.lane_checkout().or(self.worktree_path.as_deref())
+    }
+
+    /// Where the agent is working: the displaced checkout, else the directory it
+    /// last registered from. Occupancy, worktree removal protection, and worktree
+    /// activity read this; a row that changed directory works outside its lane.
+    pub fn working_path(&self) -> Option<&str> {
         self.checkout.as_deref().or(self.worktree_path.as_deref())
+    }
+
+    /// The checkout a derived row carries beside its process directory, so the
+    /// row's own lane path answers as [`Self::lane_path`] does.
+    pub fn lane_checkout(&self) -> Option<&str> {
+        self.lane
+            .as_ref()
+            .map(crate::ids::Lane::path)
+            .or(self.checkout.as_deref())
+    }
+
+    /// Point `channel` and `root_lane` at the lane, when the row has one.
+    pub(crate) fn project_lane(&mut self) {
+        let Some(lane) = &self.lane else {
+            return;
+        };
+        self.channel = lane.stored_name().map(ToOwned::to_owned);
+        self.root_lane = lane.is_trunk();
     }
 
     /// Whether an unstamped launch belongs to the project's root lane.
@@ -1558,6 +1588,7 @@ impl AgentState {
             launch_ordinal: None,
             channel: None,
             root_lane: false,
+            lane: None,
             ended_at: None,
             resumed_at: None,
             status,

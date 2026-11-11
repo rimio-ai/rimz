@@ -144,6 +144,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(1),
             channel: Some("identity-channel".to_owned()),
+            lane: None,
             kind_ordinal: Some(2),
             molted_from: None,
         },
