@@ -118,6 +118,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Find a running build or gate by process name (`pgrep -ax cargo`, `pgrep -ax xtask`), never with `pgrep -af PATTERN`: an agent's launch command line quotes its whole brief, so `-af` also matches every agent whose brief names the tool.
 - Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
 - zsh reserves `status` as a read-only alias of `$?`: name an exit-code variable `rc`.
+- A command that needs another directory names it by absolute path or changes into it inside a subshell (`( cd "$D" && ... )`): some agent shells carry a bare `cd` from a compound command into every later call, so the next relative path, `git` command, or `rimz lsp` query runs there.
 - A scope check against trunk diffs from the merge base, `git diff --stat origin/main...HEAD -- <path>` (three dots). Once trunk moves, a two-dot diff against `origin/main` lists trunk's own changes as the branch's. Fetch first (`git fetch origin main`): a stale local `origin/main` lists trunk's own commits as the branch's the same way.
 
 ## Testing
