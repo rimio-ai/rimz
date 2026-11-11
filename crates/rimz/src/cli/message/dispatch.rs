@@ -247,6 +247,7 @@ fn recipient_miss(
         .map(|()| RecipientMissOutcome::Complete);
     }
     let mut resume_error = None;
+    let mut refusal = None;
     if matches!(
         err,
         TargetErr::NoMatch { .. }
@@ -271,6 +272,7 @@ fn recipient_miss(
                 }
                 Ok(ResumeChildOutcome::DeliveryFailed(error)) => return Err(error),
                 Ok(ResumeChildOutcome::NotApplicable) => {}
+                Ok(ResumeChildOutcome::LimitRefusal(reason)) => refusal = Some(reason),
                 Err(err) => resume_error = Some(format!("{err:#}")),
             }
         }
@@ -281,8 +283,14 @@ fn recipient_miss(
             channel: miss.current_channel,
             sender: miss.sender,
             text_len: miss.text.len(),
-            reason: resume_error.as_deref().unwrap_or("receiver not found"),
+            reason: refusal
+                .as_deref()
+                .or(resume_error.as_deref())
+                .unwrap_or("receiver not found"),
         })?;
+    }
+    if let Some(refusal) = refusal {
+        bail!("{refusal}");
     }
     let snapshot = store.snapshot_cached()?;
     let mapped = map_queue_target_err(miss.target, err);
