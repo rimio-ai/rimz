@@ -11,6 +11,10 @@ pub(in crate::harness) struct FakeHost {
     pub(in crate::harness) launched: RefCell<Vec<StepLaunch>>,
     pub(in crate::harness) observed: Rc<RefCell<Observed>>,
     pub(in crate::harness) failure: RefCell<Option<LaunchFailure>>,
+    /// Report the injected failure as one that started nothing.
+    unstarted: Cell<bool>,
+    /// Fail the launch with a host error after it opened, giving the engine no verdict.
+    host_error: Cell<bool>,
     evict_error: Cell<bool>,
     stale_after_evict: Cell<bool>,
     /// The occupancy the checkout reaches while a launch is prepared, after its first read.
@@ -123,6 +127,8 @@ impl FakeHost {
                 turn: None,
             })),
             failure: RefCell::new(None),
+            unstarted: Cell::new(false),
+            host_error: Cell::new(false),
             evict_error: Cell::new(false),
             stale_after_evict: Cell::new(false),
             arrives_at_launch: RefCell::new(None),
@@ -209,7 +215,13 @@ impl AttemptHost for FakeHost {
                 Occupancy::Occupied(_) if step.takeover => {
                     self.evictions.set(self.evictions.get() + 1);
                     if self.evict_error.get() {
-                        return Err(WorkflowErr::Refused("occupant did not stop".into()));
+                        if let Some(check) = &*self.on_launch.borrow() {
+                            check();
+                        }
+                        return Ok(Err(NotLaunched::Unstarted(LaunchFailure {
+                            outcome: AttemptOutcome::Died,
+                            reason: "occupant did not stop".into(),
+                        })));
                     }
                     *self.occupancy.borrow_mut() = Occupancy::Free;
                 }
@@ -220,7 +232,11 @@ impl AttemptHost for FakeHost {
         if let Some(check) = &*self.on_launch.borrow() {
             check();
         }
+        if self.host_error.get() {
+            return Err(WorkflowErr::Refused("launch opened no leader run".into()));
+        }
         Ok(match self.failure.borrow_mut().take() {
+            Some(failure) if self.unstarted.get() => Err(NotLaunched::Unstarted(failure)),
             Some(failure) => Err(failure.into()),
             None => Ok(AttemptRun {
                 run_id: crate::ids::RunId::new(),

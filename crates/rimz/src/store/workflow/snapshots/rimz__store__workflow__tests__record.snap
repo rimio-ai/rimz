@@ -28,6 +28,7 @@ expression: value
   "id": "wf_0190b8172c0070008000000000000001",
   "input": null,
   "key": null,
+  "launch_retry": false,
   "loop_report": "none",
   "next_seq": 2,
   "node": "pr",

@@ -309,6 +309,7 @@ impl Transition<'_> {
         self.record.attempt = Some(held.attempt);
         self.record.check_retry = 0;
         self.record.check_retry_context = None;
+        self.record.launch_retry = false;
         self.record.recheck_at = None;
     }
 
@@ -480,6 +481,7 @@ impl Transition<'_> {
                     self.record.entered_at = self.now;
                     self.record.check_retry = 0;
                     self.record.check_retry_context = None;
+                    self.record.launch_retry = false;
                 }
             }
         }
@@ -883,6 +885,7 @@ impl Transition<'_> {
         self.record.state = RunState::Active;
         self.record.check_retry = 0;
         self.record.check_retry_context = None;
+        self.record.launch_retry = false;
         self.push(
             None,
             JournalEvent::Restart {

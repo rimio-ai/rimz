@@ -3526,6 +3526,28 @@ fn resident_takeover_case(case: Takeover) {
         case,
         Takeover::Restricted | Takeover::FailedStop | Takeover::OpenRunPane
     ) {
+        if case != Takeover::Restricted {
+            // The eviction started nothing, so the step waits to retry it once, counting nothing.
+            wait_for_run("waited to retry", &|run| {
+                run.wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.outcome == "retry")
+                    && run.attempt.is_none()
+                    && run.prev_attempt.is_none()
+                    && run.visits.is_empty()
+            });
+            assert!(!trace_text().contains("new-tab"));
+            assert!(leaders().is_empty());
+            let advance = command()
+                .args(["workflow", "advance", id.as_str()])
+                .output()
+                .unwrap();
+            assert!(
+                advance.status.success(),
+                "{}",
+                String::from_utf8_lossy(&advance.stderr)
+            );
+        }
         let report = wait_for_loop_report(&env, "resident");
         assert_eq!(report.result, LoopRunResult::Failed, "{report:?}");
         let error = report.error.as_deref().unwrap_or_default();

@@ -433,7 +433,23 @@ pub(super) fn launch(
     }
     let launched = match launched {
         Ok(run) => Ok(run),
-        Err(NotLaunched::Failed(failure)) => Err(failure),
+        Err(NotLaunched::Unstarted(failure))
+            if !t.record.launch_retry
+                && failure.outcome == AttemptOutcome::Died
+                && record.restart.as_ref().is_none_or(|r| r.resume.is_none())
+                && t.record
+                    .attempt
+                    .as_ref()
+                    .is_some_and(|a| a.ending.is_none()) =>
+        {
+            // Nothing started, so the next advance runs the step again; no attempt is counted.
+            t.withdraw_attempt();
+            t.record.launch_retry = true;
+            t.step_wait("retry", Some(failure.reason));
+            persist(&mut t, &guard)?;
+            return Ok(false);
+        }
+        Err(NotLaunched::Failed(failure) | NotLaunched::Unstarted(failure)) => Err(failure),
         Err(NotLaunched::Taken(occupancy)) => {
             // The step waits as the first read would have, with no attempt counted.
             t.withdraw_attempt();
