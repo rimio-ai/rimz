@@ -2360,6 +2360,7 @@ rimz message (aliases: msg)
     --smart-compact <PCT|TOKENS>  [action=set takes=1..=1]
     --stdin  [action=set-true takes=0..=0]
     --steer  [action=set-true takes=0..=0]
+    --timeout <DURATION>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --wait <DURATION>  [action=set takes=0..=1]
     --when <'ADDR STATUS DUR'>  [action=append takes=1..=1]

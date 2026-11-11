@@ -341,7 +341,7 @@ fn print_json_replies(
 fn print_timeout(total: usize, timed_out: &[&ReplyResult], wait: WaitSpec) -> Result<()> {
     let mut err = render::err();
     let hint = if wait.mode.uses_agent_default() {
-        " (default 1h for agent callers; use --wait=<duration> to change)"
+        " (default 1h for agent callers; use --timeout <duration> to change)"
     } else {
         ""
     };

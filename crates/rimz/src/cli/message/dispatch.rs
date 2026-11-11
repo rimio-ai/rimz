@@ -45,9 +45,11 @@ pub(super) fn send_message(
         stdin: _,
         no_from,
         wait,
+        timeout,
         json,
         any,
     } = flags;
+    let wait = send::wait_request(wait, timeout)?;
     let ctx = Ctx::open(globals)?;
     let caller = send::resolve_caller(&ctx.store)?;
     let wait = send::WaitSpec {
@@ -401,8 +403,7 @@ fn map_reply_prepare_err(err: ReplyPrepareErr) -> anyhow::Error {
             first_message_id,
             chain,
         } => {
-            let fix =
-                "finish your turn to answer it, or resend without --wait or with --wait=<duration>";
+            let fix = "finish your turn to answer it, or resend without --wait or with --timeout <duration>";
             let (Some(handle), Some(message_id)) = (first_handle, first_message_id) else {
                 return anyhow::anyhow!("--wait would deadlock: {target} is your own agent; {fix}");
             };
