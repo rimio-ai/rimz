@@ -153,6 +153,38 @@ fn subagent_projection_carries_the_child_kind_and_completed_compactions() {
 }
 
 #[test]
+fn subagent_projection_marks_compaction_and_an_open_soft_compaction_cycle() {
+    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+    for (compacting, progress, expected) in [
+        (true, None, true),
+        (false, Some(SoftCompactProgress::TurnEnded), true),
+        (false, Some(SoftCompactProgress::ContinueQueued), true),
+        (true, Some(SoftCompactProgress::Continued), true),
+        (false, Some(SoftCompactProgress::WrappingUp), false),
+        (false, Some(SoftCompactProgress::Continued), false),
+        (false, None, false),
+    ] {
+        let mut child = child_state("root", "child", AgentStatus::Success, 5);
+        child.launch_depth = Some(1);
+        child.compacting_since = compacting.then(|| ago(5));
+        child.soft_compact = progress.map(|progress| SoftCompactMark {
+            steered_at: ago(60),
+            compactions: Some(0),
+            progress,
+        });
+        let label = format!("compacting={compacting} {progress:?}");
+        let sub = sub_agent_from_state(&child, epoch(), false, 1_800);
+        assert_eq!(sub.compacting, expected, "{label}");
+        let encoded = serde_json::to_value(&sub).unwrap();
+        assert_eq!(
+            encoded.get("compacting"),
+            expected.then_some(&serde_json::Value::Bool(true)),
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn silent_native_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
     let mut child = child_state("root", "child", AgentStatus::Running, 1_800);

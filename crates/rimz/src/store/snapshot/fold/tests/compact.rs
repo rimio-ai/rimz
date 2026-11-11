@@ -28,6 +28,11 @@ fn soft_compact_events_hydrate_and_update_carried_receivers() {
             MessageStatus::Queued,
             MessageEventMethod::Queued,
         ),
+        (
+            "continue",
+            MessageStatus::Delivered,
+            MessageEventMethod::Delivered,
+        ),
     ] {
         record.status = status;
         let mut event = EventEnvelope::message_event(&record, "session", method, None);
@@ -44,6 +49,7 @@ fn soft_compact_events_hydrate_and_update_carried_receivers() {
         outcomes,
         vec![
             serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "wrapping_up"}),
+            serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "continue_queued"}),
             serde_json::json!({"steered_at": epoch(), "compactions": 0, "progress": "continued"}),
         ]
     );

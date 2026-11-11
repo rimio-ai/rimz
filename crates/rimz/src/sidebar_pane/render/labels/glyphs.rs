@@ -162,7 +162,11 @@ pub(in crate::sidebar_pane::render) fn status_chip_color(
     )
 }
 
-fn role_style(theme: &Theme, role: AnimationRole, animation_phase: u64) -> Style {
+pub(in crate::sidebar_pane::render) fn role_style(
+    theme: &Theme,
+    role: AnimationRole,
+    animation_phase: u64,
+) -> Style {
     let animation = theme.animations.role(role);
     match theme.animations.natural_color(role) {
         Some(_) => effect_style(theme, animation, animation_phase),

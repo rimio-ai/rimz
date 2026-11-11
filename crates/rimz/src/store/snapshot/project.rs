@@ -721,11 +721,13 @@ pub(super) fn message_agent_key<'a>(
             payload.status,
             MessageStatus::Sent | MessageStatus::Delivered
         );
-    let soft_compact = matches!(
-        (payload.soft_compact, payload.status),
-        (Some(SoftCompactStep::WrapUp), MessageStatus::Sent)
-            | (Some(SoftCompactStep::Continue), MessageStatus::Queued)
-    );
+    let soft_compact = match payload.soft_compact {
+        Some(SoftCompactStep::WrapUp) => payload.status == MessageStatus::Sent,
+        Some(SoftCompactStep::Continue) => {
+            payload.status == MessageStatus::Queued || payload.status.is_terminal()
+        }
+        None => false,
+    };
     if !compact_command && !soft_compact {
         return None;
     }
@@ -764,6 +766,15 @@ fn stamp_message(
         }
         (Some(SoftCompactStep::Continue), MessageStatus::Queued) => {
             if let Some(mark) = &mut agent.soft_compact {
+                mark.progress = SoftCompactProgress::ContinueQueued;
+            }
+        }
+        // Only the continue this cycle queued finishes it, so a stale one
+        // settling cannot drop an owed step.
+        (Some(SoftCompactStep::Continue), status) if status.is_terminal() => {
+            if let Some(mark) = &mut agent.soft_compact
+                && mark.progress == SoftCompactProgress::ContinueQueued
+            {
                 mark.progress = SoftCompactProgress::Continued;
             }
         }
@@ -1425,6 +1436,17 @@ fn fold_lifecycle(
         turn_started && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only);
     if turn_started && !keepalive_turn {
         state.last_prompt_at = Some(timestamp);
+    }
+    // Once a real turn opens the row is working again, so a continue still
+    // undelivered is the queue's to hold, and a terminal event that settles
+    // elsewhere cannot leave the cycle open at the next rest.
+    if turn_started
+        && !keepalive_turn
+        && !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
+        && let Some(mark) = &mut state.soft_compact
+        && mark.progress == SoftCompactProgress::ContinueQueued
+    {
+        mark.progress = SoftCompactProgress::Continued;
     }
     if resets_context || ((opened_turn || turn_started) && !keepalive_turn) {
         state.keepalive_since = None;

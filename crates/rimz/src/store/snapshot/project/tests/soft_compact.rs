@@ -16,8 +16,9 @@ fn message(at: i64, id: &str, tag: &str, status: MessageStatus) -> EventEnvelope
     record.status = status;
     let method = match status {
         MessageStatus::Sent => MessageEventMethod::Sent,
-        MessageStatus::Delivered => MessageEventMethod::Delivered,
-        _ => MessageEventMethod::Queued,
+        status => {
+            MessageEventMethod::for_terminal_status(status).unwrap_or(MessageEventMethod::Queued)
+        }
     };
     let mut event = EventEnvelope::message_event(&record, "session", method, None);
     let mut params = event.params_value();
@@ -98,8 +99,8 @@ fn soft_compact_mark_tracks_wrap_up_sent_and_continue_queued_only() {
     });
     let steered =
         json!({"steered_at": events[6].timestamp, "compactions": 1, "progress": "wrapping_up"});
-    let mut continued = steered.clone();
-    continued["progress"] = json!("continued");
+    let mut queued = steered.clone();
+    queued["progress"] = json!("continue_queued");
     assert_eq!(
         outcomes,
         [
@@ -108,10 +109,112 @@ fn soft_compact_mark_tracks_wrap_up_sent_and_continue_queued_only() {
             steered.clone(),
             steered.clone(),
             steered,
-            continued.clone(),
-            continued
+            queued.clone(),
+            queued
         ]
     );
+}
+
+#[test]
+fn soft_compact_mark_finishes_when_its_continue_reaches_any_terminal_status() {
+    let events = vec![
+        lifecycle(0, "sess-1", json!({"signal": "registered"})),
+        lifecycle(1, "sess-1", json!({"signal": "turn_started"})),
+        message(2, "sess-1", "wrap_up", MessageStatus::Sent),
+        lifecycle(
+            3,
+            "sess-1",
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+        ),
+    ];
+    let progress = |events: &[EventEnvelope]| mark(events, "sess-1")["progress"].clone();
+    // A continue that settles without its queued step leaves the owed step in place.
+    let mut unqueued = events.clone();
+    unqueued.push(message(4, "sess-1", "continue", MessageStatus::Canceled));
+    assert_eq!(progress(&unqueued), "turn_ended");
+
+    let mut queued = events;
+    queued.push(message(4, "sess-1", "continue", MessageStatus::Queued));
+    assert_eq!(progress(&queued), "continue_queued");
+    for status in [MessageStatus::Claimed, MessageStatus::Sent] {
+        let mut open = queued.clone();
+        open.push(message(5, "sess-1", "continue", status));
+        assert_eq!(progress(&open), "continue_queued", "{status:?}");
+    }
+    for status in [
+        MessageStatus::Delivered,
+        MessageStatus::TimedOut,
+        MessageStatus::Errored,
+        MessageStatus::Canceled,
+        MessageStatus::Abandoned,
+        MessageStatus::Expired,
+        MessageStatus::Archived,
+    ] {
+        assert!(status.is_terminal());
+        let mut settled = queued.clone();
+        settled.push(message(5, "sess-1", "continue", status));
+        assert_eq!(progress(&settled), "continued", "{status:?}");
+    }
+}
+
+#[test]
+fn soft_compact_mark_finishes_when_a_real_turn_opens_after_its_continue_queued() {
+    let queued = vec![
+        lifecycle(0, "sess-1", json!({"signal": "registered"})),
+        lifecycle(1, "sess-1", json!({"signal": "turn_started"})),
+        message(2, "sess-1", "wrap_up", MessageStatus::Sent),
+        lifecycle(
+            3,
+            "sess-1",
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+        ),
+        message(4, "sess-1", "continue", MessageStatus::Queued),
+    ];
+    let progress = |events: &[EventEnvelope]| mark(events, "sess-1")["progress"].clone();
+    let keepalive = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm.";
+    for (label, params) in [
+        (
+            "keepalive ping",
+            json!({"agent_id": "sess-1", "signal": {"signal": "turn_started"}, "prompt": keepalive}),
+        ),
+        (
+            "state snapshot",
+            json!({"agent_id": "sess-1", "signal": {"signal": "turn_started"}, "state_snapshot": true}),
+        ),
+    ] {
+        let mut events = queued.clone();
+        events.push(raw_lifecycle_at("codex", 5, params));
+        assert_eq!(progress(&events), "continue_queued", "{label}");
+    }
+
+    let mut opened = queued.clone();
+    opened.push(lifecycle(5, "sess-1", json!({"signal": "turn_started"})));
+    assert_eq!(progress(&opened), "continued");
+    opened.push(message(6, "sess-1", "continue", MessageStatus::Delivered));
+    assert_eq!(progress(&opened), "continued");
+
+    // A continue that settles on the predecessor leaves the continuation's
+    // inherited mark queued until the continuation's own turn opens.
+    let mut continuation = queued;
+    continuation.push(raw_lifecycle_at(
+        "codex",
+        5,
+        json!({
+            "agent_id": "continuation", "compacted_from": "sess-1",
+            "signal": {"signal": "compaction_ended"}
+        }),
+    ));
+    continuation.push(message(6, "sess-1", "continue", MessageStatus::Delivered));
+    assert_eq!(
+        mark(&continuation, "continuation")["progress"],
+        "continue_queued"
+    );
+    continuation.push(lifecycle(
+        7,
+        "continuation",
+        json!({"signal": "turn_started"}),
+    ));
+    assert_eq!(mark(&continuation, "continuation")["progress"], "continued");
 }
 
 #[test]
@@ -194,7 +297,7 @@ fn soft_compact_mark_follows_a_linked_compaction_continuation() {
         let inherited = mark(&events, "continuation");
         let owed = json!({
             "steered_at": events[2].timestamp, "compactions": null,
-            "progress": if already_continued { "continued" } else { "turn_ended" }
+            "progress": if already_continued { "continue_queued" } else { "turn_ended" }
         });
         events.push(message(
             6,
@@ -202,11 +305,20 @@ fn soft_compact_mark_follows_a_linked_compaction_continuation() {
             "continue",
             MessageStatus::Queued,
         ));
-        let mut continued = owed.clone();
-        continued["progress"] = json!("continued");
+        let mut queued = owed.clone();
+        queued["progress"] = json!("continue_queued");
         assert_eq!(
             (inherited, mark(&events, "continuation")),
-            (owed, continued)
+            (owed.clone(), queued)
         );
+        events.push(message(
+            7,
+            "continuation",
+            "continue",
+            MessageStatus::Delivered,
+        ));
+        let mut continued = owed;
+        continued["progress"] = json!("continued");
+        assert_eq!(mark(&events, "continuation"), continued);
     }
 }

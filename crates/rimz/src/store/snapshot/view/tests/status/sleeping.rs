@@ -155,6 +155,79 @@ fn launched_child_resting_on_shell_holds_parent_turn() {
 }
 
 #[test]
+fn launched_child_in_its_soft_compaction_cycle_holds_parent_turn() {
+    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+    for (label, child_status, compacting, progress, holds) in [
+        ("child mid-turn", AgentStatus::Running, false, None, true),
+        (
+            "wrap-up turn ended",
+            AgentStatus::Success,
+            false,
+            Some(SoftCompactProgress::TurnEnded),
+            true,
+        ),
+        (
+            "compacting after the wrap-up",
+            AgentStatus::Success,
+            true,
+            Some(SoftCompactProgress::TurnEnded),
+            true,
+        ),
+        (
+            "continue queued",
+            AgentStatus::Success,
+            false,
+            Some(SoftCompactProgress::ContinueQueued),
+            true,
+        ),
+        (
+            "compacting at rest",
+            AgentStatus::Success,
+            true,
+            None,
+            false,
+        ),
+        (
+            "cycle finished",
+            AgentStatus::Success,
+            false,
+            Some(SoftCompactProgress::Continued),
+            false,
+        ),
+        (
+            "compacting after a finished cycle",
+            AgentStatus::Success,
+            true,
+            Some(SoftCompactProgress::Continued),
+            false,
+        ),
+    ] {
+        let parent = agent("claude", "root", AgentStatus::Success, 0).worktree("/repo/main");
+        let mut child = child_state("root", "child", child_status, 5);
+        child.launch_depth = Some(1);
+        child.name = Some("child".to_owned());
+        if compacting {
+            child.compacting_since = Some(ago(5));
+        }
+        child.soft_compact = progress.map(|progress| SoftCompactMark {
+            steered_at: ago(60),
+            compactions: Some(0),
+            progress,
+        });
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent = row(&snapshot, "root");
+        let expected = if holds {
+            AgentStatus::Running
+        } else {
+            AgentStatus::Success
+        };
+        assert_eq!(parent.status(), Some(expected), "{label}");
+        assert_eq!(parent.sub_agents()[0].status, expected, "{label}");
+        assert_eq!(parent.sub_agents()[0].holds_parent_turn(), holds, "{label}");
+    }
+}
+
+#[test]
 fn settled_wait_does_not_hide_the_rested_verdict() {
     let mut session = agent("claude", "rest", AgentStatus::Success, 0).worktree("/repo/main");
     session.pending_waits.push(PendingWait {
