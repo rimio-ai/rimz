@@ -1,16 +1,11 @@
-//! Detached helper for a child stopped on a provider limit: holds its run until the reset and
-//! queues the parent's one notice for the park, or fails the run and reclaims it as a timeout does.
+//! Detached helper for a child stopped on a provider limit: holds its run until the refill, or
+//! fails the run with its typed cause and reclaims it as a timeout does.
 
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use rimz::harness::park_notice::{
-    ParkAction, ParkNoticeRequest, failure_reason, park_action, reset_reading, text,
-};
-use rimz::message::deliver::{DeliveryPolicy, deliver_one};
-use rimz::message::synthetic::SyntheticMessage;
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
+use rimz::harness::park_notice::{ParkAction, ParkNoticeRequest, limit_reading, park_action};
 
 use super::Ctx;
 
@@ -47,62 +42,24 @@ pub(super) fn run(request: ParkNoticeRequest, globals: &super::GlobalFlags) -> R
         now,
         Duration::from_secs(request.horizon_secs),
         request.continuation,
-        |child| reset_reading(ctx.runtime(), child, now),
+        |child, since| limit_reading(ctx.runtime(), child, now, since),
     );
-    let (child, parent, hold) = match action {
-        None => return Ok(()),
+    match action {
+        None => Ok(()),
+        Some(ParkAction::Hold { hold, .. }) => {
+            rimz::harness::run::claim_limit_hold(paths, &run.run_id, hold)?;
+            Ok(())
+        }
         Some(ParkAction::Fail {
-            child,
-            activity,
-            cause,
+            activity, failure, ..
         }) => {
-            let reason = failure_reason(child, cause, now);
             let Some(record) =
-                rimz::harness::run::fail_limit_park(paths, &run.run_id, activity, &reason)?
+                rimz::harness::run::fail_limit_park(paths, &run.run_id, activity, failure)?
             else {
                 return Ok(());
             };
-            return super::run_timeout::reclaim_settled_run(&ctx, globals, &run, &record)
-                .context("reclaiming limit-failed run pane");
+            super::run_timeout::reclaim_settled_run(&ctx, globals, &run, &record)
+                .context("reclaiming limit-failed run pane")
         }
-        Some(ParkAction::Notice {
-            child,
-            parent,
-            hold,
-        }) => (child, parent, hold),
-    };
-    let activity = hold.activity;
-    if !rimz::harness::run::claim_park_notice(paths, &run.run_id, hold)? {
-        return Ok(());
     }
-    let message = SyntheticMessage {
-        agent: parent,
-        text: text(child, &hold, request.continuation, Timestamp::now()),
-        sender: MessageSender::Harness {
-            notice: HarnessNotice::SubagentPaused,
-        },
-        gate: DeliveryGate::Done,
-        pane_id: parent.pane.as_ref().map(|pane| pane.pane_id.clone()),
-    }
-    .record(&ctx.workspace)
-    .with_about_run(Some(run.run_id.clone()));
-    if let Err(err) = ctx
-        .store
-        .queue_message(&message, &ctx.workspace.session_name)
-    {
-        let _ = rimz::harness::run::release_park_notice(paths, &run.run_id, activity);
-        return Err(err).context("queueing park notice");
-    }
-    // A closed gate leaves the record queued for the delivery sweep.
-    if let Some(pane_id) = &message.pane_id {
-        deliver_one(
-            &ctx.workspace,
-            &ctx.store,
-            &message.message_id,
-            Some(pane_id.mux()),
-            DeliveryPolicy::Boundary,
-        )
-        .context("delivering park notice")?;
-    }
-    Ok(())
 }

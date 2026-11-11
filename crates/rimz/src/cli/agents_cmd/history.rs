@@ -122,7 +122,6 @@ fn render_history(
                         HarnessNotice::Wait => "wait".to_owned(),
                         HarnessNotice::Signal => "signal".to_owned(),
                         HarnessNotice::Stage => "stage".to_owned(),
-                        HarnessNotice::SubagentPaused => "paused".to_owned(),
                         HarnessNotice::SubagentRestarted => "restarted".to_owned(),
                         HarnessNotice::SubagentStalled => "stalled".to_owned(),
                         HarnessNotice::TeamStalled => "nudge".to_owned(),
@@ -268,11 +267,6 @@ mod tests {
                 "Type: WAIT\nFrom: @rimz\nContent:\ntests finished",
                 "wait",
                 "tests finished",
-            ),
-            (
-                "Type: SUBAGENT_PAUSED\nFrom: @rimz\nContent:\nchild paused",
-                "paused",
-                "child paused",
             ),
             (
                 "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\nchild stalled",

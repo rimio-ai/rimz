@@ -90,8 +90,6 @@ pub enum HarnessNotice {
     Stage,
     /// The leader of an agent-launched team, reported when its board reaches Done.
     TeamReport,
-    /// A launched child parked on a provider limit; queued for its parent once per park.
-    SubagentPaused,
     /// A launched child `rimz agents restart` handed to a replacement pane with its run
     /// still open; queued for its parent once per handover.
     SubagentRestarted,
@@ -119,7 +117,6 @@ impl HarnessNotice {
             | Self::Wait
             | Self::Signal
             | Self::Stage
-            | Self::SubagentPaused
             | Self::SubagentRestarted
             | Self::SubagentStalled
             | Self::TeamStalled
@@ -139,7 +136,6 @@ impl HarnessNotice {
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
             Self::AgentReport => "AGENT_REPORT".to_owned(),
             Self::TeamReport => "TEAM_REPORT".to_owned(),
-            Self::SubagentPaused => "SUBAGENT_PAUSED".to_owned(),
             Self::SubagentRestarted => "SUBAGENT_RESTARTED".to_owned(),
             Self::SubagentStalled => "SUBAGENT_STALLED".to_owned(),
             Self::TeamStalled => "TEAM_STALLED".to_owned(),

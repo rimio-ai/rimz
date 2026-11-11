@@ -372,6 +372,19 @@ fn agent_sender_codec_preserves_optional_identity_without_changing_headers() {
 }
 
 #[test]
+fn a_stored_subagent_paused_notice_decodes_as_an_unnamed_notice() {
+    let stored = serde_json::json!({"origin": "harness", "notice": "subagent_paused"});
+    let sender: MessageSender = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(
+        sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Other("subagent_paused".to_owned())
+        }
+    );
+    assert_eq!(serde_json::to_value(&sender).unwrap(), stored);
+}
+
+#[test]
 fn submitted_sections_cover_every_sender_and_body() {
     let mut cases = vec![
         (MessageSender::Human, SectionOrigin::Human),
@@ -396,7 +409,6 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::Signal,
         HarnessNotice::Stage,
         HarnessNotice::CacheKeepalive,
-        HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentRestarted,
         HarnessNotice::SubagentStalled,
         HarnessNotice::TeamStalled,
@@ -590,7 +602,6 @@ fn prompt_origin_requires_only_non_user_headers() {
         signal.to_owned(),
         stage.to_owned(),
         "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nunknown".to_owned(),
-        "Type: SUBAGENT_PAUSED\nFrom: @rimz\nContent:\npaused".to_owned(),
         "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\nstalled".to_owned(),
         "Type: MESSAGE_UNDELIVERED\nFrom: @rimz\nContent:\nundelivered".to_owned(),
         "Type: MESSAGE_QUEUED\nFrom: @rimz\nContent:\nqueued".to_owned(),
@@ -2470,7 +2481,6 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
         HarnessNotice::Signal,
         HarnessNotice::Stage,
         HarnessNotice::TeamReport,
-        HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentRestarted,
         HarnessNotice::SubagentStalled,
         HarnessNotice::TeamStalled,
@@ -2487,7 +2497,6 @@ fn every_named_harness_notice() -> Vec<HarnessNotice> {
             | HarnessNotice::Signal
             | HarnessNotice::Stage
             | HarnessNotice::TeamReport
-            | HarnessNotice::SubagentPaused
             | HarnessNotice::SubagentRestarted
             | HarnessNotice::SubagentStalled
             | HarnessNotice::TeamStalled

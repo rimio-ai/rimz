@@ -3011,6 +3011,13 @@ fn hold_at(activity: Timestamp, held: Duration) -> crate::store::run::LimitHold 
     }
 }
 
+/// Clear a run's park claim as an older binary's release did, keeping its hold.
+fn unclaim(paths: &StatePaths, run_id: &RunId) {
+    let mut record = load(paths, run_id).unwrap();
+    record.park_noticed_activity = None;
+    create(paths, &record).unwrap();
+}
+
 #[test]
 fn a_park_is_claimed_once_until_the_child_acts_again() {
     let (_dir, paths, record) = setup();
@@ -3019,22 +3026,21 @@ fn a_park_is_claimed_once_until_the_child_acts_again() {
     let stamp = || load(&paths, &record.run_id).unwrap().park_noticed_activity;
     let hour = Duration::from_secs(3600);
 
-    assert!(claim_park_notice(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
-    assert!(!claim_park_notice(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
+    assert!(!claim_limit_hold(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
     assert_eq!(stamp(), Some(parked));
-    assert!(claim_park_notice(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
-    assert!(!claim_park_notice(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
+    assert!(!claim_limit_hold(&paths, &record.run_id, hold_at(parked, hour)).unwrap());
     assert_eq!(stamp(), Some(resumed));
 
-    release_park_notice(&paths, &record.run_id, parked).unwrap();
-    assert_eq!(stamp(), Some(resumed));
-    release_park_notice(&paths, &record.run_id, resumed).unwrap();
+    // An older binary gave a claim back when its notice could not be queued.
+    unclaim(&paths, &record.run_id);
     assert_eq!(stamp(), None);
-    assert!(claim_park_notice(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
 
     cancel(&paths, &record.run_id).unwrap();
     assert!(
-        !claim_park_notice(
+        !claim_limit_hold(
             &paths,
             &record.run_id,
             hold_at(resumed + std::time::Duration::from_secs(1), hour)
@@ -3067,16 +3073,16 @@ fn a_hold_moves_both_deadline_stamps_once_per_park() {
     let notice = record.deadline_notice_at.unwrap();
     let kill = deadline + Duration::from_secs(180);
 
-    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold).unwrap());
     let loaded = load(&paths, &record.run_id).unwrap();
     assert_eq!(loaded.limit_hold, Some(hold));
     assert_eq!(loaded.park_noticed_activity, Some(hold.activity));
     assert_eq!(loaded.deadline_at, Some(deadline + held));
     assert_eq!(loaded.deadline_notice_at, Some(notice + held));
 
-    // A notice that could not be queued is claimed again without a second shift.
-    release_park_notice(&paths, &record.run_id, hold.activity).unwrap();
-    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    // A claim an older binary gave back is claimed again without a second shift.
+    unclaim(&paths, &record.run_id);
+    assert!(claim_limit_hold(&paths, &record.run_id, hold).unwrap());
     let loaded = load(&paths, &record.run_id).unwrap();
     assert_eq!(loaded.deadline_at, Some(deadline + held));
     assert_eq!(loaded.deadline_notice_at, Some(notice + held));
@@ -3107,7 +3113,7 @@ fn a_hold_without_a_warn_claim_moves_only_the_deadline() {
     create(&paths, &record).unwrap();
     let held = Duration::from_secs(600);
     let hold = hold_at(record.started_at, held);
-    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold).unwrap());
     let loaded = load(&paths, &record.run_id).unwrap();
     assert_eq!(loaded.deadline_at, Some(record.deadline_at.unwrap() + held));
     assert_eq!(loaded.deadline_notice_at, None);
@@ -3194,7 +3200,7 @@ fn a_delayed_in_turn_hook_from_before_the_park_keeps_the_hold() {
         record.started_at + Duration::from_secs(600),
         Duration::from_secs(7200),
     );
-    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold).unwrap());
     let held = load(&paths, &record.run_id).unwrap();
     let observation = AgentLifecycleObservation::new(
         Some("child".into()),
@@ -3282,39 +3288,66 @@ fn a_reopen_clears_a_hold_and_rearms_from_the_timeout() {
 
 #[test]
 fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
+    use crate::store::run::{LimitFailure, LimitFailureCause};
+
     let activity: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+    let failure = |cause| LimitFailure {
+        cause,
+        refill_at: None,
+        label: Some("Usage limit reached".to_owned()),
+    };
+    let sentence = "stopped on a provider limit: \"Usage limit reached\"";
 
     let (_dir, paths, record) = held_candidate();
-    let failed = fail_limit_park(&paths, &record.run_id, activity, "provider limit")
-        .unwrap()
-        .expect("an open, unclaimed park fails");
+    let failed = fail_limit_park(
+        &paths,
+        &record.run_id,
+        activity,
+        failure(LimitFailureCause::RefillUnknown),
+    )
+    .unwrap()
+    .expect("an open, unclaimed park fails");
     assert_eq!(failed.status, RunStatus::Failed);
-    assert_eq!(failed.failure_tail.as_deref(), Some("provider limit"));
+    assert_eq!(failed.failure_tail.as_deref(), Some(sentence));
+    assert_eq!(
+        failed.limit_failure,
+        Some(failure(LimitFailureCause::RefillUnknown)),
+        "the cause and the sentence land in one write"
+    );
     assert!(
-        fail_limit_park(&paths, &record.run_id, activity, "again")
-            .unwrap()
-            .is_none(),
+        fail_limit_park(
+            &paths,
+            &record.run_id,
+            activity,
+            failure(LimitFailureCause::Refilled)
+        )
+        .unwrap()
+        .is_none(),
         "a terminal run is untouched"
     );
+    let stored = load(&paths, &record.run_id).unwrap();
+    assert_eq!(stored.failure_tail.as_deref(), Some(sentence));
     assert_eq!(
-        load(&paths, &record.run_id)
-            .unwrap()
-            .failure_tail
-            .as_deref(),
-        Some("provider limit")
+        stored.limit_failure,
+        Some(failure(LimitFailureCause::RefillUnknown))
     );
 
-    // A park another helper claimed for a notice stays on its deadline.
+    // A park another helper claimed for a hold stays on its deadline.
     let (_dir, paths, mut record) = held_candidate();
     record.park_noticed_activity = Some(activity);
     create(&paths, &record).unwrap();
     assert!(
-        fail_limit_park(&paths, &record.run_id, activity, "x")
-            .unwrap()
-            .is_none()
+        fail_limit_park(
+            &paths,
+            &record.run_id,
+            activity,
+            failure(LimitFailureCause::RefillUnknown)
+        )
+        .unwrap()
+        .is_none()
     );
 
-    // A held park fails only once its reset has passed.
+    // A held park fails only once its refill has passed.
     let (_dir, paths, mut record) = held_candidate();
     let now = Timestamp::now();
     record.park_noticed_activity = Some(activity);
@@ -3325,10 +3358,15 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     });
     create(&paths, &record).unwrap();
     assert!(
-        fail_limit_park(&paths, &record.run_id, activity, "x")
-            .unwrap()
-            .is_none(),
-        "the reset is still ahead"
+        fail_limit_park(
+            &paths,
+            &record.run_id,
+            activity,
+            failure(LimitFailureCause::ContinueFailed)
+        )
+        .unwrap()
+        .is_none(),
+        "the refill is still ahead"
     );
     record.limit_hold = Some(crate::store::run::LimitHold {
         activity,
@@ -3336,10 +3374,22 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
         until: now - Duration::from_secs(1),
     });
     create(&paths, &record).unwrap();
-    let failed = fail_limit_park(&paths, &record.run_id, activity, "reset reached")
-        .unwrap()
-        .expect("a held park past its reset fails");
-    assert_eq!(failed.failure_tail.as_deref(), Some("reset reached"));
+    let failed = fail_limit_park(
+        &paths,
+        &record.run_id,
+        activity,
+        failure(LimitFailureCause::ContinueFailed),
+    )
+    .unwrap()
+    .expect("a held park past its refill fails");
+    assert_eq!(
+        failed.failure_tail.as_deref(),
+        Some(format!("{sentence}; continuing it after the refill failed").as_str())
+    );
+    assert_eq!(
+        failed.limit_failure,
+        Some(failure(LimitFailureCause::ContinueFailed))
+    );
 }
 
 #[test]
@@ -3417,7 +3467,7 @@ fn the_replaced_pane_neither_settles_nor_moves_a_handed_over_run() {
         .unwrap()
     };
     let hold = hold_at(record.started_at, Duration::from_secs(3600));
-    assert!(claim_park_notice(&paths, &record.run_id, hold).unwrap());
+    assert!(claim_limit_hold(&paths, &record.run_id, hold).unwrap());
     for bound in [false, true] {
         if bound {
             record_pane(&paths, &record.run_id, new.clone()).unwrap();

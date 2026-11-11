@@ -711,13 +711,13 @@ pub fn claim_rung(
     .map(|(_, rung)| rung)
 }
 
-/// Claim one provider-limit park of a child run for its parent's notice and hold
-/// the run through it. The park is named by the child's `last_activity`; a
-/// settled run and a park already claimed write nothing. The first claim of a
-/// park stores `hold` and moves `deadline_at`, and `deadline_notice_at` when
-/// set, later by the held span; a claim again after a release moves nothing.
-/// Returns whether this caller owns the notice.
-pub fn claim_park_notice(
+/// Claim one provider-limit park of a child run and hold the run through it.
+/// The park is named by the child's `last_activity`; a settled run and a park
+/// already claimed write nothing. The first claim of a park stores `hold` and
+/// moves `deadline_at`, and `deadline_notice_at` when set, later by the held
+/// span; a claim again of a stored hold (one an older binary released) moves
+/// nothing. Returns whether this caller made the claim.
+pub fn claim_limit_hold(
     paths: &StatePaths,
     run_id: &RunId,
     hold: crate::store::run::LimitHold,
@@ -747,14 +747,15 @@ pub fn claim_park_notice(
 }
 
 /// Fail a child run for the provider-limit park named by `activity`, writing
-/// `reason` with the terminal status. A held park fails only once its reset
-/// has passed; an unheld one only while no notice claims it. A terminal run is
-/// left untouched. Returns the record only when this call wrote it.
+/// `failure` and its sentence in `failure_tail` with the terminal status. A
+/// held park fails only once its refill has passed; an unheld one only while
+/// no hold claims it. A terminal run is left untouched. Returns the record
+/// only when this call wrote it.
 pub fn fail_limit_park(
     paths: &StatePaths,
     run_id: &RunId,
     activity: Timestamp,
-    reason: &str,
+    failure: crate::store::run::LimitFailure,
 ) -> Result<Option<RunRecord>> {
     let (record, wrote) = update_record(paths, run_id, |record, now| {
         let owed = match record.limit_hold {
@@ -767,8 +768,9 @@ pub fn fail_limit_park(
             return Ok(RecordMutation::Keep(false));
         }
         if record.failure_tail.is_none() {
-            record.failure_tail = capped_failure_tail(reason);
+            record.failure_tail = capped_failure_tail(&super::park_notice::failure_tail(&failure));
         }
+        record.limit_failure = Some(failure.clone());
         Ok(RecordMutation::Write(true))
     })?;
     Ok(wrote.then_some(record))
@@ -791,18 +793,6 @@ pub fn hand_over(paths: &StatePaths, run_id: &RunId, from: Option<PaneId>) -> Re
         Ok(RecordMutation::Write(stamped))
     })
     .map(|(_, stamped)| stamped)
-}
-
-/// Give a claimed park back when its notice could not be queued.
-pub fn release_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timestamp) -> Result<()> {
-    update_record(paths, run_id, |record, _| {
-        if record.park_noticed_activity != Some(activity) {
-            return Ok(RecordMutation::Keep(()));
-        }
-        record.park_noticed_activity = None;
-        Ok(RecordMutation::Write(()))
-    })
-    .map(|_| ())
 }
 
 /// Claim this run's one silent-child notice. A settled or already-noticed run writes nothing.

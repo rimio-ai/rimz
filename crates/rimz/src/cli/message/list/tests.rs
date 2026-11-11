@@ -103,20 +103,16 @@ fn foldable_notice_kinds_fold_at_every_status() {
     let mut compact = keepalive.clone();
     compact.sender = MessageSender::System;
     compact.body = MessageBody::Command;
-    let mut paused = keepalive.clone();
-    paused.sender = MessageSender::Harness {
-        notice: HarnessNotice::SubagentPaused,
-    };
-    paused.about_run = Some(rimz::ids::RunId::new());
-    let mut stalled = paused.clone();
+    let mut stalled = keepalive.clone();
     stalled.sender = MessageSender::Harness {
         notice: HarnessNotice::SubagentStalled,
     };
-    let mut restarted = paused.clone();
+    stalled.about_run = Some(rimz::ids::RunId::new());
+    let mut restarted = stalled.clone();
     restarted.sender = MessageSender::Harness {
         notice: HarnessNotice::SubagentRestarted,
     };
-    let counts = [keepalive, compact, paused, stalled, restarted]
+    let counts = [keepalive, compact, stalled, restarted]
         .into_iter()
         .flat_map(|row| {
             [
@@ -140,7 +136,7 @@ fn foldable_notice_kinds_fold_at_every_status() {
             })
         })
         .collect::<Vec<_>>();
-    assert_eq!(counts, [1; 50]);
+    assert_eq!(counts, [1; 40]);
 }
 
 #[test]
@@ -193,7 +189,6 @@ fn child_notices_fold_only_with_the_same_recorded_run() {
     let run = rimz::ids::RunId::new();
     let other_run = rimz::ids::RunId::new();
     let outputs = [
-        HarnessNotice::SubagentPaused,
         HarnessNotice::SubagentRestarted,
         HarnessNotice::SubagentStalled,
     ]
@@ -224,7 +219,7 @@ fn child_notices_fold_only_with_the_same_recorded_run() {
             .iter()
             .map(|output| output.matches(" → ").count())
             .collect::<Vec<_>>(),
-        [1, 2, 2, 2, 2].repeat(3),
+        [1, 2, 2, 2, 2].repeat(2),
         "{outputs:#?}"
     );
 }
