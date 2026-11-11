@@ -641,9 +641,9 @@ pub fn project_tasks_from_value(
             })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
     for (name, entry) in &mut tasks.0 {
-        schedule::validate_name(name).map_err(|source| EffectiveConfigErr::Tasks {
+        crate::harness::name::validate_name(name).map_err(|source| EffectiveConfigErr::Tasks {
             path: config_path.to_path_buf(),
-            source: source.into(),
+            source: ScheduleErr::from(source).into(),
         })?;
         entry.root = project_root.to_path_buf();
         if entry.agent.is_some() && !task_has_prompt(entry) {

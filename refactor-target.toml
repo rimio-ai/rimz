@@ -1003,8 +1003,10 @@ path = "crates/rimz/src/config"
 upward-dependencies = [
     "agents",
     "harness::budget",
+    "harness::name",
     "harness::schedule",
     "harness::spec",
+    "harness::surplus",
     "harness::team_prompt",
     "store::message",
 ]
@@ -2146,7 +2148,7 @@ path = "crates/rimz/src/harness"
 # The prompt-submit Environment sampler and its launch switch cross the harness/CLI hook seam (+4).
 # A loop run in flight is looked up by name and root, its row gone or not (+1).
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
-# A loop task's one account resolution serves the runner and `loop add`: `task_login` (+1).
+# A loop task's one account resolution serves the runner, workflow steps and `loop add`: `loop_task::task_login` (+1).
 # Rebirth settlement takes a disposition and previews the unresumable agents; the plan reads skips by session (+5).
 # The preview says recovery was switched off, and live room entry settles parked recovery through the room (+2).
 # Live room entry reads the plan's empty verdict and its declined count, and the preview counts seats live members already fill (+3).
@@ -5198,6 +5200,7 @@ allowed-dependencies = [
     "harness::hibernate",
     "harness::launch",
     "harness::launch_reminders",
+    "harness::loop_task",
     "harness::prompt_compose",
     "harness::schedule",
     "harness::scratch",
@@ -5396,9 +5399,12 @@ allowed-dependencies = [
     "harness::assist_log",
     "harness::budget",
     "harness::launch",
+    "harness::loop_task",
+    "harness::name",
     "harness::plan",
     "harness::run",
     "harness::schedule",
+    "harness::surplus",
     "harness::workflow",
     "ids",
     "proc",
@@ -5417,7 +5423,7 @@ allowed-dependencies = [
 # The add-time window resolver and its refusals serve both `loop add` paths (+2).
 # `--after-reset` resolves its instant here for both `loop add` paths (+2).
 # `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
-# A task's account pin is a `LaunchLogin`, resolved once by `task_login` for the runner and `loop add` (+1).
+# A task's account pin is a `LaunchLogin`, which `loop_task::task_login` resolves for the runner and `loop add`.
 # Fan-out supplies its already-resolved marker checkout separately from task config.
 # A deduping task's run creation records its checkout in the workflow launch memory.
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
@@ -5432,7 +5438,7 @@ allowed-dependencies = [
 # CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
 # CheckOutcome::{stderr_line,timed_out} let capacity checks diagnose failures without copying output (+2).
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
-# `surplus_refusal` lets a workflow judge read the surplus gate its run kept from the loop task's row, as a fire's admission reads the row (+1).
+# A fire's admission reads the live row's surplus gate through `surplus::surplus_refusal`, as a workflow judge reads the values its run kept.
 surface-budget = 70
 
 [[verdict]]

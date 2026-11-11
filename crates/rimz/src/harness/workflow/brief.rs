@@ -5,9 +5,8 @@ use serde_json::Value;
 use super::{Check, CheckKind, Fireability, HopKind, Step, WorkflowSpec, routing_hop};
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
-use crate::harness::schedule::{
-    catalog::TaskCatalog, span, trigger_clause, verbatim, when::WhenExpr,
-};
+use crate::harness::prose::{span, verbatim};
+use crate::harness::schedule::{catalog::TaskCatalog, trigger_clause, when::WhenExpr};
 use crate::store::workflow::{
     self, AttemptOutcome, JournalEvent, Key, RunRecord, StepLifecycle, TurnEndAction,
 };

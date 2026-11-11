@@ -996,7 +996,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         );
         if let Some(task) = &request.identity.params.loop_task {
             unset.insert(
-                super::schedule::LOOP_TASK_ENV.to_owned(),
+                super::loop_task::LOOP_TASK_ENV.to_owned(),
                 sandbox::EnvPin::Set(task.clone()),
             );
         }

@@ -27,7 +27,7 @@ impl TaskCatalog {
         config: &MachineConfig,
         definitions: &LoadedDefinitions,
     ) -> Result<PathBuf> {
-        super::validate_name(workflow)?;
+        crate::harness::name::validate_name(workflow)?;
         let task = self
             .visible()
             .get(name)

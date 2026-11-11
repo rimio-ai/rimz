@@ -211,7 +211,7 @@ pub(in crate::harness::workflow) fn budget_refusal(
     {
         return Some(reason);
     }
-    crate::harness::schedule::runner::surplus_refusal(
+    crate::harness::surplus::surplus_refusal(
         surplus,
         surplus_after,
         profile.cell.kind.as_str(),

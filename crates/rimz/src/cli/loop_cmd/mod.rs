@@ -25,6 +25,7 @@ use jiff::Timestamp;
 
 use rimz::config::{CheckOn, Judge, MachineConfig, TaskCheck, TaskEntry, TaskTarget};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
+use rimz::harness::loop_task::task_login;
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, RunStage,
@@ -33,7 +34,7 @@ use rimz::harness::schedule::run_log::{
 use rimz::harness::schedule::runner::{
     AfterReset, InFlightRun, RunLockInfo, RunLockState, RunLocks,
     SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset, in_flight_run,
-    parse_mode, parse_task_timeout, preflight_entry, task_login, window_condition_provider,
+    parse_mode, parse_task_timeout, preflight_entry, window_condition_provider,
 };
 use rimz::harness::schedule::throttle::Held;
 use rimz::harness::schedule::{

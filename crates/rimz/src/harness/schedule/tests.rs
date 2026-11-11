@@ -546,31 +546,6 @@ fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
     );
 }
 
-#[test]
-fn surplus_gate_values_parse_and_reject_unsafe_inputs() {
-    assert_eq!(parse_surplus("1.5x"), Ok(1.5));
-    assert_eq!(parse_surplus(" 2X "), Ok(2.0));
-    assert_eq!(
-        parse_surplus_after("3d"),
-        Ok(Duration::from_secs(3 * 86_400))
-    );
-    for raw in ["", "0", "-1x", "NaN", "inf", "many"] {
-        assert!(parse_surplus(raw).is_err(), "{raw}");
-    }
-    for raw in ["3", "2w", "1.5d"] {
-        assert!(parse_surplus_after(raw).is_err(), "{raw}");
-    }
-}
-
-#[test]
-fn names_are_validated() {
-    validate_name("morning").expect("ok");
-    validate_name("morning-claude_1").expect("ok");
-    for name in ["", "bad name", "bad/name"] {
-        assert!(validate_name(name).is_err(), "{name}");
-    }
-}
-
 /// Each accepted action shape with its kind predicates, then every way the
 /// action fields contradict each other and the message that names the fix.
 #[test]

@@ -547,7 +547,7 @@ fn launch_groups(
             crate::store::writer::LaunchLogin::RoomDefault,
             crate::store::writer::LaunchLogin::Pinned,
         );
-        let login = crate::harness::schedule::runner::task_login(&requested, &cell.kind, &runtime)
+        let login = crate::harness::loop_task::task_login(&requested, &cell.kind, &runtime)
             .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
         let account = login.as_ref().map(|login| login.name().clone());
         match groups

@@ -746,7 +746,7 @@ impl TaskEntry {
             }
         }
         if let Some(raw) = self.surplus.as_deref() {
-            crate::harness::schedule::parse_surplus(raw).map_err(|detail| {
+            crate::harness::surplus::parse_surplus(raw).map_err(|detail| {
                 TaskBudgetError::InvalidSurplus {
                     task: task.to_owned(),
                     field: "surplus",
@@ -755,7 +755,7 @@ impl TaskEntry {
             })?;
         }
         if let Some(raw) = self.surplus_after.as_deref() {
-            crate::harness::schedule::parse_surplus_after(raw).map_err(|detail| {
+            crate::harness::surplus::parse_surplus_after(raw).map_err(|detail| {
                 TaskBudgetError::InvalidSurplus {
                     task: task.to_owned(),
                     field: "surplus-after",
