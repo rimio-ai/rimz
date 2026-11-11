@@ -1145,7 +1145,11 @@ impl LoopState {
             return Ok(());
         }
         // A jump to this pane's tab is viewing evidence: the landing paints a view, never scratch.
-        self.pane.optimistic_watch_until = Some(arrived + FOCUS_RESUME_WATCH_WINDOW);
+        // A peer that turns out not to be the destination gets its earlier mark back.
+        let unarmed = self
+            .pane
+            .optimistic_watch_until
+            .replace(arrived + FOCUS_RESUME_WATCH_WINDOW);
         if let Some(source) = push.source_view {
             self.views.registry.lock().land(
                 source,
@@ -1164,6 +1168,7 @@ impl LoopState {
             self.prepare_action();
             push.peer.snapshot_ms = Some(push.elapsed_ms(self.pane.clock.now()));
             if !push.is_current() {
+                self.pane.optimistic_watch_until = unarmed;
                 push.finish(PushVerdict::Superseded, self.pane.clock.now());
                 return Ok(());
             }
@@ -1173,6 +1178,7 @@ impl LoopState {
         if push.anchor.session_name != self.pane.config.room.session_name
             || !self.owns_focus_target(&push.anchor.pane_id)
         {
+            self.pane.optimistic_watch_until = unarmed;
             push.finish(PushVerdict::NotDestination, self.pane.clock.now());
             return Ok(());
         }
@@ -1187,6 +1193,7 @@ impl LoopState {
             self.pane.paint_hold.release();
         }
         if !push.is_current() {
+            self.pane.optimistic_watch_until = unarmed;
             push.finish(PushVerdict::Superseded, self.pane.clock.now());
             return Ok(());
         }
