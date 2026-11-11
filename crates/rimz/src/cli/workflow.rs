@@ -295,6 +295,7 @@ fn start(
             task: None,
             surplus: None,
             surplus_after: None,
+            fire: None,
         },
         workflow::ScopeRoots {
             checkout: scope.clone(),

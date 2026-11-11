@@ -1466,6 +1466,7 @@ fn create_and_validate_agree_on_ignored_fields_and_required_rules() {
                 task: None,
                 surplus: None,
                 surplus_after: None,
+                fire: None,
             },
             ScopeRoots {
                 checkout: dir.clone(),

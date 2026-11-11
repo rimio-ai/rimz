@@ -497,6 +497,21 @@ fn durable_record_round_trip_and_json_shape() {
         (&kept["surplus"], &kept["surplus_after"]),
         (&json!("1.5x"), &json!("2h"))
     );
+    assert!(
+        value.get("fire").is_none(),
+        "a hand-started run keeps no fire"
+    );
+    for fire in [
+        json!({"kind":"manual", "task":"land"}),
+        json!({"kind":"scheduled", "task":"land"}),
+        json!({"kind":"scheduled", "task":"land", "trigger":"on the signal `deploy.done`"}),
+    ] {
+        let mut fired = value.clone();
+        fired["fire"] = fire.clone();
+        let kept =
+            serde_json::to_value(serde_json::from_value::<RunRecord>(fired).unwrap()).unwrap();
+        assert_eq!(kept["fire"], fire);
+    }
     let mut legacy = value["prev_attempt"].clone();
     legacy.as_object_mut().unwrap().remove("code");
     legacy.as_object_mut().unwrap().remove("log");

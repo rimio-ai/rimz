@@ -372,6 +372,7 @@ fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
             capacity_until: None,
             surplus: task.entry().surplus.clone(),
             surplus_after: task.entry().surplus_after.clone(),
+            fire: None,
         },
         ScopeRoots {
             checkout: home.into(),
@@ -808,6 +809,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
             capacity_until: None,
             surplus: None,
             surplus_after: None,
+            fire: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -1435,6 +1437,7 @@ fn inline_and_ejected(
             capacity_until: None,
             surplus: None,
             surplus_after: None,
+            fire: None,
         },
         ScopeRoots {
             checkout: inline_home.path().into(),
@@ -1460,6 +1463,7 @@ fn inline_and_ejected(
             task: Some("nightly".into()),
             surplus: None,
             surplus_after: None,
+            fire: None,
         },
         ScopeRoots {
             checkout: ejected_home.path().into(),

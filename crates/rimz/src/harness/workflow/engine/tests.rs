@@ -384,6 +384,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
             task: None,
             surplus: None,
             surplus_after: None,
+            fire: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -463,6 +464,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
                 task: None,
                 surplus: None,
                 surplus_after: None,
+                fire: None,
             },
             ScopeRoots {
                 checkout: home.path().into(),
@@ -517,6 +519,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
                 task: None,
                 surplus: None,
                 surplus_after: None,
+                fire: None,
             },
             ScopeRoots {
                 checkout,
@@ -981,6 +984,7 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
         capacity_until: None,
         surplus: None,
         surplus_after: None,
+        fire: None,
     }
 }
 
@@ -1050,6 +1054,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
             task: None,
             surplus: None,
             surplus_after: None,
+            fire: None,
         },
     )
     .unwrap();
@@ -1066,6 +1071,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
             task: Some("nightly".into()),
             surplus: None,
             surplus_after: None,
+            fire: None,
         }),
         task.id,
         "a task that now names another workflow still overlaps its inline run"
@@ -1076,6 +1082,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
             task: None,
             surplus: None,
             surplus_after: None,
+            fire: None,
         }),
         deployed.id
     );
@@ -1113,6 +1120,7 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
         task: None,
         surplus: None,
         surplus_after: None,
+        fire: None,
     };
     assert!(
         start_at(&state, home.path(), deployed)

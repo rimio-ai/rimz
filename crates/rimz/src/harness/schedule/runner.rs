@@ -54,6 +54,7 @@ use crate::harness::surplus::surplus_refusal;
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
+use crate::store::workflow::RunFire;
 use crate::store::writer::LaunchLogin;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -908,6 +909,7 @@ impl<'a> TaskFire<'a> {
                 task: Some(self.name.clone()),
                 surplus: self.entry.surplus.clone(),
                 surplus_after: self.entry.surplus_after.clone(),
+                fire: Some(self.run_fire()),
             },
             WorkflowSource::Inline(definition) => {
                 crate::harness::workflow::DefinitionSource::Inline {
@@ -920,6 +922,7 @@ impl<'a> TaskFire<'a> {
                     capacity_until: self.default_capacity_cutoff()?,
                     surplus: self.entry.surplus.clone(),
                     surplus_after: self.entry.surplus_after.clone(),
+                    fire: Some(self.run_fire()),
                 }
             }
         };
@@ -996,6 +999,19 @@ impl<'a> TaskFire<'a> {
                 record.error = error;
             },
         )))
+    }
+
+    /// What this fire tells its run's briefs, frozen into the run at its creation: the task, and
+    /// for a scheduled fire the trigger; a manual fire's brief names the command instead.
+    fn run_fire(&self) -> RunFire {
+        let task = self.name.clone();
+        if self.mode == LoopRunMode::Manual {
+            return RunFire::Manual { task };
+        }
+        RunFire::Scheduled {
+            task,
+            trigger: super::trigger_clause(&self.task),
+        }
     }
 
     /// The task's live run keyed on its firing checkout, read before a fresh tree is cut so

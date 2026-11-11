@@ -770,21 +770,29 @@ impl ParsedTrigger {
     }
 }
 
-pub(super) fn trigger_clause(parsed: &ParsedTrigger, condition_predicate: &str) -> Option<String> {
+/// The task's trigger as its run's brief words it (``on the cron schedule `0 * * * *` ``); a
+/// watch, or a trigger that does not parse, has none.
+fn trigger_clause(task: &catalog::LoadedTask) -> Option<String> {
+    let parsed = task.trigger().as_ref().ok()?;
+    let condition_predicate = if task.entry().each_worktree {
+        "held in this worktree"
+    } else {
+        "held"
+    };
     Some(match &parsed.trigger {
         // `describe` prints a raw cron as a noun phrase, which no verb can follow.
         Trigger::Schedule(ParsedSchedule {
             schedule: Schedule::Cron(cron),
             ..
-        }) => format!(" on the cron schedule {}", span(&cron.source)),
-        Trigger::Schedule(_) => format!(" {}", verbatim(&parsed.describe())),
+        }) => format!("on the cron schedule {}", span(&cron.source)),
+        Trigger::Schedule(_) => verbatim(&parsed.describe()),
         Trigger::Signal { .. } => {
             let described = parsed.describe();
             let selector = described.strip_prefix("on ").unwrap_or(&described);
-            format!(" on the signal {}", span(selector))
+            format!("on the signal {}", span(selector))
         }
         Trigger::Condition { expr, hold } => {
-            let mut clause = format!(" when {} {condition_predicate}", span(&expr.to_string()));
+            let mut clause = format!("when {} {condition_predicate}", span(&expr.to_string()));
             if let Some(hold) = hold {
                 clause.push_str(&format!(" for {}", arm::duration_label(*hold)));
             }
