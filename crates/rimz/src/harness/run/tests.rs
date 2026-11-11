@@ -2494,7 +2494,7 @@ fn fail_if_nonterminal_writes_the_reason_with_the_failed_status() {
     assert!(tail.ends_with('b'));
 
     let (_dir, paths, record) = setup();
-    record_failure_tail(&paths, &record.run_id, "pane tail").unwrap();
+    record_failure_tail(&paths, &record.run_id, None, "pane tail").unwrap();
     let failed = fail_if_nonterminal(&paths, &record.run_id, "launch error")
         .unwrap()
         .expect("newly failed");
@@ -2512,10 +2512,10 @@ fn fail_if_nonterminal_writes_the_reason_with_the_failed_status() {
 fn record_failure_tail_persists_first_non_empty_tail() {
     let (_dir, paths, record) = setup();
 
-    let stored = record_failure_tail(&paths, &record.run_id, "first\n\n").unwrap();
+    let stored = record_failure_tail(&paths, &record.run_id, None, "first\n\n").unwrap();
     assert_eq!(stored.failure_tail.as_deref(), Some("first"));
 
-    let unchanged = record_failure_tail(&paths, &record.run_id, "second").unwrap();
+    let unchanged = record_failure_tail(&paths, &record.run_id, None, "second").unwrap();
     assert_eq!(unchanged.failure_tail.as_deref(), Some("first"));
     assert_eq!(
         load(&paths, &record.run_id)
@@ -2530,7 +2530,7 @@ fn record_failure_tail_persists_first_non_empty_tail() {
 fn record_failure_tail_ignores_empty_tail() {
     let (_dir, paths, record) = setup();
 
-    let stored = record_failure_tail(&paths, &record.run_id, " \n\t").unwrap();
+    let stored = record_failure_tail(&paths, &record.run_id, None, " \n\t").unwrap();
 
     assert_eq!(stored.failure_tail, None);
     assert_eq!(load(&paths, &record.run_id).unwrap().failure_tail, None);
@@ -2541,7 +2541,7 @@ fn record_failure_tail_caps_stored_tail() {
     let (_dir, paths, record) = setup();
     let tail = format!("{}{}", "a".repeat(FAILURE_TAIL_CAP), "b".repeat(20));
 
-    let stored = record_failure_tail(&paths, &record.run_id, &tail).unwrap();
+    let stored = record_failure_tail(&paths, &record.run_id, None, &tail).unwrap();
 
     let stored = stored.failure_tail.expect("tail");
     assert_eq!(stored.len(), FAILURE_TAIL_CAP);
@@ -3459,6 +3459,25 @@ fn a_wrapper_fails_only_a_run_its_pane_still_owns() {
     assert_eq!(load(&paths, id).unwrap().status, RunStatus::Running);
     let settled = fail(&third).expect("the owning pane's exit settles the run");
     assert_eq!(settled.status, RunStatus::Failed);
+}
+
+#[test]
+fn a_wrapper_records_a_failure_tail_only_on_a_run_its_pane_still_owns() {
+    let (_dir, paths, record, old, new) = handed_over_run();
+    let id = &record.run_id;
+    let kept = record_failure_tail(&paths, id, Some(&old), "old pane screen").unwrap();
+    assert_eq!(kept.failure_tail, None);
+    assert_eq!(load(&paths, id).unwrap().failure_tail, None);
+
+    record_pane(&paths, id, new.clone()).unwrap();
+    let stored = record_failure_tail(&paths, id, Some(&new), "new pane screen").unwrap();
+    assert_eq!(stored.failure_tail.as_deref(), Some("new pane screen"));
+
+    let (_dir, paths, record) = setup();
+    let owner = PaneId::parse("tmux:%1").unwrap();
+    record_pane(&paths, &record.run_id, owner.clone()).unwrap();
+    let stored = record_failure_tail(&paths, &record.run_id, Some(&owner), "own screen").unwrap();
+    assert_eq!(stored.failure_tail.as_deref(), Some("own screen"));
 }
 
 #[test]
