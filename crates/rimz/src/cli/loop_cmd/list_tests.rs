@@ -33,6 +33,7 @@ fn held_starts_have_their_own_table_without_moving_the_task() {
         caller_root: None,
         now,
         warnings: Vec::new(),
+        timer_active: false,
     };
     for (bounded, running) in [(false, false), (true, false), (false, true)] {
         let task = &mut model.rooms[0].tasks[0];
@@ -237,6 +238,7 @@ fn done_keeps_running_rows_above_the_finished_cut() {
         caller_root: Some("/repo".into()),
         now,
         warnings: Vec::new(),
+        timer_active: false,
     };
     let mut out = Vec::new();
     text::write(
@@ -275,6 +277,7 @@ fn expanded_wake_ups_drop_the_unfold_hint() {
         caller_root: Some("/repo".into()),
         now,
         warnings: Vec::new(),
+        timer_active: false,
     };
     for all in [false, true] {
         let mut out = Vec::new();
@@ -311,6 +314,7 @@ fn here_marks_only_rows_that_name_a_worktree() {
         caller_root: Some("/repo".into()),
         now: Timestamp::from_second(1_000).unwrap(),
         warnings: Vec::new(),
+        timer_active: false,
     };
     let mut out = Vec::new();
     text::write(
@@ -398,6 +402,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         caller_root: Some("/repo".into()),
         now,
         warnings: Vec::new(),
+        timer_active: false,
     };
     let mut out = Vec::new();
     text::write(
@@ -481,6 +486,7 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
         caller_root: Some("/repo".into()),
         now,
         warnings: Vec::new(),
+        timer_active: false,
     };
     let mut out = Vec::new();
     text::write(
@@ -561,6 +567,7 @@ fn row_colors_follow_state_not_name_or_trigger_prefixes() {
         caller_root: Some("/repo".into()),
         now,
         warnings: Vec::new(),
+        timer_active: false,
     };
     let mut out = Vec::new();
     text::write(&mut out, &model, &[&model.rooms[0]], true, None, None, None).unwrap();

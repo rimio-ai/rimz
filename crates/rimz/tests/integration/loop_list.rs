@@ -2043,3 +2043,175 @@ fn stop_cancels_every_live_run_before_failing_on_one_that_would_not_cancel() {
         "{stderr}"
     );
 }
+
+/// A no-room project with a routine clock, a one-off clock, and a signal task,
+/// and a `systemctl` stand-in that exits `code` and logs each call. The timer's
+/// unit files exist when `units` holds.
+#[cfg(target_os = "linux")]
+fn timer_fixture(code: i32, units: bool) -> (Env, PathBuf, PathBuf) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let clock = task(&env.project_root);
+    config(
+        &env,
+        BTreeMap::from([
+            ("nightly".into(), clock.clone()),
+            (
+                "once".into(),
+                TaskEntry {
+                    every: None,
+                    at: Some("23:59".into()),
+                    ..clock.clone()
+                },
+            ),
+            (
+                "merged".into(),
+                TaskEntry {
+                    every: None,
+                    signal: Some("pr.merged".into()),
+                    ..clock
+                },
+            ),
+        ]),
+    );
+    write_loop_fire_state(
+        &env,
+        BTreeMap::from([(
+            "nightly".to_owned(),
+            Timestamp::now() - SignedDuration::from_mins(10),
+        )]),
+    );
+    let shims = env.home_root.join("timer-shims");
+    let log = env.home_root.join("systemctl.log");
+    write_path_shim(
+        &shims,
+        "systemctl",
+        &format!("echo \"$@\" >> '{}'\nexit {code}", log.display()),
+    );
+    if units {
+        let dir = env.config_root().join("systemd/user");
+        std::fs::create_dir_all(&dir).unwrap();
+        for unit in ["rimz-loop.timer", "rimz-loop.service"] {
+            std::fs::write(dir.join(unit), "").unwrap();
+        }
+    }
+    (env, shims, log)
+}
+
+/// Run `loop list` with the stand-in first on `PATH`; return stdout and the
+/// number of timer status reads the invocation made.
+#[cfg(target_os = "linux")]
+fn list_with_timer(env: &Env, shims: &Path, log: &Path, args: &[&str]) -> (String, usize) {
+    std::fs::write(log, "").unwrap();
+    let output = env
+        .rimz()
+        .args(["loop", "list"])
+        .args(args)
+        .env("PATH", path_with_front(shims))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reads = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .filter(|line| *line == "--user is-active rimz-loop.timer")
+        .count();
+    (String::from_utf8(output.stdout).unwrap(), reads)
+}
+
+#[cfg(target_os = "linux")]
+fn json_tasks(stdout: &str) -> (serde_json::Value, BTreeMap<String, serde_json::Value>) {
+    let listed: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    let room = listed["rooms"][0].clone();
+    let tasks = room["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| (task["name"].as_str().unwrap().to_owned(), task.clone()))
+        .collect();
+    (room, tasks)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn active_timer_shows_closed_room_clocks_as_live() {
+    let (env, shims, log) = timer_fixture(0, true);
+    let (text, text_reads) = list_with_timer(&env, &shims, &log, &[]);
+    assert!(text.contains("no room open"), "{text}");
+    assert!(text.contains("clocks use the active timer"), "{text}");
+    assert_eq!(text.matches("waits for room").count(), 0, "{text}");
+    let nightly = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("nightly"))
+        .unwrap();
+    assert!(!nightly.contains('—'), "{text}");
+    let (json, json_reads) = list_with_timer(&env, &shims, &log, &["--json"]);
+    let (room, tasks) = json_tasks(&json);
+    assert_eq!(room["open"], false, "{json}");
+    for name in ["nightly", "once", "merged"] {
+        let task = &tasks[name];
+        assert_eq!(task["state"], "live", "{json}");
+        assert!(
+            !task["trigger"].as_str().unwrap().contains("waits for room"),
+            "{json}"
+        );
+    }
+    assert!(tasks["nightly"]["next_at"].is_string(), "{json}");
+    assert_eq!((text_reads, json_reads), (1, 1));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clocks_wait_for_the_room_without_an_active_timer() {
+    for (code, units) in [(3, true), (0, false)] {
+        let (env, shims, log) = timer_fixture(code, units);
+        let (text, _) = list_with_timer(&env, &shims, &log, &[]);
+        assert!(
+            text.contains("clocks and CI/PR signals wait until"),
+            "{text}"
+        );
+        for name in ["nightly", "once"] {
+            let row = text
+                .lines()
+                .find(|line| line.trim_start().starts_with(name))
+                .unwrap();
+            assert_eq!(row.matches("waits for room").count(), 1, "{text}");
+        }
+        let (json, _) = list_with_timer(&env, &shims, &log, &["--json"]);
+        let (_, tasks) = json_tasks(&json);
+        assert_eq!(tasks["nightly"]["state"], "waits_for_room", "{json}");
+        assert_eq!(tasks["once"]["state"], "waits_for_room", "{json}");
+        assert_eq!(tasks["merged"]["state"], "live", "{json}");
+        if !units {
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), "");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn open_room_lists_clocks_without_reading_the_timer() {
+    let (env, shims, log) = timer_fixture(0, true);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "list-timer",
+    );
+    let (text, reads) = list_with_timer(&env, &shims, &log, &[]);
+    assert!(
+        text.contains("room open") && !text.contains("no room open"),
+        "{text}"
+    );
+    assert_eq!(reads, 0, "{text}");
+    let (json, reads) = list_with_timer(&env, &shims, &log, &["--json"]);
+    let (room, tasks) = json_tasks(&json);
+    assert_eq!(room["open"], true, "{json}");
+    assert_eq!(tasks["nightly"]["state"], "live", "{json}");
+    assert_eq!(tasks["once"]["state"], "live", "{json}");
+    assert_eq!(reads, 0);
+}

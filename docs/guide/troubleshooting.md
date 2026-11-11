@@ -421,7 +421,7 @@ Stop cancels each live run the task started, as `rimz workflow cancel <run>` doe
 
 `rimz doctor` flags live clock tasks with no open room and no active loop timer under `LOOP TASKS`. Run `rimz loop timer install`, then `rimz loop timer status`, or run `rimz start` in the task's root to keep time in an open room. Disabled and paused tasks are not flagged.
 
-A clock task whose room is closed says `waits for room` in `rimz loop list`. The heading says whether the loop timer can keep its clocks moving without a room. If the timer is installed but its tick cannot reach your systemd user session, it refuses rather than firing and prints the fix. `rimz loop timer status` says which. [Who keeps time](./loops.md#who-keeps-time) covers both, along with what a timer fire does to your machine.
+A clock task whose room is closed says `waits for room` in `rimz loop list` when the loop timer is not active. With the timer active, its row reads as in an open room, and the heading says clocks use the active timer. If the timer is installed but its tick cannot reach your systemd user session, it refuses rather than firing and prints the fix. `rimz loop list` and `rimz loop timer status` report the timer unit's state, active or inactive, not whether its tick succeeds, so an active timer whose tick refuses still shows its clocks as live. [Who keeps time](./loops.md#who-keeps-time) covers both, along with what a timer fire does to your machine.
 
 Signal and watch tasks need no timekeeper: whatever emits the signal or runs the command fires them, room or no room.
 
