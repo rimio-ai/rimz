@@ -112,7 +112,7 @@ A launch that names an existing marked tree reuses it, subject to the CLI's [nam
 
 `crates/rimz/src/launcher/worktree_entry.rs::check` is the entry check. It reads the marker and returns for a missing, unmarked, or occupied tree. It then prints the `--fresh` notice, and only after that inspects Git, so an occupied tree or a `--fresh` launch pays no Git status. It runs after cross-repository consent and before checkout resolution, from layout `launcher::settle_layout` and supervised `prepare_supervised`. Single agents enter it directly, and cohorts enter only from `Absent`. Harness-owned runs, PR checkouts, explicit resumes, and generated names skip it. The launcher owns entry checks and protected removal, and the CLI presents the closed-cohort offers described [below](#removing-a-worktree).
 
-The facts behind the check come from the harness. `crates/rimz/src/harness/worktree_entry.rs::occupied` applies `schedule::takeover::read` to cached alive snapshot rows. `crates/rimz/src/harness/worktree_entry.rs::read` takes a marked tree and owns the landed memo load and save, Git inspection with `WorktreeState::removable`, and the newest Audit activity at or under the tree, ended agents included. Both lexical and physical checkout paths match.
+The facts behind the check come from the harness. `crates/rimz/src/harness/worktree_entry.rs::occupied` applies `harness::takeover::read` to cached alive snapshot rows. `crates/rimz/src/harness/worktree_entry.rs::read` takes a marked tree and owns the landed memo load and save, Git inspection with `WorktreeState::removable`, and the newest Audit activity at or under the tree, ended agents included. Both lexical and physical checkout paths match.
 
 ### Which repository a launch uses
 

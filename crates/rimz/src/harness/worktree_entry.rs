@@ -6,7 +6,7 @@ use jiff::Timestamp;
 
 use crate::agents::{AgentState, ParkDemotion};
 use crate::harness::auto_continue::CardStatus;
-use crate::harness::schedule::takeover::{self, Takeover};
+use crate::harness::takeover::{self, Takeover};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::path::normalize_path_lexical;
 use crate::worktree::{self, WorktreeErr, WorktreeMarker, WorktreeStatus};

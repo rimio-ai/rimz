@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::Store;
 use crate::agents::{AgentState, WorkflowAttemptRef};
-use crate::harness::schedule::takeover::OpenTurn;
 use crate::harness::schedule::when::head;
+use crate::harness::takeover::OpenTurn;
 use crate::ids::{EventId, RunId, WorkflowRunId};
 use crate::store::StoreErr;
 use crate::store::run::RunStatus;

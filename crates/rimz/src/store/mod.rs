@@ -265,7 +265,7 @@ impl Store {
     /// the runtime liveness expel as of its last publish: an owner that died
     /// since stays until the next append. A reader that decides on current
     /// liveness rechecks each row with [`runtime::agent_liveness`], as
-    /// `harness::schedule::takeover::read` does. The extent stamp catches a
+    /// `harness::takeover::read` does. The extent stamp catches a
     /// fetch racing a just-appended event and re-projects instead. Cached
     /// snapshots also attach cache-class agent context so every address
     /// resolver sees the same rest certificates as pane ownership.

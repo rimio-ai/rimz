@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::agents::{AgentState, AskDelivery, AskKind, ProviderCapacity, TurnErrorClass};
-use rimz::harness::schedule::takeover::{self, Takeover};
+use rimz::harness::takeover::{self, Takeover};
 use rimz::harness::workflow::{self, WorkflowErr};
 use rimz::ids::EventId;
 use rimz::launcher::{self, LaunchOutcome, Preparation};
