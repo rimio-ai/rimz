@@ -558,8 +558,8 @@ fn collect_loop() -> model::LoopTasks {
         .map(|(name, task)| (name.as_str(), task.entry()))
         .collect::<Vec<_>>();
     model::LoopTasks {
-        throttle_errors: rimz::harness::schedule::throttle::check_errors(),
-        throttle_holds: rimz::harness::schedule::throttle::diagnostic_holds(&config, &tasks),
+        throttle_errors: rimz::harness::throttle::check_errors(),
+        throttle_holds: rimz::harness::throttle::diagnostic_holds(&config, &tasks),
         tasks: rows,
         timer,
         unscheduled,

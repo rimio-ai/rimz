@@ -45,7 +45,6 @@ pub mod runner;
 pub mod signal;
 pub mod strikes;
 pub mod team;
-pub mod throttle;
 
 pub use fire::last_stamps;
 

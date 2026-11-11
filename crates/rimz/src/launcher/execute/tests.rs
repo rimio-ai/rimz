@@ -208,7 +208,7 @@ fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
 
 #[test]
 fn committed_launch_counts_once_even_when_run_publication_fails() {
-    crate::harness::schedule::throttle::tests::assert_committed_launch_counts_once(|turn| {
+    crate::harness::throttle::tests::assert_committed_launch_counts_once(|turn| {
         let fixture = Fixture::new();
         let store = fixture.fresh.context.store.clone();
         let mut fresh = fixture.fresh.clone();

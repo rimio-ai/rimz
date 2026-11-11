@@ -26,7 +26,6 @@ use super::{
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
     run_lock::file_name as run_lock_file_name,
-    throttle,
 };
 use crate::agents::PermissionMode;
 use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
@@ -2414,7 +2413,7 @@ pub struct InFlightRun {
     pub run: Option<RunRecord>,
     /// The task's runs waiting for their turn in the start throttle; the
     /// holder is one of them when its pid matches.
-    pub held: Vec<throttle::Held>,
+    pub held: Vec<crate::harness::throttle::Held>,
 }
 
 /// The run of task `name` in flight under `root`. The run lock decides; the run
@@ -2425,7 +2424,7 @@ pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
         return Ok(None);
     };
     let (_, project_root) = stop_workspace(root)?;
-    let held = throttle::held(name, root);
+    let held = crate::harness::throttle::held(name, root);
     // A holder still held for its turn has started no run of its own.
     let holder_held = holder.is_some_and(|info| held.iter().any(|held| held.pid == info.pid));
     let run = if holder_held {
@@ -2559,7 +2558,7 @@ pub fn stop_task(
         ) {
             tracing::debug!(pid = info.pid, "stopped loop run holder still reads live");
         }
-        throttle::reap();
+        crate::harness::throttle::reap();
         return Ok((
             StopOutcome::Stopped {
                 run_id: run.map(|record| record.run_id),

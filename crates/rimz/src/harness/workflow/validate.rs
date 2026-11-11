@@ -142,7 +142,7 @@ pub(super) fn validate_spec(
         }
         if sleep {
             if let Some(raw) = &check.sleep {
-                match spec::duration(raw) {
+                match crate::harness::duration::duration(raw) {
                     Ok(duration) if duration.is_zero() => {
                         report.error(&format!("{path}.sleep"), "sleep must be nonzero")
                     }

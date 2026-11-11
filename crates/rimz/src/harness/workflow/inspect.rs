@@ -409,7 +409,7 @@ pub fn close_after<'a>(spec: &WorkflowSpec, record: &'a RunRecord) -> Option<(Ti
     let at = verdict
         .at
         .unwrap_or(verdict.entered_at)
-        .checked_add(super::spec::duration(delay).ok()?)
+        .checked_add(crate::harness::duration::duration(delay).ok()?)
         .unwrap_or(Timestamp::MAX);
     Some((at, &verdict.target))
 }
@@ -491,7 +491,9 @@ pub fn timeout_at(
     let Some(raw) = timeout else {
         return Ok(None);
     };
-    Ok(start.checked_add(super::spec::duration(raw)?).ok())
+    Ok(start
+        .checked_add(crate::harness::duration::duration(raw)?)
+        .ok())
 }
 
 /// The case's hold instant, measured from its first matching settlement or `now`.
@@ -514,5 +516,7 @@ pub fn hold_until(
         .as_ref()
         .filter(|wait| wait.is_hold() && wait.case == Some(case))
         .map_or(now, |wait| wait.first);
-    Ok(first.checked_add(super::spec::duration(&hold)?).ok())
+    Ok(first
+        .checked_add(crate::harness::duration::duration(&hold)?)
+        .ok())
 }

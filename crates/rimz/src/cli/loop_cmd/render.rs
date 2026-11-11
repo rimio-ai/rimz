@@ -1637,7 +1637,9 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else if !config.throttle.is_empty()
         || in_flight.as_ref().is_some_and(|run| !run.held.is_empty())
     {
-        ShowThrottle::Full(schedule::throttle::readings(&config, &args.name, entry))
+        ShowThrottle::Full(rimz::harness::throttle::readings(
+            &config, &args.name, entry,
+        ))
     } else {
         ShowThrottle::Off
     };

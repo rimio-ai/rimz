@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::harness::signal::{
     SelectorErr, SignalSelector, default_signal_match_key, is_match_wildcard, parse_signal_selector,
 };
+use crate::harness::throttle::Limit;
 use crate::harness::when::WhenExpr;
 use crate::store::workflow::{Key, RouteDefaults, RunRecord, StepLifecycle, StepVisits};
 
@@ -151,46 +152,6 @@ impl<'de> Deserialize<'de> for OnBreak {
             }
         }
         deserializer.deserialize_any(Visitor)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-#[schemars(deny_unknown_fields)]
-pub struct Limit {
-    #[schemars(range(min = 1))]
-    pub max_parallel: Option<u32>,
-    pub stagger: Option<String>,
-}
-
-pub(super) fn duration(raw: &str) -> Result<std::time::Duration, crate::utils::time::TimeInputErr> {
-    use crate::utils::time::{
-        DurationUnit, TimeInputErr, format_duration_compact, parse_duration_units,
-    };
-    let duration = parse_duration_units(
-        raw,
-        &[
-            DurationUnit::Second,
-            DurationUnit::Minute,
-            DurationUnit::Hour,
-            DurationUnit::Day,
-        ],
-    )?;
-    let maximum = std::time::Duration::from_secs(365 * 86_400);
-    if duration > maximum {
-        return Err(TimeInputErr::DurationTooLong {
-            value: raw.to_owned(),
-            maximum: format_duration_compact(maximum),
-        });
-    }
-    Ok(duration)
-}
-
-impl Limit {
-    pub(in crate::harness) fn stagger(
-        &self,
-    ) -> Result<Option<std::time::Duration>, crate::utils::time::TimeInputErr> {
-        self.stagger.as_deref().map(duration).transpose()
     }
 }
 

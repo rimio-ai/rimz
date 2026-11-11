@@ -1,6 +1,5 @@
 use super::*;
 use crate::store::workflow::RunRecord;
-use std::time::Duration;
 
 const SIMPLE: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
 const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
@@ -918,27 +917,6 @@ fn wrong_typed_live_routes_refuse_but_dead_routes_warn() {
         })
         .collect::<Vec<_>>();
     assert!(actual.iter().all(|(matches, _)| *matches), "{actual:#?}");
-}
-
-#[test]
-fn workflow_duration_limit_is_one_year_inclusive() {
-    for raw in ["365d", "8760h"] {
-        assert_eq!(
-            super::super::spec::duration(raw).unwrap(),
-            Duration::from_secs(365 * 86_400)
-        );
-    }
-    for raw in ["366d", "8761h", "3000000d"] {
-        let result = super::super::spec::duration(raw);
-        assert!(
-            result.is_err(),
-            "{raw} must exceed the workflow duration maximum"
-        );
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            format!("duration `{raw}` is longer than the 365d maximum")
-        );
-    }
 }
 
 #[test]

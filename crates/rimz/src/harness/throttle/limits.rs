@@ -11,7 +11,7 @@ use super::{
     AgentState, Hold, HoldKind, Host, LimitScope, ThrottleError, cap_hold, duration_ms,
     name_counted, open,
 };
-use crate::harness::workflow::Limit;
+use crate::harness::throttle::Limit;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::RunState;
 use crate::utils::time::format_duration_compact;

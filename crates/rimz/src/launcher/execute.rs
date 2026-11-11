@@ -40,7 +40,7 @@ pub struct LeaderRun {
     pub loop_task: Option<String>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     pub reminder_section: Option<crate::harness::launch::ReminderSection>,
-    pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    pub throttle_turn: Option<crate::harness::throttle::Turn>,
     pub reader: Option<String>,
     pub response_receipt: bool,
     pub completion: RunCompletion,
@@ -92,7 +92,7 @@ pub(super) struct FreshLaunch {
     pub(super) recovery: crate::room::AttendedRecovery,
     pub(super) entry: RoomEntry,
     pub(super) soft_name: bool,
-    pub(super) throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    pub(super) throttle_turn: Option<crate::harness::throttle::Turn>,
     pub(super) fallback_assist: Option<crate::harness::assist_log::Assist>,
 }
 

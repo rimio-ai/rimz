@@ -14,12 +14,12 @@ type SleepHook = Box<dyn FnMut(&FakeHost) + Send>;
 
 /// A machine the test scripts: a queue in a tempdir, a clock that only
 /// `sleep` moves, and readings the sleep hook may change as time passes.
-pub(in crate::harness::schedule) struct FakeHost {
+pub(in crate::harness) struct FakeHost {
     dir: tempfile::TempDir,
     clock: AtomicU64,
     owner: Mutex<Owner>,
     dead: Mutex<Vec<u32>>,
-    pub(in crate::harness::schedule) pressure: Mutex<Result<Pressure, String>>,
+    pub(in crate::harness) pressure: Mutex<Result<Pressure, String>>,
     memory: Mutex<Result<u64, String>>,
     disk: Mutex<u64>,
     disk_reads: Mutex<Vec<PathBuf>>,
@@ -35,7 +35,7 @@ pub(in crate::harness::schedule) struct FakeHost {
 }
 
 impl FakeHost {
-    pub(in crate::harness::schedule) fn new() -> Arc<Self> {
+    pub(in crate::harness) fn new() -> Arc<Self> {
         Arc::new(Self {
             dir: tempfile::tempdir().expect("tempdir"),
             clock: AtomicU64::new(1_000_000),
@@ -64,47 +64,44 @@ impl FakeHost {
     }
 
     /// The seam as the gate takes it.
-    pub(in crate::harness::schedule) fn host(self: &Arc<Self>) -> Arc<dyn Host> {
+    pub(in crate::harness) fn host(self: &Arc<Self>) -> Arc<dyn Host> {
         Arc::clone(self) as Arc<dyn Host>
     }
 
     /// Run `hook` after every sleep, with the clock already advanced.
-    pub(in crate::harness::schedule) fn on_sleep(
-        &self,
-        hook: impl FnMut(&FakeHost) + Send + 'static,
-    ) {
+    pub(in crate::harness) fn on_sleep(&self, hook: impl FnMut(&FakeHost) + Send + 'static) {
         *self.on_sleep.lock().unwrap() = Some(Box::new(hook));
     }
 
     /// Milliseconds since the fake clock started.
-    pub(in crate::harness::schedule) fn elapsed_ms(&self) -> u64 {
+    pub(in crate::harness) fn elapsed_ms(&self) -> u64 {
         self.clock.load(Ordering::SeqCst) - 1_000_000
     }
 
-    pub(in crate::harness::schedule) fn set_pressure(&self, avg10: f32, avg60: f32) {
+    pub(in crate::harness) fn set_pressure(&self, avg10: f32, avg60: f32) {
         *self.pressure.lock().unwrap() = Ok(Pressure { avg10, avg60 });
     }
 
-    pub(in crate::harness::schedule) fn tickets(&self) -> usize {
+    pub(in crate::harness) fn tickets(&self) -> usize {
         ticket_paths(&self.queue_dir()).unwrap().len()
     }
 
-    pub(in crate::harness::schedule) fn checked_groups(&self) -> Vec<StartGroup> {
+    pub(in crate::harness) fn checked_groups(&self) -> Vec<StartGroup> {
         self.checks.lock().unwrap().clone()
     }
 
     /// Every path free disk was read at, in order.
-    pub(in crate::harness::schedule) fn disk_reads(&self) -> Vec<PathBuf> {
+    pub(in crate::harness) fn disk_reads(&self) -> Vec<PathBuf> {
         self.disk_reads.lock().unwrap().clone()
     }
 
     /// Become another process, as a second `rimz loop run` would be.
-    pub(in crate::harness::schedule) fn become_owner(&self, pid: u32) {
+    pub(in crate::harness) fn become_owner(&self, pid: u32) {
         self.owner.lock().unwrap().pid = pid;
     }
 
     /// Move the clock and run the sleep hook, as time passing between fires.
-    pub(in crate::harness::schedule) fn sleep(&self, duration: Duration) {
+    pub(in crate::harness) fn sleep(&self, duration: Duration) {
         self.clock
             .fetch_add(duration_ms(duration), Ordering::SeqCst);
         let hook = self.on_sleep.lock().unwrap().take();
@@ -118,11 +115,7 @@ impl FakeHost {
         self.dead.lock().unwrap().push(pid);
     }
 
-    pub(in crate::harness::schedule) fn set_agents(
-        &self,
-        workspace: &WorkspaceId,
-        agents: Vec<AgentState>,
-    ) {
+    pub(in crate::harness) fn set_agents(&self, workspace: &WorkspaceId, agents: Vec<AgentState>) {
         self.rooms
             .lock()
             .unwrap()

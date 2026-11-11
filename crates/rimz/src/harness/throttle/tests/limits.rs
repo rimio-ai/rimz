@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
-use crate::harness::schedule::throttle::WorkflowStart;
+use crate::harness::throttle::WorkflowStart;
 use crate::ids::{RunId, WorkflowRunId};
 use crate::store::workflow::{self, StepLifecycle};
 use serde_json::json;

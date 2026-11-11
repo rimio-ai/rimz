@@ -350,7 +350,7 @@ pub(super) fn prepare_end(
 pub(super) type Launch = (
     RunRecord,
     std::result::Result<String, String>,
-    Option<crate::harness::schedule::throttle::Turn>,
+    Option<crate::harness::throttle::Turn>,
     Option<super::super::Eviction>,
 );
 

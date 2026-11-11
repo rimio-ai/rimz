@@ -186,7 +186,9 @@ pub fn condition_now(
 ) -> Result<(Value, Option<Timestamp>), String> {
     if let Some(sleep) = &check.sleep {
         let end = slept_from
-            .checked_add(spec::duration(sleep).map_err(|error| error.to_string())?)
+            .checked_add(
+                crate::harness::duration::duration(sleep).map_err(|error| error.to_string())?,
+            )
             .map_err(|error| error.to_string())?;
         if Timestamp::now() >= end {
             return Ok((

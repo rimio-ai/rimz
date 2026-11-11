@@ -1726,7 +1726,7 @@ fn capacity_check_errors_render_without_tasks_and_name_the_fix() {
 
 #[test]
 fn throttle_holds_name_the_problem_and_put_repairs_in_the_closing_fixes() {
-    use rimz::harness::schedule::throttle::DiagnosticHold;
+    use rimz::harness::throttle::DiagnosticHold;
     use rimz::ids::HoldKind;
 
     let holds = [

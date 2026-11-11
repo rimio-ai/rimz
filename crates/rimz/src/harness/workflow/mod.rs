@@ -33,7 +33,7 @@ pub use inspect::{
 };
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub use spec::{
-    Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, Limit, OutcomeCap, Route,
+    Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, OutcomeCap, Route,
     ScopeKind, SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
 };
 pub(crate) use spec::{parse, parse_run};
@@ -147,7 +147,7 @@ pub struct StepLaunch {
     pub prompt: String,
     pub workflow_note: String,
     pub cwd: PathBuf,
-    pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
+    pub throttle_turn: Option<crate::harness::throttle::Turn>,
     pub overrides: LaunchOverrides,
     /// The step stops its checkout's occupants, so a named worktree's stopped cohort
     /// relaunches fresh.

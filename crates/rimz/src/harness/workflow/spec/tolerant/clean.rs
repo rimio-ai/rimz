@@ -2,10 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use super::super::{
-    CheckKind, Issue, Limit, RESERVED_OUTCOMES, Route, Step, StepKind, Wake, WorkflowSpec,
-    duration, parse_deadline, parse_window,
+    CheckKind, Issue, RESERVED_OUTCOMES, Route, Step, StepKind, Wake, WorkflowSpec, parse_deadline,
+    parse_window,
 };
 use super::ignored_issue;
+use crate::harness::duration::duration;
+use crate::harness::throttle::Limit;
 use crate::harness::when::WhenExpr;
 
 pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usize>>) {
