@@ -809,12 +809,10 @@ fn reading(elapsed_days: i64, headroom: f64) -> WindowSurplus {
 #[test]
 fn surplus_gate_covers_every_branch() {
     // Reason `surplus`/`surplus-after` gave for holding a fire back, if any.
-    let gate = |surplus, after, reading| {
-        surplus_gate_in(&surplus_entry(surplus, after), "claude", reading)
-    };
+    let gate = |surplus, after, reading| surplus_gate_in(surplus, after, "claude", reading);
 
     assert_eq!(
-        surplus_gate_in(&TaskEntry::default(), "claude", None),
+        surplus_gate_in(None, None, "claude", None),
         None,
         "an ungated task never consults the window"
     );
@@ -838,12 +836,7 @@ fn surplus_gate_covers_every_branch() {
         "headroom exactly at the threshold fires"
     );
     assert_eq!(
-        surplus_gate_in(
-            &surplus_entry(None, Some("3d")),
-            "codex",
-            Some(reading(4, 0.9))
-        )
-        .as_deref(),
+        surplus_gate_in(None, Some("3d"), "codex", Some(reading(4, 0.9))).as_deref(),
         Some("codex 7d window surplus 0.9x below 1.0x"),
         "a bare elapsed floor still demands sustainable headroom"
     );
@@ -945,7 +938,8 @@ fn month_surplus_reasons_use_the_window_label() {
         .into_iter()
         .map(|(surplus, after)| {
             surplus_gate_in(
-                &surplus_entry(surplus, after),
+                surplus,
+                after,
                 "qwen",
                 Some(WindowSurplus {
                     duration_mins: 43_200,

@@ -1058,6 +1058,7 @@ fn a_judges_account_over_its_day_cap_or_parked_is_refused_before_it_spawns() {
             &profile,
             &crate::agents::ManagedLaunchState::Unsupported,
             None,
+            None,
             &state,
             &runtime,
             now,
@@ -1136,9 +1137,9 @@ fn a_judge_on_a_spent_quota_binding_or_short_of_its_tasks_surplus_is_refused() {
         },
     )
     .unwrap();
-    let refuse = |managed: &ManagedLaunchState, task| {
+    let refuse = |managed: &ManagedLaunchState, surplus| {
         super::super::script::budget_refusal(
-            &config, &profile, managed, task, &state, &runtime, now,
+            &config, &profile, managed, surplus, None, &state, &runtime, now,
         )
     };
     let quota = refuse(&ManagedLaunchState::Bound(binding), None);
@@ -1148,25 +1149,17 @@ fn a_judge_on_a_spent_quota_binding_or_short_of_its_tasks_surplus_is_refused() {
             .is_some_and(|reason| reason.contains("exhausted")),
         "{quota:?}"
     );
-    let gated = crate::config::TaskEntry {
-        surplus: Some("1.5x".into()),
-        ..Default::default()
-    };
-    let surplus = refuse(&ManagedLaunchState::Unsupported, Some(&gated));
+    let surplus = refuse(&ManagedLaunchState::Unsupported, Some("1.5x"));
     assert!(
         surplus
             .as_deref()
             .is_some_and(|reason| reason.contains("window surplus")),
         "{surplus:?}"
     );
-    let ungated = crate::config::TaskEntry::default();
     assert_eq!(
-        (
-            refuse(&ManagedLaunchState::Unsupported, None),
-            refuse(&ManagedLaunchState::Unsupported, Some(&ungated)),
-        ),
-        (None, None),
-        "a kind-wide account has no bound quota, and surplus is read only for a task that sets it"
+        refuse(&ManagedLaunchState::Unsupported, None),
+        None,
+        "a kind-wide account has no bound quota, and surplus is read only for a run that keeps it"
     );
 }
 
