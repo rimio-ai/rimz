@@ -293,7 +293,7 @@ Encode a confirmed anomaly as a test in [`observe/detect/tests.rs`](../../crates
 | `push_handshake` | the jump's source attachment | Every same-host cross-tab jump that reached push |
 | `click_delivery` | the host, per attached renderer | Every host click datagram |
 | `card_command_refused` | the host or acting attachment | Every refused card command. `reason` includes the command and no-op cause |
-| `jump_progress` | the jump's source attachment | Every lease arming and pre-push checkpoint |
+| `jump_progress` | the jump's source attachment | Every lease arming and pre-push checkpoint, and a push offered to nobody |
 
 ### Publications and folds
 
@@ -345,7 +345,7 @@ jq 'select(.event.kind=="push_handshake" and (.event.outcome!="painted" or any(.
 
 `click_delivery` records a host click datagram for an attached renderer: the target attachment in the envelope, zero-based `column` and `row`, and `delivery` (`sent`, `inbox_full`, or `inbox_closed`). It measures delivery to the bounded input lane, which is independent of the room inbox. It is not a card hit or a processed click. A successful `sidebar click` command only enqueues its datagram, so this record tells a full or closed input inbox apart from a jump stopped later. Ordinary attach-stream input writes no such record.
 
-`jump_progress` records cross-tab lease arming and the pre-push checkpoints, without edge gating or sampling. It carries the source attachment in the envelope, a host-local `sequence`, `target`, `stage`, and wall-clock `elapsed_ms` since lease arming. The sequence orders focus effects as source loops processed them, not raw input arrival across loops.
+`jump_progress` records cross-tab lease arming, the pre-push checkpoints, and a push offered to nobody, without edge gating or sampling. It carries the source attachment in the envelope, a host-local `sequence`, `target`, `stage`, and wall-clock `elapsed_ms` since lease arming. The sequence orders focus effects as source loops processed them, not raw input arrival across loops.
 
 | `stage` | Meaning |
 | --- | --- |
