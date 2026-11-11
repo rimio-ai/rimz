@@ -217,7 +217,7 @@ In the timeline header, `N held` joins the detail. A line's mark names its kind:
 | `▶` | Resident launch: an older record of a scheduled task opening its agents; loop-started runs record `workflow_start`. |
 | `↘` | Tier fallback: the profile used the next available model. |
 | `▶` | Auto-continue: a parked agent resumed, or `resume held` when delivery did not happen. |
-| `◷` | Cache keepalive: idle duration (a range for repeats), the keep-warm horizon when one was holding, and newest pending-wait count, followed by agent, message, and delivery verdict. |
+| `◷` | Cache keepalive (`forced cache keepalive` for the ping sent past the typing hold): idle duration (a range for repeats), the keep-warm horizon when one was holding, and newest pending-wait count, followed by agent, message, and delivery verdict. |
 | `■` | Idle stop: an agent stopped by its `--when-idle` request, with how long it rested, the threshold, and who asked; `idle stop failed` carries the error. |
 | `↶` | Idle stop withdrawn: a prompt from the user kept the session, with the withdrawn threshold and who asked for the stop. |
 | `⤳` | Molt: the predecessor moved into a fresh successor session. |
@@ -295,7 +295,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 | `auto_continue` | Auto-continue | `kind`, `agent_id`, `label?`, `park`, `parked_since?`, `delivered`, `message_id` |
 | `auto_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id` |
 | `soft_compact` | Soft compact | `kind`, `agent_id`, `label?`, `threshold`, `occupied_tokens?`, `message_id`, `delivered`, `error?` |
-| `cache_keepalive` | Keepalive | `kind`, `agent_id`, `label?`, `idle_secs`, `waits`, `horizon_secs?`, `message_id`, `delivered`, `error?`, `capped` |
+| `cache_keepalive` | Keepalive | `kind`, `agent_id`, `label?`, `idle_secs`, `waits`, `horizon_secs?`, `message_id`, `delivered`, `error?`, `capped`, `forced` |
 | `idle_compact` | Auto-compact | `kind`, `agent_id`, `label?`, `idle_secs`, `idle_after_secs?`, `occupied_tokens`, `message_id`, `delivered`, `error?` |
 | `idle_stop` | Idle stop | `kind`, `agent_id`, `label`, `idle_secs`, `idle_after_secs`, `requested_by?`, `stopped`, `error?` |
 | `idle_stop_withdrawn` | Idle stop withdrawn | `kind`, `agent_id`, `label?`, `idle_after_secs`, `requested_by?`, `requested_at` |
@@ -322,7 +322,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 
 `Auto-redeem: N` counts automatic redemptions that reset a window. A redemption carries the account name as `login` when its record has one, and its line names the account when it is not `default`, as in `↻ codex@spare credit`. Manual redemptions keep the `auto_redeem` record type with `reason: "manual"`; their line says `manual`, and they are not automation assists.
 
-`Keepalive: N` counts delivered pings. `capped` is true on the ping that told the agent the keepalive maximum was reached; its `◷` line ends with `, limit reached`. `horizon_secs` is the [keep-warm](../../guide/configuration.md#keep-warm) finite maximum that was holding the agent (the resolved `max`, including the global default, or the keepalive cap for a `while` with no resolved maximum); its line reads `holding warm (2h)`. `waits` counts all pending waits, including subagent and team waits. Failed attempts appear with `--all` without increasing the count.
+`Keepalive: N` counts delivered pings. `capped` is true on the ping that told the agent the keepalive maximum was reached; its `◷` line ends with `, limit reached`. `horizon_secs` is the [keep-warm](../../guide/configuration.md#keep-warm) finite maximum that was holding the agent (the resolved `max`, including the global default, or the keepalive cap for a `while` with no resolved maximum); its line reads `holding warm (2h)`. `forced` is true on the ping sent past the typing hold 30 s before the cache expired; its line reads `forced cache keepalive`, and a forced and a polite ping never fold into one row. `waits` counts all pending waits, including subagent and team waits. Failed attempts appear with `--all` without increasing the count.
 
 `Soft compact: N` counts delivered mid-turn wrap-up steers, separately from the compact commands counted by `Auto-compact:`. A missed steer appears only with `--all` and in the held count, not as a delivered soft compaction.
 

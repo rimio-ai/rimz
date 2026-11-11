@@ -574,6 +574,12 @@ pub struct MessageRecord {
     pub retry_after: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typing_hold: Option<TypingHold>,
+    /// A cache keepalive sent close to its cache's expiry: it skips the typing hold and the
+    /// queued records ahead of it on its card, and no other gate. It claims alone so no follower
+    /// rides past the hold, and once claimed or sent it holds the records it passed. An operator
+    /// requeue (`requeue_from`) drops it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forced_keepalive: bool,
     /// The once-only sender notice for this message's long-queued state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_notice_at: Option<Timestamp>,
@@ -722,6 +728,7 @@ impl MessageRecord {
             when: Vec::new(),
             retry_after: None,
             typing_hold: None,
+            forced_keepalive: false,
             queued_notice_at: None,
             auto_compact: None,
             soft_compact: None,
@@ -1035,6 +1042,7 @@ impl MessageRecord {
     pub fn batchable(&self) -> bool {
         self.body == MessageBody::Prompt
             && self.enter
+            && !self.forced_keepalive
             && !self.text.trim_start().starts_with('/')
             && !matches!(
                 &self.sender,
@@ -1196,10 +1204,23 @@ pub(crate) fn older_ready_blocker<'a>(
             holds_boundary(message, now)
                 && message.same_card(candidate.card_ref())
                 && same_delivery_lane(candidate.gate, message.gate)
-                && message.message_id.as_str() < candidate.message_id.as_str()
+                && ahead_in_fifo(message, candidate)
                 && (message.status == MessageStatus::Sent || ready(message))
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+}
+
+/// Whether `other` holds `candidate`'s place in their lane. Id order is FIFO order, with one
+/// exception: a forced keepalive passes the queued records ahead of it, and once claimed or sent
+/// it holds them in turn until it settles.
+fn ahead_in_fifo(other: &MessageRecord, candidate: &MessageRecord) -> bool {
+    if other.message_id.as_str() < candidate.message_id.as_str() {
+        !(candidate.forced_keepalive && other.status == MessageStatus::Queued)
+    } else {
+        other.message_id != candidate.message_id
+            && other.forced_keepalive
+            && other.status != MessageStatus::Queued
+    }
 }
 
 pub(crate) fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {
@@ -1223,12 +1244,13 @@ pub(crate) fn delivery_batch_indices(
     let head = &live[head_index];
     if head.status != MessageStatus::Queued
         || !head.is_deliverable(now)
-        || head.typing_hold.is_some_and(|hold| hold.until > now)
+        || (!head.forced_keepalive && head.typing_hold.is_some_and(|hold| hold.until > now))
         || !claim_expired(head.last_attempt_at, now)
-        || live[..head_index].iter().any(|message| {
+        || live.iter().any(|message| {
             holds_boundary(message, now)
                 && message.same_card(head.card_ref())
                 && same_delivery_lane(head.gate, message.gate)
+                && ahead_in_fifo(message, head)
                 && (message.status == MessageStatus::Sent || message.is_deliverable(now))
         })
     {

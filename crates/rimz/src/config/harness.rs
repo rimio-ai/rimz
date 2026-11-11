@@ -568,6 +568,12 @@ impl HarnessConfig {
         })
     }
 
+    /// When the agent's last request's cache goes cold, or `None` when it cannot be pinged.
+    pub fn cache_cold_at(&self, agent: &AgentState) -> Option<jiff::Timestamp> {
+        let ttl = self.ping_lifetime(agent)?;
+        agent.last_request_at()?.checked_add(ttl).ok()
+    }
+
     /// The configured fallback lifetime, or one hour when unset.
     pub fn fallback_lifetime(&self) -> Option<Duration> {
         match self.prompt_cache_ttl.get("fallback") {

@@ -239,6 +239,9 @@ pub enum Assist {
         /// This ping told the agent the keepalive maximum was reached.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         capped: bool,
+        /// This ping was the fire before the cache's expiry, sent past the typing hold.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        forced: bool,
     },
     IdleCompact {
         kind: AgentKind,
@@ -706,6 +709,7 @@ mod tests {
                     delivered: true,
                     error: None,
                     capped: true,
+                    forced: true,
                 },
             },
             restored(20),

@@ -26,27 +26,30 @@ fn typing_hold_replay_policy_uses_its_own_force() {
 }
 
 #[test]
-fn stored_typing_hold_applies_to_every_policy_except_a_forced_interrupt() {
+fn stored_typing_hold_applies_to_every_policy_except_a_forced_interrupt_or_keepalive() {
     let now = Timestamp::from_second(10_000).unwrap();
     let receiver = agent("receiver", AgentStatus::Idle);
     let live = snapshot(receiver.clone(), true, now);
     let mut encoded = serde_json::to_value(message(&receiver, 1, "go")).unwrap();
     encoded["typing_hold"] = serde_json::json!({"until": now + Duration::from_secs(30)});
     let held: MessageRecord = serde_json::from_value(encoded).unwrap();
+    let mut forced_keepalive = held.clone();
+    forced_keepalive.forced_keepalive = true;
     let observed = [
-        DeliveryPolicy::Boundary,
-        DeliveryPolicy::Steer { force: false },
-        DeliveryPolicy::Steer { force: true },
-        DeliveryPolicy::Interrupt { force: false },
-        DeliveryPolicy::Interrupt { force: true },
+        (&held, DeliveryPolicy::Boundary),
+        (&held, DeliveryPolicy::Steer { force: false }),
+        (&held, DeliveryPolicy::Steer { force: true }),
+        (&held, DeliveryPolicy::Interrupt { force: false }),
+        (&held, DeliveryPolicy::Interrupt { force: true }),
+        (&forced_keepalive, DeliveryPolicy::Boundary),
     ]
-    .map(|policy| {
+    .map(|(record, policy)| {
         matches!(
-            delivery_candidate(std::slice::from_ref(&held), &live, &held.message_id, policy, now),
+            delivery_candidate(std::slice::from_ref(record), &live, &record.message_id, policy, now),
             Candidacy::Refused(verdict) if verdict.reason().contains("someone is using")
         )
     });
-    assert_eq!(observed, [true, true, true, true, false]);
+    assert_eq!(observed, [true, true, true, true, false, false]);
 }
 
 #[test]

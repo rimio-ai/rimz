@@ -753,6 +753,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
         pane_id: pane_id.clone(),
         anchor: "2026-01-02T03:04:05Z".parse().unwrap(),
         label: "@coder".into(),
+        forced: true,
     };
     let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
         "cache-keepalive",

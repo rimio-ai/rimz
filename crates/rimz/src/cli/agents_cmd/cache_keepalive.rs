@@ -34,6 +34,10 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
         pane_id: Some(request.pane_id),
     }
     .record(&ctx.workspace);
+    let message = rimz::store::message::MessageRecord {
+        forced_keepalive: request.forced,
+        ..message
+    };
     let outcome = synthetic::deliver_now(
         &ctx.workspace,
         &ctx.store,
@@ -44,7 +48,7 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
     let delivered = matches!(outcome, Ok(true));
     let error = match &outcome {
         Ok(true) => None,
-        Ok(false) => Some(CLOSED_GATE.to_owned()),
+        Ok(false) => Some(settled_error(&ctx.store, &message.message_id)),
         Err(err) => Some(err.to_string()),
     };
     rimz::harness::assist_log::append(&AssistRecord {
@@ -63,8 +67,19 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             delivered,
             error,
             capped: limit.is_some(),
+            forced: request.forced,
         },
     });
     outcome.context("delivering cache keepalive")?;
     Ok(())
+}
+
+/// The reason the miss recorded on the ping, so a hold or a cold cache says so in the assist.
+fn settled_error(store: &rimz::Store, message_id: &rimz::ids::MessageId) -> String {
+    let live = store.list_messages().ok().into_iter().flatten();
+    let history = store.list_message_history().ok().into_iter().flatten();
+    live.chain(history)
+        .find(|record| record.message_id == *message_id)
+        .and_then(|record| record.last_error)
+        .unwrap_or_else(|| CLOSED_GATE.to_owned())
 }

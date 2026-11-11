@@ -495,6 +495,139 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     });
 }
 
+fn paned(agent: &AgentState, workspace_id: WorkspaceId, now: i64) -> SidebarSnapshot {
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(workspace_id, vec![agent.clone()], ts(now));
+    std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
+        checkout: None,
+        root_lane: false,
+        kind: agent.kind.clone(),
+        kind_ordinal: None,
+        name: None,
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: None,
+        agent_id: Some(agent.agent_id.clone()),
+        pane_id: PaneId::parse("tmux:%1").unwrap(),
+        pane_pid: None,
+        worktree_path: None,
+        worktree_branch: None,
+    });
+    snapshot
+}
+
+#[test]
+fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let fresh_runtime = |name: &str| {
+        let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join(name)).unwrap();
+        runtime.ensure_dirs().unwrap();
+        runtime
+    };
+    let runtime = fresh_runtime("quiet");
+    let config = HarnessConfig::default();
+    let policy = SeatPolicy::default();
+    let agent = sleeping();
+    let fires = |runtime: &RuntimePaths, agent: &AgentState, now: i64, config: &HarnessConfig| {
+        let snapshot = paned(agent, workspace_id.clone(), now);
+        let mut fired = Vec::new();
+        keepalive_agents_with(&snapshot, runtime, config, &policy, |request| {
+            assert!(
+                request
+                    .target(&snapshot, config, &policy, ts(now))
+                    .is_some(),
+                "the helper accepts the fire it was given at {now}"
+            );
+            keepalive_agents_with(&snapshot, runtime, config, &policy, |_| {
+                panic!("concurrent producer fired at {now}")
+            });
+            fired.push(request.forced);
+        });
+        fired
+    };
+    assert_eq!(
+        fires(&runtime, &agent, 3540, &config),
+        [false],
+        "polite fire"
+    );
+    assert!(fires(&runtime, &agent, 3569, &config).is_empty());
+    assert_eq!(
+        fires(&runtime, &agent, 3570, &config),
+        [true],
+        "forced fire"
+    );
+    assert!(
+        fires(&runtime, &agent, 3575, &config).is_empty(),
+        "one forced"
+    );
+    assert!(fires(&runtime, &agent, 3600, &config).is_empty(), "cold");
+
+    let mut landed = agent.clone();
+    landed.pinged_at = Some(ts(3545));
+    assert!(
+        fires(&fresh_runtime("landed"), &landed, 3570, &config).is_empty(),
+        "a ping that landed moved the anchor"
+    );
+    let mut in_flight = agent.clone();
+    in_flight.ping_turn = true;
+    in_flight.ping_opened_at = Some(ts(3541));
+    assert!(
+        fires(&fresh_runtime("in-flight"), &in_flight, 3570, &config).is_empty(),
+        "a ping in flight for this anchor"
+    );
+    assert_eq!(
+        fires(&fresh_runtime("lost"), &agent, 3575, &config),
+        [true],
+        "the forced fire recovers a polite fire that never ran"
+    );
+    // A forced helper whose polite ping's turn opened after the claim sends nothing into it.
+    let mut forced = None;
+    let snapshot = paned(&agent, workspace_id.clone(), 3570);
+    keepalive_agents_with(
+        &snapshot,
+        &fresh_runtime("late-polite"),
+        &config,
+        &policy,
+        |request| {
+            forced = Some(request.clone());
+        },
+    );
+    let forced = forced.expect("forced fire");
+    assert!(forced.forced);
+    let open = paned(&in_flight, workspace_id.clone(), 3572);
+    assert!(
+        forced.target(&open, &config, &policy, ts(3572)).is_none(),
+        "the helper refuses a row whose ping turn is open"
+    );
+    // With no provider record, a ping that closed 20 s after it opened counts from its open:
+    // its request followed the open, so the close would put the expiry 20 s late.
+    let mut slow_ping = agent.clone();
+    slow_ping.ping_opened_at = Some(ts(3541));
+    slow_ping.pinged_at = Some(ts(3561));
+    assert_eq!(
+        fires(
+            &fresh_runtime("slow-ping"),
+            &slow_ping,
+            3541 + 3570,
+            &config
+        ),
+        [true],
+        "the forced window counts from the ping's open"
+    );
+    let mut narrow = config.clone();
+    narrow.prompt_cache_margin = Duration::from_secs(20);
+    let runtime = fresh_runtime("narrow");
+    assert!(fires(&runtime, &agent, 3579, &narrow).is_empty());
+    assert_eq!(
+        fires(&runtime, &agent, 3580, &narrow),
+        [true],
+        "a margin inside the lead fires once, forced"
+    );
+    assert!(fires(&runtime, &agent, 3590, &narrow).is_empty());
+}
+
 const TWO_HOURS: Duration = Duration::from_secs(7200);
 
 fn idle() -> AgentState {

@@ -24,7 +24,16 @@ pub struct CacheKeepaliveRequest {
     /// does not move.
     pub anchor: Timestamp,
     pub label: String,
+    /// The fire 30 s before the cache expires, which delivers past the typing hold.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forced: bool,
 }
+
+/// How long before `last_request_at + TTL` a ping still unsent fires past the typing hold. It
+/// covers the measured worst case from the producer's decision to the provider's request
+/// (a fold up to 6 s old, the 1 s producer rest and fold wait, 4 s from enqueue to paste and
+/// 7.5 s from paste to request) with about 10 s to spare.
+const FORCED_LEAD: Duration = Duration::from_secs(30);
 
 /// Effective teams, roles, and agent profiles: per-field keep-warm resolution and its stage gate.
 #[derive(Clone, Debug, Default)]
@@ -164,9 +173,8 @@ pub(crate) fn holds(
     let horizon = horizon?;
     let ttl = harness.ping_lifetime(agent)?;
     let warm_until = agent.turn_ended_at?.checked_add(horizon).ok()?;
-    let cache_warm = agent
-        .last_request_at()
-        .and_then(|request| request.checked_add(ttl).ok())
+    let cache_warm = harness
+        .cache_cold_at(agent)
         .is_some_and(|cold_at| now < cold_at);
     (now < warm_until
         && cache_warm
@@ -194,7 +202,8 @@ fn pingable(agent: &AgentState) -> bool {
 }
 
 impl CacheKeepaliveRequest {
-    /// The agent still due this exact ping, and the keep-warm horizon holding it, if any.
+    /// The agent still due this exact ping, and the keep-warm horizon holding it, if any. A
+    /// row whose ping turn is open is not: another fire's ping is in flight for this anchor.
     pub fn target<'a>(
         &self,
         snapshot: &'a SidebarSnapshot,
@@ -206,6 +215,7 @@ impl CacheKeepaliveRequest {
             agent.kind == self.kind
                 && agent.agent_id == self.agent_id
                 && agent.request_key() == Some(self.anchor)
+                && !agent.ping_turn
                 && snapshot
                     .live_agent_pane(&self.kind, &self.agent_id)
                     .as_ref()
@@ -322,9 +332,11 @@ fn keepalive_agents_with(
     };
     for agent in snapshot.agents.iter() {
         let holding = policy.holding(agent, config, snapshot.now);
-        if !should_keepalive(agent, config, holding, snapshot.now) {
+        // A ping in flight already answers for this anchor.
+        if agent.ping_turn || !should_keepalive(agent, config, holding, snapshot.now) {
             continue;
         }
+        let forced = in_forced_window(agent, config, snapshot.now);
         // The anchor names the request, not its instant: the record and the estimate of one
         // request differ, and a switch of source must neither refire nor drop the claim.
         let (Some(anchor), Some(pane_id)) = (
@@ -333,9 +345,12 @@ fn keepalive_agents_with(
         ) else {
             continue;
         };
+        // Each fire claims its own file: a binary that knows only the polite claim never reads
+        // the forced one, so neither refires the other.
         let path = runtime.live_path("cache-keepalive").join(format!(
-            "{}.json",
-            crate::store::sidecar::digest(agent.kind.as_str(), agent.agent_id.as_str())
+            "{}{}.json",
+            crate::store::sidecar::digest(agent.kind.as_str(), agent.agent_id.as_str()),
+            if forced { ".forced" } else { "" }
         ));
         let fired: Option<Timestamp> = std::fs::read(&path)
             .ok()
@@ -359,6 +374,7 @@ fn keepalive_agents_with(
                 &crate::address::addressable_agents(snapshot),
                 false,
             ),
+            forced,
         });
     }
 }
@@ -407,7 +423,16 @@ fn should_keepalive(
     idle >= fire_after && idle < ttl && !run_reached_cap(agent, config, ttl)
 }
 
-/// Whether the ping after the open keepalive run's last one, the request anchor a ping's close
+/// Whether a due ping is within [`FORCED_LEAD`] of its cache's expiry, so it fires past the
+/// typing hold.
+fn in_forced_window(agent: &AgentState, config: &HarnessConfig, now: Timestamp) -> bool {
+    config
+        .cache_cold_at(agent)
+        .and_then(|cold_at| cold_at.checked_sub(FORCED_LEAD).ok())
+        .is_some_and(|forced_at| now >= forced_at)
+}
+
+/// Whether the ping after the open keepalive run's last one, the request anchor a closed ping
 /// moves, would start at or past the cap. Reads only stamps, so the producer and the helper's
 /// recheck agree.
 fn run_reached_cap(agent: &AgentState, config: &HarnessConfig, ttl: Duration) -> bool {
