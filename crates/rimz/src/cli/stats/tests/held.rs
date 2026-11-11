@@ -1143,6 +1143,7 @@ fn dashboard_assist_suffixes_and_retention_header_use_the_window_start() {
             delivered: true,
             error: None,
             capped: false,
+            forced: false,
         },
     });
     let mut assists = TabAssists::from_records(records.into(), now, "UTC");

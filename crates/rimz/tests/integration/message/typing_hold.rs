@@ -469,16 +469,28 @@ fn cancellation_after_pacing_stops_before_any_pane_write() {
 }
 
 #[test]
-fn typing_hold_only_bypasses_for_forced_interrupt_disabled_setting_or_read_failure() {
+fn typing_hold_only_bypasses_for_forced_interrupt_forced_keepalive_disabled_setting_or_read_failure()
+ {
     let mut observed = Vec::new();
     for case in [
         "boundary",
         "forced-steer",
+        "polite-keepalive",
         "forced-interrupt",
+        "forced-keepalive",
         "off",
         "read-error",
     ] {
         let fixture = Fixture::new(false);
+        if let Some(forced) = case.strip_suffix("-keepalive").map(|kind| kind == "forced") {
+            fixture.keepalive_config();
+            run_success(
+                &mut fixture.keepalive_command(&fixture.keepalive(forced)),
+                case,
+            );
+            observed.push(fixture.pings()[0].status);
+            continue;
+        }
         if case == "off" {
             run_success(
                 fixture
@@ -506,6 +518,8 @@ fn typing_hold_only_bypasses_for_forced_interrupt_disabled_setting_or_read_failu
         [
             MessageStatus::Queued,
             MessageStatus::Queued,
+            MessageStatus::Errored,
+            MessageStatus::Sent,
             MessageStatus::Sent,
             MessageStatus::Sent,
             MessageStatus::Sent
@@ -602,73 +616,389 @@ fn compact_first_prompt_hold_never_repeats_the_compact() {
     );
 }
 
-#[test]
-fn held_compaction_retries_but_a_cache_ping_is_a_terminal_miss() {
-    let fixture = Fixture::new(false);
-    for (key, value) in [
-        ("harness.keep_warm", "2h"),
-        ("harness.keep_warm_min_ttl", "off"),
-        ("harness.prompt_cache_ttl.claude", "61s"),
-    ] {
-        run_success(
-            fixture.command().args(["config", "set", key, value]),
-            "keepalive config",
-        );
+impl Fixture {
+    fn keepalive_config(&self) {
+        for (key, value) in [
+            ("harness.keep_warm", "2h"),
+            ("harness.keep_warm_min_ttl", "off"),
+            ("harness.prompt_cache_ttl.claude", "61s"),
+        ] {
+            run_success(
+                self.command().args(["config", "set", key, value]),
+                "keepalive config",
+            );
+        }
     }
-    let agent = fixture.env.store().snapshot().unwrap().agents[0].clone();
-    let request = rimz::harness::cache_keepalive::CacheKeepaliveRequest {
-        workspace_id: fixture.env.workspace_id.clone(),
-        kind: agent.kind.clone(),
-        agent_id: agent.agent_id.clone(),
-        pane_id: PaneId::from_parts(MuxName::Tmux, "%3"),
-        anchor: agent.last_request_at().unwrap(),
-        label: "@claude".into(),
-    };
-    run_success(
-        fixture
-            .command()
-            .args(rimz::child_process::agent_helper_argv(
-                "cache-keepalive",
-                &request,
-            )),
-        "held ping",
-    );
-    let mut messages = fixture.env.store().list_messages().unwrap();
-    messages.extend(fixture.env.store().list_message_history().unwrap());
-    let ping = messages
-        .iter()
-        .find(|r| {
+
+    fn keepalive(&self, forced: bool) -> rimz::harness::cache_keepalive::CacheKeepaliveRequest {
+        let agent = self.env.store().snapshot().unwrap().agents[0].clone();
+        rimz::harness::cache_keepalive::CacheKeepaliveRequest {
+            workspace_id: self.env.workspace_id.clone(),
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%3"),
+            anchor: agent.request_key().unwrap(),
+            label: "@claude".into(),
+            forced,
+        }
+    }
+
+    fn keepalive_command(
+        &self,
+        request: &rimz::harness::cache_keepalive::CacheKeepaliveRequest,
+    ) -> std::process::Command {
+        let mut cmd = self.command();
+        cmd.args(rimz::child_process::agent_helper_argv(
+            "cache-keepalive",
+            request,
+        ));
+        cmd
+    }
+
+    fn pings(&self) -> Vec<MessageRecord> {
+        let mut messages = self.env.store().list_messages().unwrap();
+        messages.extend(self.env.store().list_message_history().unwrap());
+        messages.retain(|r| {
             matches!(
                 r.sender,
                 MessageSender::Harness {
                     notice: HarnessNotice::CacheKeepalive
                 }
             )
-        })
-        .expect("eligible ping recorded");
-    assert_eq!(ping.status, MessageStatus::Errored);
-    assert!(
-        ping.last_error
-            .as_ref()
-            .is_some_and(|r| r.contains("someone is using")),
-        "{ping:?}"
-    );
+        });
+        messages.sort_by(|a, b| a.message_id.cmp(&b.message_id));
+        messages
+    }
+
+    fn keepalive_assists(&self) -> Vec<(bool, bool, Option<String>)> {
+        rimz::harness::assist_log::recent(&self.env.rimz_home().join("logs"), None)
+            .into_iter()
+            .filter_map(|record| match record.assist {
+                rimz::harness::assist_log::Assist::CacheKeepalive {
+                    forced,
+                    delivered,
+                    error,
+                    ..
+                } => Some((forced, delivered, error)),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn a_held_record_ahead_retries_while_a_polite_ping_misses_and_a_forced_one_delivers_first() {
+    for ahead in ["compaction", "message"] {
+        let fixture = Fixture::new(false);
+        fixture.keepalive_config();
+        fixture.short_hold();
+        run_success(
+            &mut fixture.keepalive_command(&fixture.keepalive(false)),
+            "held ping",
+        );
+        let pings = fixture.pings();
+        assert_eq!(pings.len(), 1, "{ahead}: {pings:?}");
+        assert_eq!(pings[0].status, MessageStatus::Errored);
+        assert!(
+            pings[0]
+                .last_error
+                .as_ref()
+                .is_some_and(|r| r.contains("someone is using")),
+            "{ahead}: {pings:?}"
+        );
+        let args: &[&str] = match ahead {
+            "compaction" => &["agents", "compact", "@claude"],
+            _ => &["message", "@claude", "go"],
+        };
+        run_success(fixture.command().args(args), ahead);
+        let held = || {
+            fixture
+                .env
+                .store()
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .find(|r| r.body == MessageBody::Command || r.text == "go")
+                .unwrap()
+        };
+        let before = held();
+        assert_eq!(before.status, MessageStatus::Queued, "{ahead}");
+        assert_eq!(before.attempts, 0, "{ahead}");
+        assert!(before.typing_hold.is_some(), "{ahead}: {before:?}");
+        assert_eq!(fixture.writes(), 0, "{ahead}");
+
+        // The forced ping passes the typing hold and the held record's place in the queue.
+        fixture.input();
+        run_success(
+            &mut fixture.keepalive_command(&fixture.keepalive(true)),
+            "forced ping past the held record",
+        );
+        let pings = fixture.pings();
+        assert_eq!(pings.len(), 2, "{ahead}: {pings:?}");
+        assert_eq!(pings[1].status, MessageStatus::Sent, "{ahead}: {pings:?}");
+        assert_eq!(pings[1].batch_id, None, "{ahead}: the ping claims alone");
+        assert_eq!(held(), before, "{ahead}: the held record is untouched");
+        let writes = fixture.writes();
+        assert!(writes > 0, "{ahead}");
+
+        // Past its hold, the record still waits while the ping is unacknowledged, then delivers.
+        fixture.expire(&before);
+        run_success(
+            fixture.command().args(["message", "sweep"]),
+            "ping in flight",
+        );
+        assert_eq!(held().status, MessageStatus::Queued, "{ahead}");
+        assert_eq!(fixture.writes(), writes, "{ahead}");
+        let store = fixture.env.store();
+        let agent = store.snapshot().unwrap().agents[0].clone();
+        let acked = store
+            .confirm_delivered_for_card(
+                &agent.kind,
+                &agent.agent_id,
+                None,
+                rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                "room",
+            )
+            .unwrap();
+        assert_eq!(
+            acked.iter().map(|r| &r.message_id).collect::<Vec<_>>(),
+            [&pings[1].message_id],
+            "{ahead}"
+        );
+        run_success(fixture.command().args(["message", "sweep"]), "retry");
+        assert_eq!(held().status, MessageStatus::Sent, "{ahead}");
+        assert_eq!(held().attempts, 1, "{ahead}");
+    }
+}
+
+#[test]
+fn a_held_polite_ping_misses_and_the_forced_ping_delivers_past_the_hold() {
+    let fixture = Fixture::new(false);
+    fixture.keepalive_config();
     run_success(
-        fixture.command().args(["agents", "compact", "@claude"]),
-        "held compact",
+        &mut fixture.keepalive_command(&fixture.keepalive(false)),
+        "held ping",
     );
-    let compact = fixture
-        .env
-        .store()
-        .list_messages()
-        .unwrap()
-        .into_iter()
-        .find(|r| r.body == MessageBody::Command)
-        .unwrap();
-    assert_eq!(compact.status, MessageStatus::Queued);
-    assert_eq!(compact.attempts, 0);
-    assert!(serde_json::to_value(compact).unwrap()["typing_hold"].is_object());
     assert_eq!(fixture.writes(), 0);
+
+    // The hold is live before the pane lock and again under it, after the pacer.
+    fixture.input();
+    let before = DeliveryRendezvous::new(&fixture.env, "forced-ping-write");
+    let child = fixture
+        .keepalive_command(&fixture.keepalive(true))
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before
+        .arrive_timeout(Duration::from_secs(10))
+        .expect("the forced ping reaches the pane write past the typing hold");
+    fixture.input();
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let pings = fixture.pings();
+    assert_eq!(pings.len(), 2, "{pings:?}");
+    assert_eq!(pings[1].status, MessageStatus::Sent, "{pings:?}");
+    assert!(pings[1].forced_keepalive, "{pings:?}");
+    assert!(
+        trace_lines(&fixture.trace)
+            .iter()
+            .any(|line| line.starts_with("load-buffer ")),
+        "the forced ping reached the pane"
+    );
+    let assists = fixture.keepalive_assists();
+    assert_eq!(assists.len(), 2, "{assists:?}");
+    assert!(
+        !assists[0].0
+            && !assists[0].1
+            && assists[0]
+                .2
+                .as_ref()
+                .is_some_and(|error| error.contains("someone is using")),
+        "the polite miss says the typing hold refused it: {assists:?}"
+    );
+    assert_eq!(
+        assists[1],
+        (true, true, None),
+        "the forced send says forced"
+    );
+}
+
+#[test]
+fn a_ping_whose_cache_went_cold_under_the_pane_lock_is_never_pasted() {
+    let fixture = Fixture::new(false);
+    fixture.keepalive_config();
+    // A 10 s lifetime with an 8 s margin: the 3 s old anchor is due and goes cold during the hold.
+    for (key, value) in [
+        ("harness.prompt_cache_margin", "8s"),
+        ("harness.prompt_cache_ttl.claude", "10s"),
+    ] {
+        run_success(
+            fixture.command().args(["config", "set", key, value]),
+            "short lifetime",
+        );
+    }
+    fixture.clear_input();
+    let request = fixture.keepalive(true);
+    let cold_at = fixture.env.store().snapshot().unwrap().agents[0]
+        .last_request_at()
+        .unwrap()
+        + Duration::from_secs(10);
+    let before = DeliveryRendezvous::new(&fixture.env, "cold-ping-write");
+    let child = fixture
+        .keepalive_command(&request)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    let left = cold_at.duration_since(jiff::Timestamp::now());
+    std::thread::sleep(Duration::try_from(left).unwrap_or_default() + Duration::from_millis(100));
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let pings = fixture.pings();
+    assert_eq!(pings.len(), 1, "{pings:?}");
+    assert_eq!(pings[0].status, MessageStatus::Errored, "{pings:?}");
+    assert_eq!(fixture.writes(), 0);
+    assert!(
+        !fixture
+            .env
+            .read_events()
+            .iter()
+            .any(|e| e.method == "message.sent")
+    );
+}
+
+impl Fixture {
+    fn lifecycle_at(&self, signal: LifecycleSignal, prompt: Option<&str>, at: jiff::Timestamp) {
+        let mut observation = AgentLifecycleObservation::new(Some("typing-session".into()), signal);
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%3"));
+        observation.worktree_path = Some(self.env.project_root.display().to_string());
+        observation.prompt = rimz::agents::SanitizedPrompt::new(prompt);
+        let mut event = EventEnvelope::agent_lifecycle(
+            self.env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "typing-test",
+            &observation,
+        );
+        event.timestamp = at;
+        self.env.store().append_event(&event).unwrap();
+    }
+
+    fn record_request(&self, at: jiff::Timestamp) {
+        let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
+        context.recorded_request_at = Some(at);
+        let record = rimz::agents::context::record::AgentContextRecord::new(
+            "claude",
+            "typing-session",
+            context,
+        );
+        rimz::store::agent_context::write_record(&self.env.runtime_paths(), &record).unwrap();
+    }
+}
+
+/// The cold check under the pane write lock judges the clock the producer and the helper read:
+/// the provider's recorded request, not the hook estimate, whichever way the two disagree.
+#[test]
+fn the_cold_check_under_the_pane_lock_reads_the_recorded_request() {
+    for record_later in [false, true] {
+        let fixture = Fixture::new(false);
+        fixture.keepalive_config();
+        // A 10 s lifetime with a 9 s margin: due one second after the clock's stamp.
+        for (key, value) in [
+            ("harness.prompt_cache_margin", "9s"),
+            ("harness.prompt_cache_ttl.claude", "10s"),
+        ] {
+            run_success(
+                fixture.command().args(["config", "set", key, value]),
+                "short lifetime",
+            );
+        }
+        let now = jiff::Timestamp::now();
+        let recorded = if record_later {
+            // A retried request: the record lands after the hook estimate (the fixture's turn,
+            // 3 s ago), so the estimate goes cold 3 s before the record does.
+            fixture.record_request(now);
+            now
+        } else {
+            // A ping's close lands after its own recorded request, so the record goes cold
+            // first.
+            let open = now - Duration::from_millis(2_500);
+            fixture.lifecycle_at(
+                LifecycleSignal::TurnStarted { turn_id: None },
+                Some("Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm."),
+                open,
+            );
+            fixture.lifecycle_at(
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+                None,
+                now,
+            );
+            fixture.record_request(open + Duration::from_millis(100));
+            open + Duration::from_millis(100)
+        };
+        let estimate = fixture.env.store().snapshot().unwrap().agents[0]
+            .request_key()
+            .unwrap();
+        let gap = if record_later {
+            recorded.duration_since(estimate)
+        } else {
+            estimate.duration_since(recorded)
+        };
+        assert!(
+            gap.as_millis() >= 2_000,
+            "record_later={record_later}: {recorded} vs {estimate}"
+        );
+        std::thread::sleep(Duration::from_millis(1_100));
+        fixture.clear_input();
+        let request = fixture.keepalive(true);
+        let first_cold = recorded.min(estimate) + Duration::from_secs(10);
+        let before = DeliveryRendezvous::new(&fixture.env, "recorded-cold-check");
+        let child = fixture
+            .keepalive_command(&request)
+            .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = before.arrive();
+        let left = first_cold.duration_since(jiff::Timestamp::now());
+        std::thread::sleep(
+            Duration::try_from(left).unwrap_or_default() + Duration::from_millis(100),
+        );
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let pings = fixture.pings();
+        assert_eq!(pings.len(), 1, "record_later={record_later}: {pings:?}");
+        if record_later {
+            assert_eq!(pings[0].status, MessageStatus::Sent, "{pings:?}");
+            assert!(
+                fixture.writes() > 0,
+                "the ping the record calls warm reached the pane"
+            );
+        } else {
+            assert_eq!(pings[0].status, MessageStatus::Errored, "{pings:?}");
+            assert_eq!(
+                pings[0].last_error.as_deref(),
+                Some("the receiver's prompt cache went cold before the ping was written"),
+            );
+            assert_eq!(
+                fixture.writes(),
+                0,
+                "no ping text onto the cache the record calls cold"
+            );
+        }
+    }
 }
 
 #[test]

@@ -453,6 +453,7 @@ fn attempt_delivery(
             ),
         policy.kind(),
     );
+    live_send.past_typing_hold = first.forced_keepalive;
     let batch_id = (send_messages.len() > 1).then(|| first.message_id.clone());
     for message in &mut send_messages {
         message.batch_id = batch_id.clone();
@@ -625,6 +626,15 @@ pub(super) fn execute_attempt(
             interrupt,
         }),
         Ok(send::Receipt::ClaimLost { .. }) => Ok(AttemptOutcome::Queued),
+        Ok(send::Receipt::CacheCold) => {
+            store.record_message_delivery_failures(
+                records,
+                crate::store::writer::DeliveryFailureDisposition::Terminal,
+                "the receiver's prompt cache went cold before the ping was written",
+                &workspace.session_name,
+            )?;
+            Ok(AttemptOutcome::Queued)
+        }
         Ok(send::Receipt::TypingHeld { until, compacted }) => {
             if matches!(
                 source,
@@ -1552,7 +1562,7 @@ fn delivery_candidate<'a>(
         return Candidacy::Gone;
     };
     let mut evaluation = evaluate_delivery(&message, pending, snapshot, now, card_status);
-    if matches!(policy, DeliveryPolicy::Interrupt { force: true }) {
+    if matches!(policy, DeliveryPolicy::Interrupt { force: true }) || message.forced_keepalive {
         evaluation.check.typing_hold = None;
     }
     let check = &evaluation.check;

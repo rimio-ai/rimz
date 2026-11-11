@@ -16,7 +16,9 @@ use crate::mux::PaneWriter;
 use crate::mux::typing::{InputSource, TypingRecord, TypingView};
 use crate::pane::keys::NamedKey;
 use crate::store::follow::{EventFollower, FollowEvent};
-use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
+use crate::store::message::{
+    AutoCompact, HarnessNotice, MessageBody, MessageRecord, MessageSender,
+};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
 
@@ -75,6 +77,9 @@ pub(super) enum Receipt {
         compacted: bool,
     },
     Deferred(Deferral),
+    /// A cache keepalive whose cache went cold before its write: the ping would only pay to
+    /// rebuild it.
+    CacheCold,
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -82,6 +87,8 @@ pub(super) enum Receipt {
 pub(super) struct LiveSend {
     pub(super) force: bool,
     pub(super) kind: DeliveryKind,
+    /// A forced cache keepalive: the typing hold is the one check it skips.
+    pub(super) past_typing_hold: bool,
     pacer: Pacer,
     command_submit_delay: Duration,
 }
@@ -92,6 +99,7 @@ impl LiveSend {
         Self {
             force,
             kind,
+            past_typing_hold: false,
             pacer: Pacer::from_env(),
             command_submit_delay: command_submit_delay_from_env(),
         }
@@ -103,7 +111,7 @@ impl LiveSend {
         runtime: &crate::RuntimePaths,
         pane: &crate::ids::PaneId,
     ) -> Option<Timestamp> {
-        if self.kind == DeliveryKind::Interrupt && self.force {
+        if self.past_typing_hold || (self.kind == DeliveryKind::Interrupt && self.force) {
             return None;
         }
         let hold = crate::config::MachineConfig::load_lenient()
@@ -491,6 +499,18 @@ fn wait_and_decide(
     let Some(agent) = fresh.as_ref().or(bound) else {
         return Ok(Decided::Write(fresh));
     };
+    if matches!(
+        head.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::CacheKeepalive
+        }
+    ) && crate::config::MachineConfig::load_lenient()
+        .harness
+        .cache_cold_at(agent)
+        .is_none_or(|cold_at| Timestamp::now() >= cold_at)
+    {
+        return Ok(Decided::Stop(Receipt::CacheCold));
+    }
     let now = Timestamp::now();
     if !send.force && agent.is_awaiting_input() {
         return Ok(Decided::Stop(Receipt::SkippedWaiting(
@@ -778,6 +798,7 @@ mod tests {
         let send = LiveSend {
             force: false,
             kind: DeliveryKind::Boundary,
+            past_typing_hold: false,
             pacer: Pacer::new(Duration::ZERO),
             command_submit_delay: Duration::from_millis(200),
         };
@@ -814,6 +835,7 @@ mod tests {
         let send = LiveSend {
             force: false,
             kind: DeliveryKind::Boundary,
+            past_typing_hold: false,
             pacer: Pacer::new(Duration::ZERO),
             command_submit_delay: Duration::from_millis(200),
         };

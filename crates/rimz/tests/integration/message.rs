@@ -4451,6 +4451,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
             anchor: anchor - Duration::from_secs(1),
             label: "@planner".into(),
+            forced: false,
         };
         let send = |request: &CacheKeepaliveRequest| {
             run_success(

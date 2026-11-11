@@ -293,6 +293,7 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
         capped: bool,
+        forced: bool,
     },
     #[serde(rename = "idle_compact")]
     IdleCompact {
@@ -993,6 +994,7 @@ impl AssistEvent {
                 delivered,
                 error,
                 capped,
+                forced,
             } => Self::CacheKeepalive {
                 at: record.at,
                 kind,
@@ -1005,6 +1007,7 @@ impl AssistEvent {
                 delivered,
                 error,
                 capped,
+                forced,
             },
             Assist::IdleStop {
                 kind,
@@ -1369,7 +1372,8 @@ enum RepeatKey<'a> {
     Hibernated,
     Deepened,
     Held,
-    Keepalive(bool),
+    /// Whether the run's last ping was capped, and whether the ping was forced.
+    Keepalive(bool, bool),
     Continue(&'a str),
     Compact(AutoCompact),
     IdleCompact(Option<u64>),
@@ -1456,7 +1460,7 @@ impl AssistEvent {
                 ..
             } => RepeatKey::Deepened,
             Self::Hibernate { .. } => RepeatKey::Held,
-            Self::CacheKeepalive { capped, .. } => RepeatKey::Keepalive(*capped),
+            Self::CacheKeepalive { capped, forced, .. } => RepeatKey::Keepalive(*capped, *forced),
             Self::Continue { park, .. } => RepeatKey::Continue(park),
             Self::Compact { threshold, .. } | Self::SoftCompact { threshold, .. } => {
                 RepeatKey::Compact(*threshold)
@@ -2084,9 +2088,11 @@ fn row_benefit_line(
             horizon_secs,
             error,
             capped,
+            forced,
             ..
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
+            let forced = if *forced { "forced " } else { "" };
             let idle =
                 repeat_duration_range(*idle_secs, duration, rimz::theme::fmt::active_duration);
             let holding = horizon_secs
@@ -2107,7 +2113,9 @@ fn row_benefit_line(
                 format!(" — {waits} {noun} pending")
             };
             let limit = if *capped { ", limit reached" } else { "" };
-            format!("{time} ◷ {agent} cache keepalive after {idle}{holding}{waits}{error}{limit}")
+            format!(
+                "{time} ◷ {agent} {forced}cache keepalive after {idle}{holding}{waits}{error}{limit}"
+            )
         }
         AssistEvent::IdleStop {
             label,

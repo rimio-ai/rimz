@@ -934,6 +934,26 @@ mod repeats {
     }
 
     #[test]
+    fn a_forced_keepalive_says_forced_and_folds_apart_from_polite_ones() {
+        let forced = || {
+            let mut record = keepalive_record("a", true);
+            record["forced"] = serde_json::json!(true);
+            record
+        };
+        let stats = repeat_stats(vec![forced(), forced(), keepalive_record("a", true)]);
+        let (lines, _) = timeline_lines(&stats, 0, false, &jiff::tz::TimeZone::UTC);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains("@a forced cache keepalive after 1h00m — 1 wait pending · ×2"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("@a cache keepalive after 1h00m — 1 wait pending · agent a"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn timeline_other_kinds_do_not_break_a_subjects_repeats() {
         let stats = repeat_stats(vec![
             keepalive_record("a", true),

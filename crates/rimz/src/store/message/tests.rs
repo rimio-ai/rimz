@@ -105,16 +105,28 @@ fn typing_hold_stops_a_boundary_batch_at_each_held_member() {
     let now = Timestamp::from_second(1_000).unwrap();
     let receiver = agent("receiver", None);
     let records = [1, 2, 3].map(|id| delivery_message(id, &receiver, DeliveryGate::Any, None));
-    let observed = [0, 1].map(|index| {
+    let observed = [(0, false), (1, false), (0, true)].map(|(index, forced_keepalive)| {
         let mut records = records.clone();
         records[index].typing_hold = Some(TypingHold {
             until: now + Duration::from_secs(30),
             replay: None,
             force: false,
         });
+        records[index].forced_keepalive = forced_keepalive;
         delivery_batch_indices(&records, &records[0].message_id, AgentStatus::Idle, now)
     });
-    assert_eq!(observed, [None, Some(vec![0])]);
+    assert_eq!(
+        observed,
+        [None, Some(vec![0]), Some(vec![0])],
+        "a forced keepalive claims past its stored hold, and alone"
+    );
+    let mut forced = records.clone();
+    forced[0].forced_keepalive = true;
+    assert_eq!(
+        delivery_batch_indices(&forced, &forced[0].message_id, AgentStatus::Idle, now),
+        Some(vec![0]),
+        "no follower rides a forced keepalive past the hold"
+    );
 }
 
 #[test]
@@ -1830,6 +1842,51 @@ fn older_ready_blocker_names_claimed_and_sent_prompt_fifo_holds() {
         delivery_message(1, &receiver, DeliveryGate::Done, None).with_body(MessageBody::Command);
     command.status = MessageStatus::Sent;
     assert!(older_ready_blocker([&command], &head, now, |_| true).is_none());
+}
+
+#[test]
+fn a_forced_keepalive_passes_queued_records_but_not_a_write_in_flight() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let mut held = delivery_message(1, &receiver, DeliveryGate::Done, None);
+    held.typing_hold = Some(TypingHold {
+        until: now + Duration::from_secs(30),
+        replay: None,
+        force: false,
+    });
+    let queued = delivery_message(2, &receiver, DeliveryGate::Done, None);
+    let ping = delivery_message(3, &receiver, DeliveryGate::Done, None);
+    let follower = delivery_message(4, &receiver, DeliveryGate::Done, None);
+    let ready = |message: &MessageRecord| message.is_deliverable(now);
+    let observed = [false, true].map(|forced_keepalive| {
+        let mut live = [held.clone(), queued.clone(), ping.clone(), follower.clone()];
+        live[2].forced_keepalive = forced_keepalive;
+        (
+            delivery_batch_indices(&live, &live[2].message_id, AgentStatus::Idle, now),
+            older_ready_blocker(&live, &live[2], now, ready).map(|m| m.message_id.clone()),
+        )
+    });
+    assert_eq!(
+        observed,
+        [(None, Some(held.message_id.clone())), (Some(vec![2]), None)],
+        "a polite ping keeps its FIFO turn; a forced one claims alone ahead of queued records"
+    );
+    for status in [MessageStatus::Claimed, MessageStatus::Sent] {
+        let mut in_flight = held.clone();
+        in_flight.status = status;
+        in_flight.last_attempt_at = Some(now);
+        let mut forced = ping.clone();
+        forced.forced_keepalive = true;
+        let live = [in_flight.clone(), forced.clone()];
+        assert_eq!(
+            (
+                delivery_batch_indices(&live, &forced.message_id, AgentStatus::Idle, now),
+                older_ready_blocker(&live, &forced, now, ready).map(|m| m.message_id.clone()),
+            ),
+            (None, Some(in_flight.message_id.clone())),
+            "a {status:?} record ahead still holds the forced ping"
+        );
+    }
 }
 
 #[test]
