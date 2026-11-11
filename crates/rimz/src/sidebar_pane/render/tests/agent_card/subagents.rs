@@ -117,7 +117,7 @@ fn child_headline_uses_description_task_then_first_prompt_without_repeating_the_
 }
 
 #[test]
-fn compacting_child_draws_the_compacting_head_unless_its_status_is_actionable() {
+fn compacting_child_draws_the_compacting_head_unless_its_status_wants_attention() {
     use crate::sidebar_pane::render::labels::{agent_glyph, role_glyph};
     let theme = truecolor_sidebar_theme();
     let compacting_tone = theme.animations.natural_color(AnimationRole::Compacting);
@@ -129,6 +129,7 @@ fn compacting_child_draws_the_compacting_head_unless_its_status_is_actionable() 
         (AgentStatus::Success, false, false),
         (AgentStatus::Waiting, true, false),
         (AgentStatus::Failed, true, false),
+        (AgentStatus::Paused, true, false),
     ] {
         let mut snapshot = fast_child_snapshot(status, false);
         let child = &mut fast_children_mut(&mut snapshot)[0];
