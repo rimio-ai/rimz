@@ -1113,7 +1113,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         serde_json::json!({"agent": {"total": 1, "outcomes": []}}),
     );
     for _ in 0..2 {
-        report_run(&failed, &[attempt(0.5), attempt(0.25)], true);
+        report_run(&failed, &[attempt(0.5), attempt(0.25)], true).unwrap();
         assert_eq!(
             super::super::strikes::load().get(&key),
             Some(&1),
@@ -1143,7 +1143,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
             Some(60_000)
         )
     );
-    report_run(&run("done", serde_json::json!({})), &[], false);
+    report_run(&run("done", serde_json::json!({})), &[], false).unwrap();
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
@@ -1155,8 +1155,8 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         Some(root.path()),
     );
     assert_eq!(rows.last().map(|row| row.acted), Some(Some(false)));
-    report_run(&run("canceled", serde_json::json!({})), &[], false);
-    report_run(&failed, &[], true);
+    report_run(&run("canceled", serde_json::json!({})), &[], false).unwrap();
+    report_run(&failed, &[], true).unwrap();
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
@@ -1201,7 +1201,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         "input":{"outcome":"capacity", "step":"agent", "reason":"2 agents open", "kinds":["claude"], "waited_ms":3600000}
     }))
     .unwrap();
-    report_run(&failed, &[gave_up], false);
+    report_run(&failed, &[gave_up], false).unwrap();
     let rows = task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",
@@ -1261,7 +1261,7 @@ fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_
             false,
         )
         .unwrap();
-        report_run(&run, &[], acted);
+        report_run(&run, &[], acted).unwrap();
         let memory = super::super::launch_ledger::load_workflows(&state).unwrap();
         assert_eq!(
             memory

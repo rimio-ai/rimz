@@ -391,16 +391,27 @@ fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
 }
 
 /// Report a finished task-started run to its loop task once, after its terminal record is
-/// durable; a crash before the mark leaves the report to the scheduler's backstop advance.
+/// durable, and mark it sent only once the report landed. An unreadable journal or a report
+/// that did not land leaves the run owing it, as a crash before the mark does: the
+/// scheduler's backstop advance retries it, and the terminal transition stands either way.
 fn report_to_loop(paths: &WorkflowPaths, record: &mut RunRecord, guard: &WorkspaceLock) {
     if !record.owes_loop_report() {
         return;
     }
-    let journal = workflow::journal(paths).unwrap_or_else(|error| {
-        tracing::warn!(run = %record.id, %error, "workflow journal unreadable for its loop report");
-        Vec::new()
-    });
-    crate::harness::schedule::run_log::report_run(record, &journal, acted(paths, record));
+    let journal = match workflow::journal(paths) {
+        Ok(journal) => journal,
+        Err(error) => {
+            tracing::warn!(
+                run = %record.id, %error, "workflow journal unreadable for its loop report"
+            );
+            return;
+        }
+    };
+    let acted = acted(paths, record);
+    if let Err(error) = crate::harness::schedule::run_log::report_run(record, &journal, acted) {
+        tracing::warn!(run = %record.id, %error, "workflow loop report not landed");
+        return;
+    }
     record.loop_report = workflow::LoopReport::Sent;
     if let Err(error) = workflow::write(paths, record, guard) {
         tracing::warn!(run = %record.id, %error, "workflow loop report mark not written");

@@ -536,9 +536,12 @@ pub enum LoopReport {
     /// Nothing is owed: no task started the run, or it was recorded before reports existed.
     #[default]
     None,
-    /// A loop task started the run; its terminal outcome is not yet in the loop history.
+    /// A loop task started the run; its terminal outcome is not yet in the loop history. On a
+    /// terminal record this also means the last report attempt failed, and the scheduler's
+    /// tick retries it.
     Owed,
-    /// The terminal outcome reached the loop history and the strike count.
+    /// The terminal outcome reached the loop history and, while the task's row existed, the
+    /// strike count.
     Sent,
 }
 
