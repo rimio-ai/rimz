@@ -366,6 +366,8 @@ fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
             definition: definition("nightly", &task),
             fire_tree: false,
             capacity_until: None,
+            surplus: task.entry().surplus.clone(),
+            surplus_after: task.entry().surplus_after.clone(),
         },
         ScopeRoots {
             checkout: home.into(),
@@ -800,6 +802,8 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
             },
             fire_tree: false,
             capacity_until: None,
+            surplus: None,
+            surplus_after: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -1163,6 +1167,80 @@ fn a_judge_on_a_spent_quota_binding_or_short_of_its_tasks_surplus_is_refused() {
         ),
         (None, None),
         "a kind-wide account has no bound quota, and surplus is read only for a task that sets it"
+    );
+}
+
+/// What a judge of a task run fired while its row's surplus gate read `1.5x` answers once the
+/// project config reads `config`, against a Codex window short of any surplus.
+fn judge_after_the_row_changes(config: &str) -> (&'static str, Result<Value, String>) {
+    use crate::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
+    let row = "agent='claude'\nprompt='go'\nevery='1h'\ncheck='exit 1'\non='fail'\n\
+               judge=[{agent='codex',prompt='Is there work?'}]\nsurplus='1.5x'\n";
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".rimz")).unwrap();
+    fs::write(
+        home.path().join(".rimz/config.toml"),
+        format!("[tasks.nightly]\n{row}"),
+    )
+    .unwrap();
+    let (state, record) = fire_at(home.path(), row);
+    fs::write(home.path().join(".rimz/config.toml"), config).unwrap();
+    let runtime = crate::disk::paths::RuntimePaths::for_state(&state).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = jiff::Timestamp::now();
+    let week = 7 * 24 * 60;
+    let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
+    let window = RateLimitWindow {
+        used_percentage: Some(90),
+        resets_at: Some(now + jiff::SignedDuration::from_secs(i64::from(week) * 60 / 2)),
+        duration_mins: Some(week),
+        ..RateLimitWindow::default()
+    };
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &RateLimitsCache::shared_path(&runtime),
+        &RateLimitsCache {
+            entries: std::collections::BTreeMap::from([(
+                key.into(),
+                RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![window],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut record = serde_json::to_value(record).unwrap();
+    record["node"] = json!("judge-1");
+    record["next_seq"] = json!(2);
+    record["attempt"] = json!({"kind":"judge","seq":1,"node":"judge-1",
+        "started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":null}});
+    let record: RunRecord = serde_json::from_value(record).unwrap();
+    let spec = super::super::load(&record.spec_dir).unwrap();
+    let judged =
+        super::super::script::evaluate(&state, &state.workflow(&record.id), &spec, &record);
+    (judged.failure, judged.object)
+}
+
+#[test]
+fn a_judge_keeps_the_surplus_gate_its_run_started_with_when_the_row_is_edited() {
+    let edited = "[tasks.nightly]\nagent='claude'\nprompt='go'\nevery='1h'\ncheck='exit 1'\n\
+                  on='fail'\njudge=[{agent='codex',prompt='Is there work?'}]\nsurplus='1.2x'\n";
+    let (failure, object) = judge_after_the_row_changes(edited);
+    assert_eq!(
+        (failure, object.err().as_deref()),
+        ("budget", Some("codex 7d window surplus 0.2x below 1.5x"))
+    );
+}
+
+#[test]
+fn a_judge_keeps_the_surplus_gate_its_run_started_with_when_the_row_is_removed() {
+    let (failure, object) = judge_after_the_row_changes("");
+    assert_eq!(
+        (failure, object.err().as_deref()),
+        ("budget", Some("codex 7d window surplus 0.2x below 1.5x"))
     );
 }
 
@@ -1567,6 +1645,8 @@ fn inline_and_ejected(
                 .unwrap(),
             fire_tree: false,
             capacity_until: None,
+            surplus: None,
+            surplus_after: None,
         },
         ScopeRoots {
             checkout: inline_home.path().into(),
@@ -1590,6 +1670,8 @@ fn inline_and_ejected(
         DefinitionSource::Deployed {
             dir,
             task: Some("nightly".into()),
+            surplus: None,
+            surplus_after: None,
         },
         ScopeRoots {
             checkout: ejected_home.path().into(),

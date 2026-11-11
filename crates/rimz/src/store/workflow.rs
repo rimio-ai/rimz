@@ -581,6 +581,14 @@ pub struct RunRecord {
     /// then, however late in the run its first hold comes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity_until: Option<Timestamp>,
+    /// The loop task row's `surplus` value as written when its fire started the run. The run's
+    /// judges gate on it and on `surplus_after`, never on the live row; a record with neither
+    /// applies no surplus gate to its judges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surplus: Option<String>,
+    /// The loop task row's `surplus-after` value as written when its fire started the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surplus_after: Option<String>,
     pub project_root: PathBuf,
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]

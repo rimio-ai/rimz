@@ -430,7 +430,7 @@ Every judge decline in a run a task started appears in `rimz stats --assists` an
 
 ## Budgets, gates, and strikes
 
-A fire passes its gates in this order before its run starts: scope and arming (account, fleet and provider budget caps), the deadline and launch memory, the task's run lock, the task's daily budget and the surplus gate, then the overlap rule. Their refusals spend nothing and open no room. Each agent step passes the room, account and quota caps again when it launches, and each judge the fleet and account daily caps, the account's park, its bound provider quota, and the task's surplus gate; a judge they refuse never spawns, and the run records `budget skipped`. A gate skip never counts as a strike.
+A fire passes its gates in this order before its run starts: scope and arming (account, fleet and provider budget caps), the deadline and launch memory, the task's run lock, the task's daily budget and the surplus gate, then the overlap rule. Their refusals spend nothing and open no room. Each agent step passes the room, account and quota caps again when it launches, and each judge the fleet and account daily caps, the account's park, its bound provider quota, and the task's surplus gate as the row had it when the run started; a judge they refuse never spawns, and the run records `budget skipped`. A gate skip never counts as a strike.
 
 ### Budgets
 
@@ -452,7 +452,7 @@ The room, account, and quota caps are checked again when the agent launches and 
 
 `--surplus <RATIO>` fires an `--agent` or `--wait` action only while the provider's longest budget window has that much headroom: the share of budget left divided by the share of time left. `1.0x` is the sustainable pace, and `--surplus 1.5x` needs half again as much. `--surplus-after <DUR>` (`m`, `h`, or `d`) first requires that much of the window to have elapsed; alone it implies `--surplus 1.0x`.
 
-A missing, incomplete, expired, or not-started window keeps the gate closed (which is why `--after-reset` on the longest window refuses a surplus gate), so an API-key account without window readings always skips. A managed Qwen `--agent` task paces against its account's 7-day window, and a Qwen `--wait` task always skips. A closed gate records `surplus skipped`, and `loop show` prints the gate and the recorded reason. The headroom model with a worked example is [budgets → the surplus gate](../../guide/budget.md#the-surplus-gate).
+A missing, incomplete, expired, or not-started window keeps the gate closed (which is why `--after-reset` on the longest window refuses a surplus gate), so an API-key account without window readings always skips. A managed Qwen `--agent` task paces against its account's 7-day window, and a Qwen `--wait` task always skips. A closed gate records `surplus skipped`, and `loop show` prints the gate and the recorded reason. A run the fire started keeps the gate it started with: its judges read the thresholds the row had then, so editing or removing the row changes the next fire, not a run in flight. The headroom model with a worked example is [budgets → the surplus gate](../../guide/budget.md#the-surplus-gate).
 
 ### The start throttle
 

@@ -911,6 +911,8 @@ impl<'a> TaskFire<'a> {
             WorkflowSource::Deployed(dir) => crate::harness::workflow::DefinitionSource::Deployed {
                 dir,
                 task: Some(self.name.clone()),
+                surplus: self.entry.surplus.clone(),
+                surplus_after: self.entry.surplus_after.clone(),
             },
             WorkflowSource::Inline(definition) => {
                 crate::harness::workflow::DefinitionSource::Inline {
@@ -921,6 +923,8 @@ impl<'a> TaskFire<'a> {
                     },
                     fire_tree: fresh,
                     capacity_until: self.default_capacity_cutoff()?,
+                    surplus: self.entry.surplus.clone(),
+                    surplus_after: self.entry.surplus_after.clone(),
                 }
             }
         };
@@ -3622,7 +3626,8 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
 
 /// Why task `entry`'s surplus setting holds an agent on `kind`'s account back, from that
 /// account's window `reading`, read only when the task sets a surplus gate: a fire's admission
-/// and a workflow judge's spawn read it alike.
+/// reads the live row, and a workflow judge's spawn the `surplus` and `surplus-after` values
+/// its run's record kept from the row when the run started.
 pub(in crate::harness) fn surplus_refusal(
     entry: &TaskEntry,
     kind: &str,

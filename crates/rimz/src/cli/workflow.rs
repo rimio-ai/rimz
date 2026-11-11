@@ -295,6 +295,8 @@ fn start(
         workflow::DefinitionSource::Deployed {
             dir: &dir,
             task: None,
+            surplus: None,
+            surplus_after: None,
         },
         workflow::ScopeRoots {
             checkout: scope.clone(),
