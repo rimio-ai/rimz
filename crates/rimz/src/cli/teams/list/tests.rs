@@ -369,6 +369,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
                     last_request_at: Some(jiff::Timestamp::from_second(120).unwrap()),
                     warm_until: None,
                     rewarm_cost_usd: None,
+                    recorded: false,
                 }),
                 ..AgentCard::default()
             })),

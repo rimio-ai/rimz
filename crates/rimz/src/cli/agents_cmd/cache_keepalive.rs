@@ -53,7 +53,10 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             kind: request.kind,
             agent_id: request.agent_id,
             label: Some(request.label),
-            idle_secs: now.duration_since(request.anchor).as_secs().max(0) as u64,
+            idle_secs: now
+                .duration_since(agent.last_request_at().unwrap_or(request.anchor))
+                .as_secs()
+                .max(0) as u64,
             waits: agent.pending_waits.len(),
             horizon_secs: holding.map(|horizon| horizon.as_secs()),
             message_id: message.message_id.to_string(),

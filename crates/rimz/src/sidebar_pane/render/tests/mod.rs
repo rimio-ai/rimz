@@ -435,6 +435,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
     AgentContext {
         model_context_limits: None,
         last_cache_write: None,
+        recorded_request_at: None,
         post_compaction_tokens: None,
         source: "claude".to_owned(),
         session_name: Some("store refactor".to_owned()),
@@ -506,6 +507,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
     AgentContext {
         model_context_limits: None,
         last_cache_write: None,
+        recorded_request_at: None,
         post_compaction_tokens: None,
         source: "codex".to_owned(),
         session_name: None,

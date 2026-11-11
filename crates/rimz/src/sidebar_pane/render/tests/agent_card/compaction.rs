@@ -254,6 +254,7 @@ fn compaction_wall_and_label_render_across_meter_states_and_glyph_sets() {
                         last_request_at: None,
                         warm_until: None,
                         rewarm_cost_usd: None,
+                        recorded: false,
                     });
                     row.last_activity = fixed_now() - Duration::from_secs(2400);
                 }
@@ -443,6 +444,7 @@ fn compaction_pixel_meters_keep_the_wall_including_an_empty_compaction() {
                 last_request_at: None,
                 warm_until: None,
                 rewarm_cost_usd: None,
+                recorded: false,
             });
             row.last_activity = fixed_now() - Duration::from_secs(2400);
         }

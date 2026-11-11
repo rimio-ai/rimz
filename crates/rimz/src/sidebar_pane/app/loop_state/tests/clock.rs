@@ -368,3 +368,53 @@ fn settled_scrollbar_survives_a_long_uptime_grid_raise() {
         "settled fade releases the base grid"
     );
 }
+
+/// A recorded card's seconds countdown advances on a fold whose content did not change: the
+/// clock-only delivery marks the pane dirty, and the loop's own due check repaints it.
+#[test]
+fn a_recorded_cache_countdown_repaints_on_a_clock_only_fold() {
+    let at = |stamp: &str| stamp.parse::<Timestamp>().unwrap();
+    let clock = LoopClock::play(at("2026-11-11T16:44:10Z"));
+    let mut rig = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.now = clock.timestamp();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+    let turn_end = at("2026-11-11T15:45:27.992Z");
+    let row = snapshot.rows_mut().next().unwrap();
+    row.last_activity = turn_end;
+    let card = row.as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Success;
+    card.own_last_activity = Some(turn_end);
+    card.usage.context_pct = Some(40);
+    card.cache = Some(crate::store::snapshot::CacheClock {
+        ceiling_secs: 3600,
+        last_request_at: Some(at("2026-11-11T15:44:52.830Z")),
+        warm_until: None,
+        rewarm_cost_usd: None,
+        recorded: true,
+    });
+    let key = snapshot.worktree_groups[0].key.clone();
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        v.state.toggles.expanded_groups.insert(key);
+    });
+    let output = FrameOutput::default();
+    rig.terminal.backend_mut().play_output(output.clone());
+    let mut screens = Vec::new();
+    for _ in 0..2 {
+        rig.fold(snapshot.clone(), SnapshotSource::Produced);
+        let active = rig.frame_active();
+        clock.advance(Duration::from_secs(1));
+        rig.paint(active);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 80.try_into().unwrap(), 0);
+        parser.process(&output.0.lock().unwrap());
+        screens.push(parser.screen().contents());
+        clock.advance(Duration::from_secs(4));
+        snapshot.now += jiff::SignedDuration::from_secs(5);
+    }
+    assert_eq!(
+        rig.state.pane.content_applications, 1,
+        "the second fold applies clock-only"
+    );
+    assert!(screens[0].contains("expires in 43s"), "{}", screens[0]);
+    assert!(screens[1].contains("expires in 38s"), "{}", screens[1]);
+}

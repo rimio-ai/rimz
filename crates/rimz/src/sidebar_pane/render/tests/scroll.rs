@@ -460,6 +460,7 @@ fn assert_cache_notice_anchor(
         last_request_at: Some(fixed_now() - Duration::from_secs(1801)),
         warm_until: Some(fixed_now() - Duration::from_secs(1)),
         rewarm_cost_usd: None,
+        recorded: false,
     });
     let mut ui = ViewState {
         scroll_offset: offset,

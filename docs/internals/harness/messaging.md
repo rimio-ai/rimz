@@ -417,7 +417,7 @@ Flip, compact-first, manual, and older untagged commands retain their delivery r
 
 Two gaps remain. During a resumed parked turn, the boundary gate is closed but the edge has not advanced yet, so `refuse_repeat` still refuses a manual or flip compaction as `Pending`; the idle record then cancels at Stop, and neither command compacts.
 
-A reset at rest after the decision also cancels the idle record, and the two kinds of reset stamp differently. A compaction that closes its bracket also closes a request: it stamps `turn_started_at` and `turn_ended_at` both at the close, `last_request_at()` moves there too, and the context the idle command meant to compact has been compacted. A re-registration, or a compaction close whose bracket open was missed (`lifecycle::step` marks it `Ignored`), moves `turn_started_at` alone. The producer keys its next attempt on `last_request_at()`, not on this edge, and throttles helper respawns for ten minutes. A reset of this second kind moves `last_request_at()` to the previous turn's Stop when that turn's start and last tool activity were earlier and no keepalive ping closed after that Stop. The producer can then fire again after the throttle, if the cache window is still open. Otherwise no new idle attempt fires until the next request.
+A reset at rest after the decision also cancels the idle record, and the two kinds of reset stamp differently. A compaction that closes its bracket also closes a request: it stamps `turn_started_at` and `turn_ended_at` both at the close, `last_request_at()` moves there too, and the context the idle command meant to compact has been compacted. A re-registration, or a compaction close whose bracket open was missed (`lifecycle::step` marks it `Ignored`), moves `turn_started_at` alone. The producer keys its next attempt on `request_key()`, not on this edge, and throttles helper respawns for ten minutes. A reset of this second kind moves `last_request_at()` to the previous turn's Stop when that turn's start and last tool activity were earlier and no keepalive ping closed after that Stop. The producer can then fire again after the throttle, if the cache window is still open. Otherwise no new idle attempt fires until the next request.
 
 ### Batching
 
@@ -683,7 +683,7 @@ The helper re-resolves the workspace, session, and pane, applies the shared deci
 
 Three layers make it once per idle stretch:
 
-1. The producer's cache-class `(kind, agent_id)` record suppresses the same `last_request_at()` and throttles helper respawns for ten minutes. This pacing is producer-only: the helper must not veto its own spawn record.
+1. The producer's cache-class `(kind, agent_id)` record suppresses the same request, keyed by `AgentState::request_key()` so the provider's record replacing the estimate for that request refires nothing, and throttles helper respawns for ten minutes. This pacing is producer-only: the helper must not veto its own spawn record.
 2. The live queue refuses a second outstanding command, excluding a queued idle compaction whose decision lapsed after a new turn, and `last_compact_command_tokens` suppresses the same occupied reading.
 3. For adapters with native turn-start hooks, the unprompted marker stops the helper until the next turn opens, whether from a queued prompt or text typed into the pane.
 
@@ -741,7 +741,7 @@ The producer publishes the horizons its TTL and `while` gates admit to `lanes/ke
 
 ### The ping
 
-The producer takes the runtime lock `cache-keepalive.lock`, and records the request anchor in a per-agent runtime file before it spawns the hidden `agents cache-keepalive` helper. The sidebar and one-shot refresh paths therefore share one claim per session and anchor, even when they race. A failed spawn consumes that claim.
+The producer takes the runtime lock `cache-keepalive.lock`, and records the request anchor, `AgentState::request_key()` (the hook estimate, which the provider's record replacing it for the same request does not move), in a per-agent runtime file before it spawns the hidden `agents cache-keepalive` helper. The sidebar and one-shot refresh paths therefore share one claim per session and anchor, even when they race. A failed spawn consumes that claim.
 
 The helper rechecks the anchor, eligibility, horizon, and pane on `Ctx::published_snapshot`, pending waits and the activity heartbeat included. It sends a `CACHE_KEEPALIVE` notice that begins `Cache keepalive, no action needed. Waiting on:`, with one facts-only line per wait and no instructions. A keep-warm ping with no waits is the bare `Cache keepalive, no action needed.` The wait lines draw on the pending waits enrichment builds, `Subagent` and `Team` waits included ([model.md](../agents/model.md)):
 

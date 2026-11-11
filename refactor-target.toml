@@ -367,7 +367,9 @@ upward-dependencies = ["address"]
 # RaisedAsk::detail and question_sentence share the card's question line (+2).
 # ResetGrant, its re-export from agents and ResetCredits::accounted carry per-grant reset credits (+3).
 # AgentState::soft_compact_in_flight shares the open-cycle rest lift with the sub-agent projection (+1).
-surface-budget = 1284
+# AgentState::last_request_recorded and request_key name the cache clock's source and the
+# request identity pacing compares, which a switch of source does not move (+2).
+surface-budget = 1286
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

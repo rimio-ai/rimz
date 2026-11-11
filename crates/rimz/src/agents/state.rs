@@ -1154,7 +1154,8 @@ pub struct AgentState {
     /// Rich session-scoped enrichment from a high-frequency out-of-band source
     /// (Claude's statusline). Folded in at snapshot time by
     /// `SidebarSnapshot::with_agent_context`, never reduced from the event log.
-    /// Same enrich-only discipline as `context_pct`: display, never routing.
+    /// Same enrich-only discipline as `context_pct`: display, never routing, except the
+    /// recorded request [`Self::last_request_at`] prefers for the cache clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
     /// Enrich-only sign-in classification from live context or the accounts cache.
@@ -1227,9 +1228,12 @@ pub struct AgentState {
     /// A ping-only turn is open: a prompt whose every section is a cache-keepalive ping opened it from rest. Its close clears it; any other signal clears it and folds as the work the ping became.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ping_turn: bool,
-    /// When the last ping-only turn closed. The one stamp a ping moves: cache pacing counts from it, nothing else sees it.
+    /// When the last ping-only turn closed: the key pacing names the ping by (`request_key`). It trails the ping's request by up to tens of seconds, so the cache clock counts from the ping's open instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinged_at: Option<Timestamp>,
+    /// When the last ping-only turn opened: the ping's prompt, the input its request follows. A recorded request older than it predates the ping. While it is no later than `pinged_at` (its ping has closed), the estimate `last_request_at` returns counts from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ping_opened_at: Option<Timestamp>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
     /// Activity after this instant proves a keyless prompt was answered in the
     /// agent's own UI, so read paths project the row back to work even before
@@ -1410,21 +1414,65 @@ impl AgentState {
         }
     }
 
-    /// Request-start estimate shared by cache-aligned timers: the last real
-    /// request of a closed turn, or a later closed ping. A re-registration at
-    /// rest (`/clear`, a restart), or a compaction close with no open bracket,
-    /// moves `turn_started_at` past `turn_ended_at` without closing a request,
-    /// so this then returns the turn end: it rises from the last turn's start
-    /// or tool activity to that turn's Stop, unless a later ping close
-    /// dominates. A compaction that closes its bracket at rest also closes a
-    /// request, stamping both turn stamps, so this moves to the close.
+    /// The last request the cache counts from, shared by every cache-aligned timer
+    /// (keepalive, keep-warm holds, the run cap, idle compaction, the card's clock): the
+    /// provider's own record of it while that record is current
+    /// ([`Self::last_request_recorded`]), else the hook estimate. The estimate is
+    /// [`Self::request_key`] with a closed ping counted from its open, which precedes the
+    /// ping's request, rather than its close, which can trail it by tens of seconds; a row
+    /// whose open is unknown or belongs to a newer, unclosed ping keeps the close. For one
+    /// request the record never precedes the estimate's inputs, so a switch of source moves
+    /// the value forward by the gap between hook and request; pacing that asks "same
+    /// request?" compares [`Self::request_key`] instead, which no switch moves.
     pub fn last_request_at(&self) -> Option<Timestamp> {
-        let real = self.turn_ended_at.and_then(|end| {
+        self.recorded_request_at().or_else(|| {
+            let closed_ping = match (self.ping_opened_at, self.pinged_at) {
+                (Some(open), Some(close)) if open <= close => Some(open),
+                (_, close) => close,
+            };
+            self.real_request().max(closed_ping)
+        })
+    }
+
+    /// Whether [`Self::last_request_at`] is the provider's record rather than the estimate.
+    pub fn last_request_recorded(&self) -> bool {
+        self.recorded_request_at().is_some()
+    }
+
+    /// The provider's recorded request, when no request input (a prompt, a tool result, a
+    /// ping's open) landed after it: a newer input means a newer request the refresh has not
+    /// read yet, so the record is stale. A ping's own request postdates its open, so it wins
+    /// over the ping's later close.
+    fn recorded_request_at(&self) -> Option<Timestamp> {
+        let recorded = self.context.as_ref()?.recorded_request_at?;
+        let latest_input = self
+            .turn_started_at
+            .max(self.last_tool_at)
+            .max(self.ping_opened_at);
+        (latest_input <= Some(recorded)).then_some(recorded)
+    }
+
+    /// The key that names the last request for pacing: the last real request of a closed
+    /// turn, or a later closed ping's close (`pinged_at`), a stamp that names the ping but
+    /// trails its request, so no timer counts from it. A re-registration at rest
+    /// (`/clear`, a restart), or a compaction close with no open bracket, moves
+    /// `turn_started_at` past `turn_ended_at` without closing a request, so this then
+    /// returns the turn end: it rises from the last turn's start or tool activity to that
+    /// turn's Stop, unless a later ping close dominates. A compaction that closes its bracket
+    /// at rest also closes a request, stamping both turn stamps, so this moves to the close.
+    /// It moves only with hook stamps, so a request keeps one key whichever source
+    /// [`Self::last_request_at`] reads.
+    pub fn request_key(&self) -> Option<Timestamp> {
+        self.real_request().max(self.pinged_at)
+    }
+
+    /// The last real request of a closed turn, clamped to that turn's end.
+    fn real_request(&self) -> Option<Timestamp> {
+        self.turn_ended_at.and_then(|end| {
             self.turn_started_at
                 .max(self.last_tool_at)
                 .map(|request| request.min(end))
-        });
-        real.max(self.pinged_at)
+        })
     }
 
     pub fn runs_in(&self, machine: crate::config::Isolation) -> crate::config::Isolation {
@@ -1566,6 +1614,7 @@ impl AgentState {
             keepalive_since: None,
             ping_turn: false,
             pinged_at: None,
+            ping_opened_at: None,
             waiting_since: None,
             open_ask: None,
             queued_asks: Vec::new(),

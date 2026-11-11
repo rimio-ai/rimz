@@ -73,6 +73,7 @@ fn fleet(count: usize) -> SidebarSnapshot {
                 last_request_at: Some(fixed_now() - Duration::from_secs(59)),
                 warm_until: Some(fixed_now() + Duration::from_secs(1)),
                 rewarm_cost_usd: None,
+                recorded: false,
             });
         }
     }

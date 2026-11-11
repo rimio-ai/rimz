@@ -1,4 +1,5 @@
-//! Resumable Claude transcript fold for session-cumulative usage and cache-write retention.
+//! Resumable Claude transcript fold for session-cumulative usage, cache-write retention, and
+//! the main conversation's latest recorded request.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,8 +35,8 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let prices = managed_pricing::overlay(&prices);
-    let (parsed, last_cache_write) =
-        parse_claude_spend_with_retention(&path, Some(&fold.cursor), &prices);
+    let (parsed, tail) =
+        parse_claude_spend_with_retention(&path, Some(&fold.cursor), &prices, true);
     let restarted = restarted || parsed.update == SpendUpdate::Rewritten;
     if parsed.update == SpendUpdate::Rewritten {
         fold = LocalSpendFold::default();
@@ -61,11 +62,8 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
                 TranscriptUsageSource::Usage | TranscriptUsageSource::Fresh => FieldPatch::Clear,
                 TranscriptUsageSource::Unknown => FieldPatch::Keep,
             },
-            last_cache_write: match last_cache_write {
-                Some(retention) => FieldPatch::Set(retention),
-                None if restarted => FieldPatch::Clear,
-                None => FieldPatch::Keep,
-            },
+            last_cache_write: restartable_patch(tail.last_cache_write, restarted),
+            recorded_request_at: restartable_patch(tail.last_request_at, restarted),
             ..LocalContextPatch::default()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),
@@ -73,6 +71,16 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         spend_fold: FieldPatch::Set(fold),
         model_context_limits_key: None,
     })
+}
+
+/// A value the suffix read saw replaces the stored one; a restarted read that saw none
+/// clears it, since it described a transcript that is gone; otherwise the stored one stands.
+fn restartable_patch<T>(seen: Option<T>, restarted: bool) -> FieldPatch<T> {
+    match seen {
+        Some(value) => FieldPatch::Set(value),
+        None if restarted => FieldPatch::Clear,
+        None => FieldPatch::Keep,
+    }
 }
 
 fn existing_path(path: Option<&str>) -> Option<PathBuf> {

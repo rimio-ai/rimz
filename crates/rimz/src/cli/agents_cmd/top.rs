@@ -543,6 +543,7 @@ mod tests {
             last_request_at: Some(now - Duration::from_secs(120)),
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         });
         let sample = sample_snapshot(
             &snapshot,

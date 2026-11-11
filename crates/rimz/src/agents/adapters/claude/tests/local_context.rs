@@ -167,11 +167,27 @@ fn newest_main_chain_cache_write_sets_retention() {
 }
 
 #[test]
-fn cache_write_retention_keeps_on_resume_and_clears_on_replacement() {
+fn cache_write_retention_and_recorded_request_keep_on_resume_and_clear_on_replacement() {
     use crate::agents::context::CacheWriteRetention::Unsplit;
+    let request = |at: &str, source: &str| {
+        json!({"type": "api-request", "timestamp": at, "querySource": source}).to_string()
+    };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.jsonl");
-    std::fs::write(&path, format!("{}\n", usage_line("write", 1, 1, 10, 0))).unwrap();
+    // A retry's record is the latest by time; a record appended before its trigger is not
+    // the latest by position; another query source never moves the main conversation's clock.
+    std::fs::write(
+        &path,
+        [
+            usage_line("write", 1, 1, 10, 0),
+            request("2026-11-11T15:44:52.830Z", "repl_main_thread"),
+            request("2026-11-11T15:44:50.000Z", "repl_main_thread"),
+            request("2026-11-11T15:45:30.000Z", "sdk"),
+        ]
+        .map(|line| format!("{line}\n"))
+        .concat(),
+    )
+    .unwrap();
     let first = refresh(&path, None, None).unwrap();
     writeln!(
         std::fs::OpenOptions::new()
@@ -217,6 +233,20 @@ fn cache_write_retention_keeps_on_resume_and_clears_on_replacement() {
             },
         )
         .unwrap();
+    assert_eq!(
+        (
+            first.context.recorded_request_at.clone(),
+            resumed.context.recorded_request_at.clone(),
+            rewritten.context.recorded_request_at.clone(),
+            moved.context.recorded_request_at.clone()
+        ),
+        (
+            FieldPatch::Set("2026-11-11T15:44:52.830Z".parse().unwrap()),
+            FieldPatch::Keep,
+            FieldPatch::Clear,
+            FieldPatch::Clear
+        )
+    );
     assert_eq!(
         (
             first.context.last_cache_write,
@@ -499,7 +529,16 @@ fn local_context_refresh_stat_gates_and_discovers_session_file() {
     let project = dir.path().join("projects").join("-repo");
     std::fs::create_dir_all(&project).unwrap();
     let path = project.join("session-1.jsonl");
-    std::fs::write(&path, format!("{}\n", usage_line("one", 10, 5, 0, 90))).unwrap();
+    let request = json!({
+        "type": "api-request",
+        "timestamp": "2026-11-11T15:44:52.830Z",
+        "querySource": "repl_main_thread",
+    });
+    std::fs::write(
+        &path,
+        format!("{}\n{request}\n", usage_line("one", 10, 5, 0, 90)),
+    )
+    .unwrap();
 
     assert_eq!(
         super::super::local_context::find_session_transcript_under(
@@ -509,6 +548,8 @@ fn local_context_refresh_stat_gates_and_discovers_session_file() {
         Some(path.clone())
     );
     let first = refresh(&path, None, None).unwrap();
+    assert!(first.context.recorded_request_at.as_set().is_some());
+    // No new request read: no patch, so the sidecar and its `observed_at` stay put.
     assert!(
         refresh(
             &path,

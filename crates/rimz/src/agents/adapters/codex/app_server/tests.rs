@@ -983,6 +983,7 @@ fn app_server_context(app_at: Timestamp) -> AgentContext {
     AgentContext {
         model_context_limits: None,
         last_cache_write: None,
+        recorded_request_at: None,
         post_compaction_tokens: None,
         source: "codex".to_owned(),
         session_name: Some("TUI prototype".to_owned()),

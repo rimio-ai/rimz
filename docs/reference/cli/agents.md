@@ -707,7 +707,7 @@ Cards group by place and channel, using the sidebar's rule. `⑂` marks a checko
 | `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1M]`. Fast mode adds a bold amber bolt after the label (`ϟ`, or the configured `card.fast` glyph). The `show` header uses the same suffix. |
 | `CTX` | Context-window fill. |
 | `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
-| `AGE` | Time since the agent's own activity or a later cache request, keepalive pings included and child activity excluded, matching the sidebar. A rowless child shows time since its real activity. |
+| `AGE` | Time since the agent's last cache request while it rests, keepalive pings included, or since the later of its own activity and that request while it works or asks; child activity is excluded, matching the sidebar. A rowless child shows time since its real activity. |
 
 Under each row, the sidebar's description rule chooses the error reason, first working wait while working through a wait or first sleeping wait while sleeping, or activity, with `-` when none is known. It wraps to at most three indented lines, ending in an ellipsis when cut. A running parent whose own turn is idle adds `· on N subagents (@x, @y)` for its current running children.
 

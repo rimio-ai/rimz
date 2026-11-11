@@ -821,6 +821,7 @@ fn merge_bound_local_session(
     } else {
         state.ping_turn = false;
         state.pinged_at = None;
+        state.ping_opened_at = None;
         match &observation.projection {
             LocalSessionProjection::IdentityOnly => {
                 state.status = AgentStatus::Idle;

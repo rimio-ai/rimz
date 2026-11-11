@@ -284,6 +284,7 @@ fn stale_age_wears_the_cache_clock_tone() {
         last_request_at: None,
         warm_until: None,
         rewarm_cost_usd: None,
+        recorded: false,
     };
     for (cache, label, expected) in [
         (

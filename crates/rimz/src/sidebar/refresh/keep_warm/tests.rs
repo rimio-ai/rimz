@@ -363,6 +363,7 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             last_request_at: Some(ended),
             warm_until: Some(Timestamp::from_second(7210).unwrap()),
             rewarm_cost_usd: None,
+            recorded: false,
         })
     );
     assert_eq!(
@@ -372,6 +373,7 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             last_request_at: None,
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         }),
         "no real turn has ended, so there is nothing to hold yet"
     );
@@ -382,6 +384,7 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             last_request_at: Some(ended),
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         })
     );
     assert_eq!(
@@ -391,6 +394,7 @@ fn cache_clock_reads_the_provider_ttl_and_the_published_hold() {
             last_request_at: Some(ended),
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         }),
         "a kind without a provider default uses the fallback"
     );
@@ -403,9 +407,18 @@ fn the_cache_clock_counts_from_the_last_ping_and_drops_a_hold_once_cold() {
     let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
     let mut pinged = agent("claude", "pinged-1", Some("warm"), Some(-7000));
     pinged.pinged_at = Some(Timestamp::from_second(-3400).unwrap());
+    let mut recorded = agent("claude", "recorded-1", Some("warm"), Some(-3600));
+    recorded.context = Some(crate::agents::AgentContext {
+        recorded_request_at: Some(Timestamp::from_second(-3590).unwrap()),
+        ..Default::default()
+    });
     let mut snapshot = snapshot(
         &runtime,
-        vec![pinged, agent("claude", "cold-1", Some("warm"), Some(-3600))],
+        vec![
+            pinged,
+            agent("claude", "cold-1", Some("warm"), Some(-3600)),
+            recorded,
+        ],
     );
     let cache = KeepWarmCache {
         version: KEEP_WARM_CACHE_VERSION,
@@ -438,6 +451,12 @@ fn the_cache_clock_counts_from_the_last_ping_and_drops_a_hold_once_cold() {
     assert_eq!(
         cold.last_request_at,
         Some(Timestamp::from_second(-3600).unwrap())
+    );
+    assert!(!pinged.recorded && !cold.recorded);
+    let recorded = clock("recorded-1");
+    assert_eq!(
+        (recorded.last_request_at, recorded.recorded),
+        (Some(Timestamp::from_second(-3590).unwrap()), true)
     );
 }
 
@@ -551,6 +570,7 @@ fn a_published_horizon_holds_only_an_agent_the_pings_can_maintain() {
             last_request_at: Some(Timestamp::from_second(10).unwrap()),
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         })
     };
     let [done, parked, held] = clocks("");

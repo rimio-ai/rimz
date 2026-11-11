@@ -87,6 +87,7 @@ pub(in crate::sidebar) fn project_cache_clocks(
                 last_request_at: agent.last_request_at(),
                 warm_until,
                 rewarm_cost_usd: None,
+                recorded: agent.last_request_recorded(),
             };
             Some((horizon_key(agent), clock))
         })

@@ -420,6 +420,46 @@ fn last_request_anchor_uses_tools_and_clamps_context_resets() {
             expected.map(ts),
             "{start:?}/{tool:?}/{end:?}"
         );
+        assert_eq!(agent.request_key(), expected.map(ts));
+    }
+    // The provider's record wins while no request input (a prompt, a tool result, a ping's
+    // open) landed after it; a stale record yields the estimate. The key stays the estimate.
+    (
+        agent.turn_started_at,
+        agent.last_tool_at,
+        agent.turn_ended_at,
+    ) = (Some(ts(100)), Some(ts(200)), Some(ts(300)));
+    for (record, ping_open, ping_close, expected, recorded, key) in [
+        (None, None, None, 200, false, 200),
+        (Some(210), None, None, 210, true, 200),
+        (Some(200), None, None, 200, true, 200),
+        (Some(150), None, None, 200, false, 200),
+        (Some(3_610), Some(3_600), Some(3_640), 3_610, true, 3_640),
+        // With no current record a closed ping counts from its open, which precedes its
+        // request, while its key stays the close. A newer, unclosed open does not move the
+        // estimate, a row from before `ping_opened_at` keeps the close, and a real request
+        // later than the ping wins.
+        (Some(210), Some(3_600), Some(3_640), 3_600, false, 3_640),
+        (None, Some(3_600), Some(3_640), 3_600, false, 3_640),
+        (None, Some(3_700), Some(3_640), 3_640, false, 3_640),
+        (None, None, Some(3_640), 3_640, false, 3_640),
+        (None, Some(150), Some(160), 200, false, 200),
+    ] {
+        agent.context = Some(crate::agents::AgentContext {
+            recorded_request_at: record.map(ts),
+            ..Default::default()
+        });
+        agent.ping_opened_at = ping_open.map(ts);
+        agent.pinged_at = ping_close.map(ts);
+        assert_eq!(
+            (
+                agent.last_request_at(),
+                agent.last_request_recorded(),
+                agent.request_key()
+            ),
+            (Some(ts(expected)), recorded, Some(ts(key))),
+            "{record:?}/{ping_open:?}/{ping_close:?}"
+        );
     }
 }
 
