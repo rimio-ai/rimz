@@ -7,7 +7,8 @@ use ratatui::style::Color;
 use ratatui::text::Line;
 
 use super::{
-    ImageRequest, ImageResidency, METER_ID_CAPACITY, RgbaImage, encode_png, meter_image_id,
+    ImagePermit, ImageRequest, ImageResidency, METER_ID_CAPACITY, RgbaImage, encode_png,
+    meter_image_id,
 };
 
 const CELL_W: u32 = 8;
@@ -287,6 +288,7 @@ impl MeterPainter {
         image_id: u32,
         raster: &MeterRaster,
         now_ms: u64,
+        permit: &ImagePermit,
     ) -> io::Result<()> {
         self.residency.ensure(
             writer,
@@ -302,12 +304,17 @@ impl MeterPainter {
                 let image = rasterize(raster);
                 std::sync::Arc::from(encode_png(image.width, image.height, &image.data))
             },
+            permit,
         )?;
         Ok(())
     }
 
-    pub(in crate::sidebar_pane) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        self.residency.clear(writer)
+    pub(in crate::sidebar_pane) fn clear<W: Write>(
+        &mut self,
+        writer: &mut W,
+        permit: &ImagePermit,
+    ) -> io::Result<()> {
+        self.residency.clear(writer, permit)
     }
 }
 
@@ -503,7 +510,13 @@ mod tests {
         let mut painter = MeterPainter::new(false);
         let mut first_bytes = Vec::new();
         painter
-            .ensure_transmitted(&mut first_bytes, same_id, &first, 0)
+            .ensure_transmitted(
+                &mut first_bytes,
+                same_id,
+                &first,
+                0,
+                &ImagePermit::for_test(),
+            )
             .expect("first");
         let text = String::from_utf8_lossy(&first_bytes);
         assert!(text.contains("a=t"));
@@ -514,18 +527,26 @@ mod tests {
 
         let mut repeat = Vec::new();
         painter
-            .ensure_transmitted(&mut repeat, same_id, &subpixel, 1)
+            .ensure_transmitted(&mut repeat, same_id, &subpixel, 1, &ImagePermit::for_test())
             .expect("same");
         assert!(repeat.is_empty());
 
         let mut distinct_bytes = Vec::new();
         painter
-            .ensure_transmitted(&mut distinct_bytes, distinct_id, &distinct, 2)
+            .ensure_transmitted(
+                &mut distinct_bytes,
+                distinct_id,
+                &distinct,
+                2,
+                &ImagePermit::for_test(),
+            )
             .expect("distinct");
         assert!(!distinct_bytes.is_empty());
 
         let mut clear = Vec::new();
-        painter.clear(&mut clear).expect("clear");
+        painter
+            .clear(&mut clear, &ImagePermit::for_test())
+            .expect("clear");
         assert!(String::from_utf8_lossy(&clear).contains("a=d"));
     }
 
@@ -534,7 +555,13 @@ mod tests {
         let mut painter = MeterPainter::new(true);
         let mut bytes = Vec::new();
         painter
-            .ensure_transmitted(&mut bytes, meter_image_id(0x120000, 0), &raster(0.5), 0)
+            .ensure_transmitted(
+                &mut bytes,
+                meter_image_id(0x120000, 0),
+                &raster(0.5),
+                0,
+                &ImagePermit::for_test(),
+            )
             .expect("paint");
         assert_eq!(
             bytes
@@ -549,7 +576,13 @@ mod tests {
 
         let mut no_op = Vec::new();
         painter
-            .ensure_transmitted(&mut no_op, meter_image_id(0x120000, 0), &raster(0.5), 1)
+            .ensure_transmitted(
+                &mut no_op,
+                meter_image_id(0x120000, 0),
+                &raster(0.5),
+                1,
+                &ImagePermit::for_test(),
+            )
             .expect("unchanged");
         assert!(no_op.is_empty(), "a no-op frame writes no sync bytes");
     }
@@ -561,13 +594,31 @@ mod tests {
         let third_id = meter_image_id(0x120000, 2);
         let mut painter = MeterPainter::new(false);
         painter
-            .ensure_transmitted(&mut Vec::new(), first_id, &raster(0.5), 0)
+            .ensure_transmitted(
+                &mut Vec::new(),
+                first_id,
+                &raster(0.5),
+                0,
+                &ImagePermit::for_test(),
+            )
             .expect("first resident");
         painter
-            .ensure_transmitted(&mut Vec::new(), second_id, &raster(0.75), 0)
+            .ensure_transmitted(
+                &mut Vec::new(),
+                second_id,
+                &raster(0.75),
+                0,
+                &ImagePermit::for_test(),
+            )
             .expect("second resident");
         painter
-            .ensure_transmitted(&mut Vec::new(), third_id, &raster(1.0), 0)
+            .ensure_transmitted(
+                &mut Vec::new(),
+                third_id,
+                &raster(1.0),
+                0,
+                &ImagePermit::for_test(),
+            )
             .expect("third resident");
 
         let mut first_stale = Vec::new();
@@ -577,6 +628,7 @@ mod tests {
                 first_id,
                 &raster(0.5),
                 RESIDENT_REFRESH_MS,
+                &ImagePermit::for_test(),
             )
             .expect("first stale");
         assert!(!first_stale.is_empty());
@@ -588,6 +640,7 @@ mod tests {
                 second_id,
                 &raster(0.75),
                 RESIDENT_REFRESH_MS,
+                &ImagePermit::for_test(),
             )
             .expect("same-frame batch");
         assert!(!same_frame.is_empty());
@@ -599,6 +652,7 @@ mod tests {
                 third_id,
                 &raster(1.0),
                 RESIDENT_REFRESH_MS + 1,
+                &ImagePermit::for_test(),
             )
             .expect("globally spaced");
         assert!(too_soon.is_empty());
@@ -610,6 +664,7 @@ mod tests {
                 third_id,
                 &raster(1.0),
                 RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS,
+                &ImagePermit::for_test(),
             )
             .expect("spacing elapsed");
         assert!(!spaced.is_empty());
@@ -634,11 +689,23 @@ mod tests {
 
         let mut painter = MeterPainter::new(false);
         painter
-            .ensure_transmitted(&mut Vec::new(), reused, &distinct_raster(2), 0)
+            .ensure_transmitted(
+                &mut Vec::new(),
+                reused,
+                &distinct_raster(2),
+                0,
+                &ImagePermit::for_test(),
+            )
             .expect("old raster");
         let mut changed = Vec::new();
         painter
-            .ensure_transmitted(&mut changed, reused, &replacement, 1)
+            .ensure_transmitted(
+                &mut changed,
+                reused,
+                &replacement,
+                1,
+                &ImagePermit::for_test(),
+            )
             .expect("replacement raster");
         assert!(!changed.is_empty(), "id reuse transmits the new raster");
     }

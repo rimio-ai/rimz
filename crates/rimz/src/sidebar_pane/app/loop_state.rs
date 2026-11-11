@@ -31,7 +31,7 @@ use crate::sidebar::timing::SELF_CLOSE_WATCHDOG;
 use crate::sidebar::timing::TAB_READ_DWELL;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE};
 use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pixel::PixelRenderCaps;
+use crate::sidebar_pane::pixel::{ImagePermit, PixelRenderCaps};
 use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::sidebar_pane::view::BodyLens;
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
@@ -54,6 +54,7 @@ use super::focus::{FocusRepairDispatch, spawn_pane_focus};
 use super::focus::{finish_focus_request, request_focus_until};
 use super::focus_push::{FocusPeers, FocusPush};
 use super::gate::{GateState, gate_remaining};
+use super::image_permit::image_permit;
 use super::inbox::WakeupInbox;
 use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::key_spawn;
@@ -269,6 +270,9 @@ pub(super) struct PaneState {
     bench_painted_revision: Option<u64>,
     #[cfg(feature = "testkit")]
     bench_painted_deadline: Option<Instant>,
+    /// The scenario player's live surface is its own screen, so it draws images.
+    #[cfg(feature = "testkit")]
+    play_own_screen: bool,
     paint_reports: Vec<(FocusPush, PushVerdict)>,
     optimistic_watch_until: Option<Instant>,
     pending_focus_repair: Option<PendingFocusRepair>,
@@ -525,6 +529,11 @@ impl LoopState {
     }
 
     #[cfg(feature = "testkit")]
+    pub(super) fn play_on_own_screen(&mut self) {
+        self.pane.play_own_screen = true;
+    }
+
+    #[cfg(feature = "testkit")]
     pub(super) fn prepare_play_pet(&mut self, snapshot: &SidebarSnapshot) -> bool {
         let presentation = self.inspect_view(|ui, _| ui.clone());
         self.pane.paint.prepare_play_pet(
@@ -632,6 +641,8 @@ impl LoopState {
                 bench_painted_revision: None,
                 #[cfg(feature = "testkit")]
                 bench_painted_deadline: None,
+                #[cfg(feature = "testkit")]
+                play_own_screen: false,
                 paint_reports: Vec::new(),
                 optimistic_watch_until: None,
                 pending_focus_repair: None,
@@ -846,9 +857,10 @@ impl LoopState {
         terminal.get_frame().area().as_size()
     }
 
-    /// Whether an attached client's focus currently lands in this sidebar's tab.
-    /// Unknown own-view state reads as watched so uncertainty never suppresses
-    /// motion.
+    /// Whether an attached client's focus currently lands in this sidebar's tab,
+    /// for paint, timing and hidden skipping. Unknown own-view state reads as
+    /// watched so uncertainty never suppresses motion; images instead need the
+    /// host's permit (`image_permit`), which unknown state never earns.
     fn watched(&self) -> bool {
         // Input and corroborated resize keep a painting view warm between samples.
         if self
@@ -1188,6 +1200,9 @@ impl LoopState {
             }
             push.finish(PushVerdict::Exiting, self.pane.clock.now());
             return Ok(());
+        }
+        if let Some(peers) = &self.pane.focus_peers {
+            peers.claim_landing(&push, &self.pane.config.own_pane, self.pane.clock.now());
         }
         if self.focus_push_size_matches(&push, terminal) {
             self.pane.paint_hold.release();
@@ -2217,7 +2232,12 @@ impl LoopState {
     }
 
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<PaneBackend>) {
-        if let Err(err) = self.pane.paint.clear(terminal.backend_mut()) {
+        let permit = self.image_permit(self.pane.clock.now());
+        if let Err(err) = self
+            .pane
+            .paint
+            .clear(terminal.backend_mut(), permit.as_ref())
+        {
             debug!(error = %err, "pet pixel clear failed");
         }
     }
@@ -2339,7 +2359,7 @@ impl LoopState {
         if !self.mirror_due(size) && !offered {
             return Ok(());
         }
-        let Some(_grant) = self
+        let Some(grant) = self
             .views
             .registry
             .mirrors
@@ -2375,19 +2395,19 @@ impl LoopState {
             &source.view,
             &source.snapshot,
             source.alert.as_ref().is_some_and(render::Alert::is_active),
-            PaintKind::Mirror,
+            PaintKind::Mirror(&grant),
             self.pane.clock.now(),
         );
-        let permit = self
+        let fence = self
             .pane
             .focus_peers
             .as_ref()
-            .map(|peers| peers.paint_permit(source.nonce, self.pane.clock.now()));
-        if matches!(permit, Some(None))
-            || permit
+            .map(|peers| peers.paint_fence(source.nonce, self.pane.clock.now()));
+        if matches!(fence, Some(None))
+            || fence
                 .as_ref()
                 .and_then(Option::as_ref)
-                .is_some_and(|permit| !permit())
+                .is_some_and(|fence| !fence())
         {
             return Ok(());
         }
@@ -2400,7 +2420,7 @@ impl LoopState {
             source.alert.as_ref(),
             &mut source.view,
             &mut self.pane.ui,
-            PaintKind::Mirror,
+            PaintKind::Mirror(&grant),
         );
         let output = frame.write(terminal.backend_mut());
         result.and(output)?;
@@ -2491,42 +2511,43 @@ impl LoopState {
                     alert_active(v.context),
                 )
             });
+            let permit = self.image_permit(now);
             self.pane.paint.refresh_view(
                 &mut self.pane.ui,
                 &view,
                 &snapshot,
                 alert_active,
-                PaintKind::Routed,
+                PaintKind::Routed(permit.as_ref()),
                 now,
             );
             let nonce = self.inspect_view(|_, view| view.last_folded_focus_intent);
-            let permit = self
+            let fence = self
                 .pane
                 .focus_peers
                 .as_ref()
-                .map(|peers| peers.paint_permit(nonce, self.pane.clock.now()));
-            if matches!(permit, Some(None)) {
+                .map(|peers| peers.paint_fence(nonce, self.pane.clock.now()));
+            if matches!(fence, Some(None)) {
                 return Ok(());
             }
             let composed = self.paint_transition(|state, v| {
                 if v.token != token {
                     return None;
                 }
-                if permit
+                if fence
                     .as_ref()
                     .and_then(Option::as_ref)
-                    .is_some_and(|permit| !permit())
+                    .is_some_and(|fence| !fence())
                 {
                     return None;
                 }
-                Some(state.compose_frame(v, terminal, now, user_input))
+                Some(state.compose_frame(v, terminal, now, user_input, permit.as_ref()))
             });
             let Some((result, frame)) = composed else {
                 continue;
             };
             let output = frame.write(terminal.backend_mut());
             result.and(output)?;
-            self.pane.paint.routed_frame_written();
+            self.pane.paint.routed_frame_written(&mut self.pane.ui);
             self.pane.painted_at = self.pane.clock.now();
             #[cfg(feature = "testkit")]
             {
@@ -2562,6 +2583,20 @@ impl LoopState {
     #[cfg(test)]
     fn focus_placement(&self, pane: &PaneId) -> Option<crate::mux::focus_anchor::FocusPlacement> {
         self.inspect_view(|state, context| self.pane.focus_placement(state, context, pane))
+    }
+
+    /// This pass's image permit, from the host's on-screen reading and landing.
+    fn image_permit(&self, now: Instant) -> Option<ImagePermit> {
+        #[cfg(feature = "testkit")]
+        if self.pane.play_own_screen {
+            return Some(ImagePermit::for_test());
+        }
+        image_permit(
+            &self.views.record(),
+            self.pane.focus_peers.as_ref(),
+            &self.pane.config.own_pane,
+            now,
+        )
     }
 
     fn owns_focus_target(&self, pane: &PaneId) -> bool {
@@ -2798,6 +2833,8 @@ impl PaneState {
                 bench_painted_revision: _,
             #[cfg(feature = "testkit")]
                 bench_painted_deadline: _,
+            #[cfg(feature = "testkit")]
+                play_own_screen: _,
             paint_reports: _,
             // Paint, animation, and frame scheduling, which a clock-only
             // delivery drives itself.
@@ -3232,6 +3269,7 @@ impl PaneState {
         terminal: &mut Terminal<PaneBackend>,
         now: Instant,
         user_input: bool,
+        permit: Option<&ImagePermit>,
     ) -> (std::io::Result<()>, BufferedFrame) {
         if v.target.shared_id().is_some() && v.state.baseline_pane.is_none() {
             v.state.baseline_pane = self.baseline_seed.take();
@@ -3258,7 +3296,7 @@ impl PaneState {
             v.context.health.alert.as_ref(),
             v.state,
             &mut self.ui,
-            PaintKind::Routed,
+            PaintKind::Routed(permit),
         );
         if result.is_err() {
             return (result, frame);

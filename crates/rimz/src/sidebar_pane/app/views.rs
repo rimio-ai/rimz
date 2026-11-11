@@ -126,6 +126,9 @@ pub(super) struct ViewsRecord {
     pub(super) fold: Option<Arc<WorkspaceFold>>,
     mapped_panes: HashSet<PaneId>,
     resolved_panes: HashSet<PaneId>,
+    /// The sidebars the last fresh client sample routes a client to; routing,
+    /// landing and input never write it.
+    on_screen_panes: HashSet<PaneId>,
 }
 
 impl ViewsRecord {
@@ -144,6 +147,7 @@ impl ViewsRecord {
             fold: views.fold.clone(),
             mapped_panes: views.panes.keys().cloned().collect(),
             resolved_panes: views.resolved_panes().cloned().collect(),
+            on_screen_panes: views.on_screen_panes().cloned().collect(),
         }
     }
 
@@ -157,6 +161,11 @@ impl ViewsRecord {
             && views.panes.keys().all(|pane| self.mapped(pane))
             && views.resolved_panes().all(|pane| self.resolved(pane))
             && self.resolved_panes.iter().all(|pane| views.resolved(pane))
+            && views.on_screen_panes().all(|pane| self.on_screen(pane))
+            && self
+                .on_screen_panes
+                .iter()
+                .all(|pane| views.on_screen_panes().any(|sampled| sampled == pane))
     }
 
     pub(super) fn mapped(&self, pane: &PaneId) -> bool {
@@ -165,6 +174,10 @@ impl ViewsRecord {
 
     pub(super) fn resolved(&self, pane: &PaneId) -> bool {
         self.resolved_panes.contains(pane)
+    }
+
+    pub(super) fn on_screen(&self, pane: &PaneId) -> bool {
+        self.on_screen_panes.contains(pane)
     }
 
     pub(super) fn observed(&self, pane: &PaneId) -> Option<bool> {
@@ -582,6 +595,13 @@ impl Views {
             .values()
             .filter(|client| client.departed.is_none())
             .filter_map(|client| client.pane.as_ref())
+    }
+
+    fn on_screen_panes(&self) -> impl Iterator<Item = &PaneId> {
+        self.last_sample
+            .iter()
+            .flatten()
+            .filter_map(|route| route.pane.as_ref())
     }
 
     pub(super) fn has_sample(&self) -> bool {

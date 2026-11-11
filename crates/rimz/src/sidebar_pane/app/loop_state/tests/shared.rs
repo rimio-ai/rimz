@@ -501,7 +501,7 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
                 entered.send(()).unwrap();
                 blocked.recv_timeout(Duration::from_secs(10)).unwrap();
                 state
-                    .compose_frame(v, &mut rig.terminal, Instant::now(), false)
+                    .compose_frame(v, &mut rig.terminal, Instant::now(), false, None)
                     .0
                     .unwrap();
             });

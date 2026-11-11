@@ -276,6 +276,17 @@ impl MirrorQueue {
     }
 }
 
+#[cfg(test)]
+impl Grant {
+    /// A grant from a private queue, for painter tests that compose a mirror directly.
+    pub(super) fn for_test(pane: PaneId) -> Self {
+        Self {
+            queue: Arc::default(),
+            pane,
+        }
+    }
+}
+
 impl Drop for Grant {
     fn drop(&mut self) {
         let mut state = self.queue.lock();

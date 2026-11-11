@@ -2,10 +2,12 @@
 
 pub(super) mod meter;
 mod pacing;
+mod permit;
 pub(super) mod probe;
 mod tty;
 
 pub use pacing::LiveGraphicsPacer;
+pub(super) use permit::ImagePermit;
 pub use probe::{PixelRenderCaps, detect_env as detect_pixel_render_env};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,8 +32,8 @@ pub(super) const RESIDENT_REFRESH_MS: u64 = 2000;
 pub(super) const MIN_RESEND_SPACING_MS: u64 = 250;
 
 /// Cross-version image-id layout. Moving it orphans images from older renderers.
-/// A pane holds one only while on screen: a routed frame takes it, a hidden
-/// mirror returns it.
+/// A pane holds one only while it holds an [`ImagePermit`]: a permitted routed frame
+/// takes it, and the first frame written without a permit returns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PixelSlot(u8);
 
@@ -45,9 +47,14 @@ impl PixelSlot {
     }
 
     /// Unbracketed: the caller's frame carries the synchronized-output bracket.
-    pub(super) fn sweep<W: Write>(self, writer: &mut W, wrap: bool) -> io::Result<()> {
+    pub(super) fn sweep<W: Write>(
+        self,
+        writer: &mut W,
+        wrap: bool,
+        _permit: &ImagePermit,
+    ) -> io::Result<()> {
         for image_id in self.base()..self.base() + SLOT_STRIDE {
-            writer.write_all(&wrap_pixel_payload(&delete(image_id), wrap))?;
+            write_graphics(writer, &wrap_pixel_payload(&delete(image_id), wrap))?;
         }
         Ok(())
     }
@@ -61,12 +68,15 @@ pub(super) struct PixelLease {
 impl PixelLease {
     pub(super) fn acquire(
         runtime: &crate::disk::paths::RuntimePaths,
+        _permit: &ImagePermit,
     ) -> crate::disk::lock::Result<Option<Self>> {
         for index in 0..MAX_PIXEL_SLOTS {
             let slot = PixelSlot::new(index as u8);
             if let Some(guard) = crate::disk::lock::WorkspaceLock::try_acquire(
                 &runtime.shared_pixel_slot_lock(slot.0),
             )? {
+                #[cfg(any(test, feature = "testkit"))]
+                crate::testkit::host_pass::count(crate::testkit::host_pass::Counter::PixelSlotTake);
                 return Ok(Some(Self {
                     slot,
                     _guard: guard,
@@ -139,6 +149,7 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
         writer: &mut W,
         request: ImageRequest<K, C>,
         png: impl FnOnce() -> Arc<[u8]>,
+        _permit: &ImagePermit,
     ) -> io::Result<bool> {
         let ImageRequest {
             key,
@@ -166,7 +177,7 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
         let png = png();
         let mut payload = transmit_png(image_id, &png);
         payload.extend_from_slice(&resident_place(image_id, cols, rows));
-        writer.write_all(&wrap_pixel_payload(&payload, self.wrap))?;
+        write_graphics(writer, &wrap_pixel_payload(&payload, self.wrap))?;
         self.images.insert(
             key,
             Resident {
@@ -191,9 +202,13 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
 
     /// Unbracketed: the caller's frame or teardown carries the
     /// synchronized-output bracket, since mode 2026 does not nest.
-    pub(super) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    pub(super) fn clear<W: Write>(
+        &mut self,
+        writer: &mut W,
+        _permit: &ImagePermit,
+    ) -> io::Result<()> {
         for image_id in std::mem::take(&mut self.resident_ids) {
-            writer.write_all(&wrap_pixel_payload(&delete(image_id), self.wrap))?;
+            write_graphics(writer, &wrap_pixel_payload(&delete(image_id), self.wrap))?;
         }
         self.invalidate();
         Ok(())
@@ -240,6 +255,16 @@ pub(super) struct ImageRequest<K, C> {
     pub(super) now_ms: u64,
     pub(super) cols: u16,
     pub(super) rows: u16,
+}
+
+/// The one write behind every permitted graphics exit.
+fn write_graphics<W: Write>(writer: &mut W, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(any(test, feature = "testkit"))]
+    crate::testkit::host_pass::add(
+        crate::testkit::host_pass::Counter::GraphicsBytes,
+        bytes.len() as u64,
+    );
+    writer.write_all(bytes)
 }
 
 pub fn write_synchronized_pixel_output<W: Write>(
@@ -455,6 +480,7 @@ mod tests {
                         rows: 6,
                     },
                     || png.clone(),
+                    &ImagePermit::for_test(),
                 )
                 .expect("transmit");
             let text = String::from_utf8(bytes).expect("ascii kitty escapes");

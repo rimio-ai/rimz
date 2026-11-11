@@ -44,6 +44,11 @@ pub enum Counter {
     ViewsRecord,
     /// Event-store takes at the attachment's three read funnels.
     EventsTake,
+    /// Pixel slots a sidebar painter took, counted at the permitted take.
+    PixelSlotTake,
+    /// Kitty graphics bytes written at the permitted exits: slot sweeps, image
+    /// transmissions, and resident-image deletes.
+    GraphicsBytes,
     HostFold,
 }
 

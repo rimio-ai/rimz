@@ -256,6 +256,9 @@ impl Column {
             caps,
             slots,
         );
+        if matches!(surface, Surface::Live { .. }) {
+            state.play_on_own_screen();
+        }
         let pet_ready = state.prepare_play_pet(&snapshot);
         let mut backend = PaneBackend::captured(scenario.width, height);
         if matches!(surface, Surface::Live { .. }) {
