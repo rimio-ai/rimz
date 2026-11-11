@@ -191,7 +191,7 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 | `--stay` | `--agent` | Open a staying layout in a background tab, once per scope checkout. |
 | `--each-worktree` | `--stay --when`; `--workflow` with `--when`, `--every`, or `--cron` | Evaluate and launch separately per RimZ-owned worktree; refused with `--worktree`. |
 | `--subscribe <SIGNAL>` | `--stay` | Forward this signal to the prompt leader while its session lives; repeatable. |
-| `--takeover` | `--stay` | Stop the checkout's idle agents before launching; the run waits while one is busy, and a failed stop fails it. |
+| `--takeover` | `--stay` | Stop the checkout's idle agents before launching; the run waits while one is busy. An agent whose close failed still counts as stopped once its session has ended and its process is gone; any other failed stop is retried once, and a second failure fails the run. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait`, `--workflow` | The prompt the action delivers, or the workflow run's prompt. The two conflict. |
 | `--check <CMD>` | `--agent`, or alone | Shell command to run; alone it is the action, otherwise the guard. Refused with `--wait` and `--workflow`. |
 | `--check-timeout <DUR>` | `--check` | Cap for the shell check; default `--timeout`, else `5m`; a killed check fails. |

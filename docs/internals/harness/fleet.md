@@ -703,7 +703,7 @@ After the provider exits, the thin image releases any drainer lease, crosses its
 
 ### Stopping an agent tree
 
-Every agent-tree stop passes its whole root set through `agents_cmd::stop_resolved`. It closes children before parents, attempts every root even after a failure, and retires closed sessions' subscriptions. It then waits once for the runtime owners of the rows actually closed, ended rows and a refreshed molt successor included, so that a resume issued next does not race a dying provider.
+Every agent-tree stop passes its whole root set through `agents_cmd::stop_resolved`. It closes children before parents, attempts every root even after a failure, and retires closed sessions' subscriptions. A root whose close fails counts as closed only when a fresh `runtime_projection(RuntimeScope::Audit)` read after the failure finds its row ended and its owner `Dead`, after `await_owner_exits` has given a still-`Live` owner the stop's bound (`crates/rimz/src/cli/agents_cmd/stop.rs::ended_after_failed_stop`); the stop writes no lifecycle end of its own, and an `Unknown` owner or an unended row keeps the failure. It then waits once for the runtime owners of the rows actually closed, ended rows and a refreshed molt successor included, so that a resume issued next does not race a dying provider.
 
 The wait never signals an owner. It counts an owner only while `agent_liveness == Live`: absent, Daemon, and already-dead owners do not delay it, nor do failed closes. `store::runtime::await_owner_exits` and `OWNER_EXIT_BOUND` share the 3-second bound with rebirth, and for a stop the bound starts after the last close. The stop reads `runtime_projection(RuntimeScope::Audit)` after all closes to select owners, and again after waiting to decide which still run.
 

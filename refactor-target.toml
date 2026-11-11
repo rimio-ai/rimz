@@ -12172,7 +12172,7 @@ reason = "Only failed and canceled turn dispositions can hold a workflow-owned r
 [[verdict]]
 kind = "item"
 key = "harness::workflow::LaunchFailure"
-reason = "Failed launches settle as counted attempts with typed outcomes and journaled reasons."
+reason = "Failed launches settle as counted attempts with typed outcomes and journaled reasons; one whose eviction failed waits retry once per step entry first."
 
 [[verdict]]
 kind = "item"
