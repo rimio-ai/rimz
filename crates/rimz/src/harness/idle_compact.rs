@@ -143,8 +143,8 @@ fn compact_idle_agents_with(
         let Some(pane_id) = snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
             continue;
         };
-        let (Some(occupied_tokens), Some(last_request_at)) =
-            (agent.occupied_context_tokens(), agent.last_request_at())
+        let (Some(occupied_tokens), Some(request_key)) =
+            (agent.occupied_context_tokens(), agent.request_key())
         else {
             continue;
         };
@@ -163,7 +163,7 @@ fn compact_idle_agents_with(
                 &record_path,
                 &FireRecord {
                     fired_at: snapshot.now,
-                    fired_for_request: last_request_at,
+                    fired_for_request: request_key,
                 },
             );
         }
@@ -172,7 +172,7 @@ fn compact_idle_agents_with(
 
 fn spawn_due(agent: &AgentState, now: Timestamp, record: Option<&FireRecord>) -> bool {
     record.is_none_or(|record| {
-        Some(record.fired_for_request) != agent.last_request_at()
+        Some(record.fired_for_request) != agent.request_key()
             && now.as_second() - record.fired_at.as_second()
                 >= IDLE_COMPACT_RESPAWN_THROTTLE.as_secs() as i64
     })

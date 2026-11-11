@@ -374,14 +374,44 @@ pub fn parse_claude_spend(
     resume: Option<&SpendCursor>,
     prices: &PriceBook,
 ) -> SpendParse {
-    parse_claude_spend_with_retention(path, resume, prices).0
+    parse_claude_spend_with_retention(path, resume, prices, false).0
+}
+
+/// What a suffix parse saw of the main conversation's cache: the latest write tier and the
+/// latest request the provider recorded (`api-request` from `repl_main_thread`, by timestamp,
+/// since a record can be appended before the input that triggered it).
+#[derive(Default)]
+pub(super) struct MainCacheTail {
+    pub(super) last_cache_write: Option<CacheWriteRetention>,
+    pub(super) last_request_at: Option<jiff::Timestamp>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeApiRequest {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: Option<jiff::Timestamp>,
+    #[serde(rename = "querySource")]
+    query_source: Option<String>,
+}
+
+/// The stamp of a main-conversation request record, or `None` for any other line.
+fn main_request_at(line: &[u8]) -> Option<jiff::Timestamp> {
+    if !bytes_contains(line, br#""api-request""#) {
+        return None;
+    }
+    let record = serde_json::from_slice::<ClaudeApiRequest>(line).ok()?;
+    (record.kind == "api-request" && record.query_source.as_deref() == Some("repl_main_thread"))
+        .then_some(record.timestamp)
+        .flatten()
 }
 
 pub(super) fn parse_claude_spend_with_retention(
     path: &Path,
     resume: Option<&SpendCursor>,
     prices: &PriceBook,
-) -> (SpendParse, Option<CacheWriteRetention>) {
+    read_requests: bool,
+) -> (SpendParse, MainCacheTail) {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let read = match try_read_anchored_transcript(
         path,
@@ -395,12 +425,12 @@ pub(super) fn parse_claude_spend_with_retention(
                     read_error: Some(error.kind()),
                     ..SpendParse::stalled(resume)
                 },
-                None,
+                MainCacheTail::default(),
             );
         }
     };
     if read.content.is_empty() && !read.rewritten && resume.is_some() {
-        return (SpendParse::stalled(resume), None);
+        return (SpendParse::stalled(resume), MainCacheTail::default());
     }
     let mut state: ClaudeSpendState = resume
         .filter(|_| !read.rewritten)
@@ -410,9 +440,13 @@ pub(super) fn parse_claude_spend_with_retention(
     let mut entries: Vec<CachedEntry> = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
-    let mut last_cache_write = None;
+    let mut tail = MainCacheTail::default();
 
     for line in read.content.split(|&b| b == b'\n') {
+        if read_requests && let Some(request_at) = main_request_at(line) {
+            tail.last_request_at = tail.last_request_at.max(Some(request_at));
+            continue;
+        }
         if bytes_contains(line, br#""user""#)
             && let Ok(input) = serde_json::from_slice::<ClaudeInput>(line)
             && input.kind == "user"
@@ -471,7 +505,7 @@ pub(super) fn parse_claude_spend_with_retention(
         if entry.is_sidechain != Some(true)
             && let Some(retention) = cache_write_retention(usage)
         {
-            last_cache_write = Some(retention);
+            tail.last_cache_write = Some(retention);
         }
         main_entry.timing = state
             .current_message
@@ -550,7 +584,7 @@ pub(super) fn parse_claude_spend_with_retention(
             },
             read_error: None,
         },
-        last_cache_write,
+        tail,
     )
 }
 

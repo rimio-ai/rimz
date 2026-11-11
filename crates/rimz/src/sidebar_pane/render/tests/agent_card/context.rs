@@ -55,6 +55,7 @@ fn half_hour_cache() -> CacheClock {
         last_request_at: None,
         warm_until: None,
         rewarm_cost_usd: None,
+        recorded: false,
     }
 }
 
@@ -246,12 +247,7 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
     let theme = Theme::fixed(false);
     for width in [45, 46, 47] {
         let wide = width >= 46;
-        for (quiet, minutes) in [
-            (15 * 60 + 1, 15),
-            (22 * 60 + 1, 8),
-            (29 * 60 + 59, 1),
-            (30 * 60, 1),
-        ] {
+        for (quiet, minutes) in [(15 * 60 + 1, 15), (22 * 60 + 1, 8), (29 * 60 + 59, 1)] {
             let snapshot = cache_meter_snapshot(quiet, Some(half_hour_cache()));
             let lines = group_lines_at_width(&snapshot, &theme, 0, width);
             let cache = lines
@@ -271,7 +267,6 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
                     span.content.contains("15m")
                         || span.content.contains("29m")
                         || span.content.contains("22m")
-                        || span.content.contains("30m")
                 })
                 .unwrap()
                 .style;
@@ -290,7 +285,7 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
                 serde_json::json!({"ceiling_secs": 1800, "rewarm_cost_usd": estimate}),
             )
             .unwrap();
-            let snapshot = cache_meter_snapshot(1801, Some(cache));
+            let snapshot = cache_meter_snapshot(1800, Some(cache));
             let lines = group_lines_at_width(&snapshot, &theme, 0, width);
             let cache_line = lines
                 .iter()
@@ -350,6 +345,67 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
                 wide && estimate == Some(1.44),
                 "{text}"
             );
+        }
+    }
+}
+
+#[test]
+fn incident_cache_line_counts_seconds_only_from_a_recorded_request() {
+    let theme = Theme::fixed(false);
+    let at = |stamp: &str| stamp.parse::<Timestamp>().unwrap();
+    let request = at("2026-11-11T15:44:52.830Z");
+    let turn_end = at("2026-11-11T15:45:27.992Z");
+    for (recorded, held) in [(true, false), (false, false), (true, true), (false, true)] {
+        let mut snapshot = cache_meter_snapshot(
+            0,
+            Some(CacheClock {
+                ceiling_secs: 3600,
+                last_request_at: Some(request),
+                warm_until: held.then(|| at("2026-11-11T17:00:00Z")),
+                recorded,
+                ..half_hour_cache()
+            }),
+        );
+        let row = snapshot.rows_mut().next().unwrap();
+        row.last_activity = turn_end;
+        row.as_agent_mut().unwrap().own_last_activity = Some(turn_end);
+        for (now, expected) in [
+            (
+                "2026-11-11T16:44:10Z",
+                if recorded {
+                    Some("expires in 43s")
+                } else if held {
+                    None
+                } else {
+                    Some("expires in 1m")
+                },
+            ),
+            (
+                "2026-11-11T16:44:52.829Z",
+                if recorded {
+                    Some("expires in 1s")
+                } else if held {
+                    None
+                } else {
+                    Some("expires in 1m")
+                },
+            ),
+            ("2026-11-11T16:44:53Z", (!held).then_some("cache expired")),
+        ] {
+            snapshot.now = at(now);
+            let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 47)).join("\n");
+            match expected {
+                Some(expected) => {
+                    assert!(
+                        text.contains(expected),
+                        "{recorded}/{held} at {now}: {text}"
+                    );
+                }
+                None => assert!(
+                    !text.contains("expire"),
+                    "{recorded}/{held} at {now}: {text}"
+                ),
+            }
         }
     }
 }
@@ -599,7 +655,8 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
         (20 * 60, Some(half_hour_cache())),
         (50 * 60, Some(held)),
         (120 * 60, None),
-        (30 * 60, Some(half_hour_cache())),
+        // One second short of the lifetime; at it the meter is expired.
+        (30 * 60 - 1, Some(half_hour_cache())),
     ] {
         assert_eq!(
             meter_fill(&cache_meter_line(
@@ -668,10 +725,6 @@ fn cache_clock_heat_starts_halfway_through_the_ttl() {
     }
     assert_eq!(
         style(1800, Some(1800)),
-        theme.style(theme.heat_tone(1.0), Modifier::empty())
-    );
-    assert_eq!(
-        style(1801, Some(1800)),
         theme.style(theme.component(Component::CacheExpired), Modifier::empty())
     );
     for age in [300, 900, 1201, 1800, 3599, 3600, 3601] {
@@ -2105,6 +2158,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
             last_request_at: None,
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         })
     };
     let held = |quiet_minutes: u64, remaining_minutes: u64| {
@@ -2113,6 +2167,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
             last_request_at: Some(fixed_now() - Duration::from_secs(quiet_minutes * 60)),
             warm_until: Some(fixed_now() + Duration::from_secs(remaining_minutes * 60)),
             rewarm_cost_usd: None,
+            recorded: false,
         })
     };
     let expired = Some(CacheClock {
@@ -2157,7 +2212,8 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 "\u{f0a9f} 20m",
                 heat(1.0 / 3.0),
             ),
-            (ttl(1800), 30 * 60, "◑ 30m", "\u{f0aa1} 30m", heat(1.0)),
+            // Expired once the age equals the lifetime.
+            (ttl(1800), 30 * 60, "◑ 30m", "\u{f0aa1} 30m", cold),
             (ttl(1800), 35 * 60, "◑ 35m", "\u{f0aa1} 35m", cold),
             (ttl(300), 301, "◔  5m", "\u{f0a9e}  5m", cold),
             (None, 2 * 3600, "●  2h", "\u{f0aa5}  2h", theme.muted()),
@@ -2189,7 +2245,8 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 "\u{f0aa3} 50m",
                 theme.good(Modifier::empty()),
             ),
-            (expired, 20 * 60, "◔ 20m", "\u{f0a9f} 20m", heat(1.0 / 3.0)),
+            // A lapsed hold resumes from the last request, not the later turn end.
+            (expired, 20 * 60, "◕ 50m", "\u{f0aa3} 50m", cold),
         ] {
             let face = if modern { nerd } else { unicode };
             assert_eq!(

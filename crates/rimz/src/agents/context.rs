@@ -154,6 +154,11 @@ pub struct AgentContext {
     pub cost: Option<AgentCost>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_cache_write: Option<CacheWriteRetention>,
+    /// The provider's own record of the main conversation's latest request, read from its
+    /// transcript (Claude's `api-request` entries). `AgentState::last_request_at` prefers it
+    /// while no newer request input has landed since, and falls back to the hook estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_request_at: Option<Timestamp>,
     /// Provider-reported occupancy after compaction, before a measured call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_compaction_tokens: Option<u64>,
@@ -286,6 +291,7 @@ impl Default for AgentContext {
             exceeds_200k_tokens: None,
             cost: None,
             last_cache_write: None,
+            recorded_request_at: None,
             post_compaction_tokens: None,
             tokens: None,
             model_context_limits: None,
@@ -420,6 +426,7 @@ pub struct LocalContextPatch {
     pub model_context_limits: FieldPatch<ModelContextLimits>,
     pub cost: FieldPatch<AgentCost>,
     pub last_cache_write: FieldPatch<CacheWriteRetention>,
+    pub recorded_request_at: FieldPatch<Timestamp>,
     pub post_compaction_tokens: FieldPatch<u64>,
     pub turn_error: FieldPatch<AgentTurnError>,
     pub settle: FieldPatch<TurnSettle>,
@@ -463,6 +470,8 @@ impl LocalContextPatch {
         );
         self.cost.apply(&mut context.cost);
         self.last_cache_write.apply(&mut context.last_cache_write);
+        self.recorded_request_at
+            .apply(&mut context.recorded_request_at);
         self.post_compaction_tokens
             .apply(&mut context.post_compaction_tokens);
         self.turn_error.apply(&mut context.turn_error);

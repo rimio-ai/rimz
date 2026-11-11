@@ -143,6 +143,7 @@ fn message_marks_follow_the_compaction_gaps_percentage_below_l2() {
             last_request_at: None,
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         });
         set_message_marks(&mut snapshot, 3, true);
         let lines = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 32));
@@ -171,6 +172,7 @@ fn message_marks_shrink_the_column_padding_before_dropping_a_mark() {
             last_request_at: None,
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         });
         set_message_marks(&mut snapshot, 3, true);
         let lines = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, 32));

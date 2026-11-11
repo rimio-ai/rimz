@@ -153,13 +153,21 @@ impl SidebarRow {
             .unwrap_or(self.last_activity)
     }
 
-    /// The displayed idle origin: own activity or a later cache request, pings included.
+    /// The displayed idle origin. At rest it is the cache clock's last request, pings
+    /// included, even when the turn's end came later: the age the cache has. In a turn or
+    /// an ask, and without a request stamp, it is own activity or a later request.
     pub fn idle_since(&self) -> Timestamp {
         let own = self.own_last_activity();
-        self.as_agent()
-            .and_then(|agent| agent.cache)
-            .and_then(|clock| clock.last_request_at)
-            .map_or(own, |request| own.max(request))
+        let Some(agent) = self.as_agent() else {
+            return own;
+        };
+        let Some(request) = agent.cache.and_then(|clock| clock.last_request_at) else {
+            return own;
+        };
+        match agent.status {
+            AgentStatus::Running | AgentStatus::Waiting => own.max(request),
+            _ => request,
+        }
     }
 
     /// Status that determines row-level attention. A current child's waiting or a provider-native child's failure lifts the parent card without changing its displayed lifecycle status; the parent's own actionable status takes precedence.
@@ -627,7 +635,7 @@ pub struct AgentCard {
 }
 
 /// How long a card's prompt cache stays warm: the resolved agent lifetime and
-/// last request (pings included), plus the finite maximum while keep-warm holds.
+/// last request (`AgentState::last_request_at`, pings included), plus the finite maximum while keep-warm holds.
 /// A stage condition can release the hold before that maximum.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CacheClock {
@@ -639,6 +647,11 @@ pub struct CacheClock {
     /// Producer-priced cache write of the card's current context at its observed write tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewarm_cost_usd: Option<f64>,
+    /// `last_request_at` is the provider's own record of the request
+    /// ([`AgentState::last_request_recorded`](crate::agents::AgentState::last_request_recorded)),
+    /// not the hook estimate: the card may count its last minute down in seconds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recorded: bool,
 }
 
 impl Default for AgentCard {

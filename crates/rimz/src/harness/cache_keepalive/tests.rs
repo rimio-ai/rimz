@@ -387,6 +387,14 @@ fn keepalive_prompt_is_neutral_and_includes_each_wait() {
     );
 }
 
+/// The provider's record of `sleeping()`'s last request, 0.4 s after its estimate.
+fn recorded() -> crate::agents::AgentContext {
+    crate::agents::AgentContext {
+        recorded_request_at: Some(Timestamp::from_millisecond(400).unwrap()),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn keepalive_producers_share_pacing_even_during_spawn() {
     let dir = tempfile::tempdir().unwrap();
@@ -434,6 +442,14 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
             "moved anchor"
         );
         changed = snapshot.clone();
+        std::sync::Arc::make_mut(&mut changed.agents)[0].context = Some(recorded());
+        assert!(
+            request
+                .target(&changed, &config, &policy, ts(3541))
+                .is_some(),
+            "the provider's record of the claimed request is the same anchor"
+        );
+        changed = snapshot.clone();
         std::sync::Arc::make_mut(&mut changed.agents)[0]
             .pending_waits
             .clear();
@@ -459,6 +475,12 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     assert_eq!(count, 1);
     keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
         panic!("repeated anchor")
+    });
+    let mut switched = snapshot.clone();
+    std::sync::Arc::make_mut(&mut switched.agents)[0].context = Some(recorded());
+    switched.now = ts(3541);
+    keepalive_agents_with(&switched, &runtime, &config, &policy, |_| {
+        panic!("a source switch for the claimed request refired")
     });
     let stale = snapshot.clone();
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].turn_started_at = Some(ts(3545));

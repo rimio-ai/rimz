@@ -141,6 +141,7 @@ impl AgentContextRecord {
         let observed_cost = context.cost.is_some();
         context.turn_opened_by = self.context.turn_opened_by.clone();
         context.last_cache_write = self.context.last_cache_write;
+        context.recorded_request_at = self.context.recorded_request_at;
         context.post_compaction_tokens = self.context.post_compaction_tokens;
         context.permission_settle = self.context.permission_settle;
         let model_context_limits_key = if context.model_context_limits.is_none() {

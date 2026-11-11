@@ -20,6 +20,8 @@ pub struct CacheKeepaliveRequest {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub pane_id: PaneId,
+    /// The claimed request's [`AgentState::request_key`], which a switch of clock source
+    /// does not move.
     pub anchor: Timestamp,
     pub label: String,
 }
@@ -203,7 +205,7 @@ impl CacheKeepaliveRequest {
         let agent = snapshot.agents.iter().find(|agent| {
             agent.kind == self.kind
                 && agent.agent_id == self.agent_id
-                && agent.last_request_at() == Some(self.anchor)
+                && agent.request_key() == Some(self.anchor)
                 && snapshot
                     .live_agent_pane(&self.kind, &self.agent_id)
                     .as_ref()
@@ -323,8 +325,10 @@ fn keepalive_agents_with(
         if !should_keepalive(agent, config, holding, snapshot.now) {
             continue;
         }
+        // The anchor names the request, not its instant: the record and the estimate of one
+        // request differ, and a switch of source must neither refire nor drop the claim.
         let (Some(anchor), Some(pane_id)) = (
-            agent.last_request_at(),
+            agent.request_key(),
             snapshot.live_agent_pane(&agent.kind, &agent.agent_id),
         ) else {
             continue;

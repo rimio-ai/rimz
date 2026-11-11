@@ -999,6 +999,7 @@ fn observed_context() -> AgentContext {
     AgentContext {
         model_context_limits: None,
         last_cache_write: None,
+        recorded_request_at: None,
         post_compaction_tokens: None,
         source: "pi".to_owned(),
         session_name: Some("fixture session".to_owned()),

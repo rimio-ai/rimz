@@ -52,6 +52,7 @@ fn timeline_idle_origin_uses_the_card_without_repointing_liveness() {
             last_request_at: Some(Timestamp::from_second(1880).unwrap()),
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         }),
         ..Default::default()
     });
@@ -71,6 +72,35 @@ fn timeline_idle_origin_uses_the_card_without_repointing_liveness() {
     );
     assert_eq!(entry.timeline.last_seen, state.last_seen);
     assert_eq!(entry.timeline.last_activity, state.last_activity);
+
+    // A row at rest whose last request precedes its turn end: list AGE and `show`'s last
+    // request count from the request, as the card's cache age does.
+    let request = Timestamp::from_second(900).unwrap();
+    let row = card_row(AgentCard {
+        own_last_activity: Some(state.last_activity),
+        cache: Some(rimz::store::snapshot::CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: Some(request),
+            warm_until: None,
+            rewarm_cost_usd: None,
+            recorded: true,
+        }),
+        ..Default::default()
+    });
+    let entry = build_entry(
+        &Default::default(),
+        &state,
+        Some(&row),
+        None,
+        "@cache".into(),
+        None,
+        now,
+        ReportOverrides::default(),
+    );
+    assert_eq!(
+        (entry.timeline.idle_since, row.idle_since()),
+        (request, request)
+    );
 }
 
 #[test]

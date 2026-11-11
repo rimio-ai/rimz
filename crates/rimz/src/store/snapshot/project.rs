@@ -864,6 +864,7 @@ fn carried_base(
         state.last_prompt_at = prior.last_prompt_at;
         state.keepalive_since = prior.keepalive_since;
         state.pinged_at = prior.pinged_at;
+        state.ping_opened_at = prior.ping_opened_at;
         state.registered_at = prior.registered_at.or(Some(event_ts));
         state.on_screen_at = prior.on_screen_at;
     }
@@ -1540,7 +1541,7 @@ fn fold_lifecycle(
 }
 
 /// A ping-only turn's edge: the agent reads exactly as `prior` left it, and
-/// only the open-ping flag and the ping's close time move.
+/// only the open-ping flag and the ping stamps move.
 fn carry_across_ping(
     state: &mut AgentState,
     prior: &AgentState,
@@ -1556,6 +1557,9 @@ fn carry_across_ping(
     // A run of pings keeps the last real request it followed: the clock the keepalive cap reads.
     if edge == lifecycle::PingEdge::Open {
         state.keepalive_since = prior.keepalive_since.or(prior.last_request_at());
+        state.ping_opened_at = Some(timestamp);
+    } else {
+        state.ping_opened_at = prior.ping_opened_at;
     }
     state.status = prior.status;
     state.phase = prior.phase;

@@ -1517,7 +1517,11 @@ fn a_ping_only_turn_is_audited_as_a_no_op_and_moves_only_the_cache_clock() {
     assert_eq!(pinged.turn_ended_at, rested.turn_ended_at);
     assert_eq!(pinged.started_turn_id.as_deref(), Some("r1"));
     assert!(pinged.pinged_at > rested.turn_ended_at);
-    assert_eq!(pinged.last_request_at(), pinged.pinged_at);
+    assert!(pinged.ping_opened_at > rested.turn_ended_at);
+    assert!(pinged.ping_opened_at < pinged.pinged_at);
+    // The cache clock counts from the ping's open, the pacing key from its close.
+    assert_eq!(pinged.last_request_at(), pinged.ping_opened_at);
+    assert_eq!(pinged.request_key(), pinged.pinged_at);
 }
 
 #[test]

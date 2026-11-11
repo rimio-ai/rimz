@@ -378,8 +378,8 @@ enum CacheAge {
     NoCache,
     /// A keep-warm horizon holds the phase, not the age origin.
     Held,
-    /// Count from the later of own activity and the last ping; an unknown TTL
-    /// has no ceiling.
+    /// Count from the displayed idle origin (`SidebarRow::idle_since`); an unknown
+    /// TTL has no ceiling.
     Aging {
         since: jiff::Timestamp,
         ceiling: Option<i64>,
@@ -411,10 +411,11 @@ impl CacheAge {
         let Some(ceiling) = ceiling else {
             return CachePhase::Unknown;
         };
-        let age = age_secs(since, now);
-        if age > ceiling {
+        // Cold at `request + TTL` exactly, the instant keep-warm's hold calls cold.
+        if now.duration_since(since).as_millis() >= i128::from(ceiling) * 1000 {
             return CachePhase::Expired;
         }
+        let age = age_secs(since, now);
         let band = (ceiling / 2)
             .max(ceiling.min(600))
             .min(CACHE_WARNING_MAX_SECS);
@@ -504,20 +505,45 @@ fn cache_age_pin(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Span<'static>> {
     Some(Span::styled(format!("{glyph} {label:>3}"), style))
 }
 
+/// Whole seconds left, rounded up, in the last minute of a cache whose clock is the
+/// provider's own record of the request; `None` on an estimated clock, which keeps minutes.
+fn recorded_seconds_left(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<i64> {
+    let clock = row.as_agent()?.cache.filter(|clock| clock.recorded)?;
+    let cold_at = clock
+        .last_request_at?
+        .checked_add(jiff::SignedDuration::from_secs(i64::from(
+            clock.ceiling_secs,
+        )))
+        .ok()?;
+    let left_ms = i64::try_from(cold_at.duration_since(ctx.now).as_millis()).ok()?;
+    (0 < left_ms && left_ms < 60_000).then(|| (left_ms + 999) / 1000)
+}
+
 /// Cache expiry guidance follows the template's stats, including held cards,
-/// but stays hidden on no-cache cards, even during a keep-warm hold.
+/// but stays hidden on no-cache cards, even during a keep-warm hold. A
+/// recorded clock counts its last minute in seconds, held or not.
 pub(super) fn cache_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'static>> {
     let theme = ctx.theme;
     let wide = ctx.tier == Tier::L2;
     let phase = cache_age(ctx, row).phase(ctx.now);
     let mut spans = vec![Span::raw("  ")];
+    let seconds = matches!(phase, CachePhase::Closing { .. } | CachePhase::Held)
+        .then(|| recorded_seconds_left(ctx, row))
+        .flatten();
+    let left = match (seconds, phase) {
+        (Some(seconds), _) => Some(format!("{seconds}s")),
+        (None, CachePhase::Closing { remaining, .. }) => {
+            Some(format!("{}m", ((remaining + 59) / 60).max(1)))
+        }
+        _ => None,
+    };
     match phase {
-        CachePhase::Closing { remaining, .. } => {
-            let minutes = ((remaining + 59) / 60).max(1);
+        CachePhase::Closing { .. } | CachePhase::Held => {
+            let left = left?;
             let subject = if wide { "cache expires" } else { "expires" };
             spans.push(Span::styled(
                 format!(
-                    "{} {subject} in {minutes}m",
+                    "{} {subject} in {left}",
                     theme.glyph(GlyphRole::CardWaitTimer)
                 ),
                 phase.style(theme),
@@ -657,7 +683,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cache_phase_owns_the_expiry_band_and_strict_tie() {
+    fn cache_phase_owns_the_expiry_band_and_expires_at_the_ttl() {
         let now = jiff::Timestamp::from_second(10000).unwrap();
         let phase = |age, ceiling| {
             CacheAge::Aging {
@@ -686,19 +712,32 @@ mod tests {
                     amount: 1.0 / band as f32
                 }
             );
-            assert_eq!(
-                phase(ceiling, Some(ceiling as i64)),
-                CachePhase::Closing {
-                    remaining: 0,
-                    amount: 1.0
-                }
+            if band > 1 {
+                assert_eq!(
+                    phase(ceiling - 1, Some(ceiling as i64)),
+                    CachePhase::Closing {
+                        remaining: 1,
+                        amount: (band - 1) as f32 / band as f32
+                    }
+                );
+            }
+            // Half a second before the TTL is still warm; the TTL itself is cold.
+            let half_second_left = CacheAge::Aging {
+                since: now - std::time::Duration::from_millis(ceiling * 1000 - 500),
+                ceiling: Some(ceiling as i64),
+            }
+            .phase(now);
+            assert!(
+                matches!(half_second_left, CachePhase::Closing { remaining: 1, .. }),
+                "{half_second_left:?}"
             );
+            assert_eq!(phase(ceiling, Some(ceiling as i64)), CachePhase::Expired);
             assert_eq!(
                 phase(ceiling + 1, Some(ceiling as i64)),
                 CachePhase::Expired
             );
         }
-        assert_eq!(phase(0, Some(0)), CachePhase::Calm);
+        assert_eq!(phase(0, Some(0)), CachePhase::Expired);
         assert_eq!(phase(1, Some(0)), CachePhase::Expired);
         for age in [0, 300, 1800, 10000] {
             assert_eq!(phase(age, None), CachePhase::Unknown);

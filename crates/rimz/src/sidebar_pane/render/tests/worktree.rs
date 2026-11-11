@@ -1939,6 +1939,7 @@ fn inactive_worktree_age_ignores_newer_member_cache_requests() {
             last_request_at: Some(fixed_now() - Duration::from_secs(minutes * 60)),
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         });
     }
     let theme = Theme::fixed(false);

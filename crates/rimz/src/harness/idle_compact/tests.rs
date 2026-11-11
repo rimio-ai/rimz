@@ -432,6 +432,14 @@ fn predicate_deduplicates_context_and_paces_spawns() {
     assert!(!spawn_due(&resumed, ts(10_000), Some(&same_turn)));
     candidate.turn_ended_at = Some(ts(8_500));
     assert!(!spawn_due(&candidate, ts(10_000), Some(&same_turn)));
+    // The provider's record of the same request is no new request.
+    candidate.context = Some(crate::agents::AgentContext {
+        recorded_request_at: Some(ts(6_001)),
+        ..Default::default()
+    });
+    assert_eq!(candidate.last_request_at(), Some(ts(6_001)));
+    assert!(!spawn_due(&candidate, ts(10_000), Some(&same_turn)));
+    candidate.context = None;
     candidate.last_tool_at = Some(ts(8_000));
     assert!(spawn_due(&candidate, ts(10_000), Some(&same_turn)));
 

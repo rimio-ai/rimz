@@ -50,7 +50,7 @@ fn default_stall_secs() -> i64 {
 }
 
 #[test]
-fn displayed_idle_origin_uses_own_activity_and_closed_cache_requests() {
+fn displayed_idle_origin_at_rest_is_the_cache_request_and_in_flight_own_activity() {
     use crate::store::snapshot::{CacheClock, agent_idle_since};
 
     let mut state = agent("claude", "parent", AgentStatus::Success, 1200);
@@ -59,19 +59,27 @@ fn displayed_idle_origin_uses_own_activity_and_closed_cache_requests() {
     let mut row = row_from_agent(&state, epoch());
     row.last_activity = ago(10);
     row.as_agent_mut().unwrap().own_last_activity = Some(ago(1200));
-    for request in [None, Some(ago(1800)), Some(ago(120))] {
-        row.as_agent_mut().unwrap().cache = Some(CacheClock {
+    // At rest the cache request is the origin, even before the turn end; in flight the
+    // later of own activity and the request stays.
+    for (status, request, expected) in [
+        (AgentStatus::Success, None, ago(1200)),
+        (AgentStatus::Success, Some(ago(1800)), ago(1800)),
+        (AgentStatus::Success, Some(ago(120)), ago(120)),
+        (AgentStatus::Idle, Some(ago(1800)), ago(1800)),
+        (AgentStatus::Running, Some(ago(1800)), ago(1200)),
+        (AgentStatus::Running, Some(ago(120)), ago(120)),
+        (AgentStatus::Waiting, Some(ago(1800)), ago(1200)),
+    ] {
+        let card = row.as_agent_mut().unwrap();
+        card.status = status;
+        card.cache = Some(CacheClock {
             ceiling_secs: 1800,
             last_request_at: request,
             warm_until: None,
             rewarm_cost_usd: None,
+            recorded: false,
         });
-        let expected = if request == Some(ago(120)) {
-            ago(120)
-        } else {
-            ago(1200)
-        };
-        assert_eq!(row.idle_since(), expected, "request {request:?}");
+        assert_eq!(row.idle_since(), expected, "{status:?} request {request:?}");
         assert_eq!(agent_idle_since(&state, Some(&row)), expected);
     }
 }

@@ -325,6 +325,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
     agent.context = Some(AgentContext {
         model_context_limits: None,
         last_cache_write: None,
+        recorded_request_at: None,
         post_compaction_tokens: None,
         source: "claude".to_owned(),
         session_name: None,

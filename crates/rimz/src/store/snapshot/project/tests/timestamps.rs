@@ -1435,17 +1435,24 @@ fn a_ping_only_turn_moves_only_the_cache_clock() {
             Some(events[0].timestamp),
             "{opener:?}"
         );
+        assert_eq!(open.ping_opened_at, Some(events[2].timestamp));
 
         events.push(ended(4, "p1"));
         let closed = fold(&events);
         assert!(!closed.ping_turn);
         assert_eq!(observable(&closed), observable(&before), "{opener:?}");
         assert_eq!(closed.pinged_at, Some(events[3].timestamp));
-        assert_eq!(closed.last_request_at(), Some(events[3].timestamp));
+        // The cache clock counts from the ping's open; the pacing key names it by its close.
+        assert_eq!(closed.last_request_at(), Some(events[2].timestamp));
+        assert_eq!(closed.request_key(), Some(events[3].timestamp));
         assert_eq!(closed.keepalive_since, open.keepalive_since);
         let decoded: AgentState =
             serde_json::from_value(serde_json::to_value(&closed).unwrap()).unwrap();
         assert_eq!(decoded.pinged_at, closed.pinged_at);
+        assert_eq!(
+            (closed.ping_opened_at, decoded.ping_opened_at),
+            (open.ping_opened_at, open.ping_opened_at)
+        );
 
         events.push(lifecycle(5, None, json!({"signal": "registered"})));
         let cleared = fold(&events);
