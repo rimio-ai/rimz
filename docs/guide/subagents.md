@@ -95,7 +95,7 @@ rimz transcript @calm-fox        # last 20 entries, after the pane has closed to
 rimz transcript @calm-fox -n 0   # the whole run
 ```
 
-`list` from a shell outside any channel shows every child in the room. A child parked on a provider usage limit reads `paused` there while it can still resume, with the provider's message under its row. Once the park is spent, it reads `failed`; `RUN` still says `running` until the run ends ([status reference](../reference/cli/subagents.md#list-children)). A reset alone does not guarantee continuation; automatic continuation depends on the configured [resume policy](./loops.md). Channel and `@all` transcript views leave children out, so read a child by its handle.
+`list` from a shell outside any channel shows every child in the room. A child parked on a provider usage limit reads `paused` there while it can still resume, with the provider's message under its row. Once the park is spent, it reads `failed`; `RUN` reads `failed` once RimZ fails the run, which for most rate and spend limits follows within one sidebar refresh, and an overload park's run stays `running` until its deadline ([status reference](../reference/cli/subagents.md#list-children)). A reset alone does not guarantee continuation; automatic continuation depends on the configured [resume policy](./loops.md). Channel and `@all` transcript views leave children out, so read a child by its handle.
 
 A child runs one prompt and is not built to read messages mid-run. To change what a child is doing, stop it and let the parent relaunch.
 
