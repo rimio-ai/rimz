@@ -62,65 +62,27 @@ fn note(host: &FakeHost) -> String {
     host.launched.borrow().last().unwrap().workflow_note.clone()
 }
 
+/// A loop task `land` started the run, by hand or on its `when` condition held for 3m.
 fn task(record: &mut RunRecord, manual: bool) {
     record.task = Some("land".into());
     record.manual = manual;
-    let path = crate::config::MachineConfig::loop_path();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let entry = crate::config::TaskEntry {
-        root: record.project_root.clone(),
-        workflow: Some("land".into()),
-        when: Some(vec![
-            "pr=open && team.stage=Done && !ci=pending,failed".into(),
-        ]),
-        hold: Some("3m".into()),
-        each_worktree: true,
-        ..Default::default()
-    };
-    let config = crate::config::LoopConfig {
-        tasks: crate::config::Tasks(std::collections::BTreeMap::from([("land".into(), entry)])),
-        ..Default::default()
-    };
-    fs::write(path, toml::to_string(&config).unwrap()).unwrap();
-    let catalog =
-        crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(&record.project_root));
-    let task = catalog
-        .visible()
-        .get("land")
-        .expect("fixture task is visible");
-    assert!(task.trigger().is_ok(), "{:?}", task.trigger());
-    crate::harness::schedule::arming::disable(&task.key("land"), None).unwrap();
-}
-
-fn isolated_task_home(test: &str) -> bool {
-    if std::env::var_os("RIMZ_TEST_WORKFLOW_BRIEF_HOME").is_some() {
-        return false;
-    }
-    let home = tempfile::tempdir().unwrap();
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("harness::workflow::tests::attempts::brief::{test}"),
-            "--nocapture",
-        ])
-        .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
-        .env("RIMZ_TEST_WORKFLOW_BRIEF_HOME", "1")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    true
+    let task = "land".to_owned();
+    record.fire = Some(if manual {
+        records::RunFire::Manual { task }
+    } else {
+        records::RunFire::Scheduled {
+            task,
+            trigger: Some(
+                "when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree \
+                 for 3m"
+                    .into(),
+            ),
+        }
+    });
 }
 
 #[test]
 fn land_note_matches_the_approved_example_with_reset_aware_visits() {
-    if isolated_task_home("land_note_matches_the_approved_example_with_reset_aware_visits") {
-        return;
-    }
     let (_dir, state, mut record) = setup(LAND);
     record.workflow = "land".into();
     record.prompt = None;
@@ -192,9 +154,6 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
 
 #[test]
 fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
-    if isolated_task_home("origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts") {
-        return;
-    }
     for origin in ["automatic", "fire", "run"] {
         for prompt in [false, true] {
             let (_dir, state, mut record) = setup(&format!("{OUTCOME_STEP}throttle='off'\n"));
@@ -467,6 +426,10 @@ fn engine_invalid_routes_and_previous_deaths_use_plain_words() {
 fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
     let (_dir, state, mut record) = setup(OUTCOME_STEP);
     record.task = Some("missing-task".into());
+    record.fire = Some(records::RunFire::Scheduled {
+        task: "missing-task".into(),
+        trigger: None,
+    });
     update(&state, &record);
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));

@@ -6,10 +6,9 @@ use super::{Check, CheckKind, Fireability, HopKind, Step, WorkflowSpec, routing_
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
-use crate::harness::schedule::{catalog::TaskCatalog, trigger_clause};
 use crate::harness::when::WhenExpr;
 use crate::store::workflow::{
-    self, AttemptOutcome, JournalEvent, Key, RunRecord, StepLifecycle, TurnEndAction,
+    self, AttemptOutcome, JournalEvent, Key, RunFire, RunRecord, StepLifecycle, TurnEndAction,
 };
 
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
@@ -20,7 +19,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
     let mut origin = origin(record);
     origin.push_str(" Your prompt is the step's fixed text, not a message someone just typed.");
     if record.prompt.is_some() {
-        origin.push_str(if record.task.is_some() {
+        origin.push_str(if record.fire.is_some() {
             " The loop fire's prompt ends it: the task's prompt, what fired it, or both."
         } else {
             " The text given with `--prompt` to `rimz workflow run` ends it."
@@ -195,32 +194,22 @@ fn rail(spec: &WorkflowSpec, current: &str) -> String {
 }
 
 fn origin(record: &RunRecord) -> String {
-    let Some(task) = &record.task else {
-        return "The user started this run by hand with `rimz workflow run`.".into();
-    };
-    if record.manual {
-        return format!(
+    match &record.fire {
+        None => "The user started this run by hand with `rimz workflow run`.".into(),
+        Some(RunFire::Manual { task }) => format!(
             "The user started this run by hand with {}.",
             span(&format!("rimz loop fire {task}"))
-        );
+        ),
+        Some(RunFire::Scheduled { task, trigger }) => {
+            let clause = trigger
+                .as_ref()
+                .map_or_else(String::new, |clause| format!(", {clause}"));
+            format!(
+                "RimZ started this run automatically{clause} (loop task {}).",
+                span(task)
+            )
+        }
     }
-    let catalog = TaskCatalog::load_lenient(Some(&record.project_root));
-    let clause = catalog
-        .visible()
-        .get(task)
-        .and_then(|task| {
-            let predicate = if task.entry().each_worktree {
-                "held in this worktree"
-            } else {
-                "held"
-            };
-            trigger_clause(task.trigger().as_ref().ok()?, predicate)
-        })
-        .map_or_else(String::new, |clause| format!(",{clause}"));
-    format!(
-        "RimZ started this run automatically{clause} (loop task {}).",
-        span(task)
-    )
 }
 
 fn detail(check: &Check, input: &Value) -> Option<String> {
@@ -558,7 +547,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                     span(&target)
                 )
             } else {
-                let watching = if record.task.is_some() && !record.manual {
+                let watching = if matches!(record.fire, Some(RunFire::Scheduled { .. })) {
                     "Nobody is watching. "
                 } else {
                     ""

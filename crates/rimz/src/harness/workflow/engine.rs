@@ -16,7 +16,7 @@ use crate::harness::when::WindowReadings;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, LiveAttempt,
-    ParkReason, RunOrigin, RunRecord, RunState, Scope, ScopeKind, Verdict,
+    ParkReason, RunFire, RunOrigin, RunRecord, RunState, Scope, ScopeKind, Verdict,
 };
 
 mod accounting;
@@ -57,7 +57,8 @@ type Result<T> = std::result::Result<T, WorkflowErr>;
 mod agent;
 
 /// Where a new run's definition comes from. A loop fire passes its task row's `surplus` and
-/// `surplus-after` values as written, which the run's judges read in place of the live row.
+/// `surplus-after` values as written, which the run's judges read in place of the live row, and
+/// the `fire` its briefs name.
 pub enum DefinitionSource<'a> {
     /// A deployed workflow directory; its basename names the run.
     Deployed {
@@ -65,6 +66,7 @@ pub enum DefinitionSource<'a> {
         task: Option<String>,
         surplus: Option<String>,
         surplus_after: Option<String>,
+        fire: Option<RunFire>,
     },
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
     /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
@@ -77,6 +79,7 @@ pub enum DefinitionSource<'a> {
         capacity_until: Option<Timestamp>,
         surplus: Option<String>,
         surplus_after: Option<String>,
+        fire: Option<RunFire>,
     },
 }
 
@@ -103,6 +106,7 @@ pub fn create(
             task,
             surplus,
             surplus_after,
+            fire,
         } => {
             let dir = dir.canonicalize()?;
             RunStart {
@@ -118,6 +122,7 @@ pub fn create(
                 capacity_until: None,
                 surplus: surplus.clone(),
                 surplus_after: surplus_after.clone(),
+                fire: fire.clone(),
             }
         }
         DefinitionSource::Inline {
@@ -126,6 +131,7 @@ pub fn create(
             capacity_until,
             surplus,
             surplus_after,
+            fire,
             ..
         } => RunStart {
             origin: RunOrigin::Inline,
@@ -136,6 +142,7 @@ pub fn create(
             capacity_until: *capacity_until,
             surplus: surplus.clone(),
             surplus_after: surplus_after.clone(),
+            fire: fire.clone(),
         },
     };
     // A run already holding the scope wins before the definition or the
@@ -189,6 +196,7 @@ struct RunStart {
     capacity_until: Option<Timestamp>,
     surplus: Option<String>,
     surplus_after: Option<String>,
+    fire: Option<RunFire>,
 }
 
 /// Validate the definition at `start.spec_dir` and publish the run's record.
@@ -272,6 +280,7 @@ fn publish(
         capacity_until: start.capacity_until,
         surplus: start.surplus,
         surplus_after: start.surplus_after,
+        fire: start.fire,
         project_root: roots.project.clone(),
         created_at: now,
         notes: None,

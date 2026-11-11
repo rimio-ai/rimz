@@ -4212,7 +4212,8 @@ path = "crates/rimz/src/store"
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
 # RunRecord::superseded_in names the panes a handed-over run no longer answers to (+1).
 # store::run::LimitFailure and LimitFailureCause keep a limit-failed child's typed cause for the fleet report (+2).
-surface-budget = 600
+# workflow::RunFire freezes what a loop fire tells its run's briefs (+1).
+surface-budget = 601
 
 [[verdict]]
 kind = "item"
@@ -11248,6 +11249,11 @@ reason = "A run record says whether a deployed workflow or a loop task's inline 
 kind = "item"
 key = "store::workflow::LoopReport"
 reason = "A run record carries whether it still owes its loop task the outcome report; the engine writes it, and the workflow tick and GC read it."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunFire"
+reason = "A run record keeps what the loop fire that started it tells its briefs, the task's name included, so a later edit, rename or removal of the task leaves every brief as it was."
 
 [[verdict]]
 kind = "item"

@@ -545,6 +545,21 @@ pub enum LoopReport {
     Sent,
 }
 
+/// The loop fire that started a run, as the run's briefs name it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum RunFire {
+    /// `rimz loop fire <task>` started the run by hand.
+    Manual { task: String },
+    /// The task's trigger started the run; `trigger` words it as the brief does
+    /// (``on the cron schedule `0 * * * *` ``), and a watch trigger has none.
+    Scheduled {
+        task: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<String>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
@@ -589,6 +604,11 @@ pub struct RunRecord {
     /// The loop task row's `surplus-after` value as written when its fire started the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surplus_after: Option<String>,
+    /// What the loop fire that started the run tells the run's briefs, frozen at creation, so an
+    /// edit, rename or removal of the task mid-run leaves every brief as it was; a run
+    /// `rimz workflow run` started carries none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire: Option<RunFire>,
     pub project_root: PathBuf,
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]

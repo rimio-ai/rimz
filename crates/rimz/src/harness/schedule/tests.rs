@@ -1969,3 +1969,35 @@ fn judge_prompt_file_uses_the_task_rows_origin() {
         root.path()
     );
 }
+
+#[test]
+fn trigger_clauses_word_each_trigger_as_a_runs_brief_names_it() {
+    let clause = |row: &str| {
+        let entry: TaskEntry =
+            toml::from_str(&format!("agent='claude'\nprompt='go'\n{row}")).unwrap();
+        trigger_clause(&catalog::LoadedTask::new(
+            "land",
+            entry,
+            catalog::TaskSource::Config,
+        ))
+    };
+    let when = "when=['pr=open && team.stage=Done && !ci=pending,failed']\nfor='3m'\n";
+    assert_eq!(
+        clause(&format!("{when}each-worktree=true\n")).as_deref(),
+        Some(
+            "when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m"
+        )
+    );
+    assert_eq!(
+        clause(when).as_deref(),
+        Some("when `pr=open && team.stage=Done && !ci=pending,failed` held for 3m")
+    );
+    assert_eq!(
+        clause("cron='0 * * * *'\n").as_deref(),
+        Some("on the cron schedule `0 * * * *`")
+    );
+    assert_eq!(
+        clause("signal='deploy.done'\n").as_deref(),
+        Some("on the signal `deploy.done`")
+    );
+}

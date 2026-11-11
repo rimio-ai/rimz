@@ -2332,3 +2332,96 @@ fn a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival() {
     }
     assert_sealed_prompt_names_the_served_trigger("arrival", TriggerSwitch::None, "b");
 }
+
+#[test]
+fn a_runs_trigger_sentence_stays_as_fired_when_its_task_is_edited_renamed_or_removed() {
+    let name = "harness::schedule::runner::tests::a_runs_trigger_sentence_stays_as_fired_when_its_task_is_edited_renamed_or_removed";
+    if reexec_with_private_homes(name) {
+        return;
+    }
+    let adapter = find_definition("claude").unwrap();
+    let login_env = ambient_env();
+    adapter
+        .install_hooks(&login_env, Default::default())
+        .unwrap();
+    let row = "agent='claude'\nprompt='Land it.'\nthrottle='off'\n";
+    for (mode, sentence) in [
+        (
+            LoopRunMode::Scheduled,
+            "RimZ started this run automatically, on the cron schedule `0 * * * *` \
+             (loop task `land`).",
+        ),
+        (
+            LoopRunMode::Manual,
+            "The user started this run by hand with `rimz loop fire land`.",
+        ),
+    ] {
+        for change in ["edited", "renamed", "removed"] {
+            let root = tempfile::tempdir().unwrap();
+            record_room(root.path()).unwrap();
+            let config = root.path().join(".rimz/config.toml");
+            std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+            std::fs::write(&config, format!("[tasks.land]\n{row}cron='0 * * * *'\n")).unwrap();
+            crate::trust::grant(root.path()).unwrap();
+            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+            let task = catalog.visible()["land"].clone();
+            let mut fire = TaskFire::new(
+                "land",
+                task,
+                &catalog,
+                mode,
+                false,
+                Timestamp::now(),
+                Arc::new(MachineConfig::default()),
+                None,
+                Instant::now(),
+            )
+            .unwrap();
+            let plan = fire
+                .prepare(&mut |_| Ok(()))
+                .unwrap_or_else(|error| panic!("TaskFire::prepare: {error:#}"));
+            let TaskFirePlan::Done(done) = plan else {
+                panic!("expected TaskFirePlan::Done")
+            };
+            assert_eq!(done.record.result, LoopRunResult::Launched, "{change}");
+            drop(fire);
+            let state = StatePaths::for_project_root(root.path()).unwrap();
+            let run = crate::store::workflow::list(&state)
+                .unwrap()
+                .into_iter()
+                .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
+                .expect("created workflow run");
+            let host = crate::harness::workflow::tests::FakeHost::new();
+            crate::harness::workflow::advance(&state, &run.id, &host).unwrap();
+            let fired = host.launched.borrow()[0].workflow_note.clone();
+            assert!(fired.contains(sentence), "{mode:?} at its fire: {fired}");
+
+            match change {
+                "edited" => {
+                    std::fs::write(&config, format!("[tasks.land]\n{row}cron='30 * * * *'\n"))
+                        .unwrap();
+                    crate::trust::grant(root.path()).unwrap();
+                }
+                "renamed" => {
+                    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+                    assert!(catalog.rename("land", "shipped").unwrap().changed());
+                }
+                _ => {
+                    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+                    assert!(catalog.remove("land").unwrap().changed());
+                }
+            }
+            crate::harness::workflow::restart(&state, &run.id, None, &host)
+                .unwrap_or_else(|error| panic!("{mode:?} {change}: restart: {error}"));
+            crate::harness::workflow::advance(&state, &run.id, &host).unwrap();
+            let launched = host.launched.borrow();
+            assert_eq!(
+                launched.len(),
+                2,
+                "{mode:?} {change}: the restart relaunches"
+            );
+            let next = launched[1].workflow_note.clone();
+            assert!(next.contains(sentence), "{mode:?} {change}: {next}");
+        }
+    }
+}
