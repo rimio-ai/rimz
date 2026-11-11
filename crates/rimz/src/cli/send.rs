@@ -251,13 +251,13 @@ pub(crate) fn validate_reply_wait(
         return Ok(());
     }
     if !enter {
-        bail!("--wait and --timeout require submitting the message; remove --no-enter");
+        bail!("--wait/--timeout requires submitting the message; remove --no-enter");
     }
     if create {
-        bail!("--wait and --timeout require an existing agent; remove --create");
+        bail!("--wait/--timeout requires an existing agent; remove --create");
     }
     if scheduled {
-        bail!("--wait and --timeout send now or park for a turn boundary; remove --schedule");
+        bail!("--wait/--timeout sends now or parks for a turn boundary; remove --schedule");
     }
     Ok(())
 }
