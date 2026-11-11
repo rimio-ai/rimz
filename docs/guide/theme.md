@@ -112,10 +112,10 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `caution` | the warm "hot, costly, or blocked until you act" amber: the gauge mid-band, the age-heat midpoint, the active stall lead and figures, the conflicted pull request marker and cockpit PR count, and the `PREFIX`, `PANE`, `TAB`, `RESIZE`, `SCROLL` and `MOVE` room-mode marks on the bottom key row |
 | `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker, the card's `✎` typing pen, and the pending and continuation keys of the which-key hint on the bottom key row |
-| `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
+| `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph, and the card's `↧` queued-message glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, the workflow badge, and the context meter's `┤` compaction wall and matching point label |
 | `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, active stall resource words, not-tracked fix text, and the card's due-message count |
-| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, the needs-you filter header, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, the compacted-context meter's empty track while it has no size estimate, and the card's `↧` queued-message glyph |
+| `muted` | chrome: labels, ages, subordinate values, workflow visit counts, the needs-you filter header, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, the compacted-context meter's empty track while it has no size estimate |
 | `faint` | faintest chrome: measured bar tracks, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |

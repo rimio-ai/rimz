@@ -225,7 +225,7 @@ In the sidebar, `Component` in `render/theme/component.rs` is the equivalent for
 
 Two kinds of sidebar color stay off the component layer. Amount-driven tones come from `Theme::heat_tone`, `warm_heat_tone`, and `calm_tone`. Fixed positive, floor, and negative chrome (diff churn, gate notices) uses the flat `Theme::good`, `warn`, and `alarm`, where the tier name is the intent. Trunk markers resolve through component roles. The conflict marker and cockpit PR count share `Component::WorktreePrConflict` so a retune moves both.
 
-Message marks have their own component tokens: `MessageQueued` maps the glyph to `muted`, and `Typing` maps the pen to `accent`. The queued count uses `body`. Adding a mark includes its component in `Component::ALL` and its slot in the [theme guide](../guide/theme.md#color-slots).
+Message marks have their own component tokens: `MessageQueued` maps the glyph to `cool`, and `Typing` maps the pen to `accent`. The queued count uses `body`. Adding a mark includes its component in `Component::ALL` and its slot in the [theme guide](../guide/theme.md#color-slots).
 
 ## Shared value formats
 
