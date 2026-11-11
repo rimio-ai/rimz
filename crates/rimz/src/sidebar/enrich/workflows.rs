@@ -7,7 +7,7 @@ use crate::harness::workflow::{WorkflowSpec, hops, reached};
 use crate::store::snapshot::{
     SidebarSnapshot, SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind,
 };
-use crate::store::workflow::{JournalEntry, RunRecord, RunState};
+use crate::store::workflow::{JournalEntry, RunOrigin, RunRecord, RunState};
 
 thread_local! {
     // Sealed specs are immutable; the shared cache bounds retained paths to 1,024.
@@ -16,10 +16,11 @@ thread_local! {
     static JOURNALS: KeyedParseCache<Vec<JournalEntry>> = KeyedParseCache::default();
 }
 
+/// Strips for live deployed runs; a loop task's own run shows in `rimz loop list` instead.
 pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWorkflow> {
     records
         .iter()
-        .filter(|record| !record.state.is_terminal())
+        .filter(|record| !record.state.is_terminal() && record.origin == RunOrigin::Deployed)
         .filter_map(|record| {
             let paths = state.workflow(&record.id);
             let spec = SPECS.with(|cache| {
