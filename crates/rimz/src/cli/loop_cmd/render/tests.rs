@@ -847,6 +847,69 @@ fn worktree_view() -> ShowView {
 }
 
 #[test]
+fn worktree_rows_sharing_a_rank_sort_by_name_from_every_input_order() {
+    let launched = |name: &str, second: i64| CheckoutCondition {
+        checkout: format!("/repo/{name}").into(),
+        name: name.into(),
+        state: CheckoutState::Launched {
+            leader: format!("{name}-leader"),
+            at: Timestamp::from_second(second).unwrap(),
+        },
+    };
+    // All blocked, so all rank 0: the newer launch is named `z`, the older `a`,
+    // and a ready row `m` sits between them by name. Ordering the two launches
+    // by time and each against `m` by name is a cycle, which the sort panics on.
+    let conditions = [
+        launched("z", 20),
+        launched("a", 10),
+        CheckoutCondition {
+            checkout: "/repo/m".into(),
+            name: "m".into(),
+            state: CheckoutState::Ready {
+                since: Timestamp::from_second(5).unwrap(),
+                verdict: Verdict {
+                    ok: true,
+                    readings: BTreeMap::new(),
+                    unread: BTreeMap::new(),
+                },
+            },
+        },
+    ];
+    let row = |condition| WorktreeRow {
+        condition,
+        blocked: Some((
+            Timestamp::from_second(30).unwrap(),
+            CheckoutRefusals {
+                count: 1,
+                reason: "@busy is working",
+                active_since: None,
+            },
+        )),
+        leader_status: None,
+        run: None,
+        armed: 0,
+        short: Vec::new(),
+        capacity: None,
+    };
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let mut rows = order.map(|index| row(&conditions[index]));
+        sort_worktree_rows(&mut rows);
+        let names = rows
+            .iter()
+            .map(|row| row.condition.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a", "m", "z"], "input order {order:?}");
+    }
+}
+
+#[test]
 fn show_worktrees_fresh_hold_renders_zero_elapsed() {
     let mut view = worktree_view();
     let row = view
