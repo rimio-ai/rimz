@@ -273,9 +273,8 @@ impl Component {
             }
             WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited
             | ThrottleNotice | WorkflowVisitsCapped | WorkflowParked | PaneNotice => palette.warn,
-            WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
-                palette.cool
-            }
+            WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge
+            | MessageQueued => palette.cool,
             TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite | CompactionPoint
             | WorkflowBadge => palette.meta,
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
@@ -284,7 +283,7 @@ impl Component {
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
             | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow
-            | NotTrackedSuffix | NotTrackedTip | MessageQueued | NeedsYouFilter => palette.muted,
+            | NotTrackedSuffix | NotTrackedTip | NeedsYouFilter => palette.muted,
         })
     }
 }

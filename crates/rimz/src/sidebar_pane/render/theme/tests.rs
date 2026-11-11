@@ -449,7 +449,7 @@ fn components_resolve_concretely_and_collapse_under_no_color() {
             [Component::MessageQueued, Component::Typing]
                 .map(|component| theme.component(component)),
             [
-                tone_color(theme.palette.muted),
+                tone_color(theme.palette.cool),
                 tone_color(theme.palette.accent)
             ]
         );
