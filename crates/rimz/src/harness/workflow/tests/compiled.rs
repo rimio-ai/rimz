@@ -6,7 +6,7 @@ use crate::disk::paths::StatePaths;
 use crate::harness::schedule::catalog::{LoadedTask, TaskSource};
 use crate::harness::schedule::compile::{CompiledAction, InlineTask, TaskWorkflow};
 use crate::harness::schedule::run_log::LoopRunResult;
-use crate::harness::schedule::signal::Signal;
+use crate::harness::signal::Signal;
 use crate::store::workflow::{self as records, JournalEvent, RunRecord, RunState};
 use serde_json::{Value, json};
 

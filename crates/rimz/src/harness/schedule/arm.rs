@@ -11,10 +11,10 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use super::catalog::{LoadedTask, TaskSource};
-use super::signal::SignalSelector;
 use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
 use crate::config::{CheckOn, Judge, TaskCheck, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
+use crate::harness::signal::{SignalSelector, default_signal_match_key};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
 
@@ -508,21 +508,6 @@ pub enum DeliveryScopeFailure {
     SelfSignal,
 }
 
-pub fn default_signal_match_key(
-    selector: &SignalSelector,
-    matches: &BTreeMap<String, String>,
-) -> Option<&'static str> {
-    match selector.family() {
-        "ci" | "pr" if !matches.contains_key("path") && !matches.contains_key("branch") => {
-            Some("path")
-        }
-        "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
-            Some("instance")
-        }
-        _ => None,
-    }
-}
-
 pub fn default_signal_matches(
     workspace: &ResolvedWorkspace,
     agents: &[AgentState],
@@ -569,11 +554,11 @@ pub fn validate_self_signal(
     }
     let other = matches.get("handle").is_some_and(|handle| {
         !handle.is_empty()
-            && !super::signal::is_match_wildcard(handle)
+            && !crate::harness::signal::is_match_wildcard(handle)
             && handle_name(handle) != handle_name(&target.handle)
     }) || matches.get("session").is_some_and(|session| {
         !session.is_empty()
-            && !super::signal::is_match_wildcard(session)
+            && !crate::harness::signal::is_match_wildcard(session)
             && session != &target.session
     });
     if other {

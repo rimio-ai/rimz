@@ -1058,10 +1058,10 @@ fn parse_trigger_rejects_conflicting_fields() {
                 signal: Some("CI.finished".to_owned()),
                 ..spawn_entry()
             },
-            ScheduleErr::BadSignal {
+            ScheduleErr::Selector(crate::harness::signal::SelectorErr::BadSignal {
                 name: "task".to_owned(),
                 value: "CI.finished".to_owned(),
-            },
+            }),
         ),
         (
             TaskEntry {
@@ -1094,7 +1094,7 @@ fn parse_trigger_rejects_conflicting_fields() {
 
 #[test]
 fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
-    use signal::SignalResolution::{Deliver, Ignore};
+    use crate::harness::signal::SignalResolution::{Deliver, Ignore};
     for (selector, matches, payload, expected) in [
         (
             "pr.conflicted",
@@ -1164,7 +1164,7 @@ fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
                 .map(|(key, value)| (key.to_owned(), value.to_owned()))
                 .collect(),
         };
-        let signal = signal::Signal {
+        let signal = crate::harness::signal::Signal {
             name: selector.parse().unwrap(),
             payload: payload.as_object().unwrap().clone(),
             source: crate::store::event::SignalSource::Cli,
@@ -1180,20 +1180,8 @@ fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
 }
 
 #[test]
-fn signal_match_values_reject_blanks_but_accept_wildcards() {
-    for value in ["", " \t"] {
-        let matches = std::collections::BTreeMap::from([("branch".to_owned(), value.to_owned())]);
-        let err = parse_signal_selector("task", "pr.conflicted", Some(&matches)).unwrap_err();
-        assert!(err.to_string().contains("task"));
-        assert!(err.to_string().contains("branch"));
-    }
-    let matches = std::collections::BTreeMap::from([("branch".to_owned(), "*".to_owned())]);
-    assert!(parse_signal_selector("task", "pr.conflicted", Some(&matches)).is_ok());
-}
-
-#[test]
 fn triggers_match_names_and_top_level_payload_values() {
-    let signal = signal::Signal {
+    let signal = crate::harness::signal::Signal {
         name: "ci.failed".parse().unwrap(),
         payload: serde_json::Map::from_iter([
             ("result".to_owned(), serde_json::json!("failure")),
@@ -1209,7 +1197,7 @@ fn triggers_match_names_and_top_level_payload_values() {
             ("result".to_owned(), "failure".to_owned()),
         ]),
     };
-    use signal::SignalResolution::{Deliver, Ignore, Skip};
+    use crate::harness::signal::SignalResolution::{Deliver, Ignore, Skip};
     assert_eq!(matching.resolve("task", &signal), Deliver);
     assert_eq!(
         Trigger::Schedule(parse_schedule("task", &entry(None, Some("5m"), None)).unwrap())
@@ -1221,7 +1209,7 @@ fn triggers_match_names_and_top_level_payload_values() {
     assert_eq!(
         watch.resolve(
             "task",
-            &signal::Signal {
+            &crate::harness::signal::Signal {
                 name: "wait.task".parse().unwrap(),
                 ..signal.clone()
             }
@@ -1231,7 +1219,7 @@ fn triggers_match_names_and_top_level_payload_values() {
     assert_eq!(
         watch.resolve(
             "other",
-            &signal::Signal {
+            &crate::harness::signal::Signal {
                 name: "wait.task".parse().unwrap(),
                 ..signal.clone()
             }
@@ -1264,7 +1252,7 @@ fn triggers_match_names_and_top_level_payload_values() {
 
 #[test]
 fn signal_selectors_observe_only_matching_family_payloads() {
-    use signal::SignalResolution::{Deliver, Ignore, Skip};
+    use crate::harness::signal::SignalResolution::{Deliver, Ignore, Skip};
     for (selector, emitted, path, expected) in [
         ("ci.failed", "ci.failed", "/worktree", Deliver),
         ("ci.failed", "ci.passed", "/worktree", Skip),
@@ -1283,7 +1271,7 @@ fn signal_selectors_observe_only_matching_family_payloads() {
                 "/worktree".to_owned(),
             )]),
         };
-        let signal = signal::Signal {
+        let signal = crate::harness::signal::Signal {
             name: emitted.parse().unwrap(),
             payload: serde_json::Map::from_iter([("path".to_owned(), serde_json::json!(path))]),
             source: crate::store::event::SignalSource::Cli,

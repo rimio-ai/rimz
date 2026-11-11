@@ -5,8 +5,6 @@
 //! run here; the CLI executes a prepared message delivery and returns its typed result.
 
 mod prompt;
-pub(in crate::harness) use prompt::signal_details;
-pub use prompt::signal_subject;
 
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
@@ -51,8 +49,8 @@ use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition, SignalRecord,
 };
-use crate::harness::schedule::signal::{Signal as TriggerSignal, WatchOutcome};
 use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, Trigger};
+use crate::harness::signal::{Signal as TriggerSignal, WatchOutcome};
 use crate::harness::surplus::surplus_refusal;
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};

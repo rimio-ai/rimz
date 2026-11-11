@@ -784,8 +784,11 @@ impl WhenTerm {
     /// does not narrow it to the scope's own flips.
     pub(in crate::harness) fn wake_subscription(
         &self,
-    ) -> Option<(super::signal::SignalSelector, BTreeMap<String, String>)> {
-        use super::signal::SignalSelector;
+    ) -> Option<(
+        crate::harness::signal::SignalSelector,
+        BTreeMap<String, String>,
+    )> {
+        use crate::harness::signal::SignalSelector;
         if let Some(key) = TeamStageKey::parse(&self.key) {
             let matches = key
                 .branch()

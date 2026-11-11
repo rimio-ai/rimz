@@ -526,7 +526,7 @@ pub enum LayoutErr {
         team: String,
         role: String,
         index: usize,
-        source: Box<crate::harness::schedule::ScheduleErr>,
+        source: Box<crate::harness::signal::SelectorErr>,
     },
     #[error(
         "team `{team}` role `{role}` signal binding {index} (`{signal}`) requires match.handle or match.session"
@@ -2393,7 +2393,7 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
             .map(move |(index, binding)| (&role.role, index, binding))
     }) {
         let index = index + 1;
-        let selector = crate::harness::schedule::parse_signal_selector(
+        let selector = crate::harness::signal::parse_signal_selector(
             name,
             &binding.signal,
             Some(&binding.matches),
@@ -2407,8 +2407,7 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
         if selector.family() == "agent"
             && !["handle", "session"].iter().any(|key| {
                 binding.matches.get(*key).is_some_and(|value| {
-                    !value.trim().is_empty()
-                        && !crate::harness::schedule::signal::is_match_wildcard(value)
+                    !value.trim().is_empty() && !crate::harness::signal::is_match_wildcard(value)
                 })
             })
         {

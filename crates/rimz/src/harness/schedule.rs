@@ -412,8 +412,8 @@ pub enum ScheduleErr {
     TriggerConflict { name: String },
     #[error("schedule `{name}` sets `match` without `signal`")]
     MatchWithoutSignal { name: String },
-    #[error("schedule `{name}` has a blank match value for `{key}`")]
-    BlankMatch { name: String, key: String },
+    #[error(transparent)]
+    Selector(#[from] crate::harness::signal::SelectorErr),
     #[error("schedule `{name}` sets `once` without `signal` or `when`")]
     OnceWithoutSignal { name: String },
     #[error("schedule `{name}` sets `for` without `when`")]
@@ -433,12 +433,6 @@ pub enum ScheduleErr {
     WindowWithoutProvider { name: String },
     #[error("schedule `{name}` sets both `watch` and `check`; the watched command is the check")]
     WatchWithCheck { name: String },
-    #[error("schedule `{name}` has an invalid signal name `{value}`")]
-    BadSignal { name: String, value: String },
-    #[error(
-        "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove --match conclusion"
-    )]
-    ObsoleteCiSignal { name: String },
     #[error("schedule `{name}` has an empty watched command, check, file, or pattern")]
     BadWatch { name: String },
     #[error(
@@ -704,7 +698,7 @@ pub struct ParsedSchedule {
 pub enum Trigger {
     Schedule(ParsedSchedule),
     Signal {
-        selector: signal::SignalSelector,
+        selector: crate::harness::signal::SignalSelector,
         matches: std::collections::BTreeMap<String, String>,
     },
     Watch(crate::config::WatchSpec),
@@ -741,12 +735,16 @@ impl Trigger {
         }
     }
 
-    fn resolve(&self, task_name: &str, signal: &signal::Signal) -> signal::SignalResolution {
-        use signal::SignalResolution::{Deliver, Ignore};
+    fn resolve(
+        &self,
+        task_name: &str,
+        signal: &crate::harness::signal::Signal,
+    ) -> crate::harness::signal::SignalResolution {
+        use crate::harness::signal::SignalResolution::{Deliver, Ignore};
         match self {
             Self::Schedule(_) | Self::Condition { .. } => Ignore,
             Self::Signal { selector, matches } => {
-                signal::resolve_subscription(selector, matches, signal)
+                crate::harness::signal::resolve_subscription(selector, matches, signal)
             }
             Self::Watch { .. } if signal.name.as_str() == format!("wait.{task_name}") => Deliver,
             Self::Watch { .. } => Ignore,
@@ -831,7 +829,7 @@ pub enum TaskTimingState {
     Due(Timestamp),
     NoOccurrence,
     Listening {
-        name: signal::SignalSelector,
+        name: crate::harness::signal::SignalSelector,
     },
     Watching {
         spec: crate::config::WatchSpec,
@@ -1248,7 +1246,8 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             .transpose()?;
         Trigger::Condition { expr, hold }
     } else if let Some(raw) = entry.signal.as_deref() {
-        let selector = parse_signal_selector(name, raw, entry.matches.as_ref())?;
+        let selector =
+            crate::harness::signal::parse_signal_selector(name, raw, entry.matches.as_ref())?;
         Trigger::Signal {
             selector,
             matches: entry.matches.clone().unwrap_or_default(),
@@ -1308,34 +1307,6 @@ fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::time::Duration
         WatchSpec::Pid { .. } | WatchSpec::File { .. } => Some(std::time::Duration::from_secs(1)),
         WatchSpec::Check { every, .. } => parse_duration_units(every, WATCH_EVERY_UNITS).ok(),
     }
-}
-
-pub fn parse_signal_selector(
-    name: &str,
-    raw: &str,
-    matches: Option<&std::collections::BTreeMap<String, String>>,
-) -> Result<signal::SignalSelector, ScheduleErr> {
-    if let Some((key, _)) =
-        matches.and_then(|matches| matches.iter().find(|(_, value)| value.trim().is_empty()))
-    {
-        return Err(ScheduleErr::BlankMatch {
-            name: name.to_owned(),
-            key: key.clone(),
-        });
-    }
-    let selector: signal::SignalSelector = raw.parse().map_err(|_| ScheduleErr::BadSignal {
-        name: name.to_owned(),
-        value: raw.to_owned(),
-    })?;
-    if raw == "ci.finished"
-        || (selector.family() == "ci"
-            && matches.is_some_and(|matches| matches.contains_key("conclusion")))
-    {
-        return Err(ScheduleErr::ObsoleteCiSignal {
-            name: name.to_owned(),
-        });
-    }
-    Ok(selector)
 }
 
 enum TimingFields<'a> {

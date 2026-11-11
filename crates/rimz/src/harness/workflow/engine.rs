@@ -8,11 +8,9 @@ use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
 use super::{WorkflowSpec, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::harness::schedule::{
-    arm,
-    signal::{Signal, SignalResolution, resolve_subscription},
-    throttle,
-    when::WindowReadings,
+use crate::harness::schedule::{throttle, when::WindowReadings};
+use crate::harness::signal::{
+    Signal, SignalResolution, default_signal_match_key, resolve_subscription,
 };
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
@@ -1957,12 +1955,12 @@ fn delivers(
     project_root: &Path,
     checkout: &Path,
     (selector, mut matches): (
-        crate::harness::schedule::signal::SignalSelector,
+        crate::harness::signal::SignalSelector,
         BTreeMap<String, String>,
     ),
     signal: &Signal,
 ) -> bool {
-    match arm::default_signal_match_key(&selector, &matches) {
+    match default_signal_match_key(&selector, &matches) {
         Some("path") => {
             matches.insert("path".into(), checkout.to_string_lossy().into_owned());
         }
@@ -2075,13 +2073,13 @@ fn subscribers(
 
 /// The SIGNAL notice a subscribed step's leader receives.
 fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &Signal) -> String {
-    let subject = crate::harness::schedule::runner::signal_subject(&signal.name, &signal.payload);
+    let subject = crate::harness::signal::signal_subject(&signal.name, &signal.payload);
     let mut lines = vec![if subject.is_empty() {
         signal.name.to_string()
     } else {
         format!("{} {subject}", signal.name)
     }];
-    lines.extend(crate::harness::schedule::runner::signal_details(signal));
+    lines.extend(crate::harness::signal::signal_details(signal));
     lines.push(format!(
         "Workflow `{}` step `{step}` subscribes to this signal (run {id}; `rimz workflow show {id}`).",
         record.workflow,

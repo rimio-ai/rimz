@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
-use rimz::harness::schedule::signal::SignalSelector;
+use rimz::harness::signal::SignalSelector;
 use rimz::store::event::{SignalName, SignalSource};
 use rimz::store::follow::{FollowEvent, SignalEvent};
 use serde_json::{Map, Value};
@@ -190,8 +190,7 @@ fn signal_rows(
 ) -> Vec<[String; 4]> {
     let mut rows = Vec::<SignalRow>::new();
     for signal in signals {
-        let subject =
-            rimz::harness::schedule::runner::signal_subject(&signal.name, &signal.payload);
+        let subject = rimz::harness::signal::signal_subject(&signal.name, &signal.payload);
         if let Some(row) = rows.last_mut()
             && row.name == signal.name
             && row.source == signal.source
@@ -275,7 +274,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let store = super::require_existing_store(&workspace)?;
-    let signal = rimz::harness::schedule::signal::Signal {
+    let signal = rimz::harness::signal::Signal {
         name: name.clone(),
         payload,
         source,

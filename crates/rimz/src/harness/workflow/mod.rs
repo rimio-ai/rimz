@@ -56,7 +56,7 @@ impl ScopeRoots {
 pub fn advance_args(
     project_root: &Path,
     id: Option<&crate::ids::WorkflowRunId>,
-    wake_signal: Option<&crate::harness::schedule::signal::Signal>,
+    wake_signal: Option<&crate::harness::signal::Signal>,
     woken_by: Option<&EventId>,
 ) -> Vec<std::ffi::OsString> {
     let mut args = vec![

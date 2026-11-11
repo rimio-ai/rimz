@@ -6,7 +6,10 @@ use std::path::{Component, Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::harness::schedule::{self, signal::SignalSelector, when::WhenExpr};
+use crate::harness::schedule::when::WhenExpr;
+use crate::harness::signal::{
+    SelectorErr, SignalSelector, default_signal_match_key, is_match_wildcard, parse_signal_selector,
+};
 use crate::store::workflow::{Key, RouteDefaults, RunRecord, StepLifecycle, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
@@ -64,7 +67,7 @@ impl WorkflowSpec {
         let mut branches = None;
         for step in self.steps.values() {
             for (selector, matches) in step.subscriptions()? {
-                if schedule::arm::default_signal_match_key(&selector, &matches) == Some("path") {
+                if default_signal_match_key(&selector, &matches) == Some("path") {
                     branches.get_or_insert_with(BTreeSet::new);
                 }
             }
@@ -73,8 +76,7 @@ impl WorkflowSpec {
             if !matches!(check.kind(), Some(CheckKind::Condition | CheckKind::Sleep)) {
                 for wake in check.wake.iter().flatten() {
                     let (selector, matches) = wake.subscription()?;
-                    if schedule::arm::default_signal_match_key(&selector, &matches) == Some("path")
-                    {
+                    if default_signal_match_key(&selector, &matches) == Some("path") {
                         branches.get_or_insert_with(BTreeSet::new);
                     }
                 }
@@ -382,9 +384,9 @@ impl Wake {
     pub(super) fn step_subscription(&self) -> Result<Subscription, SpecErr> {
         let (selector, matches) = self.parsed()?;
         let names_another = ["handle", "session"].iter().any(|key| {
-            matches.get(*key).is_some_and(|value| {
-                !value.is_empty() && !schedule::signal::is_match_wildcard(value)
-            })
+            matches
+                .get(*key)
+                .is_some_and(|value| !value.is_empty() && !is_match_wildcard(value))
         });
         if selector.family() == "agent" && !names_another {
             return Err(SpecErr::SelfSignal);
@@ -399,7 +401,7 @@ impl Wake {
                 signal, matches, ..
             } => (signal, matches.clone()),
         };
-        let selector = schedule::parse_signal_selector("workflow wake", raw, Some(&matches))?;
+        let selector = parse_signal_selector("workflow wake", raw, Some(&matches))?;
         Ok((selector, matches))
     }
 
@@ -688,7 +690,7 @@ impl Step {
             .subscriptions()?
             .into_iter()
             .map(|(selector, matches)| {
-                let scope = match schedule::arm::default_signal_match_key(&selector, &matches) {
+                let scope = match default_signal_match_key(&selector, &matches) {
                     Some("path") => Some("for this checkout"),
                     Some("instance") if selector.to_string() != "team.stage" => {
                         Some("for this checkout's team")
@@ -815,7 +817,7 @@ pub enum SpecErr {
     #[error("only provider-window keys are allowed")]
     WindowKeys,
     #[error(transparent)]
-    Signal(#[from] schedule::ScheduleErr),
+    Signal(#[from] SelectorErr),
     #[error("lifecycle signals cannot wake workflows; use team.stage or a non-lifecycle selector")]
     LifecycleWake,
     #[error(

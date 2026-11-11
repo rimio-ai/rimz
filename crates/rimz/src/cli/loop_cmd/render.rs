@@ -3127,7 +3127,7 @@ enum RunExit {
 
 impl RunExit {
     fn of(record: &LoopRunRecord) -> Option<Self> {
-        use schedule::signal::WatchVerdict;
+        use rimz::harness::signal::WatchVerdict;
         if let Some(watch) = &record.watch {
             return Some(match watch {
                 WatchVerdict::Running { .. } => Self::WatchRunning,

@@ -8,6 +8,7 @@ use super::arm::{
 };
 use crate::agents::AgentState;
 use crate::config::{TaskTarget, Team, TeamSignalBinding};
+use crate::harness::signal::{default_signal_match_key, parse_signal_selector};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
 
@@ -57,9 +58,9 @@ pub fn validate_launch(
             .map(move |(index, binding)| (&role.role, index, binding))
     }) {
         let result = (|| -> Result<(), TeamBindingFailure> {
-            let selector =
-                super::parse_signal_selector(name, &binding.signal, Some(&binding.matches))?;
-            if arm::default_signal_match_key(&selector, &binding.matches) == Some("path") {
+            let selector = parse_signal_selector(name, &binding.signal, Some(&binding.matches))
+                .map_err(super::ScheduleErr::from)?;
+            if default_signal_match_key(&selector, &binding.matches) == Some("path") {
                 return Err(TeamBindingFailure::RootCheckout);
             }
             Ok(())
@@ -155,7 +156,8 @@ fn binding_spec(
     provenance: DeliveryProvenance,
 ) -> Result<DeliverySpec, TeamBindingFailure> {
     let selector =
-        super::parse_signal_selector(&name.to_string(), &binding.signal, Some(&binding.matches))?;
+        parse_signal_selector(&name.to_string(), &binding.signal, Some(&binding.matches))
+            .map_err(super::ScheduleErr::from)?;
     let mut matches = binding.matches.clone();
     arm::default_signal_matches(workspace, agents, member, &selector, &mut matches)?;
     arm::validate_self_signal(&selector, &matches, target)?;
