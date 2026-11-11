@@ -354,7 +354,7 @@ pub(super) struct TaskRow {
     section: Section,
     kind: TaskKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    condition: Option<schedule::when::ConditionCount>,
+    condition: Option<rimz::harness::when::ConditionCount>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attention: Option<Attention>,
     state: TaskState,

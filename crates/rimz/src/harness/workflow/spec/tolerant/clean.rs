@@ -6,7 +6,7 @@ use super::super::{
     duration, parse_deadline, parse_window,
 };
 use super::ignored_issue;
-use crate::harness::schedule::when::WhenExpr;
+use crate::harness::when::WhenExpr;
 
 pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usize>>) {
     let legacy = spec.spec_version == 0;

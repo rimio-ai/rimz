@@ -2242,7 +2242,7 @@ fn prepare_team<'a>(
         if clause == "off" {
             continue;
         }
-        let expr = crate::harness::schedule::when::WhenExpr::parse_with_stages(
+        let expr = crate::harness::when::WhenExpr::parse_with_stages(
             std::slice::from_ref(clause),
             Some(&stages),
         )

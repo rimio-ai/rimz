@@ -3,7 +3,7 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use super::when::UnreadReason;
+use super::UnreadReason;
 
 /// Stage names admitted by the project's effective teams, including the terminal stage.
 pub fn condition_stages(

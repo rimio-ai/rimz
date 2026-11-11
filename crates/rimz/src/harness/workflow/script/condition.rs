@@ -5,14 +5,11 @@ use serde_json::{Value, json};
 
 use super::super::{Check, SpecErr};
 use crate::disk::paths::StatePaths;
-use crate::harness::schedule::{
-    self,
-    when::{self, CiSource, WhenExpr, WindowReadings},
-};
+use crate::harness::when::{self, CiSource, WhenExpr, WindowReadings};
 use crate::store::workflow::{RunRecord, Wait};
 
 #[cfg(test)]
-use crate::harness::schedule::when::ci_unread;
+use crate::harness::when::ci_unread;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaseMark {
@@ -84,7 +81,12 @@ pub(super) fn reading(
         checked_at,
         (entered_at, stale_reason),
         ci_unread,
-        |key| schedule::unread_reason(source.probe_unread_reason(key, &record.scope.path), None),
+        |key| {
+            when::condition::unread_reason(
+                source.probe_unread_reason(key, &record.scope.path),
+                None,
+            )
+        },
     );
     Ok((object, checked_at.filter(|_| reads_forge)))
 }

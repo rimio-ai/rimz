@@ -48,7 +48,7 @@ pub enum SubscriptionLifetime {
 
 pub enum DeliveryTrigger {
     Condition {
-        expr: super::when::WhenExpr,
+        expr: crate::harness::when::WhenExpr,
         hold: Option<Duration>,
         lifetime: SubscriptionLifetime,
     },

@@ -8,10 +8,11 @@ use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
 use super::{WorkflowSpec, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::harness::schedule::{throttle, when::WindowReadings};
+use crate::harness::schedule::throttle;
 use crate::harness::signal::{
     Signal, SignalResolution, default_signal_match_key, resolve_subscription,
 };
+use crate::harness::when::WindowReadings;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, LiveAttempt,
@@ -479,14 +480,8 @@ fn window_wait(
     windows: &WindowReadings<'_>,
 ) -> Result<Option<String>> {
     let expr = spec::parse_window(raw)?;
-    let verdict = crate::harness::schedule::when::evaluate(
-        &expr,
-        scope,
-        None,
-        Some(provider),
-        account,
-        windows,
-    );
+    let verdict =
+        crate::harness::when::evaluate(&expr, scope, None, Some(provider), account, windows);
     Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 

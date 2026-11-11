@@ -149,7 +149,7 @@ fn fire_timers(
     now: &jiff::Zoned,
     last_message_sweep: &mut Option<(jiff::Timestamp, jiff::Timestamp)>,
 ) {
-    let ci_source = crate::harness::schedule::when::CiSource::read(runtime);
+    let ci_source = crate::harness::when::CiSource::read(runtime);
     crate::harness::schedule::fire::fire_due_tasks(
         runtime,
         None,

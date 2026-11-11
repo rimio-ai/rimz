@@ -122,7 +122,7 @@ pub(super) fn wait(
         let when = check
             .when
             .as_ref()
-            .and_then(|when| rimz::harness::schedule::when::WhenExpr::parse(when).ok())
+            .and_then(|when| rimz::harness::when::WhenExpr::parse(when).ok())
             .map_or_else(String::new, |expression| format!(" when {expression}"));
         return Some(format!(
             "sleeping {}/{}{when} → {}",

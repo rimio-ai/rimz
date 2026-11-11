@@ -8,7 +8,7 @@ use crate::harness::signal::{Signal, elapsed_label, one_line, signal_details, si
 pub(super) enum Evidence<'a> {
     Scheduled,
     Signal(&'a Signal),
-    Condition(&'a super::super::when::ConditionEvidence),
+    Condition(&'a crate::harness::when::ConditionEvidence),
     Manual,
 }
 
@@ -100,7 +100,7 @@ fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>)
         return format!("waited on {}", condition.when);
     }
     if let Some(clauses) = &task.when
-        && let Ok(expr) = super::super::when::WhenExpr::parse(clauses)
+        && let Ok(expr) = crate::harness::when::WhenExpr::parse(clauses)
     {
         return format!("waited on {expr}");
     }

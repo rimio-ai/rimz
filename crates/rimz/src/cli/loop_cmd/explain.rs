@@ -1,7 +1,7 @@
 //! Read-only condition inspection, using the same scope and readings as tasks.
 
 use super::*;
-use schedule::when::WhenExpr;
+use rimz::harness::when::WhenExpr;
 
 pub(super) fn run(args: ExplainArgs) -> Result<()> {
     if let Some(kind) = args.provider.as_deref()
@@ -16,7 +16,7 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
     }
     .with_context(|| format!("resolving project root at {}", args.root.display()))?;
     condition::validate(&args.expressions, &workspace.project_root).map_err(|err| {
-        match err.downcast::<schedule::when::WhenError>() {
+        match err.downcast::<rimz::harness::when::WhenError>() {
             Ok(refusal) => crate::cli::usage::UsageError::new(refusal.to_string()).into(),
             Err(err) => err,
         }

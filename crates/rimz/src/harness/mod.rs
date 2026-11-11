@@ -51,6 +51,7 @@ pub mod team_notes;
 pub mod team_prompt;
 pub mod team_stage;
 pub mod tmp_floor;
+pub mod when;
 pub mod workflow;
 pub mod worktree_entry;
 

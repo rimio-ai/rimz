@@ -6,7 +6,8 @@ use super::{Check, CheckKind, Fireability, HopKind, Step, WorkflowSpec, routing_
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
-use crate::harness::schedule::{catalog::TaskCatalog, trigger_clause, when::WhenExpr};
+use crate::harness::schedule::{catalog::TaskCatalog, trigger_clause};
+use crate::harness::when::WhenExpr;
 use crate::store::workflow::{
     self, AttemptOutcome, JournalEvent, Key, RunRecord, StepLifecycle, TurnEndAction,
 };

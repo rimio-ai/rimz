@@ -196,7 +196,7 @@ pub(super) enum AssistEvent {
         task: String,
         checkout: std::path::PathBuf,
         #[serde(skip_serializing_if = "Option::is_none")]
-        condition: Option<rimz::harness::schedule::when::ConditionEvidence>,
+        condition: Option<rimz::harness::when::ConditionEvidence>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         stopped: Vec<String>,
         handles: Vec<String>,

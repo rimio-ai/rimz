@@ -411,7 +411,7 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
         (">=42", None, "window.5h.left=unknown>=42"),
     ] {
         let expr = spec::parse_window(&format!("5h.left{comparison}")).unwrap();
-        let verdict = crate::harness::schedule::when::Verdict {
+        let verdict = crate::harness::when::Verdict {
             ok: false,
             readings: BTreeMap::from([("window.5h.left".into(), reading.map(str::to_owned))]),
             unread: Default::default(),
@@ -424,7 +424,7 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
         ("!(5h.left>=42 || !(7d.left>=42))", "window.7d.left=12<42"),
     ] {
         let expr = spec::parse_window(raw).unwrap();
-        let verdict = crate::harness::schedule::when::Verdict {
+        let verdict = crate::harness::when::Verdict {
             ok: false,
             readings: BTreeMap::from([
                 ("window.5h.left".into(), Some("12".into())),
@@ -809,7 +809,7 @@ fn step_window_waits_for_a_closed_companion_provider() {
 #[test]
 fn provider_windows_close_and_reopen_on_fresh_capacity() {
     use crate::agents::{ProviderCapacity, RateLimitWindow};
-    use crate::harness::schedule::when::WindowReadings;
+    use crate::harness::when::WindowReadings;
     use crate::ids::LoginKey;
     let now = "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap();
     let kind = crate::ids::AgentKind::new_unchecked("claude");
