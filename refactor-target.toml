@@ -5424,7 +5424,7 @@ allowed-dependencies = [
 # CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
 # CheckOutcome::{stderr_line,timed_out} let capacity checks diagnose failures without copying output (+2).
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
-# `surplus_refusal` lets a workflow judge read its loop task's surplus gate as a fire's admission does (+1).
+# `surplus_refusal` lets a workflow judge read the surplus gate its run kept from the loop task's row, as a fire's admission reads the row (+1).
 surface-budget = 70
 
 [[verdict]]

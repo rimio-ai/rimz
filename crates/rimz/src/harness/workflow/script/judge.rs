@@ -60,20 +60,17 @@ fn run(
     )
     .map_err(|e| e.to_string())?;
     let managed = managed_launch(&profile, record)?;
-    let catalog = record.task.as_ref().map(|_| {
-        crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(&record.project_root))
-    });
-    let task = record
-        .task
-        .as_deref()
-        .zip(catalog.as_ref())
-        .and_then(|(name, catalog)| catalog.for_run(name))
-        .map(|task| task.entry());
+    // The surplus gate the run's fire started it with; an edit to the row moves the next fire.
+    let surplus = crate::config::TaskEntry {
+        surplus: record.surplus.clone(),
+        surplus_after: record.surplus_after.clone(),
+        ..Default::default()
+    };
     if let Some(reason) = budget_refusal(
         &config,
         &profile,
         &managed,
-        task,
+        Some(&surplus),
         state,
         &runtime,
         Timestamp::now(),
@@ -190,13 +187,14 @@ fn managed_launch(
 
 /// Why the judge's account may not spend now: the fleet's or the account's daily cap is spent,
 /// the account is parked, its bound provider quota is exhausted until a reset, or the window
-/// lacks the surplus the run's loop `task` asks for. A refused judge never spawns, as a refused
-/// agent launch never does.
+/// lacks the surplus that `surplus` asks for: the gate the run's loop task had when the run
+/// started, kept on its record. A refused judge never spawns, as a refused agent launch never
+/// does.
 pub(in crate::harness::workflow) fn budget_refusal(
     config: &crate::config::MachineConfig,
     profile: &HeadlessProfile,
     managed: &crate::agents::ManagedLaunchState,
-    task: Option<&crate::config::TaskEntry>,
+    surplus: Option<&crate::config::TaskEntry>,
     state: &StatePaths,
     runtime: &crate::disk::paths::RuntimePaths,
     now: Timestamp,
@@ -212,7 +210,7 @@ pub(in crate::harness::workflow) fn budget_refusal(
     {
         return Some(reason);
     }
-    crate::harness::schedule::runner::surplus_refusal(task?, profile.cell.kind.as_str(), || {
+    crate::harness::schedule::runner::surplus_refusal(surplus?, profile.cell.kind.as_str(), || {
         managed
             .capacity(runtime, &key)
             .and_then(|capacity| capacity.longest_window_surplus(now))

@@ -1234,6 +1234,71 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
 }
 
 #[test]
+fn a_fired_run_keeps_its_rows_surplus_gate_for_inline_and_named_workflows() {
+    let workflow = format!("surplus-{}", crate::ids::WorkflowRunId::new());
+    let dir = crate::disk::paths::workflows_dir().join(&workflow);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        crate::disk::paths::workflow_spec_file(&dir),
+        "[workflow]\nscope='worktree'\nstart='check'\n[checks.check]\nshell='true'\n\
+         on={pass='@done',fail='@failed',invalid='@failed'}\n",
+    )
+    .unwrap();
+    let mut kept = Vec::new();
+    for named in [false, true] {
+        for gated in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let project_root = root.path().canonicalize().unwrap();
+            record_room(&project_root).unwrap();
+            let catalog = TaskCatalog::load(Some(&project_root)).unwrap();
+            let entry = TaskEntry {
+                root: project_root.clone(),
+                check: (!named).then(|| "true".into()),
+                workflow: named.then(|| workflow.clone()),
+                every: Some("1m".to_owned()),
+                surplus: gated.then(|| "1.5x".to_owned()),
+                surplus_after: gated.then(|| "2h".to_owned()),
+                ..TaskEntry::default()
+            };
+            let mut fire = TaskFire::new(
+                "gated",
+                LoadedTask::new("gated", entry, catalog::TaskSource::Config),
+                &catalog,
+                LoopRunMode::Scheduled,
+                false,
+                Timestamp::now(),
+                Arc::new(MachineConfig::default()),
+                None,
+                Instant::now(),
+            )
+            .unwrap();
+            let plan = fire.prepare(&mut |_| Ok(()));
+            let Ok(TaskFirePlan::Done(done)) = plan else {
+                panic!("named={named}: {:?}", plan.err());
+            };
+            let state = StatePaths::for_project_root(&project_root).unwrap();
+            let run = crate::store::workflow::list(&state)
+                .unwrap()
+                .into_iter()
+                .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
+                .unwrap_or_else(|| panic!("named={named}: {:?}", done.record));
+            kept.push((named, run.surplus, run.surplus_after));
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+    let (surplus, after) = (Some("1.5x".to_owned()), Some("2h".to_owned()));
+    assert_eq!(
+        kept,
+        [
+            (false, surplus.clone(), after.clone()),
+            (false, None, None),
+            (true, surplus, after),
+            (true, None, None),
+        ]
+    );
+}
+
+#[test]
 fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();

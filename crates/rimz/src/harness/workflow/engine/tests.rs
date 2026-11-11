@@ -382,6 +382,8 @@ fn create_validates_the_spec_it_reads_before_publication() {
         DefinitionSource::Deployed {
             dir: &dir,
             task: None,
+            surplus: None,
+            surplus_after: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -459,6 +461,8 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             DefinitionSource::Deployed {
                 dir: &dir,
                 task: None,
+                surplus: None,
+                surplus_after: None,
             },
             ScopeRoots {
                 checkout: home.path().into(),
@@ -511,6 +515,8 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
             DefinitionSource::Deployed {
                 dir: &dir,
                 task: None,
+                surplus: None,
+                surplus_after: None,
             },
             ScopeRoots {
                 checkout,
@@ -973,6 +979,8 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
         },
         fire_tree: false,
         capacity_until: None,
+        surplus: None,
+        surplus_after: None,
     }
 }
 
@@ -1040,6 +1048,8 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
         DefinitionSource::Deployed {
             dir: &dir,
             task: None,
+            surplus: None,
+            surplus_after: None,
         },
     )
     .unwrap();
@@ -1054,6 +1064,8 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
         blocker(DefinitionSource::Deployed {
             dir: &other,
             task: Some("nightly".into()),
+            surplus: None,
+            surplus_after: None,
         }),
         task.id,
         "a task that now names another workflow still overlaps its inline run"
@@ -1062,6 +1074,8 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
         blocker(DefinitionSource::Deployed {
             dir: &dir,
             task: None,
+            surplus: None,
+            surplus_after: None,
         }),
         deployed.id
     );
@@ -1097,6 +1111,8 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
     let deployed = DefinitionSource::Deployed {
         dir: &dir,
         task: None,
+        surplus: None,
+        surplus_after: None,
     };
     assert!(
         start_at(&state, home.path(), deployed)

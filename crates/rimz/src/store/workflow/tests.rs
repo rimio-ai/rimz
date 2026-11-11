@@ -484,6 +484,19 @@ fn durable_record_round_trip_and_json_shape() {
         serde_json::to_value(&record).unwrap()["prev_attempt"],
         value["prev_attempt"]
     );
+    assert_eq!(
+        (&record.surplus, &record.surplus_after),
+        (&None, &None),
+        "a record without the surplus keys applies no gate"
+    );
+    let mut gated = value.clone();
+    gated["surplus"] = json!("1.5x");
+    gated["surplus_after"] = json!("2h");
+    let kept = serde_json::to_value(serde_json::from_value::<RunRecord>(gated).unwrap()).unwrap();
+    assert_eq!(
+        (&kept["surplus"], &kept["surplus_after"]),
+        (&json!("1.5x"), &json!("2h"))
+    );
     let mut legacy = value["prev_attempt"].clone();
     legacy.as_object_mut().unwrap().remove("code");
     legacy.as_object_mut().unwrap().remove("log");
