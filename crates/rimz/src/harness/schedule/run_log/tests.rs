@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::workflow::RunEnding;
 use std::io::Write as _;
 
 #[test]
@@ -1068,6 +1069,19 @@ fn workflow_daily_gate_holds_each_live_runs_reservation() {
     );
 }
 
+fn ended(
+    ending: RunEnding,
+    cost_usd: Option<f64>,
+    acted: bool,
+) -> crate::store::workflow::RunOutcome {
+    crate::store::workflow::RunOutcome {
+        ending,
+        cost_usd,
+        acted,
+        reason: None,
+    }
+}
+
 #[test]
 fn a_workflow_report_strikes_or_resets_once_per_run() {
     let root = tempfile::tempdir().unwrap();
@@ -1099,21 +1113,12 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         }))
         .unwrap()
     };
-    let attempt = |cost: f64| -> crate::store::workflow::JournalEntry {
-        serde_json::from_value(serde_json::json!({
-            "seq":1, "at":"2026-01-01T00:00:30Z", "node":"agent", "event":"attempt",
-            "outcome":"ended", "visit":1, "key":null, "digests":{},
-            "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:30Z",
-            "cost_usd":cost
-        }))
-        .unwrap()
-    };
     let failed = run(
         "failed",
         serde_json::json!({"agent": {"total": 1, "outcomes": []}}),
     );
     for _ in 0..2 {
-        report_run(&failed, &[attempt(0.5), attempt(0.25)], true).unwrap();
+        report_run(&failed, &ended(RunEnding::Failed, Some(0.75), true)).unwrap();
         assert_eq!(
             super::super::strikes::load().get(&key),
             Some(&1),
@@ -1143,7 +1148,11 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
             Some(60_000)
         )
     );
-    report_run(&run("done", serde_json::json!({})), &[], false).unwrap();
+    report_run(
+        &run("done", serde_json::json!({})),
+        &ended(RunEnding::Done, None, false),
+    )
+    .unwrap();
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
@@ -1155,8 +1164,12 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         Some(root.path()),
     );
     assert_eq!(rows.last().map(|row| row.acted), Some(Some(false)));
-    report_run(&run("canceled", serde_json::json!({})), &[], false).unwrap();
-    report_run(&failed, &[], true).unwrap();
+    report_run(
+        &run("canceled", serde_json::json!({})),
+        &ended(RunEnding::Canceled, None, false),
+    )
+    .unwrap();
+    report_run(&failed, &ended(RunEnding::Failed, None, true)).unwrap();
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
@@ -1194,14 +1207,11 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         "loop_report":"owed"
     }))
     .unwrap();
-    // The engine's give-up: a `capacity` route out of the agent step, then the failed terminal.
-    let gave_up: crate::store::workflow::JournalEntry = serde_json::from_value(serde_json::json!({
-        "seq":1, "at":"2026-01-01T00:59:59Z", "node":"agent", "event":"route",
-        "outcome":"capacity",
-        "input":{"outcome":"capacity", "step":"agent", "reason":"2 agents open", "kinds":["claude"], "waited_ms":3600000}
-    }))
-    .unwrap();
-    report_run(&failed, &[gave_up], false).unwrap();
+    let gave_up = RunEnding::CapacityGaveUp {
+        waited_ms: 3_600_000,
+        reason: Some("2 agents open".into()),
+    };
+    report_run(&failed, &ended(gave_up, None, false)).unwrap();
     let rows = task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",
@@ -1261,7 +1271,12 @@ fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_
             false,
         )
         .unwrap();
-        report_run(&run, &[], acted).unwrap();
+        let ending = match run_state {
+            "done" => RunEnding::Done,
+            "failed" => RunEnding::Failed,
+            _ => RunEnding::Canceled,
+        };
+        report_run(&run, &ended(ending, None, acted)).unwrap();
         let memory = super::super::launch_ledger::load_workflows(&state).unwrap();
         assert_eq!(
             memory

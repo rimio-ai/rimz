@@ -360,11 +360,17 @@ fn fire(row: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 
 fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
     let state = StatePaths::for_project_root_under(home, home).unwrap();
-    open_room(&state, home);
+    let record = fire_in(&state, home, row);
+    (state, record)
+}
+
+/// Fire task `nightly` of project `home` into the store at `state`.
+fn fire_in(state: &StatePaths, home: &std::path::Path, row: &str) -> RunRecord {
+    open_room(state, home);
     // Parallel tests share the machine's start queue; the caps still apply.
     let task = loaded("nightly", &format!("{row}throttle='off'\n"), home);
-    let record = create(
-        &state,
+    create(
+        state,
         DefinitionSource::Inline {
             task: "nightly".into(),
             definition: definition("nightly", &task),
@@ -381,12 +387,13 @@ fn fire_at(home: &std::path::Path, row: &str) -> (StatePaths, RunRecord) {
         || Ok(None),
         false,
     )
-    .unwrap();
-    (state, record)
+    .unwrap()
 }
 
+/// Advance the run and collect it, as `rimz workflow advance` does.
 fn step(state: &StatePaths, record: &RunRecord, host: &FakeHost) -> RunRecord {
     advance(state, &record.id, host).unwrap();
+    crate::harness::schedule::run_log::collect_run(state, &record.id);
     records::load(&state.workflow(&record.id)).unwrap()
 }
 
@@ -647,9 +654,125 @@ fn a_report_whose_history_append_fails_stays_owed_until_a_retry_lands_it() {
 }
 
 #[test]
-fn a_report_whose_journal_cannot_be_read_stays_owed_and_lands_the_journals_outcome_later() {
+fn a_run_the_engine_ends_reaches_loop_history_only_once_it_is_collected() {
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let (state, record) = fire_at(task.home.path(), row);
+    let host = FakeHost::new();
+    advance(&state, &record.id, &host).unwrap();
+    host.observed.borrow_mut().status = RunStatus::Failed;
+    advance(&state, &record.id, &host).unwrap();
+    let paths = state.workflow(&record.id);
+    let ended = records::load(&paths).unwrap();
+    assert_eq!(
+        (
+            ended.state,
+            ended.loop_report,
+            task.strikes(),
+            task.raw_rows(&record)
+        ),
+        (RunState::Failed, records::LoopReport::Owed, None, 0),
+        "the engine's terminal write reports nothing"
+    );
+    for _ in 0..2 {
+        crate::harness::schedule::run_log::collect_run(&state, &record.id);
+        assert_eq!(
+            (
+                records::load(&paths).unwrap().loop_report,
+                task.strikes(),
+                task.raw_rows(&record)
+            ),
+            (records::LoopReport::Sent, Some(1), 1),
+            "a collection lands once"
+        );
+    }
+}
+
+#[test]
+fn a_run_cancel_ends_reaches_loop_history_only_once_it_is_collected() {
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let (state, record) = fire_at(task.home.path(), row);
+    let host = FakeHost::new();
+    assert!(crate::harness::workflow::cancel(&state, &record.id, &host, None).unwrap());
+    let paths = state.workflow(&record.id);
+    let canceled = records::load(&paths).unwrap();
+    assert_eq!(
+        (canceled.state, canceled.loop_report, task.raw_rows(&record)),
+        (RunState::Canceled, records::LoopReport::Owed, 0)
+    );
+    crate::harness::schedule::run_log::collect_run(&state, &record.id);
+    assert_eq!(
+        records::load(&paths).unwrap().loop_report,
+        records::LoopReport::Sent
+    );
+    assert_eq!(
+        task.rows()
+            .iter()
+            .map(|row| (row.result, row.run_id.clone()))
+            .collect::<Vec<_>>(),
+        [(LoopRunResult::Canceled, Some(record.id.to_string()))]
+    );
+}
+
+#[test]
+fn a_rename_before_its_collection_forgets_the_runs_launch_under_the_new_name() {
     if isolated_rimz_home(
-        "a_report_whose_journal_cannot_be_read_stays_owed_and_lands_the_journals_outcome_later",
+        "a_rename_before_its_collection_forgets_the_runs_launch_under_the_new_name",
+    ) {
+        return;
+    }
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let home = task.home.path();
+    crate::trust::grant(home).unwrap();
+    // The catalog renames in the project's own store, so the run lives there.
+    let state = StatePaths::for_project_root(home).unwrap();
+    let record = fire_in(&state, home, row);
+    let host = FakeHost::new();
+    advance(&state, &record.id, &host).unwrap();
+    host.observed.borrow_mut().status = RunStatus::Failed;
+    advance(&state, &record.id, &host).unwrap();
+    let paths = state.workflow(&record.id);
+    assert_eq!(
+        records::load(&paths).unwrap().loop_report,
+        records::LoopReport::Owed
+    );
+    let launch = crate::harness::schedule::launch_ledger::WorkflowLaunchRecord {
+        at: record.created_at,
+        run: Some(record.id.clone()),
+        scope: record.scope.kind,
+        leader: None,
+        destination: None,
+    };
+    let ledger = json!({"version": 2, "tasks": {"nightly": {home.to_str().unwrap(): launch}}});
+    let file = crate::StatePaths::class_path(
+        &state.root,
+        crate::disk::paths::Class::Records,
+        "loop-workflow-launches.json",
+    );
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, ledger.to_string()).unwrap();
+
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load(Some(home)).unwrap();
+    assert!(catalog.rename("nightly", "renamed").unwrap().changed());
+    crate::harness::schedule::run_log::collect_run(&state, &record.id);
+    let collected = records::load(&paths).unwrap();
+    assert_eq!(
+        (collected.task.as_deref(), collected.loop_report),
+        (Some("renamed"), records::LoopReport::Sent)
+    );
+    let remembered = crate::harness::schedule::launch_ledger::load_workflows(&state).unwrap();
+    assert!(
+        remembered.tasks.is_empty(),
+        "the failed run's launch is forgotten under the task's new name: {remembered:?}"
+    );
+}
+
+#[test]
+fn a_collection_reads_the_record_alone_so_an_unusable_journal_or_definition_still_lands_it() {
+    if isolated_rimz_home(
+        "a_collection_reads_the_record_alone_so_an_unusable_journal_or_definition_still_lands_it",
     ) {
         return;
     }
@@ -661,28 +784,19 @@ fn a_report_whose_journal_cannot_be_read_stays_owed_and_lands_the_journals_outco
         outcome: AttemptOutcome::Limited,
         reason: "fleet budget $0.00/day is spent".into(),
     });
-    assert_eq!(step(&state, &record, &host).state, RunState::Failed);
-    // Forget the report the terminal step made, leaving a terminal run that still owes one.
-    fs::remove_dir_all(crate::disk::paths::logs_dir()).unwrap();
-    fs::remove_dir_all(crate::disk::paths::loops_dir()).unwrap();
     let paths = state.workflow(&record.id);
+    advance(&state, &record.id, &host).unwrap();
     let mut owed = records::load(&paths).unwrap();
+    assert_eq!(owed.state, RunState::Failed);
+    // The run owes its collection, however the terminal write left the marker.
     owed.loop_report = records::LoopReport::Owed;
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     records::write(&paths, &owed, &guard).unwrap();
     drop(guard);
-    let aside = paths.journal.with_extension("aside");
-    fs::rename(&paths.journal, &aside).unwrap();
+    fs::remove_file(&paths.journal).unwrap();
     fs::create_dir(&paths.journal).unwrap();
+    fs::remove_dir_all(&record.spec_dir).unwrap();
 
-    let unread = step(&state, &record, &host);
-    assert_eq!(
-        (unread.loop_report, task.strikes(), task.raw_rows(&record)),
-        (records::LoopReport::Owed, None, 0)
-    );
-
-    fs::remove_dir(&paths.journal).unwrap();
-    fs::rename(&aside, &paths.journal).unwrap();
     let sent = step(&state, &record, &host);
     assert_eq!(
         (sent.loop_report, task.strikes(), task.raw_rows(&record)),
@@ -697,6 +811,35 @@ fn a_report_whose_journal_cannot_be_read_stays_owed_and_lands_the_journals_outco
             LoopRunResult::BudgetSkipped,
             Some("fleet budget $0.00/day is spent".to_owned())
         )]
+    );
+}
+
+#[test]
+fn a_run_whose_journal_does_not_parse_still_ends_with_an_outcome_and_is_collected() {
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let (state, record) = fire_at(task.home.path(), row);
+    let host = FakeHost::new();
+    step(&state, &record, &host);
+    let paths = state.workflow(&record.id);
+    fs::write(&paths.journal, "not json\n").unwrap();
+    host.observed.borrow_mut().status = RunStatus::Failed;
+    let failed = step(&state, &record, &host);
+    assert_eq!(
+        (
+            failed.state,
+            failed.outcome.map(|outcome| outcome.ending),
+            failed.loop_report,
+            task.strikes(),
+            task.raw_rows(&record)
+        ),
+        (
+            RunState::Failed,
+            Some(records::RunEnding::Failed),
+            records::LoopReport::Sent,
+            Some(1),
+            1
+        )
     );
 }
 
@@ -843,7 +986,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
         [(LoopRunResult::Completed, Some(id.as_str()), Some(false))],
         "a visited command step is not an act"
     );
-    // A launcher that remembers the run only after this report keeps no memory of it.
+    // A launcher that remembers the run only after its collection keeps no memory of it.
     let launch = crate::harness::schedule::launch_ledger::WorkflowLaunchRecord {
         at: record.created_at,
         run: Some(record.id.clone()),
@@ -853,7 +996,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     };
     let ledger =
         json!({"version": 2, "tasks": {"nightly": {home.path().to_str().unwrap(): launch}}});
-    // The report forgets in the project's own store, as it does in production.
+    // The collection forgets in the project's own store, as it does in production.
     let ledger_state = StatePaths::for_project_root(home.path()).unwrap();
     let file = crate::StatePaths::class_path(
         &ledger_state.root,
@@ -862,7 +1005,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     );
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(file, ledger.to_string()).unwrap();
-    crate::harness::workflow::forget_reported_launch(&state, &record.id).unwrap();
+    crate::harness::schedule::run_log::forget_collected_launch(&state, &record.id).unwrap();
     let remembered =
         crate::harness::schedule::launch_ledger::load_workflows(&ledger_state).unwrap();
     assert!(
@@ -893,7 +1036,7 @@ fn judged(
     results: &[(Result<Value, String>, &'static str)],
 ) -> String {
     let (paths, record) = judge_at(node);
-    let (record, _) = finish_judge(spec, &paths, record, results);
+    let record = finish_judge(spec, &paths, record, results);
     if record.state == RunState::Active {
         record.node
     } else {
@@ -939,14 +1082,15 @@ fn a_budget_refused_judge_after_a_shell_stage_fails_the_run_as_budget_skipped() 
     let record: RunRecord = serde_json::from_value(record).unwrap();
     let paths = state.workflow(&record.id);
     let reason = "account codex:default budget $10.00/day is spent";
-    let (record, entries) = finish_judge(&spec, &paths, record, &[(Err(reason.into()), "budget")]);
+    let record = finish_judge(&spec, &paths, record, &[(Err(reason.into()), "budget")]);
     assert_eq!(
         (record.state, record.recheck_at),
         (RunState::Failed, None),
         "a refused judge ends the run instead of waiting or routing to the act"
     );
     assert_eq!(route(&spec, "judge-1", "budget"), "@failed");
-    crate::harness::schedule::run_log::report_run(&record, &entries, false).unwrap();
+    let outcome = record.outcome.clone().unwrap();
+    crate::harness::schedule::run_log::report_run(&record, &outcome).unwrap();
     let last = crate::harness::schedule::run_log::task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",

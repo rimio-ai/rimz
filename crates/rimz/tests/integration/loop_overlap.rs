@@ -255,6 +255,25 @@ fn stop_cancels_the_run_and_its_report_drains_the_waiting_trigger() {
 }
 
 #[test]
+fn workflow_cancel_collects_the_run_it_ends_before_it_returns() {
+    let env = fixture("skip", None);
+    blocking_check(&env);
+    let blocker = start_blocker(&env);
+    let run = blocker.run_id.clone().unwrap();
+    loop_ok(&env, &["workflow", "cancel", &run]);
+    let rows = read_loop_run_records(&env);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.run_id.as_deref() == Some(run.as_str()))
+            .map(|row| row.result)
+            .collect::<Vec<_>>(),
+        [LoopRunResult::Launched, LoopRunResult::Canceled],
+        "{rows:?}"
+    );
+    std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+}
+
+#[test]
 fn a_queue_drains_each_trigger_in_turn_and_refuses_past_its_limit() {
     let env = fixture("queue", Some(2));
     blocking_check(&env);

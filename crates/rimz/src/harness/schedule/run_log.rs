@@ -322,9 +322,90 @@ impl LoopRunRecord {
     }
 }
 
+/// Collect a finished task-started workflow run: report its outcome to its loop task and mark
+/// it collected, under the workspace lock, once. A run that owes nothing is left alone; a report
+/// that did not land leaves it owed, and the scheduler's backstop advance of the run, whose
+/// command collects after it, retries it.
+pub fn collect_run(state: &crate::StatePaths, run: &crate::ids::WorkflowRunId) {
+    if let Err(error) = try_collect_run(state, run) {
+        tracing::warn!(%run, error = %format!("{error:#}"), "workflow run not collected");
+    }
+}
+
+fn try_collect_run(
+    state: &crate::StatePaths,
+    run: &crate::ids::WorkflowRunId,
+) -> anyhow::Result<()> {
+    use crate::store::workflow;
+    let paths = state.workflow(run);
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
+    let mut record = workflow::load(&paths)?;
+    if !record.owes_loop_report() {
+        return Ok(());
+    }
+    let outcome = record
+        .outcome
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("the run's record carries no outcome"))?;
+    report_run(&record, &outcome)?;
+    record.loop_report = workflow::LoopReport::Sent;
+    workflow::write(&paths, &record, &guard)?;
+    Ok(())
+}
+
+/// Collect every finished run of `task` in `root` that still owes its report, and say whether
+/// one was owed, so a fire decides on the strikes, rows and launch memory those runs leave.
+pub fn collect_task_runs(root: &Path, task: &str) -> bool {
+    let owed = (|| -> anyhow::Result<_> {
+        let state = crate::StatePaths::for_project_root(root)?;
+        if !state.root.exists() {
+            return Ok(None);
+        }
+        let runs: Vec<_> = crate::store::workflow::list(&state)?
+            .into_iter()
+            .filter(|record| record.ran_for(task) && record.owes_loop_report())
+            .map(|record| record.id)
+            .collect();
+        Ok(Some((state, runs)))
+    })();
+    match owed {
+        Ok(Some((state, runs))) => {
+            for run in &runs {
+                collect_run(&state, run);
+            }
+            !runs.is_empty()
+        }
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(task, error = %format!("{error:#}"), "owed workflow runs not read");
+            false
+        }
+    }
+}
+
+/// Apply a collected run's launch-memory rule again, for a launcher that remembered the run only
+/// after its collection forgot it: a fast run can end before its launcher writes the memory. The
+/// workspace lock orders this read after a collection in flight, which forgets under that lock.
+pub(super) fn forget_collected_launch(
+    state: &crate::StatePaths,
+    run: &crate::ids::WorkflowRunId,
+) -> anyhow::Result<()> {
+    use crate::store::workflow;
+    let paths = state.workflow(run);
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
+    let record = workflow::load(&paths)?;
+    if record.loop_report == workflow::LoopReport::Sent
+        && let Some(task) = record.task.as_deref()
+        && let Some(outcome) = &record.outcome
+    {
+        forget_unkept_launch(&record, task, outcome.acted);
+    }
+    Ok(())
+}
+
 /// What a run report does when its task strikes out: notify the user. The notice's sender,
-/// `sidebar::notify`, sits in a later atlas layer than `harness`, and the engine reports in
-/// whichever process makes the run's terminal transition, so the binary registers the CLI's
+/// `sidebar::notify`, sits in a later atlas layer than `harness`, and runs are collected from
+/// the CLI commands that end them or fire their task, so the binary registers the CLI's
 /// notifier at dispatch, in every process.
 /// `loop_repeated_failures_auto_disable_notify_once_and_enable` in the integration suite
 /// fails without that registration.
@@ -341,33 +422,29 @@ pub fn on_loop_disabled(notify: fn(&str, &Path, u32)) {
 /// error says it has not, and a failed append returns before the strike so a retry notes the
 /// two together. The strike store counts a run id once, so a report repeated after a crash or
 /// a failed attempt moves no count, and history readers fold a repeated row by its run id.
-/// `acted` says the run entered an agent or message step: a scheduled `--until` row is consumed
-/// then, and a waiting trigger is drained once the run is over, both only after the report
-/// landed. A run in its fire's own tree settles that tree here, so whichever report lands
-/// first, the engine's or the backstop's, settles it.
+/// The outcome the engine wrote at the terminal transition says everything else: when the run
+/// entered an agent or message step, a scheduled `--until` row is consumed, and a waiting
+/// trigger is drained once the run is over, both only after the report landed. A run in its
+/// fire's own tree settles that tree here, so whichever collection lands first settles it.
 pub(in crate::harness) fn report_run(
     run: &crate::store::workflow::RunRecord,
-    journal: &[crate::store::workflow::JournalEntry],
-    acted: bool,
+    outcome: &crate::store::workflow::RunOutcome,
 ) -> Result<RunTransition, ReportError> {
-    use crate::store::workflow::{JournalEvent, RunState};
+    use crate::store::workflow::RunEnding;
     let Some(task) = run.task.as_deref() else {
         return Ok(RunTransition::Recorded);
     };
-    let gave_up = capacity_give_up(run, journal);
-    let result = match run.state {
-        RunState::Failed if gave_up.is_some() => LoopRunResult::ThrottleSkipped,
-        RunState::Failed if let Some(turned) = budget_ended(journal) => {
-            if turned {
-                LoopRunResult::BudgetExceeded
-            } else {
-                LoopRunResult::BudgetSkipped
-            }
-        }
-        RunState::Done => LoopRunResult::Completed,
-        RunState::Failed => LoopRunResult::Failed,
-        RunState::Canceled => LoopRunResult::Canceled,
-        RunState::Active | RunState::Parked => return Ok(RunTransition::Recorded),
+    if !run.state.is_terminal() {
+        return Ok(RunTransition::Recorded);
+    }
+    let acted = outcome.acted;
+    let result = match outcome.ending {
+        RunEnding::Done => LoopRunResult::Completed,
+        RunEnding::Failed => LoopRunResult::Failed,
+        RunEnding::Canceled => LoopRunResult::Canceled,
+        RunEnding::CapacityGaveUp { .. } => LoopRunResult::ThrottleSkipped,
+        RunEnding::Budget { turned: true } => LoopRunResult::BudgetExceeded,
+        RunEnding::Budget { turned: false } => LoopRunResult::BudgetSkipped,
     };
     let ended = run.terminal_at.unwrap_or_else(Timestamp::now);
     let mode = if run.manual {
@@ -380,36 +457,20 @@ pub(in crate::harness) fn report_run(
     record.at = ended;
     record.checkout = Some(run.firing_checkout().to_path_buf());
     record.run_id = Some(run.id.to_string());
-    let mut costs = journal
-        .iter()
-        .filter_map(|entry| match entry.event {
-            JournalEvent::Attempt { cost_usd, .. } | JournalEvent::Evaluation { cost_usd, .. } => {
-                cost_usd
-            }
-            _ => None,
-        })
-        .peekable();
-    record.cost_usd = costs
-        .peek()
-        .is_some()
-        .then(|| costs.fold(0.0, |sum, cost| sum + cost));
+    record.cost_usd = outcome.cost_usd;
     record.acted = Some(acted);
     // A failed run names why its last attempt ended, as a fire's own refusal would.
-    record.error = matches!(
-        result,
-        LoopRunResult::Failed | LoopRunResult::BudgetSkipped | LoopRunResult::BudgetExceeded
-    )
-    .then(|| {
-        journal.iter().rev().find_map(|entry| match &entry.event {
-            JournalEvent::Attempt { reason, .. } => reason.clone(),
-            JournalEvent::Route { outcome, input } if outcome == "budget" => {
-                input["reason"].as_str().map(str::to_owned)
-            }
-            _ => None,
-        })
-    })
-    .flatten()
-    .or(gave_up);
+    record.error = match &outcome.ending {
+        RunEnding::Failed | RunEnding::Budget { .. } => outcome.reason.clone(),
+        RunEnding::CapacityGaveUp { waited_ms, reason } => Some(format!(
+            "gave up waiting for capacity after {}; {}",
+            crate::utils::time::format_duration_compact(std::time::Duration::from_millis(
+                *waited_ms
+            )),
+            reason.as_deref().unwrap_or("no capacity")
+        )),
+        RunEnding::Done | RunEnding::Canceled => None,
+    };
     if run.fire_tree {
         // The report supersedes the launch row, so it carries the tree that row named.
         record.worktree = task_records(&logs_dir(), task, Some(&run.project_root))
@@ -454,11 +515,7 @@ pub(in crate::harness) fn report_run(
 /// A run that ended without acting, or failed, leaves its checkout free to launch again: the
 /// launch memory keeps a checkout for a run whose act came to an end of its own, and for a
 /// canceled run, which only a manual fire replaces.
-pub(in crate::harness) fn forget_unkept_launch(
-    run: &crate::store::workflow::RunRecord,
-    task: &str,
-    acted: bool,
-) {
+fn forget_unkept_launch(run: &crate::store::workflow::RunRecord, task: &str, acted: bool) {
     use crate::store::workflow::RunState;
     let kept = match run.state {
         RunState::Canceled => true,
@@ -477,42 +534,6 @@ pub(in crate::harness) fn forget_unkept_launch(
     if let Err(error) = forgotten {
         tracing::warn!(task, run = %run.id, error = %format!("{error:#}"), "launch memory kept");
     }
-}
-
-/// Whether the run's last attempt ended at its budget, and if so whether a turn ran: a launch
-/// or a judge the budget refused has no agent, as a fire whose launch it refused did.
-fn budget_ended(journal: &[crate::store::workflow::JournalEntry]) -> Option<bool> {
-    use crate::store::workflow::{AttemptOutcome, JournalEvent};
-    journal.iter().rev().find_map(|entry| match &entry.event {
-        JournalEvent::Attempt {
-            outcome, handle, ..
-        } => Some((*outcome == AttemptOutcome::Limited).then_some(handle.is_some())),
-        JournalEvent::Route { outcome, .. } if outcome == "budget" => Some(Some(false)),
-        _ => None,
-    })?
-}
-
-/// Why a failed run ended by giving up on capacity, worded as a fire's own give-up was: the
-/// engine's `capacity` route out of the agent step is the run's last decision.
-fn capacity_give_up(
-    run: &crate::store::workflow::RunRecord,
-    journal: &[crate::store::workflow::JournalEntry],
-) -> Option<String> {
-    use crate::store::workflow::{JournalEvent, RunState};
-    if run.state != RunState::Failed {
-        return None;
-    }
-    let input = journal.iter().rev().find_map(|entry| match &entry.event {
-        JournalEvent::Route { outcome, input } => Some((outcome == "capacity").then_some(input)),
-        JournalEvent::Attempt { .. } => Some(None),
-        _ => None,
-    })??;
-    let waited = std::time::Duration::from_millis(input["waited_ms"].as_u64().unwrap_or(0));
-    Some(format!(
-        "gave up waiting for capacity after {}; {}",
-        crate::utils::time::format_duration_compact(waited),
-        input["reason"].as_str().unwrap_or("no capacity")
-    ))
 }
 
 /// Start the next waiting trigger now that the run holding the task is over.

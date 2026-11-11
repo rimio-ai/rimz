@@ -529,7 +529,8 @@ pub enum RunOrigin {
     Inline,
 }
 
-/// Whether a run still owes its loop task the report of how it ended.
+/// Whether a run still owes its loop task the report of how it ended. The fire's task sets it
+/// owed at creation, and only the scheduler's collector marks it sent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopReport {
@@ -537,12 +538,49 @@ pub enum LoopReport {
     #[default]
     None,
     /// A loop task started the run; its report has not fully landed: the history row, the
-    /// strike update, or both are missing. On a terminal record this also means the last
-    /// report attempt failed, and the scheduler's tick retries it.
+    /// strike update, or both are missing. On a terminal record the run awaits its collection,
+    /// which the command that ended it runs next, and which the scheduler's tick retries.
     Owed,
     /// The terminal outcome reached the loop history and, while the task's row existed, the
     /// strike count.
     Sent,
+}
+
+/// How a run ended, in the engine's terms: written in the record write that makes the run
+/// terminal, so a reader of the record learns the end without the journal or the sealed graph.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunOutcome {
+    pub ending: RunEnding,
+    /// The summed cost of the run's attempts and evaluations; none when none recorded a cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Whether the run entered an agent or message step.
+    pub acted: bool,
+    /// Why a failed run's last attempt ended: the newest reason an attempt or a budget route
+    /// recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The decision that ended a run; a failure the run's last decision explains names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum RunEnding {
+    Done,
+    Failed,
+    Canceled,
+    /// The run's last decision was the `capacity` route out of an agent step, after waiting
+    /// `waited_ms` for the capacity named by `reason`.
+    CapacityGaveUp {
+        waited_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// The last attempt ended at its budget; `turned` says whether an agent turn ran, which a
+    /// refused launch or judge never did.
+    Budget {
+        turned: bool,
+    },
 }
 
 /// The loop fire that started a run, as the run's briefs name it.
@@ -633,6 +671,9 @@ pub struct RunRecord {
     pub restart: Option<Restart>,
     pub prev_attempt: Option<PreviousAttempt>,
     pub terminal_at: Option<Timestamp>,
+    /// How the run ended, written with the terminal state; none while the run is live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<RunOutcome>,
     #[serde(default)]
     pub check_retry: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]

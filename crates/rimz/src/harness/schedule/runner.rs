@@ -1363,8 +1363,8 @@ impl<'a> TaskFire<'a> {
             record,
             replace_project,
         ) else {
-            // The run advances before this write, so its report may already have forgotten it.
-            if let Err(error) = crate::harness::workflow::forget_reported_launch(paths, run) {
+            // The run advances before this write, so its collection may already have forgotten it.
+            if let Err(error) = run_log::forget_collected_launch(paths, run) {
                 tracing::warn!(task = %self.name, %run, %error, "launch memory kept");
             }
             return None;

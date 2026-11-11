@@ -72,7 +72,14 @@ pub(super) fn run_one(
         .map(serde_json::from_str)
         .transpose()
         .context("decoding loop condition evidence")?;
-    let catalog = task_catalog(globals)?;
+    let mut catalog = task_catalog(globals)?;
+    // The task's runs that ended uncollected are collected before the fire decides, so it reads
+    // the strikes, the consumed `--until` row and the launch memory they leave.
+    if let Some(task) = catalog.for_run(name)
+        && rimz::harness::schedule::run_log::collect_task_runs(&task.entry().resolved_root(), name)
+    {
+        catalog = task_catalog(globals)?;
+    }
     let loaded = catalog.for_run(name).cloned();
     if args.drain
         && loaded.as_ref().is_none_or(|task| {

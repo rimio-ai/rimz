@@ -25,7 +25,9 @@ pub(super) fn cancel(
         &run.record.id,
         &Host::new(&run.state, globals, None),
         reason,
-    )?;
+    );
+    run_log::collect_run(&run.state, &run.record.id);
+    let changed = changed?;
     write_history_copy(&run.state, &records::load(&run.paths)?)?;
     let address = run.record.address().to_string();
     let mut out = render::out();
@@ -145,7 +147,9 @@ pub(in crate::cli) fn restart(
     };
     let session = resume.as_ref().map(|(_, session)| session.clone());
     let host = Host::new(&run.state, globals, None);
-    let restarted = workflow::restart(&run.state, &run.record.id, resume, &host)?;
+    let restarted = workflow::restart(&run.state, &run.record.id, resume, &host);
+    run_log::collect_run(&run.state, &run.record.id);
+    let restarted = restarted?;
     let receipt_deadline =
         std::time::Instant::now().checked_add(std::time::Duration::from_secs(30));
     let record = loop {
