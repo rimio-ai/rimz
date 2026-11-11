@@ -7019,6 +7019,39 @@ fn message_wait_requires_live_hooked_agent_target() {
 }
 
 #[test]
+fn message_timeout_takes_a_spaced_deadline_before_the_text() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "bash")]);
+    let pane = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "zellij:terminal_3", "--timeout", "1s", "x"])
+        .output()
+        .expect("pane timeout");
+    let stderr = String::from_utf8_lossy(&pane.stderr);
+    assert_eq!(pane.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains("not bound to a known agent"),
+        "the spaced deadline parses and reaches the reply-wait target check: {stderr}"
+    );
+
+    let both = env
+        .rimz()
+        .args(["message", "@claude", "--wait=1s", "--timeout", "1s", "x"])
+        .output()
+        .expect("two deadlines");
+    let stderr = String::from_utf8_lossy(&both.stderr);
+    assert_eq!(both.status.code(), Some(2), "stderr: {stderr}");
+    assert!(
+        stderr.contains(
+            "--wait=<DURATION> and --timeout <DURATION> both set the reply deadline; pass one"
+        ),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn steer_sends_a_file_with_cr_newlines_inside_the_paste() {
     let env = Env::new();
     env.record(&env.project_root);

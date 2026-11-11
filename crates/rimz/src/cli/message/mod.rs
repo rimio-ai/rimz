@@ -69,13 +69,13 @@ pub struct MessageArgs {
     #[arg(long, value_name = "DUR|HH:MM", conflicts_with = "steer")]
     schedule: Option<String>,
     /// Hold delivery until this agent finishes its queued work (repeatable; all must finish).
-    #[arg(long, value_name = "ADDR", conflicts_with_all = ["steer", "wait"])]
+    #[arg(long, value_name = "ADDR", conflicts_with_all = ["steer", "wait", "timeout"])]
     after: Vec<String>,
     /// Hold delivery until an agent stays in a status for a duration (repeatable; all must match).
     #[arg(
         long,
         value_name = "'ADDR STATUS DUR'",
-        conflicts_with_all = ["steer", "wait"]
+        conflicts_with_all = ["steer", "wait", "timeout"]
     )]
     #[arg(value_parser = parse_when_request)]
     when: Vec<WhenRequest>,
@@ -363,6 +363,7 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
                 stdin,
                 no_from,
                 wait,
+                timeout,
                 json,
                 any,
             },
@@ -383,6 +384,7 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
         (*stdin, "--stdin"),
         (*no_from, "--no-from"),
         (wait.is_some(), "--wait"),
+        (timeout.is_some(), "--timeout <DURATION>"),
         (*any, "--any"),
     ];
     if let Some((_, flag)) = send_only.into_iter().find(|(given, _)| *given) {
@@ -599,6 +601,103 @@ mod tests {
                 .to_string()
                 .starts_with("--file <PATH> needs a target and text:")
         );
+    }
+
+    fn parse_send(argv: &[&str]) -> std::result::Result<MessageArgs, clap::Error> {
+        Harness::try_parse_from(std::iter::once("rimz").chain(argv.iter().copied()))
+            .map(|harness| harness.args)
+    }
+
+    fn reply_wait_of(
+        argv: &[&str],
+        agent_caller: bool,
+    ) -> std::result::Result<send::ReplyWait, String> {
+        let args = parse_send(argv).map_err(|err| err.to_string())?;
+        let wait =
+            send::wait_request(args.send.wait, args.send.timeout).map_err(|err| err.to_string())?;
+        Ok(send::reply_wait(wait, agent_caller))
+    }
+
+    #[test]
+    fn timeout_sets_the_reply_wait_deadline() {
+        use send::ReplyWait;
+        use std::time::Duration;
+
+        for argv in [
+            &["@coder", "--timeout", "10m", "q"][..],
+            &["@coder", "q", "--timeout", "10m"],
+            &["@coder", "--timeout=10m", "q"],
+            &["@coder", "--wait", "--timeout", "10m", "q"],
+        ] {
+            for agent_caller in [false, true] {
+                assert_eq!(
+                    reply_wait_of(argv, agent_caller),
+                    Ok(ReplyWait::Deadline(Duration::from_secs(600))),
+                    "{argv:?} agent_caller={agent_caller}"
+                );
+            }
+        }
+        assert_eq!(
+            reply_wait_of(&["@coder", "--wait", "q"], false),
+            Ok(ReplyWait::Indefinite)
+        );
+        assert_eq!(
+            reply_wait_of(&["@coder", "--wait", "q"], true),
+            Ok(ReplyWait::DefaultDeadline(Duration::from_secs(3600)))
+        );
+        assert_eq!(
+            reply_wait_of(&["@coder", "--wait=5m", "q"], true),
+            Ok(ReplyWait::Deadline(Duration::from_secs(300)))
+        );
+        assert_eq!(reply_wait_of(&["@coder", "q"], true), Ok(ReplyWait::Off));
+    }
+
+    #[test]
+    fn timeout_refuses_a_second_deadline_and_held_delivery() {
+        assert_eq!(
+            reply_wait_of(&["@coder", "--wait=5m", "--timeout", "5m", "q"], false),
+            Err(
+                "--wait=<DURATION> and --timeout <DURATION> both set the reply deadline; pass one"
+                    .to_owned()
+            )
+        );
+        let invalid = parse_send(&["@coder", "--timeout", "10x", "q"]).unwrap_err();
+        assert_eq!(invalid.kind(), clap::error::ErrorKind::ValueValidation);
+        for wait in ["--wait", "--timeout=5m"] {
+            for hold in [["--after", "@reviewer"], ["--when", "@reviewer idle 5m"]] {
+                let argv = ["@coder", hold[0], hold[1], wait, "q"];
+                let err = parse_send(&argv).unwrap_err();
+                assert_eq!(
+                    err.kind(),
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "{argv:?}"
+                );
+            }
+        }
+        let args = parse_send(&["--timeout", "5m"]).unwrap();
+        assert!(
+            targetless_send(&args)
+                .unwrap_err()
+                .to_string()
+                .starts_with("--timeout <DURATION> needs a target and text:")
+        );
+    }
+
+    #[test]
+    fn timeout_alone_enables_reply_output_modes() {
+        for flag in ["--json", "--any"] {
+            let args = parse_send(&["@coder", "--timeout", "5m", flag, "q"]).unwrap();
+            let wait = send::WaitSpec {
+                mode: send::reply_wait(
+                    send::wait_request(args.send.wait, args.send.timeout).unwrap(),
+                    false,
+                ),
+                any: args.send.any,
+                json: args.send.json,
+            };
+            send::validate_reply_wait(wait, true, false, false)
+                .unwrap_or_else(|err| panic!("{flag}: {err}"));
+        }
     }
 
     #[test]

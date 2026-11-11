@@ -13,6 +13,8 @@ use rimz::store::message::AutoCompact;
 use rimz::store::message::MessageSender;
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 
+use super::usage::UsageError;
+
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
 
 /// The flags shared by immediate and parked message delivery.
@@ -60,14 +62,18 @@ pub(crate) struct SendFlags {
     pub(crate) no_from: bool,
     /// Wait for the target agents' replies and print or gather their final messages.
     /// Bare `--wait` has no deadline for humans and a 1h deadline for agent callers;
-    /// use `--wait=5m` to set the whole wait explicitly.
+    /// use `--timeout 5m` (or the attached `--wait=5m`) to set the whole wait explicitly.
     #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true, value_parser = parse_wait_duration)]
     pub(crate) wait: Option<Option<Duration>>,
-    /// Emit replies as one JSON map keyed by agent handle. Requires `--wait`.
+    /// Wait for the target agents' replies for at most this long (`30s`, `10m`, `1h`).
+    /// Implies `--wait`.
+    #[arg(long, value_name = "DURATION", value_parser = parse_wait_duration)]
+    pub(crate) timeout: Option<Duration>,
+    /// Emit replies as one JSON map keyed by agent handle. Requires `--wait` or `--timeout`.
     #[arg(long)]
     pub(crate) json: bool,
     /// Return when the first reply leg finishes instead of gathering all replies.
-    /// Requires `--wait`.
+    /// Requires `--wait` or `--timeout`.
     #[arg(long)]
     pub(crate) any: bool,
 }
@@ -205,6 +211,21 @@ pub(crate) fn warn_ignored_stdin() {
 use rimz::launcher::context::resolve_caller_from;
 pub(crate) use rimz::launcher::context::{resolve_caller, sender_for};
 
+/// Fold `--wait[=DURATION]` and `--timeout DURATION` into the one requested wait.
+pub(crate) fn wait_request(
+    wait: Option<Option<Duration>>,
+    timeout: Option<Duration>,
+) -> std::result::Result<Option<Option<Duration>>, UsageError> {
+    match (wait, timeout) {
+        (Some(Some(_)), Some(_)) => Err(UsageError::new(
+            "--wait=<DURATION> and --timeout <DURATION> both set the reply deadline; pass one"
+                .to_owned(),
+        )),
+        (_, Some(timeout)) => Ok(Some(Some(timeout))),
+        (wait, None) => Ok(wait),
+    }
+}
+
 pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
     match wait {
         None => ReplyWait::Off,
@@ -222,21 +243,21 @@ pub(crate) fn validate_reply_wait(
 ) -> Result<()> {
     if !wait.is_on() {
         if wait.json {
-            bail!("--json requires --wait");
+            bail!("--json requires --wait or --timeout");
         }
         if wait.any {
-            bail!("--any requires --wait");
+            bail!("--any requires --wait or --timeout");
         }
         return Ok(());
     }
     if !enter {
-        bail!("--wait requires submitting the message; remove --no-enter");
+        bail!("--wait and --timeout require submitting the message; remove --no-enter");
     }
     if create {
-        bail!("--wait requires an existing agent; remove --create");
+        bail!("--wait and --timeout require an existing agent; remove --create");
     }
     if scheduled {
-        bail!("--wait sends now or parks for a turn boundary; remove --schedule");
+        bail!("--wait and --timeout send now or park for a turn boundary; remove --schedule");
     }
     Ok(())
 }
@@ -684,14 +705,14 @@ mod tests {
                     json: true,
                     ..WaitSpec::OFF
                 },
-                "--json requires --wait",
+                "--json requires --wait or --timeout",
             ),
             (
                 WaitSpec {
                     any: true,
                     ..WaitSpec::OFF
                 },
-                "--any requires --wait",
+                "--any requires --wait or --timeout",
             ),
         ] {
             assert_eq!(
