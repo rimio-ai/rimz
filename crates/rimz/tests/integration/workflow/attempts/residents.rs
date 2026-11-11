@@ -192,6 +192,72 @@ fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
+/// An occupant whose close fails, and whose session ends while the stop waits for its owner,
+/// counts as stopped once its owner dies: the step launches, with no failure on record.
+#[test]
+fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
+    let room = Room::new("takeover=true");
+    fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
+    let mut owner = dummy_agent_process();
+    let pid = owner.id();
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    let lifecycle = |signal| {
+        let mut observation = AgentLifecycleObservation::new(Some("resident".into()), signal);
+        observation.agent_name = Some("resident".into());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_71"));
+        observation.worktree_path = Some(room.env.project_root.display().to_string());
+        observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            "resident",
+            pid,
+        ));
+        room.env
+            .store()
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                workspace.session_name.clone(),
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    };
+    lifecycle(LifecycleSignal::Registered);
+    let receipt = success(
+        room.command(&["workflow", "run", "review", "--prompt", "Review this"])
+            .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "60000")
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap().to_owned();
+    let log = room.env.project_root.join("spawn.log");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !fs::read_to_string(&log).is_ok_and(|trace| trace.contains("close-pane")) {
+        assert!(
+            Instant::now() < deadline,
+            "the takeover never stopped the occupant"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The occupant's session ends while the failed close waits for its owner to exit.
+    lifecycle(LifecycleSignal::Ended);
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let run = room.attempt(&id);
+    let value = until(&room.env, &id, |v| {
+        v["record"]["attempt"]["run"].is_object()
+    });
+    let attempt = &value["record"]["attempt"]["run"];
+    assert_eq!(attempt["handle"], format!("@{}", run.agent_name.unwrap()));
+    assert_eq!(attempt["run_id"], run.run_id.as_str());
+    assert!(value["record"]["prev_attempt"].is_null(), "{value:#}");
+    assert!(value["record"]["wait"].is_null(), "{value:#}");
+    assert_eq!(value["record"]["node"], "build");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+}
+
 #[test]
 fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
     let room = Room::new("timeout='1h'");

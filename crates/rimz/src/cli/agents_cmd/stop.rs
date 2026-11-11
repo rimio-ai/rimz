@@ -491,10 +491,21 @@ fn stop_live_agent_tree(
 
     let (closed, pane) = match stop_live_agent(workspace, store, globals, agent) {
         Ok(closed) => closed,
-        Err(err) => {
-            stop.failures.push(format!("{parent_label}: {err:#}"));
-            return stop;
-        }
+        Err(err) => match ended_after_failed_stop(store, agent) {
+            Ok(true) => (
+                key.clone(),
+                agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+            ),
+            Ok(false) => {
+                stop.failures.push(format!("{parent_label}: {err:#}"));
+                return stop;
+            }
+            Err(read) => {
+                stop.failures
+                    .push(format!("{parent_label}: {err:#}; rereading it: {read:#}"));
+                return stop;
+            }
+        },
     };
     stop.root = Some(closed.clone());
     stop.closed
@@ -510,6 +521,30 @@ fn stop_live_agent_tree(
         stop.failures.push(format!("{parent_label}: {err}"));
     }
     stop
+}
+
+/// Whether an agent whose stop failed is gone anyway: once a still-live owner has had the
+/// owner-exit bound to leave, a read taken after the failure finds its end recorded and its
+/// owner dead. An unknown owner, or no recorded end, keeps the failure.
+fn ended_after_failed_stop(store: &rimz::Store, agent: &AgentState) -> Result<bool> {
+    let key = (agent.kind.clone(), agent.agent_id.clone());
+    let pane = agent.pane.as_ref().map(|pane| pane.pane_id.clone());
+    let deadline = Instant::now() + stop_owner_exit_bound();
+    let reread = || -> Result<Option<AgentState>> {
+        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+        Ok(closed_row(&projection.agents, &key, pane.as_ref()).cloned())
+    };
+    let mut row = reread()?;
+    if let Some(live) = &row
+        && await_owner_exits(&[live], deadline)
+    {
+        row = reread()?;
+    }
+    Ok(
+        row.is_some_and(|row| {
+            row.ended_at.is_some() && agent_liveness(&row) == AgentLiveness::Dead
+        }),
+    )
 }
 
 fn close_agent_pane(

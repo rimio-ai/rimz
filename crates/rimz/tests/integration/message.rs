@@ -4162,6 +4162,80 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
     assert_eq!(armed(), 0, "a root that closed is retired");
 }
 
+/// A failed close counts as a stop once a fresh read finds the agent's end
+/// recorded and its owner dead, the session ending while the stop waits for
+/// the owner; an agent whose owner outlives the bound keeps the failure.
+#[test]
+fn stop_counts_a_failed_close_of_an_agent_that_ends_with_its_owner_as_stopped() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut owner = dummy_agent_process();
+    let lifecycle = |id: &'static str, pane: &str, pid: u32, signal| {
+        let owner =
+            rimz::store::runtime::process_owner(rimz::pane::RuntimeOwnerKind::Agent, id, pid);
+        let event = match signal {
+            LifecycleSignal::Registered => "SessionStart",
+            _ => "SessionEnd",
+        };
+        append_lifecycle(&env, "claude", event, id, signal, |observation| {
+            observation.agent_name = Some(id.to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
+            observation.runtime_owner = Some(owner.clone());
+        });
+    };
+    lifecycle(
+        "ending",
+        TRACE_PANE,
+        owner.id(),
+        LifecycleSignal::Registered,
+    );
+    lifecycle(
+        "lingering",
+        "terminal_4",
+        env.agent_owner_pid(),
+        LifecycleSignal::Registered,
+    );
+    let armed = || rimz::store::idle_stop::read(env.store().paths()).len();
+    let stop = |target: &str, bound_ms: &str| {
+        traced_rimz(&env, "stop-trace.log")
+            .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", bound_ms)
+            .args(["--mux", "zellij", "agents", "stop", target])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("agents stop")
+    };
+
+    let child = stop("@ending", "30000");
+    let log = env.project_root.join("stop-trace.log");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !std::fs::read_to_string(&log).is_ok_and(|trace| trace.contains("close-pane")) {
+        assert!(
+            Instant::now() < deadline,
+            "the stop never tried to close the pane"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    lifecycle("ending", TRACE_PANE, owner.id(), LifecycleSignal::Ended);
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "stopped @ending (claude); resume: rimz agents resume @ending\n",
+        "{output:?}"
+    );
+
+    let output = stop("@lingering", "100").wait_with_output().unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert!(text.contains("was not stopped: "), "{text}");
+    assert_eq!(armed(), 0);
+}
+
 /// An orphan whose run pane stays open is not stamped ended: the repair
 /// fails and the next sweep finds it again.
 #[test]
