@@ -6,11 +6,11 @@ use std::cell::{Cell, RefCell};
 use std::fs;
 use std::rc::Rc;
 
-pub(super) struct FakeHost {
+pub(in crate::harness) struct FakeHost {
     pub(super) occupancy: Rc<RefCell<Occupancy>>,
-    launched: RefCell<Vec<StepLaunch>>,
-    observed: Rc<RefCell<Observed>>,
-    failure: RefCell<Option<LaunchFailure>>,
+    pub(in crate::harness) launched: RefCell<Vec<StepLaunch>>,
+    pub(in crate::harness) observed: Rc<RefCell<Observed>>,
+    pub(in crate::harness) failure: RefCell<Option<LaunchFailure>>,
     evict_error: Cell<bool>,
     stale_after_evict: Cell<bool>,
     /// The occupancy the checkout reaches while a launch is prepared, after its first read.
@@ -27,21 +27,87 @@ pub(super) struct FakeHost {
     on_observe: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) on_occupancy: RefCell<Option<Box<dyn Fn()>>>,
     pushes: RefCell<std::collections::BTreeMap<crate::ids::MessageId, String>>,
-    push_calls: RefCell<Vec<crate::ids::MessageId>>,
+    pub(in crate::harness) push_calls: RefCell<Vec<crate::ids::MessageId>>,
     push_error: Cell<bool>,
     on_push: RefCell<Option<Box<dyn Fn()>>>,
     forwards: RefCell<Vec<(crate::ids::MessageId, String)>>,
     forward_calls: Cell<usize>,
     forward_error: Cell<bool>,
     pub(super) messages: RefCell<Vec<(String, crate::ids::MessageId, String)>>,
-    pub(super) message_sessions: RefCell<Vec<Option<crate::ids::AgentSessionId>>>,
-    pub(super) message_answer: RefCell<Result<Result<String, String>, String>>,
+    pub(in crate::harness) message_sessions: RefCell<Vec<Option<crate::ids::AgentSessionId>>>,
+    pub(in crate::harness) message_answer: RefCell<Result<Result<String, String>, String>>,
     pub(super) on_message: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) retired: RefCell<Vec<crate::ids::MessageId>>,
 }
 
+/// Engine internals the loop scheduler's compiled-task tests drive on the graphs it compiles;
+/// those tests live beside the compiler, since workflow imports nothing from the scheduler.
+pub(in crate::harness) fn resolved_edges(spec: &WorkflowSpec, node: &str) -> Option<Vec<Edge>> {
+    spec.resolved_edges(node)
+}
+
+/// The prompt each of `step`'s subscriptions hands the step.
+pub(in crate::harness) fn subscription_prompts(step: &Step) -> Vec<Option<&str>> {
+    step.subscribe
+        .iter()
+        .flatten()
+        .map(spec::Wake::prompt)
+        .collect()
+}
+
+/// Finish the judge attempt `1` that `record` holds with each answer in turn, each against the
+/// same attempt, returning the record and the journal entries the last answer wrote.
+pub(in crate::harness) fn finish_judge(
+    spec: &WorkflowSpec,
+    paths: &crate::disk::paths::WorkflowPaths,
+    record: crate::store::workflow::RunRecord,
+    results: &[(Result<serde_json::Value, String>, &'static str)],
+) -> (
+    crate::store::workflow::RunRecord,
+    Vec<crate::store::workflow::JournalEntry>,
+) {
+    let mut t = state::Transition {
+        now: record.entered_at,
+        record,
+        spec,
+        paths,
+        entries: Vec::new(),
+    };
+    let attempt = t.record.attempt.clone();
+    for (object, failure) in results {
+        t.record.attempt.clone_from(&attempt);
+        t.finish_judge(
+            1,
+            script::Evaluation {
+                object: object.clone(),
+                failure,
+                stderr_tail: None,
+                limited: None,
+                cost_usd: None,
+            },
+        )
+        .unwrap();
+    }
+    (t.record, t.entries)
+}
+
+/// Whether `outcome` out of judge `node` declines the act.
+pub(in crate::harness) fn declines(spec: &WorkflowSpec, node: &str, outcome: &str) -> bool {
+    script::declines(spec, node, outcome)
+}
+
+/// Evaluate the judge `record` holds: its failure kind and its answer.
+pub(in crate::harness) fn evaluate(
+    state: &crate::disk::paths::StatePaths,
+    spec: &WorkflowSpec,
+    record: &crate::store::workflow::RunRecord,
+) -> (&'static str, Result<serde_json::Value, String>) {
+    let judged = script::evaluate(state, &state.workflow(&record.id), spec, record);
+    (judged.failure, judged.object)
+}
+
 impl FakeHost {
-    pub(super) fn new() -> Self {
+    pub(in crate::harness) fn new() -> Self {
         Self {
             occupancy: Rc::new(RefCell::new(Occupancy::Free)),
             launched: RefCell::new(Vec::new()),
@@ -257,10 +323,10 @@ impl AttemptHost for FakeHost {
 
 mod attempts;
 mod commands;
-mod compiled;
 mod conditions;
 mod graph;
 mod inspection;
+mod judges;
 mod message;
 mod sleep;
 mod tolerance;

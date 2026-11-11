@@ -271,4 +271,4 @@ impl From<LaunchFailure> for NotLaunched {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::harness) mod tests;

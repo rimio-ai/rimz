@@ -602,3 +602,6 @@ fn table<'b>(pairs: impl IntoIterator<Item = (&'b str, Value)>) -> Table {
         .map(|(key, value)| (key.to_owned(), value))
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
