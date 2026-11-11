@@ -11,7 +11,7 @@ use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::signal::{
     Signal, SignalResolution, default_signal_match_key, resolve_subscription,
 };
-use crate::harness::throttle;
+use crate::harness::throttle::{self};
 use crate::harness::when::WindowReadings;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
@@ -604,7 +604,7 @@ fn launch_groups(
             crate::store::writer::LaunchLogin::RoomDefault,
             crate::store::writer::LaunchLogin::Pinned,
         );
-        let login = crate::harness::loop_task::task_login(&requested, &cell.kind, &runtime)
+        let login = crate::harness::task_login::task_login(&requested, &cell.kind, &runtime)
             .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
         let account = login.as_ref().map(|login| login.name().clone());
         match groups

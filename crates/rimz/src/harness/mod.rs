@@ -48,6 +48,7 @@ pub mod stall_nudge;
 pub mod subagent_policy;
 pub mod surplus;
 pub mod takeover;
+pub mod task_login;
 pub mod team_notes;
 pub mod team_prompt;
 pub mod team_stage;

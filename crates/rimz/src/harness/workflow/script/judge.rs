@@ -190,7 +190,7 @@ fn managed_launch(
     clippy::too_many_arguments,
     reason = "the gates read the judge's account, its stores, and the run's two surplus values"
 )]
-pub(in crate::harness::workflow) fn budget_refusal(
+pub(in super::super) fn budget_refusal(
     config: &crate::config::MachineConfig,
     profile: &HeadlessProfile,
     managed: &crate::agents::ManagedLaunchState,
@@ -258,11 +258,7 @@ fn record_decline(
 
 /// Whether a judge's verdict routes away from every step and agent check while its opposite
 /// verdict leads into one: the compiled decline of a loop task's guard.
-pub(in crate::harness::workflow) fn declines(
-    spec: &WorkflowSpec,
-    node: &str,
-    outcome: &str,
-) -> bool {
+pub(in super::super) fn declines(spec: &WorkflowSpec, node: &str, outcome: &str) -> bool {
     let opposite = match outcome {
         "pass" => "fail",
         "fail" => "pass",

@@ -39,7 +39,7 @@ use crate::config::{CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::check_run::{CheckOutcome, CheckSignalGuard};
-use crate::harness::loop_task::{LOOP_TASK_ENV, task_login};
+use crate::harness::loop_task::LOOP_TASK_ENV;
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::SupervisedRunRequest;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
@@ -51,6 +51,7 @@ use crate::harness::schedule::run_log::{
 use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, Trigger};
 use crate::harness::signal::{Signal as TriggerSignal, WatchOutcome};
 use crate::harness::surplus::surplus_refusal;
+use crate::harness::task_login::task_login;
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -356,7 +357,7 @@ fn remove_fire_tree(
     memo.save();
 }
 
-/// Settle the fresh tree a reported run worked in, through a detached `rimz`: the engine reports
+/// Settle the fresh tree a reported run worked in, through a detached `rimz`: collection reports
 /// under the workspace lock, which the removal's store writes take. A run that never acted only
 /// ran its guards there, so `worktree remove --force` takes the tree. An acted run's agent may
 /// have left work or still hold the pane, so `worktree cleanup` keeps the tree for either and
