@@ -46,7 +46,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 | Run a command | `--check <CMD>` with no other action. Each fire starts a workflow run of one shell check, which ends `completed` on exit `0` and `failed` otherwise. | None. |
 | Start a workflow run | `--workflow <NAME>`: a definition under `~/.rimz/workflows/`. Each fire starts one [workflow](./workflow.md) run ([workflow tasks](./workflow.md#loop-tasks)). | Optional: becomes the run's prompt. |
 
-`--workflow` validates the definition the way `rimz workflow run` does, refusing an undeployed or invalid one with the same errors and printing its warnings, and the name must be a plain directory name under `~/.rimz/workflows/`. It accepts the triggers, `--each-worktree`, `--prompt` or `--prompt-file`, `--label`, `--root`, `--project`, `--max-strikes`, `--budget-per-day`, `--surplus`, and `--surplus-after`. `--budget-per-day` gates each run on the day's reported run costs plus what the task's live runs reserve (the sum of their agent steps' `budget`), and refuses a run whose own steps' `budget` would cross it; a graph without step budgets is admitted until the day's cost reaches the cap. `--surplus` checks the account of every agent step and agent check in the graph. Every other flag is refused, with the place that owns it in a workflow: `--stay`, `--takeover`, and `--subscribe`, because agent steps launch and stop agents and a check names the signals it waits for; `--check`, `--check-timeout`, the `--judge` flags, `--on`, `--verify`, `--max-attempts`, and `--until`, because checks and waits are the workflow's `[checks.<name>]` nodes; `--throttle`, `--capacity-wait`, and `--timeout`, which are fields of `[steps.<name>]`; `--mode`, `--effort`, `--fast`, `--no-fast`, `--account`, and `--system-prompt-file`, which come from a step's `agent` profile; `--budget`, because each agent step sets its own `budget`; `--worktree`, because a run scopes to the task's checkout (use `--root <worktree>` or `--each-worktree`); and `--after-reset` and `window.*` conditions, because a workflow task has no provider window.
+`--workflow` validates the definition the way `rimz workflow run` does, refusing an undeployed or invalid one with the same errors and printing its warnings, and the name must use only letters, digits, `-`, and `_`. It accepts the triggers with `--match`, `--for`, and `--once`, `--each-worktree`, `--prompt` or `--prompt-file`, `--label`, `--root`, `--project`, `--max-strikes`, `--overlap`, `--overlap-limit`, `--budget-per-day`, `--surplus`, and `--surplus-after`. `--budget-per-day` gates each run on the day's reported run costs plus what the task's live runs reserve (the sum of their agent steps' `budget`), and refuses a run whose own steps' `budget` would cross it; a graph without step budgets is admitted until the day's cost reaches the cap. `--surplus` checks the account of every agent step and agent check in the graph. Every other flag is refused, with the place that owns it in a workflow: `--stay`, `--takeover`, and `--subscribe`, because agent steps launch and stop agents and a check names the signals it waits for; `--check`, `--check-timeout`, the `--judge` flags, `--on`, `--verify`, and `--max-attempts`, because checks and waits are the workflow's `[checks.<name>]` nodes; `--throttle` and `--capacity-wait`, which are fields of `[steps.<name>]`, and `--timeout`, a field of `[steps.<name>]` or `[checks.<name>]`; `--mode`, `--effort`, `--fast`, `--no-fast`, `--account`, and `--system-prompt-file`, which come from a step's `agent` profile; `--budget`, because each agent step sets its own `budget`; `--worktree`, because a run scopes to the task's checkout (use `--root <worktree>` or `--each-worktree`); `--after-reset` and `window.*` conditions, because a workflow task has no provider window; and, with `--each-worktree`, `--signal`, `--in`, `--at` without `--every`, and `--once`, because fan-out needs `--when`, `--every`, or `--cron`.
 
 A run with an agent step or a delivery keeps its workflow notes folder, `automation-notes/<yyyymmdd>/<HHMMSS>Z-workflow-<task>-<checkout>/`, and the agent's brief names `agent-notes.md` there, for memory across restarts and subagents and a record of changes outside the repository. Set task `notes = false` in `loop.toml` to omit the instruction. A run of checks alone keeps no folder. Retention follows `gc.automation_notes_retention` (default forever), as for every [workflow run](./workflow.md). Run forensics stay in `rimz loop logs` and `rimz workflow show`.
 
@@ -95,7 +95,7 @@ The trigger values follow these rules:
 | --- | --- |
 | `--at` | Alone, a one-shot time: 24-hour `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM` (such as `fri 09:30`). It resolves at add time to the first matching instant after now, so an `HH:MM` at or before the current minute fires tomorrow; a dated time in the past is refused. With `--every`, 24-hour `HH:MM` only. |
 | `--every` interval | An integer with `s`, `m`, `h`, or `d`, rounded up to whole minutes. `0` is refused, and an interval cannot take `--at`. |
-| `--every` days | `day`, `weekday`, `weekend`, a list such as `mon,wed,fri`, or a range such as `mon-fri`. Requires `--at`. |
+| `--every` days | `day` (or `daily`), `weekday` (or `weekdays`), `weekend` (or `weekends`), a list such as `mon,wed,fri`, or a range such as `mon-fri`. Requires `--at`. |
 | `--cron` | Five whitespace-separated fields (minute, hour, day of month, month, day of week). Each field is `*`, a value, a range `a-b`, a step `*/n` or `a-b/n`, or a comma list of these. Months take `jan` to `dec` and days take `sun` to `sat`, case-insensitive and usable as range ends, and day `7` is Sunday as well as `0`. `@hourly`, `@daily`, `@weekly`, `@monthly`, or `@yearly` stands for the whole expression. When both day fields are other than `*`, a day either one selects fires. `L`, `W`, `?`, `#`, `@reboot`, an out-of-range or reversed value, and an expression whose day of month no selected month has (`0 0 30 2 *`) are refused, naming the token or form. |
 | `--in` | A [duration](../cli.md#durations) in `s`, `m`, `h`, or `d`, greater than zero. It resolves at add time to a one-shot instant, rounded up to the next minute. |
 | `--until` | Refused with `--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check`. A stored row keeps its deadline and still runs. |
@@ -155,7 +155,7 @@ now: true|false
 
 Each leaf term gets the same line as in `loop show`, in expression order. Exit 0 means true; exit 1 means false; exit 2 means a refused expression. Refused expressions use the same clause, position, and fix diagnostics as `loop add --when`; mistyped keys, forge values, and configured stages within two edits get a `did you mean` suggestion.
 
-Forge terms read the existing room cache only: explain does not keep a selected branch probed. Outside a room they are unread, with the reason `readings paused (room closed)`, and print the sidebar hint. Window terms use `--provider` and optionally `--account`, or the room's default account for that provider. Without `--provider`, window readings are unknown and a hint names the missing flag.
+Forge terms read the existing room cache only: explain does not keep a selected branch probed. Outside a room they are unread, with the reason `readings paused (room closed)`, and print the sidebar hint. Window terms use `--provider` and optionally `--account`, or the room's default account for that provider. An unknown `--provider` kind refuses with exit 1. Without `--provider`, window readings are unknown and the text output ends with `window readings need --provider <KIND>; without it they are unknown`.
 
 `--json` prints one object instead of text and omits the human hints. For `ci=passed` outside a room:
 
@@ -193,7 +193,7 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 | `--subscribe <SIGNAL>` | `--stay` | Forward this signal to the prompt leader while its session lives; repeatable. |
 | `--takeover` | `--stay` | Stop the checkout's idle agents before launching; the run waits while one is busy, and a failed stop fails it. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait`, `--workflow` | The prompt the action delivers, or the workflow run's prompt. The two conflict. |
-| `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
+| `--check <CMD>` | `--agent`, or alone | Shell command to run; alone it is the action, otherwise the guard. Refused with `--wait` and `--workflow`. |
 | `--check-timeout <DUR>` | `--check` | Cap for the shell check; default `--timeout`, else `5m`; a killed check fails. |
 | `--judge <PROFILE>` | `--agent` | Profile for a headless judge, resolving to one Claude or Codex agent. May follow `--check`; requires `--on`. |
 | `--judge-prompt <TEXT>`, `--judge-prompt-file <PATH>` | `--judge` | Judge question; exactly one is required. |
@@ -201,21 +201,22 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 | `--judge-timeout <DUR>` | `--judge` | Cap for the judge, one deadline over both attempts; default `5m`, independent of `--timeout`. |
 | `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |
 | `--for <DUR>` | `--when` | Continuous hold before firing. |
+| `--match <KEY=VALUE>` | `--signal` | Require a top-level payload field to equal the value; repeatable. See [signals](#signals). |
 | `--once` | `--signal`, `--when` | Retire after the first delivering fire. |
 | `--on fail\|success\|any` | `--check`, `--judge` | Outcome every stage must land on for the action to run; required with `--judge`, otherwise default `fail`. |
-| `--verify <CMD>` | `--agent` | Command that must pass after the turn; a failure re-prompts the same session. |
+| `--verify <CMD>` | `--agent` without `--stay` | Command that must pass after the turn; a failure re-prompts the same session. |
 | `--max-attempts <N>` | `--verify` | Total turns allowed to make `--verify` pass. Default `3`, at least `1`. |
 | `--max-strikes <N>` | all | Consecutive failed fires before the task disables itself. Default `3`; `0` turns the gate off. |
-| `--timeout <DUR>` | all except `--stay` | Cap for the agent turn, each verify command, and the shell check when it has no `--check-timeout`; see [timeouts](#timeouts). `--wait` accepts it only with `--check`. |
+| `--timeout <DUR>` | `--agent` without `--stay`, check-only | Cap for the agent turn, each verify command, and the shell check when it has no `--check-timeout`; see [timeouts](#timeouts). |
 | `--worktree <NAME>` | `--agent`, `--check`, `--wait` | Fresh worktree prefix for each fire of an `--agent` or check-only task; with `--stay`, create or reuse this named worktree at fire time; with `--wait`, the channel of the address. |
 | `--mode auto\|ask\|yolo` | `--agent` | Permission posture for the turn. |
 | `--effort <EFFORT>` | `--agent` | Reasoning effort passed to the agent. Add saves with the direct launch's warning if any agent in the spec lacks an effort flag; those agents launch without effort. Stored as the task's requested effort. |
 | `--fast`, `--no-fast` | `--agent` | Launch in the provider's [fast mode](../agent-support.md#fast-mode), or request none even where the profile sets `fast`. Add saves with a warning if any agent lacks a fast-mode switch; those agents launch without fast. `--no-fast` is accepted on every kind. Stored as the task's requested `fast = true` or `false`. |
-| `--account <NAME>` | `--agent` | Named account of the agent's provider that every fire runs on; see [the account pin](#the-account-pin). |
-| `--system-prompt-file <PATH>` | `--agent` | Replace the agent's base system prompt with a file's contents. |
-| `--budget <AMOUNT[/day]>` | `--agent` | Dollar cap for each spawned run. |
+| `--account <NAME>` | `--agent` without `--stay` | Named account of the agent's provider that every fire runs on; see [the account pin](#the-account-pin). |
+| `--system-prompt-file <PATH>` | `--agent` without `--stay` | Replace the agent's base system prompt with a file's contents. |
+| `--budget <AMOUNT[/day]>` | `--agent` without `--stay` | Dollar cap for each spawned run, such as `5`, `$5`, or `5/day`, in the form [`rimz agents --budget`](./agents.md#shared-launch-params) takes. |
 | `--budget-per-day <AMOUNT>` | `--agent` with `--budget`, or `--workflow` | Daily dollar cap for the task; see [budgets](#budgets). |
-| `--surplus <RATIO>`, `--surplus-after <DUR>` | `--agent`, `--wait`, `--workflow` | Fire only while the provider window has headroom; see [the surplus gate](#the-surplus-gate). |
+| `--surplus <RATIO>`, `--surplus-after <DUR>` | `--agent` without `--stay`, `--wait`, `--workflow` | Fire only while the provider window has headroom; see [the surplus gate](#the-surplus-gate). A ratio greater than zero with an optional `x` (`1.5x`), and a duration in `m`, `h`, or `d`. |
 | `--throttle on\|off` | `--agent` | `off` skips machine stagger, resource limits, and the capacity check, not caps. Default `on`. See [the start throttle](#the-start-throttle). |
 | `--capacity-wait DURATION\|forever` | `--agent` | Positive `s`/`m`/`h`/`d` duration or `forever`; defaults follow [the trigger](#the-start-throttle). |
 | `--overlap <POLICY>` | repeating clock, signal, or condition tasks, `--stay` and `--workflow` included | `skip` (default), `coalesce`, `queue`, or `replace`; see [overlapping triggers](#overlapping-triggers). |
@@ -258,7 +259,7 @@ live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
 
-For `--agent recon --stay --worktree review-merge`, the action instead reads ``leaves staying layout recon in worktree `review-merge` (created from trunk for a team, the configured base otherwise, or reused when the task fires)``. A separate `scope` line says that condition, guards and launch memory stay at the project root. With `--takeover`, the before-launch line names ``worktree `review-merge` `` rather than the scope checkout.
+For `--agent recon --stay --worktree review-merge`, the action instead reads ``leaves staying layout recon in worktree `review-merge` (created from trunk for a team, the configured base otherwise, or reused when the task fires)``. A separate `scope` line says that condition, guards and launch memory stay at the project root. An `--each-worktree` resident reads `action: leaves staying layout <agent> in each matching owned worktree`. With `--takeover`, a line `before launch: stops idle agents in the checkout first (waits while any is busy)` follows, naming ``worktree `review-merge` `` in place of `the checkout` when the task has `--worktree`. Each `--subscribe` adds `subscription: <signal> for the prompt leader`.
 
 An `--after-reset` task replaces the trigger and next-fire lines:
 
@@ -272,7 +273,9 @@ A window that has not started reads `window: claude 5h · not started · 100% le
 
 A judge or a shell check before an action adds one `guard:` line. The watchdog above reads `guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no answer after one retry counting as a fail`.
 
-A `--wait` action reads ``action: waits @planner — pinned to claude session `<id>` now; skipped and removed if that session exits``, a check-only task `action: runs check in <root>` (or ``in a fresh worktree `<prefix>-<time>` per fire, branched from trunk`` with `--worktree`), and a surplus gate adds a `gate:` line. The last line reads `the loop timer will keep time` when the timer is active.
+A `--wait` action reads ``action: waits @planner — pinned to claude session `<id>` now; skipped and removed if that session exits``, a check-only task `action: runs check in <root>` (or ``in a fresh worktree `<prefix>-<time>` per fire, branched from trunk`` with `--worktree`), and a workflow task `action: starts workflow <name>`. A surplus gate adds `gate: [after <DUR> into the <kind> longest window · ]surplus ≥ <ratio>x`, the ratio to one decimal. A launching or check-only task added from a linked worktree without `--worktree` adds the `note: runs at the project root` line described under [actions](#actions).
+
+Replacing a task whose arming, pause, or strike state was set prints `arming: reset` right after the first line, and an `--project` add prints its [trust result](#project-tasks) there too. When no room is open and the timer is active, the last line reads `no room is open there; the loop timer will keep time`. A `--wait` receipt prints a no-room line only for a condition task, as ``no room is open there; start one with `rimz start` ``.
 
 ## Where tasks are stored
 
@@ -280,13 +283,13 @@ Each task lives in one of three stores:
 
 | Store | File | Holds | SOURCE |
 | --- | --- | --- | --- |
-| Machine | `~/.rimz/loop.toml` | Repeating `--agent` and check-only tasks added without `--project`. | `machine` |
-| State | `~/.rimz/ws/<workspace-dir>/records/loop-instances.json` | Every `--wait` task, plus one-shots (`--at`, `--in`, `--after-reset`), `--until`, and `--once` tasks. Rows retire themselves. | `state`, or `team <instance>` for a team binding |
+| Machine | `~/.rimz/loop.toml` | `--agent`, `--workflow`, and check-only tasks with a repeating trigger (`--every`, `--cron`, `--signal`, or `--when`, without `--once`), added without `--project`. | `machine` |
+| State | `~/.rimz/ws/<workspace-dir>/records/loop-instances.json` | Every `--wait` task, plus one-shots (`--at`, `--in`, `--after-reset`), `--once` tasks, and stored `--until` rows. Rows retire themselves. | `state`, or `team <instance>` for a team binding |
 | Project | `<root>/.rimz/config.toml`, `[tasks.<name>]` | Tasks added with `--project`. | `project`, or `project · untrusted` / `project · stale` while trust is missing |
 
 Adding a state task requires an existing room: run `rimz start` in its root first, or pass `--root <room>`. Machine and project definitions can be added without a room and create no room state.
 
-A machine task takes precedence over a same-named state task only within the same root. A machine task rooted elsewhere neither hides the room's state task nor is removed when you add that state task. `loop show`, `remove`, `rename`, `pause`, `run`, and `stop` in that room address its state task; the machine task remains reachable from its own room or outside any room.
+A machine task takes precedence over a same-named state task only within the same root. A machine task rooted elsewhere neither hides the room's state task nor is removed when you add that state task. `loop show`, `remove`, `rename`, `pause`, `fire`, and `stop` in that room address its state task; the machine task remains reachable from its own room or outside any room.
 
 Adding a standing machine task also requires that an existing machine task of that name have the same resolved project root. A cross-project collision refuses without changing either task, names the stored root, and suggests another name or `rimz loop remove <NAME>` from the owning project. Re-adding from that project, or with `--root <owning-project>`, still replaces its task. A machine row with a missing, empty, or relative root is skipped at load with a warning and does not run; `~` and `~/` expand against `HOME` before the absolute-path check. Adding over it refuses when its resolved root differs too; run `rimz loop remove <NAME>` from a fresh directory outside any repository or RimZ project before reusing its name, so it cannot select a same-named room or project task instead. Rename and remove still reach a skipped row by name, and rename preserves its root as written.
 
@@ -491,7 +494,7 @@ What pressure means as a number depends on the machine. The cgroup source descri
 
 ### Strikes
 
-After `--max-strikes` consecutive strikes (default `3`), the task disables itself, `loop list` shows `disabled after N strikes` under NEEDS YOU, and `loop_disabled` notification handlers fire. `rimz loop enable` clears the count.
+After `--max-strikes` consecutive strikes (default `3`), the task disables itself, the process that recorded the last strike prints ``loop `<name>`: disabled after N consecutive failed fires; enable with `rimz loop enable <name>` ``, `loop list` shows `disabled after N strikes` under NEEDS YOU, and `loop_disabled` notification handlers fire. `rimz loop enable` clears the count.
 
 | Run result | Effect on strikes |
 | --- | --- |
@@ -503,7 +506,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `skipped`, whatever its guard answered, or a sibling signal | Neutral. |
 | `overlapped` by a fire whose scope already has an active or parked run, or `skipped` in older history (`workflow_skipped` in JSON); condition tasks with a recorded launch are silent instead | Neutral. |
 | `budget skipped`, `surplus skipped`, `account skipped`, `throttle skipped`, `capacity held`, `takeover blocked`, `overlapped`, `deferred`, `canceled`, `replaced`, `expired`, `target gone` | Neutral. |
-| `start failed` — the fire left no run behind: either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`, `--after-reset`) stays and is dispatched again five minutes later | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
+| `start failed`: the fire left no run behind, either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`, `--after-reset`) stays and is dispatched again five minutes later | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 ### Timeouts
 
@@ -518,9 +521,9 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 
 ## Enable, disable, and pause
 
-`loop enable <name>...` arms tasks on this machine and clears disables, pauses, and strike counts. `loop disable <name>...` holds them until the next enable. Both resolve every name before changing any task: an unknown name refuses the command without changing any task. Both take `--all` instead of names, covering machine tasks plus the state and project tasks of the current project.
+`loop enable <name>...` arms tasks on this machine and clears disables, pauses, and strike counts. `loop disable <name>...` holds them until the next enable. Both resolve every name before changing any task: an unknown name refuses the command without changing any task. Both take `--all` instead of names, covering machine tasks plus the state and project tasks of the current project. Each task prints one line: ``loop `<name>`: enabled`` (with `· next in 2h` when a clock fire is due), ``loop `<name>`: already enabled``, or ``loop `<name>`: disabled``.
 
-`loop pause <name> --for <DUR>` holds a task for a bounded time (`s`, `m`, `h`, or `d`, greater than zero) and prints when it resumes. A disabled task refuses a pause; `disable` owns the indefinite hold.
+`loop pause <name> --for <DUR>` holds a task for a bounded time (`s`, `m`, `h`, or `d`, greater than zero) and prints ``loop `<name>`: paused; resumes in 2h (Sat 14:00)``, the clock in the configured zone. A disabled task refuses a pause; `disable` owns the indefinite hold.
 
 All three write machine-local state and never edit a task definition or a trust-hashed project config. Enabling, or reaching the end of a pause, starts the schedule fresh from that moment, so fires missed while held never replay.
 
@@ -601,7 +604,7 @@ LAST in the lifecycle tables chooses running, off, latest acting result, latest 
 
 A run whose task row is gone keeps a DONE row until it ends, with the real name `loop stop` needs and FIRED `▸ running 3m`. After that, retained one-off history remains in DONE; other rowless runs disappear. Empty rooms say how many tasks exist elsewhere and point to `--all`; with none anywhere, the add hint remains.
 
-`--json` prints one object with a `rooms` array for the same scope (`--all` widens it). Each room has `root`, `open`, `here`, `spend_today_usd`, `tasks`, and an unfolded `retired` array of one-offs (`name`, `at`, serialized run `result`, optional `checkout`). Tasks are never collapsed and always retain real names. Each has `name`, lifecycle `kind` (`routine`, `one_off`, `wake_up`), `section` (`needs_you`, `routine`, `waiting`, `done`, `wake_ups`), `state` (`live`, `off`, `not_enabled`, `paused`, `running`, `waits_for_room`), unwrapped `trigger`, `you`, and spend. Pure-AND conditions with an observed verdict outside fan-out tasks add `condition` with `met`, `total`, and `not_read`. `action` has `kind` (`check`, `start`, `wake`, `workflow`) and `subject`; it is omitted when no definition survives or the action is invalid. An action's `kind` is separate from its task's lifecycle `kind`; a workflow action's `subject` is the workflow name. Other optional fields are `attention` (`checkout_gone`, `strikes`, `failing`, `held`, `blocked`, `invalid`, `parked`, `lost`), `label`, `dir`, `worktree`, `owner` (`kind`: `team`, `loop`; `name`), `next_at`, `running_since`, `last` (`at`, serialized run `result`, `ok`, `streak`), `heard` (`signal`, `at`), `budget_per_day_usd`, and `workflow_runs`, the task's active and parked [workflow runs](./workflow.md#json-shapes). Absent values are omitted, not null; timestamps use the same format as other JSON commands. Retired history is separate from `tasks`; it counts in watch's done fold without adding table rows.
+`--json` prints one object with a `rooms` array for the same scope (`--all` widens it). Each room has `root`, `open`, `here`, `spend_today_usd`, `tasks`, and an unfolded `retired` array of one-offs (`name`, `at`, serialized run `result`, optional `checkout`). Tasks are never collapsed and always retain real names. Each has `name`, lifecycle `kind` (`routine`, `one_off`, `wake_up`), `section` (`needs_you`, `routine`, `waiting`, `done`, `wake_ups`), `state` (`live`, `off`, `not_enabled`, `paused`, `running`, `waits_for_room`), unwrapped `trigger`, `you`, and spend. Pure-AND conditions with an observed verdict outside fan-out tasks add `condition` with `met`, `total`, and `not_read`. `action` has `kind` (`check`, `start`, `wake`, `workflow`) and `subject`; it is omitted when no definition survives or the action is invalid. An action's `kind` is separate from its task's lifecycle `kind`; a workflow action's `subject` is the workflow name. Other optional fields are `attention` (`checkout_gone`, `strikes`, `failing`, `held`, `blocked`, `invalid`, `parked`, `lost`), `label`, `dir`, `worktree`, `fresh_worktree` (the per-fire prefix), `owner` (`kind`: `team`, `loop`; `name`), `next_at`, `running_since`, `last` (`at`, serialized run `result`, `ok`, `streak`), `heard` (`signal`, `at`), `budget_per_day_usd`, and `workflow_runs`, the task's active and parked [workflow runs](./workflow.md#json-shapes). Absent values are omitted, not null, except `capacity_wait`, which every task carries and which is `null` without a wait; timestamps use the same format as other JSON commands. Retired history is separate from `tasks`; it counts in watch's done fold without adding table rows.
 
 Listing is read-only and never creates a room store. Malformed local task state fails the command; a malformed other room warns with its root and is skipped. A run lock that cannot be read warns on stderr with the task's name. When a room's locks directory cannot be listed, one warning names the root and directory, and its rows show their other state.
 
@@ -687,11 +690,11 @@ Workflow-run DETAIL in `loop show` and WORKTREES uses the same count-free status
 | `--failed` | Only `failed`, `timed out`, `budget exceeded`, `verify failed`, and `error` runs, plus `launched` workflow blocks whose run ended `failed`. |
 | `--heard` | Include heard sibling signals in log order, labelled `○ heard`. |
 
-## Rename and remove
-
 Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line in expression order (map order if a stored expression cannot be parsed). The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings. Signal runs include `signal: <name>` and, when the signal carried fields, a JSON payload line. Sibling signals appear only with `--heard`; their stored records are unchanged.
 
-`loop rename <name> <new-name>` moves the task to the new key in its store. Its workflow launch entries and live workflow runs, active or parked, follow it; finished run records keep the name they ran under. The new name must differ and be free. A `stay` task's launch memory follows it the same way. A task that still remembers a launch from before every fire became a workflow run cannot be renamed, because that launch's leader retains the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without such launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
+## Rename and remove
+
+`loop rename <name> <new-name>` moves the task to the new key in its store and prints ``renamed loop task `<name>` to `<new-name>` ``, or ``no loop task named `<name>` `` with exit 0 when none exists. Its workflow launch entries and live workflow runs, active or parked, follow it; finished run records keep the name they ran under. The new name must be a valid task name, differ, and be free: a taken name refuses with ``loop task `<new-name>` already exists``. A `stay` task's launch memory follows it the same way. A task that still remembers a launch from before every fire became a workflow run cannot be renamed, because that launch's leader retains the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without such launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 
 `loop remove <name>...` deletes each task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Comment lines above the removed task's headers stay above the next header, or at the end of the file. Missing names do not stop later removals or cause a nonzero exit. Removal clears the task's resident or workflow launch entries and detaches its active and parked workflow runs, which continue as independent runs. Re-adding a condition workflow task skips that independent run without adopting it, then permits a fresh launch after it ends. Replacing a task under the same name keeps its launch entries. Run history stays readable through `rimz loop logs <name>`. For a project task, both commands print the [trust result](#project-tasks).
 
@@ -721,7 +724,7 @@ A task that fires on a signal, a condition, or a watch keeps its trigger's evide
 | Command | Prints |
 | --- | --- |
 | `timer install` | `loop timer: installed (<backend>; every 1m) → <path>` |
-| `timer status` | `loop timer: active` or `inactive`, the backend and executable, and `task roots without a room: N`; or `loop timer: not installed`. |
+| `timer status` | `loop timer: active (<backend>) → <executable>` (or `inactive`), then `task roots without a room: N`; or `loop timer: not installed`. |
 | `timer remove` | `loop timer: removed (<backend>)`, or `loop timer: already absent`. `rimz uninstall` removes it too. |
 
 A timer fire follows the same rules as a room's:
