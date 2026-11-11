@@ -53,7 +53,7 @@ pub(super) fn produce_pr_states(
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
     let condition_scopes =
-        crate::harness::schedule::when::probe_demand(runtime, snapshot.project_root.as_deref());
+        crate::harness::schedule::probe::probe_demand(runtime, snapshot.project_root.as_deref());
     let needed = needed_worktree_paths(snapshot, condition_scopes.keys().cloned().collect());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());

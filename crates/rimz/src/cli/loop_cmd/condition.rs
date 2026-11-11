@@ -1,7 +1,7 @@
 //! Condition admission and room-aware presentation.
 
 use super::*;
-use schedule::when::{self, CiSource, Verdict, WhenExpr, WhenTerm, WindowReadings};
+use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WhenTerm, WindowReadings};
 
 struct Reading {
     verdict: Verdict,
@@ -67,7 +67,7 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     if clauses.is_empty() {
         return Ok(());
     }
-    let stages = schedule::condition_stages(root)?;
+    let stages = rimz::harness::when::condition::condition_stages(root)?;
     WhenExpr::parse_with_stages(clauses, Some(&stages))?;
     Ok(())
 }
@@ -321,5 +321,5 @@ fn term_unread_reason(
 }
 
 pub(super) fn unread_reason(reason: Option<when::UnreadReason>) -> String {
-    schedule::unread_reason(reason, Some(Timestamp::now()))
+    rimz::harness::when::condition::unread_reason(reason, Some(Timestamp::now()))
 }

@@ -35,16 +35,14 @@ fn workflow_agent(
 
 struct RoomView {
     runtime: Option<rimz::RuntimePaths>,
-    ci: Option<rimz::harness::schedule::when::CiSource>,
+    ci: Option<rimz::harness::when::CiSource>,
     snapshot: std::cell::OnceCell<Option<rimz::store::snapshot::SidebarSnapshot>>,
 }
 
 impl RoomView {
     fn new(root: &std::path::Path) -> Self {
         let runtime = rimz::RuntimePaths::for_project_root(root).ok();
-        let ci = runtime
-            .as_ref()
-            .map(rimz::harness::schedule::when::CiSource::read);
+        let ci = runtime.as_ref().map(rimz::harness::when::CiSource::read);
         Self {
             runtime,
             ci,

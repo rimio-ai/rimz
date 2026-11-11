@@ -683,7 +683,7 @@ impl Validation {
     }
 
     fn condition_terms(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
-        use crate::harness::schedule::{condition_stages, when::WhenExpr};
+        use crate::harness::when::{WhenExpr, condition::condition_stages};
 
         let cases = check.condition_cases();
         let when_path = |index| {

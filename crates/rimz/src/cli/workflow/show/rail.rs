@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
 
-use rimz::harness::schedule::when::WhenExpr;
+use rimz::harness::when::WhenExpr;
 use rimz::harness::workflow::{CaseMark, Hop, reached};
 use serde_json::Value;
 

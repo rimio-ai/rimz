@@ -6,10 +6,10 @@ use std::path::{Component, Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::harness::schedule::when::WhenExpr;
 use crate::harness::signal::{
     SelectorErr, SignalSelector, default_signal_match_key, is_match_wildcard, parse_signal_selector,
 };
+use crate::harness::when::WhenExpr;
 use crate::store::workflow::{Key, RouteDefaults, RunRecord, StepLifecycle, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
@@ -813,7 +813,7 @@ pub enum SpecErr {
     #[error("invalid run command: use a nonempty, correctly quoted argv")]
     Command,
     #[error(transparent)]
-    Window(#[from] crate::harness::schedule::when::WhenError),
+    Window(#[from] crate::harness::when::WhenError),
     #[error("only provider-window keys are allowed")]
     WindowKeys,
     #[error(transparent)]
@@ -1048,7 +1048,7 @@ pub(super) fn parse_deadline(raw: &str) -> Result<jiff::Timestamp, jiff::Error> 
     Ok(civil.to_zoned(jiff::tz::TimeZone::system())?.timestamp())
 }
 
-pub(super) fn parse_window(raw: &str) -> Result<crate::harness::schedule::when::WhenExpr, SpecErr> {
+pub(super) fn parse_window(raw: &str) -> Result<crate::harness::when::WhenExpr, SpecErr> {
     let mut expression = String::new();
     for part in raw.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_') {
         let word =
@@ -1058,7 +1058,7 @@ pub(super) fn parse_window(raw: &str) -> Result<crate::harness::schedule::when::
         }
         expression.push_str(part);
     }
-    let expr = crate::harness::schedule::when::WhenExpr::parse_with_stages(&[expression], None)?;
+    let expr = crate::harness::when::WhenExpr::parse_with_stages(&[expression], None)?;
     if !expr.terms().all(|term| term.key.starts_with("window.")) {
         return Err(SpecErr::WindowKeys);
     }

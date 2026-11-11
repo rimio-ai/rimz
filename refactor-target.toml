@@ -2334,7 +2334,8 @@ path = "crates/rimz/src/harness"
 # park_notice::{Continuation, LimitReading, ParkAction, park_action, limit_reading} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run.
 # park_notice::refill_ahead and FleetRuns::{any_working, held, is_held} let the fleet report pass over a held child and read a limit-failed child's refill.
 # run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
-surface-budget = 1133
+# `when::condition` and `schedule::probe` split the shared condition evaluator from the scheduler's forge probe demand (+1).
+surface-budget = 1134
 
 [[verdict]]
 kind = "item"
@@ -5408,6 +5409,7 @@ allowed-dependencies = [
     "harness::schedule",
     "harness::signal",
     "harness::surplus",
+    "harness::when",
     "harness::workflow",
     "ids",
     "proc",
@@ -10473,7 +10475,7 @@ reason = "Sidebar publication and condition evaluation share repository/branch c
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::probe_demand"
+key = "harness::schedule::probe::probe_demand"
 reason = "Read-only condition demand supplies checkout paths and selected branches to both sidebar forge producers."
 
 [[verdict]]
@@ -11398,12 +11400,12 @@ reason = "Workflow condition cases share ordered predicates and hold durations w
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::WhenExpr::truth"
+key = "harness::when::WhenExpr::truth"
 reason = "Workflow conditions project three-valued truth without changing loop evaluation."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::WhenExpr::forge_branches"
+key = "harness::when::WhenExpr::forge_branches"
 reason = "Loop and workflow demand share the parser's forge selector extraction."
 
 [[verdict]]
@@ -11413,12 +11415,12 @@ reason = "The sidebar reads sealed workflow demand without reaching transition o
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::condition_stages"
+key = "harness::when::condition::condition_stages"
 reason = "Loop and workflow admission share the effective team's stage names."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::unread_reason"
+key = "harness::when::condition::unread_reason"
 reason = "Loop inspection adds a read-time age to shared unread reasons; workflow answers store ageless prose."
 
 [[verdict]]
@@ -11968,7 +11970,7 @@ reason = "Launch and stop admission publish the same PID/start-token ownership i
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::head"
+key = "harness::when::head"
 reason = "Workflow attempt evidence and the shared condition commit fence share one bounded checkout HEAD read."
 
 [[verdict]]
@@ -12023,12 +12025,12 @@ reason = "Worktree removal cancels through the workflow command's real attempt h
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::WhenExpr::blocking_evidence"
+key = "harness::when::WhenExpr::blocking_evidence"
 reason = "Workflow waits retain typed comparison readings without reparsing rendered conditions."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::WhenExpr::scope_checkout_key"
+key = "harness::when::WhenExpr::scope_checkout_key"
 reason = "`loop add` admission of a `stay` task names scope-reading keys without copying the condition vocabulary into the CLI."
 
 [[verdict]]
@@ -12253,27 +12255,27 @@ reason = "CLI progress projects already-observed condition readings without anot
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::ConditionCount"
+key = "harness::when::ConditionCount"
 reason = "The CLI shares typed conjunction satisfaction and unread counts."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::UnreadReason"
+key = "harness::when::UnreadReason"
 reason = "Forge cache absence is explained independently of condition truth."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::CiSource::unread_reason"
+key = "harness::when::CiSource::unread_reason"
 reason = "Condition presentation reads per-key forge failure reasons without probing."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::CiSource::checked_at"
+key = "harness::when::CiSource::checked_at"
 reason = "Condition presentation reads the latest successful cache probe timestamp."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::WhenExpr::condition_count"
+key = "harness::when::WhenExpr::condition_count"
 reason = "TaskTiming projects pure conjunction progress through the expression's private tree."
 
 [[verdict]]
@@ -12288,7 +12290,7 @@ reason = "The GitHub parser publishes draft-first review facts for condition rea
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::when::WhenTerm::reads_forge"
+key = "harness::when::WhenTerm::reads_forge"
 reason = "Condition presentation asks a parsed leaf whether it reads forge instead of reparsing its display text."
 
 [[verdict]]

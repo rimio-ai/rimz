@@ -448,7 +448,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 );
             }
             if !args.when.is_empty() {
-                let expr = schedule::when::WhenExpr::parse(&args.when)?;
+                let expr = rimz::harness::when::WhenExpr::parse(&args.when)?;
                 if let Some(key) = expr.scope_checkout_key() {
                     bail!(
                         "--stay --worktree cannot use --when key `{key}`; it reads the project root, not the destination; use a branch-qualified condition such as pr[<branch>]=merged, a window condition, or a clock trigger"
@@ -608,7 +608,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
 /// Refuses every flag whose field a workflow fire ignores or the stored row refuses, naming
 /// where that concept lives in a workflow.
 fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
-    let window = schedule::when::WhenExpr::parse(&args.when)
+    let window = rimz::harness::when::WhenExpr::parse(&args.when)
         .is_ok_and(|expr| expr.terms().any(|term| term.key.starts_with("window.")));
     let fan_out = args.each_worktree;
     let checks = "checks and waits are the workflow's `[checks.<name>]` nodes";

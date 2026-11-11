@@ -17,6 +17,7 @@ use anyhow::Context;
 
 use crate::config::{TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
+use crate::harness::when;
 use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
 use jiff::civil::Weekday;
 use jiff::{SignedDuration, Timestamp, Zoned};
@@ -27,7 +28,6 @@ pub mod backlog;
 mod backlog_store;
 pub mod catalog;
 pub mod compile;
-mod condition;
 mod config_edit;
 mod eject;
 pub mod fanout;
@@ -38,6 +38,7 @@ pub mod launch_ledger;
 mod launch_ledger_store;
 mod overlay_store;
 pub mod pending;
+pub(crate) mod probe;
 mod run_lock;
 pub mod run_log;
 pub mod runner;
@@ -45,9 +46,7 @@ pub mod signal;
 pub mod strikes;
 pub mod team;
 pub mod throttle;
-pub mod when;
 
-pub use condition::{condition_stages, unread_reason};
 pub use fire::last_stamps;
 
 /// The recorded provenance of a session delivery.

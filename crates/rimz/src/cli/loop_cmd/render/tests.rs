@@ -739,7 +739,7 @@ fn worktree_view() -> ShowView {
     view.now_zoned = Timestamp::from_second(3600)
         .unwrap()
         .to_zoned(jiff::tz::TimeZone::UTC);
-    let verdict = |pr: Option<&str>, ci: Option<&str>| schedule::when::Verdict {
+    let verdict = |pr: Option<&str>, ci: Option<&str>| rimz::harness::when::Verdict {
         ok: pr == Some("open") && ci == Some("passed"),
         readings: BTreeMap::from([
             ("pr".into(), pr.map(str::to_owned)),
@@ -954,7 +954,8 @@ fn negated_leaf_glyphs_and_short_read_through_the_negation() {
     verdict.readings.insert("ci".into(), Some("failed".into()));
     verdict.unread.clear();
 
-    let expr = schedule::when::WhenExpr::parse(&["pr=open && !ci=pending,failed".into()]).unwrap();
+    let expr =
+        rimz::harness::when::WhenExpr::parse(&["pr=open && !ci=pending,failed".into()]).unwrap();
     let CheckoutState::Ready { verdict, .. } = &view.worktrees[0].state else {
         panic!("ready fixture must carry a verdict");
     };
@@ -1257,7 +1258,7 @@ fn worktrees_json_preserves_the_full_accepted_hold_duration() {
         state: schedule::fanout::CheckoutState::Holding {
             since: view.now_zoned.timestamp(),
             hold,
-            verdict: schedule::when::Verdict {
+            verdict: rimz::harness::when::Verdict {
                 ok: true,
                 readings: BTreeMap::new(),
                 unread: Default::default(),

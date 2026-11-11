@@ -18,12 +18,12 @@ use super::{
     arming::{self, ArmState, Arming},
     catalog::{LoadedTask, TaskCatalog},
     run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult},
-    when::{self, CiSource, ConditionEvidence, Verdict, WhenState},
 };
 use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::disk::paths::{StatePaths, logs_dir};
 use crate::harness::signal::Signal;
+use crate::harness::when::{self, CiSource, ConditionEvidence, Verdict, WhenState};
 use crate::ids::WorkspaceId;
 use crate::workspace::record;
 

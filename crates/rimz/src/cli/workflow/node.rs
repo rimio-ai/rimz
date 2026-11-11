@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-use rimz::harness::schedule::when::WhenExpr;
+use rimz::harness::when::WhenExpr;
 use rimz::harness::workflow::{Check, CheckKind, Edge, Fireability, Step, StepKind};
 use rimz::store::workflow::StepLifecycle;
 

@@ -362,7 +362,7 @@ fn condition_scopes_union_with_panes_without_duplicates() {
 #[test]
 fn condition_catalog_supplies_pane_free_probe_scopes() {
     use crate::config::{TaskEntry, Tasks};
-    use crate::harness::schedule::{arming, when};
+    use crate::harness::schedule::{arming, probe};
 
     let root = tempfile::tempdir().unwrap();
     let scope = root.path().join("checkout");
@@ -453,7 +453,7 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
     )
     .unwrap();
     let snapshot = SidebarSnapshot::build(runtime.workspace_id.clone(), vec![], Timestamp::now());
-    let demand = when::probe_demand(&runtime, Some(root.path()));
+    let demand = probe::probe_demand(&runtime, Some(root.path()));
     assert_eq!(
         demand.get(&root.path().display().to_string()),
         Some(&BTreeSet::from(["feat/x".to_owned(), "other".to_owned()]))
@@ -468,13 +468,13 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
         ]
     );
     std::fs::remove_file(catalog_path).unwrap();
-    assert!(when::probe_demand(&runtime, Some(root.path())).is_empty());
+    assert!(probe::probe_demand(&runtime, Some(root.path())).is_empty());
 }
 
 #[test]
 fn active_workflows_supply_pane_free_forge_scopes_and_branches() {
     use crate::config::{TaskEntry, Tasks};
-    use crate::harness::schedule::when;
+    use crate::harness::schedule::probe;
     use crate::ids::WorkflowRunId;
     use crate::store::workflow::RunState;
 
@@ -573,7 +573,7 @@ outcome = "ready"
     std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
     std::fs::write(catalog_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
 
-    let demand = when::probe_demand(&runtime, Some(root.path()));
+    let demand = probe::probe_demand(&runtime, Some(root.path()));
     assert_eq!(
         demand,
         BTreeMap::from([
@@ -592,14 +592,14 @@ outcome = "ready"
             unscoped.display().to_string()
         ]
     );
-    assert!(when::probe_demand(&runtime, None).is_empty());
+    assert!(probe::probe_demand(&runtime, None).is_empty());
 
     let runs = state.workflow(&WorkflowRunId::new());
     let runs_dir = runs.home.parent().unwrap();
     std::fs::remove_dir_all(runs_dir).unwrap();
     std::fs::write(runs_dir, "not a directory").unwrap();
     assert_eq!(
-        when::probe_demand(&runtime, Some(root.path())),
+        probe::probe_demand(&runtime, Some(root.path())),
         BTreeMap::from([(
             checkout.display().to_string(),
             BTreeSet::from(["loop".to_owned()])

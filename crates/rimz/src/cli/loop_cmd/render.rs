@@ -1,8 +1,8 @@
 //! List, show, and log loop task state.
 
 use super::*;
+use rimz::harness::when::{Verdict, WhenExpr};
 use schedule::fanout::{CheckoutCondition, CheckoutState};
-use schedule::when::{Verdict, WhenExpr};
 
 const NOTE_MAX: usize = 60;
 const BLOCKED_WARN_AFTER_SECS: i64 = 30 * 60;
@@ -699,7 +699,7 @@ fn write_worktrees(
         .collect::<Vec<_>>();
     let source = runtime_for_root(&view.entry.resolved_root())
         .filter(|_| view.room_is_open)
-        .map(|runtime| schedule::when::CiSource::read(&runtime));
+        .map(|runtime| rimz::harness::when::CiSource::read(&runtime));
     let has_launch = rendered.iter().any(|row| {
         matches!(
             row.condition.state,
@@ -1568,7 +1568,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             .as_ref()
             .context("runtime paths unavailable")
             .and_then(|runtime| {
-                let ci_source = room_is_open.then(|| schedule::when::CiSource::read(runtime));
+                let ci_source = room_is_open.then(|| rimz::harness::when::CiSource::read(runtime));
                 schedule::fanout::inspect(
                     &args.name,
                     &task,

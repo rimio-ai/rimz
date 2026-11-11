@@ -270,7 +270,7 @@ pub(super) fn refresh_diff_stats_for(
     // background worktrees. Hibernated roots take the slowest tier unless a
     // live condition demands their facts.
     let condition_scopes =
-        crate::harness::schedule::when::probe_demand(runtime, snapshot.project_root.as_deref());
+        crate::harness::schedule::probe::probe_demand(runtime, snapshot.project_root.as_deref());
     let condition_scopes = condition_scopes.into_keys().collect();
     let hibernated = hibernated_worktree_paths(snapshot, &condition_scopes);
     let needed = needed_worktree_paths(snapshot, condition_scopes);

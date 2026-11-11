@@ -274,7 +274,7 @@ The cache is `<git common dir>/rimz-landed-memo.json`, outside the checkout and 
 
 `inspect` pairs Git status with the protection set's holders in a `WorktreeState`. `inspect_owned` loads and saves one memo and runs `inspect` over the discovered trees through `utils::parallel::bounded_map` with eight workers, returning them in input order. A tree whose inspection fails gets an unknown status, so it is kept. Listing and sweeping share this projection.
 
-The loop scheduler enumerates trees for each-worktree tasks through `discover_owned_cached` (called from `harness/schedule/fire.rs` and `harness/schedule/when.rs`). It caches the `git worktree list` rows per repository for 60 seconds, invalidated when the common directory's `worktrees/` entry changes, and revalidates every marker by stat on each call.
+The loop scheduler enumerates trees for each-worktree tasks through `discover_owned_cached` (called from `harness/schedule/fire.rs` and `harness/schedule/probe.rs`). It caches the `git worktree list` rows per repository for 60 seconds, invalidated when the common directory's `worktrees/` entry changes, and revalidates every marker by stat on each call.
 
 ### What the sidebar asks
 

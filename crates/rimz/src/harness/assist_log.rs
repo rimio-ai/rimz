@@ -142,7 +142,7 @@ pub enum Assist {
         task: String,
         checkout: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        condition: Option<super::schedule::when::ConditionEvidence>,
+        condition: Option<super::when::ConditionEvidence>,
         /// Handles of the checkout occupants the launch took over from.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         stopped: Vec<String>,

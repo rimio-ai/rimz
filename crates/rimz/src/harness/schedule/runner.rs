@@ -413,7 +413,7 @@ pub struct TaskFire<'a> {
     signal: Option<TriggerSignal>,
     arrived_at: Option<Timestamp>,
     from_arrived_at: Option<Timestamp>,
-    condition: Option<super::when::ConditionEvidence>,
+    condition: Option<crate::harness::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
     /// The fresh tree of a `fresh-worktree` fire. It is never `checkout`, which
     /// keys the run lock, capacity and declines at the project root.
@@ -662,7 +662,10 @@ impl<'a> TaskFire<'a> {
         self
     }
 
-    pub fn with_condition(mut self, condition: Option<super::when::ConditionEvidence>) -> Self {
+    pub fn with_condition(
+        mut self,
+        condition: Option<crate::harness::when::ConditionEvidence>,
+    ) -> Self {
         self.condition = condition;
         self
     }
@@ -2155,7 +2158,7 @@ pub fn window_condition_provider(
     runtime: &RuntimePaths,
     now: Timestamp,
 ) -> Result<Option<AgentKind>, WindowRefusal> {
-    let Ok(expr) = super::when::WhenExpr::parse(when) else {
+    let Ok(expr) = crate::harness::when::WhenExpr::parse(when) else {
         return Ok(None);
     };
     let spans = expr
@@ -2260,7 +2263,7 @@ pub fn after_reset(
     }
     let started = !window.not_started(now);
     Ok(AfterReset {
-        left: super::when::percent_left(&window),
+        left: crate::harness::when::percent_left(&window),
         resets_at,
         started,
         fire_at: if started { resets_at } else { now },

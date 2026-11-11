@@ -105,7 +105,7 @@ The board is `blackboard.md` in the run directory, reached as `<checkout>/.rimz/
 | `launch_context` | A member's launch identity: the pipeline with the live stage bracketed, or the board already at `Done` |
 | `teams stop` (`crates/rimz/src/cli/teams/cohort.rs::stop`) | A board short of `Done` prints that the checkout stays held, with the resume and release commands |
 | `idle_stop::decide` | A pending idle stop of a team seat holds (`Hold::Board`) until the seat's board reads `Done` ([loops.md § Idle stop](./loops.md#idle-stop)) |
-| A loop condition's `team.stage` term (`crates/rimz/src/harness/schedule/when.rs::evaluate`) | The stage at the task's scope ([loops.md § Condition planning](./loops.md#condition-planning)) |
+| A loop condition's `team.stage` term (`crates/rimz/src/harness/when.rs::evaluate`) | The stage at the task's scope ([loops.md § Condition planning](./loops.md#condition-planning)) |
 | The stall-nudge helper | The open visit's stage and start, through `scratch::parse_board_run` under the board lock |
 
 `teams list` and `teams show` share one instance build. Beside the board stage it carries the pipeline (the team's declared `stages`, else the owned stages in role order, then the implicit `Done`), and each armed signal subscription's newest acting run-log record and newest heard signal ([loops.md § The display commands](./loops.md#the-display-commands)). Its PR and CI line comes from the published sidebar projection (the snapshot's `worktree_groups`) with no forge call of its own, so an absent PR line is not proof that no PR exists.

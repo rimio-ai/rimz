@@ -2,7 +2,7 @@ use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
 use rimz::config::GlyphRole;
-use rimz::harness::schedule::when::WhenExpr;
+use rimz::harness::when::WhenExpr;
 use rimz::harness::workflow::{
     Check, CheckKind, Edge, EdgeSource, Fireability, Hop, Route, StepKind, WalkNode, WorkflowSpec,
     reached,

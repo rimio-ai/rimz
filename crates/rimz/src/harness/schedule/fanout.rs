@@ -6,13 +6,9 @@ use std::time::Duration;
 use anyhow::Result;
 use jiff::Timestamp;
 
-use super::{
-    ParsedTrigger, Trigger,
-    catalog::LoadedTask,
-    fire, launch_ledger,
-    when::{self, CiSource, Verdict, WindowReadings},
-};
+use super::{ParsedTrigger, Trigger, catalog::LoadedTask, fire, launch_ledger};
 use crate::RuntimePaths;
+use crate::harness::when::{self, CiSource, Verdict, WindowReadings};
 
 #[derive(Clone, Debug)]
 pub struct CheckoutCondition {

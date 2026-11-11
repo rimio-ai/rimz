@@ -24,7 +24,7 @@ use crate::store::event::SignalName;
 use crate::store::run::RunStatus;
 use serde_json::{Map, Value};
 
-pub type ConditionRecord = super::when::ConditionEvidence;
+pub type ConditionRecord = crate::harness::when::ConditionEvidence;
 
 const NAME: &str = "loop-runs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;

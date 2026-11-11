@@ -1321,7 +1321,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         ..TaskEntry::default()
     };
     let catalog = TaskCatalog::load(None).unwrap();
-    let evidence = super::super::when::ConditionEvidence {
+    let evidence = crate::harness::when::ConditionEvidence {
         since: None,
         when: "team.stage=Done".to_owned(),
         hold: Some("30m".to_owned()),

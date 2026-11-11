@@ -2907,20 +2907,11 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
                 .to_string(),
         )
         .unwrap();
-        let source = rimz::harness::schedule::when::CiSource::read(&runtime);
-        let expr = rimz::harness::schedule::when::WhenExpr::parse(&["pr=open".to_owned()]).unwrap();
-        let windows =
-            rimz::harness::schedule::when::WindowReadings::new(Some(&runtime), Timestamp::now());
+        let source = rimz::harness::when::CiSource::read(&runtime);
+        let expr = rimz::harness::when::WhenExpr::parse(&["pr=open".to_owned()]).unwrap();
+        let windows = rimz::harness::when::WindowReadings::new(Some(&runtime), Timestamp::now());
         assert!(
-            rimz::harness::schedule::when::evaluate(
-                &expr,
-                &checkout,
-                Some(&source),
-                None,
-                None,
-                &windows
-            )
-            .ok
+            rimz::harness::when::evaluate(&expr, &checkout, Some(&source), None, None, &windows).ok
         );
     }
     let store = env.store();

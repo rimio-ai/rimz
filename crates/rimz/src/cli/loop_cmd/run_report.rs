@@ -572,7 +572,7 @@ pub(super) fn write_record_forensics(
             .map_or_else(String::new, |hold| format!(" · held {hold}"));
         let current = entry
             .and_then(|entry| entry.when.as_deref())
-            .and_then(|clauses| schedule::when::WhenExpr::parse(clauses).ok());
+            .and_then(|clauses| rimz::harness::when::WhenExpr::parse(clauses).ok());
         if detail != Forensics::Summary
             || !current.is_some_and(|expr| expr.to_string() == condition.when)
         {
@@ -583,8 +583,10 @@ pub(super) fn write_record_forensics(
         write!(out, "  ")?;
         let mut serializer = serde_json::Serializer::new(&mut *out);
         let mut readings = serializer.serialize_map(None)?;
-        if let Ok(expr) = schedule::when::WhenExpr::parse(std::slice::from_ref(&condition.when)) {
-            let verdict = schedule::when::Verdict {
+        if let Ok(expr) =
+            rimz::harness::when::WhenExpr::parse(std::slice::from_ref(&condition.when))
+        {
+            let verdict = rimz::harness::when::Verdict {
                 ok: false,
                 readings: condition.readings.clone(),
                 unread: Default::default(),

@@ -6,7 +6,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::schedule::when::{WhenExpr, WindowReadings, evaluate};
+use super::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
 use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
