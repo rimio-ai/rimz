@@ -64,6 +64,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
     ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
+    ensure_image_permit_minted_only_by_host(root, &files)?;
     ensure_sidebar_loop_runtime_uses_driver_clock(root, &files)?;
     ensure_no_hardcoded_ui_colors(root, &files)?;
     ensure_cli_color_provenance(root, &files)?;
@@ -1049,6 +1050,35 @@ fn ensure_no_match(
         return Ok(());
     }
     bail!("{message}\n{}", violations.join("\n"));
+}
+
+/// Only the host's mint grants a sidebar image permit, so every pixel slot take and
+/// kitty graphics write traces back to the host's on-screen reading or jump landing.
+/// The permit's own file and test or testkit sources are exempt. The compiler already
+/// keeps the tuple constructor inside that file; it is rejected here too, for the day
+/// the file gains a second item or a child module.
+fn ensure_image_permit_minted_only_by_host(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let source_root = root.join("crates/rimz/src");
+    let admitted = [
+        "crates/rimz/src/sidebar_pane/app/image_permit.rs",
+        "crates/rimz/src/sidebar_pane/pixel/permit.rs",
+    ]
+    .map(|path| root.join(path));
+    let exempt = |path: &Path| {
+        !path.starts_with(&source_root)
+            || admitted.iter().any(|admitted| admitted == path)
+            || path.starts_with(source_root.join("testkit"))
+            || is_test_source_path(root, path)
+    };
+    for constructor in [concat!("grant_by", "_host"), concat!("ImagePermit", "(")] {
+        ensure_no_match(
+            files,
+            constructor,
+            exempt,
+            "only the sidebar host's mint grants an image permit: take the permit the paint pass minted",
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathBuf]) -> Result<()> {

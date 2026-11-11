@@ -1107,3 +1107,45 @@ fn template_sections_match_header_lines_not_mentions() {
         "a comment that mentions a section is not its header"
     );
 }
+
+#[test]
+fn image_permit_grant_is_minted_only_by_the_host_mint() {
+    let root = temp_repo_root("image-permit-mint");
+    let grants = [
+        concat!("ImagePermit::", "grant_by", "_host()"),
+        concat!("ImagePermit", "(())"),
+    ];
+    let cases = [
+        ("crates/rimz/src/sidebar_pane/app/image_permit.rs", true),
+        ("crates/rimz/src/sidebar_pane/pixel/permit.rs", true),
+        (
+            "crates/rimz/src/sidebar_pane/app/loop_state/tests/hidden.rs",
+            true,
+        ),
+        ("crates/rimz/src/sidebar_pane/app/tests.rs", true),
+        ("crates/rimz/src/testkit/host_pass.rs", true),
+        ("docs/internals/sidebar/pets.md", true),
+        ("crates/rimz/src/sidebar_pane/pixel/mod.rs", false),
+        ("crates/rimz/src/sidebar_pane/pixel/meter.rs", false),
+        ("crates/rimz/src/sidebar_pane/app/loop_state.rs", false),
+        ("crates/rimz/src/sidebar_pane/app/paint.rs", false),
+        ("crates/rimz/src/sidebar_pane/AGENTS.md", false),
+    ];
+    for (relative, allowed) in cases {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for grant in grants {
+            std::fs::write(&path, format!("fn mint() {{ {grant}; }}\n")).unwrap();
+            let result =
+                ensure_image_permit_minted_only_by_host(&root, std::slice::from_ref(&path));
+            match result {
+                Ok(()) => assert!(allowed, "{relative} must reject {grant}"),
+                Err(error) => {
+                    assert!(!allowed, "{relative} must admit {grant}: {error}");
+                    assert!(error.to_string().contains("image permit"), "{error}");
+                }
+            }
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
