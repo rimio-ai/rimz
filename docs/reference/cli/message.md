@@ -99,7 +99,7 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 
 ## Conditions
 
-`--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer`, `--wait`, and `--create`. `rimz message steer <id>` delivers past unmet conditions.
+`--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer`, `--wait`, `--timeout`, and `--create`. `rimz message steer <id>` delivers past unmet conditions.
 
 **`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn, including a provider pause the card shows as `failed`, keeps it waiting under `--on done` and releases it under `--on any`, so under `--on any` the condition can be met between a limit's reset and auto-continue resuming that agent; a recoverable provider pause or a RimZ budget park keeps it waiting under both.
 
@@ -136,7 +136,7 @@ Each fan-out delivery starts with the typed selector, such as `@all, ` or `@code
 | --- | --- |
 | `--channel <NAME>` | Match only agents in that named channel. Same as an inline `#NAME`. Conflicts with `--worktree`. |
 | `--worktree <NAME>` | Match only agents in that worktree, by name or path. Conflicts with `--channel`. |
-| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` launches into that lane, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
+| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` launches into that lane, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, `--wait`, and `--timeout`. |
 
 When `--create --worktree NAME` finds an existing unoccupied RimZ-owned tree, it uses the [worktree entry check](./agents.md#relaunch-into-a-named-worktree). Without a terminal it refuses with the facts and a `rimz agents <spec> -w NAME --fresh` command carrying the message text; use that command to enter without asking.
 
@@ -194,12 +194,12 @@ Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED`
 
 If the prompt starts a fresh turn, that turn is the reply for `--interrupt --wait`. RimZ waits for that prompt's delivery acknowledgement before following the reply, not the interrupted turn's remaining activity. A confirmed stop alone does not satisfy the reply wait.
 
-`--wait` sends or parks one message per target, waits for each reply turn to finish, and prints the replies. It takes an optional total deadline in the attached form `--wait=<DURATION>` (`s`, `m`, or `h`), covering delivery plus the turn. Bare `--wait` takes no value, so it can sit before the text. A user shell's bare wait has no deadline; an agent's bare wait stops after one hour.
+`--wait` sends or parks one message per target, waits for each reply turn to finish, and prints the replies. `--timeout <DURATION>` (`s`, `m`, or `h`; also `--timeout=<DURATION>`) sets a total deadline covering delivery plus the turn and implies `--wait`, so `--wait --timeout 10m` is the same wait as `--timeout 10m`. The attached `--wait=<DURATION>` sets the same deadline; passing it together with `--timeout` is refused with exit 2. Bare `--wait` takes no value, so it can sit before the text. A user shell's bare wait has no deadline; an agent's bare wait stops after one hour.
 
 | Flag | Effect |
 | --- | --- |
-| `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait`. |
-| `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait`. |
+| `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait` or `--timeout`. |
+| `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait` or `--timeout`. |
 
 At the start, stderr prints each target's ordinary send receipt, including its message id, even with `--json`. Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting`, or paused but can still recover, is still in progress; a provider pause the card shows as `failed` ends the wait as failed. A script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
 

@@ -198,7 +198,7 @@ That same seat line also drives [mid-turn soft compaction](./loops.md#smart-comp
 rimz message @coder --wait "did the migration land? one line"    # the reply alone on stdout
 rimz message @all --wait --json "status? one line"               # one handle-keyed reply map
 rimz message --all @reviewer --wait --any "first verdict?"       # return on the first reply
-rimz message @codex --wait=5m "open the PR"                      # bound delivery plus turn
+rimz message @codex --timeout 5m "open the PR"                   # bound delivery plus turn
 rimz message --steer @claude --wait "answer from this turn"      # the live turn is the reply
 ```
 
@@ -206,9 +206,9 @@ A fan-out wait gathers every reply from the agents' existing contexts and stream
 
 A deadline does not withdraw queued text: it will still deliver unless you cancel its id with `rimz message cancel`. The timeout hints distinguish that queued text from text already typed into a pane (do not resend) and a delivered message still being worked on. Use `rimz agents logs @coder` to read the reply later. The same hints appear on stderr with `--json`.
 
-Every target must be a running agent with installed and trusted [hooks](./setup.md#install-agent-hooks), since hooks are what report the turn's end. `--wait` conflicts with `--create`, `--schedule`, and `--no-enter`, and `--json` and `--any` each require it.
+Every target must be a running agent with installed and trusted [hooks](./setup.md#install-agent-hooks), since hooks are what report the turn's end. `--wait` and `--timeout` conflict with `--create`, `--schedule`, and `--no-enter`, and `--json` and `--any` each require one of them.
 
-A turn that goes `waiting`, or pauses but can still recover, keeps the reply wait open. A provider pause that can no longer resume, which the card shows as `failed`, ends the wait as failed. A reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--wait=<duration>` when a script needs its own bound.
+A turn that goes `waiting`, or pauses but can still recover, keeps the reply wait open. A provider pause that can no longer resume, which the card shows as `failed`, ends the wait as failed. A reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--timeout 5m` (or the attached `--wait=5m`) when a script needs its own bound.
 
 Agents wait on each other too, and RimZ catches the deadlock instead of hanging: a send whose target is already waiting on the caller's own reply is refused before anything is queued, and a cycle that forms inside a running fan-out fails that one target, each naming the handle and message that blocks it. Text already queued stays queued and delivers at the next boundary. An agent's own `@all --wait` gathers peer replies only, never its own.
 
