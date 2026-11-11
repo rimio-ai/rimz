@@ -483,9 +483,9 @@ A settled child can take another turn: a live interactive child through an ordin
 
 [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens a terminal turn-lifecycle subagent run on a `TurnStarted` of its kind and bound session, whatever its terminal status. Other terminal runs stay terminal. The reopen:
 
-1. moves the replaced answer into `earlier_answers` with its digest link, unless it was joined or reported to `nobody`, and drops joined earlier entries
+1. moves the replaced answer into `earlier_answers` with its digest link, its `failure_tail` and its `limit_failure`, unless it was joined or reported to `nobody`, and drops joined earlier entries
 2. increments `follow_ups` and sets `follow_up.started_at` to the reopen time with no prompt, then clears `opened_by`
-3. sets `report_to` to `launcher` and status `Running`, clearing `completed_at`, `parked_at`, `parked_answer`, `joined_at`, `report_message_id`, `last_message`, `failure_tail`, and `deadline_notice_at` (`stall_noticed_at` stays set)
+3. sets `report_to` to `launcher` and status `Running`, clearing `completed_at`, `parked_at`, `parked_answer`, `joined_at`, `report_message_id`, `last_message`, `failure_tail`, `limit_failure`, `limit_hold`, and `deadline_notice_at` (`stall_noticed_at` stays set)
 4. re-arms the deadline to `now + timeout`. A record without a stored timeout re-arms by the previous answer's own span (from `follow_up.started_at`, else `started_at`), so later reopens do not compound the timeout
 
 The next completion is newly terminal again and can produce another digest without losing the earlier answer. Verification retries and park and unpark cycles keep the same ordinal.

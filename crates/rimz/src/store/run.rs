@@ -198,6 +198,8 @@ pub struct EarlierAnswer {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_tail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_failure: Option<LimitFailure>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub opened_by: Vec<crate::ids::MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,6 +239,34 @@ pub struct LimitHold {
     pub until: Timestamp,
 }
 
+/// Why a launched child's run failed on a provider-limit park, kept typed so
+/// the fleet report computes the refill's distance when it is composed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitFailure {
+    pub cause: LimitFailureCause,
+    /// The refill read for the park; set for `BeyondHoldLimit` and `RefillKnown` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refill_at: Option<Timestamp>,
+    /// The provider's message, when the limit marker carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitFailureCause {
+    /// The refill falls past the hold limit.
+    BeyondHoldLimit,
+    /// The refill is known and nothing continues the child at it.
+    RefillKnown,
+    /// The account read quota available again, with nothing to continue it.
+    Refilled,
+    /// No refill was published and no fresh reading showed quota.
+    RefillUnknown,
+    /// Auto-continue spent its retries on the park.
+    ContinueFailed,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
@@ -264,6 +294,10 @@ pub struct RunRecord {
     pub earlier_sessions: Vec<RunSession>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_tail: Option<String>,
+    /// The typed cause of a provider-limit failure, written with `failure_tail`
+    /// and moved into the earlier answer with it on a reopen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_failure: Option<LimitFailure>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_of: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -513,6 +547,7 @@ impl RunRecord {
             transcript_path: None,
             earlier_sessions: Vec::new(),
             failure_tail: None,
+            limit_failure: None,
             retry_of: None,
             loop_task: None,
             workflow: None,
@@ -1194,6 +1229,70 @@ mod tests {
         let decoded: RunRecord = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.limit_hold, None);
         assert_eq!(decoded.handed_over_from, None);
+    }
+
+    #[test]
+    fn limit_failure_round_trips_on_both_records_and_defaults_when_absent() {
+        let mut record = RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        assert!(
+            serde_json::to_value(&record)
+                .unwrap()
+                .get("limit_failure")
+                .is_none()
+        );
+        let failure = LimitFailure {
+            cause: LimitFailureCause::RefillKnown,
+            refill_at: Some("2026-11-11T20:00:00Z".parse().unwrap()),
+            label: Some("Usage limit reached".to_owned()),
+        };
+        record.limit_failure = Some(failure.clone());
+        record.earlier_answers.push(EarlierAnswer {
+            ordinal: 1,
+            status: RunStatus::Failed,
+            started_at: record.started_at,
+            completed_at: None,
+            prompt: None,
+            failure_tail: None,
+            limit_failure: Some(LimitFailure {
+                cause: LimitFailureCause::ContinueFailed,
+                refill_at: None,
+                label: None,
+            }),
+            opened_by: Vec::new(),
+            report_message_id: None,
+            joined_at: None,
+        });
+
+        let mut value = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            value["limit_failure"],
+            serde_json::json!({
+                "cause": "refill_known",
+                "refill_at": "2026-11-11T20:00:00Z",
+                "label": "Usage limit reached",
+            })
+        );
+        assert_eq!(
+            value["earlier_answers"][0]["limit_failure"],
+            serde_json::json!({ "cause": "continue_failed" })
+        );
+        let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(decoded, record);
+
+        value.as_object_mut().unwrap().remove("limit_failure");
+        value["earlier_answers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("limit_failure");
+        let decoded: RunRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.limit_failure, None);
+        assert_eq!(decoded.earlier_answers[0].limit_failure, None);
     }
 
     #[test]

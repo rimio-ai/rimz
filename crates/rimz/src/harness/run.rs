@@ -1360,6 +1360,7 @@ fn fold_lifecycle(
                     .as_ref()
                     .and_then(|turn| turn.prompt.clone()),
                 failure_tail: record.failure_tail.take(),
+                limit_failure: record.limit_failure.take(),
                 opened_by: std::mem::take(&mut record.opened_by),
                 report_message_id: record.report_message_id.take(),
                 joined_at: None,
@@ -1387,6 +1388,7 @@ fn fold_lifecycle(
         record.last_message = None;
         record.parked_answer = None;
         record.failure_tail = None;
+        record.limit_failure = None;
     }
     let stop_changed = fold_stopped_turn(record, &observation.signal, now);
     if let Some(disposition) = observation.signal.terminal_disposition() {

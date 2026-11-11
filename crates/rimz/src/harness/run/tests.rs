@@ -835,6 +835,11 @@ fn terminal_subagent_reopens_for_its_next_turn() {
         record.report_message_id = Some(crate::ids::MessageId::new());
         record.last_message = Some("first answer".into());
         record.failure_tail = Some("first failure".into());
+        record.limit_failure = Some(crate::store::run::LimitFailure {
+            cause: crate::store::run::LimitFailureCause::RefillUnknown,
+            refill_at: None,
+            label: Some("Usage limit reached".into()),
+        });
         record.deadline_at = Some(record.started_at + std::time::Duration::from_secs(30));
         create(&paths, &record).unwrap();
         let mut observation = AgentLifecycleObservation::new(
@@ -865,6 +870,7 @@ fn terminal_subagent_reopens_for_its_next_turn() {
         assert_eq!(reopened.report_message_id, None);
         assert_eq!(reopened.last_message, None);
         assert_eq!(reopened.failure_tail, None);
+        assert_eq!(reopened.limit_failure, None);
         let value = serde_json::to_value(&reopened).unwrap();
         assert_eq!(
             value["follow_up"]["started_at"],
@@ -880,6 +886,13 @@ fn terminal_subagent_reopens_for_its_next_turn() {
             assert_eq!(answers.len(), 1);
             assert_eq!(answers[0]["ordinal"], 1);
             assert_eq!(answers[0]["failure_tail"], "first failure");
+            assert_eq!(
+                answers[0]["limit_failure"],
+                serde_json::json!({
+                    "cause": "refill_unknown",
+                    "label": "Usage limit reached",
+                })
+            );
             assert_eq!(
                 answers[0]["report_message_id"],
                 serde_json::to_value(&record.report_message_id).unwrap()
