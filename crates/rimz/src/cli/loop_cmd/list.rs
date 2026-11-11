@@ -117,6 +117,8 @@ struct ListModel {
     caller_root: Option<PathBuf>,
     now: Timestamp,
     warnings: Vec<String>,
+    /// Whether the loop timer is active, read only when a loaded room is closed.
+    timer_active: bool,
 }
 
 #[derive(Serialize)]
@@ -232,7 +234,7 @@ impl TaskState {
         }
     }
 
-    fn observe(timing: &schedule::TaskTiming, running: bool, open: bool) -> Self {
+    fn observe(timing: &schedule::TaskTiming, running: bool, clocks_kept: bool) -> Self {
         if running {
             return Self::Running;
         }
@@ -241,7 +243,7 @@ impl TaskState {
             ArmState::Disabled(_) => Self::Off,
             ArmState::Paused(_) => Self::Paused,
             ArmState::Live
-                if !open
+                if !clocks_kept
                     && timing
                         .parsed()
                         .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Schedule(_))) =>
@@ -416,7 +418,8 @@ pub(super) struct TaskRow {
 
 struct RowContext<'a> {
     run_dir: &'a Path,
-    open: bool,
+    /// The room is open, or the loop timer fires its clocks while it is closed.
+    clocks_kept: bool,
     stats: Option<&'a run_log::LoopRunStats>,
     count: u32,
     watcher_pid: Option<u32>,
@@ -549,6 +552,7 @@ fn load(
     let now = Timestamp::now();
     let config = MachineConfig::load_lenient();
     let now_zoned = now.to_zoned(config.time_zone());
+    let timer_active = std::cell::OnceCell::new();
     let mut rooms = Vec::new();
     let mut warnings = config
         .notices
@@ -581,6 +585,7 @@ fn load(
         };
         let runtime = runtime_for_root(&root);
         let open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+        let clocks_kept = open || *timer_active.get_or_init(timer::active);
         let mut tickets: BTreeMap<String, Vec<Held>> = BTreeMap::new();
         for (name, held) in schedule::throttle::room_held(&root) {
             tickets.entry(name).or_default().push(held);
@@ -655,7 +660,7 @@ fn load(
                 running,
                 RowContext {
                     run_dir: &run_dir,
-                    open,
+                    clocks_kept,
                     stats: stats.get(name),
                     count,
                     watcher_pid: runtime
@@ -746,6 +751,7 @@ fn load(
         caller_root,
         now,
         warnings,
+        timer_active: timer_active.get().copied().unwrap_or(false),
     })
 }
 
@@ -782,7 +788,7 @@ impl TaskRow {
     ) -> Self {
         let RowContext {
             run_dir,
-            open,
+            clocks_kept,
             stats,
             count,
             watcher_pid,
@@ -790,7 +796,7 @@ impl TaskRow {
             now,
         } = context;
         let entry = task.entry();
-        let state = TaskState::observe(&timing, running.is_some(), open);
+        let state = TaskState::observe(&timing, running.is_some(), clocks_kept);
         let (head, continuation) = trigger_text(entry, run_dir, &timing, state, now);
         let action = task.action().ok().map(|action| Action {
             kind: ActionKind::from(action),

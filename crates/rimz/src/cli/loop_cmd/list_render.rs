@@ -21,7 +21,6 @@ pub(super) fn write(
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
-    let timer = timer::active();
     for (index, room) in rooms.iter().enumerate() {
         if index > 0 {
             writeln!(out)?;
@@ -34,7 +33,7 @@ pub(super) fn write(
             )?;
             continue;
         }
-        heading(out, room, model.now, timer)?;
+        heading(out, room, model.now, model.timer_active)?;
         needs_you(out, room, model.now, width)?;
         held_rows(out, room, model.now, width)?;
         routine_rows(out, room, model.now, width)?;
