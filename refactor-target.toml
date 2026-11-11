@@ -2252,9 +2252,9 @@ path = "crates/rimz/src/harness"
 # SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve the single-session CLI (+3).
 # schedule::backlog's reader/schema and TaskFire::{take_backlog, release_run_lock} cross the CLI boundary (+9).
 # runner::discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
-# runner::CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
+# check_run::CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
-# runner::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
+# check_run::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
 # runner::{CheckSignalGuard, TaskFire::record_signal_guard} hold SIGTERM through terminal recording (+2).
 # Workflow Case and WhenExpr::truth share condition specifications and three-valued truth (+2).
 # condition_stages and unread_reason share admission and prose with the loop CLI (+2).
@@ -5398,6 +5398,7 @@ allowed-dependencies = [
     "disk::paths",
     "harness::assist_log",
     "harness::budget",
+    "harness::check_run",
     "harness::launch",
     "harness::loop_task",
     "harness::name",
@@ -5431,12 +5432,9 @@ allowed-dependencies = [
 # signal_subject shares delivered headline composition with events list (+1).
 # TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
 # discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
-# CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
-# cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
-# CheckSignalGuard and TaskFire::record_signal_guard hold SIGTERM through terminal recording (+2).
-# CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
-# CheckOutcome::{stderr_line,timed_out} let capacity checks diagnose failures without copying output (+2).
+# TaskFire::record_signal_guard holds the `check_run::CheckSignalGuard` through terminal recording.
+# `check_run` now owns CheckOutcome, its accessors and `cancel_run_on_sigterm`, which this file exported.
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
 # A fire's admission reads the live row's surplus gate through `surplus::surplus_refusal`, as a workflow judge reads the values its run kept.
 surface-budget = 70
@@ -5853,17 +5851,17 @@ reason = "Signal firing time crosses the CLI boundary separately from the runner
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::CheckOutcome::terminated"
+key = "harness::check_run::CheckOutcome::terminated"
 reason = "Supervised verify must cancel on a caught SIGTERM, not re-prompt as it does on a red check."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::cancel_run_on_sigterm"
+key = "harness::check_run::cancel_run_on_sigterm"
 reason = "Loop-owned supervised waits share the check driver's SIGTERM bookkeeping to cancel durably without overriding its conditional default."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::CheckSignalGuard"
+key = "harness::check_run::CheckSignalGuard"
 reason = "A loop fire owns the action driver's SIGTERM guard across CLI cleanup and terminal recording until its run lock releases."
 
 [[verdict]]
@@ -10818,12 +10816,12 @@ reason = "Inherent priority cascade of pinned bind rules: owning stamp, resume, 
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::run_command"
+key = "harness::check_run::run_command"
 reason = "Pass 28e: after collapsing watch deadlines, cx 10.8 (cognitive/cyclomatic/SLOC 21/50/130) remains in fix-pinned SIGINT forwarding, identity stripping, kill plus bounded drain, lossless check-in and Tee tail phases. Extracting echo setup or reader reaping into single-caller helpers moves complexity without deleting it."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::WatchDeadline"
+key = "harness::check_run::WatchDeadline"
 reason = "Workflow shell checks use the existing exit-code runner with their own interrupt and PID-publication callbacks, without changing loop deadlines."
 
 [[verdict]]

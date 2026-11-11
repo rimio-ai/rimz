@@ -1,9 +1,9 @@
 use super::*;
 use crate::cli::{render, supervised};
 use rimz::agents::transcript::TranscriptCursor;
+use rimz::harness::check_run::CheckSignalGuard;
 use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest, VerifyStep};
 use rimz::harness::run_wake;
-use rimz::harness::schedule::runner::CheckSignalGuard;
 use rimz::store::run::{RunRecord, RunStatus};
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::{Arc, Mutex};
@@ -481,9 +481,8 @@ mod tests {
 
     #[test]
     fn unarmed_attempt_keeps_the_callers_termination_guard() {
-        let mut termination = Some(
-            rimz::harness::schedule::runner::cancel_run_on_sigterm(RunCancellation::new()).unwrap(),
-        );
+        let mut termination =
+            Some(rimz::harness::check_run::cancel_run_on_sigterm(RunCancellation::new()).unwrap());
         let slot = Mutex::new(None);
 
         handoff_termination(&mut termination, &slot);
