@@ -696,7 +696,7 @@ The stage duration sits immediately after the stage name, such as `Implement 4h1
 
 ### Workflow strips
 
-An Active or Parked workflow keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, other cohort blocks, then solo cards and process rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it. If several workflows share a checkout, the newest run supplies the strip.
+A strip belongs to a run of a deployed workflow. An Active or Parked run keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, other cohort blocks, then solo cards and process rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it. If several workflows share a checkout, the newest run supplies the strip. A run compiled from a loop task's own fields (a task without `workflow =`) draws no strip and keeps no group: its agents show as ordinary cards in their lane, and the run itself shows in `rimz loop list` and `rimz loop show`.
 
 ```text
  ⑂ merge-lane ✓ #91                            ⇉ main
@@ -711,7 +711,7 @@ The strip adds neither a selectable row nor attention. Clicking it focuses the c
 
 On narrow panes, the first fitting shape drops the run total, then the track while keeping a detour's parent, then the parent, badge, and duration, then ellipsizes the state word. The current mark and node name never shorten. The detour connector follows `chrome.box_bottom_left` and `chrome.hairline`, including ASCII overrides, in either glyph set.
 
-A live workflow keeps its group out of the inactive section, landed or unlanded, with members or rowless. When the run ends, a group with members returns to the ordinary quiet window on its members' clocks; a rowless group disappears. The six-row cap and the header fold still apply to a group with a live run.
+A live deployed workflow run keeps its group out of the inactive section, landed or unlanded, with members or rowless. When the run ends, a group with members returns to the ordinary quiet window on its members' clocks; a rowless group disappears. The six-row cap and the header fold still apply to a group with a live run.
 
 ### Row cap and inactive groups
 
