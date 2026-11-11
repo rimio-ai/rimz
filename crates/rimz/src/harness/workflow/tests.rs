@@ -56,16 +56,14 @@ pub(in crate::harness) fn subscription_prompts(step: &Step) -> Vec<Option<&str>>
 }
 
 /// Finish the judge attempt `1` that `record` holds with each answer in turn, each against the
-/// same attempt, returning the record and the journal entries the last answer wrote.
+/// same attempt, returning the record with the outcome a terminal write of the last answer's
+/// journal entries gives it.
 pub(in crate::harness) fn finish_judge(
     spec: &WorkflowSpec,
     paths: &crate::disk::paths::WorkflowPaths,
     record: crate::store::workflow::RunRecord,
     results: &[(Result<serde_json::Value, String>, &'static str)],
-) -> (
-    crate::store::workflow::RunRecord,
-    Vec<crate::store::workflow::JournalEntry>,
-) {
+) -> crate::store::workflow::RunRecord {
     let mut t = state::Transition {
         now: record.entered_at,
         record,
@@ -88,7 +86,11 @@ pub(in crate::harness) fn finish_judge(
         )
         .unwrap();
     }
-    (t.record, t.entries)
+    if t.record.state.is_terminal() {
+        let acted = engine::entered_act(spec, &t.record);
+        t.record.outcome = Some(engine::outcome(&t.record, &t.entries, acted));
+    }
+    t.record
 }
 
 /// Whether `outcome` out of judge `node` declines the act.

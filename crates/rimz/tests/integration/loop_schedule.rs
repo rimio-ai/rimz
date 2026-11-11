@@ -9194,7 +9194,7 @@ fn a_declined_run_the_backstop_reports_removes_its_fresh_tree() {
         "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"check",
         "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
         "deadline_fired":false, "next_seq":1, "terminal_at":"2026-01-01T00:00:01Z",
-        "loop_report":"owed"
+        "loop_report":"owed", "outcome":{"ending":{"kind":"failed"}, "acted":false}
     });
     std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     let output = env

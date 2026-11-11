@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::disk::paths;
+use rimz::harness::schedule::run_log;
 use rimz::harness::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
 use rimz::ids::{EventId, WorkflowRunId};
@@ -237,7 +238,10 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             ..
         } => {
             let (state, _) = resolve::locate(&id)?;
-            workflow::advance(&state, &id, &Host::new(&state, globals, woken_by))?;
+            // A terminal write can precede a later error, so the run is collected either way.
+            let advanced = workflow::advance(&state, &id, &Host::new(&state, globals, woken_by));
+            run_log::collect_run(&state, &id);
+            advanced?;
             let record = records::load(&state.workflow(&id))?;
             write_history_copy(&state, &record)
         }

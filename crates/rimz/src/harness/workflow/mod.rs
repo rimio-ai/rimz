@@ -20,11 +20,11 @@ mod spec;
 mod state;
 mod validate;
 
+pub(crate) use engine::hears_lifecycle;
 pub use engine::{
     DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, restart, resume,
     wake, wake_run,
 };
-pub(crate) use engine::{forget_reported_launch, hears_lifecycle};
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{

@@ -15,8 +15,8 @@ use crate::harness::throttle;
 use crate::harness::when::WindowReadings;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
-    self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEvent, LiveAttempt,
-    ParkReason, RunFire, RunOrigin, RunRecord, RunState, Scope, ScopeKind, Verdict,
+    self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEntry, JournalEvent,
+    LiveAttempt, ParkReason, RunFire, RunOrigin, RunRecord, RunState, Scope, ScopeKind, Verdict,
 };
 
 mod accounting;
@@ -308,6 +308,7 @@ fn publish(
         restart: None,
         prev_attempt: None,
         terminal_at: None,
+        outcome: None,
         check_retry: 0,
         check_retry_context: None,
     };
@@ -412,65 +413,119 @@ fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
     if t.record.state != RunState::Active {
         t.record.restart = None;
     }
+    if !t.record.state.is_terminal() {
+        t.record.outcome = None;
+    } else if t.record.outcome.is_none() {
+        // The terminal write never waits on its outcome's inputs: without the journal the
+        // outcome says what the record alone does, the ending its state names.
+        let journal = match workflow::journal(t.paths) {
+            Ok(mut journal) => {
+                journal.extend(t.entries.iter().cloned());
+                journal
+            }
+            Err(error) => {
+                tracing::warn!(
+                    path = %t.paths.journal.display(), %error,
+                    "workflow journal unreadable; the run's outcome carries no cost or reason"
+                );
+                Vec::new()
+            }
+        };
+        let acted = entered_act(t.spec, &t.record);
+        t.record.outcome = Some(outcome(&t.record, &journal, acted));
+    }
     for entry in &t.entries {
         workflow::append(t.paths, entry, guard)?;
     }
     workflow::write(t.paths, &t.record, guard)?;
     accounting::transition(t);
-    report_to_loop(t.paths, &mut t.record, guard);
     Ok(())
 }
 
-/// Report a finished task-started run to its loop task once, after its terminal record is
-/// durable, and mark it sent only once the report landed. An unreadable journal or a report
-/// that did not land leaves the run owing it, as a crash before the mark does: the
-/// scheduler's backstop advance retries it, and the terminal transition stands either way.
-fn report_to_loop(paths: &WorkflowPaths, record: &mut RunRecord, guard: &WorkspaceLock) {
-    if !record.owes_loop_report() {
-        return;
-    }
-    let journal = match workflow::journal(paths) {
-        Ok(journal) => journal,
-        Err(error) => {
-            tracing::warn!(
-                run = %record.id, %error, "workflow journal unreadable for its loop report"
-            );
-            return;
-        }
+/// How a terminal run ended, read from its whole journal: the decision that ended it, its summed
+/// cost, and why a failed run's last attempt ended.
+pub(super) fn outcome(
+    record: &RunRecord,
+    journal: &[JournalEntry],
+    acted: bool,
+) -> workflow::RunOutcome {
+    let ending = match record.state {
+        RunState::Done => workflow::RunEnding::Done,
+        RunState::Canceled => workflow::RunEnding::Canceled,
+        _ => failure(journal),
     };
-    let acted = acted(paths, record);
-    if let Err(error) = crate::harness::schedule::run_log::report_run(record, &journal, acted) {
-        tracing::warn!(run = %record.id, %error, "workflow loop report not landed");
-        return;
-    }
-    record.loop_report = workflow::LoopReport::Sent;
-    if let Err(error) = workflow::write(paths, record, guard) {
-        tracing::warn!(run = %record.id, %error, "workflow loop report mark not written");
+    let mut costs = journal
+        .iter()
+        .filter_map(|entry| match entry.event {
+            JournalEvent::Attempt { cost_usd, .. } | JournalEvent::Evaluation { cost_usd, .. } => {
+                cost_usd
+            }
+            _ => None,
+        })
+        .peekable();
+    let cost_usd = costs
+        .peek()
+        .is_some()
+        .then(|| costs.fold(0.0, |sum, cost| sum + cost));
+    let reason = matches!(
+        ending,
+        workflow::RunEnding::Failed | workflow::RunEnding::Budget { .. }
+    )
+    .then(|| {
+        journal.iter().rev().find_map(|entry| match &entry.event {
+            JournalEvent::Attempt { reason, .. } => reason.clone(),
+            JournalEvent::Route { outcome, input } if outcome == "budget" => {
+                input["reason"].as_str().map(str::to_owned)
+            }
+            _ => None,
+        })
+    })
+    .flatten();
+    workflow::RunOutcome {
+        ending,
+        cost_usd,
+        acted,
+        reason,
     }
 }
 
-/// Apply a sent report's launch-memory rule again, for a launcher that remembered the run only
-/// after its report forgot it: a fast run can end before its launcher writes the memory. The
-/// workspace lock orders this read after a report in flight, which forgets under that lock.
-pub(crate) fn forget_reported_launch(state: &StatePaths, run: &WorkflowRunId) -> Result<()> {
-    let paths = state.workflow(run);
-    let _guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-    let record = workflow::load(&paths)?;
-    if record.loop_report == workflow::LoopReport::Sent
-        && let Some(task) = record.task.as_deref()
-    {
-        let acted = acted(&paths, &record);
-        crate::harness::schedule::run_log::forget_unkept_launch(&record, task, acted);
+/// Why a failed run failed: its last decision was the `capacity` route out of an agent step, its
+/// last attempt ended at its budget, or neither.
+fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
+    let capacity = journal.iter().rev().find_map(|entry| match &entry.event {
+        JournalEvent::Route { outcome, input } => Some((outcome == "capacity").then_some(input)),
+        JournalEvent::Attempt { .. } => Some(None),
+        _ => None,
+    });
+    if let Some(Some(input)) = capacity {
+        return workflow::RunEnding::CapacityGaveUp {
+            waited_ms: input["waited_ms"].as_u64().unwrap_or(0),
+            reason: input["reason"].as_str().map(str::to_owned),
+        };
     }
-    Ok(())
+    let budget = journal.iter().rev().find_map(|entry| match &entry.event {
+        JournalEvent::Attempt {
+            outcome, handle, ..
+        } => Some((*outcome == AttemptOutcome::Limited).then_some(handle.is_some())),
+        JournalEvent::Route { outcome, .. } if outcome == "budget" => Some(Some(false)),
+        _ => None,
+    });
+    match budget {
+        Some(Some(turned)) => workflow::RunEnding::Budget { turned },
+        _ => workflow::RunEnding::Failed,
+    }
 }
 
 /// Whether the run entered an agent or message step, read against its sealed graph; a graph
 /// that no longer reads counts any visited step.
 fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
-    let Ok(spec) = spec::load_run(&paths.home, record) else {
-        return !record.visits.is_empty();
-    };
+    match spec::load_run(&paths.home, record) {
+        Ok(spec) => entered_act(&spec, record),
+        Err(_) => !record.visits.is_empty(),
+    }
+}
+
+pub(super) fn entered_act(spec: &WorkflowSpec, record: &RunRecord) -> bool {
     record.visits.keys().any(|step| {
         spec.steps
             .get(step)
@@ -621,10 +676,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let paths = state.workflow(id);
     let record = workflow::load(&paths)?;
-    if record.owes_loop_report() {
-        let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-        let mut record = workflow::load(&paths)?;
-        report_to_loop(&paths, &mut record, &guard);
+    if record.state.is_terminal() {
         return Ok(());
     }
     let spec = spec::load_run(&paths.home, &record)?;
@@ -1938,7 +1990,10 @@ pub(crate) fn reassign_task(
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut reassigned = Vec::new();
     for mut record in workflow::list(state)? {
-        if !record.started_by(old) {
+        // A finished run still owed its collection reports and forgets launch memory under its
+        // task's name, so a rename moves it too; a removal leaves it to report under the old one.
+        let owed = new.is_some() && record.ran_for(old) && record.owes_loop_report();
+        if !record.started_by(old) && !owed {
             continue;
         }
         record.task = new.map(str::to_owned);

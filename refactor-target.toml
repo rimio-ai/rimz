@@ -2335,7 +2335,8 @@ path = "crates/rimz/src/harness"
 # park_notice::refill_ahead and FleetRuns::{any_working, held, is_held} let the fleet report pass over a held child and read a limit-failed child's refill.
 # run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
 # `when::condition` and `schedule::probe` split the shared condition evaluator from the scheduler's forge probe demand (+1).
-surface-budget = 1134
+# run_log::{collect_run, collect_task_runs} collect a finished run from the commands that end it and the fire; the engine's workflow::forget_reported_launch is gone (+1).
+surface-budget = 1135
 
 [[verdict]]
 kind = "item"
@@ -2715,6 +2716,16 @@ reason = "The loop runner creates each fresh-worktree fire's tree under one stam
 kind = "item"
 key = "harness::schedule::run_log::FireWorktree"
 reason = "A fire's per-fire tree and its trunk fallback travel from the runner's record to loop logs."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::collect_run"
+reason = "The one collector of a finished task-started run, under the workspace lock and idempotent; every CLI command that can end a run calls it after the engine returns, Ok or Err."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::collect_task_runs"
+reason = "A fire collects its task's owed finished runs before it decides, so it reads the strikes, consumed rows and launch memory they leave."
 
 [[verdict]]
 kind = "item"
@@ -4212,8 +4223,9 @@ path = "crates/rimz/src/store"
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
 # RunRecord::superseded_in names the panes a handed-over run no longer answers to (+1).
 # store::run::LimitFailure and LimitFailureCause keep a limit-failed child's typed cause for the fleet report (+2).
+# workflow::{RunOutcome, RunEnding} carry a terminal run's outcome from the engine to the scheduler's collector (+2).
 # workflow::RunFire freezes what a loop fire tells its run's briefs (+1).
-surface-budget = 601
+surface-budget = 603
 
 [[verdict]]
 kind = "item"
@@ -11248,12 +11260,22 @@ reason = "A run record says whether a deployed workflow or a loop task's inline 
 [[verdict]]
 kind = "item"
 key = "store::workflow::LoopReport"
-reason = "A run record carries whether it still owes its loop task the outcome report; the engine writes it, and the workflow tick and GC read it."
+reason = "A run record carries whether it still owes its loop task the outcome report; the run is created owing it, the scheduler's collector marks it sent, and the workflow tick and GC read it."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunOutcome"
+reason = "The engine writes how a run ended in its terminal record write, so the scheduler's collector reports it from the record alone, without the journal or the sealed graph."
 
 [[verdict]]
 kind = "item"
 key = "store::workflow::RunFire"
 reason = "A run record keeps what the loop fire that started it tells its briefs, the task's name included, so a later edit, rename or removal of the task leaves every brief as it was."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunEnding"
+reason = "The decision that ended a run, in the engine's terms, which the collector maps to a loop result."
 
 [[verdict]]
 kind = "item"
