@@ -6191,7 +6191,7 @@ fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--wait would deadlock")
+        stderr.contains("--wait/--timeout would deadlock")
             && stderr.contains("@reviewer")
             && stderr.contains(existing_id.as_str()),
         "stderr names the blocking wait: {stderr}"
@@ -6226,7 +6226,7 @@ fn assert_counter_wait_accepted(env: &Env, live_before: usize) {
         .expect("counter-wait");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("--wait would deadlock"),
+        !stderr.contains("would deadlock"),
         "a settled wait no longer blocks the counter-wait: {stderr}"
     );
     let messages = env.store().list_messages().expect("messages");
@@ -7015,6 +7015,20 @@ fn message_wait_requires_live_hooked_agent_target() {
         String::from_utf8_lossy(&missing.stderr).contains("rimz hooks install claude"),
         "stderr: {}",
         String::from_utf8_lossy(&missing.stderr)
+    );
+
+    let missing = env
+        .rimz()
+        .args(["message", "@claude", "--timeout", "1s", "x"])
+        .output()
+        .expect("hooks missing timeout");
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert_eq!(missing.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains(
+            "--wait/--timeout requires claude hooks so the reply turn can report its boundaries; run `rimz hooks install claude`"
+        ),
+        "a --timeout caller reads a refusal that names the flag it typed: {stderr}"
     );
 }
 

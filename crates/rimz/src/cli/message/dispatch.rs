@@ -379,23 +379,23 @@ fn map_condition_err(err: ConditionErr) -> anyhow::Error {
 fn map_reply_prepare_err(err: ReplyPrepareErr) -> anyhow::Error {
     match err {
         ReplyPrepareErr::PaneOnly { label } => anyhow::anyhow!(
-            "--wait requires an agent with lifecycle state; `{label}` is only a pane target"
+            "--wait/--timeout requires an agent with lifecycle state; `{label}` is only a pane target"
         ),
         ReplyPrepareErr::NotLive { label } => anyhow::anyhow!(
-            "--wait requires a live agent with lifecycle state; `{label}` is not running"
+            "--wait/--timeout requires a live agent with lifecycle state; `{label}` is not running"
         ),
         ReplyPrepareErr::TurnLifecycleUnsupported { kind, reason } => anyhow::anyhow!(
-            "--wait cannot use {kind}: a verified executable turn-lifecycle signal is required; {reason}"
+            "--wait/--timeout cannot use {kind}: a verified executable turn-lifecycle signal is required; {reason}"
         ),
         ReplyPrepareErr::HooksMissing { kind } => anyhow::anyhow!(
-            "--wait requires {kind} hooks so the reply turn can report its boundaries; run `rimz hooks install {kind}`"
+            "--wait/--timeout requires {kind} hooks so the reply turn can report its boundaries; run `rimz hooks install {kind}`"
         ),
         ReplyPrepareErr::Login(err) => anyhow::Error::new(err),
         ReplyPrepareErr::HooksUntrusted { kind, hooks, fix } => {
             anyhow::anyhow!("{kind} hooks are installed but not trusted ({hooks}); {fix}")
         }
         ReplyPrepareErr::HooksDisabled { kind, reason, fix } => {
-            anyhow::anyhow!("--wait cannot use {kind}: {reason}; {fix}")
+            anyhow::anyhow!("--wait/--timeout cannot use {kind}: {reason}; {fix}")
         }
         ReplyPrepareErr::DependencyCycle {
             target,
@@ -405,14 +405,16 @@ fn map_reply_prepare_err(err: ReplyPrepareErr) -> anyhow::Error {
         } => {
             let fix = "finish your turn to answer it, or resend without --wait or with --timeout <duration>";
             let (Some(handle), Some(message_id)) = (first_handle, first_message_id) else {
-                return anyhow::anyhow!("--wait would deadlock: {target} is your own agent; {fix}");
+                return anyhow::anyhow!(
+                    "--wait/--timeout would deadlock: {target} is your own agent; {fix}"
+                );
             };
             match chain {
                 Some(chain) => anyhow::anyhow!(
-                    "--wait would deadlock: {chain} is an active reply-wait chain ({message_id}); {fix}"
+                    "--wait/--timeout would deadlock: {chain} is an active reply-wait chain ({message_id}); {fix}"
                 ),
                 None => anyhow::anyhow!(
-                    "--wait would deadlock: {handle} is waiting on your reply ({message_id}); {fix}"
+                    "--wait/--timeout would deadlock: {handle} is waiting on your reply ({message_id}); {fix}"
                 ),
             }
         }
@@ -459,5 +461,95 @@ pub(super) fn map_queue_target_err(target: &str, err: TargetErr) -> anyhow::Erro
     match mapped {
         Ok(_) => unreachable!("mapping an error cannot succeed"),
         Err(mapped) => mapped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CYCLE_FIX: &str =
+        "finish your turn to answer it, or resend without --wait or with --timeout <duration>";
+
+    fn refusal(err: ReplyPrepareErr) -> String {
+        map_reply_prepare_err(err).to_string()
+    }
+
+    fn claude() -> AgentKind {
+        AgentKind::new_unchecked("claude")
+    }
+
+    fn cycle(first_handle: Option<&str>, chain: Option<&str>) -> ReplyPrepareErr {
+        ReplyPrepareErr::DependencyCycle {
+            target: "@coder".to_owned(),
+            first_handle: first_handle.map(str::to_owned),
+            first_message_id: first_handle
+                .map(|_| MessageId::parse("msg_0123456789abcdef").unwrap()),
+            chain: chain.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn target_refusals_name_both_wait_flags() {
+        let pane_only = ReplyPrepareErr::PaneOnly {
+            label: "zellij:terminal_3".to_owned(),
+        };
+        assert_eq!(
+            refusal(pane_only),
+            "--wait/--timeout requires an agent with lifecycle state; \
+             `zellij:terminal_3` is only a pane target"
+        );
+        let not_live = ReplyPrepareErr::NotLive {
+            label: "@coder".to_owned(),
+        };
+        assert_eq!(
+            refusal(not_live),
+            "--wait/--timeout requires a live agent with lifecycle state; `@coder` is not running"
+        );
+        let unsupported = ReplyPrepareErr::TurnLifecycleUnsupported {
+            kind: claude(),
+            reason: "no Stop hook".to_owned(),
+        };
+        assert_eq!(
+            refusal(unsupported),
+            "--wait/--timeout cannot use claude: \
+             a verified executable turn-lifecycle signal is required; no Stop hook"
+        );
+        assert_eq!(
+            refusal(ReplyPrepareErr::HooksMissing { kind: claude() }),
+            "--wait/--timeout requires claude hooks so the reply turn can report its boundaries; \
+             run `rimz hooks install claude`"
+        );
+        let disabled = ReplyPrepareErr::HooksDisabled {
+            kind: claude(),
+            reason: "hooks are off".to_owned(),
+            fix: "turn them on".to_owned(),
+        };
+        assert_eq!(
+            refusal(disabled),
+            "--wait/--timeout cannot use claude: hooks are off; turn them on"
+        );
+    }
+
+    #[test]
+    fn deadlock_refusals_name_both_wait_flags() {
+        assert_eq!(
+            refusal(cycle(None, None)),
+            format!("--wait/--timeout would deadlock: @coder is your own agent; {CYCLE_FIX}")
+        );
+        assert_eq!(
+            refusal(cycle(Some("@reviewer"), Some("@reviewer -> @coder"))),
+            format!(
+                "--wait/--timeout would deadlock: @reviewer -> @coder is an active reply-wait \
+                 chain (msg_0123456789abcdef); {CYCLE_FIX}"
+            )
+        );
+        assert_eq!(
+            refusal(cycle(Some("@reviewer"), None)),
+            format!(
+                "--wait/--timeout would deadlock: @reviewer is waiting on your reply \
+                 (msg_0123456789abcdef); {CYCLE_FIX}"
+            )
+        );
     }
 }
