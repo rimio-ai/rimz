@@ -584,12 +584,13 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             "{status:?}"
         );
     }
-    // A compacting child's head moves unless a `?`/`!` replaces it.
+    // A compacting child's head moves unless a `?`/`!`/pause replaces it.
     for (status, moves) in [
         (crate::agents::AgentStatus::Success, true),
         (crate::agents::AgentStatus::Idle, true),
         (crate::agents::AgentStatus::Waiting, false),
         (crate::agents::AgentStatus::Failed, false),
+        (crate::agents::AgentStatus::Paused, false),
     ] {
         let child = &mut std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,

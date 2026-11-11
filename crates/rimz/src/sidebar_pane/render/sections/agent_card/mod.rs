@@ -101,7 +101,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
     delegation_entries_drawn(row, density, expansion, stale_after_secs, now)
         && (agent.sub_agents.iter().any(|child| {
             child.status == AgentStatus::Running
-                || (child.compacting && !child.status.is_actionable())
+                || (child.compacting && !child.status.is_attention())
         }) || !agent.background_shells.is_empty()
             || waits::visible_waits(&agent.pending_waits)
                 .any(|wait| waits::is_live_watch(&wait.trigger)))
@@ -545,9 +545,9 @@ fn sub_agent_entry_lines(
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict, and a compacting one
-        // wears the compacting head unless a `?`/`!` wins — one head grammar
+        // wears the compacting head unless a `?`/`!`/pause wins — one head grammar
         // for the parent's cell and its children's.
-        let lead = if sub.compacting && !sub.status.is_actionable() {
+        let lead = if sub.compacting && !sub.status.is_attention() {
             Span::styled(
                 role_glyph(theme, AnimationRole::Compacting, ctx.head_step),
                 role_style(theme, AnimationRole::Compacting, animation_phase),
