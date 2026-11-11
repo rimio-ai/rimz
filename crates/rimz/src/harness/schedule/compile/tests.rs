@@ -1,14 +1,23 @@
 //! Loop task rows compiled by `harness::schedule::compile`, validated and run as workflows.
 
 use super::*;
-use crate::config::{MachineConfig, TaskEntry};
+use crate::config::definitions::LoadedDefinitions;
 use crate::disk::paths::StatePaths;
-use crate::harness::schedule::catalog::{LoadedTask, TaskSource};
-use crate::harness::schedule::compile::{CompiledAction, InlineTask, TaskWorkflow};
+use crate::harness::schedule::catalog::TaskSource;
 use crate::harness::schedule::run_log::LoopRunResult;
 use crate::harness::signal::Signal;
+use crate::harness::workflow::tests::{
+    FakeHost, declines, evaluate, finish_judge, resolved_edges, subscription_prompts,
+};
+use crate::harness::workflow::{
+    DefinitionSource, EdgeSource, InlineDefinition, LaunchFailure, LeaderTurn, ScopeRoots,
+    Validation, WorkflowSpec, advance, create, validate,
+};
+use crate::store::run::RunStatus;
+use crate::store::workflow::AttemptOutcome;
 use crate::store::workflow::{self as records, JournalEvent, RunRecord, RunState};
 use serde_json::{Value, json};
+use std::fs;
 
 fn loaded(name: &str, row: &str, root: &std::path::Path) -> LoadedTask {
     let mut entry: TaskEntry = toml::from_str(row).unwrap();
@@ -42,7 +51,7 @@ fn report(row: &str) -> (Validation, WorkflowSpec) {
     }
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("workflow.toml"), &definition.text).unwrap();
-    let spec = spec::parse(&definition.text).unwrap();
+    let spec = crate::harness::workflow::parse(&definition.text).unwrap();
     (validate(&dir, &LoadedDefinitions::default(), None), spec)
 }
 
@@ -141,8 +150,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     );
     for (judge, next) in [("judge-1", "judge-2"), ("judge-2", "agent")] {
         for outcome in ["invalid", "timeout"] {
-            let edge = spec
-                .resolved_edges(judge)
+            let edge = resolved_edges(&spec, judge)
                 .unwrap()
                 .into_iter()
                 .find(|edge| edge.outcome == outcome)
@@ -238,11 +246,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
         "a resident takes no default timeout"
     );
     assert_eq!(
-        stay.subscribe
-            .iter()
-            .flatten()
-            .map(crate::harness::workflow::spec::Wake::prompt)
-            .collect::<Vec<_>>(),
+        subscription_prompts(stay),
         [Some("repair")],
         "a binding's prompt reaches the step"
     );
@@ -329,7 +333,7 @@ fn assets_are_read_when_a_fire_materializes_the_definition() {
             "ready?".into()
         )
     );
-    let spec = spec::parse(&first.text).unwrap();
+    let spec = crate::harness::workflow::parse(&first.text).unwrap();
     assert_eq!(spec.steps["agent"].timeout.as_deref(), Some("15m"));
     fs::remove_file(&judge).unwrap();
     assert!(
@@ -534,7 +538,7 @@ fn isolated_rimz_home(test: &str) -> bool {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            &format!("harness::workflow::tests::compiled::{test}"),
+            &format!("harness::schedule::compile::tests::{test}"),
             "--nocapture",
         ])
         .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
@@ -887,32 +891,11 @@ fn judged(
     results: &[(Result<Value, String>, &'static str)],
 ) -> String {
     let (paths, record) = judge_at(node);
-    let mut t = super::super::state::Transition {
-        now: record.entered_at,
-        record,
-        spec,
-        paths: &paths,
-        entries: Vec::new(),
-    };
-    let attempt = t.record.attempt.clone();
-    for (object, failure) in results {
-        t.record.attempt.clone_from(&attempt);
-        t.finish_judge(
-            1,
-            super::super::script::Evaluation {
-                object: object.clone(),
-                failure,
-                stderr_tail: None,
-                limited: None,
-                cost_usd: None,
-            },
-        )
-        .unwrap();
-    }
-    if t.record.state == RunState::Active {
-        t.record.node
+    let (record, _) = finish_judge(spec, &paths, record, results);
+    if record.state == RunState::Active {
+        record.node
     } else {
-        format!("{:?}", t.record.state)
+        format!("{:?}", record.state)
     }
 }
 
@@ -953,32 +936,15 @@ fn a_budget_refused_judge_after_a_shell_stage_fails_the_run_as_budget_skipped() 
         "started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":null}});
     let record: RunRecord = serde_json::from_value(record).unwrap();
     let paths = state.workflow(&record.id);
-    let mut t = super::super::state::Transition {
-        now: record.entered_at,
-        record,
-        spec: &spec,
-        paths: &paths,
-        entries: Vec::new(),
-    };
     let reason = "account codex:default budget $10.00/day is spent";
-    t.finish_judge(
-        1,
-        super::super::script::Evaluation {
-            object: Err(reason.into()),
-            failure: "budget",
-            stderr_tail: None,
-            limited: None,
-            cost_usd: None,
-        },
-    )
-    .unwrap();
+    let (record, entries) = finish_judge(&spec, &paths, record, &[(Err(reason.into()), "budget")]);
     assert_eq!(
-        (t.record.state, t.record.recheck_at),
+        (record.state, record.recheck_at),
         (RunState::Failed, None),
         "a refused judge ends the run instead of waiting or routing to the act"
     );
     assert_eq!(route(&spec, "judge-1", "budget"), "@failed");
-    crate::harness::schedule::run_log::report_run(&t.record, &t.entries, false).unwrap();
+    crate::harness::schedule::run_log::report_run(&record, &entries, false).unwrap();
     let last = crate::harness::schedule::run_log::task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",
@@ -990,176 +956,6 @@ fn a_budget_refused_judge_after_a_shell_stage_fails_the_run_as_budget_skipped() 
         (last.result, last.error.as_deref()),
         (LoopRunResult::BudgetSkipped, Some(reason)),
         "{last:?}"
-    );
-}
-
-#[test]
-fn a_judges_account_over_its_day_cap_or_parked_is_refused_before_it_spawns() {
-    use crate::agents::spending::{
-        ProviderSpendingCache, SpendWindow, write_provider_spending_cache,
-    };
-    use crate::harness::budget::{BudgetParkStamp, DailyBudgetLedger, DailyBudgetScope};
-    let now: jiff::Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
-    for parked in [false, true] {
-        let root = tempfile::tempdir().unwrap();
-        let state = StatePaths::for_project_root(root.path()).unwrap();
-        let runtime = crate::disk::paths::RuntimePaths::for_state(&state).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let config = MachineConfig {
-            timezone: Some("UTC".into()),
-            accounts: toml::from_str("[budget]\ncodex = '10/day'\n").unwrap(),
-            ..Default::default()
-        };
-        let profile = crate::harness::headless::HeadlessProfile::resolve(
-            &config,
-            "codex",
-            root.path(),
-            &state,
-            &runtime,
-            now,
-        )
-        .unwrap();
-        let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
-        write_provider_spending_cache(
-            &runtime.shared_provider_spending_path(),
-            &ProviderSpendingCache {
-                day_cutoff_secs: jiff::civil::date(2026, 6, 2)
-                    .to_zoned(jiff::tz::TimeZone::UTC)
-                    .unwrap()
-                    .timestamp()
-                    .as_second() as u64,
-                day_by_login: std::collections::BTreeMap::from([(
-                    key.clone(),
-                    SpendWindow {
-                        usd: if parked { 0.0 } else { 12.0 },
-                        ..Default::default()
-                    },
-                )]),
-                ..Default::default()
-            },
-        );
-        if parked {
-            DailyBudgetScope::Account(key)
-                .write_ledger(
-                    &runtime,
-                    &state,
-                    &DailyBudgetLedger {
-                        parked: Some(BudgetParkStamp {
-                            at_cost: 12.0,
-                            at: now,
-                        }),
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-        }
-        let refusal = super::super::script::budget_refusal(
-            &config,
-            &profile,
-            &crate::agents::ManagedLaunchState::Unsupported,
-            None,
-            None,
-            &state,
-            &runtime,
-            now,
-        );
-        assert!(
-            refusal
-                .as_deref()
-                .is_some_and(|reason| reason.contains("codex")),
-            "parked={parked}: {refusal:?}"
-        );
-    }
-}
-
-#[test]
-fn a_judge_on_a_spent_quota_binding_or_short_of_its_tasks_surplus_is_refused() {
-    use crate::agents::account::AccountUsageKey;
-    use crate::agents::{
-        AgentRateLimits, ManagedLaunchState, ProviderAccountBinding, ProviderAccountScope,
-        RateLimitCacheEntry, RateLimitWindow, RateLimitsCache,
-    };
-    let now = jiff::Timestamp::now();
-    let root = tempfile::tempdir().unwrap();
-    let state = StatePaths::for_project_root(root.path()).unwrap();
-    let runtime = crate::disk::paths::RuntimePaths::for_state(&state).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let config = MachineConfig::default();
-    let profile = crate::harness::headless::HeadlessProfile::resolve(
-        &config,
-        "codex",
-        root.path(),
-        &state,
-        &runtime,
-        now,
-    )
-    .unwrap();
-    let key = crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
-    let window = |used, resets_in: i64, mins| RateLimitWindow {
-        used_percentage: Some(used),
-        resets_at: Some(now + jiff::SignedDuration::from_secs(resets_in)),
-        duration_mins: Some(mins),
-        ..RateLimitWindow::default()
-    };
-    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
-    let binding = ProviderAccountBinding::decode(
-        r#"{"scope":{"kind":"sub_provider","provider":"openai","variant":"oauth"},"account_key":"owner"}"#,
-    )
-    .unwrap();
-    let week = 7 * 24 * 60;
-    let entries = std::collections::BTreeMap::from([
-        (
-            AccountUsageKey::new(key.clone(), scope.clone()),
-            RateLimitCacheEntry {
-                scope,
-                account_key: Some("owner".to_owned()),
-                limits: AgentRateLimits {
-                    windows: vec![window(100, 3_600, 300)],
-                },
-                ..Default::default()
-            },
-        ),
-        (
-            key.clone().into(),
-            RateLimitCacheEntry {
-                limits: AgentRateLimits {
-                    windows: vec![window(90, i64::from(week) * 60 / 2, week)],
-                },
-                ..Default::default()
-            },
-        ),
-    ]);
-    crate::disk::atomic::write_temp_then_rename_cache(
-        &RateLimitsCache::shared_path(&runtime),
-        &RateLimitsCache {
-            entries,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let refuse = |managed: &ManagedLaunchState, surplus| {
-        super::super::script::budget_refusal(
-            &config, &profile, managed, surplus, None, &state, &runtime, now,
-        )
-    };
-    let quota = refuse(&ManagedLaunchState::Bound(binding), None);
-    assert!(
-        quota
-            .as_deref()
-            .is_some_and(|reason| reason.contains("exhausted")),
-        "{quota:?}"
-    );
-    let surplus = refuse(&ManagedLaunchState::Unsupported, Some("1.5x"));
-    assert!(
-        surplus
-            .as_deref()
-            .is_some_and(|reason| reason.contains("window surplus")),
-        "{surplus:?}"
-    );
-    assert_eq!(
-        refuse(&ManagedLaunchState::Unsupported, None),
-        None,
-        "a kind-wide account has no bound quota, and surplus is read only for a run that keeps it"
     );
 }
 
@@ -1211,10 +1007,8 @@ fn judge_after_the_row_changes(config: &str) -> (&'static str, Result<Value, Str
     record["attempt"] = json!({"kind":"judge","seq":1,"node":"judge-1",
         "started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":null}});
     let record: RunRecord = serde_json::from_value(record).unwrap();
-    let spec = super::super::load(&record.spec_dir).unwrap();
-    let judged =
-        super::super::script::evaluate(&state, &state.workflow(&record.id), &spec, &record);
-    (judged.failure, judged.object)
+    let spec = crate::harness::workflow::load(&record.spec_dir).unwrap();
+    evaluate(&state, &spec, &record)
 }
 
 #[test]
@@ -1241,7 +1035,7 @@ fn a_judge_keeps_the_surplus_gate_its_run_started_with_when_the_row_is_removed()
 fn only_a_verdict_that_routes_away_from_the_act_is_a_decline() {
     let chain = "agent='claude'\nprompt='go'\nevery='1h'\non='fail'\njudge=[{agent='claude',prompt='a'},{agent='claude',prompt='b'}]\n";
     let (_, spec) = report(chain);
-    let declines = |node, outcome| super::super::script::declines(&spec, node, outcome);
+    let declines = |node, outcome| declines(&spec, node, outcome);
     assert!(declines("judge-1", "pass") && declines("judge-2", "pass"));
     assert!(!declines("judge-1", "fail") && !declines("judge-2", "fail"));
     assert!(!declines("judge-1", "unknown"));
@@ -1342,7 +1136,8 @@ fn settle(state: &StatePaths, record: &RunRecord, host: &FakeHost, from: &str) -
 fn age(state: &StatePaths, current: &mut RunRecord, secs: u64) {
     current.entered_at = jiff::Timestamp::now() - std::time::Duration::from_secs(secs);
     current.recheck_at = None;
-    super::attempts::update(state, current);
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    records::write(&state.workflow(&current.id), current, &guard).unwrap();
 }
 
 #[test]
@@ -1475,7 +1270,7 @@ fn graph(spec: &WorkflowSpec) -> Vec<(String, Value)> {
         .keys()
         .chain(spec.steps.keys())
         .map(|node| {
-            let edges = serde_json::to_value(spec.resolved_edges(node).unwrap()).unwrap();
+            let edges = serde_json::to_value(resolved_edges(spec, node).unwrap()).unwrap();
             (node.clone(), edges)
         })
         .collect()
@@ -1517,10 +1312,10 @@ fn an_ejected_task_keeps_its_graph_and_its_row_keeps_only_timing_and_admission()
         let workflow = workflow_name();
         let dir = eject_nightly(root.path(), &workflow);
         assert_eq!(dir, crate::disk::paths::workflows_dir().join(&workflow));
-        let ejected = load(&dir).unwrap();
+        let ejected = crate::harness::workflow::load(&dir).unwrap();
         assert_eq!(
             graph(&ejected),
-            graph(&spec::parse(&inline.text).unwrap()),
+            graph(&crate::harness::workflow::parse(&inline.text).unwrap()),
             "{row}"
         );
         let mut expected = inline.assets.clone();
