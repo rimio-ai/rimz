@@ -603,7 +603,7 @@ fn takeover(
     ) {
         Err(_) => writeln!(out, "takeover: blockers unavailable")?,
         Ok(workflow::Occupancy::Blocked(blockers)) => {
-            use rimz::harness::schedule::takeover::OpenTurn;
+            use rimz::harness::takeover::OpenTurn;
             for (handle, turn) in blockers {
                 let phrase = match turn {
                     OpenTurn::Working => "is working",

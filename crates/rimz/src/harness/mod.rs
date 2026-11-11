@@ -40,6 +40,7 @@ pub mod spend_ladder;
 pub mod stall_notice;
 pub mod stall_nudge;
 pub mod subagent_policy;
+pub mod takeover;
 pub mod team_notes;
 pub mod team_prompt;
 pub mod team_stage;

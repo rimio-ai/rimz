@@ -89,7 +89,7 @@ impl FakeHost {
         if self.stale_after_evict.get() && self.evictions.get() > 0 {
             return Occupancy::Blocked(vec![(
                 "stale occupant".into(),
-                crate::harness::schedule::takeover::OpenTurn::Working,
+                crate::harness::takeover::OpenTurn::Working,
             )]);
         }
         let mut occupancy = match &*self.occupancy.borrow() {

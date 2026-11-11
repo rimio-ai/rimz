@@ -2520,7 +2520,7 @@ reason = "Both worktree launch doorways share landed memo, Git inspection, and a
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::takeover::read"
+key = "harness::takeover::read"
 reason = "Staying-step takeover and workflow admission share owned-worktree discovery and occupancy over their caller-supplied runtime-scoped snapshot and card-status reader, treating spent provider pauses as settled."
 
 [[verdict]]

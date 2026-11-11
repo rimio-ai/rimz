@@ -336,7 +336,7 @@ fn on_break_detached_debuggers_neither_block_nor_get_evicted_on_resume() {
                 *occupancy.borrow_mut() = if working {
                     Occupancy::Blocked(vec![(
                         "@builder".into(),
-                        crate::harness::schedule::takeover::OpenTurn::Working,
+                        crate::harness::takeover::OpenTurn::Working,
                     )])
                 } else {
                     Occupancy::Occupied(vec!["@builder".into()])
@@ -1960,7 +1960,7 @@ fn occupancy_waits_merge_without_consuming_input_key_or_visits() {
         *host.occupancy.borrow_mut() = if takeover {
             Occupancy::Blocked(vec![(
                 "sweeper".into(),
-                crate::harness::schedule::takeover::OpenTurn::Working,
+                crate::harness::takeover::OpenTurn::Working,
             )])
         } else {
             Occupancy::Occupied(vec!["sweeper".into()])
@@ -2037,7 +2037,7 @@ fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
     let blocked = || {
         Occupancy::Blocked(vec![(
             "sweeper".into(),
-            crate::harness::schedule::takeover::OpenTurn::Working,
+            crate::harness::takeover::OpenTurn::Working,
         )])
     };
     for (takeover, arrived, wait) in [
@@ -2084,7 +2084,7 @@ fn sharing_step_launches_beside_any_occupant_without_reading_or_stopping_it() {
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Blocked(vec![(
         "sweeper".into(),
-        crate::harness::schedule::takeover::OpenTurn::Working,
+        crate::harness::takeover::OpenTurn::Working,
     )]);
     let live = advance_ok(&state, &record.id, &host);
     assert!(live.wait.is_none(), "{live:#?}");
