@@ -1613,6 +1613,11 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         let first = source.state.pane.input_jump.take().unwrap();
         let (_, _, mut anchor) = hidden_destination();
         anchor.pane_id = source.view().ctx().pending_input_focus.clone().unwrap();
+        place_owner(
+            &source.focus_plane,
+            &destination.state.pane.config.own_pane,
+            &anchor.pane_id,
+        );
         let (_, _, _, ack, _) = first
             .push(&anchor, first.clicked().unwrap(), Instant::now)
             .unwrap();
@@ -1707,15 +1712,24 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
     let (mut target, _, _) = pane_pair(MuxName::Zellij);
     let clock = play_clock(&mut target);
     target.view().ctx().current.pane_session_name = Some("rimz-test".into());
-    let peers = target
-        .focus_plane
-        .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled());
+    // The hidden pane is attached to the target's host, outside the target's tab.
+    let mut hidden_config = target.state.pane.config.clone();
+    hidden_config.instance_id = SidebarInstanceId::new();
+    hidden_config.own_pane = PaneId::from_parts(MuxName::Zellij, "terminal_98");
+    let (hidden_tx, _hidden_rx) = std::sync::mpsc::sync_channel(64);
+    let _hidden_subscription = target.focus_plane.subscribe(&hidden_config, hidden_tx);
+    let peers = target.focus_plane.focus_peers(
+        hidden_config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    );
     let start = std::sync::Barrier::new(2);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
         let start = &start;
         let work = scope.spawn(move || {
             let (_, mut hidden, output) = pane_pair(MuxName::Zellij);
+            assert_eq!(hidden.state.pane.config.own_pane, hidden_config.own_pane);
+            hidden.state.pane.config.instance_id = hidden_config.instance_id;
             hidden.state.pane.clock = clock;
             hidden.state.pane.focus_peers = Some(peers);
             hidden.view().ctx().filter_observed_at = None;
@@ -1741,7 +1755,13 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
             assert!(
                 hidden
                     .state
-                    .known_non_owner(&pane("terminal_0", "tab_0").pane_id)
+                    .pane
+                    .focus_peers
+                    .as_ref()
+                    .unwrap()
+                    .take_push()
+                    .is_none(),
+                "the host offers the hidden non-owner no push"
             );
             assert!(
                 !hidden
@@ -1869,6 +1889,7 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
         SidebarEvent::BodyFilterChanged,
     );
     let plane = super::super::super::plane::DataPlane::detached();
+    publish_host_fold(&plane, &destination);
     let (tx, rx) = std::sync::mpsc::sync_channel(3);
     for wakeup in [Wakeup::Snapshot, Wakeup::Event(event), Wakeup::Tick] {
         tx.send(wakeup).unwrap();
@@ -2864,8 +2885,10 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
     assert_eq!(second.blocked_by, Some(PushBlock::PaintHold));
     assert_eq!(paints(&output), 0);
 
-    for nonowner_push in [false, true] {
-        let (mut rig, output, anchor) = hidden_destination();
+    // A newer jump to a foreign target is offered to this pane no more; the parked push
+    // learns it is superseded at the wake that jump's release or supersession sends.
+    for released in [true, false] {
+        let (mut rig, _, anchor) = hidden_destination();
         rig.state
             .pane
             .paint_hold
@@ -2875,19 +2898,35 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
         let mut newer = anchor;
         newer.nonce = FocusNonce::new();
         newer.pane_id = pane("terminal_0", "tab_0").pane_id;
-        let (push, newer_ack) = focus_push(&mut rig, newer);
-        if nonowner_push {
-            rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
-            assert_push_report(&newer_ack, &rig, PushVerdict::NotDestination, false);
+        let (tx, wake) = std::sync::mpsc::sync_channel(64);
+        let _subscription = rig.focus_plane.subscribe(&rig.state.pane.config, tx);
+        let clicked = rig.state.pane.clock.now();
+        let jump = rig
+            .focus_plane
+            .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled())
+            .arm(newer.pane_id.clone(), clicked);
+        let (_, _, _, _newer_ack, offered) = jump.push(&newer, clicked, || clicked).unwrap();
+        assert!(
+            offered.is_empty(),
+            "the host offers this pane no foreign push"
+        );
+        assert!(wake.try_recv().is_err(), "arming wakes nobody");
+        if released {
+            jump.release();
         } else {
-            drop(push);
-            rig.state.pane.paint_hold.release();
-            rig.paint(true);
+            jump.supersede();
         }
+        let woken = wake
+            .try_recv()
+            .expect("the newer jump's end wakes the pane");
+        // The rig's first advance titles the pane, a flush that is no frame.
+        let frames = rig.state.pane.paints;
+        rig.state
+            .advance(&mut queued([woken]), &mut rig.terminal)
+            .unwrap();
         assert_push_report(&ack, &rig, PushVerdict::Superseded, true);
         assert_eq!(
-            paints(&output),
-            0,
+            rig.state.pane.paints, frames,
             "obsolete parked placement must never paint"
         );
     }

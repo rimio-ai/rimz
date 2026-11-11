@@ -1383,6 +1383,14 @@ esac
             .host
             .plane
             .subscribe(&room.host.config_for(&greeting), live.close.wake);
+        // A third attachment in a third tab, which no jump here reaches.
+        let mut bystander = hello(&SidebarInstanceId::new());
+        bystander.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_30");
+        let (bystander_inbox, bystander_live) = room.host.admit(&bystander).unwrap();
+        let _bystander_subscription = room
+            .host
+            .plane
+            .subscribe(&room.host.config_for(&bystander), bystander_live.close.wake);
 
         let mut snapshot = snapshot_with_panes(
             &workspace(),
@@ -1404,6 +1412,28 @@ esac
             },
             own_view_is_daemon: false,
         });
+        // The host resolves the push from this frame: B shares the cross-tab target's tab.
+        let target_tab = if cross_tab { "tab_2" } else { "tab_1" };
+        let frame_panes = [
+            ("terminal_10", "tab_1", true),
+            ("terminal_11", "tab_1", false),
+            ("terminal_12", target_tab, false),
+            ("terminal_20", "tab_2", true),
+            ("terminal_30", "tab_3", true),
+            ("terminal_31", "tab_3", false),
+        ]
+        .map(|(raw, tab, sidebar)| {
+            let mut pane = pane(raw, tab);
+            if sidebar {
+                pane.command = Some("rimz-sidebar".into());
+            }
+            pane
+        });
+        crate::sidebar_pane::app::fixtures::remember_fold(
+            &room.host.plane,
+            snapshot.clone(),
+            crate::sidebar::frame::assemble_frame(frame_panes.into(), 1, "rimz-test"),
+        );
         room.host
             .plane
             .publish_snapshot(&source.instance_id, snapshot);
@@ -1429,6 +1459,13 @@ esac
                 received.is_some()
             });
             let push = received.unwrap();
+            assert!(
+                room.host
+                    .plane
+                    .take_focus_push(&room.host.config_for(&bystander).instance_id)
+                    .is_none(),
+                "the third tab's attachment is offered nothing"
+            );
             assert_eq!(push.anchor.pane_id, target);
             assert_eq!(load(&room.runtime), Some(push.anchor.clone()));
             assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
@@ -1451,6 +1488,9 @@ esac
         );
         while let Ok(wakeup) = destination.inbox.try_recv() {
             assert_eq!(wakeup, Wakeup::Tick, "no further focus push is expected");
+        }
+        while let Ok(wakeup) = bystander_inbox.inbox.try_recv() {
+            assert_eq!(wakeup, Wakeup::Tick, "the bystander takes no focus push");
         }
         room.host.leave();
         drop(source);

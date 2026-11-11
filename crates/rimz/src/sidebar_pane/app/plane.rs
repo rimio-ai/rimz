@@ -145,6 +145,7 @@ impl DataPlane {
             source,
             diag,
             self.jumps.clone(),
+            self.views.clone(),
         )
         .with_fit(self.fit.clone())
     }

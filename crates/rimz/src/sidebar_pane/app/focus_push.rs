@@ -1,4 +1,5 @@
-//! Click-ordered host jumps, priority push delivery, and post-dispatch verdict tracing.
+//! Click-ordered host jumps, priority push delivery to the jump's resolved owners, and
+//! post-dispatch verdict tracing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -10,8 +11,10 @@ use crate::diag::DiagSink;
 use crate::diag::focus_trace::{FocusTraceEvent, PushDelivery, PushOutcome, PushPeer, PushVerdict};
 use crate::ids::PaneId;
 use crate::mux::focus_anchor::FocusAnchor;
+use crate::sidebar::frame::PaneFrame;
+use crate::store::snapshot::SidebarOwnView;
 
-use super::fetch::Subscribers;
+use super::fetch::{Subscriber, Subscribers};
 use super::input::Wakeup;
 use super::timing::duration_millis;
 
@@ -118,6 +121,7 @@ pub(in crate::sidebar_pane) struct FocusPeers {
     fit: Option<FitView>,
     diag: DiagSink,
     jumps: Arc<JumpHost>,
+    views: Arc<super::views::ViewsHandle>,
     lease: Option<Arc<JumpLease>>,
     push_layout: bool,
 }
@@ -197,6 +201,7 @@ impl FocusPeers {
         source: SidebarInstanceId,
         diag: DiagSink,
         jumps: Arc<JumpHost>,
+        views: Arc<super::views::ViewsHandle>,
     ) -> Self {
         Self {
             source_view: None,
@@ -205,6 +210,7 @@ impl FocusPeers {
             fit: None,
             diag,
             jumps,
+            views,
             lease: None,
             push_layout: true,
         }
@@ -234,11 +240,6 @@ impl FocusPeers {
         now: Instant,
     ) -> Option<impl Fn() -> bool + use<>> {
         self.jumps.paint_fence(&self.source, nonce, now)
-    }
-
-    /// Claim `push`'s landing for `pane`, its established destination.
-    pub(super) fn claim_landing(&self, push: &FocusPush, pane: &PaneId, now: Instant) -> bool {
-        self.jumps.claim_landing(&push.lease, pane, now)
     }
 
     pub(super) fn lands_on(&self, pane: &PaneId, now: Instant) -> bool {
@@ -352,20 +353,28 @@ impl FocusPeers {
         let lease = self.lease.as_ref()?;
         let started = now();
         let expected_panes = self.fit.as_ref().and_then(|fit| fit(anchor)).map(Arc::new);
+        let record = self.views.read();
         let peers = self
             .subscribers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let owners = record
+            .fold
+            .as_ref()
+            .and_then(|fold| fold.frame.as_deref())
+            .map_or_else(Vec::new, |frame| {
+                owners(frame, &anchor.pane_id, &self.source, peers.values())
+            });
         let (tx, rx) = channel();
         let ack = PushAck::new(tx);
-        let mut traces = Vec::with_capacity(peers.len());
+        let mut traces = Vec::with_capacity(owners.len());
         let sent = now();
         let until = clicked + PAINT_WAIT;
         self.jumps.register_wait(&lease.stamp, &ack, anchor.nonce);
-        for peer in peers
-            .values()
-            .filter(|peer| peer.instance_id != self.source)
-        {
+        if let Some(first) = owners.first() {
+            self.jumps.name_landing(&lease.stamp, &first.own_pane, sent);
+        }
+        for peer in &owners {
             if !self.is_current() {
                 break;
             }
@@ -390,8 +399,12 @@ impl FocusPeers {
             };
             traces.push(trace);
         }
+        let unresolved = owners.is_empty();
         drop(peers);
         drop(ack);
+        if unresolved {
+            self.trace_stage("owner_unresolved");
+        }
         let fit_ms = self
             .fit
             .as_ref()
@@ -399,6 +412,41 @@ impl FocusPeers {
             .filter(|elapsed| *elapsed != 0);
         Some((sent, until, fit_ms, rx, traces))
     }
+}
+
+/// The subscribers other than `source` that own `target` in `frame`, in the target tab's
+/// pane order: each passes the peer's own rule (`SidebarOwnView::from_frame` read through
+/// `own_tab_viewed`). A target no tab lists has no owner.
+fn owners<'a>(
+    frame: &PaneFrame,
+    target: &PaneId,
+    source: &SidebarInstanceId,
+    subscribers: impl Iterator<Item = &'a Subscriber> + Clone,
+) -> Vec<&'a Subscriber> {
+    let Some(tab) = frame
+        .tabs
+        .iter()
+        .find(|tab| tab.panes.iter().any(|pane| pane.pane_id == *target))
+    else {
+        return Vec::new();
+    };
+    tab.panes
+        .iter()
+        .flat_map(|pane| {
+            subscribers
+                .clone()
+                .filter(move |peer| peer.own_pane == pane.pane_id && peer.instance_id != *source)
+        })
+        .filter(|peer| {
+            SidebarOwnView::from_frame(&peer.own_pane, frame).is_some_and(|view| {
+                super::loop_state::own_tab_viewed(
+                    std::slice::from_ref(target),
+                    &view,
+                    &peer.own_pane,
+                )
+            })
+        })
+        .collect()
 }
 
 fn wait_for_paint(

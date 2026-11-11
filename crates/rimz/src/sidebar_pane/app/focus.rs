@@ -75,12 +75,12 @@ pub(super) fn request_focus_until(
 /// Zellij repair re-samples a mismatching fence until its strand deadline.
 /// Errors return to the attachment for selection rollback and a recovered
 /// health notice. A superseded dispatch releases its input without a failure alert.
-/// A cross-tab user request pushes the stored anchor to host peers
-/// and waits for the destination's frame until click + 500 ms before mux dispatch;
-/// request work and any stale tmux fit spend that same budget, without resetting it.
-/// The source arms its click-ordered lease before the input paint. Known
-/// non-owners hold room work until dispatch returns or the deadline, but still handle user input;
-/// the destination consumes the priority push first. Checkpoints fence older
+/// A cross-tab user request pushes the stored anchor to the host attachments that own
+/// its target in the host's fold and waits for the destination's frame until click + 500 ms
+/// before mux dispatch; request work and any stale tmux fit spend that same budget, without
+/// resetting it. The source arms its click-ordered lease before the input paint. Attachments
+/// offered no push go on with room work and user input; the destination consumes the
+/// priority push first. Checkpoints fence older
 /// requests before store, after fitting, and under the focus-anchor lock before
 /// each mux dispatch attempt. The lease is
 /// released before error rollback, on return, and on unwinding. Same-tab

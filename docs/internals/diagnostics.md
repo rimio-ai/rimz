@@ -303,7 +303,7 @@ To correlate a fold with its publication, take the latest `frame_published` whos
 
 ### Push handshakes
 
-`push_handshake` records one cross-tab jump from its source, without edge gating or sampling. The source writes it after dispatch, once late reports are collected (until every peer handle drops, or 1 s after send), so neither the write nor the late collection delays the jump. The envelope names the source attachment and the write time. The event carries:
+`push_handshake` records one cross-tab jump from its source, without edge gating or sampling. The source writes it after dispatch, once late reports are collected (until every offered peer's handle drops, or 1 s after send), so neither the write nor the late collection delays the jump. The envelope names the source attachment and the write time. The event carries:
 
 | Field | Meaning |
 | --- | --- |
@@ -314,18 +314,18 @@ To correlate a fold with its publication, take the latest `frame_published` whos
 | `decided_ms` | From the send instant (taken after any fit returns) to the source's wait decision |
 | `dispatched_ms` | From the send instant until the mux dispatch returns. Absent on a superseded jump |
 | `outcome` | The source's verdict at its wait decision (below) |
-| `peers` | One entry per other attachment, in subscriber order (below) |
+| `peers` | One entry per attachment the push was offered to, in the order offered: the attachments other than the source that own the target in the host's fold, usually one, none when the host resolved no owner (below) |
 
 The source classifies `outcome` at its wait decision:
 
 | `outcome` | Meaning |
 | --- | --- |
 | `painted` | A `painted` or `displaced` peer report consumed before the budget |
-| `released` | Every handle dropped before the budget without a landing report |
+| `released` | Every handle dropped before the budget without a landing report, or the push was offered to nobody |
 | `timed_out` | Any decision at or after the budget, including a release or landing report at the tie |
 | `superseded` | A newer click cancelled the pushed jump before dispatch. A cancellation before push writes no handshake |
 
-Each `peers` entry carries the attachment's `instance_id` and `delivery` (`sent` or `inbox_closed`), even when delivery failed. A failed send has no stages or verdict. The stage stamps are relative to send: `received_ms` stamps arrival, `snapshot_ms` ends pending-snapshot preparation, `folded_ms` ends the intent fold, and `finished_ms` stamps the verdict. A known non-owner returns before preparation or folding, and a datagram-first nonce also skips those stages, so both omit the middle stamps. Supersession can finish a push before receipt or between preparation and folding, leaving the later stages absent. Absent optionals and zero counts are omitted.
+Each `peers` entry carries the attachment's `instance_id` and `delivery` (`sent` or `inbox_closed`), even when delivery failed. A failed send has no stages or verdict. The stage stamps are relative to send: `received_ms` stamps arrival, `snapshot_ms` ends pending-snapshot preparation, `folded_ms` ends the intent fold, and `finished_ms` stamps the verdict. A datagram-first nonce skips preparation and folding, so it omits the middle stamps. Supersession can finish a push before receipt or between preparation and folding, leaving the later stages absent. Absent optionals and zero counts are omitted.
 
 | Peer field | Meaning |
 | --- | --- |
@@ -356,6 +356,7 @@ jq 'select(.event.kind=="push_handshake" and (.event.outcome!="painted" or any(.
 | `request_failed` | The request failed |
 | `anchor_changed` | The stored nonce no longer matched before push. This fallback also uses the request gate for its dispatch fence |
 | `push_superseded` | The obsolete jump stopped before handshake tracing |
+| `owner_unresolved` | The push was offered to nobody: the host's fold had no frame, no tab listed the target, or no attachment other than the source owned it. Written once, after the push |
 | `input_superseded` | A same-tab focus click or key revoked the active jump before arming its own local lease. The record keeps the cancelled jump's sequence, target, and source attachment |
 
 These records stay when no `push_handshake` follows. Missing progress after a stage means work still in flight or an unavailable sink, not proof of cancellation.

@@ -20,10 +20,45 @@ mod paint;
 mod scroll;
 mod shared;
 
+/// Put `rig`'s latest published fold in `plane`, the host a push resolves its owners from.
+fn publish_host_fold(plane: &super::super::plane::DataPlane, rig: &Rig) {
+    if let Some(fold) = rig.views.read().fold.clone() {
+        plane.remember((*fold).clone());
+    }
+}
+
+/// Publish a host fold in which the sidebar `owner` shares one tab with `target`.
+fn place_owner(plane: &super::super::plane::DataPlane, owner: &PaneId, target: &PaneId) {
+    let mut sidebar = pane(owner.raw(), "tab_owner");
+    sidebar.pane_id = owner.clone();
+    sidebar.command = Some("rimz-sidebar".into());
+    let mut work = pane(target.raw(), "tab_owner");
+    work.pane_id = target.clone();
+    super::super::fixtures::remember_fold(
+        plane,
+        snapshot(&workspace()),
+        crate::sidebar::frame::assemble_frame(vec![sidebar, work], 1, "rimz-test"),
+    );
+}
+
 fn focus_push(
     rig: &mut Rig,
     anchor: crate::mux::focus_anchor::FocusAnchor,
 ) -> (FocusPush, Receiver<PushPeer>) {
+    let (push, ack) = offer_push(rig, anchor);
+    (
+        push.expect("the host resolves this pane as the target's owner"),
+        ack,
+    )
+}
+
+/// Push a jump from an unsubscribed source through the rig's host, which reads the rig's
+/// latest published fold, and take what the host offered this pane.
+fn offer_push(
+    rig: &mut Rig,
+    anchor: crate::mux::focus_anchor::FocusAnchor,
+) -> (Option<FocusPush>, Receiver<PushPeer>) {
+    publish_host_fold(&rig.focus_plane, rig);
     let (tx, _rx) = std::sync::mpsc::sync_channel(64);
     let _subscription = rig.focus_plane.subscribe(&rig.state.pane.config, tx);
     let clicked = rig.state.pane.clock.now();
@@ -36,7 +71,7 @@ fn focus_push(
         rig.state.pane.config.instance_id.clone(),
         crate::diag::DiagSink::disabled(),
     );
-    let push = peers.take_push().expect("priority slot delivers the push");
+    let push = peers.take_push();
     rig.state.pane.focus_peers = Some(peers);
     rig.focus_lease = Some(lease);
     (push, ack)
