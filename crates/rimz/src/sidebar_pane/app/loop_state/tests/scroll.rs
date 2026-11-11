@@ -196,6 +196,8 @@ pub(super) struct SharedPanes {
     pub(super) snapshot: SidebarSnapshot,
     pub(super) clock: LoopClock,
     subscriptions: Vec<super::super::super::plane::Subscription>,
+    /// Kept open so a push to any pane is delivered, not forgotten as an inbox closed.
+    wakes: Vec<Receiver<Wakeup>>,
 }
 
 impl SharedPanes {
@@ -222,11 +224,13 @@ impl SharedPanes {
             snapshot,
             clock,
             subscriptions: Vec::new(),
+            wakes: Vec::new(),
         };
         for rig in &mut pair.panes {
-            let (wake, _) = std::sync::mpsc::sync_channel(1);
+            let (wake, woken) = std::sync::mpsc::sync_channel(1);
             pair.subscriptions
                 .push(pair.plane.subscribe(&rig.state.pane.config, wake));
+            pair.wakes.push(woken);
             rig.state.pane.clock = pair.clock.clone();
             rig.share_views(pair.plane.views.clone());
         }
@@ -246,9 +250,10 @@ impl SharedPanes {
             let mut rig = Rig::with_own_pane(own);
             rig.state.pane.config.room.mux = mux;
             rig.state.pane.clock = self.clock.clone();
-            let (wake, _) = std::sync::mpsc::sync_channel(1);
+            let (wake, woken) = std::sync::mpsc::sync_channel(1);
             self.subscriptions
                 .push(self.plane.subscribe(&rig.state.pane.config, wake));
+            self.wakes.push(woken);
             rig.share_views(self.plane.views.clone());
             settle_width(&mut rig);
             rig.state.pane.optimistic_watch_until = None;

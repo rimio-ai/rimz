@@ -1885,6 +1885,126 @@ fn a_jump_takes_a_slot_inline_and_an_abandoned_jump_returns_it() {
     assert!(!bytes.windows(3).any(|bytes| bytes == b"\x1b_G"));
 }
 
+fn jump_anchor(rig: &Rig, target: PaneId) -> crate::mux::focus_anchor::FocusAnchor {
+    crate::mux::focus_anchor::FocusAnchor {
+        nonce: crate::ids::FocusNonce::new(),
+        session_name: "rimz-test".into(),
+        pane_id: target,
+        origin: crate::mux::focus_anchor::FocusOrigin::User,
+        repair_generation: None,
+        input_at_ms: None,
+        issued_at_ms: rig.state.pane.clock.now_ms(),
+        applied_at_ms: None,
+        state: crate::mux::focus_anchor::FocusIntentState::Requested,
+        pre_action: Vec::new(),
+        placement: None,
+        order: None,
+    }
+}
+
+/// Hidden pixel-capable panes on one host and one slot pool, each settled on
+/// the room's mirror and writing into its own output.
+fn hidden_pixel_room(hidden: usize) -> (super::scroll::SharedPanes, Vec<FrameOutput>) {
+    let mut room = mirror_pair(MuxName::Tmux);
+    amend_for_pixel_meters(&mut room.snapshot);
+    room.add_hidden(hidden);
+    repaint_source(&mut room);
+    let pool = room.panes[0].runtime.clone();
+    let mut outputs = Vec::new();
+    for rig in &mut room.panes[1..] {
+        rig.state.pane.paint = FramePainter::new(SLOT_CAPS, true, pool.clone());
+        let output = FrameOutput::default();
+        rig.terminal.backend_mut().play_output(output.clone());
+        outputs.push(output);
+    }
+    for index in 1..room.panes.len() {
+        room.clock.advance(animation_frame(&room.snapshot));
+        advance_wakeup(&mut room.panes[index], Wakeup::Snapshot);
+    }
+    assert_eq!(first_free_slot(&room.panes[0]), Some(0x520000));
+    (room, outputs)
+}
+
+/// Pushes one jump from an unsubscribed source to every pane of `room`.
+fn push_jump_to_all(
+    room: &mut super::scroll::SharedPanes,
+    target: &PaneId,
+) -> (FocusPeers, Receiver<PushPeer>) {
+    let clicked = room.clock.now();
+    let anchor = jump_anchor(&room.panes[0], target.clone());
+    let source = room
+        .plane
+        .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled())
+        .arm(target.clone(), clicked);
+    let (_, _, _, ack, _) = source.push(&anchor, clicked, || clicked).unwrap();
+    let pushes: Vec<_> = room
+        .panes
+        .iter_mut()
+        .map(|rig| {
+            let peers = room.plane.focus_peers(
+                rig.state.pane.config.instance_id.clone(),
+                crate::diag::DiagSink::disabled(),
+            );
+            let push = peers.take_push().expect("every subscriber is pushed");
+            rig.state.pane.focus_peers = Some(peers);
+            push
+        })
+        .collect();
+    for (rig, push) in room.panes.iter_mut().zip(pushes) {
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
+    }
+    (source, ack)
+}
+
+#[test]
+fn a_pushed_jump_gives_no_hidden_peer_a_slot_or_graphics() {
+    let (mut room, outputs) = hidden_pixel_room(12);
+    for output in &outputs {
+        output.0.lock().unwrap().clear();
+    }
+    let target = PaneId::from_parts(MuxName::Tmux, "%999");
+    let (_source, ack) = push_jump_to_all(&mut room, &target);
+    let reports: Vec<_> = ack.try_iter().collect();
+    for rig in &room.panes[1..] {
+        let report = reports
+            .iter()
+            .find(|report| report.instance_id == rig.state.pane.config.instance_id)
+            .expect("each hidden peer reports");
+        assert_eq!(report.verdict, Some(PushVerdict::NotDestination));
+    }
+    for _ in 0..6 {
+        room.clock.advance(Duration::from_millis(400));
+        for rig in &mut room.panes[1..] {
+            advance_wakeup(rig, Wakeup::Tick);
+        }
+    }
+    let leaks: Vec<_> = room.panes[1..]
+        .iter()
+        .zip(&outputs)
+        .map(|(rig, output)| {
+            let graphics = output
+                .0
+                .lock()
+                .unwrap()
+                .windows(3)
+                .filter(|bytes| *bytes == b"\x1b_G")
+                .count();
+            (
+                rig.state.watched(),
+                rig.state.pane.paint.holds_slot(),
+                graphics,
+            )
+        })
+        .filter(|leak| *leak != (false, false, 0))
+        .collect();
+    assert_eq!(
+        leaks,
+        Vec::new(),
+        "(watched, holds slot, graphics escapes) of each non-destination that leaked"
+    );
+    assert_eq!(first_free_slot(&room.panes[0]), Some(0x520000));
+}
+
 impl Rig {
     fn lazy_fold(&mut self, snapshot: SidebarSnapshot, source: SnapshotSource) {
         self.deliver(self.lazy_update(snapshot, source));
