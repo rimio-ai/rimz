@@ -2565,3 +2565,185 @@ fn a_capped_fire_reads_the_budget_only_after_a_concurrent_fire_publishes_its_run
         plan.err()
     );
 }
+
+/// Takes a fire to a created run only in a re-exec of `name` with private homes: the agent
+/// row's scope gate preflights Claude hooks against this process's environment, and every
+/// test process shares the unit-test home. Returns whether this is the parent, done.
+fn reexec_with_private_homes(name: &str) -> bool {
+    const CHILD: &str = "RIMZ_TEST_FIRE_PROMPT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    // Under /tmp so the runtime root's socket paths stay short.
+    let home = tempfile::Builder::new()
+        .prefix("rimz-fire-prompt-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture"])
+        .env(CHILD, "1")
+        .env("HOME", home.path())
+        .env("CLAUDE_CONFIG_DIR", home.path().join("claude"))
+        .env_remove("RIMZ_CLAUDE_SETTINGS");
+    for (key, leaf) in [
+        ("RIMZ_HOME", ".rimz"),
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("XDG_STATE_HOME", "state"),
+        ("XDG_RUNTIME_DIR", "runtime"),
+    ] {
+        let path = home.path().join(leaf);
+        std::fs::create_dir_all(&path).unwrap();
+        command
+            .env(key, &path)
+            .env(format!("RIMZ_UNIT_TEST_{key}"), path);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{name} failed in its re-exec: {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    true
+}
+
+fn seed_deploy_trigger(root: &Path, name: &str, env: &str, arrived_at: Timestamp) {
+    let paths = StatePaths::for_project_root(root).unwrap();
+    crate::disk::atomic::write_temp_then_rename(
+        &backlog::path(&paths),
+        &serde_json::json!({"version": 1, "tasks": {name: {"triggers": [{
+            "arrived_at": arrived_at,
+            "signal": {"name": "deploy.done", "payload": {"env": env}},
+            "absorbed": 0
+        }]}}}),
+    )
+    .unwrap();
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TriggerSwitch {
+    None,
+    RunLock,
+    Reconcile,
+}
+
+/// Fires an inline agent row on a `deploy.done {"env":"b"}` arrival and checks that the run's
+/// sealed prompt names the trigger its record names: `env` is the payload the fire serves.
+fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwitch, env: &str) {
+    let adapter = find_definition("claude").unwrap();
+    let login_env = ambient_env();
+    adapter
+        .install_hooks(&login_env, Default::default())
+        .unwrap();
+    assert!(adapter.hooks_installed(&login_env));
+    let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let now = Timestamp::now();
+    let overlap = match switch {
+        TriggerSwitch::Reconcile => OverlapPolicy::Coalesce,
+        TriggerSwitch::None | TriggerSwitch::RunLock => OverlapPolicy::Queue,
+    };
+    let mut fire = TaskFire::new(
+        name,
+        LoadedTask::new(
+            name,
+            TaskEntry {
+                root: root.path().to_owned(),
+                agent: Some("claude".into()),
+                prompt: Some("Check the deployment.".into()),
+                signal: Some("deploy.done".into()),
+                overlap: Some(overlap),
+                ..Default::default()
+            },
+            catalog::TaskSource::Instance,
+        ),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        now,
+        Arc::new(MachineConfig::default()),
+        Some(
+            serde_json::from_value(serde_json::json!({
+                "name": "deploy.done", "source": "cli", "payload": {"env": "b"}
+            }))
+            .unwrap(),
+        ),
+        Instant::now(),
+    )
+    .unwrap();
+    let at = |offset: i64| Timestamp::from_second(now.as_second() + offset).unwrap();
+    if switch == TriggerSwitch::RunLock {
+        seed_deploy_trigger(root.path(), name, "a", at(-1));
+    }
+    let plan = fire
+        .prepare(&mut |_| {
+            if switch == TriggerSwitch::Reconcile {
+                seed_deploy_trigger(root.path(), name, "c", at(1));
+            }
+            Ok(())
+        })
+        .unwrap_or_else(|error| panic!("TaskFire::prepare: {error:#}"));
+    let TaskFirePlan::Done(done) = plan else {
+        panic!("expected TaskFirePlan::Done")
+    };
+    assert_eq!(
+        done.record.result,
+        LoopRunResult::Launched,
+        "{:?}",
+        done.record
+    );
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let run = crate::store::workflow::list(&state)
+        .unwrap()
+        .into_iter()
+        .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
+        .expect("created workflow run");
+    let prompt = std::fs::read_to_string(run.spec_dir.join("prompts/prompt.md")).unwrap();
+    let signal = done.record.signal.as_ref().unwrap();
+    let shown = format!("sealed prompt:\n{prompt}\nrecord signal: {signal:?}");
+    assert_eq!(signal.payload["env"], env, "{shown}");
+    assert_eq!(
+        done.record.absorbed,
+        u64::from(switch == TriggerSwitch::Reconcile),
+        "{shown}"
+    );
+    assert!(
+        prompt.starts_with(&format!(
+            "Rule `{name}` fired here. deploy.done · env: {env}\n"
+        )),
+        "{shown}"
+    );
+    assert!(prompt.contains("Check the deployment."), "{shown}");
+}
+
+#[test]
+fn a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves() {
+    let name = "harness::schedule::runner::tests::a_queued_fire_seals_the_prompt_of_the_waiting_trigger_it_serves";
+    if reexec_with_private_homes(name) {
+        return;
+    }
+    assert_sealed_prompt_names_the_served_trigger("queued", TriggerSwitch::RunLock, "a");
+}
+
+#[test]
+fn a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves() {
+    let name = "harness::schedule::runner::tests::a_coalesced_fire_seals_the_prompt_of_the_newer_trigger_it_serves";
+    if reexec_with_private_homes(name) {
+        return;
+    }
+    assert_sealed_prompt_names_the_served_trigger("coalesced", TriggerSwitch::Reconcile, "c");
+}
+
+#[test]
+fn a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival() {
+    let name = "harness::schedule::runner::tests::a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival";
+    if reexec_with_private_homes(name) {
+        return;
+    }
+    assert_sealed_prompt_names_the_served_trigger("arrival", TriggerSwitch::None, "b");
+}
