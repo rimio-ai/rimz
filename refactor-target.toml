@@ -2149,7 +2149,7 @@ path = "crates/rimz/src/harness"
 # The prompt-submit Environment sampler and its launch switch cross the harness/CLI hook seam (+4).
 # A loop run in flight is looked up by name and root, its row gone or not (+1).
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
-# A loop task's one account resolution serves the runner, workflow steps and `loop add`: `loop_task::task_login` (+1).
+# A loop task's one account resolution serves the runner, workflow steps and `loop add`: `task_login::task_login` (+1).
 # Rebirth settlement takes a disposition and previews the unresumable agents; the plan reads skips by session (+5).
 # The preview says recovery was switched off, and live room entry settles parked recovery through the room (+2).
 # Live room entry reads the plan's empty verdict and its declined count, and the preview counts seats live members already fill (+3).
@@ -2336,7 +2336,8 @@ path = "crates/rimz/src/harness"
 # run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
 # `when::condition` and `schedule::probe` split the shared condition evaluator from the scheduler's forge probe demand (+1).
 # run_log::{collect_run, collect_task_runs} collect a finished run from the commands that end it and the fire; the engine's workflow::forget_reported_launch is gone (+1).
-surface-budget = 1135
+# The `task_login` module resolves a loop task's account outside the sidebar graph that `loop_task` joins (+1).
+surface-budget = 1136
 
 [[verdict]]
 kind = "item"
@@ -5399,6 +5400,205 @@ allowed-dependencies = [
 surface-budget = 14
 
 [[module]]
+path = "crates/rimz/src/harness/workflow"
+# The workflow engine decides what a run does and imports nothing from the loop scheduler:
+# `harness::schedule` stays off this list, and the scheduler collects a finished run from its
+# record's typed outcome.
+allowed-dependencies = [
+    "(crate)",
+    "address",
+    "agents",
+    "child_process",
+    "config",
+    "config::definitions",
+    "config::effective",
+    "diag",
+    "diag::record",
+    "disk::atomic",
+    "disk::lock",
+    "disk::paths",
+    "disk::summary",
+    "harness::assist_log",
+    "harness::budget",
+    "harness::check_run",
+    "harness::duration",
+    "harness::headless",
+    "harness::headless::judge",
+    "harness::hook_drain",
+    "harness::idle_stop",
+    "harness::launch",
+    "harness::loop_task",
+    "harness::name",
+    "harness::plan",
+    "harness::prompt_compose",
+    "harness::prose",
+    "harness::run",
+    "harness::scratch",
+    "harness::signal",
+    "harness::spec",
+    "harness::surplus",
+    "harness::takeover",
+    "harness::task_login",
+    "harness::throttle",
+    "harness::when",
+    "harness::when::condition",
+    "ids",
+    "proc",
+    "store",
+    "store::event",
+    "store::ingress",
+    "store::notes",
+    "store::run",
+    "store::workflow",
+    "store::writer",
+    "utils::time",
+    "workspace",
+    "workspace::record",
+    "worktree",
+]
+surface-budget = 84
+
+[[module]]
+path = "crates/rimz/src/harness/check_run"
+# Neutral home of the hosted subprocess check runner the scheduler and the engine share;
+# it reaches neither `harness::schedule` nor `harness::workflow`.
+allowed-dependencies = [
+    "(crate)",
+    "harness::loop_task",
+    "harness::run",
+    "proc",
+    "workspace",
+]
+surface-budget = 17
+
+[[module]]
+path = "crates/rimz/src/harness/duration.rs"
+# Neutral leaf holding the duration grammar of workflow definitions and their start limits.
+allowed-dependencies = [
+    "(crate)",
+    "utils::time",
+]
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/harness/loop_task.rs"
+# Neutral leaf in the sidebar import graph holding the loop-task environment key.
+allowed-dependencies = []
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/harness/name.rs"
+# Neutral leaf holding the name grammar loop tasks, workflows, and workflow nodes share.
+allowed-dependencies = []
+surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/harness/prose.rs"
+# Neutral leaf holding the prose helpers that loop rows and workflow briefs share.
+allowed-dependencies = ["(crate)"]
+surface-budget = 2
+
+[[module]]
+path = "crates/rimz/src/harness/signal.rs"
+# Neutral signal vocabulary; the emit, arming and fire side stays in the scheduler.
+allowed-dependencies = [
+    "(crate)",
+    "disk::summary",
+    "harness::check_run",
+    "store::event",
+    "theme::fmt",
+]
+surface-budget = 22
+
+[[module]]
+path = "crates/rimz/src/harness/surplus.rs"
+# Neutral surplus gate read by a loop fire's admission and a workflow judge alike.
+allowed-dependencies = [
+    "(crate)",
+    "agents",
+    "utils::time",
+]
+surface-budget = 3
+
+[[module]]
+path = "crates/rimz/src/harness/takeover"
+# Neutral checkout occupancy shared by loop takeover and workflow admission.
+allowed-dependencies = [
+    "address",
+    "agents",
+    "harness::auto_continue",
+    "store::runtime",
+    "store::snapshot",
+    "utils::path",
+    "worktree",
+]
+surface-budget = 3
+
+[[module]]
+path = "crates/rimz/src/harness/task_login.rs"
+# Neutral leaf resolving the account a loop task's launches use, for the runner, workflow steps
+# and `loop add`; it reads a `store::writer::LaunchLogin`, so it stays out of the sidebar graph.
+allowed-dependencies = [
+    "agents",
+    "config",
+    "disk::paths",
+    "ids",
+    "store::writer",
+]
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/harness/throttle"
+# Neutral home-wide start throttle that loop fires and workflow starts both admit through.
+allowed-dependencies = [
+    "(crate)",
+    "address",
+    "agents",
+    "agents::state",
+    "config",
+    "disk::atomic",
+    "disk::lock",
+    "disk::paths",
+    "disk::usage",
+    "harness::check_run",
+    "harness::duration",
+    "harness::loop_task",
+    "ids",
+    "proc",
+    "proc::memory",
+    "proc::pressure",
+    "store",
+    "store::runtime",
+    "store::workflow",
+    "utils::path",
+    "utils::size",
+    "utils::time",
+    "workspace",
+    "worktree",
+]
+surface-budget = 41
+
+[[module]]
+path = "crates/rimz/src/harness/when"
+# Neutral condition evaluator shared by loop conditions and workflow condition checks.
+allowed-dependencies = [
+    "(crate)",
+    "agents",
+    "agents::account",
+    "config",
+    "config::effective",
+    "forge::pr_state",
+    "harness::scratch",
+    "harness::signal",
+    "ids",
+    "proc",
+    "store::snapshot",
+    "utils::suggest",
+    "worktree",
+]
+surface-budget = 48
+
+[[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"
 # The recorded-room predicate gates room-dependent locks; cold checks take runtime-only run locks.
 allowed-dependencies = [
@@ -5422,6 +5622,7 @@ allowed-dependencies = [
     "harness::schedule",
     "harness::signal",
     "harness::surplus",
+    "harness::task_login",
     "harness::throttle",
     "harness::when",
     "harness::workflow",
@@ -5442,7 +5643,7 @@ allowed-dependencies = [
 # The add-time window resolver and its refusals serve both `loop add` paths (+2).
 # `--after-reset` resolves its instant here for both `loop add` paths (+2).
 # `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
-# A task's account pin is a `LaunchLogin`, which `loop_task::task_login` resolves for the runner and `loop add`.
+# A task's account pin is a `LaunchLogin`, which `task_login::task_login` resolves for the runner and `loop add`.
 # Fan-out supplies its already-resolved marker checkout separately from task config.
 # A deduping task's run creation records its checkout in the workflow launch memory.
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
