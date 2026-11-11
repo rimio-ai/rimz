@@ -10,17 +10,17 @@ expression: rendered
   1    1    1    2                ⢿ 3   󰤄 0    2
 
 ▎ rollout-guard  #91 ┄┄┄┄┄┄┄ ⇡2  +1180 -390   main🮇
-▌ reviewer-2 · Opus 4.8 · xhigh · 1M 5         $9.04▐
+▌ reviewer-2 · Opus 4.8 · xhigh · 1M           $9.04▐
 ▌  approve staged migration                          ▐
 ▌  󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────── 34.0% 󰪣 52m▐
 ▌  󰿦 347k · 󱥸 299k  34k  13k  43k ·  1           ▐
-▎⢄ coder-2 · GPT 5.5 · xhigh · 257k/286k 4      $2.93🮇
+▎⢄ coder-2 · GPT 5.5 · xhigh · 257k/286k        $2.93🮇
 ▎  patch rollout smoke harness                       🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━━━━╺───────────────── 55.2% 󰪞  5m🮇
 ▎   subagents (2)                                   🮇
 
   ci-retry                  ⇡1 ⇣1  +880 -240   main
-  codex · GPT 5.5 · xhigh · 257k/286k 6        $4.58
+  codex · GPT 5.5 · xhigh · 257k/286k          $4.58
    API error
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺───────────── 65.0% 󰪢 44m
 

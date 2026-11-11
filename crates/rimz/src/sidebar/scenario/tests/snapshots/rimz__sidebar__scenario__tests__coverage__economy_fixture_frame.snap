@@ -10,15 +10,15 @@ expression: rendered
   2    0    1    4                ⢿ 3   󰤄 0    2
 
 ▎ usage-alerts ┄┄┄┄┄┄┄┄┄┄┄ ⇡2 ⇣1  +1980 -740   main🮇
-▌ opencode-2 · GPT 5.5 · xhigh · 231k/272k 7   $5.18▐
+▌ opencode-2 · GPT 5.5 · xhigh · 231k/272k     $5.18▐
 ▌  approve burst throttle                            ▐
 ▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━─── 93.7% 󰪟 19m▐
 ▌  󰿦 216k · 󱥸 208k  8k  27k                        ▐
-▎▁ claude-3 · Opus 4.8 · xhigh · 1M 9           $8.91🮇
+▎▁ claude-3 · Opus 4.8 · xhigh · 1M             $8.91🮇
 ▎  repair budget alert webhook                       🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━━━╺━╺──────────────── 37.0% 󰪣 48m🮇
 ▎   subagents (2)                              $0.46🮇
-▎ claude-2 · Opus 4.8 · xhigh · 1M 8          $29.36🮇
+▎ claude-2 · Opus 4.8 · xhigh · 1M            $29.36🮇
 ▎  API Error: rate limit exceeded                    🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━─── 85.0% 󰪥  2h🮇
 

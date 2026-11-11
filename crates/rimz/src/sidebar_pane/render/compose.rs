@@ -1216,7 +1216,6 @@ fn scroll_lines_windowed(
 
     let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
     let ctx = RowCtx {
-        card_slots: crate::sidebar_pane::view::card_slots(snapshot),
         theme,
         now: snapshot.now,
         typing_until: &snapshot.typing_until,

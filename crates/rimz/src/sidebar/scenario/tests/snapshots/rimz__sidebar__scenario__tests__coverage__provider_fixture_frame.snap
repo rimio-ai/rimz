@@ -10,7 +10,7 @@ expression: rendered
  ? 1   ! 1   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 6
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47🮇
-▌? claude · Opus 4.8 · xhigh · 1M 7            $12.40▐
+▌? claude · Opus 4.8 · xhigh · 1M              $12.40▐
 ▌  Allow the auth watcher write?                     ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────── 34.0%      ▐
 ▌  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 ▐
@@ -21,7 +21,7 @@ expression: rendered
 ▌      ◇ 22k · Haiku · xhigh                       5m▐
 ▎⣾ cargo nextest                                     🮇
 ▎  integration::backend::zellij                      🮇
-▎⠁ codex · GPT 5.5 · xhigh · 257k/286k 8        $4.36🮇
+▎⠁ codex · GPT 5.5 · xhigh · 257k/286k          $4.36🮇
 ▎  approve pricing cache write                       🮇
 
  ─── Claude ──── Codex ──────────────────────────────

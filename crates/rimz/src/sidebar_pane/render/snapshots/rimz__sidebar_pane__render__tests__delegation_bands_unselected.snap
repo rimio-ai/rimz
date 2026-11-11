@@ -10,7 +10,7 @@ expression: screen
  ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
 
  ⑂ main
- ⢄ claude 1
+ ⢄ claude
    delegate
    ▢ ────────────────────────────────────  0.0%
    ⧉ subagents (9) · ⧖ waits (1)

@@ -10,25 +10,25 @@ expression: screen
  ? 0   ! 0   ⏸︎ 0   ✓ 0                                          ⢿ 6   ☾ 0   ○ 0
 
 ▎⑂ alpha ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌⣾ codex 1                                                                     ▐
+▌⣾ codex                                                                       ▐
 ▌  task-0                                                                      ▐
 ▌  ▢ ──────────────────────────────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                                         ▐
-▎⣾ codex 2                         ╭ help ─────────────────────────────────────╮
+▎⣾ codex                           ╭ help ─────────────────────────────────────╮
 ▎  task-1                          │ keys                                      │
 ▎  ▢ ──────────────────────────────│   /    search         ✕ Esc   clear       │
-▎⣾ codex 3                         │ ↕ j/k  cards/entries  ↕ J/K   worktrees   │
+▎⣾ codex                           │ ↕ j/k  cards/entries  ↕ J/K   worktrees   │
 ▎  task-2                          │ ↕ gg/G ends           ↕ ^f/^b page        │
 ▎  ▢ ──────────────────────────────│ ⏎ 1-9  direct         ↕ ^d/^u half page   │
                                    │ ␣ n/N  next/prev      ↕ H/M/L screen      │
  ⑂ beta                            │ ⏎ Tab  last card      ⏎ Enter focus/open  │
- ⣾ codex 4                         │ ✉ m    read/unread    ✉ U     read all    │
+ ⣾ codex                           │ ✉ m    read/unread    ✉ U     read all    │
    task-3                          │ ↔ ←/→  account tabs   ⟳ R     reload      │
    ▢ ──────────────────────────────│   zi   inactive fold  ↕ </>   width       │
- ⣾ codex 5                         │   za   card fold        zR/zM all groups  │
+ ⣾ codex                           │   za   card fold        zR/zM all groups  │
    task-4                          │   dd   close            :     commands    │
    ▢ ──────────────────────────────│   o/O  new agent        .     repeat      │
- ⣾ codex 6                         │ ⏎ q    return         ↕ =     reset width │
+ ⣾ codex                           │ ⏎ q    return         ↕ =     reset width │
    task-5                          │   ^l   redraw                             │
    ▢ ──────────────────────────────│                                           │
                                    │ filter                                    │

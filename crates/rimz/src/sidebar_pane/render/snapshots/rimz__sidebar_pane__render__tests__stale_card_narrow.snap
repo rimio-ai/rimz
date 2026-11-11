@@ -3,4 +3,4 @@ source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
 expression: screen
 ---
  ⑂ main
- ✓ claude 1 · try the …  2d   $3.10
+ ✓ claude · try the ar…  2d   $3.10

@@ -76,8 +76,8 @@ pub(super) fn agent_lead_cell(
 
 /// Line 1 for an agent: the leading cell (the working fill or thinking head
 /// while active; attention rows use the card emphasis), the agent
-/// name, then the dim capability tokens (`· model · reasoning · window`) and
-/// optional room-birth digit, with bold `$cost` (dollar green) pinned right —
+/// name, then the dim capability tokens (`· model · reasoning · window`), with
+/// bold `$cost` (dollar green) pinned right —
 /// counting up through the row's stepped [`CostRolls`] roll as a turn lands,
 /// with the shared settle brighten.
 /// The fast-mode bolt follows the model in bold amber, still at rest and
@@ -208,7 +208,6 @@ pub(super) fn agent_identity_line(
             }
         }
     }
-    row_ctx.append_card_slot(row, &mut left, &right);
     pin_right(left, right, width)
 }
 
@@ -315,7 +314,6 @@ pub(super) fn stale_line(
         marks.extend(right);
         right = marks;
     }
-    ctx.append_card_slot(row, &mut left, &right);
     left.push(Span::styled(value_seam(theme), theme.muted()));
     let mut remaining = width.saturating_sub(spans_width(&left) + spans_width(&right) + 1);
     for mut span in description_spans(ctx, row, attention) {

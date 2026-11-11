@@ -2,7 +2,7 @@ use super::*;
 use crate::sidebar_pane::render::PresentationToggles;
 
 #[test]
-fn card_slot_yields_before_the_handle_at_exact_widths() {
+fn card_head_draws_no_slot_digit_at_any_width() {
     let state = agent(
         "slot",
         "claude",
@@ -23,36 +23,29 @@ fn card_slot_yields_before_the_handle_at_exact_widths() {
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut plain.worktree_groups)[0].rows)
         [0]
     .pane = None;
-    for width in [17, 18, 19] {
-        let theme = Theme::fixed(false);
-        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+    let head_text = |snapshot: &SidebarSnapshot, width: usize| {
+        let lines = group_lines_at_width(snapshot, &Theme::fixed(false), usize::MAX, width);
         let head = lines
             .iter()
             .find(|line| line.spans.iter().any(|span| span.content == "claude"))
             .unwrap();
-        let slot = head.spans.iter().find(|span| span.content == " 1");
-        assert_eq!(slot.is_some(), width >= 18, "width={width}: {head:?}");
-        if let Some(slot) = slot {
-            assert!(slot.style.add_modifier.contains(Modifier::DIM));
-        }
-        let plain_lines = group_lines_at_width(&plain, &theme, usize::MAX, width);
-        let plain_head = plain_lines
-            .iter()
-            .find(|line| line.spans.iter().any(|span| span.content == "claude"))
-            .unwrap();
-        let handles = |line: &Line<'_>| {
-            line.spans
-                .iter()
-                .filter(|span| span.content.contains("claude"))
-                .map(|span| span.content.to_string())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(handles(head), handles(plain_head));
+        assert!(
+            head.spans.iter().all(|span| span.content != " 1"),
+            "width={width}: {head:?}"
+        );
+        head.to_string()
+    };
+    for width in [17, 18, 19, 46, 60] {
+        assert_eq!(
+            head_text(&snapshot, width),
+            head_text(&plain, width),
+            "width={width}"
+        );
     }
 }
 
 #[test]
-fn stale_card_head_keeps_its_slot() {
+fn stale_card_head_draws_no_slot_digit() {
     let mut state = agent(
         "stale",
         "claude",
@@ -72,7 +65,7 @@ fn stale_card_head_keeps_its_slot() {
         .find(|line| line.spans.iter().any(|span| span.content == "claude"))
         .unwrap();
     assert!(
-        head.spans.iter().any(|span| span.content == " 1"),
+        head.spans.iter().all(|span| span.content != " 1"),
         "{head:?}"
     );
 }

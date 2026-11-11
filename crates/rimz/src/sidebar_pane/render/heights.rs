@@ -53,8 +53,7 @@ impl CardHeights {
         ctx: &RowCtx<'_>,
     ) -> bool {
         let RowCtx {
-            card_slots: _, // Content-only; the token never adds a line.
-            theme: _,      // The owned Rc is compared by identity below.
+            theme: _, // The owned Rc is compared by identity below.
             now,
             typing_until: _, // Marks never change a card's height.
             width,

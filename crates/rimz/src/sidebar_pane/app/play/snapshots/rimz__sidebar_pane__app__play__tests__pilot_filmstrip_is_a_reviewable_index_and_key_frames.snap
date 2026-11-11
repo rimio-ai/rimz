@@ -29,10 +29,10 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 1
 cockpit       │
 #main         │  ⑂ main
-@planner#main │  ✓ planner 1
+@planner#main │  ✓ planner
 @planner#main │    plan approved
 @planner#main │    ▢ ────────────────────────────────────  0.0%
-@coder#main   │  ○ coder 2
+@coder#main   │  ○ coder
               │
               │
               │
@@ -65,10 +65,10 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
 cockpit       │
 #main         │  ⑂ main
-@planner#main │  ✓ planner 1
+@planner#main │  ✓ planner
 @planner#main │    plan approved
 @planner#main │    ▢ ────────────────────────────────────  0.0%
-@coder#main   │  ⠁ coder 2
+@coder#main   │  ⠁ coder
 @coder#main   │    implement the sidebar story
 @coder#main   │    ▢ ────────────────────────────────────  0.0%
               │
@@ -101,10 +101,10 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
 cockpit       │
 #main         │  ⑂ main
-@planner#main │  ✓ planner 1
+@planner#main │  ✓ planner
 @planner#main │    plan approved
 @planner#main │    ▢ ────────────────────────────────────  0.0%
-@coder#main   │  ⢄ coder 2
+@coder#main   │  ⢄ coder
 @coder#main   │    implement the sidebar story
 @coder#main   │    ▢ ────────────────────────────────────  0.0%
 @coder#main   │    ⧉ subagents (1)
@@ -137,10 +137,10 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
 cockpit       │
 #main         │  ⑂ main
-@planner#main │  ✓ planner 1
+@planner#main │  ✓ planner
 @planner#main │    plan approved
 @planner#main │    ▢ ────────────────────────────────────  0.0%
-@coder#main   │  ⢄ coder 2
+@coder#main   │  ⢄ coder
 @coder#main   │    implement the sidebar story
 @coder#main   │    ▢ ────────────────────────────────────  0.0%
 @coder#main   │    ⧉ subagents (2)
@@ -173,11 +173,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
-@coder#main   │ ▌⢄ coder 2                                           ▐
+@coder#main   │ ▌⢄ coder                                             ▐
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -209,11 +209,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
-@coder#main   │ ▌⢄ coder 2                                           ▐
+@coder#main   │ ▌⢄ coder                                             ▐
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -245,11 +245,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
-@coder#main   │ ▌☾ coder 2                                           ▐
+@coder#main   │ ▌☾ coder                                             ▐
 @coder#main   │ ▌  wakes in 1m                                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -281,10 +281,10 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
-@coder#main   │ ▌☾ coder 2                                           ▐
+@coder#main   │ ▌☾ coder                                             ▐
 @coder#main   │ ▌  wakes in 1m                                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -317,11 +317,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▌✓ planner 1                                         ▐
+@planner#main │ ▌✓ planner                                           ▐
 @planner#main │ ▌  plan approved                                     ▐
 @planner#main │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @planner#main │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▎☾ coder 2                                           🮇
+@coder#main   │ ▎☾ coder                                             🮇
 @coder#main   │ ▎  wakes now                                         🮇
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ▤ 0                                               🮇
@@ -353,11 +353,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 1   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@planner#main │ ▌✓ planner 1                                         ▐
+@planner#main │ ▌✓ planner                                           ▐
 @planner#main │ ▌  plan approved                                     ▐
 @planner#main │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @planner#main │ ▌  ▤ 0                                               ▐
-@coder#main   │ ▎? coder 2                                           🮇
+@coder#main   │ ▎? coder                                             🮇
 @coder#main   │ ▎  Ship the sidebar story?                           🮇
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ▤ 0                                               🮇
@@ -389,11 +389,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 1   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▎? coder 2                                           🮇
+@coder#main   │ ▎? coder                                             🮇
 @coder#main   │ ▎  Ship the sidebar story?                           🮇
 @coder#main   │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @coder#main   │ ▎  ⧉ subagents (2)                                   🮇
-@planner#main │ ▌✓ planner 1                                         ▐
+@planner#main │ ▌✓ planner                                           ▐
 @planner#main │ ▌  plan approved                                     ▐
 @planner#main │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @planner#main │ ▌  ▤ 0                                               ▐
@@ -425,7 +425,7 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 1   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▌? coder 2                                           ▐
+@coder#main   │ ▌? coder                                             ▐
 @coder#main   │ ▌  Ship the sidebar story?                           ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -434,7 +434,7 @@ cockpit       │
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
@@ -461,7 +461,7 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▌⠁ coder 2                                           ▐
+@coder#main   │ ▌⠁ coder                                             ▐
 @coder#main   │ ▌  implement the sidebar story                       ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -470,7 +470,7 @@ cockpit       │
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
@@ -497,7 +497,7 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 2                ⢿ 0   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▌✓ coder 2                                           ▐
+@coder#main   │ ▌✓ coder                                             ▐
 @coder#main   │ ▌  sidebar story shipped                             ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -506,7 +506,7 @@ cockpit       │
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
 @planner#main │ ▎  ▤ 0                                               🮇
@@ -533,7 +533,7 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 2                ⢿ 0   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▌✓ coder 2                                           ▐
+@coder#main   │ ▌✓ coder                                             ▐
 @coder#main   │ ▌  sidebar story shipped                             ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
@@ -542,7 +542,7 @@ cockpit       │
 @coder#main   │ ▌      xhigh                                      <1m▐
 @coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
 @coder#main   │ ▌      xhigh                                      <1m▐
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
               │
@@ -569,11 +569,11 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 2                ⢿ 0   ☾ 0   ○ 0
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▌✓ coder 2                                           ▐
+@coder#main   │ ▌✓ coder                                             ▐
 @coder#main   │ ▌  sidebar story shipped                             ▐
 @coder#main   │ ▌  ▢ ────────────────────────────────────  0.0%      ▐
 @coder#main   │ ▌  ▤ 0                                               ▐
-@planner#main │ ▎✓ planner 1                                         🮇
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
               │
@@ -605,8 +605,8 @@ cockpit       │  ────────────────────�
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 1
 cockpit       │
 #main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-@coder#main   │ ▌○ coder 2                                           ▐
-@planner#main │ ▎✓ planner 1                                         🮇
+@coder#main   │ ▌○ coder                                             ▐
+@planner#main │ ▎✓ planner                                           🮇
 @planner#main │ ▎  plan approved                                     🮇
 @planner#main │ ▎  ▢ ────────────────────────────────────  0.0%      🮇
               │

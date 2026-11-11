@@ -10,7 +10,7 @@ expression: rendered
  ? 2   ! 0   ⏸︎ 1   ✓ 2                ⢿ 5   ☾ 0   ○ 2
 
 ▎⑂ network-check ┄┄┄┄┄┄┄┄┄┄ ⇡1 ⇣1  +1680 -610  ⑂ main🮇
-▌? claude-3 · Opus 4.8 · xhigh · 1M 6           $6.88▐
+▌? claude-3 · Opus 4.8 · xhigh · 1M             $6.88▐
 ▌  approve firewall rule change                      ▐
 ▌  ▣ ━━━━━━━━━━━━╺━╺───────────────────── 23.0% ◔ 24m▐
 ▌  ▤ 236k · ◌ 203k ◍ 23k ↘ 9k ↗ 29k                  ▐
@@ -19,7 +19,7 @@ expression: rendered
 ▌      ▤ 18k · Haiku · xhigh                       3m▐
 ▌    ✓ Explore · audit auth watcher changes     $0.34▐
 ▌      ◇ 22k · Haiku · xhigh                       5m▐
-▎⢄ pi-2 · GPT 5.5 · xhigh · 272k 4              $6.24🮇
+▎⢄ pi-2 · GPT 5.5 · xhigh · 272k                $6.24🮇
 ▎  debug jump-host DNS                               🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━─── 92.0% ◕ 51m🮇
 ▎  ⧉ subagents (2)                                   🮇

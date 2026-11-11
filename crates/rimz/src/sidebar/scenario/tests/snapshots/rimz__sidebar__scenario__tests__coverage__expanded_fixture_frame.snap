@@ -25,21 +25,21 @@ expression: strip_sgr(&ansi)
 ▎       22k · Haiku · xhigh                       5m🮇
 
   zellij-health                        ⇡1  +760 -210
-  pi-2 · GPT 5.5 · xhigh · 272k 5              $5.76
+  pi-2 · GPT 5.5 · xhigh · 272k                $5.76
    API error
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━────── 84.0% 󰪢 42m
    󰿦 228k · 󱥸 219k  9k  28k
 
   pricing-refresh  #91               ⇡1  +1180 -430
-  codex · GPT 5.5 · xhigh · 257k/286k 1        $4.82
+  codex · GPT 5.5 · xhigh · 257k/286k          $4.82
    approve pricing cache write
    󰕰 ━━━━━━━━━━━━━━━━━━━━━╺────────────── 61.4% 󰪟 18m
    󰿦 158k · 󱥸 151k  6k  19k
 
   main                     ⇡3 ⇣1  +1840 -620   main
- ⣾ cargo nextest 4             37%   402M     8M/s
+ ⣾ cargo nextest               37%   402M     8M/s
    integration::backend
- ⢄ claude · Opus 4.8 · xhigh · 1M 2             $8.64
+ ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
    stabilize render diff
    󰕰 ━━━━━━━━━━━━╺━╺───────────────────── 24.0%
    󰿦 247k · 󱥸 212k  24k  9k  30k
@@ -48,13 +48,13 @@ expression: strip_sgr(&ansi)
        󰿦 18k · Haiku · xhigh                       3m
       Explore · audit auth watcher changes     $0.34
         22k · Haiku · xhigh                       5m
- ▁ claude-2 · Opus 4.8 · xhigh · 1M 8          $28.90
+ ▁ claude-2 · Opus 4.8 · xhigh · 1M            $28.90
    compact provider trace
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━──── 79.0% 󰪞  8m
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3
 
   observer-lag                 ⇡1  +980 -360   main
- ⠁ opencode · GPT 5.5 · xhigh · 231k/272k 3     $3.07
+ ⠁ opencode · GPT 5.5 · xhigh · 231k/272k       $3.07
    trace tmux layout parity
    󰕰 ━━━━━━━━━━━━━━━╺──────────────────── 45.0%
    󰿦 103k · 󱥸 99k  4k  12k ·  1
@@ -67,7 +67,7 @@ expression: strip_sgr(&ansi)
        󰿦 18k · Haiku · xhigh                       3m
       Explore · audit auth watcher changes
         22k · Haiku · xhigh                       5m
-  pi · GPT 5.5 · xhigh 9
+  pi · GPT 5.5 · xhigh
   claude-3 · Opus 4.8 · xhigh · 1M            $29.84
    API Error: Overloaded
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━─── 85.0% 󰪥  1h
@@ -75,11 +75,11 @@ expression: strip_sgr(&ansi)
   claude-4 · Opus 4.8 · xhigh
 
   mux-merge #91                                main
-  claude-6 · Opus 4.8 · xhigh · 1M 7          $15.38
+  claude-6 · Opus 4.8 · xhigh · 1M            $15.38
    API Error: Overloaded
    󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺───────────── 46.0% 󰪥  1h
    󰿦 469k · 󱥸 403k  46k  18k  58k
-  claude-7 · Opus 4.8 · xhigh · 1M 6           $2.41
+  claude-7 · Opus 4.8 · xhigh · 1M             $2.41
    land tmux hook fix
    󰕰 ━━━━━━━╺╺─────────────────────────── 13.0% 󰪥  2h
    󰿦 132k · 󱥸 114k  13k  5k  16k

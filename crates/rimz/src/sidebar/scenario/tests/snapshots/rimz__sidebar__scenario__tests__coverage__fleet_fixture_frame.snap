@@ -10,24 +10,24 @@ expression: rendered
  ? 1   ! 1   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 6
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47🮇
-▌? codex · GPT 5.5 · xhigh · 257k/286k 8        $4.36▐
+▌? codex · GPT 5.5 · xhigh · 257k/286k          $4.36▐
 ▌  Allow the pricing cache write?                    ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━╸───────── 75.1% ◑ 40m▐
 ▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
 ▌  ◉ cache expired                                   ▐
-▎⢄ claude · Opus 4.8 · xhigh · 1M 7            $12.40🮇
+▎⢄ claude · Opus 4.8 · xhigh · 1M              $12.40🮇
 ▎  port auth watcher                                 🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────── 34.0%      🮇
 ▎  ⧉ subagents (2)                              $0.46🮇
 ▎⣾ cargo nextest                                     🮇
 ▎  integration::backend::zellij                      🮇
-▎○ codex-2 · GPT 5.1 Codex · xhigh 1                 🮇
-▎○ codex-3 2 · —                           1d        🮇
-▎○ codex-4 3 · —                           1d        🮇
+▎○ codex-2 · GPT 5.1 Codex · xhigh                   🮇
+▎○ codex-3 · —                             1d        🮇
+▎○ codex-4 · —                             1d        🮇
 ▎  +3 more                                           🮇
 
  ⑂ zellij-health                           ⇡1  +14 -3
- ! pi · GPT 5.5 · xhigh · 272k 9                $2.18
+ ! pi · GPT 5.5 · xhigh · 272k                  $2.18
    API error
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━── 95.0%
 

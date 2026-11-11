@@ -571,7 +571,6 @@ fn test_row_ctx<'a>(
     cost_rolls: &'a CostRolls,
 ) -> RowCtx<'a> {
     RowCtx {
-        card_slots: crate::sidebar_pane::view::card_slots(snapshot),
         theme,
         now: snapshot.now,
         typing_until: &snapshot.typing_until,

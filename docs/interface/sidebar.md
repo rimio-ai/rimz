@@ -17,7 +17,7 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
  ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: units by status
 
 ▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: branch, commits, diff, PR state
-▌⢄ claude · Opus 4.8 · high · 200k 1              $1.27▐    ← status, handle, model, effort, window, slot, cost
+▌⢄ claude · Opus 4.8 · high · 200k                $1.27▐    ← status, handle, model, effort, window, cost
 ▌  store refactor                                      ▐    ← what the session is on
 ▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m▐    ← context meter and own quiet age
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐    ← selected card's tokens in the window
@@ -29,7 +29,7 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
 ▌    ⣾ shell · Run the test suite                 ◔  4m▐    ← background shell
 ▌      cargo test                                      ▐    ← its command
 ▌    ⌁ signal · pr.merged                         ◔  5m▐    ← signal wait
-▎○ zsh 2                                               🮇    ← process row
+▎○ zsh                                                 🮇    ← process row
 
  ──────────────────────────────────────────────────────
  Claude v2.1.169 · Claude Max                      ⇅ rc     ← provider, version, plan, remote control
@@ -277,10 +277,10 @@ Here the focused card sits below the view after a tab switch:
 
 ```
  ⑂ alpha
- ⣾ codex 1
+ ⣾ codex
    task-0
    ▢ ──────────────────────────  0.0%
- ⣾ codex 2
+ ⣾ codex
    task-1
    ▢ ──────────────────────────  0.0%
  ↓ codex
@@ -292,7 +292,7 @@ Here the focused card sits below the view after a tab switch:
 The selected card includes its stats line:
 
 ```
-▌⣾ claude · Opus 4.8 · high · 200k 1              $1.27▐    ← identity line
+▌⣾ claude · Opus 4.8 · high · 200k                $1.27▐    ← identity line
 ▌  store refactor                                      ▐    ← description line
 ▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m▐    ← context meter and own quiet age
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐    ← selected card's stats line
@@ -300,7 +300,7 @@ The selected card includes its stats line:
 
 | line | shows |
 |------|-------|
-| identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context size: `372k/1M` for Claude, `372k/872k` for Codex, or `835k/1M` for OpenCode when compaction-scaled, otherwise the published capacity alone (falling back to the usable window). Codex shows the context size and compaction point only once it reports a window, when its first turn starts. The point shares the wall's dim violet; `/capacity` is muted. Codex's capacity is its catalog maximum, falling back to its session's raw window. From L1, when it fits without shortening the handle, a fast model adds a bold amber bolt immediately after its name, before reasoning or context size: still at rest, crackling only while running. A provider's live fast-mode reading wins; a fast launch supplies the badge only while the live reading is unknown. A dim room-wide birth-slot digit follows the capability tokens when it fits without shortening the handle. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
+| identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context size: `372k/1M` for Claude, `372k/872k` for Codex, or `835k/1M` for OpenCode when compaction-scaled, otherwise the published capacity alone (falling back to the usable window). Codex shows the context size and compaction point only once it reports a window, when its first turn starts. The point shares the wall's dim violet; `/capacity` is muted. Codex's capacity is its catalog maximum, falling back to its session's raw window. From L1, when it fits without shortening the handle, a fast model adds a bold amber bolt immediately after its name, before reasoning or context size: still at rest, crackling only while running. A provider's live fast-mode reading wins; a fast launch supplies the badge only while the live reading is unknown. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
 | description | The open ask while waiting for input, when available: the first line of its first structured question, then ` +N` for N more questions in that ask, wrapped over at most two lines. Without structured questions, the ask's summary supplies the text. Otherwise the displayed error or pause reason in italics, else the first working wait's label while working through a wait or first sleeping wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. Optional `✎ ↧ N` message marks pin right on its last line, after any ` +N`; the text clips first, without adding a line. |
 | context meter | Progress toward the provider-capped native compaction point when known, including Codex's own point when RimZ sets none and OpenCode's predicted default point; otherwise the percent of the session's usable window in use. The label shows one decimal, except for `<0.1%` below a tenth and `100%` at the ceiling. A compaction-scaled track ends in `┤`, reserved inside the existing bar width. Fill and percentage stop at 100%, reaching but never covering the wall. The fill shows where the context went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the selected scale fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` wears the same expired-cache tone. A no-cache card never takes the expired-cache tone. After a compaction completes, `↻` stays until the first real context reading from a model call. A provider-reported compacted size fills the track as a flat estimate with a percentage and the glyph in the fill's tone; a positive estimate below 0.1% reads `<0.1%` with a sliver, while a zero estimate reads `0.0%` with no fill. Without an estimate, the glyph is green and the empty track stays muted, with no percentage. The wall stays through both states. An agent that reports no context usage keeps this state after its first compaction. For measured usage, `▢` means exactly empty, while any positive fraction uses `▣`. An engaged card without a usage reading keeps `▢` and `0.0%`; a fresh, never-prompted card has no meter. |
 | stats line | On a selected or held engaged card, or under `expanded` density: `▤` tokens in the window, the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. Hidden entirely between a compaction and its first real reading, even when the meter shows an estimate; the reading restores it, including `↻ N`. From 46 columns the age is on the meter; below that it pins right on this line, or stays on the meter while the line is hidden if the card has a cache. |
@@ -310,7 +310,7 @@ The selected card includes its stats line:
 With native compaction configured at 372k on a 1M model, this [58-column frame](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__compaction_unicode_color_measured.snap) measures 279k as 75.0% toward the wall. The stats line still counts the occupied tokens:
 
 ```
-▌⣾ claude · Opus · high · 372k/1M 1                      ▐
+▌⣾ claude · Opus · high · 372k/1M                        ▐
 ▌  index docs                                            ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━━╺━━━━━━╺━━────────┤ 75.0%      ▐
 ▌  ▤ 279k · ◌ 200k ◍ 60k ↘ 19k                           ▐
@@ -321,7 +321,7 @@ The [expired-cache](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__si
 Codex pairs its effective point with the model capacity: [372k/872k](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__codex_compaction_capacity.snap), [244k/872k on a smaller session window](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__codex_compaction_lowered.snap), or [300k/872k from its own setting when RimZ sets none](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__codex_compaction_own.snap):
 
 ```
-▌⣾ codex · GPT 6.1 Sol · high · 244k/872k 1              ▐
+▌⣾ codex · GPT 6.1 Sol · high · 244k/872k                ▐
 ▌  index docs                                            ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━───────────────────────┤ 40.8%      ▐
 ▌  ▤ 100k                                                ▐
@@ -332,13 +332,13 @@ The compaction label yields in whole tokens after the other identity fields. The
 ```
 ▌⣾ claude-docsmith · Opus ϟ ↪ · high · 372k/1M $1.20▐
 ▌⣾ claude-docsmith · Opus ϟ ↪ · high · 372k $1.20▐
-▌⣾ claude-docsmith · Opus ϟ ↪ · high 1     $1.20▐
+▌⣾ claude-docsmith · Opus ϟ ↪ · high       $1.20▐
 ```
 
 After compaction, without a size estimate (58 columns, window-scaled):
 
 ```
-▌○ claude · Opus 4.8 · high 1                       $1.27▐
+▌○ claude · Opus 4.8 · high                         $1.27▐
 ▌  store refactor                                        ▐
 ▌  ↻ ────────────────────────────────────────            ▐
 ```
@@ -346,7 +346,7 @@ After compaction, without a size estimate (58 columns, window-scaled):
 With a provider-reported estimate, the same mark keeps the flat fill and percentage until the first real reading; both variants hide the stats line:
 
 ```
-▌✓ codex 1                                               ▐
+▌✓ codex                                                 ▐
 ▌  compact the context                                   ▐
 ▌  ↻ ━━╸────────────────────────────────────┤  5.5%      ▐
 ```
@@ -362,7 +362,7 @@ A resting fast-mode card at L2 (54 columns):
  ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 1
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌○ codex · GPT 6.1 Sol ϟ · xhigh 1              $1.00▐
+▌○ codex · GPT 6.1 Sol ϟ · xhigh                $1.00▐
 ▌  Ship the badge                                    ▐
  ────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
@@ -392,7 +392,7 @@ This 46-column [rendered frame](../../crates/rimz/src/sidebar_pane/render/snapsh
  ? 0   ! 0   ⏸︎ 0   ✓ 0        ⢿ 0   ☾ 0   ○ 1
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌○ codex · astra ↪ 1                         ▐
+▌○ codex · astra ↪                           ▐
 ▌  route the work                            ▐
  ────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
@@ -512,7 +512,7 @@ A card is unread from the moment it becomes waiting, failed, paused, or done unt
 A waiting or failed card looks like any other card with `?` or `!` in the lead. A waiting card shows its open question on the second line when one is available, otherwise its session label:
 
 ```
-▌? codex · GPT 5.5 · xhigh · 257k/286k 8        $4.36▐
+▌? codex · GPT 5.5 · xhigh · 257k/286k          $4.36▐
 ▌  Allow the pricing cache write?                    ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━╸───────── 75.1% ◑ 40m▐
 ▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
@@ -523,7 +523,7 @@ When a turn dies on a provider API error, the description shows the provider's e
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌! claude · Opus 4.8 · high · 200k 1            $1.27▐
+▌! claude · Opus 4.8 · high · 200k              $1.27▐
 ▌  API Error: Bad Request                            ▐
 ▌  ▣ ━━━━━━━━━━━╺━╺────────────────────── 38.2%      ▐
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                      ▐
@@ -534,7 +534,7 @@ Two checks raise `!` without a report from the agent. A working agent that stays
 A sleeping card names its first sleeping wait in the description:
 
 ```
-▌☾ claude 1                                ▐
+▌☾ claude                                  ▐
 ▌  wakes in 12m                            ▐
 ▌  ▢ ────────────────────────────────  0.0%▐
 ▌  ▤ 0                                     ▐
@@ -563,9 +563,9 @@ Hibernation does not change a card's state, glyph, ranking, or unread result. A 
 A pane with no tracked agent, such as a shell, an editor, or a build, shows as a process row. Its ordinary lead glyph dims; the program name keeps the normal body tone. It shares the calm cards' newest-first order below asks and failures. An agent launched in that shell pane inherits its place, including after focus leaves and the layout freeze expires; an agent exiting back to the shell leaves its place to that shell. A new pane still enters at the top, and an attention-zone crossing still restamps the card.
 
 ```
-▌○ codex 3                                 ▐
-▎○ zsh 2                                   🮇
-▎⣾ claude 1                                🮇
+▌○ codex                                   ▐
+▎○ zsh                                     🮇
+▎⣾ claude                                  🮇
 ▎  db migrate                              🮇
 ▎  ▢ ────────────────────────────────  0.0%🮇
 ```
@@ -573,7 +573,7 @@ A pane with no tracked agent, such as a shell, an editor, or a build, shows as a
 Here the shell was first seen between the two agents' launches, so it sits between their cards.
 
 ```
- ⣾ cargo 1                     C  34%  M 512M  ⇅   8M/s
+ ⣾ cargo                       C  34%  M 512M  ⇅   8M/s
    cargo build --release
 ```
 
@@ -584,7 +584,7 @@ An idle row is `○` and the program's name. A working row spins, shows the runn
 A recognized agent pane with no bound session gets two lines when RimZ knows why it cannot read the agent. This [54-column frame](../../crates/rimz/src/sidebar/scenario/tests/snapshots/rimz__sidebar__scenario__tests__coverage__not_tracked_fixture_frame.snap) shows missing hooks:
 
 ```text
-▌○ qoder · not tracked 1                             ▐
+▌○ qoder · not tracked                               ▐
 ▌  tip: rimz hooks install qoder, then restart       ▐
 ```
 
@@ -635,8 +635,8 @@ No selection, compact cards:
  ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 2
 
  ⑂ main · forge
- ○ planner · opus 1
- ○ coder · opus 2
+ ○ planner · opus
+ ○ coder · opus
 
 
 
@@ -649,16 +649,16 @@ No selection, compact cards:
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇    ← selected group: lane spine and dotted seal
-▌? claude 1                                            ▐    ← selected card: bright spine on both edges
+▌? claude                                              ▐    ← selected card: bright spine on both edges
 ▌  permission                                          ▐
 ▌  ▢ ──────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                 ▐
-▎⣾ codex · GPT 5.5 · 257k/286k 2                       🮇    ← same group, not selected
+▎⣾ codex · GPT 5.5 · 257k/286k                         🮇    ← same group, not selected
 ▎  add tests                                           🮇
 ▎  ▢ ──────────────────────────────────────  0.0%      🮇
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1     ← panes with no channel and no known place, with its own ? and ! count
- ? claude 3
+ ? claude
    Deploy staging?
    ▢ ──────────────────────────────────────  0.0%
 ```
@@ -669,13 +669,13 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
-▌⣾ claude 1                                            ▐
+▌⣾ claude                                              ▐
 ▌  db migrate                                          ▐
 ▌  ▢ ──────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                 ▐
 
  agents                                                     ← the directory's own group: name only
- ○ zsh 2
+ ○ zsh
 ```
 
 A group with one staged team and a readable worktree `.rimz/team/blackboard.md` containing a `Stage:` line gets a pipeline line heading the team's own block. It follows the workflow section, when present, and precedes the team's cards; other cohort blocks follow, then solo cards and process rows. Cohort members keep launch layout order, even when asking or failing; other rows keep attention rank. Blocks without a pipeline sort by earliest pane creation, missing last, then cohort name. This partition fills the six-row cap before idle solo rows. The team's members must identify one worktree:
@@ -683,7 +683,7 @@ A group with one staged team and a readable worktree `.rimz/team/blackboard.md` 
 ```
 ▎⑂ pipeline ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▎  forge ● ● ◉ Implement 47m ○ ○                  47m🮇
-▌⣾ planner 1                                         ▐
+▌⣾ planner                                           ▐
 ```
 
 The team badge leads, followed by the track; a stage outside the declared pipeline has no track and shows ` · ` between the badge and its name. The dots follow declared stage order: passed, current, then future, with the current stage's name immediately after its dot. Passed dots are green and future dots are muted unless already reached this run, in which case they are yellow: the shape says not done, the color says been there. Flipping backward moves the current dot back and warms the dots it left behind. At `Done`, every dot is passed and the last becomes the green done seal, followed by `Done` to keep the meaning visible without color. A board stage outside the declared pipeline shows its name without a track. The current dot and stage name take the visible stage owner's status color and animation phase, or stay muted when that owner has no visible card. The line itself adds no attention. An unfinished stage with a resolved owner and only idle or successful members, with no attention from their current children, raises `!` on the owner after `[agents.attention] stalled_after_secs` without member activity or a stage flip. Its error line reads `stage <Stage>: nothing running <age>`, with the usual unread and notification behaviour.
@@ -744,7 +744,7 @@ Inactive groups follow all active project work and `external`, at the very botto
 
 ```
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ✓ external 6
+ ✓ external
    task-external
    ▢ ────────────────────────────────────  0.0%
 
@@ -755,7 +755,7 @@ Click anywhere on the chip, or press `z i`, to peek at the first 10 inactive gro
 
 ```
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ✓ external 7
+ ✓ external
    task-external
    ▢ ────────────────────────────────────  0.0%
 

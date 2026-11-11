@@ -9,11 +9,11 @@ expression: rendered
  ────────────────────────────────────────────────────
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌○ qoder · not tracked 1                             ▐
+▌○ qoder · not tracked                               ▐
 ▌  tip: rimz hooks install qoder, then restart       ▐
-▎○ hermes · not tracked 2                            🮇
+▎○ hermes · not tracked                              🮇
 ▎  tip: launch hermes in a terminal and answer y to… 🮇
-▎○ custom-agent · not tracked 3                      🮇
+▎○ custom-agent · not tracked                        🮇
 ▎  tip: start in an interactive mode                 🮇
 
 
