@@ -723,6 +723,28 @@ pub(crate) fn format_compact_duration(mut seconds: u64) -> String {
     rendered
 }
 
+/// The wait until `at` and its local clock: `3h05m (at 21:00 +01:00)`. Minutes
+/// round up and drop from 24 hours on; a later local day adds ` tomorrow` or
+/// its date.
+pub(crate) fn refill_in(at: Timestamp, now: Timestamp, tz: &jiff::tz::TimeZone) -> String {
+    let minutes = u64::try_from(at.duration_since(now).as_secs())
+        .unwrap_or(0)
+        .div_ceil(60);
+    let wait = match (minutes / 60, minutes % 60) {
+        (0, minutes) => format!("{minutes}m"),
+        (hours @ 24.., _) => format!("{hours}h"),
+        (hours, minutes) => format!("{hours}h{minutes:02}m"),
+    };
+    let local = at.to_zoned(tz.clone());
+    let today = now.to_zoned(tz.clone()).date();
+    let day = match today.tomorrow() {
+        Ok(tomorrow) if local.date() == tomorrow => " tomorrow".to_owned(),
+        _ if local.date() > today => format!(" on {}", local.strftime("%Y-%m-%d")),
+        _ => String::new(),
+    };
+    format!("{wait} (at {}{day})", local.strftime("%H:%M %:z"))
+}
+
 pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
     let age = now.duration_since(ts);
     age_label(age.as_secs().max(0) as u64)

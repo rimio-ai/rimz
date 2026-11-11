@@ -368,6 +368,12 @@ pub fn ended_team_runs<'a, 'agents>(
 }
 
 impl<'a> FleetRuns<'a> {
+    /// A run held open for its provider's refill: `run::claim_limit_hold` stores the
+    /// hold, and the child's next turn or a reopen clears it; a terminal run keeps it.
+    pub fn is_held(run: &RunRecord) -> bool {
+        !run.status.is_terminal() && run.limit_hold.is_some()
+    }
+
     pub fn of(
         agents: impl IntoIterator<Item = &'a AgentState> + Clone,
         runs: &'a [RunRecord],
@@ -402,6 +408,22 @@ impl<'a> FleetRuns<'a> {
 
     pub fn any_running(&self) -> bool {
         self.0.iter().any(|(_, run)| !run.status.is_terminal())
+    }
+
+    /// Whether an open run is still working, not held for its provider's refill.
+    pub fn any_working(&self) -> bool {
+        self.0
+            .iter()
+            .any(|(_, run)| !run.status.is_terminal() && !Self::is_held(run))
+    }
+
+    /// Open rows held for a provider's refill, in member order.
+    pub fn held(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|(_, run)| Self::is_held(run))
+            .collect()
     }
 
     pub(super) fn unsettled(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
@@ -526,6 +548,56 @@ mod tests {
         assert!(newest_run(&child, &runs).is_some());
         child.kind = AgentKind::new_unchecked("claude");
         assert!(newest_run(&child, &runs).is_none());
+    }
+
+    #[test]
+    fn a_held_run_is_open_but_not_working() {
+        let at = Timestamp::from_second(1_000).unwrap();
+        let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
+        let children = ["held", "sibling"].map(|name| {
+            let mut child = AgentState::stub("codex", name, AgentStatus::Running);
+            child.parent_agent_id = Some(parent.agent_id.clone());
+            child.parent_agent_kind = Some(parent.kind.clone());
+            child.launch_depth = Some(1);
+            child
+        });
+        let mut runs = children.each_ref().map(|child| {
+            let mut run = RunRecord::new(
+                WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+                child.kind.clone(),
+                PermissionMode::Auto,
+                "task".into(),
+                "/repo".into(),
+            );
+            run.agent_id = Some(child.agent_id.clone());
+            run.subagent = true;
+            run.status = crate::store::run::RunStatus::Running;
+            run
+        });
+        runs[0].limit_hold = Some(crate::store::run::LimitHold {
+            activity: at,
+            since: at,
+            until: at,
+        });
+        let agents = [std::slice::from_ref(&parent), &children].concat();
+        let fleet = fleet_runs(&agents, &runs, &parent);
+        assert!(fleet.any_working(), "the sibling still works");
+        assert_eq!(fleet.held().len(), 1);
+        assert_eq!(fleet.held()[0].1.run_id, runs[0].run_id);
+
+        runs[1].status = crate::store::run::RunStatus::Completed;
+        let fleet = fleet_runs(&agents, &runs, &parent);
+        assert!(!fleet.any_working(), "only the held run is open");
+        assert!(fleet.any_running(), "the held run stays open");
+        assert_eq!(fleet.unsettled().len(), 2);
+        assert_eq!(fleet.held().len(), 1);
+
+        runs[0].status = crate::store::run::RunStatus::Failed;
+        let fleet = fleet_runs(&agents, &runs, &parent);
+        assert!(
+            fleet.held().is_empty(),
+            "a terminal run keeps its hold but is not held"
+        );
     }
 
     #[test]

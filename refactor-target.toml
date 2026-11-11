@@ -2327,6 +2327,7 @@ path = "crates/rimz/src/harness"
 # run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
 # run::report::may_claim lets `agents wait` mark a printed answer read only for a person or the run's launcher during its open turn (+1).
 # park_notice::{Continuation, LimitReading, ParkAction, park_action, limit_reading} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run.
+# park_notice::refill_ahead and FleetRuns::{any_working, held, is_held} let the fleet report pass over a held child and read a limit-failed child's refill.
 # run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
 surface-budget = 1133
 
@@ -5110,7 +5111,8 @@ allowed-dependencies = [
 # LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
 # RecoveryPlan::skip_agent and planned_team_matches_agent let rebirth retain unavailable candidates and whole cohorts (+2).
 # SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve explicit session restore (+3).
-surface-budget = 73
+# resume_login and ResumeLogin let the fleet report and a message to a limit-failed child read the account a resume would use (+2).
+surface-budget = 75
 
 [[verdict]]
 kind = "item"

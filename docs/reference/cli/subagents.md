@@ -139,7 +139,7 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 ## The fleet report
 
-A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
+A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled or is [held on a provider limit](#a-child-paused-on-a-provider-limit). A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
 Type: SUBAGENT_REPORT
@@ -155,16 +155,17 @@ The report lists status and where each answer is, and asks for nothing: reading 
 
 | Part | Format |
 | --- | --- |
-| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run or a peer turn |
+| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; with a held line, `{rows} of {rows + held lines} subagents settled:`, extended the same way; `background agent` replaces `subagent` when any row is a `-p --bg` run or a peer turn |
 | Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`; `partial response:` for a timed-out child with text, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled`. Except for configuration refusals (exit 78), a child whose CLI exited nonzero before opening a session is relaunched first, three times by default (`[agents] startup-relaunches`), so `failed` then means the last launch died too, and the reason is its output |
 | `in` / `after` | `after` for a timed-out answer, `in` for every other status; elapsed time is compact (`4m12s`) and starts at that answer's turn, not the child's launch |
-| Reason | The last non-empty line of the answer's failure tail, for a status other than completed |
+| Reason | The last non-empty line of the answer's failure tail, for a status other than completed; for an answer that failed on a provider limit, the sentence [below](#a-child-paused-on-a-provider-limit) instead |
+| Held line | `- @{name}: paused on a provider limit[: "{label}"]; it refills in {wait} (at {HH:MM} {offset}) and RimZ continues it then. Its report follows`, or `; the limit has refilled and RimZ is continuing it. Its report follows` once the refill has passed; one per held child, after the rows |
 | Task | The launch answer uses `--description`, falling back to the prompt. Follow-ups use the shortened first line of their own stored prompt, omitted when unknown. Peer turns use their own prompt preview |
 | Response | The child's first answer in `out/<parent>/<name>.output` under the room's state directory, then `<name>.2.output`, `<name>.3.output`, and so on for follow-ups; available when that turn settles. A child that parked on a wait or its own children answers with each turn's final message in order, separated by a `---` line. `no response` when the message is empty or absent, with no file for that turn; earlier files remain |
 | Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 
-Rows follow launch order, with a child's earlier answers before its current answer. Each unreported, unjoined answer gets a row; the heading counts rows, so one child can contribute several. Every path is the host path, in every isolation; the host state path is reachable from a scoped pane. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. Closing the room keeps the files; `rimz gc` removes one once it is 7 days old and no run record names its agent, and `rimz reset --hard` removes them all. Opening one does not count as reading the result.
+Rows follow launch order, with a child's earlier answers before its current answer. Each unreported, unjoined answer gets a row; the heading counts rows, so one child can contribute several. A held child's line repeats in every report composed while it is held, and a fleet whose only open children are held sends no report until an answer is owed. Every path is the host path, in every isolation; the host state path is reachable from a scoped pane. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. Closing the room keeps the files; `rimz gc` removes one once it is 7 days old and no run record names its agent, and `rimz reset --hard` removes them all. Opening one does not count as reading the result.
 
 Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `out/<launcher>/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
 
@@ -244,15 +245,34 @@ When a child's turn parks on a provider rate or spend limit and its run remains 
 | known, within the hold limit, auto-continue on with retries left | stays open; its deadline and its next warning move later by the time from the stop to the refill |
 | any other case | waits 10 minutes after the stop, then fails, unless the child acts or a refill within the hold limit is read while auto-continue is on |
 
-The hold limit is `harness.cache_keepalive_max` (default `6h`; `6h` too when it is `off`), whether or not cache pings are on. A held run that reaches its refill is continued by [auto-continue](../../guide/loops.md#auto-continue) and stays open on its moved deadline. When auto-continue has been turned off or has spent its retries on this park, a held run fails at the later of its refill and 10 minutes after the stop. A child that resumes before its refill gets back the unused part of the hold: its deadline moves earlier by the time left until the refill. A hold sends nobody a message.
+The hold limit is `harness.cache_keepalive_max` (default `6h`; `6h` too when it is `off`), whether or not cache pings are on. A held run that reaches its refill is continued by [auto-continue](../../guide/loops.md#auto-continue) and stays open on its moved deadline. When auto-continue has been turned off or has spent its retries on this park, a held run fails at the later of its refill and 10 minutes after the stop. A child that resumes before its refill gets back the unused part of the hold: its deadline moves earlier by the time left until the refill. A hold sends no message of its own: a held child does not hold back the [fleet report](#the-fleet-report) of its siblings, which carries a line for it, and when a sibling's answer is already waiting, the hold sends that report at once.
 
-A failed run keeps its typed cause (`limit_failure` on the run record, under `run` in `rimz agents show <ref> --json`) and a reason naming the provider's message and the refill when known, which the [fleet report](#the-fleet-report) prints:
+A failed run keeps its typed cause (`limit_failure` on the run record, under `run` in `rimz agents show <ref> --json`) and a reason naming the provider's message and the refill when known, stored as the run's failure tail:
 
 ```text
 stopped on a provider limit: "Usage limit reached"; it refills at 2026-11-11 04:00:00 +01:00
 ```
 
-A failure whose continue after the refill failed reads `stopped on a provider limit: "Usage limit reached"; continuing it after the refill failed`, and one whose refill RimZ has not read ends after the provider's message. When the provider gave no message, the quoted part is left out. The run's pane is reclaimed as for a [timeout](#configure-the-deadline-ladder). A child that resumes and stops on a limit again is held or failed afresh. A child paused because its provider is overloaded, or parked by a RimZ budget, reads `paused` in `list` and is neither held nor failed.
+A failure whose continue after the refill failed reads `stopped on a provider limit: "Usage limit reached"; continuing it after the refill failed`, and one whose refill RimZ has not read ends after the provider's message. When the provider gave no message, the quoted part is left out.
+
+The fleet report computes its row's reason when it is composed, from the typed cause and from the account a message to the child would resume it on (the room's current account for the child's kind):
+
+```text
+- @still-silver: failed in 12m; stopped on a provider limit: "Usage limit reached"; it refills in 2h10m (at 21:00 +01:00). Message it after the refill to continue it, task: "review correctness", no response
+```
+
+| Case | The reason ends |
+| --- | --- |
+| the room's account cannot read the child's session | `. The room's codex account has changed and cannot read its session: do the task yourself` |
+| another account, no refill ahead on it | `. The room's codex account has changed since it stopped: message it to retry now; if that fails too, do the task yourself` |
+| another account, its refill ahead | `; it refills in 2h10m (at 21:00 +01:00). Message it after the refill to continue it` |
+| same account, the continue after the refill failed | `, and continuing it after the refill failed. Message it to retry; if that fails too, do the task yourself` |
+| same account, refill beyond the hold limit and still ahead | `; it refills in 31h (at 04:00 +01:00 tomorrow). Do the task yourself; a message after the refill continues it` |
+| same account, refill within the hold limit and still ahead | `; it refills in 2h10m (at 21:00 +01:00). Message it after the refill to continue it` |
+| same account, quota read available, or the refill passed | `; the limit has refilled. Message it to continue it` |
+| same account, refill unknown | `. Message it to retry; if that fails too, do the task yourself` |
+
+`codex` names the child's kind. A wait is hours and minutes rounded up to the minute (`48m`, `3h05m`), whole hours from 24 hours on (`31h`); the clock is local, with ` tomorrow` or ` on {date}` for a later day. An account the room cannot resolve counts as the same account. A run with a failure tail but no typed cause, as an older RimZ wrote it, gets its stored sentence. The run's pane is reclaimed as for a [timeout](#configure-the-deadline-ladder). A child that resumes and stops on a limit again is held or failed afresh. A child paused because its provider is overloaded, or parked by a RimZ budget, reads `paused` in `list` and is neither held nor failed.
 
 The room's sidebar producer detects the stop, so a room with no sidebar running neither holds nor fails. Detection waits for RimZ to record the provider's error and for a producer refresh.
 

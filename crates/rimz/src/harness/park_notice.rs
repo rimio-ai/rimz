@@ -83,6 +83,16 @@ pub fn limit_reading(
     )
 }
 
+/// The refill ahead of `now` for `key`'s account and `model`, read from the usage cache.
+pub fn refill_ahead(
+    runtime: &RuntimePaths,
+    key: &crate::ids::LoginKey,
+    model: Option<&str>,
+    now: Timestamp,
+) -> Option<Timestamp> {
+    ProviderCapacity::read(runtime, key)?.latest_spent_window_reset_for_model(now, model)
+}
+
 /// A refill ahead reads as it stands; quota available counts as refilled only
 /// from a usage read newer than the park, since an older one predates the limit.
 fn read_limit(

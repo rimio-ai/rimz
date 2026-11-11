@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn owed_fleet_includes_ended_unreported_children() {
-        for (status, joined, reported, report_to, expected) in [
+        for ((status, joined, reported, report_to, expected), held) in [
             (
                 RunStatus::Running,
                 false,
@@ -473,7 +473,19 @@ mod tests {
             (RunStatus::Completed, false, true, ReportTo::Launcher, None),
             (RunStatus::Running, false, false, ReportTo::Nobody, None),
             (RunStatus::Completed, false, false, ReportTo::Nobody, None),
-        ] {
+        ]
+        .into_iter()
+        .map(|row| (row, false))
+        .chain([(
+            (
+                RunStatus::Running,
+                false,
+                false,
+                ReportTo::Launcher,
+                Some(OwedWake::Subagents),
+            ),
+            true,
+        )]) {
             let (dir, store) = fixture();
             register(&store, "parent", None);
             register(&store, "child", Some("parent"));
@@ -490,6 +502,12 @@ mod tests {
             run.report_to = report_to;
             run.joined_at = joined.then_some(jiff::Timestamp::now());
             run.report_message_id = reported.then(crate::MessageId::new);
+            let at = jiff::Timestamp::now();
+            run.limit_hold = held.then_some(crate::store::run::LimitHold {
+                activity: at,
+                since: at,
+                until: at,
+            });
             super::super::run::create(store.paths(), &run).unwrap();
             if status.is_terminal() {
                 let observation =
@@ -507,7 +525,7 @@ mod tests {
             assert_eq!(
                 owed_wake(&store, &kind, &"parent".into()).unwrap(),
                 expected,
-                "{status:?} joined={joined} reported={reported} {report_to:?}"
+                "{status:?} joined={joined} reported={reported} {report_to:?} held={held}"
             );
         }
     }
