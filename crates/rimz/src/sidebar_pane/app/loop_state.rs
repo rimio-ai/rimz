@@ -1152,12 +1152,9 @@ impl LoopState {
             push.finish(PushVerdict::Superseded, self.pane.clock.now());
             return Ok(());
         }
-        if self.known_non_owner(&push.anchor.pane_id) {
-            push.finish(PushVerdict::NotDestination, self.pane.clock.now());
-            return Ok(());
-        }
         // A jump to this pane's tab is viewing evidence: the landing paints a view, never scratch.
-        // A peer that turns out not to be the destination gets its earlier mark back.
+        // The host pushes only to owners by its fold; a newer fold that disagrees answers
+        // not_destination below and gives the earlier mark back.
         let unarmed = self
             .pane
             .optimistic_watch_until
@@ -1201,9 +1198,6 @@ impl LoopState {
             push.finish(PushVerdict::Exiting, self.pane.clock.now());
             return Ok(());
         }
-        if let Some(peers) = &self.pane.focus_peers {
-            peers.claim_landing(&push, &self.pane.config.own_pane, self.pane.clock.now());
-        }
         if self.focus_push_size_matches(&push, terminal) {
             self.pane.paint_hold.release();
         }
@@ -1220,20 +1214,6 @@ impl LoopState {
             pending.finish(PushVerdict::Superseded, self.pane.clock.now());
         }
         self.paint_frame_if_due(terminal, true)
-    }
-
-    fn known_non_owner(&self, target: &PaneId) -> bool {
-        self.views.mirror().row_owning_pane(target).is_some()
-            && !self.owns_focus_target(target)
-            && self
-                .views
-                .mirror()
-                .own_view
-                .as_ref()
-                .is_some_and(|own_view| {
-                    self.pending_preview()
-                        .is_none_or(|(pending, _)| pending.as_ref() == Some(own_view))
-                })
     }
 
     fn retire_superseded_push(&mut self) -> bool {

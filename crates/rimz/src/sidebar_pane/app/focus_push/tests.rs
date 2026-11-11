@@ -221,6 +221,7 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
     let (tx, _rx) = std::sync::mpsc::sync_channel(1);
     tx.send(Wakeup::Snapshot).unwrap();
     let _subscription = rig.plane.subscribe(&destination, tx);
+    rig.place_target(&[&destination.own_pane]);
     let target = rig
         .plane
         .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
@@ -255,6 +256,7 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
         let destination = serve_config(&workspace());
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
         let _subscription = rig.plane.subscribe(&destination, tx);
+        rig.place_target(&[&destination.own_pane]);
         let newer = Arc::new(std::sync::Mutex::new(None));
         let fit_newer = newer.clone();
         let owner = rig.peers.clone();
@@ -324,6 +326,7 @@ fn stale_release_and_unwinding_cannot_leave_or_clear_the_wrong_lease() {
     let (tx, _rx) = std::sync::mpsc::sync_channel(1);
     tx.send(Wakeup::Snapshot).unwrap();
     let _subscription = rig.plane.subscribe(&destination, tx);
+    rig.place_target(&[&destination.own_pane]);
     let target = rig
         .plane
         .focus_peers(destination.instance_id, DiagSink::disabled());
@@ -352,8 +355,22 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
         let plane = DataPlane::detached();
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let runtime = crate::RuntimePaths::under(workspace(), dir.path()).unwrap();
-        let source = serve_config(&workspace());
-        let destination = serve_config(&workspace());
+        let mut source = serve_config(&workspace());
+        source.own_pane = crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_10");
+        let mut destination = serve_config(&workspace());
+        destination.own_pane =
+            crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_20");
+        place(
+            &plane,
+            &[
+                &[
+                    &destination.own_pane,
+                    &crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_2"),
+                ],
+                &[&source.own_pane],
+            ],
+            &[&source.own_pane, &destination.own_pane],
+        );
         let (source_tx, source_rx) = std::sync::mpsc::sync_channel(64);
         let (destination_tx, destination_rx) = std::sync::mpsc::sync_channel(64);
         let _source = plane.subscribe(&source, source_tx);
@@ -724,6 +741,7 @@ fn dispatch_records_click_lead_and_the_landing_paint_instead_of_receipt_time() {
             let destination = serve_config(&workspace());
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             let _subscription = rig.plane.subscribe(&destination, tx);
+            rig.place_target(&[&destination.own_pane]);
             let sent = Instant::now();
             let clicked = sent - Duration::from_millis(42);
             let painted = if offset < 0 {
@@ -775,6 +793,9 @@ fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
                 rig.plane.subscribe(&closed, closed_tx),
             ]
         });
+        if with_peers {
+            rig.place_target(&[&full.own_pane]);
+        }
         let anchor = rig.anchor();
         let clicked = Instant::now();
         let target = rig
@@ -843,6 +864,7 @@ fn dispatch_records_a_successful_paint_after_the_jump() {
     let destination = serve_config(&workspace());
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let _subscription = rig.plane.subscribe(&destination, tx);
+    rig.place_target(&[&destination.own_pane]);
     let target = rig
         .plane
         .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
@@ -871,6 +893,7 @@ fn dispatch_records_a_displaced_paint_after_the_jump() {
     let destination = serve_config(&workspace());
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let _subscription = rig.plane.subscribe(&destination, tx);
+    rig.place_target(&[&destination.own_pane]);
     let target = rig
         .plane
         .focus_peers(destination.instance_id.clone(), DiagSink::disabled());
@@ -929,6 +952,7 @@ fn dispatch_collects_reports_sent_after_the_budget_but_before_the_horizon() {
     let destination = serve_config(&workspace());
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let _subscription = rig.plane.subscribe(&destination, tx);
+    rig.place_target(&[&destination.own_pane]);
     let (go_tx, go_rx) = channel();
     let target = rig
         .plane
@@ -970,6 +994,7 @@ fn dispatch_keeps_timely_buffered_reports_after_a_slow_jump() {
         let destination = serve_config(&workspace());
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let _subscription = rig.plane.subscribe(&destination, tx);
+        rig.place_target(&[&destination.own_pane]);
         let (go_tx, go_rx) = channel();
         let (done_tx, done_rx) = channel();
         let target = rig
@@ -1032,6 +1057,12 @@ fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
         let destination = serve_config(&workspace());
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let _subscription = plane.subscribe(&destination, tx);
+        let target = PaneId::from_parts(crate::MuxName::Tmux, "%1");
+        place(
+            &plane,
+            &[&[&destination.own_pane, &target]],
+            &[&destination.own_pane],
+        );
         let start = Instant::now();
         let returned = start + fit_time;
         let clock = Arc::new(Mutex::new(start));
@@ -1110,91 +1141,379 @@ fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
     }
 }
 
-fn stamp(peers: &FocusPeers) -> LeaseStamp {
-    peers.lease.as_ref().expect("an armed jump").stamp.clone()
-}
-
-fn sidebar(raw: &str) -> PaneId {
+fn tmux(raw: &str) -> PaneId {
     PaneId::from_parts(crate::MuxName::Tmux, raw)
 }
 
-#[test]
-fn a_jump_lands_on_its_first_claimant_only() {
-    let rig = TraceRig::new();
-    let now = Instant::now();
-    let jump = rig.peers.arm(rig.anchor().pane_id, now);
-    let (first, second) = (sidebar("%11"), sidebar("%12"));
-    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &first, now));
-    assert!(
-        !rig.peers.jumps.claim_landing(&stamp(&jump), &second, now),
-        "a second pane is refused the same jump's landing"
+/// A frame whose tabs list `tabs` in order; panes in `sidebars` run the sidebar command.
+fn frame(tabs: &[&[&PaneId]], sidebars: &[&PaneId]) -> crate::sidebar::frame::PaneFrame {
+    let panes = tabs
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tab)| {
+            tab.iter().map(move |id| {
+                let mut pane =
+                    crate::sidebar_pane::app::fixtures::pane(id.raw(), &format!("tab_{index}"));
+                pane.pane_id = (*id).clone();
+                if sidebars.contains(id) {
+                    pane.command = Some("rimz-sidebar".into());
+                }
+                pane
+            })
+        })
+        .collect();
+    crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test")
+}
+
+/// Publish the host fold a push resolves its owners from.
+fn place_frame(plane: &DataPlane, frame: crate::sidebar::frame::PaneFrame) {
+    crate::sidebar_pane::app::fixtures::remember_fold(
+        plane,
+        crate::sidebar_pane::app::fixtures::snapshot(&workspace()),
+        frame,
     );
-    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &first, now));
-    assert!(rig.peers.lands_on(&first, now));
-    assert!(!rig.peers.lands_on(&second, now));
+}
+
+fn place(plane: &DataPlane, tabs: &[&[&PaneId]], sidebars: &[&PaneId]) {
+    place_frame(plane, frame(tabs, sidebars));
+}
+
+struct Peer {
+    config: super::super::ServeConfig,
+    wake: Receiver<Wakeup>,
+    _subscription: super::super::plane::Subscription,
+}
+
+impl Peer {
+    fn pane(&self) -> &PaneId {
+        &self.config.own_pane
+    }
+
+    fn take(&self, rig: &TraceRig) -> Option<FocusPush> {
+        rig.plane.take_focus_push(&self.config.instance_id)
+    }
+}
+
+impl TraceRig {
+    fn peer(&self, raw: &str) -> Peer {
+        let mut config = serve_config(&workspace());
+        config.own_pane = tmux(raw);
+        let (tx, wake) = std::sync::mpsc::sync_channel(8);
+        let _subscription = self.plane.subscribe(&config, tx);
+        Peer {
+            config,
+            wake,
+            _subscription,
+        }
+    }
+
+    /// Put `sidebars`, in order, in one tab with the anchor's target.
+    fn place_target(&self, sidebars: &[&PaneId]) {
+        let target = self.anchor().pane_id;
+        let mut tab = sidebars.to_vec();
+        tab.push(&target);
+        place(&self.plane, &[&tab], sidebars);
+    }
+
+    fn anchor_to(&self, target: &PaneId) -> FocusAnchor {
+        FocusAnchor {
+            pane_id: target.clone(),
+            ..self.anchor()
+        }
+    }
+
+    fn stages(&self, stage: &str) -> usize {
+        self.all_records()
+            .iter()
+            .filter(|row| row["event"]["kind"] == "jump_progress" && row["event"]["stage"] == stage)
+            .count()
+    }
+}
+
+fn offered(traces: &[PushPeer]) -> Vec<SidebarInstanceId> {
+    traces
+        .iter()
+        .map(|trace| trace.instance_id.clone())
+        .collect()
 }
 
 #[test]
-fn a_later_jumps_landing_ends_the_earlier_one_and_dispatch_keeps_it() {
+fn a_push_reaches_only_the_sidebar_in_the_targets_tab() {
     let rig = TraceRig::new();
+    let peers = ["%10", "%20", "%30"].map(|raw| rig.peer(raw));
+    let target = tmux("%21");
+    place(
+        &rig.plane,
+        &[
+            &[peers[0].pane(), &tmux("%11")],
+            &[peers[1].pane(), &target],
+            &[peers[2].pane(), &tmux("%31")],
+        ],
+        &[peers[0].pane(), peers[1].pane(), peers[2].pane()],
+    );
+    let clicked = Instant::now();
+    let mut checked = false;
+    let result = rig.peers.arm(target.clone(), clicked).dispatch_with(
+        rig.anchor_to(&target),
+        clicked,
+        || 17,
+        Instant::now,
+        |ack, timeout| {
+            if !std::mem::replace(&mut checked, true) {
+                for (index, peer) in peers.iter().enumerate() {
+                    if index == 1 {
+                        assert_eq!(peer.wake.try_recv(), Ok(Wakeup::Tick));
+                        peer.take(&rig)
+                            .expect("the target tab's sidebar takes the push")
+                            .finish(PushVerdict::Painted, Instant::now());
+                    } else {
+                        assert!(peer.take(&rig).is_none(), "peer {index} is offered nothing");
+                        assert!(peer.wake.try_recv().is_err(), "peer {index} is not woken");
+                    }
+                }
+            }
+            ack.recv_timeout(timeout)
+        },
+    );
+    assert_eq!(result, Some(17));
+    let rows = rig.records();
+    assert_eq!(rows[0]["event"]["outcome"], "painted");
+    let event_peers = rows[0]["event"]["peers"].as_array().unwrap();
+    assert_eq!(event_peers.len(), 1, "peers lists the receiver alone");
+    assert_eq!(
+        event_peers[0]["instance_id"],
+        peers[1].config.instance_id.as_str()
+    );
+    assert!(rig.peers.lands_on(peers[1].pane(), Instant::now()));
+    assert_eq!(rig.stages("owner_unresolved"), 0);
+}
+
+#[test]
+fn a_push_with_no_resolved_owner_is_offered_to_nobody_and_dispatches_at_once() {
+    for case in ["no_frame", "no_tab", "carried", "no_sidebar", "source_only"] {
+        let rig = TraceRig::new();
+        let peer = rig.peer("%10");
+        let (work, target, unattached) = (tmux("%11"), tmux("%21"), tmux("%20"));
+        let (source_tx, _source_rx) = std::sync::mpsc::sync_channel(8);
+        let _source = (case == "source_only").then(|| rig.plane.subscribe(&rig.source, source_tx));
+        let home: &[&PaneId] = &[peer.pane(), &work];
+        match case {
+            "no_frame" => rig.plane.remember(crate::sidebar_pane::app::fixtures::fold(
+                crate::sidebar_pane::app::fixtures::snapshot(&workspace()),
+                Some(peer.pane()),
+                Vec::new(),
+            )),
+            "no_tab" => place(&rig.plane, &[home], &[peer.pane()]),
+            "carried" => {
+                let mut frame = frame(&[home], &[peer.pane()]);
+                frame
+                    .carried_panes
+                    .push(crate::sidebar::frame::CarriedPane {
+                        pane_id: target.clone(),
+                        pid: None,
+                        start_ticks: None,
+                        carried_since_ms: 1,
+                    });
+                place_frame(&rig.plane, frame);
+            }
+            "no_sidebar" => place(
+                &rig.plane,
+                &[home, &[&unattached, &target]],
+                &[peer.pane(), &unattached],
+            ),
+            _ => place(
+                &rig.plane,
+                &[home, &[&rig.source.own_pane, &target]],
+                &[peer.pane(), &rig.source.own_pane],
+            ),
+        }
+        let clicked = Instant::now();
+        let result = rig.peers.arm(target.clone(), clicked).dispatch_with(
+            rig.anchor_to(&target),
+            clicked,
+            || 17,
+            Instant::now,
+            |ack, timeout| {
+                assert!(
+                    peer.take(&rig).is_none(),
+                    "{case}: nobody is offered the push"
+                );
+                ack.recv_timeout(timeout)
+            },
+        );
+        assert_eq!(result, Some(17), "{case}: dispatch runs");
+        let rows = rig.records();
+        assert_eq!(rows.len(), 1, "{case}");
+        assert_eq!(rows[0]["event"]["outcome"], "released", "{case}");
+        assert_eq!(rows[0]["event"]["peers"], serde_json::json!([]), "{case}");
+        assert_eq!(rig.stages("owner_unresolved"), 1, "{case}");
+        for pane in [
+            peer.pane(),
+            &work,
+            &target,
+            &unattached,
+            &rig.source.own_pane,
+        ] {
+            assert!(
+                !rig.peers.lands_on(pane, Instant::now()),
+                "{case}: {pane} lands nothing"
+            );
+        }
+    }
+}
+
+#[test]
+fn two_sidebars_in_the_targets_tab_both_take_the_push_and_the_first_lands() {
+    let rig = TraceRig::new();
+    let (first, second, other) = (rig.peer("%22"), rig.peer("%20"), rig.peer("%10"));
+    let target = tmux("%21");
+    place(
+        &rig.plane,
+        &[
+            &[other.pane(), &tmux("%11")],
+            &[first.pane(), &target, second.pane()],
+        ],
+        &[other.pane(), first.pane(), second.pane()],
+    );
+    let clicked = Instant::now();
+    let jump = rig.peers.arm(target.clone(), clicked);
+    let (_, _, _, _ack, traces) = jump
+        .push(&rig.anchor_to(&target), clicked, Instant::now)
+        .unwrap();
+    assert_eq!(
+        offered(&traces),
+        [
+            first.config.instance_id.clone(),
+            second.config.instance_id.clone()
+        ],
+        "both are offered, in the tab's pane order"
+    );
+    assert!(first.take(&rig).is_some());
+    assert!(second.take(&rig).is_some());
+    assert!(other.take(&rig).is_none());
+    assert!(rig.peers.lands_on(first.pane(), Instant::now()));
+    assert!(!rig.peers.lands_on(second.pane(), Instant::now()));
+}
+
+#[test]
+fn the_hosts_owner_set_is_the_peer_rule_for_every_subscriber() {
+    use crate::sidebar_pane::app::loop_state::own_tab_viewed;
+    use crate::store::snapshot::SidebarOwnView;
+
+    let rig = TraceRig::new();
+    // A duplicate sidebar beside the first, an own pane that runs a shell, and a daemon tab.
+    let peers = ["%10", "%12", "%20", "%30"].map(|raw| rig.peer(raw));
+    let mut frame = frame(
+        &[
+            &[peers[0].pane(), &tmux("%11"), peers[1].pane()],
+            &[peers[2].pane(), &tmux("%21")],
+            &[peers[3].pane(), &tmux("%31")],
+        ],
+        &[peers[0].pane(), peers[1].pane(), peers[3].pane()],
+    );
+    frame.tabs[2].name = Some(crate::pane::VIEW_NAME.to_owned());
+    place_frame(&rig.plane, frame.clone());
+    let targets = frame
+        .tabs
+        .iter()
+        .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
+        .chain([tmux("%99")]);
+    for target in targets {
+        let clicked = Instant::now();
+        let jump = rig.peers.arm(target.clone(), clicked);
+        jump.push(&rig.anchor_to(&target), clicked, Instant::now)
+            .unwrap();
+        for peer in &peers {
+            let rule = SidebarOwnView::from_frame(peer.pane(), &frame).is_some_and(|view| {
+                own_tab_viewed(std::slice::from_ref(&target), &view, peer.pane())
+            });
+            assert_eq!(
+                peer.take(&rig).is_some(),
+                rule,
+                "{} owning {target}",
+                peer.pane()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_later_jumps_landing_replaces_the_earlier_one_and_dispatch_keeps_it() {
+    let rig = TraceRig::new();
+    let (first, second) = (rig.peer("%10"), rig.peer("%20"));
+    let (first_target, second_target) = (tmux("%11"), tmux("%21"));
+    place(
+        &rig.plane,
+        &[
+            &[first.pane(), &first_target],
+            &[second.pane(), &second_target],
+        ],
+        &[first.pane(), second.pane()],
+    );
     let now = Instant::now();
-    let (first, second) = (sidebar("%11"), sidebar("%12"));
-    let earlier = rig.peers.arm(rig.anchor().pane_id, now);
-    assert!(rig.peers.jumps.claim_landing(&stamp(&earlier), &first, now));
+    let earlier = rig.peers.arm(first_target.clone(), now);
+    earlier
+        .push(&rig.anchor_to(&first_target), now, || now)
+        .unwrap();
+    assert!(rig.peers.lands_on(first.pane(), now));
     earlier.release();
     assert!(
-        rig.peers.lands_on(&first, now),
+        rig.peers.lands_on(first.pane(), now),
         "a dispatched jump keeps its landing"
     );
-    let later = rig.peers.arm(rig.anchor().pane_id, now);
+    let later = rig.peers.arm(second_target.clone(), now);
     assert!(
-        rig.peers.lands_on(&first, now),
+        rig.peers.lands_on(first.pane(), now),
         "arming over a dispatched jump leaves its landing"
     );
+    later
+        .push(&rig.anchor_to(&second_target), now, || now)
+        .unwrap();
+    assert!(rig.peers.lands_on(second.pane(), now));
     assert!(
-        !rig.peers.jumps.claim_landing(&stamp(&earlier), &first, now),
-        "a jump that is no longer current claims nothing"
+        !rig.peers.lands_on(first.pane(), now),
+        "one landing host-wide"
     );
-    assert!(rig.peers.jumps.claim_landing(&stamp(&later), &second, now));
-    assert!(rig.peers.lands_on(&second, now));
-    assert!(!rig.peers.lands_on(&first, now), "one landing host-wide");
 }
 
 #[test]
 fn a_jump_superseded_before_dispatch_ends_its_landing() {
     let rig = TraceRig::new();
+    let destination = rig.peer("%10");
+    rig.place_target(&[destination.pane()]);
     let now = Instant::now();
-    let pane = sidebar("%11");
+    let pane = destination.pane();
     let jump = rig.peers.arm(rig.anchor().pane_id, now);
-    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &pane, now));
+    jump.push(&rig.anchor(), now, || now).unwrap();
+    assert!(rig.peers.lands_on(pane, now));
     let _newer = rig.peers.arm(rig.anchor().pane_id, now);
+    assert!(!rig.peers.lands_on(pane, now), "arming over an active jump");
+    jump.push(&rig.anchor(), now, || now).unwrap();
     assert!(
-        !rig.peers.lands_on(&pane, now),
-        "arming over an active jump"
+        !rig.peers.lands_on(pane, now),
+        "a jump that is no longer current names no landing"
     );
 
     let jump = rig.peers.arm(rig.anchor().pane_id, now);
-    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &pane, now));
+    jump.push(&rig.anchor(), now, || now).unwrap();
+    assert!(rig.peers.lands_on(pane, now));
     rig.peers.supersede();
-    assert!(!rig.peers.lands_on(&pane, now), "input supersedes the jump");
+    assert!(!rig.peers.lands_on(pane, now), "input supersedes the jump");
 }
 
 #[test]
-fn a_landing_ends_at_its_deadline_and_a_reclaim_does_not_extend_it() {
+fn a_landing_ends_at_its_deadline_from_the_send_instant() {
     let rig = TraceRig::new();
-    let now = Instant::now();
-    let pane = sidebar("%11");
-    let jump = rig.peers.arm(rig.anchor().pane_id, now);
-    assert!(rig.peers.jumps.claim_landing(&stamp(&jump), &pane, now));
-    let deadline = now + crate::sidebar_pane::app::timing::FOCUS_RESUME_WATCH_WINDOW;
+    let destination = rig.peer("%10");
+    rig.place_target(&[destination.pane()]);
+    let clicked = Instant::now();
+    let sent = clicked + Duration::from_millis(40);
+    let jump = rig.peers.arm(rig.anchor().pane_id, clicked);
+    jump.push(&rig.anchor(), clicked, || sent).unwrap();
+    let deadline = sent + crate::sidebar_pane::app::timing::FOCUS_RESUME_WATCH_WINDOW;
     assert!(
         rig.peers
-            .jumps
-            .claim_landing(&stamp(&jump), &pane, now + Duration::from_secs(1))
+            .lands_on(destination.pane(), deadline - Duration::from_millis(1))
     );
-    assert!(
-        rig.peers
-            .lands_on(&pane, deadline - Duration::from_millis(1))
-    );
-    assert!(!rig.peers.lands_on(&pane, deadline));
+    assert!(!rig.peers.lands_on(destination.pane(), deadline));
 }

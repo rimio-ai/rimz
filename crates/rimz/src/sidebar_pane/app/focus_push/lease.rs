@@ -1,4 +1,5 @@
-//! Host-local click ordering and a bounded priority slot per subscribed attachment.
+//! Host-local click ordering, a bounded priority slot per subscribed attachment, and the
+//! jump's one landing, which the host names at push.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +27,8 @@ struct JumpState {
     landing: Option<Landing>,
 }
 
-/// The one sidebar pane a pushed jump earns images for, until its deadline.
+/// The one sidebar pane a pushed jump earns images for, until its deadline: the first
+/// owner the host resolved at push.
 struct Landing {
     pane: PaneId,
     sequence: u64,
@@ -83,7 +85,7 @@ impl Drop for JumpLease {
 }
 
 impl JumpState {
-    /// A jump superseded before dispatch ends the landing it earned.
+    /// A jump superseded before dispatch ends the landing named for it.
     fn revoke_landing(&mut self, sequence: u64) {
         if self
             .landing
@@ -262,27 +264,18 @@ impl JumpHost {
             .is_none_or(|active| active.nonce.is_some() && active.nonce == nonce)
     }
 
-    /// Claim the jump's landing for its destination while the jump is current.
-    /// The first claimant of a jump wins and keeps its deadline; a claim for a
-    /// later jump replaces the landing.
-    pub(super) fn claim_landing(&self, stamp: &LeaseStamp, pane: &PaneId, now: Instant) -> bool {
+    /// Name `pane` the jump's landing from its send instant `sent`, while the jump is
+    /// current; it replaces an earlier jump's landing.
+    pub(super) fn name_landing(&self, stamp: &LeaseStamp, pane: &PaneId, sent: Instant) {
         let mut state = self.lock();
         if !stamp.is_current() {
-            return false;
-        }
-        if let Some(landing) = state
-            .landing
-            .as_ref()
-            .filter(|landing| landing.sequence == stamp.sequence)
-        {
-            return landing.pane == *pane;
+            return;
         }
         state.landing = Some(Landing {
             pane: pane.clone(),
             sequence: stamp.sequence,
-            until: now + FOCUS_RESUME_WATCH_WINDOW,
+            until: sent + FOCUS_RESUME_WATCH_WINDOW,
         });
-        true
     }
 
     pub(super) fn lands_on(&self, pane: &PaneId, now: Instant) -> bool {

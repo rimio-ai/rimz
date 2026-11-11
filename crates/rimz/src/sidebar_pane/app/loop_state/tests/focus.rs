@@ -1853,7 +1853,7 @@ fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
 }
 
 #[test]
-fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
+fn a_non_destination_is_offered_no_push_and_ignores_the_intent() {
     let own = zellij("terminal_99");
     let target = zellij("terminal_2");
     let mut rig = Rig::with_own_pane(own);
@@ -1868,8 +1868,8 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
     let mut pending = rig.state.views.mirror().clone();
     pending.display_name = "waiting fold".to_owned();
     rig.send(rig.lazy_update(pending, SnapshotSource::Produced));
-    let (push, ack) = focus_push(&mut rig, anchor.clone());
-    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
+    let (push, _ack) = offer_push(&mut rig, anchor.clone());
+    assert!(push.is_none(), "the host offers a non-owner no push");
     assert_eq!(
         rig.state.pane.projections, projections,
         "non-owner must leave the publication unread"
@@ -1878,7 +1878,6 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
     assert_eq!(rig.view().ui().selected_pane, selected);
     assert_ne!(rig.view().ctx().current.display_name, "waiting fold");
     assert!(!rig.state.watched());
-    assert_push_report(&ack, &rig, PushVerdict::NotDestination, false);
     rig.event(SidebarEvent::FocusIntent {
         pane_id: target,
         nonce: anchor.nonce,
@@ -1930,45 +1929,30 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
 }
 
 #[test]
-fn focus_push_with_unknown_own_view_takes_the_drain_and_fold_path() {
-    let (mut seed, sidebar, _, target) = focus_fixture();
-    let mut rig = Rig::with_own_pane(sidebar);
-    seed.own_view = None;
-    rig.fold(seed, SnapshotSource::Produced);
+fn a_pushed_peer_whose_newer_fold_disagrees_still_prepares_folds_and_declines() {
+    let mut rig = Rig::with_own_pane(zellij("terminal_99"));
+    let target = zellij("terminal_2");
+    // The host's fold at push puts the target in this sidebar's tab.
+    let owned = snapshot_with_focused_pane(&rig.ws, zellij("terminal_1"));
+    rig.send(rig.lazy_update(owned, SnapshotSource::Produced));
+    assert!(rig.view().ctx().current.row_owning_pane(&target).is_none());
     let anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
     let nonce = anchor.nonce;
     let (push, ack) = focus_push(&mut rig, anchor);
-    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
-    assert_eq!(rig.view().ctx().last_folded_focus_intent, Some(nonce));
-    assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
-}
-
-#[test]
-fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
-    let mut rig = Rig::with_own_pane(zellij("terminal_99"));
-    let mut pending = snapshot_with_focused_pane(&rig.ws, zellij("terminal_1"));
-    pending.own_view = Some(own_view());
-    pending.display_name = "new target".to_owned();
-    assert!(
-        rig.view()
-            .ctx()
-            .current
-            .row_owning_pane(&zellij("terminal_2"))
-            .is_none()
-    );
-    rig.send(rig.lazy_update(pending, SnapshotSource::Produced));
-    let anchor = requested_focus_anchor(
-        zellij("terminal_2"),
-        2,
-        crate::utils::time::unix_now_ms(),
-        None,
-    );
-    let nonce = anchor.nonce;
-    let (push, ack) = focus_push(&mut rig, anchor);
+    // A newer publication moves the target out of the tab before the peer folds.
+    let mut moved = snapshot_with_focused_pane(&rig.ws, zellij("terminal_1"));
+    moved.own_view = Some(own_view());
+    moved.display_name = "new target".to_owned();
+    rig.send(rig.lazy_update(moved, SnapshotSource::Produced));
+    let mark = rig.state.pane.optimistic_watch_until;
     rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(rig.state.pane.projections, 1);
     assert_eq!(rig.view().ctx().current.display_name, "new target");
     assert_eq!(rig.view().ctx().last_folded_focus_intent, Some(nonce));
+    assert_eq!(
+        rig.state.pane.optimistic_watch_until, mark,
+        "a declining peer gets its watch mark back"
+    );
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
 }
 
