@@ -87,10 +87,7 @@ impl MessageListRow {
                 notice: HarnessNotice::CacheKeepalive,
             } => None,
             MessageSender::Harness {
-                notice:
-                    HarnessNotice::SubagentPaused
-                    | HarnessNotice::SubagentRestarted
-                    | HarnessNotice::SubagentStalled,
+                notice: HarnessNotice::SubagentRestarted | HarnessNotice::SubagentStalled,
             } => Some(self.about_run.as_ref()?),
             MessageSender::System if self.body == MessageBody::Command => None,
             _ => return None,

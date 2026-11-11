@@ -195,7 +195,7 @@ rimz subagents wait calm-fox bright-owl --json --timeout 10m
 
 Headers and JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each summary entry carries the pet `name` separately. Identical typed references are deduplicated. `--json` prints the same compact keyed map for one target or several, settled or timed out. For the full run record, use `rimz agents show <ref> --json` and read `run`. Blocking reasons go to stderr even in JSON mode and appear in timed-out entries when the target is not running.
 
-`wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume. Bound the join with `--timeout`, then read `subagents list`.
+`wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume, or fail by the pause rule. Bound the join with `--timeout`, then read `subagents list`.
 
 At least one name is required. A bare `wait` fails and lists the caller's children, so a copied command never joins an older fleet by accident; with no children it fails with `this agent has no supervised subagents to wait for`. A name that is not one of the caller's children fails with ``` `<name>` is not one of this agent's subagents ```.
 
@@ -214,7 +214,7 @@ rimz subagents list --json
 | a user shell in a channel | every child in the current channel | `SUBAGENT`, `PARENT`, `CHANNEL`, `KIND`, `AGENT`, `RUN`, `ELAPSED` |
 | a user shell with no current channel | every child in the room | the same seven columns |
 
-`AGENT` uses the displayed-status rules of [`rimz agents show`](./agents.md), and `RUN` is the newest run's outcome; the two are independent. A child whose turn parks on a provider rate/spend limit or overload reads `paused`. Its run stays `running` while the stopped turn is left open; a provider whose hook ends that turn as errored fails the run at once, so `RUN` reads `failed`. An open overload park stays open until its [deadline](#configure-the-deadline-ladder) unless the child resumes or the parent stops it; an open rate or spend limit is held to its reset or fails, by the [pause rule](#a-child-paused-on-a-provider-limit). Once the park can no longer resume (auto-continue retries spent, or a limit window reset with no spent window left), `AGENT` reads `failed`. `RUN` then still says `running` for an overload park, until its deadline; for a held rate or spend park while auto-continue is on with retries left, until its moved deadline; and for a rate or spend park the pause rule never classified (no sidebar running, or a parent that had already ended), until its deadline. Any other rate or spend park's run is failed by the pause rule, a held one on the first producer refresh after its reset, so `RUN` reads `failed` too. The Claude Console API usage cap (`You have reached your specified API usage limits`) is not a park: `AGENT` reads `failed`, not `paused`, and the run fails at the error, so `RUN` reads `failed` too. The description prints as a muted line under each row; for a child stopped on a provider error, that line is the provider's message instead (`Usage limit reached`), or the error class in words when the provider gave none. Provider-native subagents, which run inside the parent's own process, are not listed. A child that has not ended reads its provider marker even when its stored status is `failed`; an ended child keeps its settled status.
+`AGENT` uses the displayed-status rules of [`rimz agents show`](./agents.md), and `RUN` is the newest run's outcome; the two are independent. A child whose turn parks on a provider rate/spend limit or overload reads `paused`. Its run stays `running` while the stopped turn is left open; a provider whose hook ends that turn as errored fails the run at once, so `RUN` reads `failed`. An open overload park stays open until its [deadline](#configure-the-deadline-ladder) unless the child resumes or the parent stops it; an open rate or spend limit is held to its refill or fails, by the [pause rule](#a-child-paused-on-a-provider-limit). Once the park can no longer resume (auto-continue retries spent, or a limit window reset with no spent window left), `AGENT` reads `failed`. `RUN` then still says `running` for an overload park, until its deadline; for a held rate or spend park while auto-continue is on with retries left, until its moved deadline; and for a rate or spend park the pause rule never classified (no sidebar running, or a parent that had already ended), until its deadline. Any other rate or spend park's run is failed by the pause rule, a held one on the first producer refresh after the later of its refill and 10 minutes from the stop, so `RUN` reads `failed` too. The Claude Console API usage cap (`You have reached your specified API usage limits`) is not a park: `AGENT` reads `failed`, not `paused`, and the run fails at the error, so `RUN` reads `failed` too. The description prints as a muted line under each row; for a child stopped on a provider error, that line is the provider's message instead (`Usage limit reached`), or the error class in words when the provider gave none. Provider-native subagents, which run inside the parent's own process, are not listed. A child that has not ended reads its provider marker even when its stored status is `failed`; an ended child keeps its settled status.
 
 `ELAPSED` measures the child's current answer: from the newest run's start, or from its latest follow-up prompt when it has one. It counts to now while the run is open and stops at the run's end once it settles; a child with no run shows `-`. Rows list children with an open run first, then settled ones, each newest start first, then children with no run. With no children to list, stdout stays empty and one line on stderr says so, naming `rimz subagents launch` when the caller is an agent; `--json` prints `[]`.
 
@@ -236,36 +236,25 @@ A plain shell in the project directory has no current channel even when a team r
 
 ## A child paused on a provider limit
 
-When a child's turn parks on a provider rate or spend limit and its run remains open, RimZ reads when the limit resets from the provider usage it last recorded for the child's account, and either holds the run until then or fails it:
+When a child's turn parks on a provider rate or spend limit and its run remains open, RimZ reads when the limit refills from the provider usage it last recorded for the child's account and model, and either holds the run until then or fails it:
 
-| Reset | The run |
+| Refill | The run |
 | --- | --- |
-| known, within the hold limit | stays open; its deadline and its next warning move later by the time from the stop to the reset, and the parent gets one `SUBAGENT_PAUSED` notice |
 | known, beyond the hold limit | fails at once |
-| not yet recorded | waits up to 7 minutes after the stop for a usage reading, then fails |
+| known, within the hold limit, auto-continue on with retries left | stays open; its deadline and its next warning move later by the time from the stop to the refill |
+| any other case | waits 10 minutes after the stop, then fails, unless the child acts or a refill within the hold limit is read while auto-continue is on |
 
-The hold limit is `harness.cache_keepalive_max` (default `6h`; `6h` too when it is `off`), whether or not cache pings are on. A held run that reaches its reset is continued by [auto-continue](../../guide/loops.md#auto-continue) when that is on with retries left, and stays open on its moved deadline. With auto-continue off, or its retries spent on this park, the run fails at the reset. A child that resumes before its reset gets back the unused part of the hold: its deadline moves earlier by the time left until the reset.
+The hold limit is `harness.cache_keepalive_max` (default `6h`; `6h` too when it is `off`), whether or not cache pings are on. A held run that reaches its refill is continued by [auto-continue](../../guide/loops.md#auto-continue) and stays open on its moved deadline. When auto-continue has been turned off or has spent its retries on this park, a held run fails at the later of its refill and 10 minutes after the stop. A child that resumes before its refill gets back the unused part of the hold: its deadline moves earlier by the time left until the refill. A hold sends nobody a message.
 
-A failed run's reason names the provider's message, the reset when known, and why the run was not kept open, and the [fleet report](#the-fleet-report) prints it:
-
-```text
-stopped on a provider limit: "Usage limit reached"; it resets at 2026-11-11 04:00:00 +01:00, past the 6h hold limit (harness.cache_keepalive_max), so the run was not kept open
-```
-
-The other endings read `its reset time is unknown, so the run was not kept open`, and `it reset at <time> with nothing to continue it (auto-continue is off)` or `(auto-continue retries are spent)`. A failure sends no `SUBAGENT_PAUSED`; the run's pane is reclaimed as for a [timeout](#configure-the-deadline-ladder).
-
-A held child's notice is queued for the parent once per park, for the parent's next turn boundary. If the child's run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`, with the reason in its timeline.
+A failed run keeps its typed cause (`limit_failure` on the run record, under `run` in `rimz agents show <ref> --json`) and a reason naming the provider's message and the refill when known, which the [fleet report](#the-fleet-report) prints:
 
 ```text
-Type: SUBAGENT_PAUSED
-From: @rimz
-Content:
-@still-silver stopped on a provider limit: "Usage limit reached". It resets at 2026-11-10 21:00:00 +01:00 (in 2h); RimZ will continue it then. Its run stays open, its deadline moved by the pause. Stop it with `rimz subagents stop @still-silver`.
+stopped on a provider limit: "Usage limit reached"; it refills at 2026-11-11 04:00:00 +01:00
 ```
 
-With auto-continue off or its retries spent, the second sentence ends `. Nothing continues it then, so its run fails at the reset; a message to it after that resumes it.` instead. The quoted text is the provider's own message; when the provider gave none, the notice names the limit class instead (`a rate limit`, `a spend limit`). A child that resumes and stops on a limit again is held or failed afresh, and a second hold sends a second notice. A child paused because its provider is overloaded, or parked by a RimZ budget, reads `paused` in `list`, is neither held nor failed, and sends no notice.
+A failure whose continue after the refill failed reads `stopped on a provider limit: "Usage limit reached"; continuing it after the refill failed`, and one whose refill RimZ has not read ends after the provider's message. When the provider gave no message, the quoted part is left out. The run's pane is reclaimed as for a [timeout](#configure-the-deadline-ladder). A child that resumes and stops on a limit again is held or failed afresh. A child paused because its provider is overloaded, or parked by a RimZ budget, reads `paused` in `list` and is neither held nor failed.
 
-The notice is not the fleet report: the report still arrives once every child has settled. The room's sidebar producer detects the stop, so a room with no sidebar running neither holds, fails, nor notifies. Detection waits for RimZ to record the provider's error and for a producer refresh; delivery then waits for the parent's next eligible turn boundary. There is no fixed delivery delay.
+The room's sidebar producer detects the stop, so a room with no sidebar running neither holds nor fails. Detection waits for RimZ to record the provider's error and for a producer refresh.
 
 ## A child silent past the stall window
 

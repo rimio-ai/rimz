@@ -2782,9 +2782,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
 
 #[cfg(unix)]
 #[test]
-fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
-    use rimz::store::message::{HarnessNotice, MessageSender};
-
+fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
     let env = Env::new();
     env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
@@ -2814,6 +2812,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
         &store,
         (&parent_kind, &parent_id),
         (&child_kind, &child_id),
+        jiff::Timestamp::now(),
     );
     let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(3600);
     publish_spent_window(&env, &child_kind, reset);
@@ -2912,25 +2911,13 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
         )
         .expect("seed the limit marker");
     };
-    let notices = || {
-        store
-            .list_messages()
-            .expect("list queued messages")
-            .into_iter()
-            .filter(|message| {
-                message.sender
-                    == MessageSender::Harness {
-                        notice: HarnessNotice::SubagentPaused,
-                    }
-            })
-            .collect::<Vec<_>>()
-    };
+    let queued = || store.list_messages().expect("list queued messages");
 
     let row = list();
     assert_eq!(row["status"], "running");
     assert!(row.get("turn_error").is_none(), "{row}");
     notify();
-    assert!(notices().is_empty(), "a working child sends no notice");
+    assert!(queued().is_empty(), "a working child is left alone");
 
     // Lifecycle D < heartbeat H < marker M. The legacy `failed` class reads as
     // a limit only through the label mapping.
@@ -2951,21 +2938,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
 
     notify();
     notify();
-    let queued = notices();
-    assert_eq!(queued.len(), 1, "one notice per park: {queued:?}");
-    assert_eq!(queued[0].agent_id, parent_id);
-    assert_eq!(queued[0].about_run, Some(run.run_id.clone()));
-    assert!(
-        queued[0].text.contains("@still-silver")
-            && queued[0].text.contains("Usage limit reached")
-            && queued[0].text.contains(&format!(
-                "It resets at {}",
-                rimz::utils::time::format_local_timestamp(reset)
-            ))
-            && queued[0].text.contains("RimZ will continue it then"),
-        "{}",
-        queued[0].text
-    );
+    assert!(queued().is_empty(), "a hold sends nobody a message");
     let held = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
     assert_eq!(
         held.park_noticed_activity,
@@ -2987,16 +2960,16 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
     assert_eq!(
         list()["run_status"],
         "running",
-        "the notice leaves the run open"
+        "the hold leaves the run open"
     );
 
-    // The child resumes, works, and parks again: a new park, a second notice.
+    // The child resumes, works, and parks again: a new park, a second hold.
     let resumed_at = heartbeat();
     seed_marker(resumed_at + std::time::Duration::from_secs(1));
     assert!(producer_owes_notice(), "a later park is owed again");
     notify();
     notify();
-    assert_eq!(notices().len(), 2, "one notice per park");
+    assert!(queued().is_empty());
     let reheld = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
     assert_eq!(reheld.park_noticed_activity, Some(resumed_at));
     let second = reheld.limit_hold.expect("the second park holds too");
@@ -3007,47 +2980,17 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
         "each park gets its own hold"
     );
     assert!(!producer_owes_notice());
-
-    let queued = notices();
-    assert!(
-        queued
-            .iter()
-            .all(|message| message.about_run.as_ref() == Some(&run.run_id))
-    );
-    rimz::harness::run::cancel(store.paths(), &run.run_id).unwrap();
-    for message in &queued {
-        env.rimz()
-            .args([
-                "message",
-                "deliver",
-                "--message-id",
-                message.message_id.as_str(),
-            ])
-            .assert()
-            .success();
-    }
-    assert!(notices().is_empty());
-    let history = store.list_message_history().unwrap();
-    for message in queued {
-        let retired = history
-            .iter()
-            .find(|row| row.message_id == message.message_id)
-            .unwrap();
-        assert_eq!(
-            retired.status,
-            rimz::store::message::MessageStatus::Canceled
-        );
-        assert_eq!(retired.last_sent_at, None);
-    }
 }
 
-/// Seed a planner parent and its launched still-silver child, the child's turn started.
+/// Seed a planner parent and its launched still-silver child, the child's turn started, every
+/// event stamped `at`.
 fn seed_parent_and_child(
     env: &Env,
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
     (parent_kind, parent_id): (&AgentKind, &AgentSessionId),
     (child_kind, child_id): (&AgentKind, &AgentSessionId),
+    at: jiff::Timestamp,
 ) {
     for (kind, id, name, launch) in [
         (parent_kind, parent_id, "planner", LaunchParams::default()),
@@ -3063,41 +3006,43 @@ fn seed_parent_and_child(
             },
         ),
     ] {
-        store
-            .append_event(&EventEnvelope::agent_launched(
-                workspace.workspace_id.clone(),
-                &workspace.session_name,
-                kind,
-                AgentLaunchPayload {
-                    system_prompt_digest: None,
-                    agent_id: id.clone(),
-                    launch_id: None,
-                    agent_name: name.to_owned(),
-                    agent_name_explicit: true,
-                    launch,
-                    state: AgentLaunchState::Bound,
-                    run_id: None,
-                    pane_id: None,
-                    runtime_owner: None,
-                    worktree_path: Some(env.project_root.display().to_string()),
-                    worktree_branch: None,
-                    prompt: None,
-                    description: None,
-                },
-            ))
-            .expect("seed agent row");
-    }
-    store
-        .append_event(&EventEnvelope::agent_lifecycle(
+        let mut launched = EventEnvelope::agent_launched(
             workspace.workspace_id.clone(),
             &workspace.session_name,
-            child_kind.as_str(),
-            "UserPromptSubmit",
-            &AgentLifecycleObservation::new(
-                Some(child_id.clone()),
-                LifecycleSignal::TurnStarted { turn_id: None },
-            ),
-        ))
+            kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: id.clone(),
+                launch_id: None,
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch,
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        );
+        launched.timestamp = at;
+        store.append_event(&launched).expect("seed agent row");
+    }
+    let mut started = EventEnvelope::agent_lifecycle(
+        workspace.workspace_id.clone(),
+        &workspace.session_name,
+        child_kind.as_str(),
+        "UserPromptSubmit",
+        &AgentLifecycleObservation::new(
+            Some(child_id.clone()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+    );
+    started.timestamp = at;
+    store
+        .append_event(&started)
         .expect("start the child's turn");
 }
 
@@ -3679,9 +3624,7 @@ fn restart_account_falls_back_to_a_fresh_launch_on_the_named_account() {
 
 #[cfg(unix)]
 #[test]
-fn limit_parked_child_past_the_hold_limit_fails_at_once_with_the_reason() {
-    use rimz::store::message::{HarnessNotice, MessageSender};
-
+fn limit_parked_child_past_the_hold_limit_fails_at_once_with_its_typed_cause() {
     let env = Env::new();
     env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
@@ -3708,6 +3651,7 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_the_reason() {
         &store,
         (&parent_kind, &parent_id),
         (&child_kind, &child_id),
+        jiff::Timestamp::now(),
     );
     let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(9 * 3600);
     publish_spent_window(&env, &child_kind, reset);
@@ -3752,19 +3696,28 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_the_reason() {
     let failed = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
     assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
     assert_eq!(failed.limit_hold, None);
+    let failure = failed.limit_failure.as_ref().expect("the typed cause");
+    assert_eq!(
+        failure.cause,
+        rimz::store::run::LimitFailureCause::BeyondHoldLimit
+    );
+    assert_eq!(failure.label.as_deref(), Some("Usage limit reached"));
+    let refill_at = failure.refill_at.expect("the refill instant");
+    assert!(
+        refill_at.duration_since(reset).abs() < jiff::SignedDuration::from_secs(1),
+        "{refill_at} vs {reset}"
+    );
     let reason = format!(
-        "stopped on a provider limit: \"Usage limit reached\"; it resets at {}, past the 6h \
-         hold limit (harness.cache_keepalive_max), so the run was not kept open",
-        rimz::utils::time::format_local_timestamp(reset)
+        "stopped on a provider limit: \"Usage limit reached\"; it refills at {}",
+        rimz::utils::time::format_local_timestamp(refill_at)
     );
     assert_eq!(failed.failure_tail.as_deref(), Some(reason.as_str()));
-    let messages = store.list_messages().expect("list queued messages");
     assert!(
-        messages.iter().all(|message| message.sender
-            != MessageSender::Harness {
-                notice: HarnessNotice::SubagentPaused,
-            }),
-        "a failure sends no paused notice: {messages:?}"
+        store
+            .list_messages()
+            .expect("list queued messages")
+            .is_empty(),
+        "a failure sends nothing before the report"
     );
 
     let digest = serde_json::json!({
@@ -3787,6 +3740,116 @@ fn limit_parked_child_past_the_hold_limit_fails_at_once_with_the_reason() {
         .find(|message| message.agent_id == parent_id)
         .expect("the parent's digest");
     assert!(report.text.contains(&reason), "{}", report.text);
+    assert!(
+        !report.text.contains("cache_keepalive_max"),
+        "{}",
+        report.text
+    );
+}
+
+/// With auto-continue off, a refill inside the hold limit holds nothing: the park waits out the
+/// fail window untouched, then fails with the refill it knows.
+#[cfg(unix)]
+#[test]
+fn limit_parked_child_with_auto_continue_off_fails_after_the_window_with_its_refill() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("gatekeeper-session");
+    let started = jiff::Timestamp::now() - std::time::Duration::from_secs(20 * 60);
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        child_kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "gate the release".to_owned(),
+        env.project_root.clone(),
+    );
+    run.started_at = started;
+    run.agent_id = Some(child_id.clone());
+    run.agent_name = Some("still-silver".to_owned());
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).expect("create open subagent run");
+    seed_parent_and_child(
+        &env,
+        &workspace,
+        &store,
+        (&parent_kind, &parent_id),
+        (&child_kind, &child_id),
+        started,
+    );
+    let reset = jiff::Timestamp::now() + std::time::Duration::from_secs(2 * 3600);
+    publish_spent_window(&env, &child_kind, reset);
+    let seed_marker = |at: jiff::Timestamp| {
+        let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
+        context.turn_error = Some(rimz::agents::AgentTurnError {
+            ended_turn: false,
+            class: rimz::agents::TurnErrorClass::PausedRateLimit,
+            at,
+            label: Some("Usage limit reached".to_owned()),
+        });
+        rimz::store::agent_context::write_record(
+            &env.runtime_paths(),
+            &rimz::agents::context::record::AgentContextRecord::new(
+                child_kind.as_str(),
+                child_id.as_str(),
+                context,
+            ),
+        )
+        .expect("seed the limit marker");
+    };
+    let help = || {
+        let request = rimz::harness::park_notice::ParkNoticeRequest {
+            workspace_id: workspace.workspace_id.clone(),
+            run_id: run.run_id.clone(),
+            horizon_secs: 6 * 3600,
+            continuation: rimz::harness::park_notice::Continuation::Off,
+        };
+        env.rimz()
+            .args(rimz::child_process::agent_helper_argv(
+                "park-notice",
+                &request,
+            ))
+            .assert()
+            .success();
+        rimz::harness::run::load(store.paths(), &run.run_id).expect("load run")
+    };
+
+    seed_marker(jiff::Timestamp::now() - std::time::Duration::from_secs(60));
+    let waiting = help();
+    assert_eq!(waiting.status, rimz::store::run::RunStatus::Running);
+    assert_eq!(waiting.limit_hold, None, "auto-continue off holds nothing");
+    assert_eq!(waiting.park_noticed_activity, None);
+    assert_eq!(waiting.limit_failure, None);
+
+    seed_marker(jiff::Timestamp::now() - std::time::Duration::from_secs(11 * 60));
+    let failed = help();
+    assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
+    let failure = failed.limit_failure.as_ref().expect("the typed cause");
+    assert_eq!(
+        failure.cause,
+        rimz::store::run::LimitFailureCause::RefillKnown
+    );
+    let refill_at = failure.refill_at.expect("the refill instant");
+    assert!(
+        refill_at.duration_since(reset).abs() < jiff::SignedDuration::from_secs(1),
+        "{refill_at} vs {reset}"
+    );
+    assert_eq!(
+        failed.failure_tail.as_deref(),
+        Some(
+            format!(
+                "stopped on a provider limit: \"Usage limit reached\"; it refills at {}",
+                rimz::utils::time::format_local_timestamp(refill_at)
+            )
+            .as_str()
+        )
+    );
+    assert!(store.list_messages().expect("list messages").is_empty());
 }
 
 #[cfg(unix)]

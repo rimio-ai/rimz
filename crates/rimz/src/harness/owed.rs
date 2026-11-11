@@ -329,7 +329,6 @@ mod tests {
             HarnessNotice::TeamReport,
             HarnessNotice::Stage,
             HarnessNotice::Deadline,
-            HarnessNotice::SubagentPaused,
             HarnessNotice::SubagentRestarted,
             HarnessNotice::SubagentStalled,
             HarnessNotice::MessageUndelivered,
@@ -369,7 +368,6 @@ mod tests {
                         notice,
                         HarnessNotice::Stage
                             | HarnessNotice::Deadline
-                            | HarnessNotice::SubagentPaused
                             | HarnessNotice::SubagentRestarted
                             | HarnessNotice::SubagentStalled
                             | HarnessNotice::MessageUndelivered

@@ -99,7 +99,6 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
 | Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
 | Child restarted with its run open | `crates/rimz/src/cli/agents_cmd/restart.rs::notify_parent_restarted`, through `SyntheticMessage` | `Harness { notice: SubagentRestarted }` / `Prompt` |
-| Child parked on a provider limit | `crates/rimz/src/cli/agents_cmd/park_notice.rs::run`, text from `crates/rimz/src/harness/park_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
 | Launched child silent mid-turn or never started | `crates/rimz/src/cli/agents_cmd/stall_notice.rs::run`, text from `crates/rimz/src/harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
 | Unfinished team at rest | `crates/rimz/src/harness/stall_nudge/helper.rs::queue`, through `SyntheticMessage`, called by the hidden stall-nudge helper | `Harness { notice: TeamStalled }` / `Prompt` |
 | Agent-sent message ended undelivered | `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects endings, `Store::commit_queue` composes through `crates/rimz/src/store/message/sender_notice.rs::undelivered` | `Harness { notice: MessageUndelivered }` / `Prompt` |
@@ -397,7 +396,7 @@ One race remains. A join after the post-claim scan can still race the send, beca
 
 ### The run-linked notice guard
 
-The pause and stall helpers set `MessageRecord.about_run` to the child run they claimed before queueing their notices, and a signal forwarded to a workflow step's leader sets it to the attempt's run (`Host::forward`). `cancel_moot_message` checks any record carrying that link, independently of its sender or notice kind. The run-link check adds no run read for an unlinked record; digest scans remain unchanged.
+The stall helper sets `MessageRecord.about_run` to the child run it claimed before queueing its notice, `rimz agents restart` sets it to the open run of a child it moved to a new pane, and a signal forwarded to a workflow step's leader sets it to the attempt's run (`Host::forward`). `cancel_moot_message` checks any record carrying that link, independently of its sender or notice kind. The run-link check adds no run read for an unlinked record; digest scans remain unchanged.
 
 Before candidacy, the head's linked run is read even while the parent's turn-boundary gate is closed. After the claim, every claimed member passes the same check. A terminal run cancels its record through `Store::cancel_message` with reason `child run <status> before delivery`, using `RunStatus::as_str`; a missing run cancels it with `child run gone before delivery`. No pane write follows, even if the cancel finds the record already closed. `rimz message show` keeps the reason in its timeline. When the guard cancels a record named by `message steer`, the command exits 1 with `message <id> is no longer queued`.
 
@@ -431,7 +430,7 @@ When a queued head delivers, the helper extends the claim through the contiguous
 
 The first deliverable record on the card's lane that fails a rule ends the batch (`crates/rimz/src/store/message.rs::delivery_batch_indices`). `Resume` control messages never batch.
 
-A fleet digest is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message. Other harness notices batch normally, `TEAM_REPORT` and run-linked pause/stall notices included. Every claimed member passes the [retirement guards](#the-run-linked-notice-guard) before the paste.
+A fleet digest is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message. Other harness notices batch normally, `TEAM_REPORT` and run-linked restart and stall notices included. Every claimed member passes the [retirement guards](#the-run-linked-notice-guard) before the paste.
 
 The batch lands as one paste and one submit. Attributed members keep their own [header](#the-message-header), system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction.
 
@@ -562,7 +561,6 @@ Content:
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `SUBAGENT_RESTARTED` | A launched child `rimz agents restart` handed to a replacement pane with its run open, queued for its parent once per handover (none when the parent ran the restart) and withdrawn if its run ends before delivery | `@rimz` |
-| `SUBAGENT_PAUSED` | A launched child parked on a provider limit whose run is held until the reset, queued for its parent once per held park and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `SUBAGENT_STALLED` | A launched child silent mid-turn or not yet started past the same stall window, queued for its parent once per run and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
@@ -580,7 +578,7 @@ A handle gains `#channel` when the delivery crosses lanes. The recipient's lane 
 
 `address::agent_sender_handle` uses `agents::petname::sender_handle`: role, else explicit or pet name, else kind. Unlike the [listing handle](./fleet.md#petnames-and-the-canonical-handle), it never depends on a profile's or kind's current uniqueness. A matching live peer supplies identity and channel, and otherwise the stored sender fields do. A bare-resumed launched agent still carries a minted name recovered through ancestry. The kind fallback is for senders with no role or name, such as a hook-registered agent or an unknown parent.
 
-The receiver's turn-start hook parses every notice header into transcript entries with body text only ([transcript.md § Writing entries](./transcript.md#writing-entries)). The reader uses the writer's `HarnessNotice` vocabulary, including paused-child, stalled-child, queued, and undelivered notices. An unknown type matching `[A-Z][A-Z0-9_]*` is also a notice when its next line is exactly `From: @rimz`; an unknown type from any other sender stays unrecognized. Named types accept the existing sender grammar: `store::message::parse_sender_handle`, shared by header parsing and prompt alignment, accepts only `From: @<handle>` or `From: @<handle> (<label>)`. The handle is non-empty and whitespace-free. The label is non-empty, whitespace-free, and free of parentheses, and nothing may follow the closing parenthesis. The label is stripped before writing `entry.from`, which leaves the bare `@handle[#channel]` reply address.
+The receiver's turn-start hook parses every notice header into transcript entries with body text only ([transcript.md § Writing entries](./transcript.md#writing-entries)). The reader uses the writer's `HarnessNotice` vocabulary, including restarted-child, stalled-child, queued, and undelivered notices. An unknown type matching `[A-Z][A-Z0-9_]*` is also a notice when its next line is exactly `From: @rimz`; an unknown type from any other sender stays unrecognized. Named types accept the existing sender grammar: `store::message::parse_sender_handle`, shared by header parsing and prompt alignment, accepts only `From: @<handle>` or `From: @<handle> (<label>)`. The handle is non-empty and whitespace-free. The label is non-empty, whitespace-free, and free of parentheses, and nothing may follow the closing parenthesis. The label is stripped before writing `entry.from`, which leaves the bare `@handle[#channel]` reply address.
 
 ## Compaction commands
 

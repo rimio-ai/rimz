@@ -46,7 +46,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | `Prompt` | A human prompt, or a headerless system prompt or command with `from: "rimz"` | `user: @receiver, text` for a human prompt. A system prompt or command is hidden with the output of the turn it opens |
 | `Message` | An inter-agent delivery or a launched child's brief, with the sender's handle as `from` | `@sender: @receiver, text` |
 | `SubagentReport` | A fleet digest, agent report, or team report, with the header's sender as `from` (`@rimz`, or `@<child>` on a legacy per-child report) | Hidden with the output of the turn it opens |
-| `Wait` | Any non-report harness notice, including paused-child, stalled-child, queued, undelivered, and unknown `@rimz` notice headers | Hidden with the output of the turn it opens |
+| `Wait` | Any non-report harness notice, including restarted-child, stalled-child, queued, undelivered, and unknown `@rimz` notice headers | Hidden with the output of the turn it opens |
 | `Assistant` | A root turn's final assistant message | `@receiver: text` |
 | `Ask` | A blocking question or plan approval with parsed questions, or a Codex async question | The agent's question |
 | `Answer` | The effective answer: from the native prompt UI, from `rimz answer`, or the first direct human prompt submitted while a question is open | `user` to the agent, folded into its ask card. An orphan uses its recorded question as an answer card, or a plain body when no question text was recorded |

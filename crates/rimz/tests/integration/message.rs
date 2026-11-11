@@ -8100,16 +8100,6 @@ fn sweep_cancels_joined_subagent_report_without_pane_write() {
 }
 
 #[test]
-fn sweep_cancels_paused_notice_for_an_ended_run() {
-    assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentPaused, false);
-}
-
-#[test]
-fn deliver_cancels_paused_notice_for_an_ended_run() {
-    assert_ended_run_notice_canceled("deliver", HarnessNotice::SubagentPaused, false);
-}
-
-#[test]
 fn sweep_cancels_stalled_notice_for_an_ended_run() {
     assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentStalled, false);
 }
@@ -8121,7 +8111,7 @@ fn deliver_cancels_stalled_notice_for_an_ended_run() {
 
 #[test]
 fn sweep_retires_run_notice_while_the_parent_is_mid_turn() {
-    assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentPaused, true);
+    assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentStalled, true);
 }
 
 fn run_notice_fixture(notice: HarnessNotice) -> (Env, MessageRecord, PathBuf) {
@@ -8235,7 +8225,6 @@ fn assert_run_notice_canceled(env: &Env, message: &MessageRecord, attempts: u32,
 #[test]
 fn delivery_preserves_notices_for_open_runs() {
     for (notice, header) in [
-        (HarnessNotice::SubagentPaused, "SUBAGENT_PAUSED"),
         (HarnessNotice::SubagentRestarted, "SUBAGENT_RESTARTED"),
         (HarnessNotice::SubagentStalled, "SUBAGENT_STALLED"),
     ] {
@@ -8259,7 +8248,7 @@ fn delivery_preserves_notices_for_open_runs() {
 
 #[test]
 fn delivery_retires_notices_for_missing_runs() {
-    let (env, mut message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+    let (env, mut message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentStalled);
     message.about_run = Some(rimz::ids::RunId::new());
     queue_messages(&env, &[&message]);
     let trace_log = env.project_root.join("gone-run-notice-trace.log");
@@ -8321,7 +8310,7 @@ fn delivery_warns_and_keeps_its_claim_when_the_linked_run_is_unreadable() {
 
 #[test]
 fn delivery_filters_ended_run_notices_from_a_batch() {
-    let (env, moot, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+    let (env, moot, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentStalled);
     let store = env.store();
     let mut live_run =
         rimz::harness::run::load(store.paths(), moot.about_run.as_ref().unwrap()).unwrap();
@@ -8372,7 +8361,7 @@ fn delivery_filters_ended_run_notices_from_a_batch() {
 fn delivery_rechecks_run_end_between_scan_and_claim() {
     let mut outcomes = Vec::new();
     for command in ["sweep", "deliver", "steer", "interrupt"] {
-        let (env, message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+        let (env, message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentStalled);
         queue_messages(&env, &[&message]);
         let before = DeliveryRendezvous::new(&env, "before");
         let trace_log = env.project_root.join("run-notice-race-trace.log");
@@ -8433,7 +8422,7 @@ fn delivery_rechecks_run_end_between_scan_and_claim() {
 fn delivery_rebases_batches_after_retiring_their_head() {
     let mut outcomes = Vec::new();
     for survivors in 0..=2 {
-        let (env, head, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+        let (env, head, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentStalled);
         let followers: Vec<_> = (0..survivors)
             .map(|index| {
                 let mut record = head.clone();

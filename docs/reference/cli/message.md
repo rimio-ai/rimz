@@ -169,7 +169,6 @@ Read plan.md when the planner finishes.
 | `AGENT_REPORT` | The status digest for a fleet containing solo agents, including background runs and interactive peers | `@rimz` |
 | `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` or the cohort ends before `Done` | `@rimz` |
 | `SUBAGENT_RESTARTED` | A [subagent restarted](./agents.md#restart) into a new pane with its run still open, queued for its parent once per restart unless the parent ran it; withdrawn if its run ends before delivery | `@rimz` |
-| `SUBAGENT_PAUSED` | A [subagent parked on a provider limit](./subagents.md#a-child-paused-on-a-provider-limit) whose run is held until the reset, queued for its parent once per held park; withdrawn if its run ends before delivery | `@rimz` |
 | `SUBAGENT_STALLED` | A [subagent silent mid-turn or not yet started past the stall window](./subagents.md#a-child-silent-past-the-stall-window), queued for its parent once per run; withdrawn if its run ends before delivery | `@rimz` |
 | `TEAM_STALLED` | An opt-in [stalled-team nudge](../../guide/configuration.md#stalled-team-nudge), queued to the last-active teammate at 55 minutes of quiet, once per unfinished stage visit | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
@@ -238,7 +237,7 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `delivered` | The agent acknowledged it: a turn started with the prompt, or compaction started for a command. |
 | `timed_out` | The agent never acknowledged it. A command is never resent, because repeating `/compact` can discard context. |
 | `errored` | Delivery could not happen, for example the address matched no agent. |
-| `canceled` | `message cancel` or `message clear` stopped it, a fleet digest was fully joined, a pause/stall notice's child run ended, a soft-compaction cycle cleared, an idle compaction's agent took a turn after its idle decision, or a workflow attempt ended before consuming its push-back. `message show` keeps the reason in its timeline. |
+| `canceled` | `message cancel` or `message clear` stopped it, a fleet digest was fully joined, a restart or stall notice's child run ended, a soft-compaction cycle cleared, an idle compaction's agent took a turn after its idle decision, or a workflow attempt ended before consuming its push-back. `message show` keeps the reason in its timeline. |
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
 | `expired` | An automatic command remained queued for ten minutes without delivery, or a resumed child did not register by its follow-up's deadline. Automatic commands stop blocking later messages even before the next sweep records expiry; registration expiry is recorded only while the card is absent or ended no later than enqueue. Other prompts and operator commands never expire. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
@@ -270,7 +269,7 @@ user → @coder  queued  3m ago  msg_…
   Read plan.md when the planner finishes. · after @planner
 ```
 
-Conversation never folds. With `--system`, only cache keepalives, paused or stalled child notices with the same recorded run id, and automatic compaction commands can fold. Adjacent messages within each channel must also agree on sender (including notice kind), recipient, body kind (`prompt` or `command`), and status. Other notices and system prompts, including `--no-from` text, keep their own rows. A folded row quotes only the newest message or reason. Its header keeps that message's id and age, with `×N` after the status. When the folded messages span at least one second, the text line starts with the enqueue span; a burst inside one second keeps `×N` without a span:
+Conversation never folds. With `--system`, only cache keepalives, restarted or stalled child notices with the same recorded run id, and automatic compaction commands can fold. Adjacent messages within each channel must also agree on sender (including notice kind), recipient, body kind (`prompt` or `command`), and status. Other notices and system prompts, including `--no-from` text, keep their own rows. A folded row quotes only the newest message or reason. Its header keeps that message's id and age, with `×N` after the status. When the folded messages span at least one second, the text line starts with the enqueue span; a burst inside one second keeps `×N` without a span:
 
 ```text
 @rimz → @coder  delivered ×6  18m ago  msg_…
@@ -291,7 +290,7 @@ Trailing lines report what the view left out:
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
-`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. `gate` is `done`, `any`, or `resume` (an auto-continue or budget continuation RimZ queues for a `paused` agent, which opens only while the agent reads `paused`). When set, a row adds `about_run` (the run a subagent pause or stall notice is about), `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), and `compacted_context_tokens`.
+`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. `gate` is `done`, `any`, or `resume` (an auto-continue or budget continuation RimZ queues for a `paused` agent, which opens only while the agent reads `paused`). When set, a row adds `about_run` (the run a subagent restart or stall notice, or a signal forwarded to a workflow step's leader, is about), `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), and `compacted_context_tokens`.
 
 ### Show one message
 

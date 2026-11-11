@@ -214,7 +214,7 @@ upward-dependencies = ["address"]
 # `RateLimitWindow::remaining_percentage` is the one displayed remainder the snapshot's budget reading and `rimz accounts` read (+1).
 # `DaemonSessions` is the three-state answer the account-link gate reads from `runtime_control_writes_history` (+1).
 # AgentState::rowless_status gives `agents` and `subagents list` one status for a child with no row (+1).
-# TurnErrorClass::words names a labelless turn error for `subagents list` and the parent's park notice (+1).
+# TurnErrorClass::words names a labelless turn error for `subagents list` (+1).
 # `newest_version` is the one version-order rule the provider panel fold and the accounts merge share (+1).
 # `runtime_control::installed_broker_bin`, the one answer to "is the broker's provider installed" for the room and daemon-view pane gates (+1).
 # The switch-hint pick and its result serve providers and accounts list (+2).
@@ -2326,7 +2326,7 @@ path = "crates/rimz/src/harness"
 # `schedule::compile` carries a task's `CompiledAction`, `TaskWorkflow`, and `InlineTask` with its text and fire-time `definition` to the clock pass, `workflow show|validate`, and `LoadedTask::compiled`; `LoadedTask::new` builds a task for workflow's compiled-graph tests (+9).
 # run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
 # run::report::may_claim lets `agents wait` mark a printed answer read only for a person or the run's launcher during its open turn (+1).
-# park_notice::{Continuation, FailCause, ParkAction, park_action, reset_reading, failure_reason} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run (+7).
+# park_notice::{Continuation, LimitReading, ParkAction, park_action, limit_reading} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run.
 # run::hand_over lets `rimz agents restart` keep a child's open run across the restart (+1).
 surface-budget = 1133
 
@@ -5239,6 +5239,8 @@ allowed-dependencies = [
     # Supervised requests carry the birth's shell-lookup persistence policy.
     "harness::launch",
     "harness::owed",
+    # A limit failure stores the sentence park_notice composes beside its typed cause.
+    "harness::park_notice",
     # A loop spawn request carries its start-throttle turn to the launch commit.
     "harness::schedule::throttle",
     # Terminal supervised attempts wake their workflow after releasing the lock.
@@ -5254,7 +5256,7 @@ allowed-dependencies = [
 # Team runs: the hook finds the leader's open run; the flip settles or reopens it per Done.
 # Verify settlement is one call (settle_verify, VerifyStep); its three transitions are private.
 # The exec wrapper asks one pure decision over `ProviderExit` (+2), with `StartupEvidence` and `StartupRelaunch` as input and answer (+2).
-# The park-notice helper claims one park per child activity through a locked CAS, and gives it back when queueing fails.
+# The park-notice helper claims one park per child activity through a locked CAS (claim_limit_hold).
 # `VERIFY_MAX_ATTEMPTS_DEFAULT` is the one verify cap the loop reminder, `loop show`, and the supervised run read (+1).
 # `provider_startup_exit` shares the diagnostic window independently of relaunch eligibility (+1).
 # A silent-child notice is claimed once per run and released only after a failed queue write (+2).
