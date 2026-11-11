@@ -450,6 +450,7 @@ mod tests {
                         completed_at: record.completed_at,
                         prompt: None,
                         failure_tail: None,
+                        limit_failure: None,
                         opened_by: std::mem::take(&mut record.opened_by),
                         report_message_id: None,
                         joined_at: None,

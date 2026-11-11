@@ -4204,7 +4204,8 @@ path = "crates/rimz/src/store"
 # store::run::LimitHold records a limit-parked child's hold on its run, for the harness and the park-notice helper (+1).
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
 # RunRecord::superseded_in names the panes a handed-over run no longer answers to (+1).
-surface-budget = 598
+# store::run::LimitFailure and LimitFailureCause keep a limit-failed child's typed cause for the fleet report (+2).
+surface-budget = 600
 
 [[verdict]]
 kind = "item"

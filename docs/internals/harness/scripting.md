@@ -54,7 +54,7 @@ The rule that resolves this is that the durable run record is the run, and the p
 | Provider process | `provider_pid`, `provider_process_start` |
 | Provenance | `prompt`, `worktree_path`, `permission_mode`, `budget`, `retry_of`, `loop_task`, `workflow` |
 | Retention | `keep`, `subagent` |
-| Outcome | `status`, `lifecycle`, `last_message`, `parked_answer`, `stopped_turn`, `verify`, `failure_tail`, `transcript_path` |
+| Outcome | `status`, `lifecycle`, `last_message`, `parked_answer`, `stopped_turn`, `verify`, `failure_tail`, `limit_failure` (the typed cause of a [provider-limit failure](./subagents.md#a-child-parked-on-a-provider-limit), which a reopen moves into `earlier_answers` with `failure_tail`), `transcript_path` |
 | Accounting | `cost_usd`, `input_tokens`, `output_tokens`, `earlier_sessions` |
 | Reporting | `reader`, `report_to`, `joined_at`, `report_message_id` |
 | Follow-ups | `follow_ups`, `follow_up`, `opened_by`, `earlier_answers` ([subagents.md](./subagents.md#follow-ups-and-resume)) |
