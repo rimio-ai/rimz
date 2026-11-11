@@ -2400,6 +2400,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         provider_native: true,
         fast: false,
         stalled: false,
+        compacting: false,
         prior_turn: false,
         status: spec.status,
         phase: spec.phase,

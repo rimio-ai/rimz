@@ -68,6 +68,18 @@ fn projected_child_chain(
     cycle: bool,
     age_secs: i64,
 ) -> SidebarSnapshot {
+    projected_child_chain_with(status, trigger, shell, terminal, cycle, age_secs, |_| {})
+}
+
+fn projected_child_chain_with(
+    status: AgentStatus,
+    trigger: Option<PendingWaitTrigger>,
+    shell: bool,
+    terminal: bool,
+    cycle: bool,
+    age_secs: i64,
+    edit: impl FnOnce(&mut [crate::agents::AgentState]),
+) -> SidebarSnapshot {
     use crate::agents::{AgentState, BackgroundShell, PermissionMode};
     use crate::store::run::{self, RunRecord, RunStatus};
     let dir = tempfile::tempdir().unwrap();
@@ -125,6 +137,7 @@ fn projected_child_chain(
                 started_at: now,
             });
     }
+    edit(Arc::make_mut(&mut snapshot.agents).as_mut_slice());
     project_run_waits(&mut snapshot, &paths);
     snapshot
 }
@@ -140,6 +153,56 @@ fn child_wait_chain_follows_background_shell() {
         snapshot.agents[1].pending_waits[0].class,
         PendingWaitClass::Working
     );
+}
+
+#[test]
+fn child_wait_chain_follows_soft_compaction_cycle() {
+    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+    for (progress, compacting, expected) in [
+        (
+            Some(SoftCompactProgress::TurnEnded),
+            true,
+            PendingWaitClass::Working,
+        ),
+        (
+            Some(SoftCompactProgress::TurnEnded),
+            false,
+            PendingWaitClass::Working,
+        ),
+        (
+            Some(SoftCompactProgress::ContinueQueued),
+            false,
+            PendingWaitClass::Working,
+        ),
+        (
+            Some(SoftCompactProgress::Continued),
+            true,
+            PendingWaitClass::Inert,
+        ),
+        (None, true, PendingWaitClass::Inert),
+    ] {
+        let snapshot = projected_child_chain_with(
+            AgentStatus::Success,
+            None,
+            false,
+            false,
+            false,
+            0,
+            |agents| {
+                let child = &mut agents[1];
+                child.compacting_since = compacting.then_some(child.last_activity);
+                child.soft_compact = progress.map(|progress| SoftCompactMark {
+                    steered_at: child.last_activity,
+                    compactions: Some(0),
+                    progress,
+                });
+            },
+        );
+        assert_eq!(
+            snapshot.agents[0].pending_waits[0].class, expected,
+            "{progress:?} compacting={compacting}"
+        );
+    }
 }
 
 #[test]

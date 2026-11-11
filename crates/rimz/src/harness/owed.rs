@@ -74,7 +74,7 @@ pub fn owed_wake(
                 .is_some_and(|mark| match mark.progress {
                     SoftCompactProgress::WrappingUp => launcher.holds_open_turn(),
                     SoftCompactProgress::TurnEnded => true,
-                    SoftCompactProgress::Continued => false,
+                    SoftCompactProgress::ContinueQueued | SoftCompactProgress::Continued => false,
                 })
         {
             return Ok(Some(OwedWake::SoftCompact));
@@ -236,6 +236,18 @@ mod tests {
                 }
             }
             let label = format!("queued={queued}, terminal={terminal}, after={after:?}");
+            let progress = store
+                .audit_rows()
+                .unwrap()
+                .find(&kind, &agent.agent_id)
+                .and_then(|agent| agent.soft_compact)
+                .map(|mark| mark.progress);
+            let expected_progress = match (queued, terminal) {
+                (false, _) => SoftCompactProgress::WrappingUp,
+                (true, false) => SoftCompactProgress::ContinueQueued,
+                (true, true) => SoftCompactProgress::Continued,
+            };
+            assert_eq!(progress, Some(expected_progress), "{label}");
             if let Some(signal) = after {
                 lifecycle(signal);
             }

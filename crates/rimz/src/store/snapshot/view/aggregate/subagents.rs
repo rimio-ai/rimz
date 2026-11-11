@@ -346,6 +346,7 @@ fn project_sub_agent(
         provider_native: child.is_provider_subagent(),
         status,
         stalled: silent_secs.is_some(),
+        compacting: child.is_compacting(now) || child.soft_compact_in_flight(),
         phase,
         turn_error_label,
         task: child.task.clone(),

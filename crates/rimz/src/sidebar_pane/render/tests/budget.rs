@@ -33,6 +33,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         provider_native: true,
         fast: false,
         stalled: false,
+        compacting: false,
         status: crate::agents::AgentStatus::Running,
         phase: crate::agents::TurnPhase::Acting,
         task: None,

@@ -515,6 +515,7 @@ fn provider_child_attention_matches_declared_status_count() {
             provider_native: true,
             fast: false,
             stalled: false,
+            compacting: false,
             status: AgentStatus::Waiting,
             phase: TurnPhase::Idle,
             task: None,

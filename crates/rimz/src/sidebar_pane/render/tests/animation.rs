@@ -584,6 +584,27 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             "{status:?}"
         );
     }
+    // A compacting child's head moves unless a `?`/`!` replaces it.
+    for (status, moves) in [
+        (crate::agents::AgentStatus::Success, true),
+        (crate::agents::AgentStatus::Idle, true),
+        (crate::agents::AgentStatus::Waiting, false),
+        (crate::agents::AgentStatus::Failed, false),
+    ] {
+        let child = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0];
+        child.status = status;
+        child.compacting = true;
+        assert_eq!(
+            animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some(),
+            moves,
+            "compacting {status:?}"
+        );
+    }
 }
 
 #[test]
@@ -1093,6 +1114,7 @@ fn selected_pet_action_follows_the_focused_card() {
         provider_native: true,
         fast: false,
         stalled: false,
+        compacting: false,
         status: AgentStatus::Running,
         phase: crate::agents::TurnPhase::Reasoning,
         task: None,

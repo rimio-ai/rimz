@@ -382,6 +382,7 @@ fn a_childs_ask_holds_its_focused_parent_without_freezing_other_arrivals() {
             provider_native: true,
             status: AgentStatus::Waiting,
             stalled: false,
+            compacting: false,
             phase: crate::agents::TurnPhase::Idle,
             turn_error_label: None,
             task: None,

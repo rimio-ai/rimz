@@ -615,6 +615,7 @@ fn full_entry_has_a_stable_projection() {
                 provider_native: false,
                 fast: false,
                 stalled: false,
+                compacting: false,
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
                 task: None,

@@ -23,7 +23,7 @@ use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, TokenColumns, TokenDetail, activity_age_style, agent_glyph,
     agent_lead_style_with_attention, agent_role, agent_role_style_at, context_breakdown_spans,
     context_compaction_spans, context_gauge_spans, context_tool_repeat_spans, context_total_spans,
-    elapsed_glyph, emphasize, role_glyph, severity_heat_amount, severity_heat_color,
+    elapsed_glyph, emphasize, role_glyph, role_style, severity_heat_amount, severity_heat_color,
     token_breakdown_spans, token_total_glyph, unread_run_spans, value_seam, window_style,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
@@ -86,7 +86,8 @@ pub(in crate::sidebar_pane) fn agent_card_cost_usd(
 }
 
 /// Whether this card's delegation entries are on screen with something in
-/// motion on the fast grid: a running child's head or a running shell job.
+/// motion on the fast grid: a running or compacting child's head or a running
+/// shell job.
 pub(in crate::sidebar_pane::render) fn delegation_motion(
     row: &SidebarRow,
     density: CardDensityMode,
@@ -98,11 +99,10 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
         return false;
     };
     delegation_entries_drawn(row, density, expansion, stale_after_secs, now)
-        && (agent
-            .sub_agents
-            .iter()
-            .any(|child| child.status == AgentStatus::Running)
-            || !agent.background_shells.is_empty()
+        && (agent.sub_agents.iter().any(|child| {
+            child.status == AgentStatus::Running
+                || (child.compacting && !child.status.is_actionable())
+        }) || !agent.background_shells.is_empty()
             || waits::visible_waits(&agent.pending_waits)
                 .any(|wait| waits::is_live_watch(&wait.trigger)))
 }
@@ -544,12 +544,20 @@ fn sub_agent_entry_lines(
             );
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child thinks (reasoning) or fills (acting) in the live clay, a
-        // finished one holds its static `✓`/`!` verdict — one head grammar
+        // finished one holds its static `✓`/`!` verdict, and a compacting one
+        // wears the compacting head unless a `?`/`!` wins — one head grammar
         // for the parent's cell and its children's.
-        let lead = Span::styled(
-            agent_glyph(theme, sub.status, sub.phase, ctx.head_step),
-            agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
-        );
+        let lead = if sub.compacting && !sub.status.is_actionable() {
+            Span::styled(
+                role_glyph(theme, AnimationRole::Compacting, ctx.head_step),
+                role_style(theme, AnimationRole::Compacting, animation_phase),
+            )
+        } else {
+            Span::styled(
+                agent_glyph(theme, sub.status, sub.phase, ctx.head_step),
+                agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
+            )
+        };
         let detail = sub
             .description
             .as_deref()

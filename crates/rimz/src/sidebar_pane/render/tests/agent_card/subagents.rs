@@ -116,6 +116,50 @@ fn child_headline_uses_description_task_then_first_prompt_without_repeating_the_
     );
 }
 
+#[test]
+fn compacting_child_draws_the_compacting_head_unless_its_status_is_actionable() {
+    use crate::sidebar_pane::render::labels::{agent_glyph, role_glyph};
+    let theme = truecolor_sidebar_theme();
+    let compacting_tone = theme.animations.natural_color(AnimationRole::Compacting);
+    assert!(compacting_tone.is_some());
+    for (status, compacting, shows_compacting) in [
+        (AgentStatus::Running, true, true),
+        (AgentStatus::Success, true, true),
+        (AgentStatus::Running, false, false),
+        (AgentStatus::Success, false, false),
+        (AgentStatus::Waiting, true, false),
+        (AgentStatus::Failed, true, false),
+    ] {
+        let mut snapshot = fast_child_snapshot(status, false);
+        let child = &mut fast_children_mut(&mut snapshot)[0];
+        child.name = "claude".to_owned();
+        child.fast = false;
+        child.phase = TurnPhase::Idle;
+        child.description = Some("audit the trust hash".to_owned());
+        child.compacting = compacting;
+        let lines = group_lines(&snapshot, &theme, 0);
+        let line = lines
+            .iter()
+            .find(|line| line.to_string().contains("claude · audit the trust hash"))
+            .expect("the child entry line");
+        let glyph = if shows_compacting {
+            role_glyph(&theme, AnimationRole::Compacting, 0)
+        } else {
+            agent_glyph(&theme, status, TurnPhase::Idle, 0)
+        };
+        let lead = line
+            .spans
+            .iter()
+            .find(|span| span.content == glyph)
+            .unwrap_or_else(|| panic!("{status:?} compacting={compacting}: {line}"));
+        assert_eq!(
+            lead.style.fg == compacting_tone,
+            shows_compacting,
+            "{status:?} compacting={compacting}"
+        );
+    }
+}
+
 fn fast_children_mut(
     snapshot: &mut SidebarSnapshot,
 ) -> &mut Vec<crate::store::snapshot::SidebarSubAgent> {

@@ -366,7 +366,8 @@ upward-dependencies = ["address"]
 # AgentTune's per-key accessors project effective overrides before configured fallback (+3).
 # RaisedAsk::detail and question_sentence share the card's question line (+2).
 # ResetGrant, its re-export from agents and ResetCredits::accounted carry per-grant reset credits (+3).
-surface-budget = 1283
+# AgentState::soft_compact_in_flight shares the open-cycle rest lift with the sub-agent projection (+1).
+surface-budget = 1284
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"

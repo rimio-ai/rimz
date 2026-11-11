@@ -812,6 +812,11 @@ impl<'a> AgentCardRef<'a> {
 pub enum SoftCompactProgress {
     WrappingUp,
     TurnEnded,
+    /// The continue is queued: it has not reached a terminal status, and the
+    /// row has opened no real turn since.
+    ContinueQueued,
+    /// The cycle is finished: its continue reached a terminal status, or a real
+    /// turn opened after it was queued.
     Continued,
 }
 
@@ -1909,11 +1914,28 @@ impl AgentState {
         }
     }
 
+    /// Whether this live card's soft-compaction cycle is open: from the
+    /// wrap-up turn's clean end until its continue reaches a terminal status.
+    /// A compaction at rest with no mark, or after a finished cycle, is not.
+    pub(crate) fn soft_compact_in_flight(&self) -> bool {
+        self.ended_at.is_none()
+            && self.soft_compact.is_some_and(|mark| {
+                matches!(
+                    mark.progress,
+                    SoftCompactProgress::TurnEnded | SoftCompactProgress::ContinueQueued
+                )
+            })
+    }
+
+    /// A resting status as displayed: an open soft-compaction cycle, a
+    /// background shell, or a `Working` wait lifts it to running, and a
+    /// `Sleeping` wait to sleeping.
     pub(crate) fn display_rest_status(&self, status: AgentStatus) -> AgentStatus {
         if !matches!(status, AgentStatus::Idle | AgentStatus::Success) {
             return status;
         }
-        if !self.background_shells.is_empty()
+        if self.soft_compact_in_flight()
+            || !self.background_shells.is_empty()
             || self
                 .pending_waits
                 .iter()
@@ -2233,7 +2255,8 @@ impl AgentState {
     /// (a launched child nests under its parent's card). A displayed fatal or
     /// unknown marker reads `failed`, on a raw-`failed` row too, and so does a
     /// displayed pausing marker the card's [`super::ParkDemotion`] counts as
-    /// spent; otherwise this is the rested status lifted by in-flight waits or shells.
+    /// spent; otherwise this is the rested status lifted by in-flight waits or
+    /// shells, or by an open soft-compaction cycle.
     pub fn rowless_status(
         &self,
         demotion: &super::ParkDemotion,
