@@ -147,10 +147,13 @@ fn seeds_skips_the_journal_when_the_spec_is_missing_or_unparseable() {
     }
 }
 
-#[test]
-fn every_frame_fold_seeds_live_runs_and_clears_terminal_runs() {
-    let (dir, runtime, snapshot) = runtime();
-    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+/// Writes a one-check run at `checkout` and returns its id and record JSON, unwritten.
+fn live_run(
+    state: &StatePaths,
+    root: &Path,
+    checkout: &Path,
+    now: Timestamp,
+) -> (crate::ids::WorkflowRunId, serde_json::Value) {
     let id = crate::ids::WorkflowRunId::new();
     let paths = state.workflow(&id);
     std::fs::create_dir_all(&paths.home).unwrap();
@@ -166,45 +169,121 @@ fn every_frame_fold_seeds_live_runs_and_clears_terminal_runs() {
          queued='@wait'\n",
     )
     .unwrap();
-    let checkout = dir.path().join("trees/lane");
-    let mut record = serde_json::json!({
+    let record = serde_json::json!({
         "version":1, "id":id, "workflow":"land", "spec_dir":"/unused-definition",
-        "spec_digest":"digest", "project_root":dir.path(),
+        "spec_digest":"digest", "project_root":root,
         "scope":{"kind":"worktree", "path":checkout},
-        "created_at":snapshot.now, "entered_at":snapshot.now, "state":"active",
+        "created_at":now, "entered_at":now, "state":"active",
         "node":"watch", "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1
     });
+    (id, record)
+}
+
+#[test]
+fn every_frame_fold_seeds_live_deployed_runs_and_clears_terminal_and_loop_task_runs() {
+    let (dir, runtime, snapshot) = runtime();
+    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+    let checkout = dir.path().join("trees/lane");
+    let (id, mut record) = live_run(&state, dir.path(), &checkout, snapshot.now);
+    let paths = state.workflow(&id);
     let snapshot = snapshot.with_project_root(Some(dir.path().to_path_buf()));
     let frame = crate::sidebar::frame::assemble_frame(Vec::new(), unix_now_ms(), "rimz-test");
-    for status in ["active", "parked", "done", "failed", "canceled"] {
-        record["state"] = status.into();
-        std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    for origin in [None, Some("deployed"), Some("inline")] {
+        match origin {
+            Some(origin) => record["origin"] = origin.into(),
+            None => assert!(record.get("origin").is_none()),
+        }
+        for status in ["active", "parked", "done", "failed", "canceled"] {
+            record["state"] = status.into();
+            std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+            for opts in [cached_opts(), producing_opts()] {
+                let projected = fold(snapshot.clone(), Some(&frame), &runtime, opts);
+                let live = matches!(status, "active" | "parked") && origin != Some("inline");
+                assert_eq!(
+                    projected.worktree_groups.len(),
+                    usize::from(live),
+                    "{origin:?} {status}: both fold paths project rowless deployed scopes only"
+                );
+                if live {
+                    let workflow = projected.worktree_groups[0].workflow.as_ref().unwrap();
+                    assert_eq!(
+                        workflow.track[0].name, "watch",
+                        "read the sealed run spec, not spec_dir"
+                    );
+                    assert_eq!(workflow.run, id);
+                    assert!(
+                        !workflow.current.reached,
+                        "a missing journal reaches nothing"
+                    );
+                    assert!(
+                        fold_cached(snapshot.clone(), None, &runtime)
+                            .worktree_groups
+                            .is_empty(),
+                        "frameless rollup folds have no groups"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_loop_task_runs_step_agent_stays_an_ordinary_card_in_its_lane() {
+    let (dir, runtime, _) = runtime();
+    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+    let checkout = dir.path().join("trees/lane");
+    let worktree = checkout.to_string_lossy().into_owned();
+    let now = Timestamp::now();
+    let (id, mut record) = live_run(&state, dir.path(), &checkout, now);
+    record["node"] = "work".into();
+    record["attempt"] = serde_json::json!({
+        "kind":"agent", "lifecycle":"until", "seq":1, "node":"work",
+        "started_at":now, "host":{"pid":1, "start":null}
+    });
+    let mut agent = codex_root("step", &worktree, "terminal_1");
+    agent.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: id.clone(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    });
+    let snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], now)
+            .with_project_root(Some(dir.path().to_path_buf()));
+    let frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", "codex", &worktree)],
+        unix_now_ms(),
+        "rimz-test",
+    );
+    for origin in ["deployed", "inline"] {
+        record["origin"] = origin.into();
+        std::fs::write(
+            state.workflow(&id).record,
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
         for opts in [cached_opts(), producing_opts()] {
             let projected = fold(snapshot.clone(), Some(&frame), &runtime, opts);
-            let live = matches!(status, "active" | "parked");
+            assert_eq!(projected.worktree_groups.len(), 1, "{origin}");
+            let group = &projected.worktree_groups[0];
             assert_eq!(
-                projected.worktree_groups.len(),
-                usize::from(live),
-                "{status}: both fold paths project rowless scopes"
+                group
+                    .rows
+                    .iter()
+                    .filter(|row| row.is_agent())
+                    .map(|row| row.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["step"],
+                "{origin}: the step agent keeps its card in its lane's group"
             );
-            if live {
-                let workflow = projected.worktree_groups[0].workflow.as_ref().unwrap();
-                assert_eq!(
-                    workflow.track[0].name, "watch",
-                    "read the sealed run spec, not spec_dir"
-                );
-                assert_eq!(workflow.run, id);
-                assert!(
-                    !workflow.current.reached,
-                    "a missing journal reaches nothing"
-                );
-                assert!(
-                    fold_cached(snapshot.clone(), None, &runtime)
-                        .worktree_groups
-                        .is_empty(),
-                    "frameless rollup folds have no groups"
-                );
-            }
+            assert_eq!(
+                group
+                    .workflow
+                    .as_ref()
+                    .and_then(|run| run.agent.as_ref())
+                    .map(|(_, session)| session.as_str()),
+                (origin == "deployed").then_some("step"),
+                "{origin}: only a deployed run binds its step agent to a strip"
+            );
         }
     }
 }
