@@ -125,7 +125,7 @@ pub(super) trait Host: Send + Sync {
         run: &Run,
         group: &StartGroup,
         timeout: Duration,
-    ) -> std::result::Result<super::runner::CheckOutcome, String>;
+    ) -> std::result::Result<crate::harness::check_run::CheckOutcome, String>;
     fn owner(&self) -> Owner;
     fn owner_is_live(&self, owner: &Owner) -> bool;
     /// `Err` is the missing source, for the fail-fast message.
@@ -159,7 +159,7 @@ impl Host for SystemHost {
         run: &Run,
         group: &StartGroup,
         timeout: Duration,
-    ) -> std::result::Result<super::runner::CheckOutcome, String> {
+    ) -> std::result::Result<crate::harness::check_run::CheckOutcome, String> {
         let mut env = crate::workspace::pin_env(&run.workspace, &run.root);
         env.extend([
             (
@@ -184,11 +184,11 @@ impl Host for SystemHost {
         ]);
         // check_groups only calls the host when the check is configured.
         let command = config.check.as_deref().expect("configured capacity check");
-        super::runner::run_command(
+        crate::harness::check_run::run_command(
             &run.checkout,
             command,
-            super::runner::WatchDeadline::CapacityCheck(timeout),
-            super::runner::CheckEcho::Capture,
+            crate::harness::check_run::WatchDeadline::CapacityCheck(timeout),
+            crate::harness::check_run::CheckEcho::Capture,
             &env,
             |_, _| {},
             &mut None,
@@ -528,7 +528,7 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
 }
 
 fn check_answer(
-    checked: std::result::Result<super::runner::CheckOutcome, String>,
+    checked: std::result::Result<crate::harness::check_run::CheckOutcome, String>,
     timeout: Duration,
 ) -> (CheckAnswer, String) {
     let checked = match checked {

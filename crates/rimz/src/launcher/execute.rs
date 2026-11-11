@@ -21,7 +21,7 @@ pub enum RunCompletion {
     Watched {
         cancellation: RunCancellation,
         install_interrupts: fn(RunCancellation) -> Result<()>,
-        termination: Option<Arc<Mutex<Option<crate::harness::schedule::runner::CheckSignalGuard>>>>,
+        termination: Option<Arc<Mutex<Option<crate::harness::check_run::CheckSignalGuard>>>>,
     },
 }
 
@@ -583,7 +583,7 @@ fn publish_run(
             .context("binding run socket")?;
             if let Some(slot) = termination {
                 *slot.lock().unwrap_or_else(|error| error.into_inner()) = Some(
-                    crate::harness::schedule::runner::cancel_run_on_sigterm(cancellation.clone())?,
+                    crate::harness::check_run::cancel_run_on_sigterm(cancellation.clone())?,
                 );
             }
             Some(waiter)

@@ -14,14 +14,15 @@ use serde_json::{Map, Value};
 
 use super::arming;
 use super::catalog::TaskCatalog;
-use super::runner::{
-    CheckEcho, CheckOutcome, WatchDeadline, check_record, run_command, task_timeout,
-};
+use super::runner::{check_record, task_timeout};
 use crate::RuntimePaths;
 use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
 use crate::disk::lease;
 use crate::disk::paths::StatePaths;
 use crate::disk::summary::FileSummary;
+use crate::harness::check_run::{
+    CheckEcho, CheckOutcome, WAIT_TAIL_CAP, WatchDeadline, run_command,
+};
 use crate::harness::schedule::runner::RunLockInfo;
 use crate::store::Store;
 use crate::store::event::{
@@ -125,8 +126,6 @@ impl From<&Signal> for SignalEventPayload {
         }
     }
 }
-
-pub(super) const WAIT_TAIL_CAP: usize = 4 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]

@@ -613,6 +613,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "spend_ladder.rs",
         "budget.rs",
         "cache_keepalive.rs",
+        "check_run.rs",
         "deadline.rs",
         "drainer_outage.rs",
         "fleet.rs",

@@ -145,7 +145,7 @@ impl Host for FakeHost {
         _run: &Run,
         group: &StartGroup,
         timeout: Duration,
-    ) -> Result<super::super::runner::CheckOutcome, String> {
+    ) -> Result<crate::harness::check_run::CheckOutcome, String> {
         self.checks.lock().unwrap().push(group.clone());
         self.check_commands
             .lock()
@@ -160,7 +160,7 @@ impl Host for FakeHost {
             .unwrap()
             .clone()
             .map(|(code, timed_out)| {
-                super::super::runner::CheckOutcome::new(
+                crate::harness::check_run::CheckOutcome::new(
                     code == Some(0),
                     timed_out,
                     String::new(),

@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 
 use super::{WorkflowSpec, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
+use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
 use crate::harness::headless::exit_failure;
-use crate::harness::schedule::runner::{self, CheckEcho, WatchDeadline};
 use crate::store::workflow::{self, RunRecord, RunState};
 
 mod condition;
@@ -225,7 +225,7 @@ fn evaluate_shell(
             record,
             BTreeMap::new(),
             |interrupted, spawned| {
-                runner::run_command(
+                check_run::run_command(
                     &record.scope.path,
                     shell,
                     WatchDeadline::Hosted {
@@ -267,7 +267,7 @@ pub(super) fn execute_step(
     spec: &WorkflowSpec,
     record: &RunRecord,
     on_spawn: impl Fn(),
-) -> Result<runner::CheckOutcome, ChildError> {
+) -> Result<check_run::CheckOutcome, ChildError> {
     let mut digests = BTreeMap::new();
     // Only validated command steps enter this hosting path.
     let (command, argv) = match spec.steps[&record.node]
@@ -301,7 +301,7 @@ pub(super) fn execute_step(
                 on_spawn();
                 Ok(())
             };
-            runner::run_command(
+            check_run::run_command(
                 &record.scope.path,
                 command,
                 WatchDeadline::Hosted {

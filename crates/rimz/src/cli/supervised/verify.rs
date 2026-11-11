@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use rimz::harness::schedule::runner::{CheckEcho, CheckOutcome, run_check};
+use rimz::harness::check_run::{CheckEcho, CheckOutcome, run_check};
 use rimz::message::synthetic::{self, SyntheticMessage};
 use rimz::store::message::{DeliveryGate, MessageSender};
 use rimz::store::run::RunRecord;
