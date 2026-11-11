@@ -558,6 +558,25 @@ impl WorktreeRow<'_> {
     }
 }
 
+/// Orders the WORKTREES table by rank, then newest launch first inside the two
+/// launched ranks, then by name. The launch time is a key of every row, `None`
+/// outside those ranks: a capacity hold or a block puts a launched row in a rank
+/// it shares with other states, and a tiebreak that compared launch times only
+/// between two launched rows was no total order there, which panics the sort.
+fn sort_worktree_rows(rows: &mut [WorktreeRow<'_>]) {
+    fn key<'r>(row: &'r WorktreeRow<'_>) -> (u8, std::cmp::Reverse<Option<Timestamp>>, &'r str) {
+        let rank = row.rank();
+        let launched_at = match (rank, &row.condition.state) {
+            (3 | 6, CheckoutState::Launched { at, .. } | CheckoutState::Workflow { at, .. }) => {
+                Some(*at)
+            }
+            _ => None,
+        };
+        (rank, std::cmp::Reverse(launched_at), &row.condition.name)
+    }
+    rows.sort_by(|a, b| key(a).cmp(&key(b)));
+}
+
 fn worktree_expr(view: &ShowView) -> Option<&WhenExpr> {
     let schedule::Trigger::Condition { expr, .. } = &view.timing.parsed().ok()?.trigger else {
         return None;
@@ -681,18 +700,7 @@ fn write_worktrees(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    rows.sort_by(|a, b| {
-        a.rank()
-            .cmp(&b.rank())
-            .then_with(|| match (&a.condition.state, &b.condition.state) {
-                (
-                    CheckoutState::Launched { at: a, .. } | CheckoutState::Workflow { at: a, .. },
-                    CheckoutState::Launched { at: b, .. } | CheckoutState::Workflow { at: b, .. },
-                ) => b.cmp(a),
-                _ => std::cmp::Ordering::Equal,
-            })
-            .then(a.condition.name.cmp(&b.condition.name))
-    });
+    sort_worktree_rows(&mut rows);
     let rendered = rows
         .iter()
         .filter(|row| view.all || row.rank() < 5)
