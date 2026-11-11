@@ -262,14 +262,19 @@ fn pane_agent_from_agent_with_worktree(
     project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     PaneAgent {
-        checkout: agent.checkout.clone(),
-        root_lane: AgentState::is_root_lane(
-            agent.channel.as_deref(),
-            agent
-                .lane_path()
-                .or(worktree_path.as_deref())
-                .map(std::path::Path::new),
-            project_root,
+        checkout: agent.lane_checkout().map(ToOwned::to_owned),
+        root_lane: agent.lane.as_ref().map_or_else(
+            || {
+                AgentState::is_root_lane(
+                    agent.channel.as_deref(),
+                    agent
+                        .lane_path()
+                        .or(worktree_path.as_deref())
+                        .map(std::path::Path::new),
+                    project_root,
+                )
+            },
+            crate::ids::Lane::is_trunk,
         ),
         kind: agent.kind.clone(),
         kind_ordinal: agent.kind_ordinal,

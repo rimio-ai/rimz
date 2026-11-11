@@ -846,6 +846,19 @@ fn holders_share_occupancy_and_do_not_double_count_bound_panes() {
 }
 
 #[test]
+fn a_live_agent_protects_the_checkout_it_registered_from_not_its_lanes_home() {
+    let mut moved = agent("moved", Some("/repo-worktrees/demo"), None, at(1));
+    moved.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo"));
+    moved.runtime_owner = Some(crate::store::runtime::current_process_owner(
+        crate::RuntimeOwnerKind::Agent,
+        "moved",
+    ));
+    let protection = protection_set_from_runtime(&[], &[moved], None, Occupancy::Unproven);
+    assert!(protection.protects(Path::new("/repo-worktrees/demo")));
+    assert!(!protection.protects(Path::new("/repo")));
+}
+
+#[test]
 fn holders_keep_channel_scoped_agents_distinct() {
     let mut agents = [
         agent("one", Some("/repo-worktrees/demo/one"), None, at(1)),

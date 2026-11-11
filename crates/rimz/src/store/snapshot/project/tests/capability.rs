@@ -164,6 +164,11 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
 
                 channel: None,
 
+                lane: Some(crate::ids::Lane::own(
+                    crate::ids::LaneHome::Worktree,
+                    "/tmp/x",
+                )),
+
                 kind_ordinal: None,
                 ..LaunchParams::default()
             },
@@ -232,6 +237,13 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.worktree_path.as_deref(), Some("/tmp/x"));
     assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
     assert_eq!(agent.worktree_branches, BTreeSet::from(["main".to_owned()]));
+    assert_eq!(
+        agent.lane,
+        Some(crate::ids::Lane::own(
+            crate::ids::LaneHome::Worktree,
+            "/tmp/x"
+        ))
+    );
 }
 
 #[test]

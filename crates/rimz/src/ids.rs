@@ -354,6 +354,230 @@ impl fmt::Display for TeamInstanceId {
     }
 }
 
+/// The name of a named lane: any non-empty text without `#` or whitespace.
+///
+/// In-place team lanes are `<project dir>/<team>`, and a project directory may
+/// hold `.`, so only a typed `--channel` answers to the narrower
+/// [`LaneName::is_flat`] check.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct LaneName(String);
+
+/// A lane or lane name that does not decode.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidLane(String);
+
+impl LaneName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether `raw` is a flat name, as a typed `--channel` must be: non-empty
+    /// ASCII letters, digits, `_`, or `-`.
+    pub fn is_flat(raw: &str) -> bool {
+        !raw.is_empty()
+            && raw
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
+}
+
+impl FromStr for LaneName {
+    type Err = InvalidLane;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty() || value.contains('#') || value.chars().any(char::is_whitespace) {
+            return Err(InvalidLane(format!(
+                "invalid lane name `{value}`; expected non-empty text without `#` or whitespace"
+            )));
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
+
+impl TryFrom<String> for LaneName {
+    type Error = InvalidLane;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<LaneName> for String {
+    fn from(value: LaneName) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for LaneName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// What a lane's home checkout is to the room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaneHome {
+    /// The project checkout itself.
+    Trunk,
+    /// A RimZ-managed worktree of the project.
+    Worktree,
+    /// Any other directory.
+    Foreign,
+}
+
+/// An agent's lane: a home checkout and an optional name.
+///
+/// Without a name it is the checkout's own lane; with one it is a named lane
+/// homed there. A fresh launch decides it once, the launch record stores it
+/// whole, and every relaunch copies it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "LaneWire", into = "LaneWire")]
+pub struct Lane {
+    home: LaneHome,
+    path: String,
+    name: Option<LaneName>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LaneWire {
+    home: LaneHome,
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<LaneName>,
+}
+
+impl TryFrom<LaneWire> for Lane {
+    type Error = InvalidLane;
+
+    fn try_from(wire: LaneWire) -> Result<Self, Self::Error> {
+        if !Path::new(&wire.path).is_absolute() {
+            return Err(InvalidLane(format!(
+                "lane path `{}` is not absolute",
+                wire.path
+            )));
+        }
+        Ok(Self {
+            home: wire.home,
+            path: wire.path,
+            name: wire.name,
+        })
+    }
+}
+
+impl From<Lane> for LaneWire {
+    fn from(lane: Lane) -> Self {
+        Self {
+            home: lane.home,
+            path: lane.path,
+            name: lane.name,
+        }
+    }
+}
+
+impl Lane {
+    /// The own lane of the checkout at `path`.
+    pub(crate) fn own(home: LaneHome, path: impl Into<String>) -> Self {
+        Self {
+            home,
+            path: path.into(),
+            name: None,
+        }
+    }
+
+    /// The named lane `name` homed at this lane's checkout.
+    pub(crate) fn named(self, name: LaneName) -> Self {
+        Self {
+            name: Some(name),
+            ..self
+        }
+    }
+
+    pub fn home(&self) -> LaneHome {
+        self.home
+    }
+
+    /// The home checkout's absolute path.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn name(&self) -> Option<&LaneName> {
+        self.name.as_ref()
+    }
+
+    /// The home checkout's own lane.
+    pub fn own_lane(&self) -> Self {
+        Self::own(self.home, self.path.clone())
+    }
+
+    /// Trunk's own lane.
+    pub fn is_trunk(&self) -> bool {
+        self.home == LaneHome::Trunk && self.name.is_none()
+    }
+
+    /// The name the record's `channel` field carries: the name, else a
+    /// worktree's directory; trunk's and a foreign checkout's own lanes have none.
+    pub fn stored_name(&self) -> Option<&str> {
+        match (&self.name, self.home) {
+            (Some(name), _) => Some(name.as_str()),
+            (None, LaneHome::Worktree) => self.basename(),
+            (None, LaneHome::Trunk | LaneHome::Foreign) => None,
+        }
+    }
+
+    /// The routing key: the name, else the home directory's basename.
+    pub fn routing_name(&self) -> Option<&str> {
+        self.name.as_ref().map(LaneName::as_str).or(self.basename())
+    }
+
+    /// The human lane name: `main` for trunk's own lane, else the routing name.
+    pub fn label(&self) -> Option<&str> {
+        if self.is_trunk() {
+            return Some("main");
+        }
+        self.routing_name()
+    }
+
+    /// The lane an old `channel` stamp means at this lane's checkout.
+    ///
+    /// A named lane stays as it is. No stamp, an empty one, or a name the
+    /// checkout owns (its directory; for trunk also `main`) is the own lane;
+    /// any other stamp is a named lane of that name homed here.
+    pub fn adopt(self, stamp: Option<&str>) -> Self {
+        if self.name.is_some() {
+            return self;
+        }
+        let Some(stamp) = stamp.filter(|stamp| !stamp.is_empty()) else {
+            return self;
+        };
+        let owned =
+            Some(stamp) == self.basename() || (self.home == LaneHome::Trunk && stamp == "main");
+        match stamp.parse::<LaneName>() {
+            Ok(name) if !owned => self.named(name),
+            _ => self,
+        }
+    }
+
+    fn basename(&self) -> Option<&str> {
+        Path::new(&self.path)
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+    }
+}
+
+/// Decode an optional lane, reading one that does not decode as absent so the
+/// record around it still decodes.
+pub(crate) fn deserialize_lane_lenient<'de, D>(deserializer: D) -> Result<Option<Lane>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
 /// Macro: define a UUIDv7-backed newtype with a fixed prefix.
 macro_rules! uuid_v7_id {
     ($name:ident, $prefix:literal, $doc:literal) => {
@@ -1208,6 +1432,106 @@ mod tests {
     fn mux_name_other_flips_backend() {
         assert_eq!(MuxName::Zellij.other(), MuxName::Tmux);
         assert_eq!(MuxName::Tmux.other(), MuxName::Zellij);
+    }
+
+    fn named_lane(home: LaneHome, path: &str, name: &str) -> Lane {
+        Lane::own(home, path).named(name.parse().unwrap())
+    }
+
+    #[test]
+    fn lane_readings_follow_the_home_and_name() {
+        let cases = [
+            (
+                Lane::own(LaneHome::Trunk, "/p/rimz"),
+                true,
+                None,
+                "rimz",
+                "main",
+            ),
+            (
+                Lane::own(LaneHome::Worktree, "/w/auth"),
+                false,
+                Some("auth"),
+                "auth",
+                "auth",
+            ),
+            (
+                Lane::own(LaneHome::Foreign, "/tmp/x"),
+                false,
+                None,
+                "x",
+                "x",
+            ),
+            (
+                named_lane(LaneHome::Trunk, "/p/rimz", "design"),
+                false,
+                Some("design"),
+                "design",
+                "design",
+            ),
+        ];
+        for (lane, trunk, stored, routing, label) in cases {
+            assert_eq!(lane.is_trunk(), trunk, "{lane:?}");
+            assert_eq!(lane.stored_name(), stored, "{lane:?}");
+            assert_eq!(lane.routing_name(), Some(routing), "{lane:?}");
+            assert_eq!(lane.label(), Some(label), "{lane:?}");
+        }
+        assert_eq!(
+            named_lane(LaneHome::Worktree, "/w/auth", "x").path(),
+            "/w/auth"
+        );
+    }
+
+    #[test]
+    fn adoption_reads_an_old_stamp_at_its_checkout() {
+        let trunk = Lane::own(LaneHome::Trunk, "/p/rimz");
+        let worktree = Lane::own(LaneHome::Worktree, "/w/auth");
+        let cases = [
+            (worktree.clone(), None, worktree.clone()),
+            (worktree.clone(), Some(""), worktree.clone()),
+            (worktree.clone(), Some("auth"), worktree.clone()),
+            (trunk.clone(), Some("main"), trunk.clone()),
+            (trunk.clone(), Some("rimz"), trunk.clone()),
+            (
+                trunk.clone(),
+                Some("design"),
+                named_lane(LaneHome::Trunk, "/p/rimz", "design"),
+            ),
+            (
+                worktree.clone(),
+                Some("main"),
+                named_lane(LaneHome::Worktree, "/w/auth", "main"),
+            ),
+            (
+                worktree.clone(),
+                Some("docs"),
+                named_lane(LaneHome::Worktree, "/w/auth", "docs"),
+            ),
+            (
+                named_lane(LaneHome::Trunk, "/p/rimz", "design"),
+                Some("other"),
+                named_lane(LaneHome::Trunk, "/p/rimz", "design"),
+            ),
+        ];
+        for (own, stamp, expect) in cases {
+            assert_eq!(own.clone().adopt(stamp), expect, "{own:?} {stamp:?}");
+        }
+    }
+
+    #[test]
+    fn lane_names_refuse_hash_and_whitespace_and_flatness_is_narrower() {
+        for name in ["design", "rimz/forge", "my.proj/forge"] {
+            assert!(name.parse::<LaneName>().is_ok(), "{name}");
+        }
+        for name in ["", "#ops", "a#b", "two words"] {
+            assert!(name.parse::<LaneName>().is_err(), "{name}");
+        }
+        for name in ["design", "ops_2", "run-42"] {
+            assert!(LaneName::is_flat(name), "{name}");
+        }
+        for name in ["", "a.b", "a/b", "#ops", "two words"] {
+            assert!(!LaneName::is_flat(name), "{name}");
+        }
     }
 
     #[test]

@@ -206,11 +206,15 @@ impl FoldCarryover {
 }
 
 fn stamp_root_lane(agent: &mut Arc<AgentState>, project_root: Option<&Path>) {
-    let root_lane = AgentState::is_root_lane(
-        agent.channel.as_deref(),
-        agent.lane_path().map(Path::new),
-        project_root,
-    );
+    let root_lane = if let Some(lane) = &agent.lane {
+        lane.is_trunk()
+    } else {
+        AgentState::is_root_lane(
+            agent.channel.as_deref(),
+            agent.lane_path().map(Path::new),
+            project_root,
+        )
+    };
     if agent.root_lane != root_lane {
         agent_mut(agent).root_lane = root_lane;
     }
@@ -348,7 +352,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`AgentState::normalize_prompt_labels`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 63;
+const ROLLUP_CACHE_VERSION: u32 = 64;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

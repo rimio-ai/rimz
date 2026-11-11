@@ -871,7 +871,10 @@ fn carried_base(
     state
 }
 
-fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+/// A registration's lane is the checkout its process reports, so it never
+/// lands on a lane-less row displaced into an empty directory: that row keeps
+/// its old reading until a launch event brings its lane.
+fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams, registration: bool) {
     if let Some(automation) = &launch.automation {
         state.automation = Some(automation.clone());
     }
@@ -936,9 +939,18 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     if let Some(launch_ordinal) = launch.launch_ordinal {
         state.launch_ordinal = Some(launch_ordinal);
     }
-    if let Some(channel) = &launch.channel {
+    if state.lane.is_none()
+        && !(registration && state.checkout.is_some())
+        && let Some(lane) = &launch.lane
+    {
+        state.lane = Some(lane.clone().adopt(state.channel.as_deref()));
+    }
+    if state.lane.is_none()
+        && let Some(channel) = &launch.channel
+    {
         state.channel = Some(channel.clone());
     }
+    state.project_lane();
     if let Some(model) = &launch.model {
         state.model = Some(canonical_model(model));
     }
@@ -969,7 +981,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.prior,
         input.event.timestamp,
     );
-    fold_launch_params(&mut state, &input.observation.launch);
+    fold_launch_params(&mut state, &input.observation.launch, true);
     state.resumed_at =
         (input.event_name == Some("rimz.agent-resumed")).then_some(input.event.timestamp);
     let ended_at =
@@ -1141,7 +1153,7 @@ fn inherit_compaction_registration(
 /// are equal along the chain. Per-conversation state (`tune`) copies from the
 /// latest predecessor instead. Card naming stays session-scoped, and only an
 /// explicit compaction edge inherits registration primacy. A field that pins a
-/// row to its launch (team, loop task, workflow attempt, channel) is copied here;
+/// row to its launch (team, loop task, workflow attempt, lane, channel) is copied here;
 /// a field missing from this list is lost when `/clear` gives the pane a new
 /// conversation row.
 fn inherit_launch_identity(
@@ -1187,7 +1199,18 @@ fn inherit_launch_identity(
     successor.launch_group.clone_from(&predecessor.launch_group);
     successor.launch_ordinal = predecessor.launch_ordinal;
     successor.molted_from.clone_from(&predecessor.molted_from);
+    // A displaced lane-less predecessor keeps reading through its checkout, so
+    // its successor takes no lane from the directory it registered in.
+    successor.lane = match &predecessor.lane {
+        Some(lane) => Some(lane.clone()),
+        None if predecessor.checkout.is_some() => None,
+        None => successor
+            .lane
+            .take()
+            .map(|lane| lane.adopt(predecessor.channel.as_deref())),
+    };
     successor.channel.clone_from(&predecessor.channel);
+    successor.project_lane();
     successor.launch_depth = predecessor.launch_depth;
     successor.launched_by.clone_from(&predecessor.launched_by);
     successor
@@ -1226,7 +1249,7 @@ fn assemble_launch_state(
     if let Some(launch_id) = &payload.launch_id {
         state.set_launch_id(launch_id.clone());
     }
-    fold_launch_params(&mut state, &payload.launch);
+    fold_launch_params(&mut state, &payload.launch, false);
     if payload.state == AgentLaunchState::Bound
         && let Some(prior) = prior
     {

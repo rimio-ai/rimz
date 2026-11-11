@@ -611,7 +611,7 @@ pub fn protection_set_from_runtime(
                 handle: crate::address::agent_handle(agent, &peers, true),
                 pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
                 liveness,
-                stored_path: agent.lane_path().map(PathBuf::from),
+                stored_path: agent.working_path().map(PathBuf::from),
                 process_cwd: match liveness {
                     AgentLiveness::Live { pid } => crate::proc::cwd(pid),
                     AgentLiveness::Dead | AgentLiveness::Unknown => None,

@@ -308,6 +308,14 @@ pub struct LaunchParams {
     /// In-place teams already arrive as a stamped `<dir>/<team>` lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// The lane a fresh launch decided, copied by every relaunch. A row keeps
+    /// the first lane an event brings it; one that does not decode reads as absent.
+    #[serde(
+        default,
+        deserialize_with = "crate::ids::deserialize_lane_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lane: Option<crate::ids::Lane>,
     /// Display ordinal within this kind for the current room incarnation.
     /// The reducer derives it when the event omits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
