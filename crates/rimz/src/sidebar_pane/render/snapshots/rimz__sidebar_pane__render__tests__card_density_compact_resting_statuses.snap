@@ -10,22 +10,22 @@ expression: screen
  ? 1   ! 1   ⏸︎ 1   ✓ 1                ⢿ 1   ☾ 0   ○ 2
 
  ⑂ main
- ? waiter · opus · high · 200k 3
+ ? waiter · opus · high · 200k
    waiting task
    ▣ ━━━━━━━━━━━━╺━━───────────────────── 42.0%
- ! failed · opus · high · 200k 6
+ ! failed · opus · high · 200k
    failed task
- ○ idlebot · opus · high 1
- ⣾ runner · opus · high · 200k 2
+ ○ idlebot · opus · high
+ ⣾ runner · opus · high · 200k
    running task
    ▣ ━━━━━━━━━━━╺━━────────────────────── 38.0%
- ⏸︎ paused · opus · high · 200k 4
+ ⏸︎ paused · opus · high · 200k
    paused task
- ✓ done · opus · high · 200k 5
+ ✓ done · opus · high · 200k
    done task
 
 ▎⑂ other ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌○ selector · opus · high 7                          ▐
+▌○ selector · opus · high                            ▐
 
 
  ────────────────────────────────────────────────────

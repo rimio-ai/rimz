@@ -36,11 +36,9 @@ pub(super) fn process_row_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Line<'stat
     if ctx.tier == Tier::L2 && !state.is_idle() {
         let right = proc_stats_spans(theme, row);
         if !right.is_empty() {
-            ctx.append_card_slot(row, &mut left, &right);
             return pin_right(left, right, width);
         }
     }
-    ctx.append_card_slot(row, &mut left, &[]);
     Line::from(trim_spans_to_width(left, width))
 }
 
@@ -95,7 +93,7 @@ pub(super) fn not_tracked_lines(
     let lead = process_lead(theme, row, ctx.animation_phase, ctx.head_step);
     let suffix = format!(" {} not tracked", theme.glyph(GlyphRole::Seam));
     let label_width = width.saturating_sub(lead.width() + 1 + text_width(&suffix));
-    let mut title = Line::from(vec![
+    let title = Line::from(vec![
         lead,
         Span::raw(" "),
         Span::styled(ellipsize(&row.name, label_width), theme.body()),
@@ -104,7 +102,6 @@ pub(super) fn not_tracked_lines(
             theme.styled(Component::NotTrackedSuffix, theme.muted().add_modifier),
         ),
     ]);
-    ctx.append_card_slot(row, &mut title.spans, &[]);
     let mut tip = vec![Span::raw("  ")];
     let label = if ctx.tier == Tier::L0 { "" } else { "tip: " };
     if !label.is_empty() {

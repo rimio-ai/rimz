@@ -9,7 +9,7 @@ expression: screen
  ──────────────────────────────
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌⣾ cargo 1                     ▐
+▌⣾ cargo                       ▐
 ▌  cargo test                  ▐
 
 

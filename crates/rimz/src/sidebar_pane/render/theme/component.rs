@@ -32,8 +32,6 @@ pub(crate) enum Component {
     Sessions,
     /// The active needs-you lens's row count below the make-up buckets.
     NeedsYouFilter,
-    /// The room-birth digit on a top-level card's head line.
-    CardSlot,
     /// The selected worktree's lane bracket spine — the dim selection tone, so
     /// the bracket, band, and bright card spine read as one selection language.
     LaneSpine,
@@ -190,7 +188,6 @@ impl Component {
     pub(crate) const ALL: &'static [Component] = &[
         Component::Sessions,
         Component::NeedsYouFilter,
-        Component::CardSlot,
         Component::LaneSpine,
         Component::EntrySpine,
         Component::WorktreeHeader,
@@ -287,9 +284,7 @@ impl Component {
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
             | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow
-            | NotTrackedSuffix | NotTrackedTip | MessageQueued | NeedsYouFilter | CardSlot => {
-                palette.muted
-            }
+            | NotTrackedSuffix | NotTrackedTip | MessageQueued | NeedsYouFilter => palette.muted,
         })
     }
 }

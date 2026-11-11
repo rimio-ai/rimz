@@ -41,7 +41,7 @@ rimz sidebar walk next --session-name my-room --mux tmux
 rimz sidebar slot 3
 ```
 
-Slots number every top-level pane-backed row in the room by pane birth, across groups, filters, and folds. The first nine show a dim digit when space permits, and the sidebar's `1` to `9` keys use the same numbers. `slot N` focuses that row's pane even when a filter or fold hides it; the row stays hidden under that lens. Closing a pane renumbers the later slots. Only `1` through `9` are accepted. A slot beyond the current row count is a no-op.
+Slots number every top-level pane-backed row in the room by pane birth, across groups, filters, and folds. The rows do not show their numbers; the sidebar's `1` to `9` keys use the same ones. `slot N` focuses that row's pane even when a filter or fold hides it; the row stays hidden under that lens. Closing a pane renumbers the later slots. Only `1` through `9` are accepted. A slot beyond the current row count is a no-op.
 
 ## Return to the previous card
 

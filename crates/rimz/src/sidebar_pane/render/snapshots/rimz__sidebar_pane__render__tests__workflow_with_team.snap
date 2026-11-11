@@ -11,17 +11,17 @@ expression: screen
 
  ⑂ pipeline
    land ◉ sweep 0s ◇ ○ ◇ ○ ◇                                 0s
- ? sweeper 1
+ ? sweeper
    —
    ▢ ──────────────────────────────────────────────  0.0%
    forge ● ● ◉ Implement 47m ○ ○                            47m
- ⣾ planner 1
+ ⣾ planner
    —
    ▢ ──────────────────────────────────────────────  0.0%
- ⣾ coder 4
+ ⣾ coder
    —
    ▢ ──────────────────────────────────────────────  0.0%
- ○ zsh 1
+ ○ zsh
 
 
 

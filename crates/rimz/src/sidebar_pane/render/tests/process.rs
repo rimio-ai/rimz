@@ -2,7 +2,7 @@ use super::*;
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
-fn process_and_not_tracked_heads_show_their_room_slot() {
+fn process_and_not_tracked_heads_draw_no_room_slot() {
     for not_tracked in [false, true] {
         let mut snapshot = not_tracked_snapshot("codex", "allow reporting");
         if !not_tracked {
@@ -19,7 +19,7 @@ fn process_and_not_tracked_heads_show_their_room_slot() {
             .find(|line| line.spans.iter().any(|span| span.content == "codex"))
             .unwrap();
         assert!(
-            head.spans.iter().any(|span| span.content == " 1"),
+            head.spans.iter().all(|span| span.content != " 1"),
             "{head:?}"
         );
     }

@@ -20,7 +20,6 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
-use crate::ids::PaneId;
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 use crate::store::snapshot::SidebarRow;
 
@@ -128,7 +127,6 @@ impl CardExpansion {
 }
 
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
-    pub(in crate::sidebar_pane::render) card_slots: Vec<&'a PaneId>,
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) now: Timestamp,
     pub(in crate::sidebar_pane::render) typing_until: &'a HashMap<crate::ids::PaneId, Timestamp>,
@@ -152,35 +150,6 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) max_recent_subagents: usize,
     pub(in crate::sidebar_pane::render) delegation_overrides: &'a BTreeMap<String, bool>,
     pub(in crate::sidebar_pane::render) delegation_history: &'a BTreeMap<String, Option<Timestamp>>,
-}
-
-impl RowCtx<'_> {
-    fn append_card_slot(
-        &self,
-        row: &SidebarRow,
-        left: &mut Vec<Span<'static>>,
-        right: &[Span<'static>],
-    ) {
-        let Some(pane) = row.pane.as_ref() else {
-            return;
-        };
-        let Some(slot) = self
-            .card_slots
-            .iter()
-            .take(9)
-            .position(|id| **id == pane.pane_id)
-        else {
-            return;
-        };
-        if spans_width(left) + spans_width(right) + usize::from(!right.is_empty()) + 2
-            <= content_width(self.width)
-        {
-            left.push(Span::styled(
-                format!(" {}", slot + 1),
-                self.theme.styled(Component::CardSlot, Modifier::DIM),
-            ));
-        }
-    }
 }
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the
