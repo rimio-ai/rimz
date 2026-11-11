@@ -2337,7 +2337,8 @@ path = "crates/rimz/src/harness"
 # `when::condition` and `schedule::probe` split the shared condition evaluator from the scheduler's forge probe demand (+1).
 # run_log::{collect_run, collect_task_runs} collect a finished run from the commands that end it and the fire; the engine's workflow::forget_reported_launch is gone (+1).
 # The `task_login` module resolves a loop task's account outside the sidebar graph that `loop_task` joins (+1).
-surface-budget = 1136
+# The neutral homes (`check_run`, `signal`, `throttle`, `when` and the rest) kept their items' surface once the trunk's fleet-report items took the slack they fitted in before (+3).
+surface-budget = 1139
 
 [[verdict]]
 kind = "item"
