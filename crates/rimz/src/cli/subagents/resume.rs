@@ -31,6 +31,8 @@ pub(in crate::cli) enum ResumeChildOutcome {
     Dispatched(DispatchResult),
     DispatchFailed(DispatchErr),
     DeliveryFailed(anyhow::Error),
+    /// The child failed on a provider limit that has not refilled yet: nothing was queued.
+    LimitRefusal(String),
 }
 
 pub(in crate::cli) fn resume_child(
@@ -55,6 +57,43 @@ pub(in crate::cli) fn resume_child(
         }
         outcome => outcome,
     })
+}
+
+/// Refuses a message to a child whose current answer failed on a provider limit while the
+/// account a resume would run on still reads a refill ahead.
+fn limit_refusal(
+    store: &rimz::store::Store,
+    child: &AgentState,
+    run: &RunRecord,
+    logins: &rimz::agents::RoomAccounts,
+    catalog: &rimz::agents::LoginCatalog,
+) -> Option<String> {
+    run.limit_failure.as_ref()?;
+    let key = match rimz::harness::resume::resume_login(child, Some(logins), catalog) {
+        rimz::harness::resume::ResumeLogin::Same => child.login_key(),
+        rimz::harness::resume::ResumeLogin::Changed(key) => key,
+        rimz::harness::resume::ResumeLogin::Unreadable => return None,
+    };
+    let now = jiff::Timestamp::now();
+    let refill = rimz::harness::park_notice::refill_ahead(
+        store.runtime_paths(),
+        &key,
+        child.model.as_deref(),
+        now,
+    )?;
+    let name = child
+        .name
+        .as_deref()
+        .or(run.agent_name.as_deref())
+        .unwrap_or_else(|| child.agent_id.as_str());
+    let minutes = u64::try_from(refill.duration_since(now).as_secs())
+        .unwrap_or(0)
+        .div_ceil(60);
+    Some(format!(
+        "not sent: @{name}'s provider limit refills in {}. Run `rimz wait --in {minutes}m`, \
+         then send it again.",
+        render::refill_in(refill, now, &jiff::tz::TimeZone::system()),
+    ))
 }
 
 fn resume_resolved(
@@ -224,6 +263,9 @@ fn resume_resolved(
             .any(|agent| agent.ended_at.is_none() && child.card_ref().matches(agent.card_ref()))
     {
         return Ok(ResumeChildOutcome::AlreadyBound);
+    }
+    if let Some(refusal) = limit_refusal(store, child, run, &logins, &catalog) {
+        return Ok(ResumeChildOutcome::LimitRefusal(refusal));
     }
     dispatch_request.resuming_recipient = Some(child.clone());
     let result = match dispatch::dispatch(&parent_workspace, store, dispatch_request) {

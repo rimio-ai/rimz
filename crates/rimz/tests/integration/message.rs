@@ -4947,6 +4947,164 @@ fn assert_ended_child_resume_refusal(unhooked: bool) {
     }
 }
 
+#[test]
+fn parent_message_to_a_limit_failed_child_without_a_conversation_says_so_before_the_refill() {
+    use rimz::store::run::{LimitFailure, LimitFailureCause, RunRecord, RunStatus};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "parent",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("parent".to_owned());
+        },
+    );
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionEnd",
+        "child",
+        LifecycleSignal::Ended,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+            observation.launch.isolation = Some(rimz::config::Isolation::Host);
+            observation.transcript_path =
+                Some(env.project_root.join("missing.jsonl").display().to_string());
+        },
+    );
+    let store = env.store();
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("child".into());
+    run.agent_name = Some("otter".to_owned());
+    run.status = RunStatus::Failed;
+    run.subagent = true;
+    run.limit_failure = Some(LimitFailure {
+        cause: LimitFailureCause::RefillKnown,
+        refill_at: None,
+        label: Some("Usage limit reached".to_owned()),
+    });
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    publish_claude_refill(&env, jiff::Timestamp::now() + Duration::from_secs(108 * 60));
+    let output = traced_rimz(&env, env.project_root.join("limit-refusal-mux.log"))
+        .args(["--mux", "zellij", "message", "@otter", "follow up"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "parent")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("not sent:"), "{stderr}");
+    assert!(
+        stderr.contains("cannot resume @otter") && stderr.contains("no recorded conversation"),
+        "{stderr}"
+    );
+}
+
+/// Publishes a spent five-hour window on the default Claude account that refills at `reset`.
+fn publish_claude_refill(env: &Env, reset: jiff::Timestamp) {
+    env.runtime_paths().ensure_dirs().unwrap();
+    env.publish_rate_limits(&rimz::agents::account::RateLimitsCache {
+        entries: [(
+            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
+            rimz::agents::account::RateLimitCacheEntry {
+                limits: rimz::agents::AgentRateLimits {
+                    windows: vec![rimz::agents::RateLimitWindow {
+                        used_percentage: Some(100),
+                        duration_mins: Some(300),
+                        resets_at: Some(reset),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+}
+
+/// Sends `message` to a limit-failed child whose refill is ahead, twice, and checks each
+/// attempt is refused alone: exit 1, the one `not sent:` line, nothing queued, no pane opened,
+/// and one unresolved-message record carrying that line.
+fn assert_limit_refusals(env: &Env, message: &mut std::process::Command, trace: &Path) {
+    let store = env.store();
+    let bounces_before = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "message.errored")
+        .count();
+    for attempt in 1..=2 {
+        let output = message.output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "attempt {attempt}: {stderr}");
+        let line = stderr
+            .trim_end()
+            .strip_prefix("error: ")
+            .unwrap_or_else(|| panic!("one error line: {stderr}"));
+        let rest = line
+            .strip_prefix("not sent: @otter's provider limit refills in ")
+            .unwrap_or_else(|| panic!("the refusal names the refill: {stderr}"));
+        let (wait, command) = rest
+            .split_once(". Run `rimz wait --in ")
+            .unwrap_or_else(|| panic!("the refusal names the wait command: {stderr}"));
+        assert!(
+            wait.starts_with("1h48m (at ") || wait.starts_with("1h47m (at "),
+            "{stderr}"
+        );
+        assert!(wait.ends_with(')') && !line.contains('\n'), "{stderr}");
+        let minutes = command
+            .strip_suffix("`, then send it again.")
+            .unwrap_or_else(|| panic!("the refusal ends with its instruction: {stderr}"));
+        assert!(matches!(minutes, "108m" | "107m"), "{stderr}");
+        use rimz::utils::time::DurationUnit;
+        // The units of `rimz wait --in` (`cli::supervised::parse_timeout`).
+        let parsed = rimz::utils::time::parse_duration_units(
+            minutes,
+            &[
+                DurationUnit::Second,
+                DurationUnit::Minute,
+                DurationUnit::Hour,
+                DurationUnit::Day,
+            ],
+        )
+        .expect("the printed duration parses as `rimz wait --in` reads it");
+        assert!(parsed >= Duration::from_secs(107 * 60), "{parsed:?}");
+        assert!(store.list_pending_messages().unwrap().is_empty());
+        let bounces = env
+            .read_events()
+            .into_iter()
+            .filter(|event| event.method == "message.errored")
+            .collect::<Vec<_>>();
+        assert_eq!(bounces.len(), bounces_before + attempt, "{bounces:?}");
+        assert_eq!(
+            bounces[bounces_before + attempt - 1].params_value()["reason"],
+            line,
+            "{bounces:?}"
+        );
+    }
+    let calls = trace_lines(trace);
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("\tnew-pane\t") && !call.contains("\tnew-tab\t")),
+        "a refused message must not open a pane: {calls:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn parent_message_to_resumed_child_waits_for_installed_registration() {
@@ -5007,6 +5165,7 @@ enum ResumeFollowUpCase {
     WaitReply,
     WaitExpired,
     AfterSelf,
+    LimitRefused,
 }
 
 #[test]
@@ -5047,6 +5206,11 @@ fn parent_message_wait_reports_registration_expiry() {
 #[test]
 fn parent_message_reports_condition_error_without_a_recipient_miss() {
     assert_parent_follow_up_case(None, None, ResumeFollowUpCase::AfterSelf);
+}
+
+#[test]
+fn parent_message_to_a_limit_failed_child_is_refused_until_the_refill() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::LimitRefused);
 }
 
 fn assert_parent_follow_up_case(
@@ -5269,6 +5433,14 @@ fn assert_parent_follow_up_case(
     run.status = rimz::store::run::RunStatus::Completed;
     run.joined_at = Some(jiff::Timestamp::now());
     run.last_message = Some("previous answer".into());
+    if case == ResumeFollowUpCase::LimitRefused {
+        run.status = rimz::store::run::RunStatus::Failed;
+        run.limit_failure = Some(rimz::store::run::LimitFailure {
+            cause: rimz::store::run::LimitFailureCause::RefillKnown,
+            refill_at: None,
+            label: Some("Usage limit reached".to_owned()),
+        });
+    }
     rimz::harness::run::create(store.paths(), &run).unwrap();
     let previous_answer = rimz::harness::run::publish_response(store.paths(), &run)
         .unwrap()
@@ -5314,6 +5486,15 @@ fn assert_parent_follow_up_case(
     }
     if case == ResumeFollowUpCase::AfterSelf {
         send_command.args(["--after", &target]);
+    }
+    if case == ResumeFollowUpCase::LimitRefused {
+        publish_claude_refill(
+            &env,
+            jiff::Timestamp::now() + Duration::from_secs(108 * 60 - 30),
+        );
+        assert_limit_refusals(&env, &mut send_command, &trace);
+        // With the refill behind it, the same message resumes the child as any other.
+        publish_claude_refill(&env, jiff::Timestamp::now() - Duration::from_secs(60));
     }
     let sender = send_command.spawn().unwrap();
     if case == ResumeFollowUpCase::AfterSelf {
