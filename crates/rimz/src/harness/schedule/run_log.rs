@@ -49,10 +49,36 @@ pub enum RunTransition {
     AutoDisabled { strikes: u32 },
 }
 
+/// Why a run report did not land: the run keeps owing it, and the scheduler retries.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub(in crate::harness) struct ReportError(#[from] ReportFailure);
+
+#[derive(Debug, thiserror::Error)]
+enum ReportFailure {
+    #[error("loop history append failed: {0}")]
+    Append(#[from] std::io::Error),
+    #[error("loop strike state update failed: {0}")]
+    Strike(#[from] strikes::StrikesError),
+}
+
 /// Attempt the history append before updating strike and arming overlays.
-/// Both the append and overlay updates are best-effort.
+/// Both the append and overlay updates are best-effort: a fire's own row has no retry to hand
+/// a failure to. A workflow run's report takes `report_run`'s fallible path instead.
 pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
     append_for_root(&task.entry().resolved_root(), record);
+    note_strike(task, record).unwrap_or_else(|err| {
+        tracing::warn!(task = record.task, error = %err, "loop strike state update failed");
+        RunTransition::Recorded
+    })
+}
+
+/// Note the record's strike signal, then disable a task that struck out; the disable is
+/// best-effort, since the task's next strike attempts it again.
+fn note_strike(
+    task: &LoadedTask,
+    record: &LoopRunRecord,
+) -> Result<RunTransition, strikes::StrikesError> {
     let name = &record.task;
     let key = task.key(name);
     let mut signal = strikes::classify(record);
@@ -65,27 +91,23 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
         }),
         None => strikes::note(&key, signal),
     };
-    let count = match noted {
-        Ok(count) => count,
-        Err(err) => {
-            tracing::warn!(task = name, error = %err, "loop strike state update failed");
-            return RunTransition::Recorded;
-        }
-    };
+    let count = noted?;
     let Some(max) = strikes::threshold(task.entry()) else {
-        return RunTransition::Recorded;
+        return Ok(RunTransition::Recorded);
     };
     if signal != strikes::Signal::Strike || count < max {
-        return RunTransition::Recorded;
+        return Ok(RunTransition::Recorded);
     }
-    match arming::disable_if_live(&key, task.source(), Some(count), Timestamp::now()) {
-        Ok(true) => RunTransition::AutoDisabled { strikes: count },
-        Ok(false) => RunTransition::Recorded,
-        Err(err) => {
-            tracing::warn!(task = name, error = %err, "loop auto-disable state update failed");
-            RunTransition::Recorded
-        }
-    }
+    let transition =
+        match arming::disable_if_live(&key, task.source(), Some(count), Timestamp::now()) {
+            Ok(true) => RunTransition::AutoDisabled { strikes: count },
+            Ok(false) => RunTransition::Recorded,
+            Err(err) => {
+                tracing::warn!(task = name, error = %err, "loop auto-disable state update failed");
+                RunTransition::Recorded
+            }
+        };
+    Ok(transition)
 }
 
 /// Append a `rimz loop stop` cancellation, which may outlive its task's row. A
@@ -98,9 +120,18 @@ pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord, kind: Option<s
 }
 
 fn append_for_root(root: &Path, record: &LoopRunRecord) {
+    append_to(&logs_dir(), &scoped_to(root, record));
+}
+
+fn try_append_for_root(root: &Path, record: &LoopRunRecord) -> std::io::Result<()> {
+    let capped = capped_record(&scoped_to(root, record));
+    crate::disk::rotating::append_rotating_jsonl(&log_path(&logs_dir()), MAX_BYTES, &capped)
+}
+
+fn scoped_to(root: &Path, record: &LoopRunRecord) -> LoopRunRecord {
     let mut scoped_record = record.clone();
     scoped_record.root = Some(root.to_path_buf());
-    append_to(&logs_dir(), &scoped_record);
+    scoped_record
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -305,19 +336,23 @@ pub fn on_loop_disabled(notify: fn(&str, &Path, u32)) {
 }
 
 /// Report a finished task-started workflow run to its loop task: one history row carrying the
-/// run id, its outcome and its summed attempt cost, and the strike it notes. The strike store
-/// counts a run id once, so a report repeated after a crash moves no count. `acted` says the
-/// run entered an agent or message step: a scheduled `--until` row is consumed then, and a
-/// waiting trigger is drained once the run is over. A run in its fire's own tree settles that
-/// tree here, so whichever report lands first, the engine's or the backstop's, settles it.
+/// run id, its outcome and its summed attempt cost, and the strike it notes. The report has
+/// landed only once both the row and, while the task's row exists, the strike are durable; an
+/// error says it has not, and a failed append returns before the strike so a retry notes the
+/// two together. The strike store counts a run id once, so a report repeated after a crash or
+/// a failed attempt moves no count, and history readers fold a repeated row by its run id.
+/// `acted` says the run entered an agent or message step: a scheduled `--until` row is consumed
+/// then, and a waiting trigger is drained once the run is over, both only after the report
+/// landed. A run in its fire's own tree settles that tree here, so whichever report lands
+/// first, the engine's or the backstop's, settles it.
 pub(in crate::harness) fn report_run(
     run: &crate::store::workflow::RunRecord,
     journal: &[crate::store::workflow::JournalEntry],
     acted: bool,
-) -> RunTransition {
+) -> Result<RunTransition, ReportError> {
     use crate::store::workflow::{JournalEvent, RunState};
     let Some(task) = run.task.as_deref() else {
-        return RunTransition::Recorded;
+        return Ok(RunTransition::Recorded);
     };
     let gave_up = capacity_give_up(run, journal);
     let result = match run.state {
@@ -332,7 +367,7 @@ pub(in crate::harness) fn report_run(
         RunState::Done => LoopRunResult::Completed,
         RunState::Failed => LoopRunResult::Failed,
         RunState::Canceled => LoopRunResult::Canceled,
-        RunState::Active | RunState::Parked => return RunTransition::Recorded,
+        RunState::Active | RunState::Parked => return Ok(RunTransition::Recorded),
     };
     let ended = run.terminal_at.unwrap_or_else(Timestamp::now);
     let mode = if run.manual {
@@ -393,11 +428,12 @@ pub(in crate::harness) fn report_run(
             .rev()
             .find(|row| row.run_id == record.run_id)
             .and_then(|row| row.kind);
-        append_for_root(&run.project_root, &record);
-        return RunTransition::Recorded;
+        try_append_for_root(&run.project_root, &record).map_err(ReportFailure::from)?;
+        return Ok(RunTransition::Recorded);
     };
     record.kind = Some(loaded.kind());
-    let transition = record_transition(loaded, &record);
+    try_append_for_root(&loaded.entry().resolved_root(), &record).map_err(ReportFailure::from)?;
+    let transition = note_strike(loaded, &record).map_err(ReportFailure::from)?;
     if let RunTransition::AutoDisabled { strikes } = transition
         && let Some(notify) = LOOP_DISABLED.get()
     {
@@ -412,7 +448,7 @@ pub(in crate::harness) fn report_run(
         tracing::warn!(task, %error, "acted --until row not consumed");
     }
     drain_waiting(task, &loaded.entry().resolved_root());
-    transition
+    Ok(transition)
 }
 
 /// A run that ended without acting, or failed, leaves its checkout free to launch again: the

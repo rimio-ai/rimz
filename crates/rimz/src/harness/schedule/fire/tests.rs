@@ -104,6 +104,65 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
     }
 }
 
+#[test]
+fn an_owed_reports_retry_gap_doubles_from_one_tick_up_to_an_hour() {
+    let root = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&state).unwrap();
+    let cache = runtime.lane_path("workflow-tick.json");
+    let start = 1_000_000;
+    for (ended, ticks) in [
+        // Ten minutes finished at its last attempt: the next waits ten minutes, not a tick.
+        (
+            start - 600,
+            [
+                (start, start),
+                (start + 60, start),
+                (start + 600, start + 600),
+            ],
+        ),
+        // Days finished: the gap stops at an hour.
+        (
+            start - 3 * 86_400,
+            [
+                (start, start),
+                (start + 3599, start),
+                (start + 3600, start + 3600),
+            ],
+        ),
+    ] {
+        let _ = std::fs::remove_file(&cache);
+        let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+            "version":1,"id":"wf_0190b8172c0070008000000000000002","workflow":"review",
+            "spec_dir":"/definitions/review","spec_digest":"abc",
+            "scope":{"kind":"worktree","path":root.path()},"project_root":root.path(),
+            "created_at":"2026-01-01T00:00:00Z","state":"failed","node":"pr",
+            "entered_at":"2026-01-01T00:00:00Z","visits":{},"visit_grant":0,
+            "deadline_fired":false,"next_seq":1,"task":"nightly","loop_report":"owed",
+            "terminal_at":Timestamp::from_second(ended).unwrap()
+        }))
+        .unwrap();
+        assert!(record.owes_loop_report());
+        let paths = state.workflow(&record.id);
+        std::fs::create_dir_all(&paths.home).unwrap();
+        std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+        let mut actual = Vec::new();
+        for (now, _) in ticks {
+            tick_workflows(
+                &runtime,
+                root.path(),
+                Timestamp::from_second(now).unwrap(),
+                LoopRunHost::Detached,
+            );
+            let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
+                crate::disk::atomic::read_json_cache(&cache);
+            actual.push((now, stamps.get(&record.id).map(|at| at.as_second())));
+        }
+        let expected = ticks.map(|(now, stamp)| (now, Some(stamp)));
+        assert_eq!(actual, expected, "finished at {ended}");
+    }
+}
+
 fn worktree_tasks(
     hold: Option<&str>,
 ) -> (

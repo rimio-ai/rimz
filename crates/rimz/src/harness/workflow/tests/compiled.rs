@@ -522,6 +522,204 @@ fn a_watchdog_reports_each_outcome_to_its_task_once() {
     );
 }
 
+/// Rerun `test` in a child with a private RimZ home, since it breaks a machine-wide loop file
+/// every test process in the run shares; the parent returns `true` once the child passed.
+fn isolated_rimz_home(test: &str) -> bool {
+    if std::env::var_os("RIMZ_TEST_WORKFLOW_REPORT_HOME").is_some() {
+        return false;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("harness::workflow::tests::compiled::{test}"),
+            "--nocapture",
+        ])
+        .env("RIMZ_UNIT_TEST_RIMZ_HOME", home.path())
+        .env("RIMZ_TEST_WORKFLOW_REPORT_HOME", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
+/// A project whose config holds `row` as task `nightly`, with readers of that task's strike
+/// count and its history rows, the raw log's rows for `run` included.
+struct ReportedTask {
+    home: tempfile::TempDir,
+    key: String,
+}
+
+impl ReportedTask {
+    fn new(row: &str) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".rimz")).unwrap();
+        fs::write(
+            home.path().join(".rimz/config.toml"),
+            format!("[tasks.nightly]\n{row}"),
+        )
+        .unwrap();
+        let catalog =
+            crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(home.path()));
+        let key = catalog.for_run("nightly").unwrap().key("nightly");
+        Self { home, key }
+    }
+
+    fn strikes(&self) -> Option<u32> {
+        crate::harness::schedule::strikes::load()
+            .get(&self.key)
+            .copied()
+    }
+
+    fn rows(&self) -> Vec<crate::harness::schedule::run_log::LoopRunRecord> {
+        crate::harness::schedule::run_log::task_records(
+            &crate::disk::paths::logs_dir(),
+            "nightly",
+            Some(self.home.path()),
+        )
+    }
+
+    fn raw_rows(&self, run: &RunRecord) -> usize {
+        let log = crate::disk::paths::logs_dir().join("loop-runs.log.jsonl");
+        let id = format!("\"run_id\":\"{}\"", run.id);
+        fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains(&id))
+            .count()
+    }
+}
+
+/// Drive a plain agent run to a failed turn.
+fn fail_run(state: &StatePaths, record: &RunRecord, host: &FakeHost) -> RunRecord {
+    step(state, record, host);
+    host.observed.borrow_mut().status = RunStatus::Failed;
+    step(state, record, host)
+}
+
+#[test]
+fn a_report_whose_history_append_fails_stays_owed_until_a_retry_lands_it() {
+    if isolated_rimz_home("a_report_whose_history_append_fails_stays_owed_until_a_retry_lands_it") {
+        return;
+    }
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let log = crate::disk::paths::logs_dir().join("loop-runs.log.jsonl");
+    fs::create_dir_all(&log).unwrap();
+    let (state, record) = fire_at(task.home.path(), row);
+    let host = FakeHost::new();
+    let failed = fail_run(&state, &record, &host);
+    assert_eq!(
+        (failed.state, failed.loop_report, task.strikes()),
+        (RunState::Failed, records::LoopReport::Owed, None)
+    );
+
+    fs::remove_dir(&log).unwrap();
+    let sent = step(&state, &record, &host);
+    assert_eq!(
+        (sent.loop_report, task.strikes(), task.raw_rows(&record)),
+        (records::LoopReport::Sent, Some(1), 1)
+    );
+    let rows = task.rows();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.result, row.run_id.clone()))
+            .collect::<Vec<_>>(),
+        [(LoopRunResult::Failed, Some(record.id.to_string()))]
+    );
+    let again = step(&state, &record, &host);
+    assert_eq!(
+        (again.loop_report, task.strikes(), task.raw_rows(&record)),
+        (records::LoopReport::Sent, Some(1), 1)
+    );
+}
+
+#[test]
+fn a_report_whose_journal_cannot_be_read_stays_owed_and_lands_the_journals_outcome_later() {
+    if isolated_rimz_home(
+        "a_report_whose_journal_cannot_be_read_stays_owed_and_lands_the_journals_outcome_later",
+    ) {
+        return;
+    }
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let (state, record) = fire_at(task.home.path(), row);
+    let host = FakeHost::new();
+    *host.failure.borrow_mut() = Some(LaunchFailure {
+        outcome: AttemptOutcome::Limited,
+        reason: "fleet budget $0.00/day is spent".into(),
+    });
+    assert_eq!(step(&state, &record, &host).state, RunState::Failed);
+    // Forget the report the terminal step made, leaving a terminal run that still owes one.
+    fs::remove_dir_all(crate::disk::paths::logs_dir()).unwrap();
+    fs::remove_dir_all(crate::disk::paths::loops_dir()).unwrap();
+    let paths = state.workflow(&record.id);
+    let mut owed = records::load(&paths).unwrap();
+    owed.loop_report = records::LoopReport::Owed;
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    records::write(&paths, &owed, &guard).unwrap();
+    drop(guard);
+    let aside = paths.journal.with_extension("aside");
+    fs::rename(&paths.journal, &aside).unwrap();
+    fs::create_dir(&paths.journal).unwrap();
+
+    let unread = step(&state, &record, &host);
+    assert_eq!(
+        (unread.loop_report, task.strikes(), task.raw_rows(&record)),
+        (records::LoopReport::Owed, None, 0)
+    );
+
+    fs::remove_dir(&paths.journal).unwrap();
+    fs::rename(&aside, &paths.journal).unwrap();
+    let sent = step(&state, &record, &host);
+    assert_eq!(
+        (sent.loop_report, task.strikes(), task.raw_rows(&record)),
+        (records::LoopReport::Sent, None, 1)
+    );
+    assert_eq!(
+        task.rows()
+            .iter()
+            .map(|row| (row.result, row.error.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            LoopRunResult::BudgetSkipped,
+            Some("fleet budget $0.00/day is spent".to_owned())
+        )]
+    );
+}
+
+#[test]
+fn a_report_whose_strike_cannot_be_noted_stays_owed_until_a_retry_strikes_once() {
+    if isolated_rimz_home(
+        "a_report_whose_strike_cannot_be_noted_stays_owed_until_a_retry_strikes_once",
+    ) {
+        return;
+    }
+    let row = "agent='claude'\nprompt='fix it'\nevery='1h'\n";
+    let task = ReportedTask::new(row);
+    let counted = crate::disk::paths::loops_dir().join("loop-strike-runs.json");
+    fs::create_dir_all(&counted).unwrap();
+    let (state, record) = fire_at(task.home.path(), row);
+    let host = FakeHost::new();
+    let failed = fail_run(&state, &record, &host);
+    assert_eq!(
+        (failed.state, failed.loop_report, task.raw_rows(&record)),
+        (RunState::Failed, records::LoopReport::Owed, 1)
+    );
+
+    fs::remove_dir(&counted).unwrap();
+    let sent = step(&state, &record, &host);
+    assert_eq!(
+        (sent.loop_report, task.strikes(), task.rows().len()),
+        (records::LoopReport::Sent, Some(1), 1)
+    );
+}
+
 #[test]
 fn a_limited_attempt_ends_the_run_and_reports_as_the_budget_ended_it() {
     for verify in ["", "verify='true'\n"] {
@@ -776,7 +974,7 @@ fn a_budget_refused_judge_after_a_shell_stage_fails_the_run_as_budget_skipped() 
         "a refused judge ends the run instead of waiting or routing to the act"
     );
     assert_eq!(route(&spec, "judge-1", "budget"), "@failed");
-    crate::harness::schedule::run_log::report_run(&t.record, &t.entries, false);
+    crate::harness::schedule::run_log::report_run(&t.record, &t.entries, false).unwrap();
     let last = crate::harness::schedule::run_log::task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",

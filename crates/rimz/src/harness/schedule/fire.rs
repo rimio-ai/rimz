@@ -40,6 +40,7 @@ pub(super) const RESIDENT_RETRY_SECS: i64 = 5 * 60;
 /// nothing before the pass dispatches the row again.
 const FIRE_AT_RETRY_SECS: i64 = 5 * 60;
 const WORKFLOW_TICK_SECS: i64 = 60;
+const REPORT_RETRY_MAX_SECS: i64 = 60 * 60;
 const BACKLOG_TICK_SECS: i64 = 60;
 
 fn tick_backlog_with(
@@ -188,7 +189,7 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
         }
     };
     // A finished run that still owes its loop task a report is due like an active one: its
-    // advance only reports.
+    // advance only reports, and `tick_pace` spaces out the retries of a report that failed.
     let active: BTreeMap<_, _> = records
         .into_iter()
         .filter(|record| {
@@ -215,7 +216,7 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
             continue;
         }
         if stamps.get(&id).is_some_and(|last| {
-            now.duration_since(*last).as_secs() < WORKFLOW_TICK_SECS
+            now.duration_since(*last).as_secs() < tick_pace(&record, *last)
                 && ![record.recheck_at, deadline]
                     .into_iter()
                     .flatten()
@@ -238,6 +239,19 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
             continue;
         }
         spawn_workflow_advance(runtime, project_root, &id, host);
+    }
+}
+
+/// How long a run's advance waits after its last spawn: one tick for an active run. A
+/// finished run that still owes its report waits as long as it had been finished at that
+/// spawn, so each failed report attempt doubles the gap, from one tick up to an hour.
+fn tick_pace(record: &crate::store::workflow::RunRecord, last: Timestamp) -> i64 {
+    match record.terminal_at.filter(|_| record.owes_loop_report()) {
+        Some(ended) => last
+            .duration_since(ended)
+            .as_secs()
+            .clamp(WORKFLOW_TICK_SECS, REPORT_RETRY_MAX_SECS),
+        None => WORKFLOW_TICK_SECS,
     }
 }
 
