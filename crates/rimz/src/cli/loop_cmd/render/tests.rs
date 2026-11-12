@@ -30,12 +30,9 @@ fn write_runs_table(
 #[test]
 fn agent_check_rows_name_the_profile() {
     let decoded = toml::from_str::<TaskEntry>(
-        "agent = 'codex'\non = 'success'\n[check]\nagent = 'haiku'\nprompt = 'q'",
+        "agent = 'codex'\non = 'success'\n[judge]\nagent = 'haiku'\nprompt = 'q'",
     );
-    assert!(
-        decoded.is_ok(),
-        "agent check table must be accepted: {decoded:?}"
-    );
+    assert!(decoded.is_ok(), "judge table must be accepted: {decoded:?}");
     let entry = decoded.unwrap();
     let action = TaskAction::Spawn("codex".into());
     assert_eq!(
@@ -51,7 +48,7 @@ fn agent_check_rows_name_the_profile() {
 #[test]
 fn guard_value_single_judge_explains_no_verdict_on_failure() {
     let entry: TaskEntry =
-        toml::from_str("on = 'fail'\n[check]\nagent = 'haiku'\nprompt = 'q'").unwrap();
+        toml::from_str("on = 'fail'\n[judge]\nagent = 'haiku'\nprompt = 'q'").unwrap();
     assert_eq!(
         guard_value(&entry),
         "asks haiku (cap 5m); acts when it fails or gives no answer after one retry"
@@ -105,16 +102,12 @@ fn guard_value_keeps_shell_only_and_any_wording() {
         );
     }
     let mut entry: TaskEntry =
-        toml::from_str("on = 'any'\n[check]\nagent = 'haiku'\nprompt = 'q'").unwrap();
+        toml::from_str("on = 'any'\n[judge]\nagent = 'haiku'\nprompt = 'q'").unwrap();
     assert_eq!(
         guard_value(&entry),
         "asks haiku (cap 5m); acts whatever the outcome"
     );
-    let Some(TaskCheck::Agent(judge)) = entry.check.take() else {
-        panic!("judge fixture");
-    };
     entry.check = Some("cargo test".into());
-    entry.judge.push(judge);
     assert_eq!(
         guard_value(&entry),
         "runs cargo test (cap 5m), then asks haiku (cap 5m); acts whatever the outcome"

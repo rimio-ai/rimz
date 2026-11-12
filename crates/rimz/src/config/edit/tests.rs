@@ -1843,18 +1843,18 @@ fn block_replacing_a_value_takes_default_header_spacing() {
     let loop_path = dir.path().join("loop.toml");
     std::fs::write(
         &loop_path,
-        "[tasks.x]\ncheck = \"true\"\n\n[tasks.y]\n# the check note\ncheck = \"true\"\n",
+        "[tasks.x]\njudge = []\n\n[tasks.y]\n# the judge note\njudge = []\n",
     )
     .unwrap();
     let judge = r#"{ agent = "claude", prompt = "done?" }"#;
-    editor.set("loop.tasks.x.check", judge).unwrap();
-    editor.set("loop.tasks.y.check", judge).unwrap();
+    editor.set("loop.tasks.x.judge", judge).unwrap();
+    editor.set("loop.tasks.y.judge", judge).unwrap();
 
     let rendered = std::fs::read_to_string(&loop_path).unwrap();
-    assert!(rendered.contains("\n[tasks.x.check]\n"), "{rendered}");
+    assert!(rendered.contains("\n[tasks.x.judge]\n"), "{rendered}");
     let task = rendered.find("\n[tasks.y]\n").expect("y task");
-    let note = rendered.find("# the check note\n").expect("check note");
-    let header = rendered.find("\n[tasks.y.check]\n").expect("y check");
+    let note = rendered.find("# the judge note\n").expect("judge note");
+    let header = rendered.find("\n[tasks.y.judge]\n").expect("y judge");
     assert!(task < note && note < header, "{rendered}");
 }
 

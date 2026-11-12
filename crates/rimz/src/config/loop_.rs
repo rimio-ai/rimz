@@ -149,13 +149,12 @@ pub enum OverlapPolicy {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// A shell check, or a judge table in a legacy task file.
+/// A task's shell check. A judge table here is an older RimZ's form, now refused.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum TaskCheck {
-    Shell(String),
-    Agent(Judge),
-}
+pub struct TaskCheck(pub String);
+
+const CHECK_TABLE_REFUSAL: &str = "a judge table under `check` is a task form an older RimZ \
+    wrote; delete this task from the file and re-add it with `rimz loop add`";
 
 impl<'de> Deserialize<'de> for TaskCheck {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -165,23 +164,22 @@ impl<'de> Deserialize<'de> for TaskCheck {
             type Value = TaskCheck;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a shell command or a judge table")
+                formatter.write_str("a shell command")
             }
 
             fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-                Ok(TaskCheck::Shell(value.to_owned()))
+                Ok(TaskCheck(value.to_owned()))
             }
 
             fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
-                Ok(TaskCheck::Shell(value))
+                Ok(TaskCheck(value))
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(
                 self,
-                map: M,
+                _map: M,
             ) -> Result<Self::Value, M::Error> {
-                Judge::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                    .map(TaskCheck::Agent)
+                Err(serde::de::Error::custom(CHECK_TABLE_REFUSAL))
             }
         }
 
@@ -191,22 +189,19 @@ impl<'de> Deserialize<'de> for TaskCheck {
 
 impl From<String> for TaskCheck {
     fn from(command: String) -> Self {
-        Self::Shell(command)
+        Self(command)
     }
 }
 
 impl From<&str> for TaskCheck {
     fn from(command: &str) -> Self {
-        Self::Shell(command.to_owned())
+        Self(command.to_owned())
     }
 }
 
 impl std::fmt::Display for TaskCheck {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Shell(command) => f.write_str(command),
-            Self::Agent(judge) => write!(f, "judge `{}`", judge.agent),
-        }
+        f.write_str(&self.0)
     }
 }
 
@@ -423,7 +418,7 @@ pub enum TaskWorktree<'a> {
     Fresh { prefix: &'a str },
 }
 
-/// The ordered guard chain, including a judge from a legacy `check` table.
+/// The ordered guard chain: the shell check, then each judge.
 pub struct Guard<'a> {
     pub shell: Option<&'a str>,
     pub shell_timeout: Option<&'a str>,
@@ -449,15 +444,10 @@ impl TaskEntry {
     }
 
     pub fn guard(&self) -> Guard<'_> {
-        let (shell, legacy) = match &self.check {
-            Some(TaskCheck::Shell(command)) => (Some(command.as_str()), None),
-            Some(TaskCheck::Agent(judge)) => (None, Some(judge)),
-            None => (None, None),
-        };
         Guard {
-            shell,
+            shell: self.check.as_ref().map(|check| check.0.as_str()),
             shell_timeout: self.check_timeout.as_deref().or(self.timeout.as_deref()),
-            judges: legacy.into_iter().chain(&self.judge).collect(),
+            judges: self.judge.iter().collect(),
         }
     }
 }

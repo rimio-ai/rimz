@@ -67,6 +67,41 @@ fn narrow_loop_matches_full_lenient_config() {
 }
 
 #[test]
+fn a_judge_table_under_check_refuses_with_the_loop_fix() {
+    let refused = |error: String| {
+        assert!(
+            error.contains("judge table under `check`")
+                && error.contains("older RimZ")
+                && error.contains("re-add it with `rimz loop add`"),
+            "{error}"
+        );
+    };
+    let row = "check = { agent = 'haiku', prompt = 'q' }";
+    refused(toml::from_str::<TaskEntry>(row).map_or_else(|e| e.to_string(), |_| String::new()));
+    let json: serde_json::Value = toml::from_str(row).unwrap();
+    refused(
+        serde_json::from_value::<TaskEntry>(json).map_or_else(|e| e.to_string(), |_| String::new()),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("loop.toml");
+    let shell = "[tasks.ok]\nroot = '/repo'\ncheck = 'true'\nevery = '1h'\n";
+    let text = format!(
+        "{shell}[tasks.old]\nroot = '/repo'\nevery = '1h'\n[tasks.old.check]\nagent = 'haiku'\nprompt = 'q'\n"
+    );
+    let error = super::super::parse_loop_text(&path, &text).unwrap_err();
+    assert!(error.to_string().contains("loop.toml"), "{error}");
+    refused(std::error::Error::source(&error).unwrap().to_string());
+    std::fs::write(&path, &text).unwrap();
+    assert!(LoopConfig::load_lenient_from(&path).tasks.0.is_empty());
+    let loaded = super::super::parse_loop_text(&path, shell).unwrap();
+    assert_eq!(
+        loaded.tasks.0["ok"].check,
+        Some(TaskCheck::from("true")),
+        "a string check beside no table loads as before"
+    );
+}
+
+#[test]
 fn shell_watch_previews_preserve_trailing_redirects() {
     let short = "cargo test > /tmp/gate.log 2>&1";
     assert_eq!(WatchSpec::Command(short.into()).subject(), short);
@@ -105,22 +140,17 @@ fn shell_watch_previews_preserve_trailing_redirects() {
 }
 
 #[test]
-fn guard_reads_judge_table_array_and_legacy_check_in_order() {
+fn guard_reads_shell_then_judge_table_or_array_in_order() {
     for source in [
         "check = 'cargo test'\ncheck-timeout = '10m'\njudge = { agent = 'haiku', prompt = 'q' }",
         "check = 'cargo test'\ncheck-timeout = '10m'\njudge = [{ agent = 'haiku', prompt = 'q' }, { agent = 'sonnet', prompt = 'review' }]",
-        "check = { agent = 'haiku', prompt = 'q' }\njudge = { agent = 'sonnet', prompt = 'review' }",
     ] {
         let entry: TaskEntry = toml::from_str(source).unwrap();
         let guard = entry.guard();
         assert!(!guard.judges.is_empty(), "{source}");
         assert_eq!(guard.judges[0].agent, "haiku", "{source}");
-        if source.starts_with("check = '") {
-            assert_eq!(guard.shell, Some("cargo test"));
-            assert_eq!(guard.shell_timeout, Some("10m"));
-        } else {
-            assert_eq!(guard.shell, None);
-        }
+        assert_eq!(guard.shell, Some("cargo test"));
+        assert_eq!(guard.shell_timeout, Some("10m"));
         if source.contains("sonnet") {
             assert_eq!(guard.judges[1].agent, "sonnet");
         }
@@ -144,20 +174,17 @@ fn shell_check_timeout_rejects_zero_and_invalid_durations() {
 }
 
 #[test]
-fn agent_checks_round_trip_toml_and_json() {
+fn judges_round_trip_toml_and_json() {
     for prompt in ["prompt = 'Is work needed?'", "prompt-file = 'check.md'"] {
         let source =
-            format!("[check]\nagent = 'haiku'\n{prompt}\nrecheck = '6h'\ntimeout = '5m'\n");
+            format!("[judge]\nagent = 'haiku'\n{prompt}\nrecheck = '6h'\ntimeout = '5m'\n");
         let decoded = toml::from_str::<TaskEntry>(&source);
-        assert!(
-            decoded.is_ok(),
-            "agent check table must be accepted: {decoded:?}"
-        );
+        assert!(decoded.is_ok(), "judge table must be accepted: {decoded:?}");
         let entry = decoded.unwrap();
         let json = serde_json::to_value(&entry).unwrap();
-        assert_eq!(json["check"]["agent"], "haiku");
-        assert_eq!(json["check"]["recheck"], "6h");
-        assert_eq!(json["check"]["timeout"], "5m");
+        assert_eq!(json["judge"][0]["agent"], "haiku");
+        assert_eq!(json["judge"][0]["recheck"], "6h");
+        assert_eq!(json["judge"][0]["timeout"], "5m");
         assert_eq!(serde_json::from_value::<TaskEntry>(json).unwrap(), entry);
         assert_eq!(
             toml::from_str::<TaskEntry>(&toml::to_string(&entry).unwrap()).unwrap(),
@@ -167,9 +194,9 @@ fn agent_checks_round_trip_toml_and_json() {
 }
 
 #[test]
-fn agent_checks_require_exactly_one_prompt() {
+fn judges_require_exactly_one_prompt() {
     for fields in ["", "prompt = 'question'\nprompt-file = 'check.md'"] {
-        let source = format!("[check]\nagent = 'haiku'\n{fields}\n");
+        let source = format!("[judge]\nagent = 'haiku'\n{fields}\n");
         assert!(toml::from_str::<TaskEntry>(&source).is_err(), "{source}");
         let mut json = serde_json::json!({"agent": "haiku"});
         if !fields.is_empty() {
@@ -177,15 +204,15 @@ fn agent_checks_require_exactly_one_prompt() {
             json["prompt-file"] = "check.md".into();
         }
         assert!(
-            serde_json::from_value::<TaskEntry>(serde_json::json!({"check": json, "root": ""}))
+            serde_json::from_value::<TaskEntry>(serde_json::json!({"judge": json, "root": ""}))
                 .is_err()
         );
     }
 }
 
 #[test]
-fn agent_checks_reject_unknown_fields() {
-    let source = "[check]\nagent = 'haiku'\nprompt = 'Is work needed?'\nrechek = '6h'\n";
+fn judges_reject_unknown_fields() {
+    let source = "[judge]\nagent = 'haiku'\nprompt = 'Is work needed?'\nrechek = '6h'\n";
     let error = toml::from_str::<TaskEntry>(source).unwrap_err();
     assert!(
         error.to_string().contains("unknown field `rechek`"),
@@ -194,22 +221,22 @@ fn agent_checks_reject_unknown_fields() {
     assert!(
         serde_json::from_value::<TaskEntry>(serde_json::json!({
             "root": "",
-            "check": {"agent": "haiku", "prompt": "Is work needed?", "rechek": "6h"}
+            "judge": {"agent": "haiku", "prompt": "Is work needed?", "rechek": "6h"}
         }))
         .is_err(),
-        "JSON check tables must also reject unknown keys"
+        "JSON judge tables must also reject unknown keys"
     );
 }
 
 #[test]
-fn malformed_agent_checks_preserve_the_cause() {
+fn malformed_judges_preserve_the_cause() {
     for (source, cause) in [
         (
-            "check = { agent = 'haiku' }",
+            "judge = { agent = 'haiku' }",
             "exactly one of prompt and prompt-file",
         ),
         (
-            "check = { agent = 'haiku', prompt = 'q', rechek = '6h' }",
+            "judge = { agent = 'haiku', prompt = 'q', rechek = '6h' }",
             "unknown field `rechek`",
         ),
     ] {
@@ -428,21 +455,6 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
     );
     let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
     assert_eq!(toml_round.tasks.0["ci"], entry);
-    let mut legacy_toml: toml::Value = toml::from_str(&toml).expect("toml value");
-    legacy_toml["tasks"]["ci"]["wait-meta"]
-        .as_table_mut()
-        .unwrap()
-        .insert("pid".to_owned(), toml::Value::Integer(16776));
-    legacy_toml["tasks"]["ci"]["watch"] =
-        toml::Value::String("while kill -0 16776 2>/dev/null; do sleep 1; done".to_owned());
-    let legacy_toml: LoopConfig = legacy_toml.try_into().expect("legacy toml");
-    assert_eq!(
-        legacy_toml.tasks.0["ci"].watch,
-        Some(WatchSpec::Command(
-            "while kill -0 16776 2>/dev/null; do sleep 1; done".to_owned()
-        ))
-    );
-    assert_eq!(legacy_toml.tasks.0["ci"].wait_meta, entry.wait_meta);
     assert_eq!(toml_round.tasks.0["ci"].wait_meta, entry.wait_meta);
     assert_eq!(
         toml_round
@@ -450,7 +462,7 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
             .0
             .get("ci")
             .and_then(|entry| entry.check.as_ref()),
-        Some(&TaskCheck::Shell("cargo test".into()))
+        Some(&TaskCheck("cargo test".into()))
     );
     assert_eq!(
         toml_round.tasks.0.get("ci").and_then(|entry| entry.on),
@@ -511,21 +523,13 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
     let json = serde_json::to_string(&loop_config.tasks).expect("json");
     let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
     assert_eq!(json_round.0.get("ci"), Some(&entry));
-    let mut legacy = serde_json::to_value(&loop_config.tasks).expect("json value");
+    let mut value = serde_json::to_value(&loop_config.tasks).expect("json value");
     assert_eq!(
-        legacy["ci"]["wait"],
+        value["ci"]["wait"],
         serde_json::json!({"kind": "claude", "session": "sess-1", "handle": "@claude"})
     );
-    assert!(legacy["ci"]["wait-meta"].get("armed_by").is_none());
-    for armed_by in [
-        serde_json::json!({"kind": "human"}),
-        serde_json::json!({"kind": "agent", "handle": "@planner"}),
-    ] {
-        legacy["ci"]["wait-meta"]["armed_by"] = armed_by;
-        let decoded: Tasks = serde_json::from_value(legacy.clone()).expect("legacy json");
-        assert_eq!(decoded.0.get("ci"), Some(&entry));
-    }
-    assert_eq!(legacy["ci"]["watch"], serde_json::json!({"pid": 16776}));
+    assert!(value["ci"]["wait-meta"].get("armed_by").is_none());
+    assert_eq!(value["ci"]["watch"], serde_json::json!({"pid": 16776}));
     for spec in [
         WatchSpec::Check {
             check: "nc -z localhost 3000".to_owned(),
@@ -561,17 +565,11 @@ fn task_entry_check_fields_round_trip_toml_and_json() {
             "{toml}"
         );
     }
-    legacy["ci"]["wait-meta"]["pid"] = serde_json::json!(16776);
-    legacy["ci"]["watch"] = serde_json::json!("true");
-    let decoded: Tasks = serde_json::from_value(legacy).expect("legacy json with pid");
+    value["ci"]["watch"] = serde_json::json!("true");
+    let decoded: Tasks = serde_json::from_value(value).expect("string watch json");
     assert_eq!(
         decoded.0["ci"].watch,
         Some(WatchSpec::Command("true".to_owned()))
-    );
-    assert!(
-        serde_json::to_value(&decoded).unwrap()["ci"]["wait-meta"]
-            .get("pid")
-            .is_none()
     );
 }
 

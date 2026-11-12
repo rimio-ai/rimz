@@ -287,6 +287,25 @@ fn packs_content_reads_before_trust_without_affecting_grants() {
 }
 
 #[test]
+fn a_judge_table_task_check_refuses_and_a_string_check_keeps_its_hash() {
+    let shell: ProjectConfig =
+        toml::from_str("[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\n").unwrap();
+    assert_eq!(
+        executable_surface_hash(&shell),
+        "sha256:1d75306246407c1e334fb78d696bc606ca2bcc971c6b4878eae1be89ddf4c716"
+    );
+    let error = toml::from_str::<ProjectConfig>(
+        "[tasks.x]\nevery = \"1h\"\n[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\n",
+    )
+    .map_or_else(|e| e.to_string(), |_| String::new());
+    assert!(
+        error.contains("judge table under `check`")
+            && error.contains("re-add it with `rimz loop add`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn task_labels_do_not_change_the_executable_hash() {
     let base: ProjectConfig =
         toml::from_str("[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\n").unwrap();
@@ -732,13 +751,6 @@ fn hash_covers_every_documented_surface_field() {
         "[tasks.x]\nprompt = \"repair CI\"\n",
         "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",
         "[tasks.x]\ncheck = \"cargo test\"\n",
-        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\n",
-        "[tasks.x.check]\nagent = 'sonnet'\nprompt = 'q'\n",
-        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'other'\n",
-        "[tasks.x.check]\nagent = 'haiku'\nprompt-file = 'q.md'\n",
-        "[tasks.x.check]\nagent = 'haiku'\nprompt-file = 'other.md'\n",
-        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\nrecheck = '6h'\n",
-        "[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\ntimeout = '5m'\n",
         "[tasks.x.judge]\nagent = 'haiku'\nprompt = 'q'\n",
         "[tasks.x.judge]\nagent = 'sonnet'\nprompt = 'q'\n",
         "[tasks.x.judge]\nagent = 'haiku'\nprompt = 'other'\n",
