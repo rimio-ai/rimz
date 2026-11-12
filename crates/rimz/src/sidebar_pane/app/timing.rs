@@ -1,4 +1,4 @@
-//! Driver-clock frame stamps and frame grids, with receive and focus-resume timing bounds.
+//! Driver-clock frame stamps and frame grids, with receive, focus-resume and mirror-quiet bounds.
 //! Frame-sequence heads step separately, only when a routed frame is composed.
 
 use std::time::{Duration, Instant};
@@ -17,12 +17,7 @@ pub(super) const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 /// after a quick switch away.
 pub(super) const FOCUS_RESUME_WATCH_WINDOW: Duration = Duration::from_secs(3);
 
-pub(super) const MIRROR_POOL: usize = 4;
 pub(super) const MIRROR_QUIET: Duration = Duration::from_millis(150);
-
-pub(super) const HIDDEN_FIT_BUDGET: u64 = 150_000;
-pub(super) const HIDDEN_FIT_WINDOW_COST: u64 = 1_500;
-pub(super) const HIDDEN_FIT_WINDOW_CAP: usize = 8;
 
 const _: () = assert!(
     MIRROR_QUIET.as_millis()

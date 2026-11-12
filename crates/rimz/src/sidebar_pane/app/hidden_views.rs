@@ -11,6 +11,9 @@ use crate::ids::{PaneId, ViewId};
 use crate::mux::focus_anchor::FocusAnchor;
 use crate::mux::{LaggingViews, ViewFit, ViewSize};
 
+const HIDDEN_FIT_BUDGET: u64 = 150_000;
+const HIDDEN_FIT_WINDOW_COST: u64 = 1_500;
+const HIDDEN_FIT_WINDOW_CAP: usize = 8;
 const SWEEP_SETTLE: Duration = Duration::from_millis(500);
 const SWEEP_GAP: Duration = Duration::from_millis(250);
 
@@ -154,8 +157,6 @@ impl SweepPlan {
 }
 
 fn slice(lag: &LaggingViews) -> Vec<ViewId> {
-    use super::timing::{HIDDEN_FIT_BUDGET, HIDDEN_FIT_WINDOW_CAP, HIDDEN_FIT_WINDOW_COST};
-
     let mut views = Vec::new();
     let mut cost = 0_u64;
     for view in &lag.views {

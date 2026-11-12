@@ -7,8 +7,10 @@ use std::time::{Duration, Instant};
 
 use crate::ids::{PaneId, ViewId};
 
-use super::timing::{MIRROR_POOL, MIRROR_QUIET};
+use super::timing::MIRROR_QUIET;
 use super::views::ViewsRecord;
+
+const MIRROR_POOL: usize = 4;
 
 /// Views and panes the painted tab frame cannot place rank after every known tab.
 const UNKNOWN_RANK: (u8, usize, bool) = (4, 0, false);

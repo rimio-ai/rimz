@@ -64,7 +64,7 @@ The data plane, in `crates/rimz/src/sidebar/`:
 | [`engine.rs`](../../../crates/rimz/src/sidebar/engine.rs) | `reconcile_final_fold`, the one route from outside `sidebar/` to final-fold reconciliation: attention stamps, then unread episodes. |
 | [`stall.rs`](../../../crates/rimz/src/sidebar/stall.rs) | Classification of machine PSI into the footer's active and fading stall notices. |
 | [`marks.rs`](../../../crates/rimz/src/sidebar/marks.rs) | Shared target resolution and runtime read and unread marks for operator commands. |
-| [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) | Every sidebar cadence and TTL as a named constant with its reasoning. A bound that defines another module's behaviour lives with that module. |
+| [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) | The cadences and TTLs the lanes and the renderer share, each a named constant with its reasoning. The attachment loop's frame clock and its receive, focus-resume and mirror-quiet bounds live in `sidebar_pane/app/timing.rs`, and a bound that defines one module's own behaviour lives with that module. |
 
 The shared wire and mux files:
 
