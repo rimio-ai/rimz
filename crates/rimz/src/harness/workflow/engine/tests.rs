@@ -399,7 +399,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
         error.to_string().contains("script.pr.on.ok"),
         "the bytes to seal must be validated first: {error}"
     );
-    assert_eq!(workflow::list(&state).unwrap().len(), 1);
+    assert_eq!(workflow::live_runs(&state).unwrap().len(), 1);
     assert!(state.workflow(&record.id).home.exists());
 }
 
@@ -1428,7 +1428,7 @@ fn a_deployed_run_refuses_a_file_it_cannot_seal_with_its_path() {
             error.to_string().contains(&shown.display().to_string()),
             "{link}: {error}"
         );
-        assert!(workflow::list(&state).unwrap().is_empty(), "{link}");
+        assert!(workflow::live_runs(&state).unwrap().is_empty(), "{link}");
     }
 }
 

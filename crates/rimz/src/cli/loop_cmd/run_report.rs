@@ -812,7 +812,8 @@ fn write_evaluation(
         }
         return Ok(());
     };
-    let output = std::fs::read_to_string(log).unwrap_or_default();
+    let log = evidence.paths.relocate(std::path::Path::new(log));
+    let output = std::fs::read_to_string(&log).unwrap_or_default();
     let output = output.trim_end();
     // A long log keeps its tail; `output:` names the whole file.
     let output = output
@@ -821,7 +822,7 @@ fn write_evaluation(
         .find(|at| output.len() - at <= CHECK_LOG_TAIL_CAP)
         .map_or(output, |at| &output[at..]);
     if detail != Forensics::Summary {
-        write_detail_link(out, "output", log)?;
+        write_detail_link(out, "output", &log.display().to_string())?;
     }
     if output.is_empty() {
         return Ok(());
@@ -915,7 +916,10 @@ fn write_workflow_run_link(
     let Some(run) = runs.iter().find(|run| &run.id == id) else {
         return write_detail_link(out, label, &format!("{id} · gone"));
     };
-    let mut state = format!("{id} · {} at {}", run.state, run.node);
+    let mut state = format!("{id} · {}", run.state);
+    if !run.node.is_empty() {
+        state.push_str(&format!(" at {}", run.node));
+    }
     if !run.detail.is_empty() {
         state.push_str(&format!(" · {}", run.detail));
     }

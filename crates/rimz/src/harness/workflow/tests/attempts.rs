@@ -2303,3 +2303,59 @@ fn invalid_checks_record_engine_origin() {
     assert_eq!(entry["event"], "evaluation");
     assert_eq!(entry["origin"], "engine");
 }
+
+#[test]
+fn a_launch_whose_run_moved_meanwhile_stops_its_agent_and_recreates_nothing() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    let finished = state.finished_workflow(&record.id);
+    let at_move = std::rc::Rc::new(std::cell::Cell::new(0));
+    *host.on_launch.borrow_mut() = Some(Box::new({
+        let (state, run, at_move) = (state.clone(), record.id.clone(), at_move.clone());
+        move || {
+            // The cancel waits on the launching host; another advance finds that host dead and
+            // settles the run, which then leaves the live directory.
+            assert!(cancel(&state, &run, &FakeHost::new(), None).unwrap());
+            let mut stale = records::load(&state.workflow(&run)).unwrap();
+            stale.attempt.as_mut().unwrap().host.pid = u32::MAX;
+            update(&state, &stale);
+            advance(&state, &run, &FakeHost::new()).unwrap();
+            let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            let moved = records::finish(&state, &run, None, &guard).unwrap();
+            assert!(
+                matches!(moved, records::Finished::Moved),
+                "{moved:?} {:?}",
+                records::load(&state.workflow(&run))
+            );
+            at_move.set(
+                records::journal(&state.finished_workflow(&run))
+                    .unwrap()
+                    .len(),
+            );
+        }
+    }));
+    advance(&state, &record.id, &host).unwrap();
+    assert!(
+        !state.workflow(&record.id).home.exists(),
+        "the late launch must not recreate the live home"
+    );
+    assert_eq!(host.launched.borrow().len(), 1);
+    assert_eq!(
+        host.stops.get(),
+        1,
+        "the agent it started is stopped, not leaked"
+    );
+    let ended = records::load(&finished).unwrap();
+    assert_eq!(ended.state, RunState::Canceled);
+    assert!(
+        ended
+            .attempt
+            .as_ref()
+            .is_none_or(|attempt| attempt.run.is_none())
+    );
+    assert_eq!(
+        records::journal(&finished).unwrap().len(),
+        at_move.get(),
+        "the late launch appends nothing to the finished home"
+    );
+}

@@ -221,20 +221,96 @@ pub(in crate::cli) fn terminal(
     render(record, spec, journal, now, prose, out)
 }
 
-pub(in crate::cli) fn write_copy(state: &rimz::StatePaths, record: &RunRecord) -> Result<()> {
-    let Some(relative) = record.notes.as_ref().filter(|_| record.state.is_terminal()) else {
+/// An ended run's history as plain text, as its home and its notes archive keep it: rendered
+/// from the record, the journal and the sealed definition, or from the record's header alone
+/// when the definition cannot be read.
+pub(in crate::cli) fn saved(
+    paths: &rimz::disk::paths::WorkflowPaths,
+    finished: &rimz::disk::paths::WorkflowPaths,
+    record: &RunRecord,
+) -> Vec<u8> {
+    let rendered = workflow::load(&paths.home)
+        .map_err(anyhow::Error::from)
+        .and_then(|spec| {
+            let mut journal = records::journal(paths)?;
+            relocate(&mut journal, finished);
+            let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Never);
+            terminal(record, &spec, &journal, render::prose::Prose::Raw, &mut out)?;
+            Ok(out.into_inner())
+        });
+    rendered.unwrap_or_else(|error| {
+        header_only(
+            &record.id,
+            Some(&record.header()),
+            &format!("its steps could not be rendered: {error:#}"),
+        )
+    })
+}
+
+/// Point the logs a journal names at the home the run is moving to, so that its saved history
+/// names files that exist once it has moved.
+fn relocate(journal: &mut [JournalEntry], home: &rimz::disk::paths::WorkflowPaths) {
+    for entry in journal {
+        match &mut entry.event {
+            records::JournalEvent::Attempt { log: Some(log), .. } => *log = home.relocate(log),
+            records::JournalEvent::Evaluation { object, .. } => {
+                if let Some(log) = object.get_mut("log")
+                    && let Some(recorded) = log.as_str()
+                {
+                    let moved = home.relocate(std::path::Path::new(recorded));
+                    *log = Value::from(moved.to_string_lossy().into_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A run's history from its record's header alone, for a run whose definition or record this
+/// RimZ cannot read; `why` says what is missing.
+pub(in crate::cli) fn header_only(
+    id: &rimz::ids::WorkflowRunId,
+    header: Option<&records::RunHeader>,
+    why: &str,
+) -> Vec<u8> {
+    let mut text = String::new();
+    let address = header.and_then(address);
+    text.push_str(address.as_deref().unwrap_or(id.as_str()));
+    text.push('\n');
+    if let Some(header) = header {
+        let state = header.state.map_or("unknown", records::RunState::as_str);
+        match header.terminal_at {
+            Some(at) => text.push_str(&format!("{state} {}\n", dated_clock(at))),
+            None => text.push_str(&format!("{state}\n")),
+        }
+        if let Some(reason) = &header.reason {
+            text.push_str(&format!("reason: {reason}\n"));
+        }
+    }
+    text.push_str(&format!("run {id}; {why}\n"));
+    text.into_bytes()
+}
+
+/// `<workflow>#<lane>` from a header, as `RunRecord::address` derives it.
+pub(in crate::cli) fn address(header: &records::RunHeader) -> Option<String> {
+    header.address().map(|address| address.to_string())
+}
+
+/// Copy an ended run's saved history into the notes archive its record names, when that archive
+/// exists.
+pub(in crate::cli) fn copy_to_notes(
+    state: &rimz::StatePaths,
+    notes: Option<&std::path::Path>,
+    history: &[u8],
+) -> Result<()> {
+    let Some(relative) = notes else {
         return Ok(());
     };
     let folder = state.notes_run(rimz::disk::paths::Class::AutomationNotes, relative);
     if !folder.try_exists()? {
         return Ok(());
     }
-    let paths = state.workflow(&record.id);
-    let spec = workflow::load(&paths.home)?;
-    let journal = records::journal(&paths)?;
-    let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Never);
-    terminal(record, &spec, &journal, render::prose::Prose::Raw, &mut out)?;
-    rimz::disk::atomic::write_bytes_atomically(&folder.join("history.txt"), &out.into_inner())?;
+    rimz::disk::atomic::write_bytes_atomically(&folder.join("history.txt"), history)?;
     Ok(())
 }
 

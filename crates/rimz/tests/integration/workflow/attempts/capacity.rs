@@ -283,7 +283,7 @@ fn capacity_hand_manual_and_scheduled_workflows_all_wait() {
         };
         success(room.command(&start).output().unwrap());
         let state = room.env.state_path_for(&room.env.project_root);
-        let record = records::list(&state).unwrap().pop().unwrap();
+        let record = records::live_runs(&state).unwrap().pop().unwrap();
         let value = until(&room.env, record.id.as_str(), |value| {
             value["record"]["visits"]["build"] == 1
                 || value["record"]["wait"]["outcome"] == "capacity"
@@ -366,7 +366,7 @@ fn capacity_receipts_of_run_fire_and_restart_say_the_start_is_held() {
         "{fire}"
     );
     let state = room.env.state_path_for(&room.env.project_root);
-    for record in records::list(&state).unwrap() {
+    for record in records::live_runs(&state).unwrap() {
         assert_eq!(record.visits.get("build"), None, "{record:#?}");
         if !record.state.is_terminal() {
             cancel(record.id.as_str());
@@ -400,7 +400,7 @@ fn capacity_give_up_takes_an_instant_and_ends_a_hand_run_there() {
         "{stderr}"
     );
     let state = room.env.state_path_for(&room.env.project_root);
-    assert!(records::list(&state).unwrap().is_empty());
+    assert!(records::live_runs(&state).unwrap().is_empty());
     let mut actual = Vec::new();
     for offset in [3600, -1] {
         let at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(offset);

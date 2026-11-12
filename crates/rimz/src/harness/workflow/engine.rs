@@ -486,7 +486,7 @@ fn refuse_existing(
     fire_tree: bool,
     roots: &ScopeRoots,
 ) -> Result<()> {
-    match workflow::list(state)?.into_iter().find(|r| {
+    match workflow::live_runs(state)?.into_iter().find(|r| {
         let checkout = if fire_tree {
             &roots.project
         } else {
@@ -819,11 +819,28 @@ struct Admission {
     )>,
 }
 
+/// The run's record, or none once its home has left the live directory. A run moves to the
+/// finished directory only after it ends, so a late callback treats a missing home as a run that
+/// ended: it changes nothing and cleans up what it started.
+fn reload(paths: &WorkflowPaths) -> Result<Option<RunRecord>> {
+    match workflow::load(paths) {
+        Ok(record) => Ok(Some(record)),
+        Err(workflow::WorkflowStoreErr::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<()> {
     let runtime = crate::disk::paths::RuntimePaths::for_state(state)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let paths = state.workflow(id);
-    let record = workflow::load(&paths)?;
+    let Some(record) = reload(&paths)? else {
+        return Ok(());
+    };
     if record.state.is_terminal() {
         return Ok(());
     }
@@ -901,8 +918,11 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+        let Some(current) = reload(&paths)? else {
+            return Ok(());
+        };
         let mut t = Transition {
-            record: workflow::load(&paths)?,
+            record: current,
             spec: &spec,
             paths: &paths,
             now: Timestamp::now(),
@@ -966,8 +986,11 @@ fn command_step(
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let Some(current) = reload(paths)? else {
+        return Ok(false);
+    };
     let mut t = Transition {
-        record: workflow::load(paths)?,
+        record: current,
         spec,
         paths,
         now: Timestamp::now(),
@@ -1112,16 +1135,23 @@ fn message_step(
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let current = reload(paths)?;
+    let moved = current.is_none();
     let mut t = Transition {
-        record: workflow::load(paths)?,
+        record: current.unwrap_or_else(|| notice.record.clone()),
         spec,
         paths,
         now: Timestamp::now(),
         entries: Vec::new(),
     };
-    if !t.current(notice.seq) {
-        // A lost host's retry delivers under the same id, so only another ending withdraws it.
-        let delivered = workflow::journal(paths)?.iter().any(|entry| {
+    if moved || !t.current(notice.seq) {
+        // A lost host's retry delivers under the same id, so only another ending withdraws it;
+        // a run that has left the live directory keeps its journal in the finished one.
+        let journal = match workflow::find(state, &notice.record.id)? {
+            Some(found) => workflow::journal(&found.paths)?,
+            None => Vec::new(),
+        };
+        let delivered = journal.iter().any(|entry| {
             entry.seq == Some(notice.seq)
                 && matches!(
                     entry.event,
@@ -1157,8 +1187,11 @@ fn prepare(
     admission: &mut Admission,
 ) -> Result<Decision> {
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let Some(current) = reload(paths)? else {
+        return Ok(Decision::Stop);
+    };
     let mut t = Transition {
-        record: workflow::load(paths)?,
+        record: current,
         spec,
         paths,
         now: Timestamp::now(),
@@ -1707,7 +1740,9 @@ pub fn cancel(
 ) -> Result<bool> {
     let paths = state.workflow(id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-    let record = workflow::load(&paths)?;
+    let Some(record) = reload(&paths)? else {
+        return Ok(false);
+    };
     if record.state.is_terminal() {
         return Ok(false);
     }
@@ -1972,7 +2007,9 @@ pub fn restart(
     if !busy && record.attempt.is_some() {
         agent::finish(state, &paths, &spec, &record, host, None)?;
     }
-    let record = workflow::load(&paths)?;
+    let Some(record) = reload(&paths)? else {
+        return Ok((record, None));
+    };
     let advance = if record.state == RunState::Active {
         Some(spawn(&record)?)
     } else {
@@ -2156,7 +2193,7 @@ pub(crate) fn unacted_task_runs(state: &StatePaths, task: &str) -> Result<Vec<Wo
     if !state.root.exists() {
         return Ok(Vec::new());
     }
-    Ok(workflow::list(state)?
+    Ok(workflow::live_runs(state)?
         .into_iter()
         .filter(|record| record.started_by(task) && !acted(&state.workflow(&record.id), record))
         .map(|record| record.id)
@@ -2173,7 +2210,7 @@ pub(crate) fn reassign_task(
     }
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut reassigned = Vec::new();
-    for mut record in workflow::list(state)? {
+    for mut record in workflow::live_runs(state)? {
         // A finished run still owed its collection reports and forgets launch memory under its
         // task's name, so a rename moves it too; a removal leaves it to report under the old one.
         let owed = new.is_some() && record.ran_for(old) && record.owes_loop_report();
@@ -2351,7 +2388,7 @@ pub(crate) fn hears_lifecycle(
     signal: &Signal,
     session: &dyn Fn(&workflow::AttemptRun) -> Option<crate::ids::AgentSessionId>,
 ) -> Result<bool> {
-    for record in workflow::list(state)? {
+    for record in workflow::live_runs(state)? {
         let Some(attempt) = record.session_attempt() else {
             continue;
         };
@@ -2381,7 +2418,7 @@ pub(crate) fn hears_lifecycle(
 }
 
 pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Result<()> {
-    for record in workflow::list(state)? {
+    for record in workflow::live_runs(state)? {
         let paths = state.workflow(&record.id);
         let result: Result<()> = (|| {
             let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
@@ -2457,7 +2494,10 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
 pub fn wake_run(project_root: &Path, id: &WorkflowRunId) -> Result<()> {
     let state = StatePaths::for_project_root(project_root)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
-    spawn(&workflow::load(&state.workflow(id))?).map(drop)
+    match reload(&state.workflow(id))? {
+        Some(record) => spawn(&record).map(drop),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

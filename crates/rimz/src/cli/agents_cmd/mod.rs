@@ -216,16 +216,35 @@ fn workflow_pin(store: &rimz::Store, agent: &AgentState) -> Result<WorkflowPin> 
     let Some(pin) = &agent.workflow else {
         return Ok(WorkflowPin::None);
     };
-    let record = match workflow::load(&store.paths().workflow(&pin.run)) {
-        Ok(record) => record,
-        Err(error) => {
-            writeln!(
-                crate::cli::render::err(),
-                "warning: cannot read run `{}`: {error}; keeping its workflow pin",
-                pin.run
-            )?;
-            return Ok(WorkflowPin::Unreadable);
-        }
+    let unreadable = |error: &dyn std::fmt::Display| -> Result<WorkflowPin> {
+        writeln!(
+            crate::cli::render::err(),
+            "warning: cannot read run `{}`: {error}; keeping its workflow pin",
+            pin.run
+        )?;
+        Ok(WorkflowPin::Unreadable)
+    };
+    // A finished or vanished run holds a former pin; one this RimZ cannot read keeps it.
+    let found = match workflow::find(store.paths(), &pin.run) {
+        Ok(found) => found,
+        Err(error) => return unreadable(&error),
+    };
+    let record = match found {
+        None => return Ok(WorkflowPin::Former(pin.clone())),
+        Some(found) if found.finished => return Ok(WorkflowPin::Former(pin.clone())),
+        Some(found) => match found.class {
+            workflow::RunClass::Current(record) => *record,
+            workflow::RunClass::Ended(_) | workflow::RunClass::Recordless => {
+                return Ok(WorkflowPin::Former(pin.clone()));
+            }
+            workflow::RunClass::Stranded { cause, .. } => return unreadable(&cause),
+            workflow::RunClass::Newer { version } => {
+                return unreadable(&format!("a newer RimZ wrote it (record version {version})"));
+            }
+            workflow::RunClass::NotObject => {
+                return unreadable(&"its record holds no JSON object");
+            }
+        },
     };
     let attempt = match pin.role {
         WorkflowAttemptRole::Step => record.session_attempt(),

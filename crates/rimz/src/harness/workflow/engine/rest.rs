@@ -318,8 +318,11 @@ pub(super) fn push(
         return Ok(false);
     }
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let Some(current) = super::reload(paths)? else {
+        return Ok(false);
+    };
     let mut t = Transition {
-        record: workflow::load(paths)?,
+        record: current,
         spec,
         paths,
         now: Timestamp::now(),

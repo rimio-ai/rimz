@@ -87,7 +87,6 @@ fn never_swept_classes_keep_stale_entries_under_default_sweep() {
             team_notes_retention: HistoryRetention::Forever,
             automation_notes_retention: HistoryRetention::Forever,
             team_notes_open: |_| false,
-            workflow_history: |_, _| false,
         },
         false,
         &|_| Ok(false),
@@ -404,7 +403,6 @@ fn output_sweep_does_not_hold_the_store_lock() {
             team_notes_retention: HistoryRetention::Forever,
             automation_notes_retention: HistoryRetention::Forever,
             team_notes_open: |_| false,
-            workflow_history: |_, _| false,
         },
         false,
         &|_| {
@@ -678,7 +676,6 @@ fn owned_units_and_terminal_runs_expire_together() {
         &Vec::new().into(),
         &mut Sweep::new(true),
         &mut preview,
-        &|_, _| true,
     )
     .unwrap();
     assert_eq!(preview.sidecar_files_removed, 2);
@@ -689,7 +686,6 @@ fn owned_units_and_terminal_runs_expire_together() {
         &Vec::new().into(),
         &mut Sweep::new(false),
         &mut actual,
-        &|_, _| true,
     )
     .unwrap();
     assert_eq!(preview, actual);
@@ -721,8 +717,8 @@ fn owned_grace_uses_ended_at_but_a_live_owner_always_wins() {
 }
 
 #[test]
-fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
-    use crate::store::workflow::{self, RunRecord};
+fn finished_workflow_homes_expire_by_age_whatever_wrote_them_and_live_homes_stay() {
+    use crate::store::workflow::RunRecord;
     let temp = tempfile::tempdir().unwrap();
     let paths = crate::StatePaths::under(
         crate::WorkspaceId::from_project_root(temp.path()),
@@ -731,15 +727,17 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
     .unwrap();
     paths.ensure_dirs().unwrap();
     let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
-    let mut homes = Vec::new();
-    for (state, age, report) in [
-        ("done", true, "sent"),
-        ("failed", true, "none"),
-        ("canceled", true, "none"),
-        ("active", true, "none"),
-        ("parked", true, "none"),
-        ("done", false, "none"),
-        ("failed", true, "owed"),
+    let set_old = |path: &Path| fs::File::open(path).unwrap().set_modified(old).unwrap();
+    // Each home: its record (none for a recordless home), whether it is aged, and whether it
+    // sits in the finished directory.
+    let mut cases: Vec<(Option<Vec<u8>>, bool, bool)> = Vec::new();
+    for (state, report) in [
+        ("done", "sent"),
+        ("failed", "none"),
+        ("canceled", "none"),
+        ("active", "none"),
+        ("parked", "none"),
+        ("failed", "owed"),
     ] {
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"review",
@@ -754,96 +752,90 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
         .unwrap();
         record.task = Some("nightly".to_owned());
         record.loop_report = serde_json::from_value(serde_json::json!(report)).unwrap();
-        let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
-        workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
-        let home = paths.workflow(&record.id);
-        if age {
-            fs::File::open(&home.record)
-                .unwrap()
-                .set_modified(old)
-                .unwrap();
-        }
-        homes.push(home);
+        let bytes = serde_json::to_vec(&record).unwrap();
+        cases.push((Some(bytes.clone()), true, false));
+        cases.push((Some(bytes), true, true));
     }
-    for contents in [None, Some("corrupt")] {
-        let home = paths.workflow(&crate::ids::WorkflowRunId::new());
-        fs::create_dir_all(&home.home).unwrap();
-        if let Some(contents) = contents {
-            fs::write(&home.record, contents).unwrap();
-            fs::File::open(&home.record)
-                .unwrap()
-                .set_modified(old)
-                .unwrap();
-        }
-        homes.push(home);
+    let older = format!(
+        r#"{{"version":{},"state":"active"}}"#,
+        crate::store::workflow::VERSION - 1
+    );
+    for bytes in [
+        &b"corrupt"[..],
+        older.as_bytes(),
+        br#"{"version":999,"state":"active"}"#,
+    ] {
+        cases.push((Some(bytes.to_vec()), true, false));
+        cases.push((Some(bytes.to_vec()), true, true));
+        cases.push((Some(bytes.to_vec()), false, true));
     }
-    // Another version's record goes past the grace, as a terminal one does.
-    let mut refused = Vec::new();
-    for age in [true, false] {
-        let home = paths.workflow(&crate::ids::WorkflowRunId::new());
-        fs::create_dir_all(&home.home).unwrap();
-        fs::write(&home.spec, "spec").unwrap();
-        fs::write(&home.record, r#"{"version":3,"state":"active"}"#).unwrap();
-        if age {
-            fs::File::open(&home.record)
-                .unwrap()
-                .set_modified(old)
-                .unwrap();
-        }
-        refused.push(home);
-    }
-    homes.push(refused.pop().unwrap());
-    let refused = refused.pop().unwrap();
-    // A newer RimZ may still be running its run, however old the record.
-    let newer = paths.workflow(&crate::ids::WorkflowRunId::new());
-    fs::create_dir_all(&newer.home).unwrap();
-    fs::write(&newer.record, r#"{"version":999,"state":"active"}"#).unwrap();
-    fs::File::open(&newer.record)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
-    homes.push(newer);
-    let orphan = paths.workflow(&crate::ids::WorkflowRunId::new());
-    fs::create_dir_all(&orphan.work).unwrap();
-    fs::write(&orphan.spec, "spec").unwrap();
-    fs::File::open(&orphan.home)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
+    cases.push((None, true, false));
+    cases.push((None, false, false));
+    cases.push((None, true, true));
+    let homes: Vec<_> = cases
+        .iter()
+        .map(|(record, aged, finished)| {
+            let id = crate::ids::WorkflowRunId::new();
+            let home = if *finished {
+                paths.finished_workflow(&id)
+            } else {
+                paths.workflow(&id)
+            };
+            fs::create_dir_all(&home.work).unwrap();
+            fs::write(&home.spec, "spec").unwrap();
+            if let Some(record) = record {
+                fs::write(&home.record, record).unwrap();
+            }
+            if *aged {
+                set_old(if record.is_some() {
+                    &home.record
+                } else {
+                    &home.home
+                });
+            }
+            home
+        })
+        .collect();
     let mut preview = GcReport::default();
     let collected = collect_owned(
         &paths,
         &Vec::new().into(),
         &mut Sweep::new(true),
         &mut preview,
-        &|_, _| true,
     );
     assert!(
         collected.is_ok(),
         "unreadable workflow homes must not block GC: {collected:?}"
     );
-    assert_eq!(
-        preview.sidecar_files_removed, 9,
-        "old terminal, refused, and recordless workflow homes must be collected together"
-    );
-    assert!(homes.iter().all(|p| p.home.exists()) && orphan.home.exists() && refused.home.exists());
+    assert!(homes.iter().all(|home| home.home.exists()));
     let mut actual = GcReport::default();
     collect_owned(
         &paths,
         &Vec::new().into(),
         &mut Sweep::new(false),
         &mut actual,
-        &|_, _| true,
     )
     .unwrap();
     assert_eq!(actual, preview);
-    assert!(homes[..3].iter().all(|p| !p.home.exists()));
-    assert!(
-        homes[3..].iter().all(|p| p.home.exists()),
-        "live, recent, unreported, fresh recordless, corrupt, fresh refused, and newer homes stay"
+    let gone: Vec<_> = cases
+        .iter()
+        .zip(&homes)
+        .map(|((record, aged, finished), home)| {
+            (record.is_some(), *aged, *finished, !home.home.exists())
+        })
+        .collect();
+    assert_eq!(
+        gone,
+        cases
+            .iter()
+            .map(|(record, aged, finished)| {
+                let expected = *aged && (*finished || record.is_none());
+                (record.is_some(), *aged, *finished, expected)
+            })
+            .collect::<Vec<_>>(),
+        "aged finished homes go whatever their record holds; in the live directory only an \
+         aged recordless home goes"
     );
-    assert!(!orphan.home.exists(), "an old recordless home must go");
-    assert!(!refused.home.exists(), "an old refused home must go");
 }
 
 #[test]
@@ -867,7 +859,6 @@ fn owned_sweep_keeps_a_relaunch_with_a_fresh_direct_child() {
         &vec![agent].into(),
         &mut Sweep::new(false),
         &mut GcReport::default(),
-        &|_, _| true,
     )
     .unwrap();
     assert!(unit.join("scratch").exists());
@@ -949,7 +940,6 @@ fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
                 team_notes_retention: HistoryRetention::Forever,
                 automation_notes_retention: HistoryRetention::Forever,
                 team_notes_open: |_| false,
-                workflow_history: |_, _| false,
             },
             dry_run,
             &|_| Ok(false),

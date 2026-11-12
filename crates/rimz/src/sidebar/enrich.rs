@@ -652,7 +652,7 @@ fn project_workflow_and_throttle_state(
     snapshot: &mut SidebarSnapshot,
     state: &StatePaths,
 ) -> Vec<crate::store::workflow::RunRecord> {
-    let records = crate::store::workflow::list(state).unwrap_or_else(|err| {
+    let records = crate::store::workflow::live_runs(state).unwrap_or_else(|err| {
         tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
         Vec::new()
     });

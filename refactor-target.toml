@@ -1589,7 +1589,9 @@ allowed-dependencies = [
 # notes_dir roots the home-wide note store, and write_bytes_new_mode publishes a note without taking a taken name (+2).
 # lock::probe opens a lock file for write without locking it, for the workflow start probe (+1).
 # StatePaths::wait_watch_log gives every wait watcher one room log for its own stderr (+1).
-surface-budget = 336
+# StatePaths::{finished_workflow, finished_workflow_runs} and disk::paths::recorded_rooms_under place and find finished run homes (+3).
+# WorkflowPaths::{history, relocate} name a run's saved history and map its journal's live paths onto its current home (+2).
+surface-budget = 341
 
 [[verdict]]
 kind = "item"
@@ -4489,11 +4491,14 @@ path = "crates/rimz/src/store"
 # store::run::LimitFailure and LimitFailureCause keep a limit-failed child's typed cause for the fleet report (+2).
 # workflow::{RunOutcome, RunEnding} carry a terminal run's outcome from the engine to the scheduler's collector (+2).
 # workflow::RunFire freezes what a loop fire tells its run's briefs (+1).
-# workflow::remove_refused clears a run home whose record another RimZ version wrote, for `workflow cancel` (+1).
 # Premise, MessageRecord::with_premises and the row-only premise checks broken_row_premise and ended_stage_visit share the premise model with message and harness (+4).
 # HarnessNotice::awaits_join and MessageRecord::outlived_original let owners and the write check judge a team result and a still-queued warning; AfterCondition::expiry_reason words an unmet `--after` archive (+3).
 # Store::cancel_unbound_agent_launch cancels a never-bound stop reservation under the lock (+1).
-surface-budget = 612
+# workflow::{RunHeader, StrandedCause, RunClass, classify}, RunHeader::{is_terminal, owes_loop_report}, RunClass::header and RunRecord::header classify a run home without a full decode, in place of WorkflowStoreErr::is_refused (+7).
+# workflow::{LiveRun, live, live_runs} walk the live directory alone, in place of workflow::list (+2).
+# workflow::{FoundRun, find, find_under} look a run up by id in either directory (+3).
+# workflow::{Finished, finish} move an ended run's home into the finished directory under the caller's workspace lock (+2).
+surface-budget = 625
 
 [[verdict]]
 kind = "item"
@@ -11976,11 +11981,6 @@ reason = "Workflow codecs share lock-free reads and caller-locked durable writes
 
 [[verdict]]
 kind = "item"
-key = "store::workflow::remove_refused"
-reason = "The store alone reads the record version, so `rimz workflow cancel` clears a run another version wrote through it, under the caller's workspace lock."
-
-[[verdict]]
-kind = "item"
 key = "store::workflow::initialize"
 reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
 
@@ -12003,11 +12003,6 @@ reason = "Workflow codecs share lock-free reads and caller-locked durable writes
 kind = "item"
 key = "store::workflow::parse_journal"
 reason = "The journal file reader and stat-gated sidebar projection share one lenient byte parser."
-
-[[verdict]]
-kind = "item"
-key = "store::workflow::list"
-reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
 
 [[verdict]]
 kind = "item"

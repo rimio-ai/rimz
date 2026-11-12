@@ -429,3 +429,38 @@ fn a_bounded_message_step_cycle_validates_without_a_never_waits_warning() {
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
+
+#[test]
+fn a_message_step_whose_run_moved_meanwhile_appends_and_recreates_nothing() {
+    let (_dir, state, record) = super::attempts::setup(TELL);
+    let host = FakeHost::new();
+    let finished = state.finished_workflow(&record.id);
+    let at_move = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    *host.on_message.borrow_mut() = Some(Box::new({
+        let (state, run, at_move) = (state.clone(), record.id.clone(), at_move.clone());
+        move || {
+            assert!(cancel(&state, &run, &FakeHost::new(), None).unwrap());
+            let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            let moved = records::finish(&state, &run, None, &guard).unwrap();
+            assert!(matches!(moved, records::Finished::Moved));
+            *at_move.borrow_mut() = records::journal(&state.finished_workflow(&run)).unwrap();
+        }
+    }));
+    advance(&state, &record.id, &host).unwrap();
+    assert!(
+        !state.workflow(&record.id).home.exists(),
+        "the late step must not recreate the live home"
+    );
+    assert_eq!(records::load(&finished).unwrap().state, RunState::Canceled);
+    assert_eq!(
+        records::journal(&finished).unwrap().len(),
+        at_move.borrow().len(),
+        "the late step appends nothing to the finished home"
+    );
+    let [(_, id, _)] = host.messages.borrow().clone().try_into().unwrap();
+    assert_eq!(
+        *host.retired.borrow(),
+        vec![id],
+        "its undelivered notice is retired"
+    );
+}

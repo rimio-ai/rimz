@@ -265,6 +265,9 @@ mod tests {
             .log_path()
             .unwrap();
             let owned = paths.agents_dir.join("retired/scratch/note");
+            let run = crate::ids::WorkflowRunId::new();
+            let live_run = paths.workflow(&run).record;
+            let finished_run = paths.finished_workflow(&run).record;
             let tmp = paths.temp_unit_dir(Some("retired")).join("note");
             let out = paths.out_reader_dir(Some("retired")).join("child.output");
             let shared = paths.room_shared_dir.join("task/note");
@@ -279,6 +282,8 @@ mod tests {
             for path in [
                 &audit,
                 &owned,
+                &live_run,
+                &finished_run,
                 &tmp,
                 &out,
                 &shared,
@@ -297,6 +302,16 @@ mod tests {
             assert_eq!(transcript.exists(), !hard);
             assert_eq!(messages.exists(), !hard);
             assert_eq!(owned.exists(), !hard);
+            assert_eq!(
+                live_run.exists(),
+                !hard,
+                "live workflow homes follow reset mode"
+            );
+            assert_eq!(
+                finished_run.exists(),
+                !hard,
+                "finished workflow homes do too"
+            );
             assert_eq!(tmp.exists(), !hard);
             assert_eq!(out.exists(), !hard);
             assert_eq!(shared.exists(), !hard);

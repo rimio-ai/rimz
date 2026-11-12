@@ -31,6 +31,108 @@ mod overlap_tests;
 mod tune_tests;
 
 #[test]
+fn loop_views_keep_finished_headers_without_a_current_record() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.old]\nworkflow='review'\nevery='1h'\nonce-per-checkout=true\nroot={:?}\n",
+            env.project_root
+        ),
+    );
+    let state = env.state_path_for(&env.project_root);
+    let id = rimz::ids::WorkflowRunId::new();
+    let home = state.finished_workflow(&id);
+    std::fs::create_dir_all(&home.home).unwrap();
+    let ended = Timestamp::now() - SignedDuration::from_mins(2);
+    let header = json!({
+        "version": rimz::store::workflow::VERSION - 1,
+        "workflow": "review", "task": "old", "state": "failed",
+        "project_root": env.project_root, "scope": {"path": env.project_root},
+        "node": "hold", "terminal_at": ended,
+        "outcome": {"reason": "cannot continue this run"}
+    });
+    std::fs::write(&home.record, serde_json::to_vec(&header).unwrap()).unwrap();
+    let mut report = LoopRunRecord::new("old", LoopRunResult::Failed, LoopRunMode::Scheduled, 0);
+    report.at = ended;
+    report.root = Some(env.project_root.clone());
+    report.checkout = Some(env.project_root.clone());
+    report.run_id = Some(id.to_string());
+    write_loop_run_records(&env, &[report]);
+    let show_command = format!("rimz workflow show {id}");
+    for text in [
+        loop_ok(&env, &["loop", "show", "old"]),
+        loop_ok(&env, &["loop", "logs", "old"]),
+    ] {
+        assert!(
+            text.contains(&format!("run: {id} · failed at hold")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&show_command) && !text.contains("· gone"),
+            "{text}"
+        );
+    }
+    let shown = loop_ok(&env, &["loop", "show", "old"]);
+    assert!(shown.contains("RUNS") && shown.contains("2m"), "{shown}");
+    let json: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "old", "--json"])).unwrap();
+    let row = json["workflow_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id.as_str())
+        .unwrap_or_else(|| panic!("{json}"));
+    assert_eq!(row["state"], "failed");
+    assert_eq!(row["node"], "hold");
+    assert_eq!(row["terminal_at"], json!(ended));
+    // Remembering the same run must join its header, not add a second or gone row.
+    let ledger = state.root.join("records/loop-workflow-launches.json");
+    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+    std::fs::write(
+        &ledger,
+        serde_json::to_vec(&json!({
+            "version": 2, "tasks": {"old": {env.project_root.to_str().unwrap(): {
+                "at": ended, "run": id, "scope": "project"
+            }}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "old", "--json"])).unwrap();
+    assert_eq!(json["workflow_runs"].as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(json["workflow_runs"][0]["state"], "failed", "{json}");
+    // A ledger join is by id even when the header has lost its task or node.
+    let mut incomplete = header.clone();
+    incomplete.as_object_mut().unwrap().remove("task");
+    incomplete.as_object_mut().unwrap().remove("node");
+    std::fs::write(&home.record, serde_json::to_vec(&incomplete).unwrap()).unwrap();
+    for text in [
+        loop_ok(&env, &["loop", "show", "old"]),
+        loop_ok(&env, &["loop", "logs", "old"]),
+    ] {
+        assert!(text.contains(&format!("run: {id} · failed\n")), "{text}");
+        assert!(text.contains(&show_command), "{text}");
+    }
+    let output = env
+        .rimz()
+        .args(["workflow", "show", id.as_str()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    std::fs::remove_dir_all(&home.home).unwrap();
+    for text in [
+        loop_ok(&env, &["loop", "show", "old"]),
+        loop_ok(&env, &["loop", "logs", "old"]),
+    ] {
+        assert!(text.contains(&format!("run: {id} · gone")), "{text}");
+        assert!(!text.contains(&show_command), "{text}");
+    }
+}
+
+#[test]
 fn loop_show_condition_evidence_and_watch_command_are_not_repeated_or_cut() {
     let env = Env::new();
     write_loop_config(
@@ -758,7 +860,13 @@ printf '%s\n' '{{"type":"turn.completed","usage":{{"input_tokens":10,"output_tok
             .count()
     };
     let runs = || {
-        let mut runs = rimz::store::workflow::list(env.store().paths()).unwrap();
+        let store = env.store();
+        let state = store.paths();
+        let mut runs = rimz::store::workflow::live_runs(state).unwrap();
+        // An ended run has left the live directory but still counts.
+        for paths in state.finished_workflow_runs().unwrap() {
+            runs.extend(rimz::store::workflow::load(&paths));
+        }
         runs.retain(|run| run.task.as_deref() == Some("guard"));
         runs.sort_by_key(|run| run.created_at);
         runs
@@ -782,7 +890,7 @@ printf '%s\n' '{{"type":"turn.completed","usage":{{"input_tokens":10,"output_tok
     };
     let ended = |id: &rimz::ids::WorkflowRunId| {
         let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        while !rimz::store::workflow::load(&env.store().paths().workflow(id))
+        while !rimz::store::workflow::load(&run_paths(&env, &env.project_root, id))
             .is_ok_and(|run| run.state == rimz::store::workflow::RunState::Canceled)
         {
             assert!(Instant::now() < deadline, "run {id} was not canceled");
@@ -12933,8 +13041,14 @@ fn wait_for_loop_reports_sent(env: &Env, task: &str, runs: usize) {
     use rimz::store::workflow::LoopReport;
     let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     loop {
-        let reports: Vec<_> = rimz::store::workflow::list(env.store().paths())
-            .unwrap_or_default()
+        let store = env.store();
+        let state = store.paths();
+        let mut records = rimz::store::workflow::live_runs(state).unwrap_or_default();
+        // A run whose report was sent has left the live directory but still counts.
+        for paths in state.finished_workflow_runs().unwrap_or_default() {
+            records.extend(rimz::store::workflow::load(&paths));
+        }
+        let reports: Vec<_> = records
             .into_iter()
             .filter(|run| run.ran_for(task))
             .map(|run| (run.state, run.loop_report))
@@ -12982,9 +13096,21 @@ fn wait_for_fire_tree_helpers(env: &Env) {
 }
 
 /// The journal of the run a loop row names, rendered for substring checks.
+/// A workflow run's home wherever it lives now: an ended run leaves the live directory.
+fn run_paths(
+    env: &Env,
+    root: &Path,
+    id: &rimz::ids::WorkflowRunId,
+) -> rimz::disk::paths::WorkflowPaths {
+    let state = env.state_path_for(root);
+    rimz::store::workflow::find(&state, id)
+        .unwrap()
+        .map_or_else(|| state.workflow(id), |found| found.paths)
+}
+
 fn loop_run_journal(env: &Env, root: &Path, record: &LoopRunRecord) -> String {
     let id = record.run_id.as_deref().expect("run id").parse().unwrap();
-    let paths = env.state_path_for(root).workflow(&id);
+    let paths = run_paths(env, root, &id);
     let journal = rimz::store::workflow::journal(&paths).unwrap();
     // A check's output lives in the log its evaluation names.
     let logs = journal
@@ -12993,7 +13119,7 @@ fn loop_run_journal(env: &Env, root: &Path, record: &LoopRunRecord) -> String {
             rimz::store::workflow::JournalEvent::Evaluation { object, .. } => object
                 .get("log")
                 .and_then(|log| log.as_str())
-                .map(std::path::PathBuf::from),
+                .map(|log| paths.relocate(Path::new(log))),
             _ => None,
         })
         .map(|log| std::fs::read_to_string(log).unwrap_or_default())

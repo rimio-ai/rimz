@@ -56,7 +56,13 @@ fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
         String::from_utf8_lossy(&output.stderr)
     );
     let state = env.state_path_for(&env.project_root);
-    assert_eq!(rimz::store::workflow::list(&state).unwrap().len(), 1);
+    assert!(rimz::store::workflow::live_runs(&state).unwrap().is_empty());
+    assert!(
+        rimz::store::workflow::find(&state, &id.parse().unwrap())
+            .unwrap()
+            .unwrap()
+            .finished
+    );
     let receipt = success(
         env.rimz()
             .current_dir(checkout)

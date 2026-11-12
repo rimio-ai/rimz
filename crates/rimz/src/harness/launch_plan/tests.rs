@@ -791,6 +791,111 @@ fn workflow_env_pins_survive_both_isolations() {
 }
 
 #[test]
+fn unavailable_workflow_definition_warns_with_its_cause() {
+    use crate::store::workflow::VERSION;
+
+    for (case, record, finished, cause) in [
+        ("missing", None, false, "run record not found"),
+        ("recordless", None, false, "run record not found"),
+        (
+            "finished",
+            Some(serde_json::json!({"version": VERSION, "state": "done"})),
+            true,
+            "run is finished",
+        ),
+        (
+            "stranded",
+            Some(serde_json::json!({"version": 0, "state": "active"})),
+            false,
+            "an older RimZ wrote it",
+        ),
+        (
+            "undecodable",
+            Some(serde_json::json!({"version": VERSION})),
+            false,
+            "record does not decode",
+        ),
+        (
+            "newer",
+            Some(serde_json::json!({"version": VERSION + 1})),
+            false,
+            "a newer RimZ wrote it",
+        ),
+        (
+            "non-object",
+            Some(serde_json::json!([])),
+            false,
+            "not a JSON object",
+        ),
+        (
+            "ended",
+            Some(serde_json::json!({"version": 0, "state": "failed"})),
+            false,
+            "run has ended",
+        ),
+        ("unreadable", None, false, "record.json"),
+    ] {
+        let project = tempfile::tempdir().unwrap();
+        let state = StatePaths::under(
+            crate::WorkspaceId::from_project_root(project.path()),
+            project.path(),
+        )
+        .unwrap();
+        let runtime = RuntimePaths::under(state.workspace_id.clone(), project.path()).unwrap();
+        let workflow = crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Step,
+        };
+        let paths = if finished {
+            state.finished_workflow(&workflow.run)
+        } else {
+            state.workflow(&workflow.run)
+        };
+        if case != "missing" {
+            std::fs::create_dir_all(&paths.home).unwrap();
+        }
+        if let Some(record) = record {
+            std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+        } else if case == "unreadable" {
+            std::fs::create_dir(&paths.record).unwrap();
+        }
+        let mut request = request("claude", action_with_args("launch", vec![]));
+        request.identity.params.workflow = Some(workflow);
+        let machine = crate::config::MachineConfig::default();
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            machine: &machine,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        assert!(
+            plan.warnings.iter().any(|warning| matches!(warning,
+                LaunchPlanWarning::LaunchEnv(text)
+                    if text.contains("workflow definition folder unavailable") && text.contains(cause)
+            )),
+            "{case}: {:?}",
+            plan.warnings,
+        );
+        assert!(!plan.process().env.contains_key("RIMZ_WORKFLOW_DEFINITION"));
+    }
+}
+
+#[test]
 fn scoped_empty_directory_does_not_inherit_ancestor_git_protection() {
     for symlinked_home in [true, false] {
         let project = tempfile::tempdir().unwrap();

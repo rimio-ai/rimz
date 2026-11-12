@@ -267,7 +267,7 @@ fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
 }
 
 #[test]
-fn agents_restart_warns_and_keeps_the_pin_when_its_run_is_unreadable() {
+fn agents_restart_keeps_the_pin_of_an_unreadable_run_but_drops_one_whose_run_is_gone() {
     let mut actual = Vec::new();
     let mut outputs = Vec::new();
     for missing in [false, true] {
@@ -315,12 +315,22 @@ fn agents_restart_warns_and_keeps_the_pin_when_its_run_is_unreadable() {
             output.status.success(),
             warning.contains(&format!("warning: cannot read run `{id}`"))
                 && warning.contains("keeping its workflow pin"),
-            receipt.contains("restarted") && !receipt.contains("outside run"),
+            receipt.contains("restarted"),
+            receipt.contains(&format!("is now outside run `{id}`")),
             unchanged,
         ));
         outputs.push(output);
     }
-    assert_eq!(actual, vec![(true, true, true, true); 2], "{outputs:#?}");
+    // A broken record keeps the pin with a warning; a run with no record left is over, so its
+    // pin is a former one and is cleared with a receipt.
+    assert_eq!(
+        actual,
+        vec![
+            (true, true, true, false, true),
+            (true, false, true, true, false)
+        ],
+        "{outputs:#?}"
+    );
 }
 
 #[test]

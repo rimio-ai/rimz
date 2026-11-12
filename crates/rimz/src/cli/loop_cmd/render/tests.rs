@@ -275,6 +275,7 @@ fn workflow_view() -> ShowView {
     }
     view.workflow_runs = list::WorkflowRunRow::for_show(
         &records,
+        &[],
         "sweep",
         Path::new("/repo"),
         &launches,
@@ -4982,6 +4983,7 @@ fn task_run(state: &str, lane: &str, node: &str, second: i64) -> rimz::store::wo
 fn task_rows(records: &[rimz::store::workflow::RunRecord]) -> Vec<list::WorkflowRunRow> {
     let mut rows = list::WorkflowRunRow::for_show(
         records,
+        &[],
         "sweep",
         Path::new("/repo"),
         &BTreeMap::new(),

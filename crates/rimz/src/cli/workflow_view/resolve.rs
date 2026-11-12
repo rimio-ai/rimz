@@ -29,6 +29,68 @@ pub(in crate::cli) struct Located {
 pub(in crate::cli) enum Selection {
     Run(Box<Located>),
     Workflow(Vec<Located>),
+    /// A run named by id that this RimZ does not run: finished, one it cannot continue, or a
+    /// newer RimZ's.
+    Other(Box<Other>),
+}
+
+/// A run found by id whose home is not a live run this RimZ reads.
+pub(in crate::cli) struct Other {
+    pub(in crate::cli) state: rimz::StatePaths,
+    pub(in crate::cli) id: WorkflowRunId,
+    pub(in crate::cli) found: records::FoundRun,
+}
+
+impl Other {
+    /// The run's state as its record names it, or `finished` for a finished home whose record
+    /// names none this RimZ knows.
+    pub(in crate::cli) fn state_word(&self) -> &'static str {
+        self.found
+            .class
+            .header()
+            .and_then(|header| header.state)
+            .map_or("finished", records::RunState::as_str)
+    }
+
+    /// `rimz workflow show <id>`, with `--root` when the run is in another room.
+    pub(in crate::cli) fn show_command(&self, globals: &GlobalFlags) -> String {
+        let mut home = globals.clone();
+        home.root = None;
+        let here = caller(&home).map(|workspace| workspace.project_root);
+        let root = self
+            .found
+            .class
+            .header()
+            .and_then(|header| header.project_root.clone())
+            .filter(|root| here.as_ref() != Some(root));
+        command("show", &[self.id.as_str()], root.as_deref(), None, &[], &[])
+    }
+
+    /// Why a command that changes a run refuses this one, or none for a run that is over: a
+    /// finished home, or a live record that ends its run.
+    pub(in crate::cli) fn refusal(&self) -> Option<String> {
+        let id = &self.id;
+        match &self.found.class {
+            _ if self.found.finished => None,
+            records::RunClass::Ended(_) => None,
+            records::RunClass::Newer { version } => Some(format!(
+                "workflow run {id} has record version {version}, written by a newer RimZ; this \
+                 RimZ reads only version {}. It is left for the RimZ that wrote it; nothing \
+                 changed",
+                records::VERSION
+            )),
+            records::RunClass::Stranded { cause, .. } => Some(format!(
+                "this RimZ cannot continue workflow run {id}: {cause}; it reads only record \
+                 version {}. The workflow pass will end it as failed; nothing changed",
+                records::VERSION
+            )),
+            records::RunClass::NotObject => Some(format!(
+                "this RimZ cannot continue workflow run {id}: its record holds no JSON object. \
+                 The workflow pass will set it aside; nothing changed"
+            )),
+            records::RunClass::Current(_) | records::RunClass::Recordless => None,
+        }
+    }
 }
 
 enum Picked {
@@ -59,23 +121,26 @@ pub(in crate::cli) fn caller(globals: &GlobalFlags) -> Option<rimz::ResolvedWork
     Some(workspace)
 }
 
-pub(in crate::cli) fn locate(
-    id: &WorkflowRunId,
-) -> Result<(rimz::StatePaths, paths::WorkflowPaths)> {
-    paths::workflow_runs_under(&paths::rimz_home())?
-        .into_iter()
-        .find(|(state, run)| state.workflow(id).home == run.home)
+/// The room and home of a run by id, live or finished, in whichever recorded room holds it.
+pub(in crate::cli) fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, records::FoundRun)> {
+    records::find_under(&paths::rimz_home(), id)?
         .with_context(|| format!("unknown workflow run {id}"))
 }
 
+/// Every live run this RimZ runs, across all rooms. A room whose live directory cannot be read
+/// is skipped.
 pub(in crate::cli) fn all() -> Result<Vec<Located>> {
-    let rooms: BTreeMap<_, _> = paths::workflow_runs_under(&paths::rimz_home())?
-        .into_iter()
-        .map(|(state, _)| (state.root.clone(), state))
-        .collect();
     let mut runs = Vec::new();
-    for state in rooms.into_values() {
-        for record in records::list(&state)? {
+    for state in paths::recorded_rooms_under(&paths::rimz_home())? {
+        let records = match records::live_runs(&state) {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::debug!(path = %state.root.display(), %error,
+                    "skipping room with unreadable workflow homes");
+                continue;
+            }
+        };
+        for record in records {
             runs.push(Located {
                 paths: state.workflow(&record.id),
                 state: state.clone(),
@@ -86,24 +151,25 @@ pub(in crate::cli) fn all() -> Result<Vec<Located>> {
     Ok(runs)
 }
 
-/// The refusal of every run whose record another RimZ version wrote, across all rooms.
-pub(in crate::cli) fn refused() -> Result<Vec<records::WorkflowStoreErr>> {
-    Ok(paths::workflow_runs_under(&paths::rimz_home())?
-        .into_iter()
-        .filter_map(|(_, run)| records::load(&run).err().filter(|error| error.is_refused()))
-        .collect())
-}
-
-/// The room and paths of a run named by id whose record another RimZ version wrote; none for
-/// any other target, which `select` resolves and reports.
-pub(in crate::cli) fn refused_run(raw: &str) -> Option<(rimz::StatePaths, paths::WorkflowPaths)> {
-    let Ok(Target::Id(id)) = Target::parse(raw) else {
-        return None;
-    };
-    let (state, run) = locate(&id).ok()?;
-    records::load(&run)
-        .is_err_and(|error| error.is_refused())
-        .then_some((state, run))
+/// What `workflow show` selects by address among: every live run, and every finished run this
+/// RimZ reads. A room whose finished directory cannot be read adds none.
+fn shown() -> Result<Vec<Located>> {
+    let mut runs = all()?;
+    for state in paths::recorded_rooms_under(&paths::rimz_home())? {
+        let Ok(homes) = state.finished_workflow_runs() else {
+            continue;
+        };
+        for paths in homes {
+            if let Ok(records::RunClass::Current(record)) = records::classify(&paths) {
+                runs.push(Located {
+                    paths,
+                    state: state.clone(),
+                    record: *record,
+                });
+            }
+        }
+    }
+    Ok(runs)
 }
 
 pub(in crate::cli) fn command(
@@ -181,7 +247,7 @@ impl RunTargets {
         globals.root = None;
         Self {
             home: caller(&globals),
-            runs: all().ok(),
+            runs: shown().ok(),
             globals,
             rooms: RefCell::default(),
         }
@@ -308,13 +374,17 @@ pub(in crate::cli) fn select(
 ) -> Result<Selection> {
     let target = Target::parse(raw)?;
     if let Target::Id(id) = target {
-        let (state, paths) = locate(&id)?;
-        let record = records::load(&paths)?;
-        return Ok(Selection::Run(Box::new(Located {
-            state,
-            paths,
-            record,
-        })));
+        let (state, found) = locate(&id)?;
+        return Ok(match found.class {
+            records::RunClass::Current(record) if !found.finished => {
+                Selection::Run(Box::new(Located {
+                    state,
+                    paths: found.paths,
+                    record: *record,
+                }))
+            }
+            _ => Selection::Other(Box::new(Other { state, id, found })),
+        });
     }
     let workspace = caller(globals);
     let home = || {
@@ -322,7 +392,8 @@ pub(in crate::cli) fn select(
         context.root = None;
         caller(&context).map(|workspace| workspace.project_root)
     };
-    let mut runs = all()?;
+    // Only `show` selects an ended run, so only it reads the finished directories.
+    let mut runs = if verb == "show" { shown()? } else { all()? };
     let picked = pick(
         &target,
         raw,
@@ -334,7 +405,22 @@ pub(in crate::cli) fn select(
         extend,
     )?;
     Ok(match picked {
-        Picked::Run(index) => Selection::Run(Box::new(runs.swap_remove(index))),
+        Picked::Run(index) => {
+            let run = runs.swap_remove(index);
+            if run.paths.home == run.state.workflow(&run.record.id).home {
+                Selection::Run(Box::new(run))
+            } else {
+                Selection::Other(Box::new(Other {
+                    id: run.record.id.clone(),
+                    found: records::FoundRun {
+                        paths: run.paths,
+                        finished: true,
+                        class: records::RunClass::Current(Box::new(run.record)),
+                    },
+                    state: run.state,
+                }))
+            }
+        }
         Picked::Workflow(indices) => {
             let keep = indices.into_iter().collect::<BTreeSet<_>>();
             let mut index = 0;

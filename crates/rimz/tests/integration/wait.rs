@@ -1085,13 +1085,14 @@ fn wait_run_output_file_holds_only_the_command_output() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
-    // A run record another RimZ version wrote makes the watcher's fire warn.
-    let refused = env
+    // A file in place of the live-runs directory makes the watcher's workflow wake warn.
+    let workflow = env
         .store()
         .paths()
         .workflow(&rimz::ids::WorkflowRunId::new());
-    std::fs::create_dir_all(&refused.home).unwrap();
-    std::fs::write(&refused.record, r#"{"version":0}"#).unwrap();
+    let homes = workflow.home.parent().unwrap();
+    std::fs::create_dir_all(homes.parent().unwrap()).unwrap();
+    std::fs::write(homes, "not a directory").unwrap();
     let output = agent_wait(&env)
         .args(["wait", "--run", "printf 'first line\\nsecond line\\n'"])
         .output()
@@ -1105,7 +1106,7 @@ fn wait_run_output_file_holds_only_the_command_output() {
         "first line\nsecond line\n"
     );
     let log = std::fs::read_to_string(env.store().paths().wait_watch_log()).unwrap();
-    assert!(log.contains("another RimZ version wrote"), "{log}");
+    assert!(log.contains("could not wake workflows"), "{log}");
 }
 
 /// A watched command is the agent's own work, so it keeps the agent's temp

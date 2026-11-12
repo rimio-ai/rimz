@@ -1488,7 +1488,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             let running =
                 attention::run_in_progress(None, &records, &args.name, &view.root, acting_at)
                     .and_then(|run| in_progress_text(&run, Timestamp::now()));
-            let runs = workflow_log_runs(&paths, records, &view.history.fires, globals);
+            let runs = workflow_log_runs(&paths, &view.root, &view.history.fires, globals);
             let state = match &running {
                 Some(running) => ui::paint(ui::palette::cool(), running),
                 None => runs
@@ -1674,45 +1674,43 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let runs_workflows = runs_workflows(&task);
     // Every row reads the room's runs, as `loop list` does: a row edited mid-run may no longer
     // compile to a workflow while the run it started still goes.
-    let listed = if runs_workflows {
-        Some(workflow_records(&root)?)
-    } else {
-        workflow_records(&root).ok()
-    };
-    let (workflow_runs, capacity) =
-        if let Some((paths, records)) = listed.as_ref().filter(|_| runs_workflows) {
-            let capacity = list::capacity_waits(records, &args.name, &root)
-                .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
-                .collect();
-            let specs = crate::cli::workflow_view::sealed_specs(paths, records);
-            let mut rows = list::WorkflowRunRow::for_show(
-                records,
-                &args.name,
-                &root,
-                workflow_ledger
-                    .tasks
-                    .get(&args.name)
-                    .unwrap_or(&BTreeMap::new()),
-                &specs,
-                now_zoned.timestamp(),
-            );
-            name_workflow_runs(&mut rows, records, globals);
-            // LAST RUN reads its run's checks and attempts from the journal.
-            let detail = detail_index(&history.fires)
-                .and_then(|index| history.fires[index].run_id.as_deref());
-            for row in rows
-                .iter_mut()
-                .filter(|row| Some(row.id.as_str()) == detail)
-            {
-                if let Some(record) = records.iter().find(|record| record.id == row.id) {
-                    row.read_evidence(paths, record);
-                }
+    let (workflow_runs, capacity, records) = if runs_workflows {
+        let paths = StatePaths::for_project_root(&root)?;
+        let TaskRuns { records, ended } =
+            task_runs(&paths, &args.name, workflow_ledger.tasks.get(&args.name))?;
+        let capacity = list::capacity_waits(&records, &args.name, &root)
+            .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
+            .collect();
+        let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
+        let mut rows = list::WorkflowRunRow::for_show(
+            &records,
+            &ended,
+            &args.name,
+            &root,
+            workflow_ledger
+                .tasks
+                .get(&args.name)
+                .unwrap_or(&BTreeMap::new()),
+            &specs,
+            now_zoned.timestamp(),
+        );
+        name_workflow_runs(&mut rows, &records, &root, globals);
+        // LAST RUN reads its run's checks and attempts from the journal.
+        let detail =
+            detail_index(&history.fires).and_then(|index| history.fires[index].run_id.as_deref());
+        for row in rows
+            .iter_mut()
+            .filter(|row| Some(row.id.as_str()) == detail)
+        {
+            if let Some(record) = records.iter().find(|record| record.id == row.id) {
+                row.read_evidence(&paths, record);
             }
-            (rows, capacity)
-        } else {
-            (Vec::new(), BTreeMap::new())
-        };
-    let records = listed.map(|(_, records)| records).unwrap_or_default();
+        }
+        (rows, capacity, records)
+    } else {
+        let records = workflow_records(&root).map(|(_, records)| records);
+        (Vec::new(), BTreeMap::new(), records.unwrap_or_default())
+    };
     let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
     let in_progress = attention::run_in_progress(in_flight, &records, &args.name, &root, acting_at);
     let view = ShowView {
@@ -2383,8 +2381,9 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     .filter(|_| !args.failed)
     .and_then(|run| in_progress_text(&run, Timestamp::now()));
     let workflow_runs = records
+        .zip(root.as_deref())
         .filter(|_| joins_runs)
-        .map(|(paths, records)| workflow_log_runs(&paths, records, &history.fires, globals));
+        .map(|((paths, _), root)| workflow_log_runs(&paths, root, &history.fires, globals));
     let mut out = ui::out();
     let attribution = refused_fire_attribution(&history.fires);
     let shown = write_log_records(
@@ -2440,12 +2439,16 @@ fn launched_run_failed(record: &LoopRunRecord, runs: &[list::WorkflowRunRow]) ->
 fn name_workflow_runs(
     rows: &mut [list::WorkflowRunRow],
     records: &[rimz::store::workflow::RunRecord],
+    root: &Path,
     globals: &GlobalFlags,
 ) {
     if rows.is_empty() {
         return;
     }
     let targets = crate::cli::workflow_view::resolve::RunTargets::load(globals);
+    let mut context = globals.clone();
+    context.root = None;
+    let home = crate::cli::workflow_view::resolve::caller(&context);
     for row in rows {
         if let Some(record) = records.iter().find(|record| record.id == row.id) {
             let commands = targets.commands(record);
@@ -2453,15 +2456,76 @@ fn name_workflow_runs(
                 commands.target().to_owned(),
                 commands.command("show", None, &[], &[]),
             );
+        } else if row.state != "gone" {
+            let command = crate::cli::workflow_view::resolve::command(
+                "show",
+                &[row.id.as_str()],
+                (home.as_ref().map(|home| home.project_root.as_path()) != Some(root))
+                    .then_some(root),
+                None,
+                &[],
+                &[],
+            );
+            row.named(row.id.to_string(), command);
         }
     }
+}
+
+struct TaskRuns {
+    records: Vec<rimz::store::workflow::RunRecord>,
+    ended: Vec<(rimz::ids::WorkflowRunId, rimz::store::workflow::RunHeader)>,
+}
+
+// Live runs, live headers of runs ended in place (a stranded run whose move waits on its
+// release), and finished records or headers, without decoding another version's record.
+fn task_runs(
+    paths: &StatePaths,
+    task: &str,
+    launches: Option<&BTreeMap<PathBuf, schedule::launch_ledger::WorkflowLaunchRecord>>,
+) -> Result<TaskRuns> {
+    let mut records = Vec::new();
+    let mut ended = Vec::new();
+    let remembered = launches
+        .into_iter()
+        .flat_map(|launches| launches.values())
+        .filter_map(|launch| launch.run.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let live = rimz::store::workflow::live(paths)?
+        .into_iter()
+        .map(|run| (run.paths, Ok(run.class), true));
+    let finished = paths.finished_workflow_runs()?.into_iter().map(|home| {
+        let class = rimz::store::workflow::classify(&home);
+        (home, class, false)
+    });
+    for (home, class, live) in live.chain(finished) {
+        match class {
+            Ok(rimz::store::workflow::RunClass::Current(record))
+                if live || record.ran_for(task) || remembered.contains(&record.id) =>
+            {
+                records.push(*record);
+            }
+            Ok(rimz::store::workflow::RunClass::Ended(header)) => {
+                if let Some(id) = home
+                    .home
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| rimz::ids::WorkflowRunId::parse(name).ok())
+                    && (header.task.as_deref() == Some(task) || remembered.contains(&id))
+                {
+                    ended.push((id, *header));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(TaskRuns { records, ended })
 }
 
 /// The runs a workflow task's log blocks name, live or finished, whichever task started them.
 /// The workflow runs a task's history names, found by the run ids its fires recorded.
 fn workflow_log_runs(
     paths: &StatePaths,
-    mut records: Vec<rimz::store::workflow::RunRecord>,
+    root: &Path,
     fires: &[LoopRunRecord],
     globals: &GlobalFlags,
 ) -> Vec<list::WorkflowRunRow> {
@@ -2474,7 +2538,23 @@ fn workflow_log_runs(
         .filter_map(|fire| fire.run_id.as_deref())
         .chain(blockers)
         .collect::<std::collections::BTreeSet<_>>();
-    records.retain(|record| named.contains(record.id.as_str()));
+    let mut ended = Vec::new();
+    // Missing homes keep their history rows without this enrichment.
+    let records = named
+        .into_iter()
+        .filter_map(|id| rimz::ids::WorkflowRunId::parse(id).ok())
+        .filter_map(|id| match rimz::store::workflow::find(paths, &id) {
+            Ok(Some(found)) => match found.class {
+                rimz::store::workflow::RunClass::Current(record) => Some(*record),
+                rimz::store::workflow::RunClass::Ended(header) if found.finished => {
+                    ended.push((id, *header));
+                    None
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let specs = crate::cli::workflow_view::sealed_specs(paths, &records);
     let mut rows = records
         .iter()
@@ -2484,15 +2564,18 @@ fn workflow_log_runs(
             row.read_evidence(paths, record);
             row
         })
+        .chain(ended.iter().map(|(id, header)| {
+            list::WorkflowRunRow::of_header(id, header, root, Timestamp::now())
+        }))
         .collect::<Vec<_>>();
-    name_workflow_runs(&mut rows, &records, globals);
+    name_workflow_runs(&mut rows, &records, root, globals);
     rows
 }
 
-/// The workflow runs of the room at `root`, listed once for every reader of the command.
+/// The live workflow runs of the room at `root`, listed once for every reader of the command.
 fn workflow_records(root: &Path) -> Result<(StatePaths, Vec<rimz::store::workflow::RunRecord>)> {
     let paths = StatePaths::for_project_root(root)?;
-    let records = rimz::store::workflow::list(&paths)?;
+    let records = rimz::store::workflow::live_runs(&paths)?;
     Ok((paths, records))
 }
 

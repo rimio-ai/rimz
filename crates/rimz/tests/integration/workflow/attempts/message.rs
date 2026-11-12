@@ -270,7 +270,7 @@ fn held(
     let [queued] = held.as_slice() else {
         panic!("one notice queued before the hold: {held:?}");
     };
-    let id = rimz::store::workflow::list(&room.env.state_path_for(&room.env.project_root))
+    let id = rimz::store::workflow::live_runs(&room.env.state_path_for(&room.env.project_root))
         .unwrap()
         .into_iter()
         .find(|record| record.workflow == "tell")

@@ -535,7 +535,15 @@ fn wake_workflow(paths: &StatePaths, record: &RunRecord) {
         return;
     };
     let wake = (|| {
-        let workflow = crate::store::workflow::load(&paths.workflow(&attempt.run))?;
+        // Only a live run this RimZ runs is woken; any other attempt's run has nothing to hear.
+        let Some(crate::store::workflow::FoundRun {
+            class: crate::store::workflow::RunClass::Current(workflow),
+            finished: false,
+            ..
+        }) = crate::store::workflow::find(paths, &attempt.run)?
+        else {
+            return Ok(());
+        };
         crate::harness::workflow::wake_run(&workflow.project_root, &attempt.run)
     })();
     if let Err(error) = wake {

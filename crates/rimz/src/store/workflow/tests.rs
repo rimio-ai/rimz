@@ -59,11 +59,12 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     let record = record();
     let paths = state.workflow(&record.id);
+    assert_eq!(record.header().node.as_deref(), Some("pr"));
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
     assert_eq!(load(&paths).unwrap(), record);
     let id = record.id.as_str();
-    let fix = format!("`rimz workflow cancel {id}`, then start the workflow again");
-    for version in [1, 2, 3, 4, 5, 6, VERSION + 1] {
+    let fix = format!("this RimZ reads only version {VERSION}");
+    for version in (1..VERSION).chain([VERSION + 1]) {
         let mut value = serde_json::to_value(&record).unwrap();
         value["version"] = json!(version);
         // A version-2 body this binary no longer decodes still meets the refusal first.
@@ -88,21 +89,201 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
 }
 
 #[test]
-fn remove_refused_clears_only_a_refused_run_home() {
+fn classification_reads_newer_versions_no_further_and_strands_unfinished_old_runs() {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     let record = record();
     let paths = state.workflow(&record.id);
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
-    assert!(!remove_refused(&paths, &guard).unwrap());
-    assert!(paths.record.is_file());
-    let mut value = serde_json::to_value(&record).unwrap();
-    value["version"] = json!(3);
-    fs::write(&paths.record, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(remove_refused(&paths, &guard).unwrap());
-    assert!(!paths.home.exists());
-    assert!(!remove_refused(&paths, &guard).unwrap());
+    assert_eq!(
+        classify(&paths).unwrap(),
+        RunClass::Current(Box::new(record.clone()))
+    );
+    let value = serde_json::to_value(&record).unwrap();
+    let mut ended = value.clone();
+    ended["version"] = json!(VERSION - 1);
+    ended["state"] = json!("done");
+    ended["outcome"] = json!({"ending":{"kind":"done"}, "reason":"merged", "acted":true});
+    let mut undecodable = value.clone();
+    undecodable.as_object_mut().unwrap().remove("visits");
+    let mut no_version = value.clone();
+    no_version.as_object_mut().unwrap().remove("version");
+    let mut text_version = value.clone();
+    text_version["version"] = json!("four");
+    let mut newer = value.clone();
+    newer["version"] = json!(VERSION + 1);
+    // A newer record is not read past its version, even where its state is garbage.
+    newer["state"] = json!(7);
+    let older = |version: u64| {
+        let mut older = value.clone();
+        older["version"] = json!(version);
+        older
+    };
+    let previous = u64::from(VERSION - 1);
+    let previous_cause = format!("stranded older {previous}");
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (
+            serde_json::to_vec(&older(previous)).unwrap(),
+            &previous_cause,
+        ),
+        (serde_json::to_vec(&older(1)).unwrap(), "stranded older 1"),
+        (serde_json::to_vec(&no_version).unwrap(), "stranded missing"),
+        (
+            serde_json::to_vec(&text_version).unwrap(),
+            "stranded invalid",
+        ),
+        (
+            serde_json::to_vec(&undecodable).unwrap(),
+            "stranded undecodable",
+        ),
+        (serde_json::to_vec(&ended).unwrap(), "ended"),
+        (serde_json::to_vec(&newer).unwrap(), "newer"),
+        (b"corrupt".to_vec(), "not object"),
+        (b"[1]".to_vec(), "not object"),
+    ];
+    for (bytes, expected) in cases {
+        fs::write(&paths.record, &bytes).unwrap();
+        let class = classify(&paths).unwrap();
+        let seen = match &class {
+            RunClass::Stranded { cause, header } => {
+                assert_eq!(header.workflow.as_deref(), Some("review"), "{expected}");
+                assert_eq!(header.node.as_deref(), Some("pr"), "{expected}");
+                match cause {
+                    StrandedCause::Older { version } => format!("stranded older {version}"),
+                    StrandedCause::MissingVersion => "stranded missing".into(),
+                    StrandedCause::InvalidVersion => "stranded invalid".into(),
+                    StrandedCause::Undecodable { .. } => "stranded undecodable".into(),
+                }
+            }
+            RunClass::Ended(header) => {
+                assert_eq!(header.node.as_deref(), Some("pr"));
+                assert_eq!(
+                    (header.state, header.reason.as_deref(), header.acted),
+                    (Some(RunState::Done), Some("merged"), Some(true))
+                );
+                "ended".into()
+            }
+            RunClass::Newer { version } => {
+                assert_eq!(*version, u64::from(VERSION + 1));
+                "newer".into()
+            }
+            RunClass::NotObject => "not object".into(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(seen, expected);
+    }
+    fs::remove_file(&paths.record).unwrap();
+    assert_eq!(classify(&paths).unwrap(), RunClass::Recordless);
+    assert!(paths.home.is_dir(), "classification never removes a home");
+}
+
+#[test]
+fn finish_moves_only_an_ended_run_and_never_replaces_a_finished_home() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let mut record = record();
+    let live = state.workflow(&record.id);
+    let finished = state.finished_workflow(&record.id);
+    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    assert_eq!(
+        finish(&state, &record.id, Some(b"h"), &guard).unwrap(),
+        Finished::Kept,
+        "an active run stays"
+    );
+    record.state = RunState::Done;
+    record.task = Some("nightly".into());
+    record.loop_report = LoopReport::Owed;
+    write(&live, &record, &guard).unwrap();
+    assert_eq!(
+        finish(&state, &record.id, Some(b"h"), &guard).unwrap(),
+        Finished::Kept,
+        "a run that owes its loop report stays"
+    );
+    assert!(!live.history().exists(), "a kept run gets no history");
+    let mut older = serde_json::to_value(&record).unwrap();
+    older["version"] = json!(VERSION - 1);
+    older["state"] = json!("active");
+    fs::write(&live.record, serde_json::to_vec(&older).unwrap()).unwrap();
+    assert_eq!(
+        finish(&state, &record.id, None, &guard).unwrap(),
+        Finished::Kept,
+        "a stranded run waits for the pass to end it"
+    );
+    record.loop_report = LoopReport::Sent;
+    write(&live, &record, &guard).unwrap();
+    fs::create_dir_all(&finished.home).unwrap();
+    assert_eq!(
+        finish(&state, &record.id, Some(b"history"), &guard).unwrap(),
+        Finished::Collision
+    );
+    assert!(live.record.is_file() && !finished.record.exists());
+    assert_eq!(fs::read(live.history()).unwrap(), b"history");
+    fs::remove_dir(&finished.home).unwrap();
+    assert_eq!(
+        finish(&state, &record.id, Some(b"history"), &guard).unwrap(),
+        Finished::Moved
+    );
+    assert!(!live.home.exists());
+    assert_eq!(load(&finished).unwrap(), record);
+    assert_eq!(fs::read(finished.history()).unwrap(), b"history");
+    assert_eq!(
+        finish(&state, &record.id, None, &guard).unwrap(),
+        Finished::Already
+    );
+    let found = find(&state, &record.id).unwrap().unwrap();
+    assert!(found.finished && found.paths.home == finished.home);
+    assert_eq!(
+        state
+            .finished_workflow_runs()
+            .unwrap()
+            .into_iter()
+            .map(|paths| paths.home)
+            .collect::<Vec<_>>(),
+        vec![finished.home.clone()]
+    );
+    assert!(live_runs(&state).unwrap().is_empty());
+    let other = WorkflowRunId::new();
+    assert_eq!(
+        finish(&state, &other, None, &guard).unwrap(),
+        Finished::Gone
+    );
+    assert!(find(&state, &other).unwrap().is_none());
+    // A record that is not a JSON object is set aside as it stands.
+    let broken = state.workflow(&other);
+    fs::create_dir_all(&broken.home).unwrap();
+    fs::write(&broken.record, b"corrupt").unwrap();
+    assert_eq!(
+        finish(&state, &other, None, &guard).unwrap(),
+        Finished::Moved
+    );
+    assert_eq!(
+        fs::read(state.finished_workflow(&other).record).unwrap(),
+        b"corrupt"
+    );
+}
+
+#[test]
+fn finish_keeps_the_live_home_when_its_history_cannot_be_written() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let mut record = record();
+    record.state = RunState::Canceled;
+    let live = state.workflow(&record.id);
+    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    // A directory at the destination fails the atomic write for any uid.
+    fs::create_dir_all(live.history().join("blocker")).unwrap();
+    assert!(finish(&state, &record.id, Some(b"history"), &guard).is_err());
+    assert!(live.record.is_file());
+    assert!(!state.finished_workflow(&record.id).home.exists());
+    fs::remove_dir_all(live.history()).unwrap();
+    assert_eq!(
+        finish(&state, &record.id, Some(b"history"), &guard).unwrap(),
+        Finished::Moved,
+        "a retry completes the move"
+    );
 }
 
 #[test]
@@ -203,10 +384,10 @@ fn unfinished_run_reader_pins_active_and_parked_but_not_terminal_states() {
 }
 
 #[test]
-fn strict_run_reader_skips_refused_versions_but_refuses_bad_json_with_the_record_path() {
+fn strict_run_reader_skips_other_versions_and_bad_json_but_refuses_an_unreadable_record() {
     let home = tempfile::tempdir().unwrap();
     let (_, live) = pin_record(home.path(), "live", RunState::Active);
-    for version in [3, 999] {
+    for version in [VERSION - 1, VERSION + 1] {
         let (state, run) = pin_record(home.path(), "old", RunState::Active);
         let mut value = serde_json::to_value(&run).unwrap();
         value["version"] = json!(version);
@@ -223,6 +404,17 @@ fn strict_run_reader_skips_refused_versions_but_refuses_bad_json_with_the_record
     let (state, run) = pin_record(home.path(), "project", RunState::Active);
     let path = state.workflow(&run.id).record;
     fs::write(&path, "{").unwrap();
+    assert_eq!(
+        unfinished_under(home.path(), RunRead::Strict)
+            .unwrap()
+            .into_iter()
+            .map(|run| run.id)
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&live.id)
+    );
+    // A directory where the record belongs fails the read for any uid.
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
     let result = unfinished_under(home.path(), RunRead::Strict);
     assert!(
         result
@@ -599,7 +791,7 @@ fn durable_record_round_trip_and_json_shape() {
         children.contains(&"signs".into()),
         "judges need signs/ at creation"
     );
-    assert_eq!(list(&state).unwrap(), vec![record.clone()]);
+    assert_eq!(live_runs(&state).unwrap(), vec![record.clone()]);
     let mut next = record.clone();
     next.next_seq = 3;
     write(&paths, &next, &guard).unwrap();
@@ -631,7 +823,7 @@ fn listing_skips_unreadable_records_but_named_loads_fail() {
         assert!(load(&paths).is_err(), "named loads must still fail");
     }
     assert_eq!(
-        list(&state).ok(),
+        live_runs(&state).ok(),
         Some(vec![record]),
         "unreadable records must not hide healthy runs"
     );

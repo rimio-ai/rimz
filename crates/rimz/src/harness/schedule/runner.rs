@@ -1052,7 +1052,7 @@ impl<'a> TaskFire<'a> {
         state: &StatePaths,
     ) -> Result<Option<crate::store::workflow::RunRecord>> {
         let checkout = self.launch_checkout().canonicalize()?;
-        Ok(crate::store::workflow::list(state)?
+        Ok(crate::store::workflow::live_runs(state)?
             .into_iter()
             .find(|run| run.started_by(&self.name) && run.firing_checkout() == checkout))
     }
@@ -3026,7 +3026,7 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
         return Ok(0.0);
     }
     let mut reserved = 0.0;
-    for record in crate::store::workflow::list(&state)? {
+    for record in crate::store::workflow::live_runs(&state)? {
         // A finished run whose report is owed has no history row yet, so its cost counts here.
         if !record.started_by(task) && !(record.ran_for(task) && record.owes_loop_report()) {
             continue;

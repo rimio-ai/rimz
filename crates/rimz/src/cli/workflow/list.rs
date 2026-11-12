@@ -41,13 +41,6 @@ fn capacity_wait(record: &RunRecord) -> Option<&Wait> {
 }
 
 pub(super) fn run(json: bool, globals: &super::super::GlobalFlags) -> Result<()> {
-    for refusal in resolve::refused()? {
-        writeln!(
-            render::err(),
-            "{} {refusal}",
-            render::paint(render::palette::warn().bold(), "warning:")
-        )?;
-    }
     render(&resolve::all()?, None, json, globals)
 }
 
