@@ -2243,6 +2243,42 @@ fn dead_launcher_stops_the_unpublished_supervised_run() {
 }
 
 #[test]
+fn dead_launcher_refuses_an_unpublished_run_without_a_handle() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    let mut live = advance_ok(&state, &record.id, &host);
+    let run = live.attempt.as_mut().unwrap().run.take().unwrap();
+    live.attempt.as_mut().unwrap().host = Host {
+        pid: u32::MAX,
+        start: None,
+    };
+    let mut orphan = crate::store::run::RunRecord::new(
+        state.workspace_id.clone(),
+        crate::ids::AgentKind::new_unchecked("claude"),
+        crate::agents::PermissionMode::Auto,
+        "Build it".into(),
+        live.scope.path.clone(),
+    );
+    orphan.run_id = run.run_id;
+    orphan.agent_name = None;
+    orphan.workflow = Some(host.launched.borrow()[0].workflow.clone());
+    crate::harness::run::create(&state, &orphan).unwrap();
+    update(&state, &live);
+    let error = advance(&state, &record.id, &host).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("workflow attempt run has no handle"),
+        "the orphan without a handle must refuse: {error}"
+    );
+    assert_eq!(
+        host.stops.get(),
+        0,
+        "nothing can be stopped without a handle"
+    );
+}
+
+#[test]
 fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
     let (_dir, state, record) = setup(STEP);
     let host = FakeHost::new();
