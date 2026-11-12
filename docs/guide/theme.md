@@ -116,7 +116,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker, the workflow badge, and the context meter's `┤` compaction wall and matching point label |
 | `body` | body text: stat figures, subagent lines, worktree headers, workflow state words, active stall resource words, not-tracked fix text, and the card's due-message count |
 | `muted` | chrome: labels, ages, subordinate values, a group header's `· branch` beside a lane label it differs from, workflow visit counts, the needs-you filter header, the fading stall lead and items, stall overflow tags, the not-tracked suffix and `tip:` label, the compacted-context meter's empty track while it has no size estimate |
-| `faint` | faintest chrome: measured bar tracks, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
+| `faint` | faintest chrome: measured bar tracks, the spent part of budget bars and the unknown budget track, `·` separators (including between stall items), dotted dividers, workflow detour connectors |
 | `rule` | the darkest chrome, one step below `faint`: the scrollbar track |
 | `selection` | the selected card's bright `▌` spine, the light `▏` mark beside its cursor entry, and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |

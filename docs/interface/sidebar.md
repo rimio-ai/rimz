@@ -158,7 +158,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 
 | mark | meaning |
 |------|---------|
-| `▰▰▰▱▱` | budget bar: the filled part is the budget left |
+| `▰▰▰▱▱` | budget bar: the filled part is the budget left, the quieter track the share spent |
 | `╱` | a model's own sub-cap, as a tick on its parent window's bar |
 | `╎` | a tighter longer window's allowance, measured on this bar's scale |
 | `5h` `7d` `mo` | an included budget window, labeled by its length (`mo` covers 28 to 31 days) |
@@ -865,7 +865,7 @@ Stacked blocks (`provider_tabs = "never"`):
 
 ### Budget bars
 
-A bar's filled part is the budget left. Every bar starts and ends on the same columns, so the rows compare at a glance.
+A bar's filled part is the budget left, and the spent part is drawn one step quieter than the labels beside it so the budget left leads. Every bar starts and ends on the same columns, so the rows compare at a glance.
 
 A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. An API-billed login never shows this alarm. The header uses the account's valid display label or its name (here `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
 
@@ -884,7 +884,7 @@ Claude · work v2.1.158                                                         
 | a full bar and no countdown | The sliding window has not started: its clock starts at your first token. Fixed periods, including billing months, count down even with no usage. |
 | an empty track, all red | The window is spent. |
 | a short window painted spent while a longer one is spent | The longer window gates it: a spent `7d` makes `5h` unusable until the `7d` resets, so `5h` shows red with no countdown whatever its own reading. |
-| a dim empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |
+| a faint empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |
 | a full bar and `∞` | No limit applies: an API-key or Claude Console login without a counting monthly cap or display ceiling, or extra usage with no limit or balance figure. Unlimited named quotas and lifted limits also draw this bar, but only when no enforced window remains. |
 | an `ex` row | Paid extra usage on accounts with only time windows, shown while an included window is spent and extra usage is available: the longest spent window comes first, then `ex`. The figure is dollars left, never the budget size. With a limit the bar drains; without one a positive balance draws full. Reported unlimited extra usage draws full with `∞`, whether or not a display ceiling is set. There is no `ex` row when the provider reports nothing, extra usage is off, or no dollars are left. Without usable extra usage, a longer spent window replaces the second included row (`5h` and `mo` when the month is spent). Dollar figures on `ex` and `api` floor: cents below $10 (dropping `.00`), grouped whole dollars below $100,000, whole thousands below $1 million, then millions with one decimal. |
 | an `api` row | An API-key or Claude Console login. A counting `/month` account cap drains against your history pool's spend since 00:00 UTC on the 1st, with the dollars left on the right; raises enlarge the bar's cap. Without a monthly cap, a display ceiling drains against 30-local-day spend; without either, the bar is full and reads `∞`. A daily cap does not replace that display ceiling. Stale month spend paints an unknown track until refreshed; a pool with no spend this month shows the full cap left. The row never shows the provider's credit balance. |

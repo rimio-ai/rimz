@@ -551,10 +551,10 @@ pub(in crate::sidebar_pane::render) struct ManaTick {
 /// gold → clay-amber → red along the health ramp by how much remains, with the
 /// `[theme.display.budget_bar]` zones as the warm stops ([`mana_style`]), so a near-spent
 /// window reddens regardless of which window it is. The drained `▱` run rides
-/// the dim chrome — a step up from the faint
-/// context-gauge track, so the spent share stays legible on the dashboard. At
-/// 0% remaining — the budget fully spent — the whole empty track turns red;
-/// any nonzero remaining budget keeps at least one filled cell.
+/// [`Component::BudgetSpent`], one step below the dim chrome, so the budget left
+/// leads and the spent share recedes. At 0% remaining — the budget fully spent
+/// — the whole empty track turns red; any nonzero remaining budget keeps at
+/// least one filled cell.
 /// Ticks use their 0–100 remaining axis across the full width,
 /// independently of the parent fill, but never on a fully spent track. The end
 /// cells belong to exactly 0% and exactly 100%; any partial reading sits inside.
@@ -585,7 +585,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     let track_style = if remaining_pct == 0 {
         fill_style
     } else {
-        theme.muted()
+        budget_spent_style(theme)
     };
     let fill_glyph = theme.glyph(GlyphRole::MeterManaFilled);
     let track_glyph = theme.glyph(GlyphRole::MeterManaTrack);
@@ -622,16 +622,23 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
 }
 
 /// An unknown provider budget: the window identity is known (`5h`, `7d`, …) but
-/// the account reading is older than the longest reset. Paint a plain dim empty
-/// track, distinct from a full green bar and from the fully-spent red track.
+/// the account reading is older than the longest reset. Paint a plain empty
+/// track in the spent tone, distinct from a full green bar and from the
+/// fully-spent red track.
 pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
     theme: &Theme,
     width: usize,
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
         theme.glyph(GlyphRole::MeterManaTrack).repeat(width.max(1)),
-        theme.muted(),
+        budget_spent_style(theme),
     )]
+}
+
+/// The spent share of a budget bar: [`Component::BudgetSpent`], a bare `DIM`
+/// weight under `NO_COLOR` like the chrome it sits beside.
+fn budget_spent_style(theme: &Theme) -> Style {
+    theme.styled(Component::BudgetSpent, theme.faint().add_modifier)
 }
 
 /// The mana bar's tone at `remaining_pct` budget left: the shared budget tone

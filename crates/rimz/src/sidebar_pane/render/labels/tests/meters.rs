@@ -3,6 +3,10 @@ use crate::agents::context::PaceReading;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
 
+fn budget_spent(theme: &Theme) -> Style {
+    theme.styled(Component::BudgetSpent, theme.faint().add_modifier)
+}
+
 fn text(spans: &[Span<'_>]) -> String {
     spans.iter().map(|s| s.content.as_ref()).collect()
 }
@@ -603,7 +607,23 @@ fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
         "a three-quarter window has left pure green"
     );
     let track = &mana_bar_spans(&lit, 70, 10, &zones, &[])[1];
-    assert_eq!(track.style, lit.muted());
+    assert_eq!(track.style, budget_spent(&lit));
+    assert_ne!(
+        track.style,
+        lit.muted(),
+        "the spent run sits a step below muted"
+    );
+    let unknown = unknown_mana_bar_spans(&lit, 10);
+    assert_eq!(text(&unknown), "▱▱▱▱▱▱▱▱▱▱");
+    assert_eq!(
+        unknown[0].style,
+        budget_spent(&lit),
+        "the unknown track is spent chrome"
+    );
+    assert_eq!(
+        unknown_mana_bar_spans(&plain, 10)[0].style,
+        budget_spent(&plain)
+    );
     let spent = mana_bar_spans(&lit, 0, 10, &zones, &[]);
     assert_eq!(
         spent[0].style.fg,
@@ -682,7 +702,7 @@ fn mana_ticks_use_their_own_axis_without_changing_width_or_parent_tone() {
                 } else if span.content.contains('▰') || remaining == 0 {
                     assert_eq!(span.style, mana_style(&theme, remaining, &zones));
                 } else {
-                    assert_eq!(span.style, theme.muted());
+                    assert_eq!(span.style, budget_spent(&theme));
                 }
             }
             if no_color {

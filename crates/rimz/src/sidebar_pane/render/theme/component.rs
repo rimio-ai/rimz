@@ -150,6 +150,9 @@ pub(crate) enum Component {
     WindowLarge,
     /// Window token, `1M`+ tier — the loudest, an accent (never a brand clay).
     WindowHuge,
+    /// The spent share of a provider budget bar, and the whole track of a
+    /// budget with no reading: one step below the dim chrome beside it.
+    BudgetSpent,
     /// The context meter's expired prompt-cache fill: greyed `alarm`, red
     /// enough to read as lost without looking like the full bar.
     CacheExpired,
@@ -242,6 +245,7 @@ impl Component {
         Component::WindowMedium,
         Component::WindowLarge,
         Component::WindowHuge,
+        Component::BudgetSpent,
         Component::CacheExpired,
         Component::ContextCompacted,
         Component::CompactionPoint,
@@ -269,7 +273,9 @@ impl Component {
             WorktreeHeader | BranchDelta | WorkflowState | StallWord | NotTrackedFix => {
                 palette.body
             }
-            WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator => palette.faint,
+            WorktreePristine | WindowSmall | WorkflowDetour | StallSeparator | BudgetSpent => {
+                palette.faint
+            }
             WorktreePrConflict | StallLeadActive | StallFigure | RoomModeMark => palette.caution,
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
