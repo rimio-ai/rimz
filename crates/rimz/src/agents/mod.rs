@@ -91,9 +91,8 @@ pub use credits::{
     ResetGrant,
 };
 pub use definition::{
-    AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
-    HookCoverage, IntegrationConcern, LocalSessionDiscovery, PermissionMode, PlanCapacities,
-    PlanCapacity, PlanLabel, SamePaneSessionPolicy, UserCapability, Variant,
+    AgentDefinition, AgentSpec, CapabilityLevel, ConcernCoverage, HookCoverage, IntegrationConcern,
+    LocalSessionDiscovery, PermissionMode, SamePaneSessionPolicy, UserCapability, Variant,
 };
 use definition::{
     CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs, LaunchSpec,
@@ -122,9 +121,9 @@ pub use locate::locate_binary;
 use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use login::{
     AccountStatus, BirthLoginErr, LoginCatalog, LoginConfigErr, LoginSource, ProviderHomeLogin,
-    ProviderLogin, RoomAccount, RoomAccounts, RoomLoginErr, RoomLoginSet, ambient_env,
-    machine_login_catalog, provider_home_logins, resolve_room_accounts, room_account,
-    room_accounts, session_login, session_login_env,
+    ProviderLogin, RoomAccounts, RoomLoginErr, RoomLoginSet, ambient_env, machine_login_catalog,
+    provider_home_logins, resolve_room_accounts, room_account, room_accounts, session_login,
+    session_login_env,
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{

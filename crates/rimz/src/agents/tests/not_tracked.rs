@@ -86,7 +86,7 @@ fn adapter(hooks: Hooks, discovery: LocalSessionDiscovery, wired: bool) -> Agent
     let base = registry::BUILTINS[0].spec();
     let spec = AgentSpec {
         kind: "unregistered",
-        capabilities: Capabilities {
+        capabilities: definition::Capabilities {
             local_session_discovery: discovery,
             ..base.capabilities
         },
@@ -102,7 +102,7 @@ fn adapter(hooks: Hooks, discovery: LocalSessionDiscovery, wired: bool) -> Agent
         },
         aliases: &[],
         display_name: "Unregistered",
-        brand: Brand {
+        brand: definition::Brand {
             emblem: None,
             color: 252,
             color_rgb: (216, 216, 216),

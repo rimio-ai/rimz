@@ -526,9 +526,10 @@ pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
     });
 }
 
-/// Format a provider display name or raw tier per the adapter's [`crate::agents::PlanLabel`].
-/// A name wins verbatim (`Ultra` → `Claude Ultra`); without one, the tier vocabulary
-/// applies (`pro` → `ChatGPT Pro 200`). Unknown kinds just title-case the tier.
+/// Format a provider display name or raw tier per the adapter's
+/// [`crate::agents::definition::PlanLabel`]. A name wins verbatim (`Ultra` → `Claude Ultra`);
+/// without one, the tier vocabulary applies (`pro` → `ChatGPT Pro 200`). Unknown kinds just
+/// title-case the tier.
 pub(super) fn format_plan_label(kind: &str, raw: &str, name: Option<&str>) -> String {
     match crate::agents::spec_by_kind(kind).map(|definition| &definition.plan_label) {
         Some(label) => label.format(raw, name),
