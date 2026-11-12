@@ -40,10 +40,11 @@ impl CurrentChannel {
     }
 }
 
-/// The current channel a command runs in: an explicit named lane from
-/// `RIMZ_CHANNEL`, else the caller's stored card channel, else the worktree
-/// rule. A human shell at the project root has no current channel. The value
-/// keeps its provenance, so create-on-miss launches in place on a derived one.
+/// The current channel a command runs in: the lane `RIMZ_CHANNEL` names, read
+/// as typed input so trunk's aliases mean trunk, else the caller's stored card
+/// channel, else the worktree rule. A human shell at the project root has no
+/// current channel. The value keeps its provenance, so create-on-miss launches
+/// in place on a derived one.
 pub fn current_channel(
     workspace: &crate::ResolvedWorkspace,
     store: Option<&crate::Store>,
@@ -69,6 +70,10 @@ pub fn current_channel_with(
     caller: impl FnOnce() -> Option<(crate::harness::ancestry::CallerIdentity, Vec<AgentState>)>,
 ) -> CurrentChannel {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        let project_root = &workspace.project_root;
+        if crate::address::LaneSelector::parse(Some(&channel), Some(project_root)).is_trunk() {
+            return CurrentChannel::Root(crate::address::trunk_lane_name(project_root));
+        }
         return CurrentChannel::Named(LaneName::dashed(&channel));
     }
     if let Some((caller, rows)) = caller()
@@ -134,7 +139,7 @@ fn pane_pin(project_root: &Path) -> Option<crate::ids::Lane> {
 /// its live durable owner in the process ancestry. Ordinary shells stay human.
 pub fn sender_for(
     caller: Option<&crate::harness::ancestry::CallerIdentity>,
-    channel: Option<&str>,
+    channel: Option<&LaneName>,
     no_from: bool,
 ) -> MessageSender {
     if no_from {
@@ -149,7 +154,7 @@ pub fn sender_for(
         name: caller.name.clone(),
         profile: caller.profile.clone(),
         role: caller.role.clone(),
-        channel: channel.map(ToOwned::to_owned),
+        channel: channel.cloned(),
     }
 }
 

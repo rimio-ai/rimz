@@ -315,11 +315,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         .agents
         .iter()
         .filter(|agent| {
-            all || channel.is_none_or(|channel| {
-                agent
-                    .lane_name()
-                    .is_some_and(|name| name.as_str() == channel)
-            })
+            all || channel.is_none_or(|channel| agent.lane_name().as_ref() == Some(channel))
         })
         .flat_map(|agent| {
             agent

@@ -678,12 +678,11 @@ fn user_can_finish_a_board_without_live_members() {
     let receipt = team_stage::flip(FlipRequest {
         workspace: &fixture.env.resolve_workspace(&fixture.env.project_root),
         store: &fixture.env.store(),
-        team_name: "forge",
+        instance: &"forge#feature-team".parse().unwrap(),
         team: &serde_json::from_value(
             json!({"roles": [{"role": "coder", "profile": "worker", "owns": ["Build"]}]}),
         )
         .unwrap(),
-        channel: "feature-team",
         worktree: &fixture.env.project_root,
         members: &[],
         to: "Done",
@@ -3199,9 +3198,14 @@ fn agent_launched_team_death_reports_once_and_respects_a_racing_done() {
         settle();
         assert_eq!(reports().len(), 1);
         assert!(
-            run::open_team_run_for(store.paths(), "forge#feature-team")
-                .unwrap()
-                .is_none()
+            run::open_team_run_for(
+                store.paths(),
+                &"forge#feature-team"
+                    .parse::<rimz::ids::TeamInstanceId>()
+                    .unwrap()
+            )
+            .unwrap()
+            .is_none()
         );
     }
 }
@@ -3234,9 +3238,14 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
     .unwrap()
     .expect("the prompted leader of an agent-launched team holds a team run");
     let answer = |text: &str| {
-        let open = rimz::harness::run::open_team_run_for(store.paths(), "forge#feature-team")
-            .unwrap()
-            .unwrap();
+        let open = rimz::harness::run::open_team_run_for(
+            store.paths(),
+            &"forge#feature-team"
+                .parse::<rimz::ids::TeamInstanceId>()
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
         rimz::harness::run::record_assistant_message(
             store.paths(),
             &open.run_id,
@@ -3405,10 +3414,15 @@ fn detached_team_follows_its_board_and_reports_to_nobody() {
     assert!(reopened.contains(detached), "{reopened}");
     assert!(!reopened.contains("TEAM_REPORT"), "{reopened}");
     assert_eq!(
-        rimz::harness::run::open_team_run_for(store.paths(), "forge#feature-team")
-            .unwrap()
-            .expect("the reopened stretch has its run")
-            .report_to,
+        rimz::harness::run::open_team_run_for(
+            store.paths(),
+            &"forge#feature-team"
+                .parse::<rimz::ids::TeamInstanceId>()
+                .unwrap()
+        )
+        .unwrap()
+        .expect("the reopened stretch has its run")
+        .report_to,
         rimz::store::run::ReportTo::Nobody
     );
     success(fixture.flip("Done", None, Some("Finished again.")));

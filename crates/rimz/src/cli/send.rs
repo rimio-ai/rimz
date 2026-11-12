@@ -601,7 +601,11 @@ mod tests {
             panic!("peer ancestry");
         };
         let caller = resolve_caller_from(&[agent], caller).expect("caller");
-        let sender = sender_for(Some(&caller), Some("work"), false);
+        let sender = sender_for(
+            Some(&caller),
+            Some(&rimz::ids::LaneName::dashed("work")),
+            false,
+        );
         let encoded = serde_json::to_value(&sender).unwrap();
         assert_eq!(
             encoded["agent_id"],

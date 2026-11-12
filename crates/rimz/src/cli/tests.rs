@@ -376,6 +376,27 @@ fn current_channel_uses_callers_card_before_worktree() {
 }
 
 #[test]
+fn an_explicit_trunk_alias_scopes_the_context_to_trunk() {
+    let lane = |value| serde_json::from_value::<rimz::ids::Lane>(value).unwrap();
+    let root = workspace("/repo", "/repo", None);
+    let mut trunk = rimz::testkit::agent_state("claude", "trunk", jiff::Timestamp::UNIX_EPOCH);
+    trunk.worktree_path = Some("/repo".to_owned());
+    trunk.lane = Some(lane(serde_json::json!({"home": "trunk", "path": "/repo"})));
+    let mut design = trunk.clone();
+    design.lane = Some(lane(
+        serde_json::json!({"home": "trunk", "path": "/repo", "name": "design"}),
+    ));
+    for alias in ["main", "repo", "/repo"] {
+        let lane = current_channel_with(&root, Some(alias.to_owned()), || None)
+            .address_context()
+            .lane()
+            .unwrap();
+        assert!(rimz::address::agent_in_lane(&trunk, &lane), "{alias}");
+        assert!(!rimz::address::agent_in_lane(&design, &lane), "{alias}");
+    }
+}
+
+#[test]
 fn address_context_preserves_current_channel_provenance() {
     use rimz::address::ChannelOrigin;
     for (current, channel, origin) in [

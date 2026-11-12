@@ -141,7 +141,7 @@ fn peer_receipt_names_the_host_out_path_under_its_reader() {
 
     run.team = Some(rimz::store::run::TeamRun {
         launch_id: "leader-launch".into(),
-        instance: "forge#feat-x".into(),
+        instance: "forge#feat-x".parse().unwrap(),
     });
     assert_eq!(
         receipt(&run, Some("feat-x")),
@@ -663,8 +663,11 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
         "resuming forge in #feat-x (newest of 2; others: run rimz agents resume from the project root)\n"
     );
     assert_eq!(resume_hint_handle(&plan, &[]), Some("planner"));
+    let lane = |value| serde_json::from_value::<rimz::ids::Lane>(value).unwrap();
+    let feat =
+        lane(serde_json::json!({"home": "worktree", "path": "/repo/.rimz/worktrees/feat-x"}));
     let mut output = Vec::new();
-    write_resume_receipt(&mut output, &plan, Some("forge"), Some("feat-x"), &[], None).unwrap();
+    write_resume_receipt(&mut output, &plan, Some("forge"), &feat, &[], None).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("\n\nCheck: rimz teams show forge#feat-x"));
     assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
@@ -676,6 +679,24 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
         .find_map(|line| line.strip_prefix("Wait:  "))
         .unwrap();
     <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
+
+    let trunk = lane(serde_json::json!({"home": "trunk", "path": "/repo/checkout"}));
+    let design =
+        lane(serde_json::json!({"home": "trunk", "path": "/repo/checkout", "name": "design"}));
+    for lane in [trunk, design, feat] {
+        let mut seat = test_agent("sess-seat");
+        seat.team = Some("forge".to_owned());
+        seat.lane = Some(lane.clone());
+        let signalled = seat.team_instance().unwrap().to_string();
+        let mut output = Vec::new();
+        write_resume_receipt(&mut output, &plan, Some("forge"), &lane, &[], None).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(&format!("--match instance={signalled} --once")),
+            "{output}"
+        );
+        assert!(output.contains(&format!("Check: rimz teams show forge#{}", lane.label())));
+    }
 }
 
 fn launch_identity(kind: &str, name: &str) -> AgentLaunchIdentity {

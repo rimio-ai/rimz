@@ -179,7 +179,14 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
             ),
         );
     }
-    record_answer_if_missing(store, agent, &ask_id, &detail.questions, &replies)?;
+    record_answer_if_missing(
+        &ctx.workspace,
+        store,
+        agent,
+        &ask_id,
+        &detail.questions,
+        &replies,
+    )?;
     let mut out = super::render::out();
     writeln!(
         out,
@@ -536,6 +543,7 @@ fn wait_for_confirmation(
 }
 
 fn record_answer_if_missing(
+    workspace: &rimz::workspace::ResolvedWorkspace,
     store: &rimz::Store,
     agent: &rimz::agents::AgentState,
     ask_id: &AskId,
@@ -573,7 +581,7 @@ fn record_answer_if_missing(
         rimz::transcript::answers_text(&answers),
     );
     entry.id = Some(ask_id.clone());
-    entry.channel = agent.lane_name().map(String::from);
+    entry.channel = super::hooks::entry_lane_name(workspace, Some(agent), None);
     entry.name = agent.name.clone();
     entry.profile = agent.profile.clone();
     entry.role = agent.role.clone();

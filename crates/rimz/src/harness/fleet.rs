@@ -333,11 +333,11 @@ pub(super) fn owed_team_runs<'a, 'agents>(
 
 fn team_cohort_gone<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
-    instance: &str,
+    instance: &crate::ids::TeamInstanceId,
 ) -> bool {
     crate::address::team_cohorts(agents)
         .into_iter()
-        .find(|cohort| format!("{}#{}", cohort.team, cohort.channel) == instance)
+        .find(|cohort| &cohort.instance == instance)
         .is_none_or(|cohort| {
             cohort.members.iter().all(|member| {
                 crate::store::runtime::agent_liveness(member)
@@ -620,17 +620,20 @@ mod tests {
         );
         run.team = Some(crate::store::run::TeamRun {
             launch_id: "leader-launch".into(),
-            instance: "forge#feat-x".into(),
+            instance: "forge#feat-x".parse().unwrap(),
         });
         let mut runs = vec![run];
         let mut agents = vec![parent.clone(), leader];
         let open = open_team_runs(&agents, &runs, &parent);
         assert_eq!(open.len(), 1, "an open team run belongs to its launcher");
-        assert_eq!(open[0].team.as_ref().unwrap().instance, "forge#feat-x");
-        assert!(!team_cohort_gone(&agents, "forge#feat-x"));
+        assert_eq!(
+            open[0].team.as_ref().unwrap().instance.to_string(),
+            "forge#feat-x"
+        );
+        assert!(!team_cohort_gone(&agents, &"forge#feat-x".parse().unwrap()));
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
         agents[1].ended_at = Some(Timestamp::now());
-        assert!(team_cohort_gone(&agents, "forge#feat-x"));
+        assert!(team_cohort_gone(&agents, &"forge#feat-x".parse().unwrap()));
         assert_eq!(ended_team_runs(&agents, &runs, &parent).len(), 1);
         agents[1].ended_at = None;
         agents[1].runtime_owner = Some(crate::pane::RuntimeOwner::new(
@@ -639,15 +642,15 @@ mod tests {
             u32::MAX,
             None,
         ));
-        assert!(team_cohort_gone(&agents, "forge#feat-x"));
+        assert!(team_cohort_gone(&agents, &"forge#feat-x".parse().unwrap()));
         let mut member = agents[1].clone();
         member.agent_id = "member".into();
         member.launch_id = Some("member-launch".into());
         member.runtime_owner = None;
         agents.push(member);
-        assert!(!team_cohort_gone(&agents, "forge#feat-x"));
+        assert!(!team_cohort_gone(&agents, &"forge#feat-x".parse().unwrap()));
         agents.pop();
-        assert!(team_cohort_gone(&[], "forge#feat-x"));
+        assert!(team_cohort_gone(&[], &"forge#feat-x".parse().unwrap()));
         runs[0].report_to = crate::store::run::ReportTo::Nobody;
         assert!(
             owed_runs(&agents, &runs, &parent).is_empty(),

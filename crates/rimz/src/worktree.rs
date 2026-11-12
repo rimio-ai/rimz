@@ -841,8 +841,12 @@ pub fn retire_removal(
 ) -> RemovalRetirement {
     let session_retirement =
         store.retire_worktree_sessions(&removed.removed_path, Some(removed.branch()));
+    let lane = crate::ids::Lane::own(
+        crate::ids::LaneHome::Worktree,
+        removed.removed_path.to_string_lossy(),
+    );
     let message_archival =
-        store.archive_channel_messages(&removed.worktree_name, archive_reason, session_name);
+        store.archive_channel_messages(&lane.routing_name(), archive_reason, session_name);
     let mut signal = crate::harness::signal::Signal {
         name: "worktree.removed"
             .parse()

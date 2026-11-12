@@ -309,7 +309,7 @@ fn main_transcript_filter_stays_in_current_workspace_and_matches_root_records() 
             TranscriptKind::Prompt,
             text.into(),
         );
-        entry.channel = channel.map(str::to_owned);
+        entry.channel = channel.map(rimz::ids::LaneName::dashed);
         entry.from = Some("@sender#project".to_owned());
         rimz::transcript::append(&paths, &entry).unwrap();
     }
@@ -1999,7 +1999,7 @@ fn agent_entry(
         entry,
         text.to_owned(),
     );
-    entry.channel = Some(branch.to_owned());
+    entry.channel = Some(rimz::ids::LaneName::dashed(branch));
     entry
 }
 

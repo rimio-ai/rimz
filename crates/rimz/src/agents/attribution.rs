@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::Serialize;
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, LaneName, PaneId};
 use crate::transcript::{EntryOrigin, TranscriptEntry, TranscriptKind};
 
 use super::{AgentState, pricing, spending};
@@ -242,13 +242,15 @@ enum Slot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SlotKey {
-    channel: Option<String>,
+    channel: Option<LaneName>,
     kind: AgentKind,
     slot: Slot,
 }
 
 struct FoldedMember {
-    channel: Option<String>,
+    channel: Option<LaneName>,
+    /// The `#suffix` a message header renders for the seat's lane.
+    lane_label: Option<String>,
     team: Option<String>,
     attribution: AttributionMember,
     models: BTreeMap<Option<String>, spending::SlotEffort>,
@@ -272,7 +274,12 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
             if seat.identity.is_empty() {
                 return None;
             }
-            let team = newest(&seat.identity).and_then(|agent| agent.team.clone());
+            let newest_seat = newest(&seat.identity);
+            let team = newest_seat.and_then(|agent| agent.team.clone());
+            let lane_label = slot.channel.as_ref().map(|lane| {
+                let trunk = newest_seat.is_some_and(AgentState::in_trunk);
+                lane.label(trunk).to_owned()
+            });
             let opened_turn = seat
                 .identity
                 .iter()
@@ -286,6 +293,7 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
             );
             Some(FoldedMember {
                 channel: slot.channel,
+                lane_label,
                 team,
                 attribution: member,
                 models,
@@ -385,7 +393,7 @@ fn slot(agent: &AgentState) -> SlotKey {
         },
     };
     SlotKey {
-        channel: agent.lane_name().map(String::from),
+        channel: agent.lane_name(),
         kind: agent.kind.clone(),
         slot,
     }
@@ -690,17 +698,28 @@ fn credit_sent_messages(members: &mut [FoldedMember], transcript: &[TranscriptEn
         let Some(from) = entry.from.as_deref() else {
             continue;
         };
-        let (base, explicit_channel) = from
+        let (base, explicit_label) = from
             .split_once('#')
-            .map_or((from, None), |(base, channel)| (base, Some(channel)));
-        let sender_channel = explicit_channel.or(entry.channel.as_deref());
+            .map_or((from, None), |(base, label)| (base, Some(label)));
         if let Some(member) = members.iter_mut().find(|member| {
+            let same_lane = match explicit_label {
+                // A header suffix is the lane's label (`main` for trunk) or,
+                // as typed, its routing name.
+                Some(label) => {
+                    member.lane_label.as_deref() == Some(label)
+                        || member
+                            .channel
+                            .as_ref()
+                            .is_some_and(|name| name.as_str() == label)
+                }
+                None => member.channel == entry.channel,
+            };
             super::petname::sender_handle(
                 member.attribution.role.as_deref(),
                 member.attribution.name.as_deref(),
                 &member.attribution.kind,
             ) == base
-                && member.channel.as_deref() == sender_channel
+                && same_lane
         }) {
             member.attribution.messages.to_teammates =
                 member.attribution.messages.to_teammates.saturating_add(1);

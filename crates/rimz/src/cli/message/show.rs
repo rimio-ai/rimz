@@ -56,12 +56,16 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
 
     let agents = rimz::address::addressable_agents(&cached_snapshot);
     let project_root = Some(ctx.workspace.project_root.as_path());
-    let lane_label = rimz::address::record_lane_label(message.channel.as_deref(), project_root);
+    let lane_label = rimz::address::record_lane_label(
+        message.channel.as_ref().map(rimz::ids::LaneName::as_str),
+        project_root,
+    );
     let raw_target = message_target(&message, &agents, project_root);
-    let target = scoped_handle(raw_target.clone(), lane_label);
+    let target = scoped_handle(raw_target.clone(), lane_label, project_root);
     let sender = scoped_handle(
         message_sender(&message.sender, &agents, project_root),
         lane_label,
+        project_root,
     );
     let prose = render::prose::Prose::for_stdout();
     let mut out = render::out();

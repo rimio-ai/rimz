@@ -101,11 +101,7 @@ pub(super) fn reconcile_cohort_launch(
                         text: prompt.to_owned(),
                         target_scope: leader.lane_name().map(String::from),
                         current_channel: channel.address_context(),
-                        sender: context::sender_for(
-                            caller.as_ref(),
-                            channel.as_deref().map(LaneName::as_str),
-                            false,
-                        ),
+                        sender: context::sender_for(caller.as_ref(), channel.as_deref(), false),
                         caller,
                         automated: false,
                         allow_fanout: false,

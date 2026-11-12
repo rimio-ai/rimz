@@ -409,7 +409,7 @@ pub(super) fn record_conversation(
                                 launched_parent_handle(
                                     snapshot.as_ref()?,
                                     state,
-                                    channel.as_deref(),
+                                    channel.as_ref(),
                                     sender,
                                 )
                             });
@@ -511,7 +511,7 @@ pub(super) fn record_conversation(
 fn launched_parent_handle(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     child: &rimz::agents::AgentState,
-    child_channel: Option<&str>,
+    child_channel: Option<&rimz::ids::LaneName>,
     parent: Option<&rimz::agents::AgentState>,
 ) -> Option<String> {
     let (kind, _) = child.launcher()?;
@@ -522,7 +522,7 @@ fn launched_parent_handle(
             name: parent.name.clone(),
             profile: parent.profile.clone(),
             role: parent.role.clone(),
-            channel: parent.lane_name().map(String::from),
+            channel: parent.lane_name(),
         },
         None => rimz::store::message::MessageSender::Agent {
             agent_id: None,
@@ -654,17 +654,17 @@ pub(super) fn record_turn_error_entry(
 /// The lane name a hook transcript entry carries: the row's lane, an older
 /// row's stamp-else-basename reading, or the checkout's own lane when there is
 /// no row.
-fn entry_lane_name(
+pub(in crate::cli) fn entry_lane_name(
     workspace: &ResolvedWorkspace,
     state: Option<&rimz::agents::AgentState>,
     checkout: Option<&str>,
-) -> Option<String> {
+) -> Option<rimz::ids::LaneName> {
     let row_name = state.and_then(rimz::agents::AgentState::lane_name);
     let name = row_name.unwrap_or_else(|| {
         let dir = checkout.map_or(workspace.worktree_root.as_path(), std::path::Path::new);
         rimz::harness::lanes::own_lane(&workspace.project_root, dir).routing_name()
     });
-    Some(name.into())
+    Some(name)
 }
 
 pub(super) fn agent_state(

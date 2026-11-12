@@ -395,7 +395,10 @@ fn team_seat_launch_prompt_opens_a_team_run_and_no_peer_turns() {
     .unwrap();
     assert!(record.peer.is_none(), "a team seat opens no peer turn");
     let team = record.team.as_ref().expect("the leader holds the team run");
-    assert_eq!(team.instance, "forge#feat-x");
+    assert_eq!(
+        team.instance,
+        "forge#feat-x".parse::<rimz::ids::TeamInstanceId>().unwrap()
+    );
     assert_eq!(team.launch_id.as_str(), "peer-launch");
     assert_eq!(
         run::open_team_run(h.store.paths(), &leader)

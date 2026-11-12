@@ -77,6 +77,8 @@ pub(super) struct RoleReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct LiveInstance {
+    #[serde(skip)]
+    pub instance: rimz::ids::TeamInstanceId,
     pub channel: String,
     pub state: CohortState,
     pub status_counts: BTreeMap<String, usize>,
@@ -134,7 +136,7 @@ impl CohortState {
             .find_map(|group| {
                 group
                     .unit_statuses()
-                    .remove(&SidebarUnitKey::Team(cohort.team))
+                    .remove(&SidebarUnitKey::Team(cohort.team()))
             })
             .unwrap_or_else(|| {
                 UnitStatus::from_members(
@@ -614,9 +616,9 @@ fn live_instances(
     }
     let mut by_team: BTreeMap<String, Vec<LiveInstance>> = BTreeMap::new();
     for cohort in cohorts {
-        let instance = format!("{}#{}", cohort.team, cohort.channel);
+        let instance = cohort.instance.clone();
         let members = &cohort.members;
-        let team = teams.0.get(cohort.team);
+        let team = teams.0.get(instance.team());
         let worktree = unique_value(members.iter().map(|agent| {
             agent
                 .worktree_path
@@ -778,10 +780,11 @@ fn live_instances(
                 .then_with(|| left.handle.cmp(&right.handle))
         });
         by_team
-            .entry(cohort.team.to_owned())
+            .entry(instance.team().to_owned())
             .or_default()
             .push(LiveInstance {
-                channel: cohort.channel,
+                channel: instance.lane_text().to_owned(),
+                instance: instance.clone(),
                 state,
                 status_counts,
                 last_activity_at,
@@ -811,15 +814,12 @@ fn live_signal(
     name: &str,
     entry: &TaskEntry,
     source: TaskSource,
-    instance: &str,
+    instance: &rimz::ids::TeamInstanceId,
     agent: &AgentState,
 ) -> Option<LiveSignal> {
     let target = entry.wait.as_ref()?;
     if source != TaskSource::Instance
-        || entry
-            .team
-            .as_ref()
-            .is_none_or(|team| team.to_string() != instance)
+        || entry.team.as_ref().is_none_or(|team| team != instance)
         || target.kind != agent.kind
         || target.session != agent.agent_id
     {

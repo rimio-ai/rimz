@@ -25,7 +25,7 @@ pub(super) fn resolve<'a>(
     );
     let candidates = rimz::address::team_cohorts(agents)
         .into_iter()
-        .filter(|cohort| team.is_none_or(|team| cohort.team == team))
+        .filter(|cohort| team.is_none_or(|team| cohort.team() == team))
         .filter(|cohort| match address {
             Some((_, lane)) => super::cohort::matches_worktree(cohort, lane),
             None => checkout
@@ -41,7 +41,7 @@ pub(super) fn resolve<'a>(
                 .as_deref()
                 .and_then(|path| resume::inspect_team_hold(&audit.agents, path)),
         }
-        .filter(|hold| team.is_none_or(|team| hold.team == team));
+        .filter(|hold| team.is_none_or(|team| hold.instance.team() == team));
         if let Some(hold) = hold {
             return Ok((hold, Vec::new()));
         }
@@ -49,23 +49,23 @@ pub(super) fn resolve<'a>(
     }
     let cohort = match candidates.as_slice() {
         [cohort] => cohort,
-        [first, rest @ ..] if rest.iter().all(|cohort| cohort.team == first.team) => bail!(
+        [first, rest @ ..] if rest.iter().all(|cohort| cohort.team() == first.team()) => bail!(
             "team `{}` has multiple live cohorts in worktree {} in lanes {}; stop the extra cohorts with `rimz teams stop {}#<lane>` before flipping",
-            first.team,
+            first.team(),
             place,
             candidates
                 .iter()
-                .map(|cohort| format!("#{}", cohort.channel))
+                .map(|cohort| format!("#{}", cohort.channel()))
                 .collect::<Vec<_>>()
                 .join(", "),
-            first.team
+            first.team()
         ),
         _ => bail!(
             "multiple live team cohorts in worktree {}; select a team with --team <name>: {}",
             place,
             candidates
                 .iter()
-                .map(|cohort| format!("{}#{}", cohort.team, cohort.channel))
+                .map(|cohort| cohort.instance.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -79,8 +79,7 @@ pub(super) fn resolve<'a>(
         .context("selected cohort has no single worktree for its board")?;
     Ok((
         TeamHold {
-            team: cohort.team.to_owned(),
-            channel: cohort.channel.clone(),
+            instance: cohort.instance.clone(),
             checkout,
             reason: TeamHoldReason::LiveMember,
         },

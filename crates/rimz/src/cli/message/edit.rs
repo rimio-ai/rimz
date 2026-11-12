@@ -221,8 +221,15 @@ pub(super) fn message_target_for_record(
     let row = MessageListRow::from_record(record.clone());
     let agents = rimz::address::addressable_agents(snapshot);
     let project_root = snapshot.project_root.as_deref();
-    let lane = rimz::address::record_lane_label(row.channel.as_deref(), project_root);
-    scoped_handle(message_target(&row, &agents, project_root), lane)
+    let lane = rimz::address::record_lane_label(
+        row.channel.as_ref().map(rimz::ids::LaneName::as_str),
+        project_root,
+    );
+    scoped_handle(
+        message_target(&row, &agents, project_root),
+        lane,
+        project_root,
+    )
 }
 
 pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
@@ -258,7 +265,7 @@ pub(super) fn clear_messages(
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let snapshot = ctx.cached_snapshot()?;
-    let channel = ctx.channel().map(ToOwned::to_owned);
+    let channel = ctx.channel().map(rimz::ids::LaneName::as_str);
     if let Some(target) = target {
         rimz::address::require_mention(&target)?;
         let agent = crate::cli::resolve_agent_one(
@@ -280,7 +287,7 @@ pub(super) fn clear_messages(
     let lane = worktree
         .as_deref()
         .or(channel_flag.as_deref())
-        .or(channel.as_deref())
+        .or(channel)
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a RimZ channel"
@@ -288,13 +295,12 @@ pub(super) fn clear_messages(
         })?;
     let project_root = Some(workspace.project_root.as_path());
     let selector = LaneSelector::parse(Some(lane), project_root);
-    let canceled = if selector.is_trunk() {
-        store.clear_messages_matching(
-            |message| LaneSelector::parse(message.channel.as_deref(), project_root).is_trunk(),
+    let canceled = match selector.name().filter(|_| !selector.is_trunk()) {
+        Some(name) => store.clear_channel_messages(name, &workspace.session_name)?,
+        None => store.clear_messages_matching(
+            |message| selector.holds_record(message.channel.as_ref(), project_root),
             &workspace.session_name,
-        )?
-    } else {
-        store.clear_channel_messages(lane, &workspace.session_name)?
+        )?,
     };
     let lane = selector.label();
     print_canceled_summary(&format!("in #{lane}"), &canceled);

@@ -25,12 +25,11 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     let held_by_board = matches!(target.reason, TeamHoldReason::BoardStage(_));
     let worktree = target.checkout;
     let cohort = rimz::address::TeamCohort {
-        team: &target.team,
-        channel: target.channel,
+        instance: target.instance,
         members,
     };
     let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
-    let team_name = cohort.team;
+    let team_name = cohort.team();
     let caller = super::board_context::caller(&snapshot.agents)?;
     let member = caller.filter(|caller| cohort.contains(caller));
     if member.is_none()
@@ -38,8 +37,8 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         && cohorts.iter().any(|cohort| cohort.contains(caller))
     {
         bail!(
-            "calling agent belongs to a different team cohort; selected {team_name}#{} in worktree {}",
-            cohort.channel,
+            "calling agent belongs to a different team cohort; selected {} in worktree {}",
+            cohort.instance,
             worktree.display()
         );
     }
@@ -80,9 +79,8 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     let receipt = team_stage::flip(FlipRequest {
         workspace: &ctx.workspace,
         store: &ctx.store,
-        team_name,
+        instance: &cohort.instance,
         team,
-        channel: &cohort.channel,
         worktree: &worktree,
         members: &members,
         to: &args.stage,
@@ -99,8 +97,8 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     }
     writeln!(
         out,
-        " by @{by_name}  ({team_name}#{} · {}{})",
-        cohort.channel,
+        " by @{by_name}  ({} · {}{})",
+        cohort.instance,
         worktree
             .file_name()
             .unwrap_or(worktree.as_os_str())
@@ -156,11 +154,11 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     }
     // The board already flipped; a report that cannot be queued warns rather than
     // failing a flip that has landed.
-    let instance = format!("{team_name}#{}", cohort.channel);
+    let instance = &cohort.instance;
     match super::super::agents_cmd::team_report::on_flip(
         &ctx.workspace,
         &ctx.store,
-        &instance,
+        instance,
         &receipt.board,
         receipt.from.as_deref(),
         &receipt.to,

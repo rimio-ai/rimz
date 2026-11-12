@@ -562,7 +562,7 @@ fn delivery_stamps_subagent_answer_from_confirmed_conversation() {
                 "team" => {
                     excluded_record.team = Some(crate::store::run::TeamRun {
                         launch_id: "team-launch".into(),
-                        instance: "forge#x".into(),
+                        instance: "forge#x".parse().unwrap(),
                     })
                 }
                 "other-card" => excluded_record.agent_id = Some("other".into()),
@@ -2612,7 +2612,7 @@ fn team_record(paths: &StatePaths, instance: &str) -> RunRecord {
     record.reader = Some("launcher".into());
     record.team = Some(crate::store::run::TeamRun {
         launch_id: "lead-launch".into(),
-        instance: instance.to_owned(),
+        instance: instance.parse().unwrap(),
     });
     create(paths, &record).unwrap();
     record
@@ -2727,13 +2727,21 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
     )
     .unwrap();
     assert_eq!(
-        open_team_run_for(&paths, "forge#x")
-            .unwrap()
-            .map(|run| run.run_id),
+        open_team_run_for(
+            &paths,
+            &"forge#x".parse::<crate::ids::TeamInstanceId>().unwrap()
+        )
+        .unwrap()
+        .map(|run| run.run_id),
         Some(first.run_id.clone())
     );
     assert!(
-        reopen_team_run(&paths, "forge#x").unwrap().is_none(),
+        reopen_team_run(
+            &paths,
+            &"forge#x".parse::<crate::ids::TeamInstanceId>().unwrap()
+        )
+        .unwrap()
+        .is_none(),
         "one open run per cohort"
     );
 
@@ -2752,26 +2760,42 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
         .out_reader_dir(Some("launcher"))
         .join(format!("lead.{}.output", first.run_id));
     assert_eq!(std::fs::read_to_string(response).unwrap(), "done\n");
-    assert!(open_team_run_for(&paths, "forge#x").unwrap().is_none());
-
-    let reopened = reopen_team_run(&paths, "forge#x")
+    assert!(
+        open_team_run_for(
+            &paths,
+            &"forge#x".parse::<crate::ids::TeamInstanceId>().unwrap()
+        )
         .unwrap()
-        .expect("leaving Done opens the next stretch");
+        .is_none()
+    );
+
+    let reopened = reopen_team_run(
+        &paths,
+        &"forge#x".parse::<crate::ids::TeamInstanceId>().unwrap(),
+    )
+    .unwrap()
+    .expect("leaving Done opens the next stretch");
     assert_ne!(reopened.run_id, first.run_id);
     assert_eq!(reopened.team, first.team);
     assert_eq!(reopened.prompt, first.prompt);
     assert_eq!(reopened.reader.as_deref(), Some("launcher"));
     assert_eq!(reopened.last_message, None);
     assert_eq!(
-        open_team_run_for(&paths, "forge#x")
-            .unwrap()
-            .map(|run| run.run_id),
+        open_team_run_for(
+            &paths,
+            &"forge#x".parse::<crate::ids::TeamInstanceId>().unwrap()
+        )
+        .unwrap()
+        .map(|run| run.run_id),
         Some(reopened.run_id)
     );
     assert_eq!(
-        open_team_run_for(&paths, "forge#y")
-            .unwrap()
-            .map(|run| run.run_id),
+        open_team_run_for(
+            &paths,
+            &"forge#y".parse::<crate::ids::TeamInstanceId>().unwrap()
+        )
+        .unwrap()
+        .map(|run| run.run_id),
         Some(other.run_id),
         "cohorts settle independently"
     );
@@ -3024,9 +3048,12 @@ fn a_detached_team_run_reopens_detached() {
     settle_team_run(&paths, &first.run_id, None, None)
         .unwrap()
         .expect("Done settles the detached run");
-    let reopened = reopen_team_run(&paths, "forge#x")
-        .unwrap()
-        .expect("leaving Done opens the next stretch");
+    let reopened = reopen_team_run(
+        &paths,
+        &"forge#x".parse::<crate::ids::TeamInstanceId>().unwrap(),
+    )
+    .unwrap()
+    .expect("leaving Done opens the next stretch");
     assert_eq!(reopened.report_to, ReportTo::Nobody);
 }
 
@@ -3779,7 +3806,7 @@ fn runs_outside_the_window_fold_an_interrupt_as_before() {
         ("team", |record| {
             record.team = Some(crate::store::run::TeamRun {
                 launch_id: "lead-launch".into(),
-                instance: "forge#x".into(),
+                instance: "forge#x".parse().unwrap(),
             });
         }),
     ];

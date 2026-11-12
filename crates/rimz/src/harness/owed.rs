@@ -304,7 +304,7 @@ mod tests {
             }
             record.team = Some(crate::store::run::TeamRun {
                 launch_id: "leader".into(),
-                instance: "forge#external".into(),
+                instance: "forge#external".parse().unwrap(),
             });
             super::super::run::create(store.paths(), &record).unwrap();
             if done {

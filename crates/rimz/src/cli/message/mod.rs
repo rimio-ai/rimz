@@ -17,7 +17,7 @@ use super::usage::{UsageError, shell_command};
 use crate::cli::render;
 use rimz::address::LaneSelector;
 use rimz::agents::AgentState;
-use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, LaneName, MessageId, PaneId, WorkspaceId};
 use rimz::message::deliver;
 use rimz::message::dispatch::WhenRequest;
 use rimz::message::parse_schedule_at;

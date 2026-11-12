@@ -1015,14 +1015,14 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         DeliveryGate::Any,
     )
     .with_address(Some("@coder#docs".to_owned()))
-    .with_channel(Some("docs".to_owned()))
+    .with_channel(Some(crate::ids::LaneName::dashed("docs")))
     .with_sender(MessageSender::Agent {
         agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("lucid-atlas".to_owned()),
         profile: Some("planner".to_owned()),
         role: Some("coder".to_owned()),
-        channel: Some("main".to_owned()),
+        channel: Some(crate::ids::LaneName::dashed("main")),
     })
     .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_automated(true)
@@ -1123,7 +1123,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
         DeliveryGate::Any,
     )
     .with_address(Some("@coder#docs".to_owned()))
-    .with_channel(Some("docs".to_owned()))
+    .with_channel(Some(crate::ids::LaneName::dashed("docs")))
     .with_sender(agent_sender("reviewer", Some("docs")))
     .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_automated(true)
@@ -1409,7 +1409,7 @@ fn sender_render_uses_attributed_address_precedence() {
                 name: Some("lucid-atlas".to_owned()),
                 profile: Some("planner".to_owned()),
                 role: Some("coder".to_owned()),
-                channel: Some("docs".to_owned()),
+                channel: Some(crate::ids::LaneName::dashed("docs")),
             },
             "@coder#docs",
         ),
@@ -2172,7 +2172,7 @@ fn delivery_message(
         format!("message {id}"),
         gate,
     )
-    .with_channel(channel.map(ToOwned::to_owned));
+    .with_channel(channel.map(crate::ids::LaneName::dashed));
     message.message_id = message_id(id);
     message
 }
@@ -2184,7 +2184,7 @@ pub(crate) fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
         name: None,
         profile: None,
         role: Some(role.to_owned()),
-        channel: channel.map(ToOwned::to_owned),
+        channel: channel.map(crate::ids::LaneName::dashed),
     }
 }
 
@@ -2397,7 +2397,7 @@ fn labeled_agent_batch_aligns_and_strips_labels() {
         name: Some("calm-fox".to_owned()),
         profile: Some("planner".to_owned()),
         role: None,
-        channel: Some("docs".to_owned()),
+        channel: Some(crate::ids::LaneName::dashed("docs")),
     };
     let second = MessageRecord::new(
         first.workspace_id.clone(),

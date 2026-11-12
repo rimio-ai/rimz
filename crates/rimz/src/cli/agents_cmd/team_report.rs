@@ -32,11 +32,11 @@ pub(in crate::cli) enum TeamReportOutcome {
     NotOwed,
 }
 
-/// Settle the cohort's team report for one stage flip of `instance` (`<team>#<channel>`).
+/// Settle the cohort's team report for one stage flip of `instance`.
 pub(in crate::cli) fn on_flip(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    instance: &str,
+    instance: &rimz::ids::TeamInstanceId,
     board: &Path,
     from: Option<&str>,
     to: &str,
@@ -60,7 +60,7 @@ pub(in crate::cli) fn on_flip(
 fn report_done(
     workspace: &ResolvedWorkspace,
     store: &Store,
-    instance: &str,
+    instance: &rimz::ids::TeamInstanceId,
     board: &Path,
 ) -> Result<TeamReportOutcome, ReportErr> {
     let Some(record) = run::open_team_run_for(store.paths(), instance)? else {
@@ -272,7 +272,7 @@ mod tests {
         );
         record.team = Some(rimz::store::run::TeamRun {
             launch_id: "lead".into(),
-            instance: "forge#x".into(),
+            instance: "forge#x".parse().unwrap(),
         });
         record.agent_name = Some("lead".into());
         record.last_message = Some("shipped".into());
@@ -309,7 +309,7 @@ mod tests {
                 on_flip(
                     &workspace,
                     &store,
-                    "forge#x",
+                    &"forge#x".parse().unwrap(),
                     &board,
                     Some(DONE_STAGE),
                     "Build"
@@ -317,7 +317,7 @@ mod tests {
                 .unwrap(),
                 TeamReportOutcome::Detached
             );
-            let reopened = run::open_team_run_for(store.paths(), "forge#x")
+            let reopened = run::open_team_run_for(store.paths(), &"forge#x".parse().unwrap())
                 .unwrap()
                 .unwrap();
             assert_eq!(reopened.report_to, ReportTo::Nobody);
@@ -384,7 +384,7 @@ mod tests {
                 on_flip(
                     &workspace,
                     &store,
-                    "forge#x",
+                    &"forge#x".parse().unwrap(),
                     &board,
                     Some("Build"),
                     DONE_STAGE

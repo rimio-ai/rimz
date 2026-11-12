@@ -24,7 +24,7 @@ fn log_entry(
         entry,
         text.to_owned(),
     );
-    entry.channel = channel.map(ToOwned::to_owned);
+    entry.channel = channel.map(rimz::ids::LaneName::dashed);
     entry
 }
 

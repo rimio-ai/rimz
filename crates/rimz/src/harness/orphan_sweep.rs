@@ -679,13 +679,7 @@ mod tests {
         record.status = crate::store::run::RunStatus::Running;
         record.team = Some(crate::store::run::TeamRun {
             launch_id: "leader-launch".into(),
-            instance: format!(
-                "forge#{}",
-                leader
-                    .lane_name()
-                    .map(String::from)
-                    .unwrap_or_else(|| "external".into())
-            ),
+            instance: leader.team_instance().unwrap(),
         });
         let mut agents = [launcher.clone(), leader];
         let runs = [record];

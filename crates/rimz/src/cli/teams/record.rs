@@ -42,9 +42,9 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
         let local = cohorts.iter().any(|cohort| {
             board_context::in_worktree(cohort, &worktree)
                 && cohort.contains(member)
-                && selected.as_ref().is_none_or(|(target, _)| {
-                    cohort.team == target.team && cohort.channel == target.channel
-                })
+                && selected
+                    .as_ref()
+                    .is_none_or(|(target, _)| cohort.instance == target.instance)
         });
         if !local {
             bail!("calling agent belongs to a team cohort in another worktree");
@@ -61,7 +61,7 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
         worktree: &worktree,
         team: member
             .and_then(|member| member.team.as_deref())
-            .or_else(|| selected.as_ref().map(|(target, _)| target.team.as_str())),
+            .or_else(|| selected.as_ref().map(|(target, _)| target.instance.team())),
         section,
         by,
         text: &text,

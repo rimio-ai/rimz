@@ -189,7 +189,7 @@ struct ViewMode {
 struct Identity {
     root_lane: bool,
     base_handle: String,
-    channel: Option<String>,
+    channel: Option<LaneName>,
     name: Option<String>,
     profile: Option<String>,
     role: Option<String>,
@@ -203,7 +203,7 @@ impl Identity {
         if self.root_lane {
             Some(LaneName::TRUNK_LABEL)
         } else {
-            self.channel.as_deref()
+            self.channel.as_ref().map(LaneName::as_str)
         }
     }
 }
@@ -402,9 +402,10 @@ pub(crate) fn resolve_view_workspace(
     let Some(channel) = requested_channel(target, worktree) else {
         return Ok(current);
     };
-    if LaneSelector::parse(Some(&channel), Some(&current.project_root)).is_trunk() {
+    let selector = LaneSelector::parse(Some(&channel), Some(&current.project_root));
+    let Some(lane) = selector.name().filter(|_| !selector.is_trunk()).cloned() else {
         return Ok(current);
-    }
+    };
     let paths = rimz::StatePaths::for_project_root(&current.project_root)
         .context("preparing state paths")?;
     let current_has = live_agents(
@@ -414,13 +415,12 @@ pub(crate) fn resolve_view_workspace(
             .as_ref(),
     )
     .iter()
-    .any(|agent| agent.channel.as_deref() == Some(channel.as_str()))
-        || rimz::transcript::channels(&paths)
-            .is_ok_and(|channels| channels.contains(channel.as_str()));
+    .any(|agent| agent.channel.as_ref() == Some(&lane))
+        || rimz::transcript::channels(&paths).is_ok_and(|channels| channels.contains(&lane));
     let candidates = if current_has {
         Vec::new()
     } else {
-        rimz::transcript::workspaces_with_channel(&channel)
+        rimz::transcript::workspaces_with_channel(&lane)
     };
     match channel_home(&channel, current_has, candidates)? {
         ChannelHome::Current => Ok(current),
@@ -600,11 +600,12 @@ fn chat_view_with_mode(
         flips
             .iter()
             .filter(|flip| {
-                channel_matches(
-                    Some(flip.channel()),
-                    scope.channel_filter.as_deref(),
-                    project_root,
-                )
+                let filter = scope.channel_filter.as_deref();
+                filter.is_none()
+                    || flip
+                        .instance
+                        .lane()
+                        .is_some_and(|lane| channel_matches(Some(lane), filter, project_root))
             })
             .map(|flip| render_entry_for_flip(flip, scope.include_channel))
             .filter(|render| {

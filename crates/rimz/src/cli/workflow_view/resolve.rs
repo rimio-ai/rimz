@@ -36,6 +36,15 @@ enum Picked {
     Workflow(Vec<usize>),
 }
 
+/// Whether a requested address names `record`'s workflow and lane, each lane
+/// read through the one lane parser against the run's project.
+fn address_selects(address: &RunAddress, record: &RunRecord) -> bool {
+    let project_root = Some(record.project_root.as_path());
+    address.workflow == record.workflow
+        && rimz::address::LaneSelector::parse(Some(address.lane.as_str()), project_root)
+            .holds_record(Some(&record.address().lane), project_root)
+}
+
 pub(in crate::cli) fn caller(globals: &GlobalFlags) -> Option<rimz::ResolvedWorkspace> {
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok()?;
@@ -266,9 +275,9 @@ impl Target {
             return Ok(Self::Workflow(raw.into()));
         }
         let address = raw.parse().map_err(|_| {
-            UsageError::new(
-                "run address must be <workflow>#<lane>; workflow and lane must be nonempty".into(),
-            )
+            UsageError::new(format!(
+                "run address `{raw}` must be <workflow>#<lane>; workflow and lane must be nonempty, and the lane holds no `#`"
+            ))
         })?;
         Ok(Self::Address(address))
     }
@@ -382,7 +391,7 @@ fn pick(
         .map(|run| run.record.address().to_string())
         .collect::<BTreeSet<_>>();
     runs.retain(|run| match target {
-        Target::Address(address) => address.matches(&run.record.address()),
+        Target::Address(address) => address_selects(address, &run.record),
         _ => true,
     });
     if verb != "show"
@@ -523,6 +532,27 @@ mod tests {
             paths: state.workflow(&record.id),
             state,
             record,
+        }
+    }
+
+    #[test]
+    fn an_address_selects_the_runs_of_the_lane_it_names() {
+        let feat = run("/repo", "feat-x", "active", 10).record;
+        let mut trunk = run("/repo", "unused", "active", 10).record;
+        trunk.scope.kind = ScopeKind::Project;
+        trunk.scope.path = PathBuf::from("/repo");
+        let selects =
+            |raw: &str, record: &RunRecord| address_selects(&raw.parse().unwrap(), record);
+        for raw in ["review#feat-x", "review#feat/x"] {
+            assert!(selects(raw, &feat), "{raw}");
+            assert!(!selects(raw, &trunk), "{raw}");
+        }
+        for raw in ["other#feat-x", "review#feat-y"] {
+            assert!(!selects(raw, &feat), "{raw}");
+        }
+        for raw in ["review#main", "review#repo", "review#/repo"] {
+            assert!(selects(raw, &trunk), "{raw}");
+            assert!(!selects(raw, &feat), "{raw}");
         }
     }
 

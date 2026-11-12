@@ -27,7 +27,7 @@ impl SyntheticMessage<'_> {
             self.text,
             self.gate,
         )
-        .with_channel(self.agent.lane_name().map(String::from))
+        .with_channel(self.agent.lane_name())
         .with_sender(self.sender);
         match self.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),
@@ -139,7 +139,10 @@ mod tests {
         }
         .record(&workspace);
 
-        assert_eq!(message.channel.as_deref(), Some("auth"));
+        assert_eq!(
+            message.channel.as_ref().map(crate::ids::LaneName::as_str),
+            Some("auth")
+        );
         assert_eq!(message.sender, MessageSender::System);
         assert_eq!(message.pane_id, Some(pane_id));
         assert_eq!(message.workspace_id, workspace.workspace_id);
@@ -170,7 +173,10 @@ mod tests {
         .record(&workspace);
 
         assert_eq!(message.sender, sender);
-        assert_eq!(message.channel.as_deref(), Some("auth"));
+        assert_eq!(
+            message.channel.as_ref().map(crate::ids::LaneName::as_str),
+            Some("auth")
+        );
         assert_eq!(message.pane_id, None);
         assert_eq!(message.gate, DeliveryGate::Done);
         assert!(message.enter);

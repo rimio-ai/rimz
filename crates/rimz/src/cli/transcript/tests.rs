@@ -231,7 +231,7 @@ fn writer_produced_shapes_preserve_harness_classification() {
 #[test]
 fn transcript_target_channel_precedence_and_errors() {
     assert_eq!(
-        scope::reconcile_transcript_channel("@codex#a", Some("a"), Some("b"), None)
+        scope::reconcile_transcript_channel("@codex#a", Some("a"), Some("b"), None, None)
             .unwrap_err()
             .to_string(),
         "target `@codex#a` names channel `#a` but --worktree names `b`"
@@ -244,7 +244,7 @@ fn transcript_target_channel_precedence_and_errors() {
         (None, None, None, None),
     ] {
         assert_eq!(
-            scope::reconcile_transcript_channel("@codex", inline, flag, fallback).unwrap(),
+            scope::reconcile_transcript_channel("@codex", inline, flag, fallback, None).unwrap(),
             expected.map(str::to_owned)
         );
     }
@@ -1515,7 +1515,10 @@ fn turn_openers_resolve_reply_to_then_fall_back() {
 fn flip_entry(at: &str, by: &str, from: Option<&str>, to: &str, note: Option<&str>) -> RenderEntry {
     let flip = rimz::harness::team_stage::StageSignal {
         team: "forge".to_owned(),
-        instance: "forge#chat".to_owned(),
+        instance: "forge#chat"
+            .parse::<rimz::ids::TeamInstanceId>()
+            .unwrap()
+            .to_owned(),
         to: to.to_owned(),
         by: by.to_owned(),
         board: "/tmp/blackboard.md".into(),
@@ -1749,7 +1752,7 @@ fn log_entry(
         entry,
         text.to_owned(),
     );
-    entry.channel = Some("chat".to_owned());
+    entry.channel = Some(rimz::ids::LaneName::dashed("chat"));
     entry.from = from.map(ToOwned::to_owned);
     entry
 }
@@ -1985,7 +1988,7 @@ fn message_entry_projects_structured_sender_and_receiver() {
 fn root_sender_keeps_its_cross_lane_suffix_in_a_scoped_transcript() {
     let mut focal = log_entry("claude", "local", TranscriptKind::Assistant, None, "local");
     focal.name = Some("planner".to_owned());
-    focal.channel = Some("feature".to_owned());
+    focal.channel = Some(rimz::ids::LaneName::dashed("feature"));
     let mut sent = log_entry(
         "codex",
         "receiver",
@@ -1993,7 +1996,7 @@ fn root_sender_keeps_its_cross_lane_suffix_in_a_scoped_transcript() {
         Some("@planner#project"),
         "cross-lane message",
     );
-    sent.channel = Some("feature".to_owned());
+    sent.channel = Some(rimz::ids::LaneName::dashed("feature"));
     let identities = build_identities(
         &[focal.clone(), sent.clone()],
         Some(Path::new("/work/project")),
@@ -3100,25 +3103,25 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     let live = vec![
         LiveAgent {
             key: channel_a.clone(),
-            channel: Some("chat".to_owned()),
+            channel: Some(rimz::ids::LaneName::dashed("chat")),
             registered_at: Some(ts("2026-06-01T00:03:00Z")),
             root: true,
         },
         LiveAgent {
             key: channel_b,
-            channel: Some("chat".to_owned()),
+            channel: Some(rimz::ids::LaneName::dashed("chat")),
             registered_at: Some(ts("2026-06-01T00:02:00Z")),
             root: true,
         },
         LiveAgent {
             key: other.clone(),
-            channel: Some("elsewhere".to_owned()),
+            channel: Some(rimz::ids::LaneName::dashed("elsewhere")),
             registered_at: Some(ts("2026-06-01T00:01:00Z")),
             root: true,
         },
         LiveAgent {
             key: child.clone(),
-            channel: Some("chat".to_owned()),
+            channel: Some(rimz::ids::LaneName::dashed("chat")),
             registered_at: Some(ts("2026-06-01T00:04:00Z")),
             root: false,
         },
@@ -3167,7 +3170,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
 #[test]
 fn channel_filter_matches_exact_lanes() {
     assert!(channel_matches(
-        Some("project"),
+        Some(&rimz::ids::LaneName::dashed("project")),
         Some("main"),
         Some(Path::new("/work/project"))
     ));
@@ -3176,23 +3179,31 @@ fn channel_filter_matches_exact_lanes() {
         Some("main"),
         Some(Path::new("/work/project"))
     ));
-    assert!(channel_matches(Some("web-token"), Some("web-token"), None));
-    assert!(!channel_matches(
-        Some("web-token/forge"),
+    assert!(channel_matches(
+        Some(&rimz::ids::LaneName::dashed("web-token")),
         Some("web-token"),
         None
     ));
     assert!(!channel_matches(
-        Some("web-token-other/forge"),
+        Some(&rimz::ids::LaneName::dashed("web-token/forge")),
         Some("web-token"),
         None
     ));
     assert!(!channel_matches(
-        Some("web-token/forge"),
+        Some(&rimz::ids::LaneName::dashed("web-token-other/forge")),
+        Some("web-token"),
+        None
+    ));
+    assert!(!channel_matches(
+        Some(&rimz::ids::LaneName::dashed("web-token/forge")),
         Some("web-token/ops"),
         None
     ));
-    assert!(channel_matches(Some("web-token/forge"), None, None));
+    assert!(channel_matches(
+        Some(&rimz::ids::LaneName::dashed("web-token/forge")),
+        None,
+        None
+    ));
 }
 
 #[test]

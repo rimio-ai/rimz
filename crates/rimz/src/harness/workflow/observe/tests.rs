@@ -549,14 +549,17 @@ fn children_keep_live_launches_and_launched_cohorts_once_without_ended_or_stoppe
         team("@seat"),
         Some(TeamRef {
             name: "forge".into(),
-            channel: "external".into(),
+            channel: None,
             stage: None,
         }),
         "a seat with no lane reads the external channel and no stage"
     );
     let staged = team(&staged_handle).unwrap();
     assert_eq!(staged.stage.as_deref(), Some("review"));
-    assert_eq!(staged.channel, lane_name);
+    assert_eq!(
+        staged.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some(lane_name)
+    );
 }
 
 #[test]

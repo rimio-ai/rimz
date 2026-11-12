@@ -61,7 +61,7 @@ fn a_name_shared_across_lanes_resolves_by_the_senders_channel() {
         name: Some("sender".into()),
         profile: None,
         role: None,
-        channel: channel.map(Into::into),
+        channel: channel.map(crate::ids::LaneName::dashed),
     };
     assert_eq!(
         sender_notice::resolve_sender(&origin(Some("auth")), &cards)
@@ -208,7 +208,10 @@ fn assert_notice(q: &Queue, original: &MessageRecord, status: &str) -> MessageRe
     );
     let notice = &live[0];
     assert_eq!(notice.agent_id.as_str(), "sender-session");
-    assert_eq!(notice.channel.as_deref(), Some("sender-lane"));
+    assert_eq!(
+        notice.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("sender-lane")
+    );
     assert_eq!(notice.status, MessageStatus::Queued);
     assert_eq!(
         serde_json::to_value(&notice.sender).unwrap(),

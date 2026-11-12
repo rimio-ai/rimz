@@ -950,7 +950,7 @@ fn message_list_empty_lane_counts_other_visible_rows() {
     register_running_agent(&env, "sess-docs", "docs", &[]);
     seed_channel_message(&env, 1, 100, Some("old"), "archived text");
     env.store()
-        .archive_channel_messages("old", "archive", "rimz-test")
+        .archive_channel_messages(&rimz::ids::LaneName::dashed("old"), "archive", "rimz-test")
         .unwrap();
     seed_channel_message(&env, 2, 200, Some("ops"), "private ops text");
     seed_channel_message(&env, 3, 300, Some("review"), "private review text");
@@ -961,7 +961,7 @@ fn message_list_empty_lane_counts_other_visible_rows() {
         "system text".to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some("ops".to_owned()))
+    .with_channel(Some(rimz::ids::LaneName::dashed("ops")))
     .with_sender(MessageSender::System);
     env.store().queue_message(&system, "rimz-test").unwrap();
     let output = run_success(env.rimz().args(["message", "list"]), "empty lane");
@@ -1017,7 +1017,7 @@ fn message_list_validates_explicit_channels_but_not_ambient() {
     register_running_agent(&env, "sess-docs", "docs", &[]);
     seed_channel_message(&env, 1, 100, Some("old"), "old text");
     env.store()
-        .archive_channel_messages("old", "archive", "rimz-test")
+        .archive_channel_messages(&rimz::ids::LaneName::dashed("old"), "archive", "rimz-test")
         .unwrap();
     for args in [
         vec!["message", "list", "--channel", "nope-zz"],
@@ -1040,6 +1040,25 @@ fn message_list_validates_explicit_channels_but_not_ambient() {
         .is_empty()
     );
     assert!(list_message_ids(&env, &["message", "list", "--json"], Some("never-seen")).is_empty());
+}
+
+#[test]
+fn message_list_reads_an_explicit_channel_as_a_lane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+    let feat = seed_channel_message(&env, 1, 100, Some("feat-x"), "feat text");
+    for channel in ["feat x", "feat/x"] {
+        assert_eq!(
+            list_message_ids(
+                &env,
+                &["message", "list", "--channel", channel, "--json"],
+                None
+            ),
+            vec![feat.clone()],
+            "{channel}"
+        );
+    }
 }
 
 #[test]
@@ -1084,7 +1103,11 @@ fn message_list_scopes_orders_and_limits_records() {
     let main = seed_channel_message(&env, 1, 100, None, "main task");
     let archived_docs = seed_channel_message(&env, 2, 200, Some("docs"), "old docs task");
     env.store()
-        .archive_channel_messages("docs", "test archive", "rimz-test")
+        .archive_channel_messages(
+            &rimz::ids::LaneName::dashed("docs"),
+            "test archive",
+            "rimz-test",
+        )
         .expect("archive docs channel");
     let docs = seed_channel_message(&env, 3, 300, Some("docs"), "docs task");
     let docs_forge = seed_channel_message(&env, 4, 400, Some("docs/forge"), "forge task");
@@ -1159,8 +1182,8 @@ fn message_list_main_from_root_shell_includes_root_routing_keys() {
     let current = queue_add(&env, "@reader#main", "root message");
     let named = seed_channel_message(&env, 1, 100, Some("main"), "named main message");
     assert_eq!(
-        list_message_ids(&env, &["message", "list", "--json"], Some("main")).as_slice(),
-        std::slice::from_ref(&named)
+        list_message_ids(&env, &["message", "list", "--json"], Some("main")),
+        [current.clone(), named.clone()]
     );
     for channel in ["main", "project", env.project_root.to_str().unwrap()] {
         let ids = list_message_ids(
@@ -1175,7 +1198,10 @@ fn message_list_main_from_root_shell_includes_root_routing_keys() {
         .iter()
         .find(|row| row.message_id.as_str() == current)
         .unwrap();
-    assert_eq!(root.channel.as_deref(), Some("project"));
+    assert_eq!(
+        root.channel.as_ref().map(rimz::ids::LaneName::as_str),
+        Some("project")
+    );
     let miss = env
         .rimz()
         .args(["message", "list", "--channel", "missing"])
@@ -1366,7 +1392,7 @@ fn message_list_hides_system_traffic_unless_asked() {
             "system traffic".to_owned(),
             DeliveryGate::Done,
         )
-        .with_channel(Some("docs".to_owned()))
+        .with_channel(Some(rimz::ids::LaneName::dashed("docs")))
         .with_sender(sender);
         env.store().queue_message(&message, "rimz-test").unwrap();
         system_ids.push(message.message_id.to_string());
@@ -1424,7 +1450,7 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
             format!("keepalive {n}"),
             DeliveryGate::Done,
         )
-        .with_channel(Some("docs".to_owned()))
+        .with_channel(Some(rimz::ids::LaneName::dashed("docs")))
         .with_sender(MessageSender::Harness {
             notice: HarnessNotice::CacheKeepalive,
         });
@@ -1493,7 +1519,7 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
                 format!("separate text {n}"),
                 DeliveryGate::Done,
             )
-            .with_channel(Some("docs".to_owned()))
+            .with_channel(Some(rimz::ids::LaneName::dashed("docs")))
             .with_sender(sender.clone());
             env.store().queue_message(&message, "rimz-test").unwrap();
             separate_ids.push(message.message_id.to_string());
@@ -1577,7 +1603,7 @@ fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
         "pre-history body".to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some("docs".to_owned()));
+    .with_channel(Some(rimz::ids::LaneName::dashed("docs")));
     message.status = MessageStatus::Delivered;
     message.delivered_at = Some(message.enqueued_at);
     let message_id = message.message_id.to_string();
@@ -1876,7 +1902,7 @@ fn receiver_end_tells_the_agent_sender_and_arms_the_wake_stamp() {
         name: sender.name.clone(),
         profile: None,
         role: None,
-        channel: sender.lane_name().map(String::from),
+        channel: sender.lane_name(),
     });
     store.queue_message(&sent, "rimz-test").unwrap();
     let _ = std::fs::remove_file(wake_stamp_path(&env));
@@ -2440,7 +2466,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
             name: sender.name.clone(),
             profile: None,
             role: None,
-            channel: sender.lane_name().map(String::from),
+            channel: sender.lane_name(),
         };
         let mut first = MessageRecord::new(
             env.workspace_id.clone(),
@@ -2558,7 +2584,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
                 .find(|notice| notice.text.contains(record.message_id.as_str()))
                 .unwrap();
             assert_eq!(notice.agent_id, sender.agent_id);
-            assert_eq!(notice.channel, sender.lane_name().map(String::from));
+            assert_eq!(notice.channel, sender.lane_name());
             assert!(notice.text.contains("stays queued"));
             assert!(
                 notice
@@ -9295,7 +9321,7 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
         "@first completed: first result\n@second completed: second result".to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(parent.lane_name().map(String::from))
+    .with_channel(parent.lane_name())
     .with_sender(MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
     })
@@ -11169,7 +11195,7 @@ fn queued_delivery_labels_an_ended_root_sender_main() {
         name: sender.name.clone(),
         profile: None,
         role: None,
-        channel: sender.lane_name().map(String::from),
+        channel: sender.lane_name(),
     });
     queue_messages(&env, &[&message]);
     append_lifecycle(
@@ -11243,14 +11269,14 @@ fn queued_delivery_batches_compatible_prompts() {
             text.to_owned(),
             DeliveryGate::Done,
         )
-        .with_channel(Some("feature-batch".to_owned()))
+        .with_channel(Some(rimz::ids::LaneName::dashed("feature-batch")))
         .with_sender(MessageSender::Agent {
             agent_id: None,
             kind: AgentKind::new_unchecked("codex"),
             name: None,
             profile: None,
             role: Some(role.to_owned()),
-            channel: Some(sender_channel.to_owned()),
+            channel: Some(rimz::ids::LaneName::dashed(sender_channel)),
         });
         record.message_id = fixed_message_id(id);
         record
@@ -11368,7 +11394,7 @@ fn mixed_paste_confirms_every_section_under_its_own_author() {
             text.to_owned(),
             DeliveryGate::Done,
         )
-        .with_channel(Some("feature-mixed".to_owned()))
+        .with_channel(Some(rimz::ids::LaneName::dashed("feature-mixed")))
         .with_sender(sender);
         record.message_id = fixed_message_id(id);
         record
@@ -11379,7 +11405,7 @@ fn mixed_paste_confirms_every_section_under_its_own_author() {
         name: None,
         profile: None,
         role: Some(role.to_owned()),
-        channel: Some(channel.to_owned()),
+        channel: Some(rimz::ids::LaneName::dashed(channel)),
     };
     let records = [
         message(1, "human question", MessageSender::Human),
@@ -13700,7 +13726,7 @@ fn queue_compact_command(idle_tagged: bool) -> (Env, PathBuf, MessageRecord) {
         rimz::agents::compact_command(&receiver, &rimz::config::HarnessConfig::default()).unwrap(),
         DeliveryGate::Done,
     )
-    .with_channel(receiver.lane_name().map(String::from))
+    .with_channel(receiver.lane_name())
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
     .with_sender(MessageSender::System)
     .with_body(MessageBody::Command)
@@ -15418,7 +15444,7 @@ fn seed_channel_message(
         text.to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(channel.map(str::to_owned));
+    .with_channel(channel.map(rimz::ids::LaneName::dashed));
     message.message_id = fixed_message_id(id);
     message.enqueued_at = jiff::Timestamp::from_second(epoch_seconds).expect("fixed timestamp");
     let message_id = message.message_id.to_string();
@@ -15457,7 +15483,7 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
         text.to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some(channel.to_owned()));
+    .with_channel(Some(rimz::ids::LaneName::dashed(channel)));
     let message_id = message.message_id.to_string();
     env.store()
         .queue_message(&message, "rimz-test")
@@ -15478,7 +15504,7 @@ fn deliver_direct_channel_message(env: &Env, channel: &str, text: &str) -> Strin
         text.to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some(channel.to_owned()));
+    .with_channel(Some(rimz::ids::LaneName::dashed(channel)));
     env.store()
         .queue_message(&message, "rimz-test")
         .expect("queue message");

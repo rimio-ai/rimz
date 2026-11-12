@@ -2036,12 +2036,20 @@ fn delivers(
                 .and_then(serde_json::Value::as_str)
             {
                 let own = crate::harness::lanes::own_lane(project_root, checkout);
-                let channel = if own.is_trunk() {
-                    crate::harness::lanes::in_place_team_name(project_root, team).to_string()
+                let lane = if own.is_trunk() {
+                    Some(crate::harness::lanes::in_place_team_name(
+                        project_root,
+                        team,
+                    ))
                 } else {
-                    own.routing_name().to_string()
+                    Path::new(own.path())
+                        .file_name()
+                        .map(|_| own.routing_name())
                 };
-                matches.insert("instance".into(), format!("{team}#{channel}"));
+                let Ok(instance) = crate::ids::TeamInstanceId::new(team, lane) else {
+                    return false;
+                };
+                matches.insert("instance".into(), instance.to_string());
             }
         }
         Some("instance") if !matches.contains_key("board") => {

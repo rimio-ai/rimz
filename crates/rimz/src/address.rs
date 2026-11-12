@@ -35,7 +35,7 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::agents::petname::{sender_handle, sender_label};
-use crate::ids::{AgentKind, AgentSessionId, Lane, LaneHome, LaneName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, Lane, LaneHome, LaneName, PaneId, TeamInstanceId};
 use crate::store::message::MessageSender;
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, find_agent};
 
@@ -136,9 +136,38 @@ impl LaneSelector {
         }
     }
 
-    /// Whether two selectors name one lane.
+    /// Whether two selectors name one lane, a slash name and its dashed form
+    /// included.
     pub fn same_lane(&self, other: &Self) -> bool {
-        (self.trunk && other.trunk) || (self.name.is_some() && self.name == other.name)
+        if self.trunk || other.trunk {
+            return self.trunk && other.trunk;
+        }
+        let holds = |lane: &Self, other: &Self| {
+            other
+                .name
+                .as_ref()
+                .is_some_and(|name| lane.holds(Some(name), false, None))
+        };
+        holds(self, other) || holds(other, self)
+    }
+
+    /// Whether a durable record stamped with lane name `recorded` is in the
+    /// lane: a trunk selector holds every record that spells trunk (no name,
+    /// `main`, or the project directory's name), any other one holds records
+    /// of every name it accepts for a row (the dashed slash form), a checkout's
+    /// path holding records of that checkout's own lane.
+    pub fn holds_record(&self, recorded: Option<&LaneName>, project_root: Option<&Path>) -> bool {
+        let reading = Self::parse(recorded.map(LaneName::as_str), project_root);
+        if self.trunk {
+            return reading.trunk;
+        }
+        let path_lane = self
+            .name
+            .as_ref()
+            .filter(|filter| Path::new(filter.as_str()).is_absolute())
+            .map(|path| Lane::own(LaneHome::Worktree, path.as_str()).routing_name());
+        self.holds(reading.name.as_ref(), false, None)
+            || path_lane.is_some_and(|name| reading.name.as_ref() == Some(&name))
     }
 
     /// Whether a row of this lane name and trunk reading, homed at `own_path`
@@ -201,6 +230,8 @@ pub enum TargetErr {
         channel: String,
         flag: String,
     },
+    #[error("target `{target}` names channel `#{channel}`, and a channel name holds no `#`")]
+    InvalidChannel { target: String, channel: String },
     #[error(
         "no agent matches target `{target}`{suggestion}; run `rimz agents list` to see live agents"
     )]
@@ -696,6 +727,7 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                 channel.as_deref(),
                 worktree_flag,
                 current_channel.channel.as_ref().map(LaneName::as_str),
+                project_root,
             )?;
             let lane = channel
                 .as_deref()
@@ -800,6 +832,7 @@ pub fn create_mention(
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> Result<Option<CreateMention>, TargetErr> {
     match parse_target(raw)? {
         Target::Pane(_)
@@ -808,8 +841,13 @@ pub fn create_mention(
             ..
         } => Ok(None),
         Target::Mention { channel, .. } => {
-            let channel =
-                reconcile_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
+            let channel = reconcile_channel(
+                raw,
+                channel.as_deref(),
+                worktree_flag,
+                current_channel,
+                project_root,
+            )?;
             Ok(Some(CreateMention {
                 selector: selector_of(raw).to_owned(),
                 channel,
@@ -836,9 +874,20 @@ pub fn reconcile_channel(
     inline: Option<&str>,
     flag: Option<&str>,
     current: Option<&str>,
+    project_root: Option<&Path>,
 ) -> Result<Option<String>, TargetErr> {
+    if let Some(channel) = inline.filter(|channel| channel.contains('#')) {
+        return Err(TargetErr::InvalidChannel {
+            target: raw.to_owned(),
+            channel: channel.to_owned(),
+        });
+    }
+    let same_lane = |channel: &str, flag: &str| {
+        LaneSelector::parse(Some(channel), project_root)
+            .same_lane(&LaneSelector::parse(Some(flag), project_root))
+    };
     let reconciled = match (inline, flag) {
-        (Some(channel), Some(flag)) if channel != flag => {
+        (Some(channel), Some(flag)) if !same_lane(channel, flag) => {
             return Err(TargetErr::ChannelMismatch {
                 target: raw.to_owned(),
                 channel: channel.to_owned(),
@@ -1150,12 +1199,20 @@ fn no_match_error<'a, C: Candidate<'a>>(
 /// One live launch of a configured team in a lane.
 #[derive(Clone, Debug)]
 pub struct TeamCohort<'a> {
-    pub team: &'a str,
-    pub channel: String,
+    pub instance: TeamInstanceId,
     pub members: Vec<&'a AgentState>,
 }
 
 impl TeamCohort<'_> {
+    pub fn team(&self) -> &str {
+        self.instance.team()
+    }
+
+    /// The cohort's lane as `team#<lane>` spells it: its name, or `external`.
+    pub fn channel(&self) -> &str {
+        self.instance.lane_text()
+    }
+
     /// Whether `agent`'s exact provider and session identity is a member.
     pub fn contains(&self, agent: &AgentState) -> bool {
         self.members
@@ -1323,26 +1380,19 @@ pub(crate) fn launch_occupants<'a>(
 pub fn team_cohorts<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
 ) -> Vec<TeamCohort<'a>> {
-    let mut grouped: BTreeMap<(&str, String), Vec<&AgentState>> = BTreeMap::new();
+    let mut grouped: BTreeMap<TeamInstanceId, Vec<&AgentState>> = BTreeMap::new();
     for agent in launch_occupants(agents)
         .into_iter()
         .filter(|agent| agent.ended_at.is_none())
     {
-        let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
+        let Some(instance) = agent.team_instance() else {
             continue;
         };
-        let channel = agent
-            .lane_name()
-            .map_or_else(|| "external".to_owned(), String::from);
-        grouped.entry((team, channel)).or_default().push(agent);
+        grouped.entry(instance).or_default().push(agent);
     }
     grouped
         .into_iter()
-        .map(|((team, channel), members)| TeamCohort {
-            team,
-            channel,
-            members,
-        })
+        .map(|(instance, members)| TeamCohort { instance, members })
         .collect()
 }
 
@@ -1473,13 +1523,12 @@ pub fn channel_team<'a>(agents: &'a [AgentState], channel: &LaneName) -> Option<
 pub(crate) fn recipient_channel(
     target: &PaneAgent,
     bound: Option<&AgentState>,
-    scope_channel: Option<&str>,
-) -> Option<String> {
+    scope_channel: Option<&LaneName>,
+) -> Option<LaneName> {
     bound
         .and_then(AgentState::lane_name)
         .or_else(|| target.lane_name())
-        .map(String::from)
-        .or_else(|| scope_channel.map(ToOwned::to_owned))
+        .or_else(|| scope_channel.cloned())
 }
 
 /// The canonical rendered address of an agent — the inverse of `parse_target`.
@@ -1547,7 +1596,7 @@ pub fn paste_address(
 pub(crate) fn message_header(
     sender: &MessageSender,
     peers: &[&AgentState],
-    target_channel: Option<&str>,
+    target_channel: Option<&LaneName>,
     project_root: Option<&Path>,
 ) -> Option<String> {
     if matches!(sender, MessageSender::Human) {
@@ -1595,7 +1644,7 @@ fn live_sender<'a>(sender: &MessageSender, peers: &[&'a AgentState]) -> Option<&
 pub fn agent_sender_handle(
     sender: &MessageSender,
     peers: &[&AgentState],
-    target_channel: Option<&str>,
+    target_channel: Option<&LaneName>,
     project_root: Option<&Path>,
 ) -> Option<String> {
     let MessageSender::Agent {
@@ -1609,22 +1658,22 @@ pub fn agent_sender_handle(
         return None;
     };
     let live = live_sender(sender, peers);
-    let live_channel = live.and_then(AgentState::lane_name).map(String::from);
+    let live_channel = live.and_then(AgentState::lane_name);
     let (kind, name, role, channel) = live.map_or(
-        (kind, name.as_deref(), role.as_deref(), channel.as_deref()),
+        (kind, name.as_deref(), role.as_deref(), channel.as_ref()),
         |agent| {
             (
                 &agent.kind,
                 agent.name.as_deref(),
                 agent.role.as_deref(),
-                live_channel.as_deref(),
+                live_channel.as_ref(),
             )
         },
     );
     let include_channel = channel != target_channel;
     let lane_label = live.and_then(Candidate::lane_label).or_else(|| {
         channel
-            .and_then(|channel| record_lane_label(Some(channel), project_root))
+            .and_then(|channel| record_lane_label(Some(channel.as_str()), project_root))
             .map(str::to_owned)
     });
     let channel = lane_label.as_deref();

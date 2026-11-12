@@ -135,13 +135,21 @@ pub(super) fn handle_for(
             if identity.root_lane {
                 Some(LaneName::TRUNK_LABEL)
             } else {
-                entry.channel.as_deref().or(identity.lane_label())
+                entry
+                    .channel
+                    .as_ref()
+                    .map(LaneName::as_str)
+                    .or(identity.lane_label())
             },
             include_channel,
         );
     }
     let base = rimz::agents::petname::sender_handle(None, None, &entry.kind);
-    render_handle(&base, entry.channel.as_deref(), include_channel)
+    render_handle(
+        &base,
+        entry.channel.as_ref().map(LaneName::as_str),
+        include_channel,
+    )
 }
 
 pub(super) fn render_handle(base: &str, channel: Option<&str>, include_channel: bool) -> String {

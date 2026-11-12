@@ -343,10 +343,11 @@ fn create_args_for_current_channel(
         "@codex",
         None,
         current.as_deref().map(rimz::ids::LaneName::as_str),
+        None,
     )
     .unwrap()
     .unwrap();
-    let args = create_launch_args(create, "@codex", None, None, &current, "hi");
+    let args = create_launch_args(create, "@codex", None, None, &current, "hi", None);
     assert_eq!(args.launch.spec.as_deref(), Some("codex"));
     assert_eq!(args.launch.prompt.as_deref(), Some("hi"));
     args

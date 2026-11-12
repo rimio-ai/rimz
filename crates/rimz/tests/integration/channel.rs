@@ -434,6 +434,10 @@ fn a_named_lane_agents_transcript_entries_carry_its_lane_name() {
         .collect::<Vec<_>>();
     assert!(ours.len() >= 2, "{entries:#?}");
     for entry in ours {
-        assert_eq!(entry.channel.as_deref(), Some("design"), "{entry:#?}");
+        assert_eq!(
+            entry.channel.as_ref().map(rimz::ids::LaneName::as_str),
+            Some("design"),
+            "{entry:#?}"
+        );
     }
 }

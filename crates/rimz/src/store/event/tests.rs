@@ -145,14 +145,14 @@ fn message_record() -> MessageRecord {
     );
     message.message_id = MessageId::parse("msg_0123456789abcdef").expect("fixed message id");
     message.address = Some("@reviewer#docs".to_owned());
-    message.channel = Some("docs".to_owned());
+    message.channel = Some(crate::ids::LaneName::dashed("docs"));
     message.sender = MessageSender::Agent {
         agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: Some("swift-otter".to_owned()),
         profile: Some("codex-coder".to_owned()),
         role: Some("coder".to_owned()),
-        channel: Some("docs".to_owned()),
+        channel: Some(crate::ids::LaneName::dashed("docs")),
     };
     message.force = true;
     message.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
@@ -633,7 +633,7 @@ fn unresolved_message_event_preserves_raw_target() {
         WorkspaceId::parse("ws_000000000000000000000000").expect("fixed workspace id"),
         "session",
         "@reviwer#docs".to_owned(),
-        Some("docs".to_owned()),
+        Some(crate::ids::LaneName::dashed("docs")),
         MessageSender::Human,
         12,
         "receiver not found".to_owned(),
@@ -649,7 +649,10 @@ fn unresolved_message_event_preserves_raw_target() {
     assert_eq!(payload.status, MessageStatus::Errored);
     assert_eq!(payload.address.as_deref(), Some("@reviwer#docs"));
     assert_eq!(payload.kind.as_str(), "unknown");
-    assert_eq!(payload.channel.as_deref(), Some("docs"));
+    assert_eq!(
+        payload.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("docs")
+    );
     assert_eq!(payload.reason.as_deref(), Some("receiver not found"));
 }
 

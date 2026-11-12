@@ -531,10 +531,7 @@ pub fn default_signal_matches(
                 .into_iter()
                 .find(|cohort| cohort.contains(scope))
                 .ok_or(DeliveryScopeFailure::NoTeam)?;
-            matches.insert(
-                "instance".to_owned(),
-                format!("{}#{}", cohort.team, cohort.channel),
-            );
+            matches.insert("instance".to_owned(), cohort.instance.to_string());
         }
         _ => {}
     }

@@ -250,8 +250,7 @@ fn explicit_account_refuses_both_cohort_resume_entrances() {
 #[test]
 fn held_checkout_guidance_names_the_board_command() {
     let hold = crate::harness::resume::TeamHold {
-        team: "forge".into(),
-        channel: "feature".into(),
+        instance: "forge#feature".parse().unwrap(),
         checkout: "/repo/feature".into(),
         reason: crate::harness::resume::TeamHoldReason::BoardStage("Build".into()),
     };

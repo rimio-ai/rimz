@@ -273,37 +273,40 @@ fn strict_run_reader_refuses_an_unreadable_room_directory_but_best_effort_keeps_
 }
 
 #[test]
-fn run_address_round_trips_and_matches_requested_lanes() {
+fn run_address_round_trips() {
     let address: RunAddress = "review#feat-x".parse().unwrap();
     assert_eq!(address.to_string(), "review#feat-x");
-    assert!(address.matches(&address));
-    assert!(
-        "review#feat/x"
-            .parse::<RunAddress>()
-            .unwrap()
-            .matches(&address)
-    );
-    assert!(
-        !"other#feat-x"
-            .parse::<RunAddress>()
-            .unwrap()
-            .matches(&address)
-    );
-    assert!(
-        !"review#feat-y"
-            .parse::<RunAddress>()
-            .unwrap()
-            .matches(&address)
-    );
-    assert_eq!(
-        "review#lane#part".parse::<RunAddress>().unwrap().lane,
-        "lane#part"
-    );
+    assert_eq!("review#feat-x".parse::<RunAddress>().unwrap(), address);
+}
+
+#[test]
+fn team_ref_lane_round_trips_external_and_reads_an_old_unnamed_lane_dashed() {
+    let named = TeamRef {
+        name: "forge".to_owned(),
+        channel: Some(LaneName::dashed("feat-x")),
+        stage: Some("Build".to_owned()),
+    };
+    let external = TeamRef {
+        channel: None,
+        ..named.clone()
+    };
+    for (team, lane) in [(&named, "feat-x"), (&external, "external")] {
+        let value = serde_json::to_value(team).unwrap();
+        assert_eq!(
+            value,
+            json!({"name": "forge", "channel": lane, "stage": "Build"})
+        );
+        assert_eq!(&serde_json::from_value::<TeamRef>(value).unwrap(), team);
+    }
+    let old: TeamRef =
+        serde_json::from_value(json!({"name": "forge", "channel": "feat x", "stage": null}))
+            .unwrap();
+    assert_eq!(old.channel, Some(LaneName::dashed("feat-x")));
 }
 
 #[test]
 fn run_address_rejects_missing_or_empty_parts() {
-    for raw in ["review", "", "#lane", "review#", "#"] {
+    for raw in ["review", "", "#lane", "review#", "#", "review#lane#part"] {
         assert!(raw.parse::<RunAddress>().is_err(), "{raw:?}");
     }
 }

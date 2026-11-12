@@ -70,7 +70,7 @@ pub enum InterruptConfirmation {
 
 use crate::address::recipient_channel;
 use crate::agents::{AgentCardRef, AgentState, AgentStatus, RefreshSpawn};
-use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, LaneName, PaneId, WorkspaceId};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
     WhenCondition, env_ms, gate_open,
@@ -170,18 +170,18 @@ struct RecipientIdentity {
     kind: AgentKind,
     agent_id: AgentSessionId,
     agent_name: Option<String>,
-    channel: Option<String>,
+    channel: Option<LaneName>,
     pane_id: Option<PaneId>,
 }
 
 impl Recipient<'_> {
-    fn into_identity(self, scope_channel: Option<&str>) -> RecipientIdentity {
+    fn into_identity(self, scope_channel: Option<&LaneName>) -> RecipientIdentity {
         match self {
             Self::Agent { agent, pane } => RecipientIdentity {
                 kind: agent.kind.clone(),
                 agent_id: agent.agent_id.clone(),
                 agent_name: agent.name.clone(),
-                channel: agent.lane_name().map(String::from).or_else(|| {
+                channel: agent.lane_name().or_else(|| {
                     pane.and_then(|pane| recipient_channel(pane, Some(agent), scope_channel))
                 }),
                 pane_id: pane.map(|pane| pane.pane_id.clone()),
@@ -208,7 +208,7 @@ impl MessageDraft {
         &self,
         workspace_id: WorkspaceId,
         recipient: Recipient<'_>,
-        scope_channel: Option<&str>,
+        scope_channel: Option<&LaneName>,
         text: &str,
         address: Option<&str>,
     ) -> MessageRecord {

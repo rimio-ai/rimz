@@ -32,7 +32,9 @@ use crate::harness::plan::{
     ResumeLaunchPosture, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
-use crate::ids::{AgentKind, AgentSessionId, LaneName, LoginKey, LoginName, PaneId, WorkspaceId};
+use crate::ids::{
+    AgentKind, AgentSessionId, LaneName, LoginKey, LoginName, PaneId, TeamInstanceId, WorkspaceId,
+};
 use crate::mux::ResumeTab;
 use crate::store::runtime::AgentLiveness;
 use crate::store::writer::AgentLaunchScope;
@@ -2134,13 +2136,7 @@ fn plan_team_restore_tabs(
             continue;
         }
         let mut cohort = if fresh {
-            fresh_cohort_plan(
-                &cells,
-                &team,
-                newest,
-                &cwd,
-                newest.lane_name().map(String::from),
-            )
+            fresh_cohort_plan(&cells, &team, newest, &cwd, newest.lane_name())
         } else {
             let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
             // A cohort with a member born under another account plans no tab; its
@@ -2901,7 +2897,7 @@ pub fn plan_cohort_resume(
             return None;
         }
         let hold = inspect_team_hold(agents, checkout)?;
-        (hold.team == team && matches!(&hold.reason, TeamHoldReason::BoardStage(_)))
+        (hold.instance.team() == team && matches!(&hold.reason, TeamHoldReason::BoardStage(_)))
             .then_some((agent, hold))
     })
     .min_by(|(left, _), (right, _)| {
@@ -2920,7 +2916,7 @@ pub fn plan_cohort_resume(
         team,
         newest,
         &hold.checkout,
-        Some(hold.channel),
+        hold.instance.lane().cloned(),
     ))
 }
 
@@ -3082,8 +3078,9 @@ fn fresh_cohort_plan(
     team: &str,
     newest: &AgentState,
     cwd: &Path,
-    channel: Option<String>,
+    channel: Option<LaneName>,
 ) -> CohortResumePlan {
+    let channel = channel.map(String::from);
     CohortResumePlan {
         spec: cohort_spec_label(cells, Some(team)),
         lane_label: lane_label(Some(newest), channel.as_deref(), cwd),
@@ -3445,11 +3442,15 @@ fn match_cohort<'a>(
     }
 }
 
+/// A holding member's cohort; a member without a lane name holds none.
+fn held_instance(member: &AgentState) -> Option<TeamInstanceId> {
+    TeamInstanceId::new(member.team.as_deref()?, Some(member.lane_name()?)).ok()
+}
+
 /// The team holding a checkout or channel before a fresh launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamHold {
-    pub team: String,
-    pub channel: String,
+    pub instance: TeamInstanceId,
     /// The holder's recorded checkout, where its board lives.
     pub checkout: PathBuf,
     pub reason: TeamHoldReason,
@@ -3483,7 +3484,7 @@ pub fn inspect_channel_hold(agents: &[AgentState], channel: &LaneName) -> Option
 pub fn inspect_cohort_hold(agents: &[AgentState], team: &str, lane: &str) -> Option<TeamHold> {
     let lane = crate::address::LaneSelector::parse(Some(lane), None);
     lane_hold(agents, |agent| crate::address::agent_in_lane(agent, &lane))
-        .filter(|hold| hold.team == team)
+        .filter(|hold| hold.instance.team() == team)
 }
 
 fn lane_hold(agents: &[AgentState], in_lane: impl Fn(&AgentState) -> bool) -> Option<TeamHold> {
@@ -3494,7 +3495,7 @@ fn lane_hold(agents: &[AgentState], in_lane: impl Fn(&AgentState) -> bool) -> Op
     // A board names no team: it holds this channel only while the channel's
     // team is also the newest team at that checkout.
     inspect_team_hold(agents, &hold.checkout)
-        .is_some_and(|checkout_hold| checkout_hold.team == hold.team)
+        .is_some_and(|checkout_hold| checkout_hold.instance.team() == hold.instance.team())
         .then_some(hold)
 }
 
@@ -3516,19 +3517,17 @@ fn inspect_hold(
         .max_by_key(|agent| agent.last_activity)
     {
         return Some(TeamHold {
-            team: member.team.clone()?,
-            channel: member.lane_name()?.into(),
+            instance: held_instance(member)?,
             checkout: member.lane_path()?.into(),
             reason: TeamHoldReason::LiveMember,
         });
     }
     let member = members.iter().max_by_key(|agent| agent.last_activity)?;
-    let team = member.team.clone()?;
+    let instance = held_instance(member)?;
     let checkout = PathBuf::from(member.lane_path()?);
     let stage = super::scratch::board_stage(board_checkout.unwrap_or(&checkout))?;
     super::fleet::team_stage_pending(Some(&stage.name)).then_some(TeamHold {
-        team,
-        channel: member.lane_name()?.into(),
+        instance,
         checkout,
         reason: TeamHoldReason::BoardStage(stage.name),
     })
