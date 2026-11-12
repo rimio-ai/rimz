@@ -2987,8 +2987,24 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     )
     .unwrap();
     assert!(run.notes.is_some(), "resident fires keep memory: {run:?}");
-    let runs = rimz::harness::run::list(store.paths()).unwrap();
-    assert_eq!(runs.len(), 1);
+    // The launch records the supervised run after the leader's row, so wait for it.
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    let runs = loop {
+        let runs = rimz::harness::run::list(store.paths()).unwrap();
+        if runs
+            .iter()
+            .any(|run| run.loop_task.as_deref() == Some("resident"))
+        {
+            break runs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the resident's supervised run never appeared: {runs:?}\n{:?}",
+            read_loop_run_records(&env)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(runs.len(), 1, "{runs:?}");
     assert_eq!(runs[0].loop_task.as_deref(), Some("resident"));
     // The run remembers the checkout; no fire writes the resident launch file.
     assert!(
