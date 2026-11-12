@@ -1099,17 +1099,32 @@ pub(crate) fn parse_journal(bytes: &[u8], path: &Path) -> Vec<JournalEntry> {
 
 pub fn list(state: &StatePaths) -> Result<Vec<RunRecord>> {
     let mut records = Vec::new();
+    let mut refused = 0;
     for paths in state.workflow_runs()? {
         match load(&paths) {
             Ok(record) => records.push(record),
             Err(WorkflowStoreErr::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) if err.is_refused() => refused += 1,
             Err(err) => {
                 tracing::warn!(path = %paths.record.display(), error = %err, "skipping workflow with unreadable record");
             }
         }
     }
+    warn_refused(refused);
     Ok(records)
+}
+
+/// One warning for every run a listing skipped because another RimZ version wrote its record,
+/// so a room holding thousands of old runs does not print a line for each.
+fn warn_refused(count: usize) {
+    if count > 0 {
+        tracing::warn!(
+            count,
+            "skipping workflow runs whose record another RimZ version wrote; \
+             `rimz workflow list` names each, and `rimz workflow cancel <run-id>` clears one"
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1125,19 +1140,22 @@ pub fn unfinished_under(home: &std::path::Path, mode: RunRead) -> Result<Vec<Run
         RunRead::BestEffort => crate::disk::paths::workflow_runs_under(home)?,
     };
     let mut records = Vec::new();
+    let mut refused = 0;
     for (_, paths) in homes {
         match load(&paths) {
             Ok(record) if !record.state.is_terminal() => records.push(record),
             Ok(_) => {}
             Err(WorkflowStoreErr::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if mode == RunRead::BestEffort || error.is_refused() => {
+            Err(error) if error.is_refused() => refused += 1,
+            Err(error) if mode == RunRead::BestEffort => {
                 tracing::warn!(path = %paths.record.display(), %error,
                     "skipping workflow with unreadable record");
             }
             Err(error) => return Err(error),
         }
     }
+    warn_refused(refused);
     Ok(records)
 }
 
