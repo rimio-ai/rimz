@@ -1061,28 +1061,65 @@ fn wrap_items(first: &str, indent: usize, items: &[String]) -> Vec<String> {
     }
     lines.push(line);
     lines
+        .into_iter()
+        .flat_map(|line| break_at_slashes(line, indent))
+        .collect()
+}
+
+/// Breaks a line past the screen after its last `/` that fits, continuing
+/// under the indent, so a long chord list keeps every chord on screen.
+fn break_at_slashes(mut line: String, indent: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    while line.chars().count() > SCREEN_WIDTH {
+        let fits: String = line.chars().take(SCREEN_WIDTH).collect();
+        let Some(cut) = fits.rfind('/').filter(|&cut| cut >= indent) else {
+            break;
+        };
+        let rest = format!("{}{}", " ".repeat(indent), &line[cut + 1..]);
+        line.truncate(cut + 1);
+        lines.push(line);
+        line = rest;
+    }
+    lines.push(line);
+    lines
 }
 
 fn chord(chord: Option<KeyChord>) -> String {
     chord.map_or_else(|| "(unbound)".to_owned(), |chord| chord.to_string())
 }
 
-/// The nine slot chords as one range when they are `Alt+1` to `Alt+9`, else
-/// each bound chord.
+/// The bound slot chords in slot order, a run of consecutive digits under one
+/// modifier collapsed to its ends (`Alt+1..9`).
 fn slots_text(slots: &[Option<KeyChord>]) -> String {
-    let stock = slots.len() == 9
-        && slots
-            .iter()
-            .zip('1'..='9')
-            .all(|(slot, digit)| *slot == Some(KeyChord::Alt(digit)));
-    if stock {
-        return "Alt+1..9".to_owned();
+    let mut runs: Vec<(KeyChord, KeyChord)> = Vec::new();
+    for next in slots.iter().flatten().copied() {
+        match runs.last_mut() {
+            Some((_, last)) if next_digit(*last, next) => *last = next,
+            _ => runs.push((next, next)),
+        }
     }
-    let bound: Vec<String> = slots.iter().flatten().map(KeyChord::to_string).collect();
-    if bound.is_empty() {
+    if runs.is_empty() {
         return chord(None);
     }
-    bound.join("/")
+    let texts: Vec<String> = runs
+        .iter()
+        .map(|&(first, last)| match last {
+            KeyChord::Alt(digit) | KeyChord::Ctrl(digit) if first != last => {
+                format!("{first}..{digit}")
+            }
+            _ => first.to_string(),
+        })
+        .collect();
+    texts.join("/")
+}
+
+fn next_digit(previous: KeyChord, next: KeyChord) -> bool {
+    let step =
+        |a: char, b: char| a.is_ascii_digit() && b.is_ascii_digit() && b as u32 == a as u32 + 1;
+    match (previous, next) {
+        (KeyChord::Alt(a), KeyChord::Alt(b)) | (KeyChord::Ctrl(a), KeyChord::Ctrl(b)) => step(a, b),
+        _ => false,
+    }
 }
 
 /// The three room-key options, each chord as the loaded config resolves it.
@@ -1107,7 +1144,7 @@ fn room_keys_options(facts: &KeyFacts, mux: MuxName, status_bar_unset: bool) -> 
     };
     lines.push(format!("{}{yours}", head(1, "Yours")));
     let joined = format!("{pad}  {}", adds.join("     "));
-    if joined.chars().count() <= SCREEN_WIDTH {
+    if !adds.is_empty() && joined.chars().count() <= SCREEN_WIDTH {
         lines.push(joined);
     } else {
         lines.extend(adds.iter().map(|add| format!("{pad}  {add}")));
@@ -1213,7 +1250,8 @@ fn prompt_mux(
         } else {
             String::new()
         };
-        writeln!(out, "  {}  {:<8}{note}", index + 1, mux.as_str())?;
+        let row = format!("  {}  {:<8}{note}", index + 1, mux.as_str());
+        writeln!(out, "{}", row.trim_end())?;
     }
     writeln!(out)?;
     let default = ORDER
