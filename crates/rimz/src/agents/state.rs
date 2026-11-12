@@ -1238,6 +1238,12 @@ pub struct AgentState {
     /// When the last ping-only turn opened: the ping's prompt, the input its request follows. A recorded request older than it predates the ping. While it is no later than `pinged_at` (its ping has closed), the estimate `last_request_at` returns counts from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ping_opened_at: Option<Timestamp>,
+    /// The turn stamps the row held when its current turn opened, kept across a run of errored
+    /// turns. The cache clock reads them in place of the current turn's while a usage-limit
+    /// refusal closed that turn, and counts their start among the inputs that stale the
+    /// provider's record ([`Self::last_request_at`]); a context reset clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_turn: Option<PriorTurn>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
     /// Activity after this instant proves a keyless prompt was answered in the
     /// agent's own UI, so read paths project the row back to work even before
@@ -1364,6 +1370,16 @@ pub fn standing_successor<'a>(
     None
 }
 
+/// A row's turn stamps as they stood before a turn opened: what its last request reads as if
+/// that turn had never run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriorTurn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ended_at: Option<Timestamp>,
+}
+
 /// A row stands unless it ended or its provisional launch failed.
 pub(crate) fn molt_stands(agent: &AgentState) -> bool {
     agent.ended_at.is_none()
@@ -1440,7 +1456,8 @@ impl AgentState {
     /// whose open is unknown or belongs to a newer, unclosed ping keeps the close. For one
     /// request the record never precedes the estimate's inputs, so a switch of source moves
     /// the value forward by the gap between hook and request; pacing that asks "same
-    /// request?" compares [`Self::request_key`] instead, which no switch moves.
+    /// request?" compares [`Self::request_key`] instead, which no switch moves. A request
+    /// refused for a usage limit never ran, so neither source counts it (`limit_refusal`).
     pub fn last_request_at(&self) -> Option<Timestamp> {
         self.recorded_request_at().or_else(|| {
             let closed_ping = match (self.ping_opened_at, self.pinged_at) {
@@ -1457,15 +1474,26 @@ impl AgentState {
     }
 
     /// The provider's recorded request, when no request input (a prompt, a tool result, a
-    /// ping's open) landed after it: a newer input means a newer request the refresh has not
-    /// read yet, so the record is stale. A ping's own request postdates its open, so it wins
-    /// over the ping's later close.
+    /// ping's open, the start of the turn [`Self::prior_turn`] names) landed after it: a newer
+    /// input means a newer request the refresh has not read yet, so the record is stale. A
+    /// ping's own request postdates its open, so it wins over the ping's later close. While a
+    /// usage-limit refusal explains the row ([`Self::limit_refusal`]), the newest input is the
+    /// one the provider refused, so only the inputs before it can stale the record.
     fn recorded_request_at(&self) -> Option<Timestamp> {
         let recorded = self.context.as_ref()?.recorded_request_at?;
-        let latest_input = self
-            .turn_started_at
-            .max(self.last_tool_at)
-            .max(self.ping_opened_at);
+        let mut inputs = [
+            self.prior_turn.and_then(|prior| prior.started_at),
+            self.turn_started_at,
+            self.last_tool_at,
+            self.ping_opened_at,
+        ];
+        inputs.sort_unstable();
+        let [.., before_newest, newest] = inputs;
+        let latest_input = if self.limit_refusal() {
+            before_newest
+        } else {
+            newest
+        };
         (latest_input <= Some(recorded)).then_some(recorded)
     }
 
@@ -1477,18 +1505,84 @@ impl AgentState {
     /// returns the turn end: it rises from the last turn's start or tool activity to that
     /// turn's Stop, unless a later ping close dominates. A compaction that closes its bracket
     /// at rest also closes a request, stamping both turn stamps, so this moves to the close.
-    /// It moves only with hook stamps, so a request keeps one key whichever source
-    /// [`Self::last_request_at`] reads.
+    /// It moves with hook stamps and with a limit marker landing on a turn the refusal closed,
+    /// which moves it back to the key it had before that turn; never with the provider's record,
+    /// so a request keeps one key whichever source [`Self::last_request_at`] reads.
     pub fn request_key(&self) -> Option<Timestamp> {
         self.real_request().max(self.pinged_at)
     }
 
-    /// The last real request of a closed turn, clamped to that turn's end.
+    /// The last real request of a closed turn, clamped to that turn's end, read from
+    /// [`Self::request_turn`].
     fn real_request(&self) -> Option<Timestamp> {
-        self.turn_ended_at.and_then(|end| {
-            self.turn_started_at
+        let (started, ended) = self.request_turn();
+        ended.and_then(|end| {
+            started
                 .max(self.last_tool_at)
                 .map(|request| request.min(end))
+        })
+    }
+
+    /// The turn start and end the cache clock reads: the row's own, or [`Self::prior_turn`]'s
+    /// while the latest turn closed on a usage-limit refusal ([`Self::limit_refusal`]) without
+    /// running a root tool. The read is derived, never stored, so it moves back to the prior
+    /// request when the limit marker lands after the turn's end. A tool after `prior`'s end
+    /// ran in this turn or in an errored turn the carry passed over; either made requests, so
+    /// the turn keeps counting. A turn the refusal left open already clamps to the prior end.
+    fn request_turn(&self) -> (Option<Timestamp>, Option<Timestamp>) {
+        let (Some(prior), Some(started), Some(ended)) =
+            (self.prior_turn, self.turn_started_at, self.turn_ended_at)
+        else {
+            return (self.turn_started_at, self.turn_ended_at);
+        };
+        let refused = ended >= started
+            && self.last_tool_at.is_none_or(|tool| tool < started)
+            && self.last_tool_at <= prior.ended_at
+            && self.limit_refusal();
+        if refused {
+            (prior.started_at, prior.ended_at)
+        } else {
+            (self.turn_started_at, self.turn_ended_at)
+        }
+    }
+
+    /// Whether the error explaining the row's state ([`display_turn_error`] on its raw status)
+    /// is a rate or spend limit ([`TurnErrorClass::is_limit`]) no older than the newest request
+    /// input: the provider refused that input before inference, so it made no request. Claude
+    /// leaves such a row raw `running` behind a marker newer than its last activity; a turn
+    /// that closes errored leaves it raw `failed` behind a marker inside the turn. An overload,
+    /// unknown or other error can strike after the request read the cache, so it keeps
+    /// counting, and any newer activity (a prompt, a tool, a ping) ends the refusal's reading.
+    fn limit_refusal(&self) -> bool {
+        let latest_input = self
+            .turn_started_at
+            .max(self.last_tool_at)
+            .max(self.ping_opened_at);
+        display_turn_error(
+            self.status,
+            self.context.as_ref(),
+            self.last_activity,
+            self.turn_started_at,
+        )
+        .is_some_and(|error| {
+            effective_turn_error_class(error).is_limit() && Some(error.at) >= latest_input
+        })
+    }
+
+    /// What a turn opening on this row carries as [`Self::prior_turn`]: the row's turn
+    /// stamps, or the carry it already holds when its latest turn closed errored. The fold
+    /// never sees an error's class, so an errored turn may yet read as a refusal, and a run
+    /// of refused prompts keeps the request before the first.
+    pub(crate) fn prior_turn_for_next(&self) -> Option<PriorTurn> {
+        let closed_errored = self.status == AgentStatus::Failed
+            && self.turn_started_at.is_some()
+            && self.turn_ended_at >= self.turn_started_at;
+        if closed_errored && self.prior_turn.is_some() {
+            return self.prior_turn;
+        }
+        Some(PriorTurn {
+            started_at: self.turn_started_at,
+            ended_at: self.turn_ended_at,
         })
     }
 
@@ -1676,6 +1770,7 @@ impl AgentState {
             ping_turn: false,
             pinged_at: None,
             ping_opened_at: None,
+            prior_turn: None,
             waiting_since: None,
             open_ask: None,
             queued_asks: Vec::new(),

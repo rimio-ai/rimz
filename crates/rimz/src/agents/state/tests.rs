@@ -464,6 +464,28 @@ fn last_request_anchor_uses_tools_and_clamps_context_resets() {
 }
 
 #[test]
+fn prior_turn_round_trips_and_a_legacy_row_has_none() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    let legacy = serde_json::to_value(&agent).unwrap();
+    assert!(legacy.get("prior_turn").is_none());
+    let decoded: AgentState = serde_json::from_value(legacy).unwrap();
+    assert_eq!(decoded.prior_turn, None);
+
+    let started_at = Some(Timestamp::from_second(100).unwrap());
+    agent.prior_turn = Some(PriorTurn {
+        started_at,
+        ended_at: None,
+    });
+    let wire = serde_json::to_value(&agent).unwrap();
+    assert_eq!(
+        wire["prior_turn"],
+        serde_json::json!({ "started_at": started_at })
+    );
+    let decoded: AgentState = serde_json::from_value(wire).unwrap();
+    assert_eq!(decoded.prior_turn, agent.prior_turn);
+}
+
+#[test]
 fn legacy_state_defaults_to_no_observed_branches() {
     let mut agent = test_agent(AgentStatus::Idle, 1_000);
     agent.worktree_branch = Some("main".to_owned());

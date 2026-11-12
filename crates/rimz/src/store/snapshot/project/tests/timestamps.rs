@@ -1595,3 +1595,252 @@ fn a_ping_on_a_row_parked_on_background_work_moves_only_the_cache_clock() {
     assert_eq!(active.status, AgentStatus::Running);
     assert_eq!(active.turn_started_at, Some(working[1].timestamp));
 }
+
+#[test]
+fn a_limit_refused_prompt_keeps_the_cache_clock_on_the_last_real_request() {
+    use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
+    let at = |secs: i64| epoch() + std::time::Duration::from_secs(secs.unsigned_abs());
+    let lifecycle = |secs: i64, prompt: Option<&str>, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            secs,
+            json!({ "agent_id": "a", "prompt": prompt, "signal": signal }),
+        )
+    };
+    let started = |secs, prompt| lifecycle(secs, Some(prompt), json!({"signal": "turn_started"}));
+    let ended = |secs, errored: bool| {
+        lifecycle(
+            secs,
+            None,
+            json!({"signal": "turn_ended", "errored": errored, "parked_on_background": false}),
+        )
+    };
+    let human = "keep going";
+    let delivered = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nPlease review.";
+    // The last real request: a prompt at 10, a tool at 18, the Stop at 20, which the
+    // provider recorded at 15. The view joins the tool clock and the context sidecar.
+    let real = vec![started(10, human), ended(20, false)];
+    let view = |events: &[EventEnvelope],
+                tool: Option<i64>,
+                recorded: Option<i64>,
+                error: Option<(TurnErrorClass, i64)>| {
+        let mut row = reduce_agent_states(events).remove(0);
+        row.last_tool_at = tool.map(at);
+        row.context = Some(AgentContext {
+            recorded_request_at: recorded.map(at),
+            turn_error: error.map(|(class, secs)| AgentTurnError {
+                ended_turn: true,
+                class,
+                at: at(secs),
+                label: None,
+            }),
+            ..Default::default()
+        });
+        row
+    };
+    let clock = |row: &AgentState| {
+        (
+            row.last_request_at(),
+            row.last_request_recorded(),
+            row.request_key(),
+        )
+    };
+    let limits = [
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedSpendLimit,
+    ];
+    let requests = [
+        TurnErrorClass::PausedOverloaded,
+        TurnErrorClass::Unknown,
+        TurnErrorClass::Failed,
+        TurnErrorClass::NotEntitled,
+    ];
+    for (tool, recorded) in [(Some(18), Some(19)), (Some(18), None), (None, None)] {
+        let before = clock(&view(&real, tool, recorded, None));
+        for prompt in [human, delivered] {
+            let refused = [real.clone(), vec![started(100, prompt), ended(104, true)]].concat();
+            let today = (Some(at(100)), false, Some(at(100)));
+            let case = format!("{tool:?}/{recorded:?}/{prompt:?}");
+            for class in limits {
+                let row = view(&refused, tool, recorded, Some((class, 104)));
+                assert_eq!(clock(&row), before, "{class:?} {case}");
+                // What status, stall, recovery and auto-continue read stays as it was.
+                assert_eq!(
+                    (
+                        row.status,
+                        row.turn_started_at,
+                        row.turn_ended_at,
+                        row.last_prompt_at,
+                        row.user_turn_started_at,
+                        row.displayed_turn_error(at(105)).map(|(class, _)| class),
+                    ),
+                    (
+                        AgentStatus::Failed,
+                        Some(at(100)),
+                        Some(at(104)),
+                        Some(at(100)),
+                        Some(at(if prompt == human { 100 } else { 10 })),
+                        Some(class),
+                    ),
+                    "{class:?} {case}"
+                );
+                // A turn that ran a tool made requests.
+                let worked = view(&refused, Some(102), recorded, Some((class, 104)));
+                assert_eq!(
+                    clock(&worked),
+                    (Some(at(102)), false, Some(at(102))),
+                    "{case}"
+                );
+                // Two refusals in a row still read the last real request.
+                let twice = [
+                    refused.clone(),
+                    vec![started(200, prompt), ended(201, true)],
+                ]
+                .concat();
+                let row = view(&twice, tool, recorded, Some((class, 201)));
+                assert_eq!(clock(&row), before, "{class:?} twice {case}");
+                // A real turn after the refusal moves the clock to it.
+                let resumed = [
+                    refused.clone(),
+                    vec![started(200, prompt), ended(210, false)],
+                ]
+                .concat();
+                let row = view(&resumed, tool, recorded, Some((class, 104)));
+                assert_eq!(clock(&row), (Some(at(200)), false, Some(at(200))), "{case}");
+            }
+            for class in requests {
+                let row = view(&refused, tool, recorded, Some((class, 104)));
+                assert_eq!(clock(&row), today, "{class:?} {case}");
+            }
+            // Before the class lands, and with a marker from an earlier turn, the prompt
+            // counts as today; once the marker lands the clock moves back to the request.
+            assert_eq!(
+                clock(&view(&refused, tool, recorded, None)),
+                today,
+                "{case}"
+            );
+            let stale = Some((TurnErrorClass::PausedRateLimit, 50));
+            assert_eq!(
+                clock(&view(&refused, tool, recorded, stale)),
+                today,
+                "{case}"
+            );
+            // A clean end ran its request, whatever mid-turn marker the provider wrote.
+            let clean = [real.clone(), vec![started(100, prompt), ended(104, false)]].concat();
+            let marked = Some((TurnErrorClass::PausedRateLimit, 102));
+            assert_eq!(
+                clock(&view(&clean, tool, recorded, marked)),
+                today,
+                "{case}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_that_ran() {
+    use crate::agents::{AgentContext, AgentTurnError, TurnErrorClass};
+    let at = |secs: i64| epoch() + std::time::Duration::from_secs(secs.unsigned_abs());
+    let lifecycle = |secs: i64, prompt: Option<&str>, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            secs,
+            json!({ "agent_id": "a", "prompt": prompt, "signal": signal }),
+        )
+    };
+    let started = |secs| lifecycle(secs, Some("keep going"), json!({"signal": "turn_started"}));
+    let ended = lifecycle(
+        20,
+        None,
+        json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+    );
+    // The last turn that ran: a prompt at 10, a tool at 18, the Stop at 20. Claude's
+    // `StopFailure` opens no turn end, so the refused prompt at 100 leaves the row running
+    // with a limit marker newer than its last activity.
+    let refused = [started(10), ended, started(100)];
+    let view = |events: &[EventEnvelope],
+                tool: i64,
+                recorded: Option<i64>,
+                class: TurnErrorClass,
+                marker: i64| {
+        let mut row = reduce_agent_states(events).remove(0);
+        row.last_tool_at = Some(at(tool));
+        row.last_activity = row.last_activity.max(at(tool));
+        row.context = Some(AgentContext {
+            recorded_request_at: recorded.map(at),
+            turn_error: Some(AgentTurnError {
+                ended_turn: false,
+                class,
+                at: at(marker),
+                label: None,
+            }),
+            ..Default::default()
+        });
+        row
+    };
+    let clock = |row: &AgentState| {
+        (
+            row.last_request_at(),
+            row.last_request_recorded(),
+            row.request_key(),
+        )
+    };
+    let today = (Some(at(20)), false, Some(at(20)));
+    let rate = TurnErrorClass::PausedRateLimit;
+    // An outright refusal reads the record of the last turn's request at 19; a refusal after
+    // a tool result at 103 reads the request at 101 that asked for the tool.
+    for (case, tool, recorded) in [("outright", 18, 19), ("mid-turn", 103, 101)] {
+        let row = view(&refused, tool, Some(recorded), rate, 105);
+        assert_eq!(
+            clock(&row),
+            (Some(at(recorded)), true, Some(at(20))),
+            "{case}"
+        );
+        assert_eq!(
+            (
+                row.status,
+                row.turn_started_at,
+                row.turn_ended_at,
+                row.displayed_turn_error(at(106)).map(|(class, _)| class),
+            ),
+            (
+                AgentStatus::Running,
+                Some(at(100)),
+                Some(at(20)),
+                Some(rate)
+            ),
+            "{case}"
+        );
+        let spend = TurnErrorClass::PausedSpendLimit;
+        assert_eq!(
+            clock(&view(&refused, tool, Some(recorded), spend, 105)).0,
+            Some(at(recorded)),
+            "{case} spend"
+        );
+        // Without a record the open turn clamps to the last turn's end, as before.
+        assert_eq!(
+            clock(&view(&refused, tool, None, rate, 105)),
+            today,
+            "{case}"
+        );
+        // An overload struck after its request ran, so the refused input stales the record.
+        let overloaded = TurnErrorClass::PausedOverloaded;
+        assert_eq!(
+            clock(&view(&refused, tool, Some(recorded), overloaded, 105)),
+            today,
+            "{case} overload"
+        );
+        // Activity after the marker ends the refusal's reading: a tool, or a later prompt.
+        assert_eq!(
+            clock(&view(&refused, 106, Some(recorded), rate, 105)),
+            today,
+            "{case} tool after"
+        );
+        let resumed = [refused.to_vec(), vec![started(200)]].concat();
+        assert_eq!(
+            clock(&view(&resumed, tool, Some(recorded), rate, 105)),
+            today,
+            "{case} prompt after"
+        );
+    }
+}
