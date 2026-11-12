@@ -689,6 +689,16 @@ enum AgentsSubcmd {
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
         )]
         worktree: Option<String>,
+        /// Keep rows matching `field=value` terms; repeatable, `--filter help` lists fields.
+        #[arg(
+            long = "filter",
+            value_name = "QUERY",
+            add = clap_complete::ArgValueCompleter::new(crate::cli::complete::filter_terms)
+        )]
+        filters: Vec<String>,
+        /// Print one address per listed agent and nothing else.
+        #[arg(short = 'q', long, conflicts_with = "json")]
+        quiet: bool,
     },
     /// Show one agent card.
     #[command(alias = "inspect")]
@@ -1100,7 +1110,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             json,
             all,
             worktree,
-        }) => return list_agents(json, all, scope.or(worktree), globals),
+            filters,
+            quiet,
+        }) => return list_agents(json, quiet, all, scope.or(worktree), &filters, globals),
         Some(AgentsSubcmd::Show {
             reference,
             json,

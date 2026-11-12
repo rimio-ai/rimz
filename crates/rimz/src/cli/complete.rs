@@ -417,6 +417,40 @@ pub(crate) fn sessions() -> Vec<CompletionCandidate> {
         .collect()
 }
 
+/// `--filter` terms: field names, then an enum field's values after its operator.
+pub(crate) fn filter_terms(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
+    use rimz::address::selector::Field;
+    let current = current.to_string_lossy();
+    let term_at = current
+        .char_indices()
+        .rfind(|(_, ch)| ch.is_whitespace())
+        .map_or(0, |(at, ch)| at + ch.len_utf8());
+    let (head, term) = current.split_at(term_at);
+    let Some(op_at) = term.find(['=', '!', '<', '>']) else {
+        return Field::ALL
+            .into_iter()
+            .filter(|field| field.name().starts_with(term))
+            .map(|field| candidate(format!("{head}{}", field.name()), field.kind().label()))
+            .collect();
+    };
+    let Some(field) = Field::from_name(&term[..op_at]) else {
+        return Vec::new();
+    };
+    let values_at = term[op_at..]
+        .find(|ch| !matches!(ch, '=' | '!' | '<' | '>'))
+        .map_or(term.len(), |at| op_at + at);
+    let typed_at = term[values_at..]
+        .rfind(',')
+        .map_or(values_at, |at| values_at + at + 1);
+    let (prefix, typed) = term.split_at(typed_at);
+    field
+        .values()
+        .into_iter()
+        .filter(|value| value.starts_with(typed))
+        .map(|value| CompletionCandidate::new(format!("{head}{prefix}{value}")))
+        .collect()
+}
+
 pub(crate) fn config_keys() -> Vec<CompletionCandidate> {
     let Ok(value) = toml::Value::try_from(&*MachineConfig::load_lenient()) else {
         return Vec::new();
@@ -662,5 +696,27 @@ mod tests {
             leaves,
             [("theme.display.max_cols".to_owned(), "3".to_owned())]
         );
+    }
+
+    #[test]
+    fn filter_terms_offer_fields_then_enum_values() {
+        let values = |current: &str| {
+            filter_terms(std::ffi::OsStr::new(current))
+                .iter()
+                .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let fields = values("");
+        for field in rimz::address::selector::Field::ALL {
+            assert!(fields.contains(&field.name().to_owned()), "{fields:?}");
+        }
+        assert_eq!(values("st"), ["status"]);
+        assert_eq!(values("kind=codex er"), ["kind=codex error"]);
+        assert_eq!(values("status=idle,ru"), ["status=idle,running"]);
+        assert_eq!(values("live!="), ["live!=yes", "live!=no"]);
+        assert_eq!(values("error=rate"), ["error=rate-limit"]);
+        assert_eq!(values("status=idle\u{a0}st"), ["status=idle\u{a0}status"]);
+        assert!(values("ctx>").is_empty());
+        assert!(values("bogus=").is_empty());
     }
 }

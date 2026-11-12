@@ -41,7 +41,7 @@ fn opencode_parallel_tool_preserves_attention_and_pane_input() {
         let state = &states[0];
         let row = row_from_agent(state, epoch());
         let attention =
-            needs_you(state, Some(&row), &Default::default(), epoch()).map(|ask| ask.status);
+            needs_you(state, Some(&row), None, &Default::default(), epoch()).map(|ask| ask.status);
         let reserves_input = state.is_awaiting_input();
         events.push(observe(
             close,
@@ -54,7 +54,7 @@ fn opencode_parallel_tool_preserves_attention_and_pane_input() {
         actual.push((
             attention,
             reserves_input,
-            needs_you(state, Some(&row), &Default::default(), epoch()).map(|ask| ask.status),
+            needs_you(state, Some(&row), None, &Default::default(), epoch()).map(|ask| ask.status),
             state.is_awaiting_input(),
         ));
     }
@@ -123,7 +123,7 @@ fn attention_uses_ask_age_and_error_description() {
         since: ago(120),
     });
     let row = row_from_agent(&state, epoch());
-    let attention = needs_you(&state, Some(&row), &Default::default(), epoch()).unwrap();
+    let attention = needs_you(&state, Some(&row), None, &Default::default(), epoch()).unwrap();
     assert_eq!(attention.reason.as_deref(), Some("which strategy?"));
     assert_eq!(attention.since, ago(120));
 
@@ -131,7 +131,7 @@ fn attention_uses_ask_age_and_error_description() {
     let mut row = row_from_agent(&state, epoch());
     row.as_agent_mut().unwrap().status = AgentStatus::Failed;
     row.as_agent_mut().unwrap().turn_error_label = Some("bad request".into());
-    let attention = needs_you(&state, Some(&row), &Default::default(), epoch()).unwrap();
+    let attention = needs_you(&state, Some(&row), None, &Default::default(), epoch()).unwrap();
     assert_eq!(attention.reason.as_deref(), Some("bad request"));
     assert_eq!(attention.since, row.last_activity);
 }
@@ -146,6 +146,7 @@ fn attention_lifts_native_child_waiting() {
     let attention = needs_you(
         &state,
         Some(row(&snapshot, "root")),
+        None,
         &Default::default(),
         epoch(),
     )
@@ -163,7 +164,7 @@ fn attention_membership_and_rowless_fallback() {
         let state = agent("claude", "attention", status, 0);
         let mut row = row_from_agent(&state, epoch());
         row.as_agent_mut().unwrap().status = status;
-        let attention = needs_you(&state, Some(&row), &Default::default(), epoch()).unwrap();
+        let attention = needs_you(&state, Some(&row), None, &Default::default(), epoch()).unwrap();
         assert_eq!(attention.status, status);
         assert_eq!(attention.since, row.last_activity);
     }
@@ -175,11 +176,11 @@ fn attention_membership_and_rowless_fallback() {
         let state = agent("claude", "quiet", status, 0);
         let mut row = row_from_agent(&state, epoch());
         row.as_agent_mut().unwrap().status = status;
-        assert!(needs_you(&state, Some(&row), &Default::default(), epoch()).is_none());
+        assert!(needs_you(&state, Some(&row), None, &Default::default(), epoch()).is_none());
     }
     let state = agent("claude", "failed", AgentStatus::Failed, 0);
     assert_eq!(
-        needs_you(&state, None, &Default::default(), epoch())
+        needs_you(&state, None, None, &Default::default(), epoch())
             .unwrap()
             .status,
         state.rowless_status(&Default::default(), epoch()).0,

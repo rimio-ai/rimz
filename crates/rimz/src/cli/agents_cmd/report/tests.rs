@@ -132,15 +132,27 @@ fn permission_ask_visibility_uses_the_list_snapshot_clock() {
         )
         .with_live_panes(vec![pane.clone()], None);
         let agents = rimz::address::addressable_agents(&snapshot);
+        let rows = agents
+            .iter()
+            .map(|agent| {
+                rimz::address::selector::AgentRow::of(
+                    agent,
+                    &snapshot,
+                    &Default::default(),
+                    &crate::cli::CurrentChannel::Unscoped.address_context(),
+                    Timestamp::from_second(1_061).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let rows = rows.iter().collect::<Vec<_>>();
         let report = build_list_report(
             &Default::default(),
             &snapshot,
-            &agents,
+            &rows,
             Timestamp::from_second(1_061).unwrap(),
             None,
             &[],
             &Default::default(),
-            &crate::cli::CurrentChannel::Unscoped.address_context(),
         );
         assert_eq!(report.agents.len(), 1);
         let entry = &report.agents[0];
@@ -834,15 +846,27 @@ fn budget_projection_uses_effective_ledger_cap_and_live_spend() {
         now,
     );
     let agents = rimz::address::addressable_agents(&snapshot);
+    let rows = agents
+        .iter()
+        .map(|agent| {
+            rimz::address::selector::AgentRow::of(
+                agent,
+                &snapshot,
+                &rimz::agents::ParkDemotion::default(),
+                &crate::cli::CurrentChannel::Unscoped.address_context(),
+                now,
+            )
+        })
+        .collect::<Vec<_>>();
+    let rows = rows.iter().collect::<Vec<_>>();
     let list = build_list_report(
         &rimz::agents::ParkDemotion::default(),
         &snapshot,
-        &agents,
+        &rows,
         now,
         Some(&runtime),
         &[],
         &Default::default(),
-        &crate::cli::CurrentChannel::Unscoped.address_context(),
     );
     assert_eq!(list.agents[0].budget.cap.as_deref(), Some("$6.00/day"));
     assert_eq!(list.agents[0].budget.spent_usd, Some(5.25));

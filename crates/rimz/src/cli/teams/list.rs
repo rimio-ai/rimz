@@ -714,6 +714,7 @@ fn live_instances(
                     needs_you: rimz::store::snapshot::needs_you(
                         agent,
                         row,
+                        None,
                         catalog.demotion,
                         snapshot.now,
                     ),

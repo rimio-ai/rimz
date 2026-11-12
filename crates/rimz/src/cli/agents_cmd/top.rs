@@ -569,15 +569,27 @@ mod tests {
             .find(|agent| agent.agent_id.as_str() == "child")
             .unwrap();
         assert!(row_for_agent(&snapshot, child).is_none());
+        let rows = [child]
+            .iter()
+            .map(|agent| {
+                rimz::address::selector::AgentRow::of(
+                    agent,
+                    &snapshot,
+                    &Default::default(),
+                    &crate::cli::CurrentChannel::Unscoped.address_context(),
+                    snapshot.now,
+                )
+            })
+            .collect::<Vec<_>>();
+        let rows = rows.iter().collect::<Vec<_>>();
         let report = super::super::report::build_list_report(
             &Default::default(),
             &snapshot,
-            &[child],
+            &rows,
             snapshot.now,
             None,
             &[],
             &Default::default(),
-            &crate::cli::CurrentChannel::Unscoped.address_context(),
         );
         let entry = &report.agents[0];
         let mut out = anstream::StripStream::new(Vec::new());

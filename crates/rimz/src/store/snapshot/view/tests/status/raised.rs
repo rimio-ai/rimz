@@ -100,9 +100,14 @@ fn needs_you_uses_the_displayed_raised_question_and_its_attention_clock() {
     state.raised_ask = Some(raised());
     let snapshot = room_with_agent_panes(vec![state.clone()]);
     let row = row(&snapshot, "raised");
-    let attention =
-        crate::store::snapshot::needs_you(&state, Some(row), &Default::default(), snapshot.now)
-            .unwrap();
+    let attention = crate::store::snapshot::needs_you(
+        &state,
+        Some(row),
+        None,
+        &Default::default(),
+        snapshot.now,
+    )
+    .unwrap();
     assert_eq!(attention.reason.as_deref(), Some("Which option?"));
     assert_eq!(
         attention.since,

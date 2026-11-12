@@ -128,6 +128,7 @@ fn collect_show_report(
                 effort: effort.map(|(effort, _)| effort),
                 active_secs: effort.and_then(|(_, active_secs)| active_secs),
                 budget_cost_usd,
+                card: None,
             },
         )
     });
