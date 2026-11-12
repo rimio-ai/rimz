@@ -643,6 +643,39 @@ fn both_publication_phases_stamp_the_cycle_stall_before_projection() {
 }
 
 #[test]
+fn only_a_final_fold_writes_the_attention_and_unread_records() {
+    let fixture = FetchFixture::new();
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let runtime = RuntimePaths::under(fixture.workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut worker = fixture.worker();
+    worker.runtime = runtime.clone();
+    let (mut sink, reader) = single_sink(fixture.host_data.clone(), wake_channel().0);
+    sink.begin_cycle();
+    let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    Arc::make_mut(&mut Arc::make_mut(&mut shared.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    let mut written = Vec::new();
+    for phase in [FetchPhase::Interim, FetchPhase::Final] {
+        worker.publish_fold(
+            &fixture.state,
+            frameless(shared.clone()),
+            phase,
+            SnapshotSource::Cached,
+            &mut sink,
+        );
+        reader.wait_first_unseen().unwrap();
+        written.push((
+            runtime.attention_path().exists(),
+            runtime.unread_path().exists(),
+        ));
+    }
+    assert_eq!(written, [(false, false), (true, true)]);
+}
+
+#[test]
 fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views() {
     let fixture = FetchFixture::new();
     let mut panes = Vec::new();
