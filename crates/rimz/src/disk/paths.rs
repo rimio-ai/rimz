@@ -1888,6 +1888,11 @@ pub fn handoffs_dir() -> PathBuf {
     rimz_home().join("handoffs")
 }
 
+/// The home-wide note store `rimz notes` writes, `notes/<kind>/<YYYYMMDD>/`.
+pub fn notes_dir() -> PathBuf {
+    rimz_home().join("notes")
+}
+
 /// `$XDG_RUNTIME_DIR`, else `/tmp/rimz-<uid>`.
 /// Library unit tests read only `$RIMZ_UNIT_TEST_XDG_RUNTIME_DIR`, falling
 /// back to a short, uncreated per-process path under `/tmp`.

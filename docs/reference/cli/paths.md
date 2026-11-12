@@ -36,6 +36,7 @@ out               /home/me/.rimz/ws/myrepo-f89e/out
 team notes        /home/me/.rimz/ws/myrepo-f89e/team-notes
 automation notes  /home/me/.rimz/ws/myrepo-f89e/automation-notes
 handoffs          /home/me/.rimz/handoffs
+notes             /home/me/.rimz/notes
 runtime root      /run/user/1000/rimz
 logs              /home/me/.rimz/logs
 loops             /home/me/.rimz/loops
@@ -62,6 +63,7 @@ builds            /home/me/.rimz/builds
 | `automation notes` | Kept workflow and loop notes, with a dated folder per run. Workflow folders also keep `history.txt`. |
 | `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `home/run` links here once a room is born, and a birth under another runtime root repoints it. RimZ itself never reads through the link. The tmux server RimZ rooms run on has its socket here, at `<runtime root>/tmux/server`, which is the `-S` argument for reaching a room's server by hand. |
 | `handoffs` | Reserved for agent hand-off notes. RimZ names the directory and the skills that write the notes own it. |
+| `notes` | The note store [`rimz notes`](./notes.md) writes, `notes/<kind>/<YYYYMMDD>/<slug>.md`. No RimZ command removes this tree. |
 | `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`, and shared role, effort, and closed-day spend history under `.history/`. No RimZ command removes this tree. |
 | `logs` | Machine-wide JSONL logs: assists, focus repairs, loop runs, and user inputs. |
 | `loops` | Loop arming and strike overlays, the loop start throttle queue, and their locks. |
@@ -71,7 +73,7 @@ builds            /home/me/.rimz/builds
 
 ## JSON
 
-`--json` prints one object with schema `rimz.paths.v2`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `shared`, `out`, `team_notes`, `automation_notes`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
+`--json` prints one object with schema `rimz.paths.v2`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `shared`, `out`, `team_notes`, `automation_notes`, `handoffs`, `notes`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
 
 ```sh
 cd "$(rimz paths --json | jq -r .state_dir)"

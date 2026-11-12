@@ -314,6 +314,8 @@ fn install_includes_shared_routine_rules_golden() {
         prefix_rule(pattern=["rimz", "lsp", "check"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "list"], decision="allow")
         prefix_rule(pattern=["rimz", "lsp", "status"], decision="allow")
+        prefix_rule(pattern=["rimz", "notes", "add"], decision="allow")
+        prefix_rule(pattern=["rimz", "notes", "list"], decision="allow")
         "###);
 }
 

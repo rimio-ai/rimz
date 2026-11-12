@@ -67,6 +67,7 @@ fn paths_names_one_workspace_dir_in_both_trees() {
         "paths must name the workflow and loop archive"
     );
     assert_eq!(path_of(&report, "out"), state.root.join("out"));
+    assert_eq!(path_of(&report, "notes"), env.rimz_home().join("notes"));
     assert!(report.get("scratch").is_none());
 
     env.rimz()
@@ -75,7 +76,8 @@ fn paths_names_one_workspace_dir_in_both_trees() {
         .success()
         .stdout(predicates::str::contains("workspace dir"))
         .stdout(predicates::str::contains("team notes"))
-        .stdout(predicates::str::contains("automation notes"));
+        .stdout(predicates::str::contains("automation notes"))
+        .stdout(predicates::str::is_match("(?m)^notes +").unwrap());
 }
 
 #[test]

@@ -21,6 +21,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "answer",
             "message",
             "transcript",
+            "notes",
             "events",
             "pane",
             "palette",

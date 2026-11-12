@@ -201,6 +201,8 @@ const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
     "rimz lsp check",
     "rimz lsp list",
     "rimz lsp status",
+    "rimz notes add",
+    "rimz notes list",
 ];
 
 #[derive(Debug, thiserror::Error)]

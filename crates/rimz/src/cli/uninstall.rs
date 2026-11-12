@@ -556,6 +556,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
         "packs",
         "accounts",
         "handoffs",
+        "notes",
     ];
     if !remove_state {
         keep.extend(["ws", "logs", "loops", "web", "builds"]);
@@ -661,6 +662,7 @@ mod tests {
                 "cache/providers",
                 "trust",
                 "handoffs",
+                "notes",
             ] {
                 std::fs::create_dir_all(home.join(child)).unwrap();
                 std::fs::write(home.join(child).join("user-file"), b"keep").unwrap();
@@ -674,7 +676,7 @@ mod tests {
             assert_eq!(home.join("ws/user-file").exists(), !remove_state);
             assert_eq!(home.join("trust/user-file").exists(), !remove_config);
             assert_eq!(home.join("config.toml").exists(), !remove_config);
-            for child in ["profiles", "accounts", "packs", "handoffs"] {
+            for child in ["profiles", "accounts", "packs", "handoffs", "notes"] {
                 assert!(home.join(child).join("user-file").exists());
             }
             assert!(home.join("accounts/.history/user-file").exists());

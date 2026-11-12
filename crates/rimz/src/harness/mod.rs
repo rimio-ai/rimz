@@ -25,6 +25,7 @@ pub mod launch_plan;
 pub mod launch_reminders;
 pub mod loop_task;
 pub mod name;
+pub mod notes;
 pub mod orphan_sweep;
 pub mod owed;
 pub mod parent_watch;

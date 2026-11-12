@@ -333,6 +333,7 @@ Claude and Codex also receive routine-command permissions by default, independen
 - `rimz workflow show`
 - `rimz packs list`, `rimz packs show`, `rimz packs diff`
 - `rimz lsp def`, `rimz lsp refs`, `rimz lsp hover`, `rimz lsp impl`, `rimz lsp callers`, `rimz lsp callees`, `rimz lsp symbols`, `rimz lsp find`, `rimz lsp show`, `rimz lsp check`, `rimz lsp list`, `rimz lsp status`
+- `rimz notes add`, `rimz notes list`
 
 There is no blanket RimZ grant. `pane send`, `loop add`, `events emit`, pack mutations, the bare `rimz packs` spelling, and `lsp shim`, `attach`, or `stop` are not added. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag. The `rimz teams` rule covers the whole scene: launching, stopping, and restarting cohorts, and resuming one with `--yolo`. `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)). Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands).
 

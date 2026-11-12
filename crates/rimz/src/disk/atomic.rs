@@ -72,6 +72,16 @@ pub fn write_bytes_atomically_mode(path: &Path, bytes: &[u8], mode: u32) -> Resu
 /// Durably publish complete bytes without replacing an existing destination.
 /// The caller prepares the parent directory.
 pub fn write_bytes_if_absent_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    match write_bytes_new_mode(path, bytes, mode) {
+        Err(AtomicErr::Exists { .. }) => sync_parent_dir(path),
+        written => written,
+    }
+}
+
+/// Durably publish complete bytes under a name no entry holds yet: a taken name
+/// is [`AtomicErr::Exists`] and keeps its own bytes. The caller prepares the
+/// parent directory.
+pub(crate) fn write_bytes_new_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let tmp = temp_sibling(path);
     let _guard = TempFileGuard::new(tmp.clone());
     write_temp_file(&tmp, Fsync::Durable, Some(mode), |writer| {
@@ -79,7 +89,9 @@ pub fn write_bytes_if_absent_mode(path: &Path, bytes: &[u8], mode: u32) -> Resul
     })?;
     match std::fs::hard_link(&tmp, path) {
         Ok(()) => sync_parent_dir(path),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => sync_parent_dir(path),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(AtomicErr::Exists {
+            path: path.to_owned(),
+        }),
         Err(source) => Err(AtomicErr::io(path)(source)),
     }
 }

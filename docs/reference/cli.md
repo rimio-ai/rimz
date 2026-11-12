@@ -20,6 +20,7 @@ This page indexes every command and states the rules that hold across all of the
 | Configure appearance and behavior | `config`, `keys`, `list-themes`, `list-pets` | [Config](./cli/config.md) · [Room keys](#room-keys) |
 | Load and customize definition and skill packs | `packs` | [Packs](./cli/packs.md) |
 | Find RimZ's files | `paths` | [Paths](./cli/paths.md) |
+| Save and list notes | `notes` | [Notes](./cli/notes.md) |
 | Read the sidebar | `sidebar frame` | [Sidebar frames](./cli/pane.md#render-a-sidebar-frame) |
 | Navigate and act on cards | `sidebar walk`, `slot`, `last`, `filter`, `close`, `reopen` | [Sidebar cards](./cli/sidebar.md) |
 | Maintain and recover | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
@@ -55,7 +56,7 @@ Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-a
 
 A command reaches the room for the directory it runs in. RimZ resolves that directory to its enclosing Git repository, else the nearest project-marker directory, else the directory itself, so every worktree of one repository shares one room.
 
-Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, set when the room is born. Commands that act on the running room or its agents (`accounts`, `agents`, `subagents`, `teams`, `asks`, `answer`, `budget`, `message`, `wait`, `loop` other than `loop add` and `loop explain`, `workflow`, `pane`, `palette`, `sidebar`, `transcript`, `events`, `hooks`, `gc`, `workspace rotate-events`) follow that identity, so they reach the same room even from a subdirectory that is its own repository. Commands that open, configure, or maintain a room by path (`start`, `attach`, `reset`, `web`, `worktree`, `trust`, `loop add`, `loop explain`, `doctor`, `setup`, `paths`, `workspace resolve`, `workspace migrate`) resolve from the directory alone. A Git submodule is its own repository and gets its own room.
+Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, set when the room is born. Commands that act on the running room or its agents (`accounts`, `agents`, `subagents`, `teams`, `asks`, `answer`, `budget`, `message`, `wait`, `loop` other than `loop add` and `loop explain`, `workflow`, `pane`, `palette`, `sidebar`, `transcript`, `events`, `hooks`, `gc`, `workspace rotate-events`) follow that identity, so they reach the same room even from a subdirectory that is its own repository. Commands that open, configure, or maintain a room by path (`start`, `attach`, `reset`, `web`, `worktree`, `trust`, `loop add`, `loop explain`, `doctor`, `setup`, `paths`, `workspace resolve`, `workspace migrate`) resolve from the directory alone. `notes` reaches no room: `notes add` records the pinned `RIMZ_PROJECT_ROOT` as the note's project when a pane carries it and resolves from the directory otherwise. A Git submodule is its own repository and gets its own room.
 
 `--root <PATH>` overrides both. `loop add` and `loop explain` take their own `--root`, which names the project root and defaults to `.`. Use `--root` in a monorepo whose packages you run as separate rooms, or to reach a room from outside its directory.
 

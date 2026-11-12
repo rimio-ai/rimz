@@ -62,7 +62,7 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 
 Two more files in the directory are managed for you, and you reach both through their commands rather than by hand: `remote.toml` holds the named SSH room aliases [`rimz remote`](../reference/cli/remote.md#saved-aliases) writes; `trust/` holds the per-project grants [`rimz trust`](../internals/harness/trust.md) records.
 
-Alongside them, `~/.rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library and installed [packs](../reference/cli/packs.md) under `packs/`. You edit your home Markdown files directly; `rimz config set` refuses profile and team definition keys.
+Alongside them, `~/.rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library, installed [packs](../reference/cli/packs.md) under `packs/`, and the [`notes/`](../reference/cli/notes.md) store that `rimz notes add` writes. You edit your home Markdown files directly; `rimz config set` refuses profile and team definition keys.
 
 Two environment variables move the directory. `RIMZ_HOME` moves the whole home. `RIMZ_AGENTS_HOME` moves only the definition trees, skill library, and packs, and it wins over `RIMZ_HOME` for them. `rimz doctor` lists it under HOME with the path it resolved to.
 
@@ -955,7 +955,7 @@ This key is machine-only: project config cannot override it, so a repository can
 
 Claude and Codex can otherwise pause for permission just to coordinate with another agent. RimZ defaults `allow-routine-rimz` to `true`. For Claude, it adds curated command permissions and the launch's scratch/shared directories through `--settings`, plus auto-mode context describing those commands and directories. Your Claude settings are preserved; RimZ does not edit `~/.claude/settings.json`. For Codex, `rimz hooks install` writes the same command prefixes into `$CODEX_HOME/rules/rimz.rules` (`~/.codex/rules/rimz.rules` by default); matching commands run unsandboxed without Guardian review. The file is shared by named accounts, including standalone accounts. See [permission modes](./fleet.md#set-a-permission-mode) for what this covers.
 
-The curated commands include `rimz packs list`, `rimz packs show`, and `rimz packs diff`, not pack mutations or the bare `rimz packs` spelling. The [complete prefix list](../reference/agent-support.md#permission-modes) is shared by Claude and Codex.
+The curated commands include `rimz packs list`, `rimz packs show`, and `rimz packs diff`, not pack mutations or the bare `rimz packs` spelling. They also include `rimz notes add` and `rimz notes list`, so a sandboxed agent can save a note to `~/.rimz/notes/` outside the room directories its sandbox may write. The [complete prefix list](../reference/agent-support.md#permission-modes) is shared by Claude and Codex.
 
 The switch also covers your installed `rimz-*` skills in Claude's skill directory, the RimZ library, or packs, in that precedence order with owned links skipped. Only exact directory names with a `SKILL.md` receive rules, never a wildcard grant. Turning it off does not remove the permissions from a profile's own `skills:` list.
 
