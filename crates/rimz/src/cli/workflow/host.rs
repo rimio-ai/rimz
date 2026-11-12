@@ -558,4 +558,27 @@ impl workflow::AttemptHost for Host<'_> {
         })()
         .map_err(host_error)
     }
+
+    fn orphan(
+        &self,
+        state: &rimz::StatePaths,
+        attempt: &rimz::agents::WorkflowAttemptRef,
+    ) -> Result<Option<AttemptRun>, WorkflowErr> {
+        workflow::orphan(state, attempt)
+    }
+
+    fn leader_session(&self, run: &AttemptRun) -> Option<rimz::ids::AgentSessionId> {
+        rimz::harness::run::load(self.state, &run.run_id)
+            .ok()
+            .and_then(|run| run.agent_id)
+    }
+
+    fn start_groups(
+        &self,
+        record: &rimz::store::workflow::RunRecord,
+        agent: &str,
+        account: Option<&rimz::ids::LoginName>,
+    ) -> Result<Vec<rimz::harness::throttle::StartGroup>, WorkflowErr> {
+        workflow::launch_groups(record, agent, account)
+    }
 }

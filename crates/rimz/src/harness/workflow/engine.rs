@@ -550,9 +550,10 @@ fn window_wait(
     Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 
-/// The start groups an agent launch admits, by kind and account. A step's `account` pins every
-/// cell, so availability routing is skipped, as the launcher does for a pinned login.
-fn launch_groups(
+/// The start groups an agent launch admits, by kind and account, which an attempt host's
+/// `start_groups` resolves through. A step's `account` pins every cell, so availability routing
+/// is skipped, as the launcher does for a pinned login.
+pub fn launch_groups(
     record: &RunRecord,
     agent: &str,
     account: Option<&crate::ids::LoginName>,
@@ -628,8 +629,14 @@ fn window_wait_for_launch(
     agent: &str,
     raw: &str,
     windows: &WindowReadings<'_>,
+    host: &dyn AttemptHost,
 ) -> Result<Option<String>> {
-    window_wait_for_groups(record, &launch_groups(record, agent, None)?, raw, windows)
+    window_wait_for_groups(
+        record,
+        &host.start_groups(record, agent, None)?,
+        raw,
+        windows,
+    )
 }
 
 fn window_wait_for_groups(
@@ -1126,7 +1133,7 @@ fn prepare(
                 launch_error = Some(reason.to_string());
             }
             let groups = if admits || step.window.is_some() {
-                match launch_groups(&t.record, agent, step.account.as_ref()) {
+                match host.start_groups(&t.record, agent, step.account.as_ref()) {
                     Ok(groups) => groups,
                     Err(error) => {
                         launch_error = Some(error.to_string());
@@ -1172,7 +1179,7 @@ fn prepare(
     } else if spec.checks.contains_key(&t.record.node) {
         let check = &spec.checks[&t.record.node];
         if let (Some(raw), Some(spec::CheckKind::Agent(profile))) = (&check.window, check.kind())
-            && let Some(detail) = window_wait_for_launch(&t.record, profile, raw, windows)?
+            && let Some(detail) = window_wait_for_launch(&t.record, profile, raw, windows, host)?
         {
             t.step_wait("window", Some(detail));
             persist(&mut t, &guard)?;
@@ -1423,8 +1430,13 @@ fn prepare_capacity(
 }
 
 /// Whether a lifecycle signal came from the attempt's own leader: its handle, compared
-/// without a channel, or the session its supervised run recorded.
-fn from_leader(state: &StatePaths, leader: &workflow::AttemptRun, signal: &Signal) -> bool {
+/// without a channel, or the session its supervised run recorded, read through `session` only
+/// when the handle does not match and the signal names a session.
+fn from_leader(
+    leader: &workflow::AttemptRun,
+    signal: &Signal,
+    session: impl FnOnce(&workflow::AttemptRun) -> Option<crate::ids::AgentSessionId>,
+) -> bool {
     if signal.source != crate::store::event::SignalSource::Lifecycle {
         return false;
     }
@@ -1438,12 +1450,8 @@ fn from_leader(state: &StatePaths, leader: &workflow::AttemptRun, signal: &Signa
     if field("handle").is_some_and(|handle| name(handle) == name(&leader.handle)) {
         return true;
     }
-    field("session").is_some_and(|session| {
-        crate::harness::run::load(state, &leader.run_id)
-            .ok()
-            .and_then(|run| run.agent_id)
-            .is_some_and(|agent| agent.as_str() == session)
-    })
+    field("session")
+        .is_some_and(|recorded| session(leader).is_some_and(|agent| agent.as_str() == recorded))
 }
 
 /// The wait an occupied checkout puts an agent step in, or `None` when the step may launch: an
@@ -2096,10 +2104,10 @@ impl Forward {
 /// Defaults resolve against the checkout the leader launched in; bindings with the same
 /// selector and filter coalesce into the first. The leader never hears its own lifecycle.
 fn subscribers(
-    state: &StatePaths,
     spec: &WorkflowSpec,
     record: &RunRecord,
     signal: &Signal,
+    host: &dyn AttemptHost,
 ) -> Result<Vec<Forward>> {
     let Some(attempt) = record.session_attempt() else {
         return Ok(Vec::new());
@@ -2107,7 +2115,10 @@ fn subscribers(
     let (Some(step), Some(run)) = (spec.steps.get(&attempt.node), &attempt.run) else {
         return Ok(Vec::new());
     };
-    if attempt.lifecycle.is_turn() || attempt.ending.is_some() || from_leader(state, run, signal) {
+    if attempt.lifecycle.is_turn()
+        || attempt.ending.is_some()
+        || from_leader(run, signal, |run| host.leader_session(run))
+    {
         return Ok(Vec::new());
     }
     let checkout = destination(record, step)?;
@@ -2154,8 +2165,14 @@ fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &S
 }
 
 /// Whether a live staying session subscribes to the family of a lifecycle signal, the only
-/// receiver a lifecycle signal has among workflow runs. Reads records and sealed specs.
-pub(crate) fn hears_lifecycle(state: &StatePaths, signal: &Signal) -> Result<bool> {
+/// receiver a lifecycle signal has among workflow runs. Reads records and sealed specs, and the
+/// leader's recorded session through `session` as `from_leader` needs it; it runs where a signal
+/// fires, with no attempt host.
+pub(crate) fn hears_lifecycle(
+    state: &StatePaths,
+    signal: &Signal,
+    session: &dyn Fn(&workflow::AttemptRun) -> Option<crate::ids::AgentSessionId>,
+) -> Result<bool> {
     for record in workflow::list(state)? {
         let Some(attempt) = record.session_attempt() else {
             continue;
@@ -2166,7 +2183,7 @@ pub(crate) fn hears_lifecycle(state: &StatePaths, signal: &Signal) -> Result<boo
             || attempt
                 .run
                 .as_ref()
-                .is_some_and(|run| from_leader(state, run, signal))
+                .is_some_and(|run| from_leader(run, signal, session))
         {
             continue;
         }
@@ -2206,7 +2223,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
                 }),
                 None => false,
             };
-            let forwards = subscribers(state, &spec, &current, signal)?;
+            let forwards = subscribers(&spec, &current, signal, host)?;
             let entries = forwards.iter().map(|forward| forward.entry(signal));
             if !woken {
                 if forwards.is_empty() {

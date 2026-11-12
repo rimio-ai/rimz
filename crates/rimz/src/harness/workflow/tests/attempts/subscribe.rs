@@ -289,6 +289,36 @@ fn a_staying_step_never_hears_its_own_leaders_lifecycle_signals() {
 }
 
 #[test]
+fn a_staying_step_never_hears_lifecycle_signals_from_its_leaders_session() {
+    let (_dir, state, record) = setup(&STAY.replace(
+        "subscribe=['ci.failed',",
+        "subscribe=[{signal='agent.idle', match={handle='@other'}}, ",
+    ));
+    let idle = |session: &str| Signal {
+        source: crate::store::event::SignalSource::Lifecycle,
+        ..signal(
+            "agent.idle",
+            json!({"handle": "@other", "session": session}),
+        )
+    };
+    let host = FakeHost::new();
+    *host.leader_session.borrow_mut() = Some("leader-session".into());
+    advance_ok(&state, &record.id, &host);
+    let leader = |_: &AttemptRun| Some(crate::ids::AgentSessionId::from("leader-session"));
+    assert!(!hears_lifecycle(&state, &idle("leader-session"), &leader).unwrap());
+    assert!(hears_lifecycle(&state, &idle("other-session"), &leader).unwrap());
+    for session in ["leader-session", "other-session"] {
+        wake(&state, &idle(session), &host).unwrap();
+    }
+    assert_eq!(
+        forwarded(&state, &record).len(),
+        1,
+        "the leader's own session never wakes it, whatever handle it reports"
+    );
+    cancel(&state, &record.id, &host, None).unwrap();
+}
+
+#[test]
 fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
     let (dir, state, record) = setup(&STAY.replace(
         "subscribe=['ci.failed',",
@@ -304,13 +334,15 @@ fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
             .unwrap();
     let idle = lifecycle("team.idle", cohort(&here));
     assert!(
-        !hears_lifecycle(&state, &idle).unwrap(),
+        !hears_lifecycle(&state, &idle, &|_| None).unwrap(),
         "nothing is live before the leader launches"
     );
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
-    assert!(hears_lifecycle(&state, &idle).unwrap());
-    assert!(!hears_lifecycle(&state, &lifecycle("worktree.created", json!({}))).unwrap());
+    assert!(hears_lifecycle(&state, &idle, &|_| None).unwrap());
+    assert!(
+        !hears_lifecycle(&state, &lifecycle("worktree.created", json!({})), &|_| None).unwrap()
+    );
     for signal in [
         lifecycle("team.idle", cohort("elsewhere")),
         lifecycle("agent.done", json!({"handle": "@leader"})),
@@ -330,5 +362,5 @@ fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
         "the checkout's cohort and the named agent deliver; a self-scoped agent selector is dropped"
     );
     cancel(&state, &record.id, &host, None).unwrap();
-    assert!(!hears_lifecycle(&state, &idle).unwrap());
+    assert!(!hears_lifecycle(&state, &idle, &|_| None).unwrap());
 }

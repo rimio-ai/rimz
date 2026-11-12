@@ -42,6 +42,8 @@ pub(in crate::harness) struct FakeHost {
     pub(in crate::harness) message_answer: RefCell<Result<Result<String, String>, String>>,
     pub(super) on_message: RefCell<Option<Box<dyn Fn()>>>,
     pub(super) retired: RefCell<Vec<crate::ids::MessageId>>,
+    /// The session the leader's supervised run recorded.
+    pub(in crate::harness) leader_session: RefCell<Option<crate::ids::AgentSessionId>>,
 }
 
 /// Engine internals the loop scheduler's compiled-task tests drive on the graphs it compiles;
@@ -155,6 +157,7 @@ impl FakeHost {
             message_answer: RefCell::new(Ok(Ok("@planner".into()))),
             on_message: RefCell::new(None),
             retired: RefCell::new(Vec::new()),
+            leader_session: RefCell::new(None),
         }
     }
 
@@ -336,6 +339,29 @@ impl AttemptHost for FakeHost {
         }
         self.stops.set(self.stops.get() + 1);
         Ok(self.observed.borrow().children.clone())
+    }
+
+    /// The library's own lookup, so engine tests find the run a dead launcher left.
+    fn orphan(
+        &self,
+        state: &crate::disk::paths::StatePaths,
+        attempt: &WorkflowAttemptRef,
+    ) -> Result<Option<AttemptRun>, WorkflowErr> {
+        orphan(state, attempt)
+    }
+
+    fn leader_session(&self, _: &AttemptRun) -> Option<crate::ids::AgentSessionId> {
+        self.leader_session.borrow().clone()
+    }
+
+    /// The library's own resolver, so engine tests exercise what a launch admits.
+    fn start_groups(
+        &self,
+        record: &crate::store::workflow::RunRecord,
+        agent: &str,
+        account: Option<&crate::ids::LoginName>,
+    ) -> Result<Vec<crate::harness::throttle::StartGroup>, WorkflowErr> {
+        launch_groups(record, agent, account)
     }
 }
 

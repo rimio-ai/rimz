@@ -2340,7 +2340,8 @@ path = "crates/rimz/src/harness"
 # The neutral homes (`check_run`, `signal`, `throttle`, `when` and the rest) kept their items' surface once the trunk's fleet-report items took the slack they fitted in before (+3).
 # workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
 # workflow::{Cohort, stop_cohort, detach_cohort, without_excluded, leader} pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot workflow::leader_turn left (+4).
-surface-budget = 1144
+# AttemptHost::{orphan, leader_session, start_groups}, workflow::{orphan, launch_groups}, and throttle::StartGroup close the engine's reads around the attempt host (+6).
+surface-budget = 1150
 
 [[verdict]]
 kind = "item"
@@ -2471,6 +2472,16 @@ reason = "Occupancy and eviction reads drop an excluded agent's launched tree by
 kind = "item"
 key = "harness::workflow::leader"
 reason = "The CLI host finds a run's leader row for push-back and signal forwarding by the library's rule."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::launch_groups"
+reason = "The start-group resolver stays in the library; the CLI attempt host's start_groups delegates to it."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::orphan"
+reason = "The lookup of a dead launcher's unpublished supervised run stays in the library; the CLI attempt host's orphan delegates to it."
 
 [[verdict]]
 kind = "item"
@@ -5486,7 +5497,8 @@ allowed-dependencies = [
 ]
 # observe projects an observed agent attempt for the CLI host (+1).
 # Cohort, stop_cohort, detach_cohort, without_excluded and leader pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot leader_turn left (+4).
-surface-budget = 89
+# AttemptHost::{orphan, leader_session, start_groups}, orphan and launch_groups close the engine's reads around the attempt host (+5).
+surface-budget = 94
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -5687,6 +5699,11 @@ allowed-dependencies = [
 # `resolve_task_prompt`, `resolve_config_path`, `task_permission_mode`, and `agent_check` let the compiler read a fire's assets from the paths a supervised fire reads (+4).
 # A fire's admission reads the live row's surplus gate through `surplus::surplus_refusal`, as a workflow judge reads the values its run kept.
 surface-budget = 70
+
+[[verdict]]
+kind = "item"
+key = "harness::throttle::StartGroup"
+reason = "An attempt host names the start groups it returns to workflow admission; their fields stay harness-private."
 
 [[verdict]]
 kind = "item"
