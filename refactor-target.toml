@@ -2339,7 +2339,8 @@ path = "crates/rimz/src/harness"
 # The `task_login` module resolves a loop task's account outside the sidebar graph that `loop_task` joins (+1).
 # The neutral homes (`check_run`, `signal`, `throttle`, `when` and the rest) kept their items' surface once the trunk's fleet-report items took the slack they fitted in before (+3).
 # workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
-surface-budget = 1140
+# workflow::{Cohort, stop_cohort, detach_cohort, without_excluded, leader} pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot workflow::leader_turn left (+4).
+surface-budget = 1144
 
 [[verdict]]
 kind = "item"
@@ -2445,6 +2446,31 @@ reason = "The engine explicitly requests locked leader-turn eligibility only for
 kind = "item"
 key = "harness::workflow::observe"
 reason = "The attempt host reads the run record, room snapshot, asks and window resets; the library decides what the observed attempt means."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Cohort"
+reason = "A stop or detach returns the agents the host acts on beside the children the attempt reports."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::stop_cohort"
+reason = "The library decides which agents an attempt's stop reaches; the CLI host cancels the run and stops them."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::detach_cohort"
+reason = "The library decides which pins an attempt's detach clears and which agents it reports live; the CLI host clears them."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::without_excluded"
+reason = "Occupancy and eviction reads drop an excluded agent's launched tree by the library's cohort walk."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::leader"
+reason = "The CLI host finds a run's leader row for push-back and signal forwarding by the library's rule."
 
 [[verdict]]
 kind = "item"
@@ -5459,7 +5485,8 @@ allowed-dependencies = [
     "worktree",
 ]
 # observe projects an observed agent attempt for the CLI host (+1).
-surface-budget = 85
+# Cohort, stop_cohort, detach_cohort, without_excluded and leader pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot leader_turn left (+4).
+surface-budget = 89
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"

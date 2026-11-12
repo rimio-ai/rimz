@@ -472,3 +472,192 @@ fn live_descendants_are_scanned_depth_first_and_reported_stopped() {
     );
     assert!(observed.children.live.is_empty());
 }
+
+fn launched_by(mut agent: AgentState, launcher: &str) -> AgentState {
+    agent.launched_by = Some(crate::agents::LaunchedBy {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: launcher.into(),
+    });
+    agent
+}
+
+fn seat(agent: AgentState, team: &str) -> AgentState {
+    let mut agent = agent;
+    agent.team = Some(team.into());
+    agent
+}
+
+fn pinned(mut agent: AgentState, pin: &crate::agents::WorkflowAttemptRef) -> AgentState {
+    agent.workflow = Some(pin.clone());
+    agent
+}
+
+fn pin() -> crate::agents::WorkflowAttemptRef {
+    crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    }
+}
+
+fn handles(children: &[ChildRef]) -> Vec<&str> {
+    children.iter().map(|child| child.handle.as_str()).collect()
+}
+
+#[test]
+fn children_keep_live_launches_and_launched_cohorts_once_without_ended_or_stopped_rows() {
+    let leader = row("leader", 50);
+    let mut ended = launched_by(row("ended-peer", 45), "leader");
+    ended.ended_at = Some(ago(5));
+    let lane = tempfile::tempdir().unwrap();
+    let board = crate::harness::scratch::board_path(lane.path());
+    std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+    std::fs::write(&board, "Stage: review (@seat)\n").unwrap();
+    let mut staged = seat(launched_by(row("staged", 30), "leader"), "crew");
+    staged.worktree_path = Some(lane.path().display().to_string());
+    let observed = Readers::new(&[], &[]).observe(
+        &leader_run(&leader),
+        &snapshot(vec![
+            leader,
+            child("child", "leader", 48),
+            launched_by(row("peer", 46), "leader"),
+            ended,
+            seat(launched_by(row("seat", 40), "leader"), "forge"),
+            seat(row("mate", 35), "forge"),
+            seat(row("stranger", 34), "other"),
+            staged,
+        ]),
+    );
+    let children = observed.children;
+    assert_eq!(handles(&children.stopped), ["@child"]);
+    let lane_name = lane.path().file_name().unwrap().to_str().unwrap();
+    let staged_handle = format!("@claude#{lane_name}");
+    assert_eq!(
+        handles(&children.live),
+        ["@peer", staged_handle.as_str(), "@seat", "@mate"],
+        "the fleet by registration, then each launched cohort by team and channel"
+    );
+    let team = |handle: &str| {
+        children
+            .live
+            .iter()
+            .find(|child| child.handle == handle)
+            .and_then(|child| child.team.clone())
+    };
+    assert_eq!(team("@peer"), None);
+    assert_eq!(
+        team("@seat"),
+        Some(TeamRef {
+            name: "forge".into(),
+            channel: "external".into(),
+            stage: None,
+        }),
+        "a seat with no lane reads the external channel and no stage"
+    );
+    let staged = team(&staged_handle).unwrap();
+    assert_eq!(staged.stage.as_deref(), Some("review"));
+    assert_eq!(staged.channel, lane_name);
+}
+
+#[test]
+fn a_stop_takes_pinned_and_detached_group_roots_and_reports_the_rest_live() {
+    let pin = pin();
+    let mut leader = pinned(row("leader", 50), &pin);
+    leader.launch_group = Some("group".into());
+    let mut run = leader_run(&leader);
+    run.workflow = Some(pin.clone());
+    let mut groupmate = row("groupmate", 44);
+    groupmate.launch_group = Some("group".into());
+    let mut ended_companion = pinned(row("gone", 43), &pin);
+    ended_companion.ended_at = Some(ago(5));
+    let agents = vec![
+        leader.clone(),
+        child("child", "leader", 49),
+        pinned(launched_by(row("companion", 48), "leader"), &pin),
+        launched_by(row("peer", 47), "companion"),
+        child("grandchild", "companion", 46),
+        groupmate,
+        ended_companion,
+        row("unrelated", 42),
+    ];
+    let room = snapshot(agents);
+    let cohort = stop_cohort(&room, &run).unwrap();
+    let roots = cohort
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(roots, ["leader", "companion", "groupmate"]);
+    assert_eq!(
+        handles(&cohort.children.stopped),
+        ["@child", "@grandchild", "@companion", "@groupmate"],
+        "every root's tree and every root but the leader stop, each once"
+    );
+    assert_eq!(
+        handles(&cohort.children.live),
+        ["@peer"],
+        "a stopped companion leaves the leader's live list"
+    );
+
+    let mut unpinned = run.clone();
+    unpinned.workflow = None;
+    assert!(stop_cohort(&room, &unpinned).is_none());
+    let mut ended = leader;
+    ended.ended_at = Some(ago(1));
+    assert!(stop_cohort(&snapshot(vec![ended]), &run).is_none());
+}
+
+#[test]
+fn a_detach_releases_every_pinned_row_and_reports_live_ones_but_the_leader() {
+    let pin = pin();
+    let leader = pinned(row("leader", 50), &pin);
+    let mut run = leader_run(&leader);
+    run.workflow = Some(pin.clone());
+    let mut gone = pinned(row("gone", 40), &pin);
+    gone.ended_at = Some(ago(5));
+    let agents = vec![
+        leader.clone(),
+        pinned(launched_by(row("companion", 48), "leader"), &pin),
+        launched_by(row("peer", 47), "companion"),
+        child("child", "leader", 46),
+        gone,
+        row("unrelated", 42),
+    ];
+    let room = snapshot(agents.clone());
+    let cohort = detach_cohort(&room, agents.iter(), &run);
+    let released = cohort
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(released, ["leader", "companion", "gone"]);
+    assert!(cohort.children.stopped.is_empty());
+    assert_eq!(
+        handles(&cohort.children.live),
+        ["@companion", "@child", "@peer"],
+        "each live child once, the leader never"
+    );
+    run.workflow = None;
+    let cohort = detach_cohort(&room, agents.iter(), &run);
+    assert!(cohort.agents.is_empty() && cohort.children == Children::default());
+}
+
+#[test]
+fn an_excluded_handle_leaves_with_its_live_launched_tree() {
+    let room = snapshot(vec![
+        row("leader", 50),
+        child("child", "leader", 48),
+        launched_by(row("peer", 46), "leader"),
+        row("other", 40),
+    ]);
+    let ids = |snapshot: &SidebarSnapshot| {
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&without_excluded(room.clone(), &[])), ids(&room));
+    let kept = without_excluded(room, &["@leader".into(), "@missing".into()]);
+    assert_eq!(ids(&kept), ["peer", "other"]);
+}
