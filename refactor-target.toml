@@ -2340,7 +2340,8 @@ path = "crates/rimz/src/harness"
 # workflow::{Cohort, stop_cohort, detach_cohort, without_excluded, leader} pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot workflow::leader_turn left (+4).
 # AttemptHost::{orphan, leader_session, start_groups}, workflow::{orphan, launch_groups}, and throttle::StartGroup close the engine's reads around the attempt host (+6).
 # harness::lanes and its LaneErr, CallerLane, LaneRequest, decide, own_lane, row_lane, in_place_team_name, directory_channel and admit_worktree_name replace spec::resolve_room_channel and the channel module as the one lane constructor (+9).
-surface-budget = 1159
+# deadline::interrupt_expired and run::{hold_interrupted_turn, expire_interrupt} let the timeout helper stamp, expire and settle an interrupted subagent turn's hold (+3).
+surface-budget = 1162
 
 [[verdict]]
 kind = "item"
@@ -5334,7 +5335,8 @@ allowed-dependencies = [
 # fail_limit_park fails a limit-parked child's run under the lock, for the park-notice helper (+1).
 # hand_over stamps the run `rimz agents restart` hands to its replacement wrapper (+1).
 # fail_if_owned lets the exec wrapper fail its run only while its pane still owns it (+1).
-surface-budget = 63
+# hold_interrupted_turn and expire_interrupt stamp and settle an interrupted subagent turn's hold for the timeout helper; one fits the slack left before (+1).
+surface-budget = 64
 
 [[verdict]]
 kind = "item"

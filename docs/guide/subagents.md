@@ -133,6 +133,8 @@ A Claude Console API usage cap (`You have reached your specified API usage limit
 
 A launched child silent mid-turn, or still waiting to start its first turn, past the [stall window](./configuration.md#sidebar-rendering) shows `!` with `silent Nm` under its parent and stops counting as the parent's work, so the parent shows its own status. The parent gets one `SUBAGENT_STALLED` message naming the child and distinguishing silence mid-turn from a first turn that never started; if the run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`. RimZ never stops a child because it is silent; the deadline and explicit stop still apply ([notice and once-per-run rule](../reference/cli/subagents.md#a-child-silent-past-the-stall-window)).
 
+Interrupting a child in its pane (Escape) does not end its run at once: the run stays open for 60 seconds, and a prompt you type in that time continues the same task on the same deadline. With no new turn by then, the report lists the child as `canceled`; after the child's deadline stop has gone out, it runs to the kill instead and reads `timed out`. A Claude child's interrupt reaches RimZ at Claude's next statusline run, which is the account's `statusLine.refreshInterval` when one is set and otherwise Claude's next render trigger. So its 60 seconds count from the Escape but may end later, and where no refresh interval is set the child may read `running` until the kill and then `timed out`.
+
 To stop a child yourself, stop it like any agent. The parent's report lists it as `canceled`:
 
 ```sh

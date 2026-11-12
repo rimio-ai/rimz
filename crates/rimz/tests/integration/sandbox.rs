@@ -5226,6 +5226,7 @@ fn sandboxed_run_timeout_stops_provider() {
     let timeout = rimz::harness::run_timeout::RunTimeoutRequest {
         workspace_id: env.workspace_id.clone(),
         run_id: run.run_id.clone(),
+        interrupted_at: None,
     };
     env.rimz()
         .args(rimz::child_process::agent_helper_argv(

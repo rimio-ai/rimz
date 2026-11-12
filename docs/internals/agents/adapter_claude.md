@@ -292,7 +292,7 @@ When the hook lifecycle merges a changed `not_entitled` marker, it marks the rec
 
 ### Turn-interruption marker
 
-Esc fires no root lifecycle hook. Claude appends a timestamped `user` entry whose text begins `[Request interrupted by user` (the `for tool use` variant included). When the same scan finds that entry first, `observe_context` stamps `AgentContext.settle` as `Interrupted`. A marker newer than `last_activity` displays a falsely `running` row, or a waiting row whose ask Esc cancelled, as `idle`, and any newer hook activity clears it. The root marker changes display and delivery gates only, and the durable rollup keeps the reported status. Child markers drive the [interrupted-child repair](#interrupted-children).
+Esc fires no root lifecycle hook. Claude appends a timestamped `user` entry whose text begins `[Request interrupted by user` (the `for tool use` variant included). When the same scan finds that entry first, `observe_context` stamps `AgentContext.settle` as `Interrupted`. A marker newer than `last_activity` displays a falsely `running` row, or a waiting row whose ask Esc cancelled, as `idle`, and any newer hook activity clears it. The root marker changes display and delivery gates, and opens a `rimz subagents` child's [interrupt hold](../harness/scripting.md#interrupted-subagent-turns) when the room host carries it to the run; the durable rollup keeps the reported status. The marker reaches the sidecar only at the next statusline run: Escape itself does not run the statusline, so the marker lands at the user's `statusLine.refreshInterval` when one is set, else at Claude's next render trigger. Child markers drive the [interrupted-child repair](#interrupted-children).
 
 ## Local session discovery
 

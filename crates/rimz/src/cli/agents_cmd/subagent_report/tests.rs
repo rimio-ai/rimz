@@ -1382,3 +1382,55 @@ fn a_fleet_with_only_held_children_reports_nothing() {
     );
     assert!(store.list_messages().unwrap().is_empty());
 }
+
+#[test]
+fn an_interrupted_sibling_holds_the_digest_until_its_window_expires() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    for name in ["a", "b"] {
+        append_agent(&store, name, Some("parent"));
+    }
+    let mut a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    a.last_message = Some("a answer".into());
+    let mut b = child_run(&workspace.workspace_id, "b", RunStatus::Running);
+    b.completed_at = None;
+    for record in [&a, &b] {
+        run::create(store.paths(), record).unwrap();
+    }
+    let observation = AgentLifecycleObservation::new(
+        Some("b".into()),
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+    );
+    let settled = run::record_lifecycle(
+        store.paths(),
+        &b.run_id,
+        "codex",
+        &observation,
+        None,
+        || None,
+    )
+    .unwrap();
+    assert_eq!(settled, None, "the interrupt holds the run open");
+    assert_eq!(
+        report_settled_child(&workspace, &store, &a).unwrap(),
+        ReportOutcome::SiblingsRunning
+    );
+
+    let mut held = run::load(store.paths(), &b.run_id).unwrap();
+    held.interrupted_at = Some(Timestamp::now() - std::time::Duration::from_secs(61));
+    run::create(store.paths(), &held).unwrap();
+    let b = run::expire_interrupt(&store, &b.run_id, None)
+        .unwrap()
+        .expect("the expired hold settles");
+    assert_eq!(b.status, RunStatus::Canceled);
+    assert!(matches!(
+        report_settled_child(&workspace, &store, &b).unwrap(),
+        ReportOutcome::Queued { .. }
+    ));
+    let digest = &store.list_messages().unwrap()[0].text;
+    let line = digest
+        .lines()
+        .find(|line| line.starts_with("- @b"))
+        .expect("b is listed");
+    assert!(line.contains("canceled"), "{digest}");
+}

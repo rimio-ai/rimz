@@ -259,7 +259,7 @@ Each step names the section that owns it.
 
 1. Launch. Caller policy and ancestry pass, the run record and pane are created, and the petname prints. With `--wait`, the parent then joins.
 2. Startup relaunch. A provider that dies before RimZ accepts its first lifecycle observation, other than a configuration refusal (exit 78), is relaunched in the same pane, up to `[agents] startup-relaunches` times. Handle, run, pane, and deadline stay the same, and a relaunched death is never reported ([fleet.md § A startup death is relaunched first](./fleet.md#a-startup-death-is-relaunched-first)).
-3. Work. The child runs until its work ends. A clean turn end with an owed harness wake [parks](./scripting.md#parked-runs) the run as `Running`, so the parent's digest still waits for it. Otherwise the child's hooks fold a terminal status into the run record.
+3. Work. The child runs until its work ends. A clean turn end with an owed harness wake [parks](./scripting.md#parked-runs) the run as `Running`, so the parent's digest still waits for it. An interrupted turn [holds the run open](./scripting.md#interrupted-subagent-turns) for 60 seconds, and a new turn in that time continues it. Otherwise the child's hooks fold a terminal status into the run record.
 4. Publish. The newly terminal write publishes the answer to a [response file](#response-files) before the record lands.
 5. Report. The child's in-pane wrapper runs the [fleet reporter](#the-fleet-report). Once nothing in the fleet is still running, the reporter queues one digest to the launcher.
 6. Clean up. After the parent's receiving turn ends, the wrapper stops the idle child, stamps its row's `ended_at`, and closes its pane ([cleanup after receipt](#cleanup-after-receipt)). One-shot providers exit on their own. Interactive providers stay available for [follow-ups](#follow-ups-and-resume) until then.
@@ -454,7 +454,7 @@ The ladder bounds pending and running work, never a terminal child awaiting rece
 
 `deadline_at` is the soft bound, and `kill_due` fires at `deadline_at + grace`. `due_rung` selects the latest crossed warning or stop above `deadline_notice_at`, and `run::claim_rung` claims it under the workspace lock. The hook feed skips provider-native children and asks a context-capable adapter to attach the rung only on an accepted event. `stop_channel` chooses hook context or pane steering, never both.
 
-The read-only producer in [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) spawns one hidden `agents run-timeout` helper for a pane stop or a kill. For a pane stop, the helper stamps the rung before it steers a `HarnessNotice::Deadline` into the pane, and that notice never counts as an owed wake. At the kill bound it reads the provider transcript outside the lock, then `timeout_if_due` atomically fills an absent `last_message` and settles `TimedOut`, and the usual terminal publisher writes the partial response. The kill itself, and the pane reclaim, are the supervised run's ([scripting.md § The wake socket](./scripting.md#the-wake-socket)). Heavy-lane tick cadence bounds enforcement precision. A record without `grace` kills at `deadline_at` and never gets a stop rung.
+The read-only producer in [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) spawns one hidden `agents run-timeout` helper for a pane stop, a kill, an expired interrupt hold, or a child's interrupt marker to record ([scripting.md § Interrupted subagent turns](./scripting.md#interrupted-subagent-turns)). For a pane stop, the helper stamps the rung before it steers a `HarnessNotice::Deadline` into the pane, and that notice never counts as an owed wake. At the kill bound it reads the provider transcript outside the lock, then `timeout_if_due` atomically fills an absent `last_message` and settles `TimedOut`, and the usual terminal publisher writes the partial response. The kill itself, and the pane reclaim, are the supervised run's ([scripting.md § The wake socket](./scripting.md#the-wake-socket)). Heavy-lane tick cadence bounds enforcement precision. A record without `grace` kills at `deadline_at` and never gets a stop rung.
 
 ### A child parked on a provider limit
 
@@ -486,7 +486,7 @@ A settled child can take another turn: a live interactive child through an ordin
 
 ### A follow-up reopens the run
 
-[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens a terminal turn-lifecycle subagent run on a `TurnStarted` of its kind and bound session, whatever its terminal status. Other terminal runs stay terminal. The reopen:
+[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens a terminal turn-lifecycle subagent run on a `TurnStarted` of its kind and bound session, whatever its terminal status. Other terminal runs stay terminal. A `TurnStarted` inside an open [interrupt window](./scripting.md#interrupted-subagent-turns) is no reopen: the run was never terminal, and it continues as it was. The reopen:
 
 1. moves the replaced answer into `earlier_answers` with its digest link, its `failure_tail` and its `limit_failure`, unless it was joined or reported to `nobody`, and drops joined earlier entries
 2. increments `follow_ups` and sets `follow_up.started_at` to the reopen time with no prompt, then clears `opened_by`

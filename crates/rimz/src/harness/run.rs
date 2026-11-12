@@ -688,6 +688,51 @@ pub fn timeout_if_due(
     })
 }
 
+/// Open the interrupt hold of a subagent turn run from its child's settle
+/// marker at `at`, rechecked under the lock as the lifecycle fold checks a
+/// hook's interrupt. Returns whether this call opened it.
+pub fn hold_interrupted_turn(paths: &StatePaths, run_id: &RunId, at: Timestamp) -> Result<bool> {
+    update_record(paths, run_id, |record, _| {
+        if !super::deadline::opens_interrupt_hold(record, at) {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.interrupted_at = Some(at);
+        Ok(RecordMutation::Write(true))
+    })
+    .map(|(_, held)| held)
+}
+
+/// Settle a held run canceled once its interrupt window passed with no new
+/// turn, recording spend as the hook settle does and waking its waiter. The
+/// window and the kill are judged at the locked write, so a run whose kill
+/// came due meanwhile is left to the kill. `harvest` fills an absent last
+/// message, as the kill's does. Returns the record only when this call settled
+/// it.
+pub fn expire_interrupt(
+    store: &Store,
+    run_id: &RunId,
+    harvest: Option<String>,
+) -> Result<Option<RunRecord>> {
+    let (record, settled) = update_record(store.paths(), run_id, |record, now| {
+        if !super::deadline::interrupt_expired(record, now)
+            || !record.mark_terminal(RunStatus::Canceled, now)
+        {
+            return Ok(RecordMutation::Keep(false));
+        }
+        if record.last_message.is_none() {
+            record.last_message = harvest;
+        }
+        Ok(RecordMutation::Write(true))
+    })?;
+    if !settled {
+        return Ok(None);
+    }
+    let agent = crate::agents::definition_by_kind(record.kind.as_str()).ok();
+    let record = settle_spend_and_wake(store, record, agent);
+    crate::store::run::wake_run(store.runtime_paths(), &record);
+    Ok(Some(record))
+}
+
 pub fn claim_rung(
     paths: &StatePaths,
     run_id: &RunId,
@@ -881,7 +926,8 @@ pub fn fail_if_nonterminal(
 }
 
 /// [`fail_if_nonterminal`] for the wrapper in `pane`, which leaves a run that
-/// pane no longer owns ([`RunRecord::superseded_in`]) untouched.
+/// pane no longer owns ([`RunRecord::superseded_in`]) untouched. A run held
+/// open by an interrupt settles canceled, the outcome its interrupt had.
 pub fn fail_if_owned(
     paths: &StatePaths,
     run_id: &RunId,
@@ -889,8 +935,12 @@ pub fn fail_if_owned(
     reason: &str,
 ) -> Result<Option<RunRecord>> {
     let (record, wrote) = update_record(paths, run_id, |record, now| {
-        if pane.is_some_and(|pane| record.superseded_in(pane))
-            || !record.mark_terminal(RunStatus::Failed, now)
+        let status = if record.interrupted_at.is_some() {
+            RunStatus::Canceled
+        } else {
+            RunStatus::Failed
+        };
+        if pane.is_some_and(|pane| record.superseded_in(pane)) || !record.mark_terminal(status, now)
         {
             return Ok(RecordMutation::Keep(false));
         }
@@ -1372,6 +1422,7 @@ fn fold_lifecycle(
         record.opened_by.clear();
         record.deadline_notice_at = None;
         record.limit_hold = None;
+        record.interrupted_at = None;
         record.status = RunStatus::Running;
         record.completed_at = None;
         record.parked_at = None;
@@ -1381,6 +1432,13 @@ fn fold_lifecycle(
         record.parked_answer = None;
         record.failure_tail = None;
         record.limit_failure = None;
+    }
+    let holds_interrupts = super::deadline::holds_interrupts(record);
+    if holds_interrupts
+        && record.status == RunStatus::Running
+        && matches!(observation.signal, LifecycleSignal::TurnInterrupted { .. })
+    {
+        return hold_interrupted_turn_open(record, observation, last_message, observed_at);
     }
     let stop_changed = fold_stopped_turn(record, &observation.signal, now);
     if let Some(disposition) = observation.signal.terminal_disposition() {
@@ -1399,6 +1457,8 @@ fn fold_lifecycle(
         {
             record.status = RunStatus::Running;
             record.parked_at = Some(now);
+            // The turn ended cleanly: the park, not the window, now holds the run.
+            record.interrupted_at = None;
             tracing::info!(
                 run_id = %record.run_id,
                 owed = owed.as_str(),
@@ -1408,6 +1468,14 @@ fn fold_lifecycle(
         }
         record.status = match disposition {
             TerminalDisposition::Completed => RunStatus::Completed,
+            // A provider exit inside the window keeps the interrupt's outcome,
+            // as `fail_if_owned` does.
+            TerminalDisposition::Failed
+                if record.interrupted_at.is_some()
+                    && matches!(observation.signal, LifecycleSignal::Ended) =>
+            {
+                RunStatus::Canceled
+            }
             TerminalDisposition::Failed => RunStatus::Failed,
             TerminalDisposition::Canceled => RunStatus::Canceled,
         };
@@ -1433,11 +1501,15 @@ fn fold_lifecycle(
         }
     }
     let unheld = in_turn && end_limit_hold(record, observed_at, now);
+    let turn_opened = holds_interrupts
+        && matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
+        && stamp_turn_start(record, observed_at);
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();
     if !reopen
         && !unparked
         && !unheld
+        && !turn_opened
         && !stop_changed
         && record.status != RunStatus::Pending
         && !first_transcript_path
@@ -1451,6 +1523,49 @@ fn fold_lifecycle(
             .clone_from(&observation.transcript_path);
     }
     LifecycleFold::Updated
+}
+
+/// Hold an interrupted subagent turn open for a new turn rather than settle it:
+/// keep the turn's transcript path and message and stamp the hold at the hook's
+/// ingress instant. An interrupt from before the newest turn start, or with a
+/// hold already open, changes nothing.
+fn hold_interrupted_turn_open(
+    record: &mut RunRecord,
+    observation: &AgentLifecycleObservation,
+    last_message: Option<String>,
+    observed_at: Timestamp,
+) -> LifecycleFold {
+    if !super::deadline::opens_interrupt_hold(record, observed_at) {
+        return LifecycleFold::Ignored;
+    }
+    if let Some(path) = observation.transcript_path.as_ref() {
+        record.transcript_path = Some(path.clone());
+    }
+    if let Some(message) = last_message {
+        set_turn_message(record, message);
+    }
+    record.interrupted_at = Some(observed_at);
+    LifecycleFold::Updated
+}
+
+/// Stamp a subagent turn run's newest turn start, which later interrupt
+/// evidence must postdate, and close an interrupt hold the start comes after.
+/// Nothing else moves: the run continues on its own deadline and answer.
+/// Returns whether the record changed.
+fn stamp_turn_start(record: &mut RunRecord, observed_at: Timestamp) -> bool {
+    let mut changed = false;
+    if record
+        .turn_opened_at
+        .is_none_or(|opened| observed_at > opened)
+    {
+        record.turn_opened_at = Some(observed_at);
+        changed = true;
+    }
+    if record.interrupted_at.is_some_and(|at| observed_at > at) {
+        record.interrupted_at = None;
+        changed = true;
+    }
+    changed
 }
 
 /// End a provider-limit hold on the child's first in-turn signal observed after

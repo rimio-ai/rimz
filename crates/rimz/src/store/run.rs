@@ -409,6 +409,18 @@ pub struct RunRecord {
     /// When this run's parent was told the launched child went silent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_noticed_at: Option<Timestamp>,
+    /// The instant of the interrupt evidence (a hook's ingress stamp, or the
+    /// child's settle marker) holding this subagent turn run open for a new
+    /// turn. Open while set on a running record: a later `TurnStarted` clears
+    /// it, the room host's expiry settles the run canceled, and a terminal
+    /// write keeps it until a reopen clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted_at: Option<Timestamp>,
+    /// The hook ingress instant of the newest `TurnStarted` folded into this
+    /// subagent turn run: interrupt evidence at or before it is an earlier
+    /// turn's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_opened_at: Option<Timestamp>,
     /// The pane of the wrapper `rimz agents restart` took this run from. While
     /// set, that wrapper and every pane but the one bound since neither settle
     /// nor move the run ([`RunRecord::superseded_in`]). A later restart
@@ -587,6 +599,8 @@ impl RunRecord {
             park_noticed_activity: None,
             limit_hold: None,
             stall_noticed_at: None,
+            interrupted_at: None,
+            turn_opened_at: None,
             handed_over_from: None,
         }
     }
@@ -1206,12 +1220,19 @@ mod tests {
             Path::new("/tmp/rimz-run").to_path_buf(),
         );
         let unset = serde_json::to_value(&record).unwrap();
-        for key in ["limit_hold", "handed_over_from"] {
+        for key in [
+            "limit_hold",
+            "handed_over_from",
+            "interrupted_at",
+            "turn_opened_at",
+        ] {
             assert!(unset.get(key).is_none(), "an unset {key} is omitted");
         }
         let pane = PaneId::parse("tmux:%7").unwrap();
         record.handed_over_from = Some(pane.clone());
         let at: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+        record.interrupted_at = Some(at + Duration::from_secs(5));
+        record.turn_opened_at = Some(at + Duration::from_secs(2));
         let hold = LimitHold {
             activity: at,
             since: at + Duration::from_secs(1),
@@ -1223,12 +1244,22 @@ mod tests {
         let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(decoded.limit_hold, Some(hold));
         assert_eq!(decoded.handed_over_from, Some(pane));
+        assert_eq!(decoded.interrupted_at, record.interrupted_at);
+        assert_eq!(decoded.turn_opened_at, record.turn_opened_at);
 
-        value.as_object_mut().unwrap().remove("limit_hold");
-        value.as_object_mut().unwrap().remove("handed_over_from");
+        for key in [
+            "limit_hold",
+            "handed_over_from",
+            "interrupted_at",
+            "turn_opened_at",
+        ] {
+            value.as_object_mut().unwrap().remove(key);
+        }
         let decoded: RunRecord = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.limit_hold, None);
         assert_eq!(decoded.handed_over_from, None);
+        assert_eq!(decoded.interrupted_at, None);
+        assert_eq!(decoded.turn_opened_at, None);
     }
 
     #[test]
