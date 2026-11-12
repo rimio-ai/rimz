@@ -599,7 +599,8 @@ pub struct MessageRecord {
     /// `store::writer::queue::normalize_terminal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_since: Option<Timestamp>,
-    /// Shared stamp for records sent in one batched paste; the head's message id.
+    /// Shared stamp for records sent in one batched paste; the message id of the
+    /// first member left after delivery cancels the moot ones.
     /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<MessageId>,
@@ -1026,25 +1027,11 @@ impl MessageRecord {
         }
     }
 
-    pub fn batch_key(&self) -> Option<&str> {
-        match &self.sender {
-            MessageSender::Agent { channel, .. } => channel.as_deref(),
-            MessageSender::Harness { .. } => None,
-            MessageSender::Human | MessageSender::Subagent { .. } | MessageSender::System => {
-                self.channel.as_deref()
-            }
-        }
-    }
-
     pub fn batchable(&self) -> bool {
         self.body == MessageBody::Prompt
             && self.enter
             && !self.forced_keepalive
             && !self.text.trim_start().starts_with('/')
-            && !matches!(
-                &self.sender,
-                MessageSender::Harness { notice } if notice.is_fleet_digest()
-            )
     }
 }
 
@@ -1281,10 +1268,7 @@ pub(crate) fn delivery_batch_indices(
 }
 
 fn batch_compatible(head: &MessageRecord, candidate: &MessageRecord, status: AgentStatus) -> bool {
-    candidate.batchable()
-        && candidate.batch_key() == head.batch_key()
-        && candidate.force == head.force
-        && gate_open(candidate.gate, status)
+    candidate.batchable() && candidate.force == head.force && gate_open(candidate.gate, status)
 }
 
 pub fn command_validity() -> Duration {

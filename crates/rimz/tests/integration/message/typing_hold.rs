@@ -873,6 +873,94 @@ fn a_ping_whose_cache_went_cold_under_the_pane_lock_is_never_pasted() {
     );
 }
 
+/// A cold stop on a polite ping at a batch's head settles the ping alone; the messages batched
+/// behind it go back to the queue and deliver on the next attempt.
+#[test]
+fn a_cold_ping_at_a_batch_head_releases_the_messages_batched_behind_it() {
+    let fixture = Fixture::new(false);
+    fixture.keepalive_config();
+    // A 2 s lifetime: the fixture's 3 s old turn is already cold at delivery.
+    for (key, value) in [
+        ("harness.prompt_cache_margin", "1s"),
+        ("harness.prompt_cache_ttl.claude", "2s"),
+    ] {
+        run_success(
+            fixture.command().args(["config", "set", key, value]),
+            "short lifetime",
+        );
+    }
+    fixture.clear_input();
+    let agent = fixture.env.store().snapshot().unwrap().agents[0].clone();
+    let message = |id: u64, text: &str, notice: Option<HarnessNotice>| {
+        let mut record = MessageRecord::new(
+            fixture.env.workspace_id.clone(),
+            &agent,
+            text.to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(notice.map_or(MessageSender::Human, |notice| {
+            MessageSender::Harness { notice }
+        }));
+        record.message_id = fixed_message_id(id);
+        record
+    };
+    let ping = message(1, "Keep warm.", Some(HarnessNotice::CacheKeepalive));
+    let human = message(2, "behind the ping", None);
+    let digest = message(
+        3,
+        "@child completed: done",
+        Some(HarnessNotice::SubagentReport),
+    );
+    queue_messages(&fixture.env, &[&ping, &human, &digest]);
+    let by_id = |record: &MessageRecord| {
+        let mut rows = fixture.env.store().list_messages().unwrap();
+        rows.extend(fixture.env.store().list_message_history().unwrap());
+        rows.into_iter()
+            .find(|row| row.message_id == record.message_id)
+            .unwrap()
+    };
+
+    run_success(
+        fixture.command().args([
+            "message",
+            "deliver",
+            "--message-id",
+            ping.message_id.as_str(),
+        ]),
+        "deliver the batch behind a cold ping",
+    );
+    assert_eq!(fixture.writes(), 0, "nothing is pasted onto a cold cache");
+    let cold = by_id(&ping);
+    assert_eq!(cold.status, MessageStatus::Errored, "{cold:?}");
+    assert_eq!(
+        cold.last_error.as_deref(),
+        Some("the receiver's prompt cache went cold before the ping was written"),
+    );
+    for record in [&human, &digest] {
+        let released = by_id(record);
+        assert_eq!(released.status, MessageStatus::Queued, "{released:?}");
+        assert_eq!(released.attempts, 0, "{released:?}");
+        assert_eq!(released.batch_id, None, "{released:?}");
+        assert_eq!(released.last_sent_at, None, "{released:?}");
+    }
+
+    run_success(
+        fixture.command().args([
+            "message",
+            "deliver",
+            "--message-id",
+            human.message_id.as_str(),
+        ]),
+        "deliver the released messages",
+    );
+    assert!(fixture.writes() > 0, "the released messages reach the pane");
+    for record in [&human, &digest] {
+        let sent = by_id(record);
+        assert_eq!(sent.status, MessageStatus::Sent, "{sent:?}");
+        assert_eq!(sent.batch_id, Some(human.message_id.clone()), "{sent:?}");
+    }
+}
+
 impl Fixture {
     fn lifecycle_at(&self, signal: LifecycleSignal, prompt: Option<&str>, at: jiff::Timestamp) {
         let mut observation = AgentLifecycleObservation::new(Some("typing-session".into()), signal);

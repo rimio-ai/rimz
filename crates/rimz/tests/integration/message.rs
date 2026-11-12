@@ -9081,7 +9081,7 @@ fn sweep_delivers_unlinked_subagent_report() {
 }
 
 #[test]
-fn sweep_does_not_batch_subagent_report_behind_compatible_message() {
+fn sweep_batches_a_joined_subagent_report_and_cancels_it_after_claim() {
     let (env, digest, pane_fixture) = subagent_report_fixture(&[true]);
     let mut human = digest.clone();
     human.message_id = fixed_message_id(1);
@@ -9109,36 +9109,131 @@ fn sweep_does_not_batch_subagent_report_behind_compatible_message() {
         2,
         "only the human paste and Enter: {lines:?}"
     );
-    assert_eq!(
-        message_by_id(&env, &human.message_id).status,
-        MessageStatus::Sent
+    let sent = message_by_id(&env, &human.message_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.batch_id, None, "a lone survivor is no batch");
+    let history = env.store().list_message_history().expect("history");
+    let canceled = history
+        .iter()
+        .find(|row| row.message_id == digest.message_id)
+        .expect("joined digest canceled after claim");
+    assert_eq!(canceled.status, MessageStatus::Canceled);
+    assert_eq!(canceled.attempts, 1, "claimed beside the human prompt");
+    assert_eq!(canceled.last_sent_at, None);
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.canceled"
+                && event.params_value()["message_id"] == digest.message_id.as_str()
+                && event.params_value()["reason"] == "joined before delivery")
     );
-    let queued = message_by_id(&env, &digest.message_id);
-    assert_eq!(queued.status, MessageStatus::Queued);
-    assert_eq!(queued.attempts, 0);
-    assert_eq!(queued.batch_id, None);
     submit_subagent_report_prompt(&env, &user_message(&human.text));
     assert!(env.store().list_message_history().expect("history").iter().any(|row|
         row.message_id == human.message_id && row.status == MessageStatus::Delivered
     ));
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-report",
-            "worktree_branch": "feature-report",
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    let trace_log = env.project_root.join("zellij-report-after-human-trace.log");
+}
+
+#[test]
+fn delivery_cancels_a_joined_digest_follower_and_pastes_the_survivors() {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[true]);
+    let human = |id: u64, text: &str| {
+        let mut record = digest.clone();
+        record.message_id = fixed_message_id(id);
+        record.sender = MessageSender::Human;
+        record.text = text.to_owned();
+        record.channel = None;
+        record
+    };
+    let head = human(1, "before the report");
+    let tail = human(3, "after the report");
+    queue_messages(&env, &[&head, &digest, &tail]);
+
+    let trace_log = env.project_root.join("zellij-report-survivors-trace.log");
     run_success(
         traced_rimz(&env, &trace_log)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "sweep"]),
-        "sweep joined digest after human acknowledgement",
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                head.message_id.as_str(),
+            ]),
+        "deliver a batch holding a joined digest",
     );
-    assert_subagent_report_canceled(&env, &digest, &trace_log);
+    let prompt = format!(
+        "{}\n\n{}",
+        user_message(&head.text),
+        user_message(&tail.text)
+    );
+    assert_text_then_enter(&trace_log, &prompt);
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines.iter().filter(|line| is_paste(line, &prompt)).count(),
+        1,
+        "{lines:?}"
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    for message in [&head, &tail] {
+        let sent = message_by_id(&env, &message.message_id);
+        assert_eq!(sent.status, MessageStatus::Sent);
+        assert_eq!(sent.batch_id, Some(head.message_id.clone()));
+    }
+    let history = env.store().list_message_history().expect("history");
+    let canceled = history
+        .iter()
+        .find(|row| row.message_id == digest.message_id)
+        .expect("joined digest canceled after claim");
+    assert_eq!(canceled.status, MessageStatus::Canceled);
+    assert_eq!(canceled.attempts, 1);
+    assert_eq!(canceled.last_sent_at, None);
+}
+
+#[test]
+fn delivery_releases_a_batch_when_its_digest_follower_cannot_scan_runs() {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[false]);
+    let mut human = digest.clone();
+    human.message_id = fixed_message_id(1);
+    human.sender = MessageSender::Human;
+    human.text = "ahead of the report".to_owned();
+    human.channel = None;
+    queue_messages(&env, &[&human, &digest]);
+    let store = env.store();
+    let run = rimz::harness::run::list(store.paths()).unwrap().remove(0);
+    let path = store.paths().runs_dir.join(format!("{}.json", run.run_id));
+    std::fs::write(&path, b"{not a run}\n").unwrap();
+
+    let trace_log = env
+        .project_root
+        .join("zellij-report-follower-scan-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                human.message_id.as_str(),
+            ]),
+        "deliver a batch whose digest cannot scan runs",
+    );
+    assert_no_report_pane_write(&trace_log);
+    for message in [&human, &digest] {
+        let queued = message_by_id(&env, &message.message_id);
+        assert_eq!(queued.status, MessageStatus::Queued, "{}", message.text);
+        assert_eq!(queued.attempts, 0, "{}", message.text);
+        assert_eq!(queued.last_attempt_at, None, "{}", message.text);
+        assert_eq!(queued.last_sent_at, None, "{}", message.text);
+        assert_eq!(queued.batch_id, None, "{}", message.text);
+        assert!(
+            queued
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("cannot check or settle joined runs")),
+            "{queued:?}"
+        );
+    }
 }
 
 #[test]
@@ -11176,7 +11271,11 @@ fn queued_delivery_batches_compatible_prompts() {
         "batch delivery",
     );
 
-    let payload = format!("{}\n\n{}", user_message("first\n"), user_message("second"));
+    let payload = format!(
+        "{}\n\n{}\n\nType: AGENT_MESSAGE\nFrom: @reviewer#docs (codex)\nContent:\nthird",
+        user_message("first\n"),
+        user_message("second")
+    );
     assert_text_then_enter(&trace_log, &payload);
     let lines = trace_lines(&trace_log);
     assert_eq!(
@@ -11187,14 +11286,13 @@ fn queued_delivery_batches_compatible_prompts() {
 
     let sent_first = message_by_id(&env, &first_id);
     let sent_second = message_by_id(&env, &second_id);
-    let queued_third = message_by_id(&env, &third_id);
+    let sent_third = message_by_id(&env, &third_id);
     assert_eq!(sent_first.status, MessageStatus::Sent);
     assert_eq!(sent_second.status, MessageStatus::Sent);
     assert_eq!(sent_first.batch_id, Some(first_id.clone()));
     assert_eq!(sent_second.batch_id, Some(first_id.clone()));
-    assert_eq!(queued_third.status, MessageStatus::Queued);
-    assert_eq!(queued_third.batch_id, None);
-    assert_eq!(queued_third.attempts, 0, "barrier remains unclaimed");
+    assert_eq!(sent_third.status, MessageStatus::Sent);
+    assert_eq!(sent_third.batch_id, Some(first_id.clone()));
     let sent_event_ids = env
         .read_events()
         .into_iter()
@@ -11208,7 +11306,11 @@ fn queued_delivery_batches_compatible_prompts() {
         .collect::<Vec<_>>();
     assert_eq!(
         sent_event_ids,
-        vec![first_id.to_string(), second_id.to_string()]
+        vec![
+            first_id.to_string(),
+            second_id.to_string(),
+            third_id.to_string()
+        ]
     );
 
     run_hook(
@@ -11221,9 +11323,162 @@ fn queued_delivery_batches_compatible_prompts() {
         }),
         pane_env,
     );
-    assert_eq!(message_by_id(&env, &third_id).status, MessageStatus::Queued);
     let delivered = delivered_message_ids(&env);
-    assert_eq!(delivered, vec![first_id.to_string(), second_id.to_string()]);
+    assert_eq!(
+        delivered,
+        vec![
+            first_id.to_string(),
+            second_id.to_string(),
+            third_id.to_string()
+        ]
+    );
+}
+
+#[test]
+fn mixed_paste_confirms_every_section_under_its_own_author() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-mixed", "feature-mixed", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-mixed",
+            "worktree_branch": "feature-mixed",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-mixed")
+        .expect("agent");
+    let message = |id: u64, text: &str, sender: MessageSender| {
+        let mut record = MessageRecord::new(
+            env.workspace_id.clone(),
+            agent,
+            text.to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_channel(Some("feature-mixed".to_owned()))
+        .with_sender(sender);
+        record.message_id = fixed_message_id(id);
+        record
+    };
+    let peer = |role: &str, channel: &str| MessageSender::Agent {
+        agent_id: None,
+        kind: AgentKind::new_unchecked("codex"),
+        name: None,
+        profile: None,
+        role: Some(role.to_owned()),
+        channel: Some(channel.to_owned()),
+    };
+    let records = [
+        message(1, "human question", MessageSender::Human),
+        message(2, "same-lane note", peer("coder", "feature-mixed")),
+        message(3, "docs note", peer("reviewer", "docs")),
+        message(
+            4,
+            "@child completed: done",
+            MessageSender::Harness {
+                notice: HarnessNotice::SubagentReport,
+            },
+        ),
+    ];
+    queue_messages(&env, &records.iter().collect::<Vec<_>>());
+
+    let trace_log = env.project_root.join("zellij-mixed-paste-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-mixed-paste-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                records[0].message_id.as_str(),
+            ]),
+        "mixed batch delivery",
+    );
+    let payload = [
+        user_message("human question"),
+        "Type: AGENT_MESSAGE\nFrom: @coder (codex)\nContent:\nsame-lane note".to_owned(),
+        "Type: AGENT_MESSAGE\nFrom: @reviewer#docs (codex)\nContent:\ndocs note".to_owned(),
+        "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n@child completed: done".to_owned(),
+    ]
+    .join("\n\n");
+    assert_text_then_enter(&trace_log, &payload);
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines.iter().filter(|line| is_paste(line, &payload)).count(),
+        1,
+        "{lines:?}"
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-mixed",
+            "prompt": payload,
+            "worktree_branch": "feature-mixed",
+        }),
+        pane_env,
+    );
+    let ids = records
+        .iter()
+        .map(|record| record.message_id.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(delivered_message_ids(&env), ids);
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("transcript");
+    let sections = entries
+        .iter()
+        .filter(|entry| entry.agent_id.as_str() == "sess-mixed" && entry.message_id.is_some())
+        .map(|entry| {
+            (
+                entry.message_id.as_ref().unwrap().to_string(),
+                entry.entry,
+                entry.from.clone(),
+                entry.text.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    use rimz::transcript::TranscriptKind;
+    assert_eq!(
+        sections,
+        vec![
+            (
+                ids[0].clone(),
+                TranscriptKind::Prompt,
+                None,
+                "human question".to_owned()
+            ),
+            (
+                ids[1].clone(),
+                TranscriptKind::Message,
+                Some("@coder".to_owned()),
+                "same-lane note".to_owned()
+            ),
+            (
+                ids[2].clone(),
+                TranscriptKind::Message,
+                Some("@reviewer#docs".to_owned()),
+                "docs note".to_owned()
+            ),
+            (
+                ids[3].clone(),
+                TranscriptKind::SubagentReport,
+                Some("@rimz".to_owned()),
+                "@child completed: done".to_owned()
+            ),
+        ]
+    );
 }
 
 #[test]
