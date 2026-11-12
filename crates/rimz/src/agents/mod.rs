@@ -304,7 +304,7 @@ pub struct LaunchPreset {
 }
 
 impl LaunchPreset {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.model.as_deref().is_none_or(str::is_empty)
             && self.effort.as_deref().is_none_or(str::is_empty)
             && self.auto_compact.as_deref().is_none_or(str::is_empty)
@@ -369,7 +369,7 @@ impl PresetArgMatcher {
     /// Remove every occurrence of this typed setting from provider argv.
     ///
     /// Environment-only settings leave argv unchanged.
-    pub fn remove_occurrences(&self, argv: &mut Vec<String>) {
+    pub(crate) fn remove_occurrences(&self, argv: &mut Vec<String>) {
         for occurrence in self.occurrences(argv).iter().rev() {
             argv.drain(occurrence.argv_range.clone());
         }
