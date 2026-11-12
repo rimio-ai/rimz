@@ -409,7 +409,7 @@ impl crate::agents::capabilities::ContextCapability for KiroAdapter {
             context: session::refresh_context(&path),
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
-            ..LocalContextRefresh::authoritative_current()
+            ..LocalContextRefresh::default()
         })
     }
 }
