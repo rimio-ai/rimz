@@ -34,8 +34,8 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n\
          [steps.build]\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
-         window='window.5h.bogus>=x'\nbudget='lots'\nthen='pick'\n\
-         [checks.pick]\nrun='true'\non.ok={to='@done',delay='later'}\n",
+         window='window.5h.bogus>=x'\nbudget='lots'\nsubscribe=['agent.stop']\nthen='pick'\n\
+         [checks.pick]\nrun='true'\nwake=['agent.stop']\non.ok={to='@done',delay='later'}\n",
     )
     .unwrap();
     let build = spec.step("build").unwrap();
@@ -53,8 +53,14 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
             build.budget().unwrap().value().is_err(),
         ),
         (
-            spec.stagger().unwrap().text(),
-            spec.stagger().unwrap().value().is_err(),
+            spec.limit().unwrap().stagger.as_ref().unwrap().text(),
+            spec.limit()
+                .unwrap()
+                .stagger
+                .as_ref()
+                .unwrap()
+                .value()
+                .is_err(),
         ),
     ] {
         assert!(failed, "{text} must keep its failure");
@@ -62,8 +68,21 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
     assert_eq!(build.timeout().unwrap().text(), "soon");
     assert_eq!(build.window().unwrap().text(), "window.5h.bogus>=x");
     assert_eq!(build.budget().unwrap().text(), "lots");
-    assert_eq!(spec.stagger().unwrap().text(), "soon");
+    assert_eq!(
+        spec.limit().unwrap().stagger.as_ref().unwrap().text(),
+        "soon"
+    );
     assert_eq!(delay(&spec, "pick", "ok").as_deref(), Some("later"));
+    let overrides = build
+        .launch_overrides(std::path::Path::new("/definition"))
+        .unwrap();
+    assert!(
+        overrides.budget.is_none(),
+        "a budget that fails is no budget"
+    );
+    assert_eq!(spec.reserved_usd(), 0.0);
+    assert!(build.subscriptions().is_err());
+    assert!(spec.check("pick").unwrap().subscriptions().is_err());
 }
 
 #[test]

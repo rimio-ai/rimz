@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::definition::Parsed;
 use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
-use super::{Definition, Kind, SpecErr, Target, script, spec, state::Transition};
+use super::{Definition, Kind, Node, SpecErr, Target, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::signal::{
@@ -239,16 +239,17 @@ fn publish(
         ));
     }
     let scope = Scope {
-        kind: spec.workflow.scope,
-        path: roots.path(spec.workflow.scope).to_path_buf(),
+        kind: spec.scope(),
+        path: roots.path(spec.scope()).to_path_buf(),
     };
     // An agent or a message needs the room, and so does a loop task's run, whose advance finds
     // it through the room's record; a hand-started run of checks and scripts runs without one.
     let in_room = spec
-        .steps
-        .values()
-        .any(|step| step.agent.is_some() || step.message.is_some())
-        || spec.checks.values().any(|check| check.agent.is_some());
+        .steps()
+        .any(|(_, step)| matches!(step.kind(), Some(Kind::Agent(_) | Kind::Message(_))))
+        || spec
+            .checks()
+            .any(|(_, check)| matches!(check.kind(), Some(Kind::Judge(_))));
     let room = crate::workspace::record::read(&state.workspace_record).is_ok();
     // A deployed run in a room keeps its notes and history; a loop task's run of checks fires too
     // often to keep a folder each time.
@@ -284,7 +285,7 @@ fn publish(
         notes: None,
         state: RunState::Active,
         park: None,
-        node: spec.workflow.start.clone(),
+        node: spec.start().to_owned(),
         entered_at: now,
         input: None,
         key: None,
@@ -293,9 +294,7 @@ fn publish(
         visits: BTreeMap::new(),
         visit_grant: 0,
         deadline: spec
-            .workflow
-            .deadline
-            .as_deref()
+            .deadline()
             .map(spec::parse_deadline)
             .transpose()
             .map_err(|e| WorkflowErr::Refused(e.to_string()))?,
@@ -540,7 +539,7 @@ fn window_wait(
     account: Option<&crate::ids::LoginName>,
     windows: &WindowReadings<'_>,
 ) -> Result<Option<String>> {
-    let expr = window.value().map_err(SpecErr::reissue)?;
+    let expr = window.value().map_err(SpecErr::clone)?;
     let verdict =
         crate::harness::when::evaluate(expr, scope, None, Some(provider), account, windows);
     Ok((verdict.truth != Some(true))
@@ -748,7 +747,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             .seq;
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_CONTEXT_GATE");
-        if spec.steps.contains_key(&record.node) {
+        if spec.step(&record.node).is_some() {
             if command_step(state, &paths, &spec, &record)? {
                 continue;
             }
@@ -901,15 +900,15 @@ impl Notice {
         text: std::result::Result<String, String>,
     ) -> Option<Self> {
         let attempt = record.attempt.as_ref()?;
-        let step = spec.steps.get(&attempt.node)?;
-        let Some(Kind::Message(target)) = spec.step_kind(&attempt.node) else {
+        let step = spec.step(&attempt.node)?;
+        let Some(Kind::Message(target)) = step.kind() else {
             return None;
         };
         Some(Self {
             seq: attempt.seq,
             message: attempt.message.clone()?,
             target: target.into(),
-            session: step.session.clone(),
+            session: step.session().cloned(),
             record,
             text,
         })
@@ -919,7 +918,7 @@ impl Notice {
     fn text(
         record: &RunRecord,
         paths: &WorkflowPaths,
-        step: &spec::Step,
+        step: &Node,
         digests: &mut BTreeMap<String, String>,
     ) -> std::result::Result<String, String> {
         let header = format!(
@@ -928,8 +927,8 @@ impl Notice {
             record.node,
             id = record.id,
         );
-        let prompt = agent::compose(record, paths, step, true, digests)
-            .map_err(|error| error.to_string())?;
+        let prompt =
+            agent::compose(record, paths, step, digests).map_err(|error| error.to_string())?;
         Ok(if prompt.is_empty() {
             header
         } else {
@@ -1066,7 +1065,7 @@ fn prepare(
             return Ok(Decision::Stop);
         }
         if attempt.message.is_some()
-            && let Some(step) = spec.steps.get(&t.record.node)
+            && let Some(step) = spec.step(&t.record.node)
         {
             // A lost message host re-sends under the same id, which the queue takes once.
             let mut digests = BTreeMap::new();
@@ -1110,7 +1109,7 @@ fn prepare(
     }
     let mut launch_error = None;
     let mut evict = None;
-    if let (Some(step), Some(node)) = (spec.steps.get(&t.record.node), spec.step(&t.record.node)) {
+    if let Some(step) = spec.step(&t.record.node) {
         if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
@@ -1122,15 +1121,15 @@ fn prepare(
             return Ok(Decision::Again);
         }
         if let Some(Kind::Agent(agent)) = spec.step_kind(&t.record.node) {
-            let admits = spec.workflow.limit.is_some()
-                || step.limit.is_some()
+            let admits = spec.limit().is_some()
+                || step.limit().is_some()
                 || t.record.restart.is_some()
                 || (t.record.task.is_some() && !t.record.manual);
             if admits && let Some((_, _, Err(reason))) = &admission.capacity {
                 launch_error = Some(reason.to_string());
             }
-            let groups = if admits || node.window().is_some() {
-                match host.start_groups(&t.record, agent, step.account.as_ref()) {
+            let groups = if admits || step.window().is_some() {
+                match host.start_groups(&t.record, agent, step.account()) {
                     Ok(groups) => groups,
                     Err(error) => {
                         launch_error = Some(error.to_string());
@@ -1142,19 +1141,20 @@ fn prepare(
             };
             if t.record.restart.is_none()
                 && launch_error.is_none()
-                && let Some(window) = node.window()
+                && let Some(window) = step.window()
                 && let Some(detail) = window_wait_for_groups(&t.record, &groups, window, windows)?
             {
                 t.step_wait("window", Some(detail));
                 persist(&mut t, &guard)?;
                 return Ok(Decision::Stop);
             }
-            if launch_error.is_none() && !step.share.unwrap_or_default() {
+            if launch_error.is_none() && !step.share().unwrap_or_default() {
                 // A step launched into a named worktree occupies that checkout, not the run's.
                 let destination = destination(&t.record, step)?;
                 let occupancy =
                     host.occupancy(&destination, &t.record.project_root, &t.record.break_agents)?;
-                if let Some(wait) = occupancy_wait(&occupancy, step.takeover.unwrap_or_default()) {
+                if let Some(wait) = occupancy_wait(&occupancy, step.takeover().unwrap_or_default())
+                {
                     t.step_wait(wait, None);
                     persist(&mut t, &guard)?;
                     return Ok(Decision::Stop);
@@ -1198,8 +1198,8 @@ fn prepare(
             t.record.node
         )));
     }
-    let step = spec.steps.get(&t.record.node);
-    let step_kind = spec.step_kind(&t.record.node);
+    let step = spec.step(&t.record.node);
+    let step_kind = step.and_then(Node::kind);
     let agent_step = step.filter(|_| matches!(step_kind, Some(Kind::Agent(_))));
     let kind = if agent_step.is_some() {
         AttemptKind::Agent
@@ -1214,8 +1214,7 @@ fn prepare(
     };
     let mut digests = BTreeMap::new();
     let prompt = agent_step.map(|step| {
-        agent::compose(&t.record, paths, step, false, &mut digests)
-            .map_err(|error| error.to_string())
+        agent::compose(&t.record, paths, step, &mut digests).map_err(|error| error.to_string())
     });
     let notice = step
         .filter(|_| matches!(step_kind, Some(Kind::Message(_))))
@@ -1250,7 +1249,7 @@ fn prepare(
     }
     t.record.attempt = Some(LiveAttempt {
         kind,
-        lifecycle: step.map_or(workflow::StepLifecycle::Turn, spec::Step::lifecycle),
+        lifecycle: step.map_or(workflow::StepLifecycle::Turn, Node::lifecycle),
         seq,
         node: t.record.node.clone(),
         visit: step.map(|_| t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket())),
@@ -1321,44 +1320,28 @@ fn prepare(
 
 fn prepare_capacity(
     t: &mut Transition<'_>,
-    step: &super::Step,
+    step: &Node,
     groups: Vec<throttle::StartGroup>,
     admission: &mut Admission,
     guard: &WorkspaceLock,
 ) -> Result<Option<Decision>> {
     let may_wait = t.record.task.is_some() && !t.record.manual && t.record.restart.is_none();
-    let machine_gated = may_wait && step.throttle != Some(crate::config::ThrottleSwitch::Off);
-    let limits =
-        (t.spec.workflow.limit.is_some() || step.limit.is_some() || t.record.restart.is_some())
-            .then(|| throttle::WorkflowStart {
-                workflow: t.record.workflow.clone(),
-                step: t.record.node.clone(),
-                run: t.record.id.clone(),
-                arrival: t
-                    .record
-                    .wait
-                    .as_ref()
-                    .filter(|wait| wait.outcome == "capacity")
-                    .map_or(t.now, |wait| wait.first),
-                workflow_limit: t
-                    .spec
-                    .workflow
-                    .limit
-                    .as_ref()
-                    .map(|limit| throttle::StartLimit {
-                        max_parallel: limit.max_parallel,
-                        stagger: t.spec.stagger().map(Parsed::result),
-                    }),
-                step_limit: step.limit.as_ref().map(|limit| throttle::StartLimit {
-                    max_parallel: limit.max_parallel,
-                    stagger: t
-                        .spec
-                        .step(&t.record.node)
-                        .and_then(|node| node.stagger())
-                        .map(Parsed::result),
-                }),
-                may_wait,
-            });
+    let machine_gated = may_wait && step.throttle() != Some(crate::config::ThrottleSwitch::Off);
+    let limits = (t.spec.limit().is_some() || step.limit().is_some() || t.record.restart.is_some())
+        .then(|| throttle::WorkflowStart {
+            workflow: t.record.workflow.clone(),
+            step: t.record.node.clone(),
+            run: t.record.id.clone(),
+            arrival: t
+                .record
+                .wait
+                .as_ref()
+                .filter(|wait| wait.outcome == "capacity")
+                .map_or(t.now, |wait| wait.first),
+            workflow_limit: t.spec.limit().map(start_limit),
+            step_limit: step.limit().map(start_limit),
+            may_wait,
+        });
     if !may_wait && limits.is_none() {
         admission.capacity = None;
         return Ok(None);
@@ -1429,7 +1412,7 @@ fn prepare_capacity(
             wait.kinds.sort();
             wait.kinds.dedup();
         }
-        wait.gives_up_at = match step.capacity_wait {
+        wait.gives_up_at = match step.capacity_wait() {
             Some(crate::config::CapacityWait::Duration(duration)) => {
                 wait.first.checked_add(duration).ok()
             }
@@ -1477,9 +1460,16 @@ fn occupancy_wait(occupancy: &Occupancy, takeover: bool) -> Option<&'static str>
     }
 }
 
+fn start_limit(limit: &super::definition::Limit) -> throttle::StartLimit {
+    throttle::StartLimit {
+        max_parallel: limit.max_parallel,
+        stagger: limit.stagger.as_ref().map(Parsed::result),
+    }
+}
+
 /// The checkout a step launches into: its named worktree, else the run's scope.
-fn destination(record: &RunRecord, step: &super::Step) -> Result<std::path::PathBuf> {
-    let Some(name) = &step.worktree else {
+fn destination(record: &RunRecord, step: &Node) -> Result<std::path::PathBuf> {
+    let Some(name) = step.worktree() else {
         return Ok(record.scope.path.clone());
     };
     crate::worktree::worktree_path(
@@ -1496,7 +1486,7 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
         .attempt
         .as_ref()
         .expect("context belongs to a recorded attempt");
-    let step = spec.steps.contains_key(&record.node);
+    let step = spec.step(&record.node).is_some();
     let output_path = (attempt.kind == AttemptKind::Judge).then(|| paths.check_output(attempt.seq));
     let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "output_path":output_path, "retry":attempt.retry, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
     if step {
@@ -1683,7 +1673,7 @@ pub fn restart(
         .map_or(&t.record.node, |attempt| &attempt.node)
         .clone();
     if !matches!(spec.step_kind(&step), Some(Kind::Agent(_))) {
-        let kind = if spec.checks.contains_key(&step) {
+        let kind = if spec.check(&step).is_some() {
             "a check"
         } else if matches!(spec.step_kind(&step), Some(Kind::Message(_))) {
             "a message step"
@@ -1835,7 +1825,7 @@ pub fn resume(
                     "@break is reserved; resume at the source or another sealed node".into(),
                 ));
             }
-            if !spec.checks.contains_key(node) && !spec.steps.contains_key(node) {
+            if spec.node(node).is_none() {
                 return Err(WorkflowErr::Refused(format!(
                     "unknown sealed workflow node {node}"
                 )));
@@ -2116,11 +2106,7 @@ fn subscribers(
     let Some(attempt) = record.session_attempt() else {
         return Ok(Vec::new());
     };
-    let (Some(step), Some(node), Some(run)) = (
-        spec.steps.get(&attempt.node),
-        spec.step(&attempt.node),
-        &attempt.run,
-    ) else {
+    let (Some(node), Some(run)) = (spec.step(&attempt.node), &attempt.run) else {
         return Ok(Vec::new());
     };
     if attempt.lifecycle.is_turn()
@@ -2129,15 +2115,11 @@ fn subscribers(
     {
         return Ok(Vec::new());
     }
-    let checkout = destination(record, step)?;
+    let checkout = destination(record, node)?;
     let mut seen = Vec::new();
     let mut forwards = Vec::new();
     for wake in node.wakes() {
-        let subscription = wake
-            .subscription()
-            .value()
-            .map_err(SpecErr::reissue)?
-            .clone();
+        let subscription = wake.subscription().value().map_err(SpecErr::clone)?.clone();
         if seen.contains(&subscription) {
             continue;
         }

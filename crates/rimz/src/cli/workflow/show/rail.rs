@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
 
-use rimz::harness::when::WhenExpr;
-use rimz::harness::workflow::{CaseMark, Hop, reached};
+use rimz::harness::workflow::{CaseMark, Hop, Kind, Target, reached};
 use serde_json::Value;
 
 use super::super::rail::{Rail, Row, horizontal};
@@ -36,7 +35,7 @@ impl View<'_> {
                     .held
                     .as_ref()
                     .is_some_and(|held| held.attempt.node == row.name);
-            let check = self.spec.checks.contains_key(&row.name);
+            let check = self.spec.check(&row.name).is_some();
             row.glyph = if is_current {
                 current
             } else {
@@ -65,8 +64,7 @@ impl View<'_> {
             };
             let visits = self
                 .spec
-                .steps
-                .get(&row.name)
+                .step(&row.name)
                 .and_then(|step| {
                     let bucket = if is_current
                         || self
@@ -171,7 +169,7 @@ impl View<'_> {
     }
 
     fn last(&self, node: &str, hops: &[Hop]) -> Option<String> {
-        if self.spec.steps.contains_key(node)
+        if self.spec.step(node).is_some()
             && let Some(entry) = self.journal.iter().rev().find(|entry| {
                 entry.node == node && matches!(entry.event, JournalEvent::Attempt { .. })
             })
@@ -230,11 +228,12 @@ impl View<'_> {
     }
 
     fn cases(&self, row: &mut Row) -> Result<()> {
-        let check = &self.spec.checks[&row.name];
-        if !matches!(check.kind(), Some(workflow::CheckKind::Condition)) {
+        let Some(node) = self.spec.check(&row.name) else {
             return Ok(());
-        }
-        let cases = check.condition_cases();
+        };
+        let Some(Kind::Condition(cases)) = node.kind() else {
+            return Ok(());
+        };
         let wait = self
             .record
             .wait
@@ -247,8 +246,6 @@ impl View<'_> {
             return Ok(());
         }
         let object = object.unwrap_or(&Value::Null);
-        // The row names a check, so its compiled node exists.
-        let node = self.spec.check(&row.name).expect("check node");
         let marks = workflow::case_marks(node, object, wait)?;
         let reasons = workflow::unread_reasons(object);
         let mut seen = BTreeSet::new();
@@ -264,13 +261,11 @@ impl View<'_> {
             .into();
             case.style = match mark {
                 CaseMark::False => render::palette::faint(),
-                CaseMark::NotReached => match case.target.as_str() {
-                    "@done" | "@failed" => case.style,
-                    _ => render::palette::muted(),
-                },
+                CaseMark::NotReached if case.ends.is_some() => case.style,
+                CaseMark::NotReached => render::palette::muted(),
                 CaseMark::Unread => render::palette::warn(),
-                _ if case.target == "@done" => render::palette::good().bold(),
-                _ if case.target == "@failed" => render::palette::alarm().bold(),
+                _ if case.ends == Some(Target::Done) => render::palette::good().bold(),
+                _ if case.ends == Some(Target::Failed) => render::palette::alarm().bold(),
                 _ => render::palette::cool().bold(),
             };
             let Some(index) = case.number.map(|number| number - 1) else {
@@ -279,7 +274,7 @@ impl View<'_> {
             if mark == CaseMark::NotReached {
                 continue;
             }
-            let expression = WhenExpr::parse(&cases[index].when)?;
+            let expression = cases[index].when().expression().map_err(Clone::clone)?;
             for term in expression.terms() {
                 if mark != CaseMark::Unread || !seen.insert(term.key.clone()) {
                     continue;
@@ -304,7 +299,7 @@ impl View<'_> {
                 case.when = format!(
                     "{expression} holding {} of {}",
                     render::age_short(wait.first, self.now.min(at)),
-                    cases[index].hold.as_deref().unwrap_or_default()
+                    cases[index].hold().map_or("", |hold| hold.text())
                 );
                 if workflow::next_bound(self.spec, self.record, Some(index as u32), self.now)?
                     .is_some_and(|(next, target)| {

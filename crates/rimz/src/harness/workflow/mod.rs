@@ -22,8 +22,7 @@ mod spec;
 mod state;
 mod validate;
 
-pub use definition::{Definition, Target};
-use definition::{Kind, Node};
+pub use definition::{Condition, Definition, Kind, Limit, Node, Target};
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
     DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, launch_groups,
@@ -38,10 +37,7 @@ pub use inspect::{
 pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse;
-pub use spec::{
-    Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, OutcomeCap, Route,
-    ScopeKind, SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, schema,
-};
+pub use spec::{Issue, LaunchOverrides, OutcomeCap, ScopeKind, SpecErr, load, schema};
 pub use validate::{NodeRow, Validation, validate};
 
 pub struct ScopeRoots {

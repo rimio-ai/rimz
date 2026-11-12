@@ -2,6 +2,7 @@
 
 use super::*;
 use rimz::harness::signal::WatchVerdict;
+use rimz::harness::workflow::{Kind, Node};
 use serde::ser::{SerializeMap, Serializer as _};
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
@@ -782,13 +783,16 @@ fn write_evaluation(
     else {
         return Ok(());
     };
-    let check = evidence.spec.checks.get(&entry.node);
-    let mut line = match check.and_then(|check| check.agent.as_deref()) {
+    let judge = match evidence.spec.check(&entry.node).and_then(Node::kind) {
+        Some(Kind::Judge(agent)) => Some(agent),
+        _ => None,
+    };
+    let mut line = match judge {
         Some(agent) => format!("judge {agent}: {outcome}"),
         None => format!("{}: {outcome}", entry.node),
     };
     let reason = object.get("reason").and_then(serde_json::Value::as_str);
-    if let Some(reason) = reason.filter(|_| check.is_some_and(|check| check.agent.is_some())) {
+    if let Some(reason) = reason.filter(|_| judge.is_some()) {
         line.push_str(&format!(" — {}", render::first_line(reason)));
     }
     if let Some(code) = object.get("code").and_then(serde_json::Value::as_i64) {
@@ -803,7 +807,7 @@ fn write_evaluation(
     line.push_str(&format!(" · {}", span(*started_at, *ended_at)));
     writeln!(out, "  {line}")?;
     let Some(log) = object.get("log").and_then(serde_json::Value::as_str) else {
-        if let Some(reason) = reason.filter(|_| check.is_none_or(|check| check.agent.is_none())) {
+        if let Some(reason) = reason.filter(|_| judge.is_none()) {
             write_gutter_prose(out, reason, prose)?;
         }
         return Ok(());

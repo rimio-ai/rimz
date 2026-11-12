@@ -35,6 +35,13 @@ fn a_delay_keeps_the_verdict_without_rechecking_then_closes_once() {
     assert_eq!(evaluations(&state, &record), 1);
     assert!(decisions(&state, &record).is_empty());
     let spec = load(&state.workflow(&record.id).home).unwrap();
+    assert!(crate::harness::workflow::close_after(&spec, &record).is_some());
+    let unparsed: Definition =
+        toml::from_str(&definition().replace("delay='30m'", "delay='later'")).unwrap();
+    assert_eq!(
+        crate::harness::workflow::close_after(&unparsed, &record),
+        None
+    );
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
     assert!(hops(&spec, &journal, record.held.as_ref()).is_empty());
     record.held.as_mut().unwrap().verdict.as_mut().unwrap().at =
@@ -110,15 +117,15 @@ fn an_overlong_delay_warns_and_closes_the_session_at_once() {
     assert_eq!(host.stops.get(), 1);
     let spec = super::super::super::super::spec::load(&state.workflow(&record.id).home).unwrap();
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "checks.pr.on.done.delay"
                 && issue.message.contains("365d maximum")),
         "{:?}",
-        spec.ignored
+        spec.ignored()
     );
-    assert_eq!(spec.checks["pr"].on["done"].target(), "@done");
-    assert!(spec.checks["pr"].on["done"].delay().is_none());
+    assert_eq!(spec.authored().checks["pr"].on["done"].target(), "@done");
+    assert!(spec.authored().checks["pr"].on["done"].delay().is_none());
 }
 
 #[test]

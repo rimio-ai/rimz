@@ -176,7 +176,7 @@ fn visit_bounds_keep_total_first_typed_keys_and_grants() {
         "total":4, "outcomes":[{"key":42,"visits":2},{"key":"42","visits":1}]
     }))
     .unwrap();
-    let step = &spec.steps["build"];
+    let step = &spec.authored().steps["build"];
     assert_eq!(
         step.visit_bounds(Some(&visits), (None, Some(&Key::Integer(42))), 1)
             .collect::<Vec<_>>(),

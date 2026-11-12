@@ -639,6 +639,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "schedule/backlog.rs",
         "schedule/pending.rs",
         "workflow/spec.rs",
+        "workflow/definition.rs",
         "workflow/graph.rs",
         "workflow/inspect.rs",
         "workflow/spec/tolerant.rs",

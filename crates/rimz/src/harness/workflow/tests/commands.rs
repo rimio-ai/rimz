@@ -48,6 +48,22 @@ on={pass='@done',fail='@failed'}
 }
 
 #[test]
+fn a_run_that_does_not_split_ends_invalid_with_the_command_error() {
+    let (_dir, state, record) = super::attempts::setup(
+        "[workflow]\nscope='worktree'\nstart='run'\n[checks.run]\nrun=\"echo 'open\"\non.ok='@done'\n",
+    );
+    advance(&state, &record.id, &FakeHost::new()).unwrap();
+    let journal = records::journal(&state.workflow(&record.id)).unwrap();
+    assert!(
+        journal.iter().any(|row| matches!(&row.event,
+        records::JournalEvent::Evaluation { outcome, object, .. }
+        if outcome == "invalid"
+            && object["reason"] == "invalid run command: use a nonempty, correctly quoted argv")),
+        "{journal:#?}"
+    );
+}
+
+#[test]
 fn command_steps_bypass_every_agent_host_operation_and_prompt() {
     let mut results = Vec::new();
     for runner in ["run", "shell"] {

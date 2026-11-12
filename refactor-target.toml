@@ -2256,11 +2256,11 @@ path = "crates/rimz/src/harness"
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # check_run::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
 # runner::{CheckSignalGuard, TaskFire::record_signal_guard} hold SIGTERM through terminal recording (+2).
-# Workflow Case and WhenExpr::truth share condition specifications and three-valued truth (+2).
+# Workflow Condition and WhenExpr::truth share condition specifications and three-valued truth.
 # condition_stages and unread_reason share admission and prose with the loop CLI (+2).
 # WatchDeadline, run_command and CheckOutcome::{code,interrupted} share hosted shell execution (+4).
 # WhenExpr::forge_branches shares parsed selectors with workflow demand (+1).
-# WorkflowSpec::forge_branches exposes read-only sealed-spec demand to the sidebar (+1).
+# Definition::forge_branches exposes read-only sealed-spec demand to the sidebar.
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
 # resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
 # WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
@@ -2275,7 +2275,7 @@ path = "crates/rimz/src/harness"
 # AgentShellResolution, its path/name views and resolve_agent_shell share room-scoped shells (+3).
 # AgentShellResolution::missing_saved_path explains the per-launch fallback in doctor (+1).
 # AgentShellPersistence carries the birth's shell-lookup save policy (+1).
-# StepKind/kind, ChildError, execute_step and finish_script share command-step policy (+5).
+# ChildError, execute_step and finish_script share command-step policy.
 # WorkflowLaunchRecord, WorkflowLedger, load_workflows, and launched share typed launch memory with loop inspection.
 # LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
 # hibernation_entry shares the open-agent join with the transcript watcher (+1).
@@ -2287,15 +2287,15 @@ path = "crates/rimz/src/harness"
 # LaunchCompactPolicy and its constructor carry effective seat tables to finalization (+2).
 # soft_compact shares its module, request, decision and spawn with CLI/producer callers (+4).
 # soft_compact::compact_agents exposes the paced producer pass to sidebar refresh (+1).
-# WorkflowSpec::target, Step visit bounds, timeout_at, and journal hops share inspection rules (+7).
+# Definition::target, Node visit bounds, timeout_at, and journal hops share inspection rules.
 # hold_until shares the condition hold instant with workflow inspection (+1).
 # next_bound shares first-bound forecasting and engine recheck limits (+1).
 # evaluation_target shares routed-evaluation provenance across inspection views (+1).
-# WorkflowSpec::edges replaces Check::edges as the shared routing table (net 0).
+# Definition::edges is the shared routing table.
 # Workflow fireability/mark, walk, case marks and unread reasons serve CLI inspection (+10).
 # EdgeSource shares typed route provenance with CLI inspection (+1).
-# CheckKind/kind and StepKind/kind share runner selection with definition rails (+4).
-# Check::subscriptions shares derived and explicit wakes with the full node view (+1).
+# Node::kind and Kind share runner selection with definition rails.
+# Node::subscriptions shares derived and explicit wakes with the full node view.
 # throttle::room_held shares the lock-free room ticket read with sidebar and CLI (+1).
 # throttle::DiagnosticHold and diagnostic_holds share fresh read-only doctor findings (+2).
 # stall_nudge, Decision, and decision share opt-in policy with room and host callers (+3).
@@ -2308,8 +2308,8 @@ path = "crates/rimz/src/harness"
 # workflow::parse shares the sealed-spec parser with cached sidebar projection.
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
 # workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
-# workflow::Route and workflow::close_after share delayed routes and their close instant (+2).
-# Step::lifecycle shares the agent definition's until default with CLI readers (+1).
+# workflow::close_after shares a delayed route's close instant.
+# Node::lifecycle shares the agent definition's until default with CLI readers.
 # workflow::load serves sealed-spec readers, which carry no frozen default.
 # workflow::{Stopped, StopKind} carry current non-clean turn evidence across the host seam (+2).
 # budget::project_parks shares the existing park projection with the workflow attempt host (+1).
@@ -2323,7 +2323,7 @@ path = "crates/rimz/src/harness"
 # Verdict::freshen and Verdict.unread share the loop forge-freshness hold with CLI condition displays (+1).
 # headless::judge::Failure::timed_out words a loop judge's spent deadline as the core's own timeout (+1).
 # headless::judge::FailureKind::from_label reads workflow's journaled failure labels back; it had sat in slack that trunk's schedule::resolve_once_at has since taken (+1).
-# Workflow steps carry `share`, `message`, and `undelivered`, with `Step::subscriptions` and `Step::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack (+3).
+# Workflow steps carry `share`, `message`, and `undelivered`, with `Node::subscriptions` and `Node::subscription_labels` and `NodeRow::message`, from the spec to validation, the engine, and CLI views; three of the six sat in slack.
 # run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
 # Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
 # Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
@@ -11673,13 +11673,28 @@ reason = "The workflow CLI and engine share a tolerant spec loader, strict edito
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::WorkflowSpec"
-reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
+key = "harness::workflow::Definition"
+reason = "Load compiles the authored spec once into the typed definition the engine, CLI and sidebar read."
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::Definition"
-reason = "Load compiles the authored spec once into the typed definition the engine, CLI and sidebar read."
+key = "harness::workflow::Node"
+reason = "The engine, definition views and the sidebar read one compiled check or step, its kind, edges and parsed values."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Kind"
+reason = "Definition views present the same runner kind, with its data, that the workflow engine runs."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Limit"
+reason = "Admission, throttle limits and definition views share a limit table with its stagger parsed at load."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Condition"
+reason = "Definition views print a condition's parsed expression, or its authored clauses when it does not parse."
 
 [[verdict]]
 kind = "item"
@@ -11743,36 +11758,6 @@ reason = "Trail and full history share which evaluations actually contributed a 
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::Header"
-reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::HeaderEdges"
-reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::StepEdges"
-reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::Check"
-reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::Route"
-reason = "Check routes accept a target string or a target with an optional held-session close delay."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::Case"
-reason = "Workflow condition cases share ordered predicates and hold durations with their derived schema."
-
-[[verdict]]
-kind = "item"
 key = "harness::when::WhenExpr::truth"
 reason = "Every condition reader, loop and workflow alike, decides on this one three-valued (Kleene) truth."
 
@@ -11783,7 +11768,7 @@ reason = "Loop and workflow demand share the parser's forge selector extraction.
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::WorkflowSpec::forge_branches"
+key = "harness::workflow::Definition::forge_branches"
 reason = "The sidebar reads sealed workflow demand without reaching transition or execution code."
 
 [[verdict]]
@@ -11798,43 +11783,18 @@ reason = "Loop inspection adds a read-time age to shared unread reasons; workflo
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::spec::CheckKind"
-reason = "Workflow validation and execution share one check-kind decision."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::Check::kind"
-reason = "Workflow validation and execution share one check-kind decision."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::spec::StepKind"
-reason = "Workflow validation and execution share one agent/run/shell/message step decision."
-
-[[verdict]]
-kind = "item"
 key = "harness::throttle::Limit"
 reason = "Workflow validation, admission, schema, and CLI share the workflow and step limit table."
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::Step::kind"
-reason = "Workflow validation and execution share one agent/run/shell/message step decision."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::WorkflowSpec::edges"
+key = "harness::workflow::Definition::edges"
 reason = "Routing and inspection share node edges and engine defaults from the graph resolver."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::spec::RESERVED_OUTCOMES"
 reason = "Workflow admission and answer normalization share one reserved-outcome vocabulary."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::Step"
-reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
 
 [[verdict]]
 kind = "item"
@@ -11885,16 +11845,6 @@ reason = "Validation and rail views share reachable node order and the alphabeti
 kind = "item"
 key = "harness::workflow::WalkNode"
 reason = "Rail views share which returning steps hang beneath an earlier sending check."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::CheckKind"
-reason = "Definition views present the same runner kind the workflow engine selects."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::StepKind"
-reason = "Definition views present the same runner kind the workflow engine selects."
 
 [[verdict]]
 kind = "item"

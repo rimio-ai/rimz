@@ -44,7 +44,7 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
         "workflow":"test", "spec_dir":dir.path(),
         "spec_digest":"test", "prompt":"Run request", "project_root":dir.path(),
         "scope":{"kind":"worktree","path":dir.path()},
-        "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":spec.workflow.start,
+        "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":spec.authored().workflow.start,
         "entered_at":jiff::Timestamp::now(), "deadline_fired":false, "next_seq":1, "visits":{}, "visit_grant":0
     })).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();

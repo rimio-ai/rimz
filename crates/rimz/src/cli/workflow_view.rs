@@ -2,7 +2,7 @@
 
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
-use rimz::harness::workflow::Definition;
+use rimz::harness::workflow::{Definition, Target};
 use rimz::store::workflow::{Asking, ParkReason, RunRecord, RunState};
 
 use super::render;
@@ -116,19 +116,18 @@ pub(super) fn wait(
     now: Timestamp,
 ) -> Option<String> {
     let wait = record.wait.as_ref()?;
-    if let Some(check) = spec.and_then(|spec| spec.checks.get(&wait.node))
+    if let Some(check) = spec.and_then(|spec| spec.check(&wait.node))
         && check.is_sleep()
     {
         let when = check
-            .when
-            .as_ref()
-            .and_then(|when| rimz::harness::when::WhenExpr::parse(when).ok())
+            .when()
+            .and_then(|when| when.expression().ok())
             .map_or_else(String::new, |expression| format!(" when {expression}"));
         return Some(format!(
             "sleeping {}/{}{when} → {}",
             render::age_short(record.entered_at, now),
-            check.sleep.as_deref().unwrap_or_default(),
-            check.then.as_deref().unwrap_or_default()
+            check.sleep().unwrap_or_default(),
+            check.then().first().map_or("", Target::as_str)
         ));
     }
     if wait.outcome == "capacity" {
@@ -145,13 +144,13 @@ pub(super) fn wait(
         },
         "hold" => {
             let hold = spec
-                .and_then(|spec| spec.checks.get(&wait.node))
+                .and_then(|spec| spec.check(&wait.node))
                 .and_then(|check| {
                     wait.case.and_then(|index| {
                         check
-                            .condition_cases()
+                            .cases()
                             .get(index as usize)
-                            .and_then(|case| case.hold.clone())
+                            .and_then(|case| Some(case.hold()?.text().to_owned()))
                     })
                 })
                 .unwrap_or_else(|| "?".into());
@@ -191,17 +190,16 @@ pub(super) fn park(
     let park = record.park.as_ref()?;
     let derived = match park.reason {
         ParkReason::Cap => spec
-            .and_then(|spec| spec.steps.get(&record.node))
+            .and_then(|spec| spec.step(&record.node))
             .and_then(|step| step.tripped_visit_bound(record))
             .map(|(_, used, max)| format!("{used} of {max} visits")),
         ParkReason::Timeout => spec
             .and_then(|spec| {
-                spec.checks
-                    .get(&record.node)
-                    .and_then(|check| check.timeout.as_ref())
-                    .or_else(|| spec.steps.get(&record.node)?.timeout.as_ref())
+                spec.check(&record.node)
+                    .and_then(|check| check.timeout())
+                    .or_else(|| spec.step(&record.node)?.timeout())
             })
-            .map(|timeout| format!("waited {timeout}")),
+            .map(|timeout| format!("waited {}", timeout.text())),
         ParkReason::Deadline => record
             .deadline
             .map(|at| format!("passed {}", render::workflow_clock(at, now))),
@@ -241,7 +239,7 @@ pub(super) fn detail(
     if let Some(wait) = wait(record, spec, now) {
         return wait;
     }
-    if let Some(step) = spec.and_then(|spec| spec.steps.get(&record.node)) {
+    if let Some(step) = spec.and_then(|spec| spec.step(&record.node)) {
         return step
             .visit_bounds(
                 record.visits.get(&record.node),

@@ -24,15 +24,15 @@ fn run(
     record: &RunRecord,
     result: &mut Evaluation,
 ) -> Result<(), String> {
-    let check = &spec.checks[&record.node];
+    let check = spec.check(&record.node).expect("a judge runs at its check");
     // Agent checks were validated with a profile and a confined prompt file.
-    let file = check
-        .prompt_file
-        .as_ref()
-        .ok_or("judge needs a prompt-file")?;
+    let file = check.prompt_file().ok_or("judge needs a prompt-file")?;
+    let Some(Kind::Judge(agent)) = check.kind() else {
+        return Err("judge needs an agent".into());
+    };
     let prompt_file = spec::confined_file(&record.spec_dir, file).map_err(|e| e.to_string())?;
     let prompt = std::fs::read_to_string(prompt_file).map_err(|e| e.to_string())?;
-    let digests = BTreeMap::from([(file.clone(), digest(prompt.as_bytes()))]);
+    let digests = BTreeMap::from([(file.to_owned(), digest(prompt.as_bytes()))]);
     let attempt = record.attempt.as_ref().expect("prepared judge attempt");
     let output_path = paths.check_output(attempt.seq);
     let prompt = format!(
@@ -52,7 +52,7 @@ fn run(
     let runtime = crate::disk::paths::RuntimePaths::for_state(state).map_err(|e| e.to_string())?;
     let profile = HeadlessProfile::resolve(
         &config,
-        check.agent.as_deref().ok_or("judge needs an agent")?,
+        agent,
         &record.project_root,
         state,
         &runtime,
@@ -142,7 +142,7 @@ fn run(
     }
     let failure = match attempt.answer {
         Ok(object) => {
-            record_decline(spec, record, check, kind, &object, result.cost_usd);
+            record_decline(spec, record, agent, kind, &object, result.cost_usd);
             result.object = Ok(object);
             return Ok(());
         }
@@ -228,16 +228,12 @@ pub(in super::super) fn budget_refusal(
 fn record_decline(
     spec: &Definition,
     record: &RunRecord,
-    check: &spec::Check,
+    profile: &str,
     kind: crate::ids::AgentKind,
     object: &serde_json::Value,
     cost_usd: Option<f64>,
 ) {
-    let (Some(task), Some(outcome), Some(profile)) = (
-        record.task.as_ref(),
-        object["outcome"].as_str(),
-        check.agent.as_ref(),
-    ) else {
+    let (Some(task), Some(outcome)) = (record.task.as_ref(), object["outcome"].as_str()) else {
         return;
     };
     if !declines(spec, &record.node, outcome) {
@@ -248,7 +244,7 @@ fn record_decline(
         assist: crate::harness::assist_log::Assist::JudgeDecline {
             task: task.clone(),
             checkout: record.scope.path.clone(),
-            profile: profile.clone(),
+            profile: profile.into(),
             kind,
             reason: object["reason"].as_str().unwrap_or_default().to_owned(),
             cost_usd,

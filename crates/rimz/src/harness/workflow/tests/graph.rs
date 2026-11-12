@@ -63,7 +63,7 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
             assert_eq!(spec.target("work", "asked"), None);
             if target == "@break" {
                 assert_eq!(
-                    spec.steps["@break"].lifecycle(),
+                    spec.authored().steps["@break"].lifecycle(),
                     crate::store::workflow::StepLifecycle::Stay
                 );
                 assert_eq!(
@@ -111,12 +111,12 @@ fn sleep_on_invalid_is_live_but_other_routes_still_warn() {
     );
     assert!(
         !spec
-            .ignored
+            .ignored()
             .iter()
             .any(|issue| issue.path == "checks.nap.on.invalid")
     );
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "checks.nap.on.timeout")
     );
@@ -603,4 +603,18 @@ fn validation_rows_follow_the_walk_then_alphabetical_unreachable_nodes() {
             .collect::<Vec<_>>(),
         ["z", "work", "a"]
     );
+}
+
+#[test]
+fn a_step_sharing_a_check_name_routes_failed_by_its_own_table() {
+    let seal = |step: &str| -> Definition {
+        toml::from_str(&format!(
+            "[workflow]\nscope='worktree'\nstart='work'\n[checks.work]\nrun='true'\n\
+             on.failed='@done'\non.then='@failed'\n[steps.work]\nshell='false'\ntimeout='1h'\n\
+             then='@failed'\n{step}"
+        ))
+        .unwrap()
+    };
+    assert!(!seal("").routes_on_failed("work", "died"));
+    assert!(seal("on.failed='@failed'\n").routes_on_failed("work", "died"));
 }

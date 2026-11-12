@@ -52,8 +52,13 @@ pub(in crate::harness) fn resolved_edges(spec: &Definition, node: &str) -> Optio
     spec.resolved_edges(node).map(<[Edge]>::to_vec)
 }
 
+/// The authored tables a compiled graph came from, for tests that read what the compiler wrote.
+pub(in crate::harness) fn authored(spec: &Definition) -> &spec::WorkflowSpec {
+    spec.authored()
+}
+
 /// The prompt each of `step`'s subscriptions hands the step.
-pub(in crate::harness) fn subscription_prompts(step: &Step) -> Vec<Option<&str>> {
+pub(in crate::harness) fn subscription_prompts(step: &spec::Step) -> Vec<Option<&str>> {
     step.subscribe
         .iter()
         .flatten()
@@ -522,11 +527,11 @@ fn then_lists_validate_every_entry_and_direct_link() {
         );
         if let Ok(spec) = load(&dir) {
             assert!(
-                spec.ignored
+                spec.ignored()
                     .iter()
                     .all(|issue| issue.path != "steps.build.then"),
                 "{:?}",
-                spec.ignored
+                spec.ignored()
             );
         }
     }
@@ -542,23 +547,32 @@ fn delays_between_listed_checks_are_ignored_but_closing_delays_remain() {
         + "[checks.review]\nrun='true'\non.ok={to='@done',delay='30m'}\n";
     fs::write(dir.join("workflow.toml"), &text).unwrap();
     let spec = load(&dir).unwrap();
-    assert!(spec.checks["pick"].on["done"].delay().is_none());
-    assert_eq!(spec.checks["review"].on["ok"].delay(), Some("30m"));
+    assert!(spec.authored().checks["pick"].on["done"].delay().is_none());
+    assert_eq!(
+        spec.authored().checks["review"].on["ok"].delay(),
+        Some("30m")
+    );
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "checks.pick.on.done.delay"
                 && issue.message.contains("closes the held session")),
         "{:?}",
-        spec.ignored
+        spec.ignored()
     );
     let land = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen=['ruled','ruled-read']\n[checks.ruled]\nrun='true'\non={read='ruled-read',settled={to='@done',delay='30m'}}\n[checks.ruled-read]\nrun='true'\non.settled={to='@done',delay='30m'}\n";
     fs::write(dir.join("workflow.toml"), land).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     let spec = load(&dir).unwrap();
-    assert_eq!(spec.checks["ruled"].on["settled"].delay(), Some("30m"));
-    assert_eq!(spec.checks["ruled-read"].on["settled"].delay(), Some("30m"));
+    assert_eq!(
+        spec.authored().checks["ruled"].on["settled"].delay(),
+        Some("30m")
+    );
+    assert_eq!(
+        spec.authored().checks["ruled-read"].on["settled"].delay(),
+        Some("30m")
+    );
 }
 
 #[test]
@@ -694,7 +708,7 @@ fn validation_carries_workflow_summary() {
         "workflow summaries must load: {report:?}"
     );
     assert_eq!(
-        load(&dir).unwrap().workflow.summary.as_deref(),
+        load(&dir).unwrap().authored().workflow.summary.as_deref(),
         Some(summary)
     );
 }

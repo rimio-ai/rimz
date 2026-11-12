@@ -49,6 +49,9 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
         crate::harness::workflow::hold_until(&spec, &record, 2, now).unwrap(),
         None,
     );
+    let mut spec = spec;
+    spec.edit(|spec| spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("soon".into()));
+    assert!(crate::harness::workflow::hold_until(&spec, &record, 0, now).is_err());
 }
 
 #[test]

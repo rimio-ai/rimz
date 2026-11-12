@@ -9,7 +9,7 @@ fn report(text: &str) -> (Vec<(String, String)>, Vec<String>) {
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     let ignored = load(&dir)
         .map(|spec| {
-            spec.ignored
+            spec.ignored()
                 .iter()
                 .map(|issue| issue.path.clone())
                 .collect()

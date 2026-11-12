@@ -45,12 +45,6 @@ pub struct WorkflowSpec {
     pub steps: BTreeMap<String, Step>,
 }
 
-impl WorkflowSpec {
-    pub(super) fn is_break(&self, node: &str) -> bool {
-        node == "@break"
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct Header {
@@ -651,7 +645,7 @@ impl Step {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum SpecErr {
     #[error(
         "{path}: {target} is not a route target; route to a node, @done, or @failed, \
@@ -664,7 +658,7 @@ pub enum SpecErr {
     Io {
         path: PathBuf,
         #[source]
-        source: std::io::Error,
+        source: std::sync::Arc<std::io::Error>,
     },
     #[error("{path}: {}", if .source.span().is_some() {
         .source.to_string()
@@ -696,7 +690,10 @@ pub enum SpecErr {
 
 pub fn load(dir: &Path) -> Result<Definition, SpecErr> {
     let path = crate::disk::paths::workflow_spec_file(dir);
-    let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io { path, source })?;
+    let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io {
+        path,
+        source: source.into(),
+    })?;
     parse(&text)
 }
 
@@ -839,12 +836,13 @@ pub(super) fn confined_file(dir: &Path, path: &str) -> Result<PathBuf, SpecErr> 
         });
     }
     let file = dir.join(path);
-    let file = file
-        .canonicalize()
-        .map_err(|source| SpecErr::Io { path: file, source })?;
+    let file = file.canonicalize().map_err(|source| SpecErr::Io {
+        path: file,
+        source: source.into(),
+    })?;
     let root = dir.canonicalize().map_err(|source| SpecErr::Io {
         path: dir.into(),
-        source,
+        source: source.into(),
     })?;
     if !file.starts_with(root) || !file.is_file() {
         return Err(SpecErr::Path {
@@ -902,35 +900,4 @@ pub(super) fn parse_window(raw: &str) -> Result<crate::harness::when::WhenExpr, 
         return Err(SpecErr::WindowKeys);
     }
     Ok(expr)
-}
-
-impl SpecErr {
-    /// The same failure again, for a parse a definition holds and each of its readers reports.
-    pub(super) fn reissue(&self) -> Self {
-        match self {
-            Self::ReservedTarget { path, target } => Self::ReservedTarget {
-                path: path.clone(),
-                target: target.clone(),
-            },
-            Self::ReservedNode { path } => Self::ReservedNode { path: path.clone() },
-            Self::Io { path, source } => Self::Io {
-                path: path.clone(),
-                source: std::io::Error::new(source.kind(), source.to_string()),
-            },
-            Self::Toml { path, source } => Self::Toml {
-                path: path.clone(),
-                source: source.clone(),
-            },
-            Self::Path { path, reason } => Self::Path {
-                path: path.clone(),
-                reason,
-            },
-            Self::Command => Self::Command,
-            Self::Window(error) => Self::Window(error.clone()),
-            Self::WindowKeys => Self::WindowKeys,
-            Self::Signal(error) => Self::Signal(error.clone()),
-            Self::LifecycleWake => Self::LifecycleWake,
-            Self::SelfSignal => Self::SelfSignal,
-        }
-    }
 }
