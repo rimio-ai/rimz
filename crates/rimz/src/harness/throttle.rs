@@ -336,7 +336,7 @@ impl Run {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::harness) struct StartGroup {
+pub struct StartGroup {
     pub(in crate::harness) kind: AgentKind,
     pub(in crate::harness) account: Option<LoginName>,
     pub(in crate::harness) agents: usize,

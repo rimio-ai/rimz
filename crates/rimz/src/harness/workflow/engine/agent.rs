@@ -549,21 +549,7 @@ pub(super) fn finish(
             seq: attempt.seq,
             role: WorkflowAttemptRole::Step,
         };
-        if let Some(orphan) = crate::harness::run::list(state)
-            .map_err(|error| WorkflowErr::Refused(error.to_string()))?
-            .into_iter()
-            .find(|run| run.workflow.as_ref() == Some(&identity))
-        {
-            run = Some(workflow::AttemptRun {
-                run_id: orphan.run_id,
-                handle: orphan
-                    .agent_name
-                    .map(|name| format!("@{name}"))
-                    .ok_or_else(|| {
-                        WorkflowErr::Refused("workflow attempt run has no handle".into())
-                    })?,
-            });
-        }
+        run = host.orphan(state, &identity)?;
     }
     let (children, cost) = match &run {
         Some(run) => (

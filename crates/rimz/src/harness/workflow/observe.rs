@@ -2,21 +2,25 @@
 //!
 //! The attempt host reads the facts (the leader's supervised run record, a room snapshot, an
 //! agent's open ask, a provider window's reset) and these rules project them: the ask that
-//! blocks the attempt, the provider, budget, or turn stop that holds it, and its cohort.
+//! blocks the attempt, the provider, budget, or turn stop that holds it, and its cohort. `orphan`
+//! finds the unpublished supervised run a dead launcher left, the run its stop then reaches.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use jiff::Timestamp;
 
-use super::{Observation, Observed, StopKind, Stopped, leader_turn};
+use super::{Observation, Observed, StopKind, Stopped, WorkflowErr, leader_turn};
 use crate::Store;
-use crate::agents::{AgentState, AskDelivery, AskKind, OpenAskDetail, TurnErrorClass};
+use crate::agents::{
+    AgentState, AskDelivery, AskKind, OpenAskDetail, TurnErrorClass, WorkflowAttemptRef,
+};
+use crate::disk::paths::StatePaths;
 use crate::ids::EventId;
 use crate::store::StoreErr;
 use crate::store::run::{RunRecord, StoppedTurnDisposition};
 use crate::store::snapshot::SidebarSnapshot;
-use crate::store::workflow::{Asked, Asking, ChildRef, Children, Limited, TeamRef};
+use crate::store::workflow::{Asked, Asking, AttemptRun, ChildRef, Children, Limited, TeamRef};
 
 /// Project the attempt led by `run` over `snapshot`, the room as the host read it with budget
 /// parks projected; review suppression and turn errors read `snapshot.now`.
@@ -134,6 +138,28 @@ pub fn leader<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<&'a 
     run.agent_id
         .as_ref()
         .and_then(|id| crate::address::launch_row(snapshot.agents.iter(), &run.kind, id))
+}
+
+/// The supervised run a launch opened for `attempt` without publishing it on the record, the
+/// run a stop then reaches, handled as `@` and its agent name.
+pub fn orphan(
+    state: &StatePaths,
+    attempt: &WorkflowAttemptRef,
+) -> Result<Option<AttemptRun>, WorkflowErr> {
+    let Some(orphan) = crate::harness::run::list(state)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?
+        .into_iter()
+        .find(|run| run.workflow.as_ref() == Some(attempt))
+    else {
+        return Ok(None);
+    };
+    let name = orphan
+        .agent_name
+        .ok_or_else(|| WorkflowErr::Refused("workflow attempt run has no handle".into()))?;
+    Ok(Some(AttemptRun {
+        run_id: orphan.run_id,
+        handle: format!("@{name}"),
+    }))
 }
 
 /// The agents a stop or detach acts on, with the children the attempt reports.

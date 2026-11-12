@@ -505,7 +505,11 @@ fn wake_workflows(project_root: &Path, signal: &Signal) {
     let launch = || -> Result<(), Box<dyn std::error::Error>> {
         let paths = StatePaths::for_project_root(project_root)?;
         let heard = if signal.source == SignalSource::Lifecycle {
-            crate::harness::workflow::hears_lifecycle(&paths, signal)?
+            crate::harness::workflow::hears_lifecycle(&paths, signal, &|run| {
+                crate::harness::run::load(&paths, &run.run_id)
+                    .ok()
+                    .and_then(|run| run.agent_id)
+            })?
         } else {
             crate::store::workflow::list(&paths)?
                 .iter()

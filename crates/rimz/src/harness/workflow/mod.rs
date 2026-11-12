@@ -23,8 +23,8 @@ mod validate;
 
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
-    DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, restart, resume,
-    wake, wake_run,
+    DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, launch_groups,
+    restart, resume, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
@@ -32,7 +32,7 @@ pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
     repeats_evaluation, routing_hop, timeout_at,
 };
-pub use observe::{Cohort, detach_cohort, leader, observe, stop_cohort, without_excluded};
+pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, OutcomeCap, Route,
@@ -122,6 +122,22 @@ pub trait AttemptHost {
     fn retire(&self, message: &crate::ids::MessageId) -> Result<(), WorkflowErr>;
     fn stop(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
     fn detach(&self, run: &AttemptRun) -> Result<Children, WorkflowErr>;
+    /// The supervised run a launch opened for `attempt` without publishing it on the record,
+    /// as [`orphan`] finds it under `state`.
+    fn orphan(
+        &self,
+        state: &crate::disk::paths::StatePaths,
+        attempt: &WorkflowAttemptRef,
+    ) -> Result<Option<AttemptRun>, WorkflowErr>;
+    /// The session the leader's supervised run recorded, once it bound one.
+    fn leader_session(&self, run: &AttemptRun) -> Option<crate::ids::AgentSessionId>;
+    /// The start groups launching `agent` admits, as [`launch_groups`] resolves them.
+    fn start_groups(
+        &self,
+        record: &crate::store::workflow::RunRecord,
+        agent: &str,
+        account: Option<&crate::ids::LoginName>,
+    ) -> Result<Vec<crate::harness::throttle::StartGroup>, WorkflowErr>;
 }
 
 pub struct Pushed {
