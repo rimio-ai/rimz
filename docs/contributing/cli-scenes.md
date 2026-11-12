@@ -29,9 +29,9 @@ A verb that changes something prints the target it acted on, by address, and the
 
 Progress for a long wait goes to stderr in both human and `--json` modes, so stdout stays the result.
 
-## A bare word never silently launches
+## A bare word launches only a launch spec
 
-A scene's positional launch (`rimz agents <SPEC>`, `rimz teams <TEAM>`) is a shortcut for `launch`, and a word that could mean something else refuses with exit 2 and both readings. A word naming a live agent points at `show` and at the explicit launch. An unresolved agents-scene word refuses with exit 2 and nearby verbs or launch names, or the compact launch catalog when none is close (`crates/rimz/src/cli/agents_cmd/mod.rs::run`). A team-scene word that is neither a command nor a configured team suggests nearby verbs or teams, otherwise lists both sets (`crates/rimz/src/cli/teams/mod.rs::guard_launch`). Explicit `launch` excludes verbs from suggestions, keeps exit 1 for an unknown target, and is the escape that sends any prompt literally.
+A scene's positional launch (`rimz agents <SPEC>`, `rimz teams <TEAM>`) is a shortcut for `launch`, and a word that could mean something else refuses with exit 2 and both readings. A word that resolves to a launch spec launches, whoever is live: `@word` is the only way to name an agent that exists, and an `@word` or `#scope` in the spec slot refuses with exit 2 and the command for that reading. An unresolved agents-scene word refuses with exit 2 and nearby verbs or launch names, or the compact launch catalog when none is close (`crates/rimz/src/cli/agents_cmd/mod.rs::run`). A team-scene word that is neither a command nor a configured team suggests nearby verbs or teams, otherwise lists both sets (`crates/rimz/src/cli/teams/mod.rs::guard_launch`). Explicit `launch` excludes verbs from suggestions, keeps exit 1 for an unknown target, and is the escape that sends any prompt literally.
 
 ## One vocabulary
 

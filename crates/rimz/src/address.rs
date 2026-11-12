@@ -1399,34 +1399,6 @@ pub(crate) fn recipient_channel(
         .or_else(|| scope_channel.map(ToOwned::to_owned))
 }
 
-/// The agents among `agents` that a bare launch word also names, from where
-/// `rimz agents show <word>` would look: the caller's current lane, or the
-/// whole room outside every lane. They match by role, explicit name, or pet
-/// name, each of which identifies one agent. A kind and a profile are launch
-/// recipes that any number of live agents share, so neither matches here and a
-/// launch by kind or profile stays unambiguous; a session-id prefix never
-/// matches either.
-pub fn launch_word_matches<'a>(
-    word: &str,
-    agents: &[&'a AgentState],
-    current_channel: &AddressContext,
-) -> Vec<&'a AgentState> {
-    let selector = AgentSelector::NameOrSession(word.to_owned());
-    let tiers = [
-        SelectorTier::Role,
-        SelectorTier::ExplicitName,
-        SelectorTier::Name,
-    ];
-    channel_candidates(agents, current_channel.channel.as_deref())
-        .into_iter()
-        .filter(|agent| {
-            tiers
-                .into_iter()
-                .any(|tier| tier_matches(tier, &selector, *agent))
-        })
-        .collect()
-}
-
 /// The canonical rendered address of an agent — the inverse of `parse_target`.
 ///
 /// Returns the shortest mention that names exactly this agent among `peers`:
