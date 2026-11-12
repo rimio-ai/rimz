@@ -2346,7 +2346,8 @@ path = "crates/rimz/src/harness"
 # run::release_rung gives back a stop rung the helper's interrupt could not deliver (+1).
 # harness::notes and its NotesErr, AddRequest, Added, ListFilter, Note, Listing, add and list own the home-wide note store behind `rimz notes` (+9).
 # throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
-surface-budget = 1174
+# deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
+surface-budget = 1175
 
 [[verdict]]
 kind = "item"
@@ -3163,6 +3164,7 @@ upward-dependencies = [
     "harness::ancestry",
     "harness::assist_log",
     "harness::auto_continue",
+    "harness::deadline",
     "harness::hibernate",
     "harness::run",
     "harness::schedule::pending",

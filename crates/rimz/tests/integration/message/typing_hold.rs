@@ -11,21 +11,27 @@ struct Fixture {
 
 impl Fixture {
     fn new(running: bool) -> Self {
+        Self::for_kind("claude", running)
+    }
+
+    fn for_kind(kind: &str, running: bool) -> Self {
         let env = Env::new();
         env.record(&env.project_root);
-        env.install_agent_hooks("claude");
+        env.install_agent_hooks(kind);
         let bin = env.project_root.join("bin");
         crate::common::write_path_shim(
             &bin,
             "tmux",
-            r#"if [ "$1" = -S ]; then shift 3; fi
+            &format!(
+                r#"if [ "$1" = -S ]; then shift 3; fi
 printf '%s\n' "$*" >> "$RIMZ_TEST_TYPING_TRACE"
 case "$1" in
   -V) printf 'tmux 3.8\n' ;;
   list-clients) cat "$RIMZ_TEST_TYPING_CLIENTS" ;;
-  list-panes) printf '%s,@1,%%3,claude\n' "$RIMZ_TEST_TYPING_SESSION" ;;
+  list-panes) printf '%s,@1,%%3,{kind}\n' "$RIMZ_TEST_TYPING_SESSION" ;;
   load-buffer) dd of=/dev/null status=none ;;
-esac"#,
+esac"#
+            ),
         );
         let clients = env.project_root.join("clients.txt");
         std::fs::write(&clients, "").unwrap();
@@ -49,14 +55,14 @@ esac"#,
             let mut event = EventEnvelope::agent_lifecycle(
                 env.workspace_id.clone(),
                 "rimz-test",
-                "claude",
+                kind,
                 "typing-test",
                 &observation,
             );
             event.timestamp = anchor;
             env.store().append_event(&event).unwrap();
         }
-        let mut pane = agent_pane(&env, "claude");
+        let mut pane = agent_pane(&env, kind);
         pane.pane_id = pane_id;
         pane.session_name = env.resolve_workspace(&env.project_root).session_name;
         let panes = env.write_pane_fixture(std::slice::from_ref(&pane));
@@ -1349,4 +1355,122 @@ fn terminal_record_failures_send_without_falling_back_to_the_client_clock() {
             ("lock", MessageStatus::Sent, 2),
         ]
     );
+}
+
+/// Runs the hidden timeout helper on `kind`'s overdue subagent run while the
+/// child's pane is being typed in, and returns the run and the stop the typing
+/// hold queued: claude replays it as an interrupt, kimi as a steer.
+fn held_deadline_stop(kind: &str) -> (Fixture, rimz::store::run::RunRecord, MessageRecord) {
+    let fixture = Fixture::for_kind(kind, true);
+    fixture.short_hold();
+    let env = &fixture.env;
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked(kind),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.status = rimz::store::run::RunStatus::Running;
+    run.subagent = true;
+    run.agent_id = Some(AgentSessionId::from("typing-session"));
+    run.timeout = Some(Duration::from_secs(1800));
+    run.deadline_at = Some(jiff::Timestamp::now() - Duration::from_secs(11));
+    run.grace = Some(Duration::from_secs(180));
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let request = rimz::harness::run_timeout::RunTimeoutRequest {
+        workspace_id: env.workspace_id.clone(),
+        run_id: run.run_id.clone(),
+        interrupted_at: None,
+    };
+    run_success(
+        fixture
+            .command()
+            .args(rimz::child_process::agent_helper_argv(
+                "run-timeout",
+                &request,
+            )),
+        "deadline stop helper",
+    );
+    let loaded = rimz::harness::run::load(env.store().paths(), &run.run_id).unwrap();
+    assert_eq!(loaded.deadline_notice_at, run.deadline_at, "{kind}");
+    let stop = fixture.record();
+    assert!(stop.text.starts_with("Time is up."), "{stop:?}");
+    assert_eq!(stop.status, MessageStatus::Queued, "{kind}");
+    let replay = if kind == "claude" {
+        "interrupt"
+    } else {
+        "steer"
+    };
+    let value = serde_json::to_value(&stop).unwrap();
+    assert_eq!(value["typing_hold"]["replay"], replay, "{kind}");
+    assert_eq!(fixture.writes(), 0, "{kind}");
+    (fixture, run, stop)
+}
+
+fn sweep_withdraws_the_stop(fixture: &Fixture, stop: &MessageRecord, reason: &str) {
+    fixture.expire(stop);
+    run_success(fixture.command().args(["message", "sweep"]), "replay sweep");
+    assert_eq!(fixture.writes(), 0, "{reason}");
+    let history = fixture.env.store().list_message_history().unwrap();
+    let row = history
+        .iter()
+        .find(|row| row.message_id == stop.message_id)
+        .expect("the stop is withdrawn");
+    assert_eq!(row.status, MessageStatus::Canceled);
+    assert_eq!(row.attempts, 0);
+    let events = fixture.env.read_events();
+    assert!(
+        events.iter().any(|event| event.method == "message.canceled"
+            && event.params_value()["message_id"] == stop.message_id.as_str()
+            && event.params_value()["reason"] == reason),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_held_deadline_stop_is_withdrawn_once_its_run_ends() {
+    for kind in ["claude", "kimi"] {
+        let (fixture, run, stop) = held_deadline_stop(kind);
+        rimz::harness::run::cancel(fixture.env.store().paths(), &run.run_id).unwrap();
+        sweep_withdraws_the_stop(&fixture, &stop, "child run canceled before delivery");
+    }
+}
+
+#[test]
+fn a_held_deadline_stop_is_withdrawn_once_its_run_reopens() {
+    for kind in ["claude", "kimi"] {
+        let (fixture, run, stop) = held_deadline_stop(kind);
+        let paths = fixture.env.store().paths().clone();
+        rimz::harness::run::cancel(&paths, &run.run_id).unwrap();
+        let observation = AgentLifecycleObservation::new(
+            Some("typing-session".into()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        rimz::harness::run::record_lifecycle(&paths, &run.run_id, kind, &observation, None, || {
+            None
+        })
+        .unwrap();
+        let reopened = rimz::harness::run::load(&paths, &run.run_id).unwrap();
+        assert_eq!(reopened.status, rimz::store::run::RunStatus::Running);
+        assert_eq!(reopened.deadline_notice_at, None, "{kind}");
+        sweep_withdraws_the_stop(&fixture, &stop, "deadline stop superseded before delivery");
+    }
+}
+
+#[test]
+fn a_held_deadline_stop_replays_once_while_its_run_holds_the_stop() {
+    for kind in ["claude", "kimi"] {
+        let (fixture, run, stop) = held_deadline_stop(kind);
+        assert_eq!(stop.about_run.as_ref(), Some(&run.run_id), "{kind}");
+        fixture.expire(&stop);
+        run_success(fixture.command().args(["message", "sweep"]), "replay sweep");
+        let sent = message_by_id(&fixture.env, &stop.message_id);
+        assert_eq!(sent.status, MessageStatus::Sent, "{kind}");
+        let pastes = trace_lines(&fixture.trace)
+            .iter()
+            .filter(|line| line.starts_with("load-buffer "))
+            .count();
+        assert_eq!(pastes, 1, "{kind}");
+    }
 }

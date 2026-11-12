@@ -153,6 +153,7 @@ struct MessageDraft {
     not_before: Option<Timestamp>,
     after: Vec<AfterCondition>,
     when: Vec<WhenCondition>,
+    about_run: Option<crate::ids::RunId>,
 }
 
 enum Recipient<'a> {
@@ -231,7 +232,8 @@ impl MessageDraft {
         .with_auto_compact(self.auto_compact)
         .with_not_before(self.not_before)
         .with_after(self.after.clone())
-        .with_when(self.when.clone());
+        .with_when(self.when.clone())
+        .with_about_run(self.about_run.clone());
         match recipient.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),
             None => record,

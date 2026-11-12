@@ -650,6 +650,7 @@ fn draft(not_before: Option<Timestamp>) -> MessageDraft {
         not_before,
         after: Vec::new(),
         when: Vec::new(),
+        about_run: None,
     }
 }
 
