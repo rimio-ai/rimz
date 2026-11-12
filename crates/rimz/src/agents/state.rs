@@ -382,7 +382,8 @@ impl PendingWaitTrigger {
         }
     }
 
-    /// A full command, kept separate from the headline.
+    /// The command on one line, an absolute program path cut to its basename
+    /// and every other token kept, separate from the headline.
     pub(crate) fn detail(&self) -> Option<String> {
         match self {
             Self::Command { command } | Self::Check { command } => {
@@ -1356,7 +1357,8 @@ pub struct AgentState {
     pub prompt_wake_only: bool,
     /// Launch-seeded card label (`rimz agents --description`), carried forward.
     /// Ranks below the agent's own session naming and above the prompt on the
-    /// card's description line; replaced once the agent emits its own.
+    /// card's description line: the agent's own naming outranks it without
+    /// erasing it, and an explicit description observation replaces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Agent-reported transcript path for this session, carried forward from
@@ -1391,8 +1393,10 @@ pub struct AgentState {
     /// Rich session-scoped enrichment from a high-frequency out-of-band source
     /// (Claude's statusline). Folded in at snapshot time by
     /// `SidebarSnapshot::with_agent_context`, never reduced from the event log.
-    /// Same enrich-only discipline as `context_pct`: display, never routing, except the
-    /// recorded request [`Self::last_request_at`] prefers for the cache clock.
+    /// Same enrich-only discipline as `context_pct`, though not display-only: its
+    /// waiting, settle and error readings feed `effective_status` and
+    /// `is_awaiting_input`, and its recorded request is the one
+    /// [`Self::last_request_at`] prefers for the cache clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
     /// Enrich-only sign-in classification from live context or the accounts cache.
@@ -2054,7 +2058,8 @@ impl AgentState {
 
     /// The agent this one reports to when its supervised run settles: the
     /// parent of a launched child, or the launcher of a top-level peer.
-    /// Only the fleet report reads it; lifecycle code uses the parent link.
+    /// Settle reports, the fleet, park notices, restarts, transcript hooks,
+    /// pending-work detection and launches all read it.
     pub fn launcher(&self) -> Option<(&AgentKind, &AgentSessionId)> {
         if self.is_launched_child() {
             return self
@@ -2843,11 +2848,13 @@ impl AgentState {
             })
     }
 
-    /// The real context-window fill (0..=100): the live token composition over
+    /// The real context-window fill: the live token composition over
     /// the model's window. Prefers the precise used/window fraction, then the
     /// folded statusline's `used_percentage`, then a post-compaction estimate
     /// or the carried `context_pct`, so a session with no rich context still
-    /// reads its last gauge. `None` when no source has reported a fill.
+    /// reads its last gauge. Only the used/window fraction is clamped to
+    /// `0..=100`; a fallback passes through as its source reported it. `None`
+    /// when no source has reported a fill.
     pub fn context_fill_pct(&self) -> Option<f64> {
         match (self.context_used_tokens(), self.resolved_context_window()) {
             (Some(used), Some(window)) if window > 0 => {
@@ -2889,8 +2896,9 @@ pub(crate) fn question_sentence(text: &str) -> &str {
 }
 
 /// [`single_line_description`] cut to at most `max_chars` characters without
-/// a trailing space, reading `value` only as far as the cut: a row's
-/// label costs the same for a kilobyte prompt as for a short one.
+/// a trailing space. The scan stops at the first visible character past the
+/// cut, so a kilobyte prompt costs its label plus any whitespace and control
+/// run before that character, not its whole length.
 fn single_line_prefix(value: &str, max_chars: usize) -> Option<String> {
     let mut out = String::new();
     let mut chars = 0;
