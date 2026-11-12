@@ -252,9 +252,6 @@ fn detect_resting_turn_outcome(
 ) -> Option<RestingTurnOutcome> {
     for line in tail.lines().rev() {
         let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
         // A truncated leading line from the tail seek fails to parse; skip it.
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;

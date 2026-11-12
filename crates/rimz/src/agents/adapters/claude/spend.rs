@@ -325,7 +325,7 @@ fn is_semver_prefix(value: &str) -> bool {
 pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
     const USAGE_MARKER: &[u8] = br#""usage":{"#;
 
-    if line.is_empty() || !bytes_contains(line, USAGE_MARKER) {
+    if !bytes_contains(line, USAGE_MARKER) {
         return None;
     }
     serde_json::from_slice(line).ok()
@@ -454,9 +454,8 @@ pub(super) fn parse_claude_spend_with_retention(
             if input.is_sidechain == Some(true) {
                 continue;
             }
-            if let Some(ms) = input.timestamp.as_deref().and_then(iso_to_unix_ms) {
-                state.latest_user_ms = Some(state.latest_user_ms.map_or(ms, |prior| prior.max(ms)));
-            }
+            let at = input.timestamp.as_deref().and_then(iso_to_unix_ms);
+            state.latest_user_ms = state.latest_user_ms.max(at);
             continue;
         }
         let Some(entry) = priced_entry(line) else {
