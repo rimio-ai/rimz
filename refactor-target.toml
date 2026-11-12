@@ -2375,7 +2375,8 @@ path = "crates/rimz/src/harness"
 # throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
 # deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
 # schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_ticket and of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it (+28).
-surface-budget = 1203
+# WhenExpr::closed_pr_term names the closed pull request that raises the loop verdict's pr_closed cause (+1).
+surface-budget = 1204
 
 [[verdict]]
 kind = "item"
@@ -5793,7 +5794,8 @@ allowed-dependencies = [
 ]
 # `WhenTerm::truth` gives the CLI's leaf rows the term's three-valued truth (+1).
 # WhenExpr::blocking_term and CiSource::term_pr_number name a waiting loop task's blocking term and its pull request for the loop verdict (+2).
-surface-budget = 51
+# WhenExpr::closed_pr_term names a merge-required pull request term that reads closed for the loop verdict (+1).
+surface-budget = 52
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

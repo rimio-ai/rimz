@@ -1568,3 +1568,40 @@ fn team_stage_branch_values_take_the_stage_name_check() {
         .to_string();
     assert!(error.contains("did you mean Review?"), "{error}");
 }
+
+#[test]
+fn closed_pr_term_needs_a_merge_the_rest_cannot_replace() {
+    let pick = |expr: &str, readings: &[(&str, Option<&str>)]| {
+        let expr = WhenExpr::parse(&[expr.to_owned()]).unwrap();
+        let readings = readings
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.map(ToOwned::to_owned)))
+            .collect::<Vec<_>>();
+        expr.closed_pr_term(&readings).map(|term| term.key.clone())
+    };
+    let closed = [("pr[x]", Some("closed")), ("pr[y]", Some("open"))];
+    for (expr, readings, expected) in [
+        ("pr[x]=merged", &closed[..1], Some("pr[x]")),
+        ("pr[y]=open && pr[x]=merged", &closed[..], Some("pr[x]")),
+        ("pr[y]=merged && pr[x]=merged", &closed[..], Some("pr[x]")),
+        ("pr[x]=merged || pr[y]=merged", &closed[..], None),
+        ("!(pr[x]=merged) && pr[y]=open", &closed[..], None),
+        (
+            "!(pr[y]=open || !(pr[x]=merged))",
+            &closed[..],
+            Some("pr[x]"),
+        ),
+        ("pr[x]=merged,closed", &closed[..1], None),
+        ("pr[x]=open", &closed[..1], None),
+        (
+            "pr.queue[x]=queued",
+            &[("pr.queue[x]", Some("closed"))][..],
+            None,
+        ),
+        ("pr[x]=merged", &[("pr[x]", Some("open"))][..], None),
+        ("pr[x]=merged", &[("pr[x]", None)][..], None),
+        ("pr=merged", &[("pr", Some("closed"))][..], Some("pr")),
+    ] {
+        assert_eq!(pick(expr, readings).as_deref(), expected, "{expr}");
+    }
+}

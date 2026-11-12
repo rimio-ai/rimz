@@ -23,7 +23,8 @@ use super::catalog::{LoadedTask, TaskCatalog};
 use super::launch_ledger::{self, WorkflowLaunchRecord};
 use super::run_log::{LoopRunStats, RunPolarity};
 use super::{
-    ParsedTrigger, TaskActionKind, TaskKind, TaskTiming, Trigger, fire, run_lock, signal, strikes,
+    ParsedTrigger, TaskActionKind, TaskKind, TaskTiming, TaskTimingState, Trigger, fire, run_lock,
+    signal, strikes,
 };
 
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub enum Attention {
     CheckoutGone,
     Strikes,
     Failing,
+    PrClosed,
     Held,
     Blocked,
     Invalid,
@@ -84,6 +86,8 @@ pub struct TaskFacts<'a> {
     pub timing: Option<&'a TaskTiming>,
     /// The stored checkout (`dir`), when the row names one.
     pub checkout: Option<&'a Path>,
+    /// The task has fired, by [`fired`]: a gone checkout then means it is finished.
+    pub fired: bool,
     pub running: bool,
     /// Switched off, for any reason.
     pub disabled: bool,
@@ -96,8 +100,9 @@ pub struct TaskFacts<'a> {
     pub you: bool,
 }
 
-/// The cause that needs you and its reason, by priority: a hold that needs a fix, a gone
-/// checkout, a blocked project, an invalid row, strikes, failing, a lost watcher.
+/// The cause that needs you and its reason, by priority: a hold that needs a fix, an
+/// unfired task's gone checkout, a blocked project, an invalid row, strikes, failing, a
+/// waiting one-off's pull request closed without merging, a lost watcher.
 pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> {
     if let Some(hold) = facts
         .holds
@@ -109,7 +114,8 @@ pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> 
     }
     let row = facts.task.as_ref()?;
     let task = row.task;
-    if let Some(dir) = row.checkout
+    if !row.fired
+        && let Some(dir) = row.checkout
         && !dir.is_dir()
     {
         return Some((
@@ -147,6 +153,9 @@ pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> 
             .unwrap_or_default();
         return Some((Attention::Failing, format!("✗ failing{strikes}{exit}")));
     }
+    if let Some(key) = closed_pr(row) {
+        return Some((Attention::PrClosed, format!("{key} closed without merging")));
+    }
     if super::watch_lost(task.entry(), row.watcher_alive, now) {
         let wake = task
             .entry()
@@ -162,6 +171,26 @@ pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> 
         return Some((Attention::Lost, format!("watcher gone{wake}")));
     }
     None
+}
+
+/// The key of the closed pull request an unfired one-off waits on, when the condition
+/// cannot hold without that pull request merging.
+fn closed_pr(row: &TaskFacts<'_>) -> Option<String> {
+    if row.fired || row.task.kind() == TaskKind::Routine {
+        return None;
+    }
+    let timing = row.timing?;
+    let Ok(ParsedTrigger {
+        trigger: Trigger::Condition { expr, .. },
+        ..
+    }) = timing.parsed()
+    else {
+        return None;
+    };
+    let TaskTimingState::Waiting { readings, .. } = timing.state() else {
+        return None;
+    };
+    expr.closed_pr_term(&readings).map(|term| term.key.clone())
 }
 
 /// Whether a parked run takes the row over: parked replaces only a lost watcher.
@@ -458,6 +487,7 @@ pub fn read_room(
                     task,
                     timing: Some(&timing),
                     checkout: entry.dir.as_ref().map(|_| run_dir.as_path()),
+                    fired,
                     running: running.contains(name.as_str()),
                     disabled: matches!(timing.arm_state(), ArmState::Disabled(_)),
                     last_failed: acting.is_some_and(|acting| acting.polarity != RunPolarity::Good),

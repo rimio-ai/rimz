@@ -823,6 +823,28 @@ impl WhenExpr {
         self.0.blocking_term(&verdict.readings, true)
     }
 
+    /// The first `pr[...]=merged` term outside any negation whose pull request reads
+    /// `closed`, when the expression stays false with every other term met.
+    pub fn closed_pr_term(&self, readings: &[(String, Option<String>)]) -> Option<&WhenTerm> {
+        let reading = |key: &str| {
+            readings
+                .iter()
+                .find(|(read, _)| read == key)
+                .and_then(|(_, value)| value.as_deref())
+        };
+        self.leaves()
+            .filter(|(term, negated)| {
+                !negated
+                    && matches!(ForgeKey::parse(&term.key), Some(ForgeKey::Pr(_)))
+                    && term.op == Op::In
+                    && term.values.iter().any(|value| value == "merged")
+                    && reading(&term.key) == Some("closed")
+                    && !term.matches("closed")
+            })
+            .map(|(term, _)| term)
+            .find(|closed| !self.0.holds_with_others_met(&closed.key, false))
+    }
+
     /// The leaf that keeps the expression from true: its comparison against the reading, or
     /// the key named unread.
     pub(crate) fn blocking_evidence(&self, verdict: &Verdict) -> String {
@@ -979,6 +1001,23 @@ impl Node {
                 } else {
                     right.blocking_term(readings, expected)
                 }
+            }
+        }
+    }
+
+    /// Truth with every term on `closed` reading `closed` and every other term met.
+    fn holds_with_others_met(&self, closed: &str, negated: bool) -> bool {
+        match self {
+            Self::Term(term) if term.key == closed => term.matches("closed"),
+            Self::Term(_) => !negated,
+            Self::Not(node) => !node.holds_with_others_met(closed, !negated),
+            Self::And(left, right) => {
+                left.holds_with_others_met(closed, negated)
+                    && right.holds_with_others_met(closed, negated)
+            }
+            Self::Or(left, right) => {
+                left.holds_with_others_met(closed, negated)
+                    || right.holds_with_others_met(closed, negated)
             }
         }
     }

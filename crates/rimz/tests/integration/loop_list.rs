@@ -2582,3 +2582,133 @@ fn open_room_lists_clocks_without_reading_the_timer() {
     assert_eq!(tasks["once"]["state"], "live", "{json}");
     assert_eq!(reads, 0);
 }
+
+/// D9's two rules, read by `loop list` and by the library reader on the same room: a
+/// booking waiting on a closed pull request needs you, and a fired booking whose checkout
+/// is gone is done.
+#[cfg(target_os = "linux")]
+#[test]
+fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let state = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "list-d9",
+    );
+    let booking = |when: &str, dir: Option<PathBuf>| TaskEntry {
+        root: env.project_root.clone(),
+        agent: Some("claude".into()),
+        prompt: Some("start the next stage".into()),
+        stay: true,
+        once: Some(true),
+        when: Some(vec![when.into()]),
+        dir,
+        ..TaskEntry::default()
+    };
+    let fired_checkout = env.home_root.join("fired-checkout");
+    let tasks = BTreeMap::from([
+        ("closed-x".to_owned(), booking("pr[x]=merged", None)),
+        (
+            "either-xy".to_owned(),
+            booking("pr[x]=merged || pr[y]=merged", None),
+        ),
+        (
+            "fired-gone".to_owned(),
+            booking("pr[y]=merged", Some(fired_checkout.clone())),
+        ),
+        (
+            "unfired-gone".to_owned(),
+            booking("pr[y]=merged", Some(env.home_root.join("never-made"))),
+        ),
+    ]);
+    let records = state.root.join("records");
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::write(
+        records.join("loop-instances.json"),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        records.join("loop-workflow-launches.json"),
+        serde_json::to_vec(&json!({"version": 2, "tasks": {"fired-gone": {
+            fired_checkout.to_str().unwrap(): {"at": Timestamp::now(), "scope": "worktree"},
+        }}}))
+        .unwrap(),
+    )
+    .unwrap();
+    let stamps = runtime.lane_path("loop-fire.json");
+    std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
+    std::fs::write(
+        &stamps,
+        serde_json::to_vec(
+            &tasks
+                .keys()
+                .map(|name| (name.clone(), Timestamp::UNIX_EPOCH))
+                .collect::<BTreeMap<_, _>>(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let pr = |state: &str| json!({"pr": {"state": state, "number": 1640}});
+    std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+    std::fs::write(
+        runtime.lane_path("pr-state.json"),
+        serde_json::to_vec(&json!({
+            "branch_ci": {},
+            "path_repos": {env.project_root.to_str().unwrap(): "repo"},
+            "repos": {"repo": {"ok": true, "refreshed_at_ms": 1_000}},
+            "branches": {"repo": {"x": pr("closed"), "y": pr("open")}},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (_, listed) = json_tasks(&loop_ok(&env, &["loop", "list", "--json"]));
+    let text = loop_ok(&env, &["loop", "list"]);
+
+    let expected = [
+        ("closed-x", Some("pr_closed"), "needs_you"),
+        ("either-xy", None, "waiting"),
+        ("fired-gone", None, "done"),
+        ("unfired-gone", Some("checkout_gone"), "needs_you"),
+    ];
+    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let mut reads = rimz::harness::schedule::attention::read_room(
+        &env.project_root,
+        &state,
+        &runtime,
+        rimz::harness::schedule::attention::ReadContext {
+            open: true,
+            stats: &BTreeMap::new(),
+            now: &now,
+        },
+    );
+    for (name, attention, section) in expected {
+        let row = &listed[name];
+        assert_eq!(
+            (row["attention"].as_str(), row["section"].as_str()),
+            (attention, Some(section)),
+            "{name}: {row}"
+        );
+        let read = reads.remove(name).expect("the reader finds the task");
+        assert_eq!(
+            read.attention
+                .map(|(cause, _)| serde_json::to_value(cause).unwrap()),
+            attention.map(|cause| json!(cause)),
+            "{name}: the reader and the list agree"
+        );
+        assert_eq!(read.fired, name == "fired-gone", "{name}");
+    }
+    assert!(
+        text.contains("pr[x] closed without merging")
+            && text.contains("checkout never-made is gone")
+            && text.contains("→ rimz loop remove closed-x")
+            && text.contains("→ rimz loop remove unfired-gone"),
+        "{text}"
+    );
+    assert!(!text.contains("fired-checkout is gone"), "{text}");
+}

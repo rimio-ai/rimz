@@ -496,6 +496,7 @@ macro_rules! reason_test {
     };
 }
 reason_test!(checkout_gone_reason, CheckoutGone);
+reason_test!(pr_closed_reason, PrClosed);
 reason_test!(strikes_reason, Strikes);
 reason_test!(blocked_reason, Blocked);
 reason_test!(invalid_reason, Invalid);
@@ -702,4 +703,21 @@ fn narrow_frames_wrap_then_clip_without_exceeding_bounds() {
     }
     let output = frame(&room, 32, 24, true);
     assert!(output.contains('…'), "{output}");
+}
+
+#[test]
+fn a_closed_pull_request_counts_as_needing_you() {
+    let output = frame(
+        &room(vec![attention_row("closed", Attention::PrClosed)]),
+        100,
+        24,
+        true,
+    );
+    assert!(
+        output
+            .lines()
+            .next()
+            .is_some_and(|line| line == "loop · ✗ 1 needs you"),
+        "{output}"
+    );
 }
