@@ -59,7 +59,8 @@ fn ci_commits_only_reads_an_open_pr_with_a_known_head() {
                     None,
                     &no_windows()
                 )
-                .ok,
+                .truth
+                    == Some(true),
                 "loop readings stay unchanged: {state}, {scope}"
             );
         }
@@ -192,18 +193,20 @@ fn unread_forge_reasons_follow_probe_status_before_empty_rows() {
     );
     for key in ["pr[main]", "pr.queue[main]", "ci[main]"] {
         assert_eq!(
-            source.unread_reason(key, scope),
+            source.probe_unread_reason(key, scope),
             Some(UnreadReason::NoPr {
                 branch: Some("main".into())
             })
         );
     }
     assert_eq!(
-        source.unread_reason("pr", scope),
+        source.probe_unread_reason("pr", scope),
         Some(UnreadReason::NoPr { branch: None })
     );
+    // A successful probe that found nothing is the reading `none`, so nothing is unread.
+    assert_eq!(source.unread_reason("pr", scope), None);
     assert_eq!(
-        source.unread_reason("ci", scope),
+        source.probe_unread_reason("ci", scope),
         Some(UnreadReason::NoCi { branch: None })
     );
     source.0.states.insert(
@@ -219,11 +222,11 @@ fn unread_forge_reasons_follow_probe_status_before_empty_rows() {
         .unwrap()
         .pr = source.0.states.get("/checkout").cloned();
     assert_eq!(
-        source.unread_reason("ci", scope),
+        source.probe_unread_reason("ci", scope),
         Some(UnreadReason::NoCi { branch: None })
     );
     assert_eq!(
-        source.unread_reason("ci[main]", scope),
+        source.probe_unread_reason("ci[main]", scope),
         Some(UnreadReason::NoCi {
             branch: Some("main".into())
         })
@@ -287,24 +290,20 @@ fn no_windows() -> WindowReadings<'static> {
 }
 
 #[test]
-fn unknown_membership_and_strict_inequality() {
+fn unread_terms_are_unknown_under_negation_and_inequality() {
     let scope = tempfile::tempdir().unwrap();
-    for (input, missing, known) in [
-        ("ci=unknown", true, false),
-        ("ci!=failed", false, true),
-        ("!ci=failed", true, true),
-        ("ci!=unknown", false, true),
-        ("ci=passed,unknown", true, true),
-        ("team.stage!=Done", false, false),
-        ("team.stage=unknown", true, false),
+    for (input, unread, read) in [
+        ("ci!=failed", None, Some(true)),
+        ("!ci=failed", None, Some(true)),
+        ("ci=passed,pending", None, Some(true)),
+        ("team.stage!=Done", None, Some(false)),
+        ("!team.stage=Done", None, Some(false)),
     ] {
         let stages = BTreeSet::from(["Done".to_owned()]);
-        let parsed = WhenExpr::parse_with_stages(&[input.to_owned()], Some(&stages));
-        assert!(parsed.is_ok(), "membership must parse: {input}: {parsed:?}");
-        let expr = parsed.unwrap();
+        let expr = WhenExpr::parse_with_stages(&[input.to_owned()], Some(&stages)).unwrap();
         assert_eq!(
-            evaluate(&expr, scope.path(), None, None, None, &no_windows()).ok,
-            missing,
+            evaluate(&expr, scope.path(), None, None, None, &no_windows()).truth,
+            unread,
             "{input}"
         );
         std::fs::create_dir_all(scope.path().join(".rimz/team")).unwrap();
@@ -326,11 +325,49 @@ fn unknown_membership_and_strict_inequality() {
                 None,
                 &no_windows()
             )
-            .ok,
-            known,
+            .truth,
+            read,
             "{input}"
         );
         std::fs::remove_file(scope.path().join(".rimz/team/blackboard.md")).unwrap();
+    }
+}
+
+#[test]
+fn unknown_is_not_a_value_any_term_can_match() {
+    let stages = BTreeSet::from(["Done".to_owned()]);
+    for input in [
+        "ci=unknown",
+        "ci!=unknown",
+        "pr=open,unknown",
+        "pr.queue[b]=unknown",
+        "pr.mergeable=unknown",
+        "pr.review!=unknown",
+        "team.stage=unknown",
+        "team.stage[b]=Done,unknown",
+    ] {
+        for stages in [None, Some(&stages)] {
+            let error = WhenExpr::parse_with_stages(&[input.to_owned()], stages)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.ends_with(
+                    "unknown is not a value: a term over an unread key is unknown by itself; \
+                     match a value the key reads"
+                ),
+                "{input}: {error}"
+            );
+        }
+    }
+    for key in ["ci", "pr", "pr.queue", "pr.mergeable", "pr.review"] {
+        let error = WhenExpr::parse(&[format!("{key}=invalid")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !error.contains("unknown,") && !error.ends_with("unknown"),
+            "{error}"
+        );
+        assert!(error.contains(", none"), "{error}");
     }
 }
 
@@ -343,8 +380,8 @@ fn inequality_display_and_evidence() {
     assert_eq!(WhenExpr::parse(&[expr.to_string()]).unwrap(), expr);
     let expr = WhenExpr::parse(&["ci!=failed".to_owned()]).unwrap();
     let term = expr.terms().next().unwrap();
-    assert_eq!(term.comparison_evidence(Some("failed")), "ci=failed=failed");
-    assert_eq!(term.comparison_evidence(None), "ci=unknown!=failed");
+    assert_eq!(term.comparison_evidence("failed"), "ci=failed=failed");
+    assert_eq!(term.comparison_evidence("passed"), "ci=passed!=failed");
 }
 
 #[test]
@@ -362,7 +399,7 @@ fn pr_reads_link_state_and_requires_a_scoped_link() {
             ..PrStateCache::default()
         });
         let verdict = evaluate(&expr, scope, Some(&cache), None, None, &no_windows());
-        assert!(verdict.ok);
+        assert_eq!(verdict.truth, Some(true));
         assert_eq!(verdict.readings["pr"].as_deref(), Some(state));
         for source in [None, Some(&cache)] {
             let verdict = evaluate(
@@ -373,7 +410,7 @@ fn pr_reads_link_state_and_requires_a_scoped_link() {
                 None,
                 &no_windows(),
             );
-            assert!(!verdict.ok);
+            assert_eq!(verdict.truth, None);
             assert_eq!(verdict.readings["pr"], None);
         }
     }
@@ -490,12 +527,12 @@ fn pr_review_keeps_never_fetched_distinct_from_none() {
                         .map(|expr| {
                             let verdict =
                                 evaluate(&expr, scope, Some(&source), None, None, &no_windows());
-                            (verdict.readings[key].clone(), verdict.ok)
+                            (verdict.readings[key].clone(), verdict.truth)
                         })
                         .map_err(|error| error.to_string()),
                 );
                 let reading = review.filter(|_| state == "open");
-                expected.push(Ok((reading.map(str::to_owned), reading.is_some())));
+                expected.push(Ok((reading.map(str::to_owned), reading.map(|_| true))));
                 source.0.states.clear();
             }
         }
@@ -516,11 +553,11 @@ fn pr_review_keeps_never_fetched_distinct_from_none() {
             expr.as_ref()
                 .map(|expr| {
                     let verdict = evaluate(expr, scope, source, None, None, &no_windows());
-                    (verdict.readings["pr.review"].clone(), verdict.ok)
+                    (verdict.readings["pr.review"].clone(), verdict.truth)
                 })
                 .map_err(|error| error.to_string()),
         );
-        expected.push(Ok((None, false)));
+        expected.push(Ok((None, None)));
     }
     assert_eq!(readings, expected);
 }
@@ -528,10 +565,10 @@ fn pr_review_keeps_never_fetched_distinct_from_none() {
 #[test]
 fn pr_fact_value_refusals_list_the_readings() {
     let cases = [
-        ("pr.mergeable", "mergeable, conflicting, unknown"),
+        ("pr.mergeable", "mergeable, conflicting, none"),
         (
             "pr.review",
-            "draft, changes_requested, required, approved, none, unknown",
+            "draft, changes_requested, required, approved, none",
         ),
     ];
     let errors = cases.map(|(key, _)| {
@@ -608,11 +645,14 @@ fn pr_queue_reads_the_open_link_fact_and_leaves_pr_open() {
         });
         let expr = WhenExpr::parse(&[format!("pr={pr} && pr.queue={queue}")]).unwrap();
         let verdict = evaluate(&expr, scope, Some(&source), None, None, &no_windows());
-        assert!(verdict.ok, "{:?}", verdict.readings);
+        assert_eq!(verdict.truth, Some(true), "{:?}", verdict.readings);
         assert_eq!(verdict.readings["pr.queue"].as_deref(), Some(queue));
         for (scope, source) in [(scope, None), (Path::new("/missing"), Some(&source))] {
             let verdict = evaluate(&expr, scope, source, None, None, &no_windows());
-            assert_eq!((verdict.ok, &verdict.readings["pr.queue"]), (false, &None));
+            assert_eq!(
+                (verdict.truth, &verdict.readings["pr.queue"]),
+                (None, &None)
+            );
         }
     }
     let armed = CiSource(
@@ -625,7 +665,10 @@ fn pr_queue_reads_the_open_link_fact_and_leaves_pr_open() {
         .unwrap(),
     );
     let expr = WhenExpr::parse(&["pr.queue[topic]=armed".to_owned()]).unwrap();
-    assert!(evaluate(&expr, scope, Some(&armed), None, None, &no_windows()).ok);
+    assert_eq!(
+        evaluate(&expr, scope, Some(&armed), None, None, &no_windows()).truth,
+        Some(true)
+    );
     let reads_forge = |when: &str| WhenExpr::parse(&[when.to_owned()]).unwrap().reads_forge();
     assert!(reads_forge("pr.queue=queued,dequeued") && reads_forge("ci=passed || team.stage=Done"));
     assert!(!reads_forge("team.stage=Done && window.5h.left>=40"));
@@ -705,10 +748,13 @@ fn ci_link_fallback_mapping_and_run_dir_key() {
                 None,
                 &no_windows(),
             );
-            assert!(verdict.ok, "{state:?} {ci:?}");
+            assert_eq!(verdict.truth, Some(true), "{state:?} {ci:?}");
             assert_eq!(verdict.readings["ci"].as_deref(), Some(expected));
-            assert!(!evaluate(&expr, root.path(), Some(&cache), None, None, &no_windows()).ok);
-            assert!(!evaluate(&expr, &entry.run_dir(), None, None, None, &no_windows()).ok);
+            let run_dir = entry.run_dir();
+            for (scope, cache) in [(root.path(), Some(&cache)), (run_dir.as_path(), None)] {
+                let verdict = evaluate(&expr, scope, cache, None, None, &no_windows());
+                assert_eq!(verdict.truth, None, "{state:?} {ci:?}");
+            }
         }
     }
     let expr = WhenExpr::parse(&["ci=passed".to_owned()]).unwrap();
@@ -727,17 +773,13 @@ fn ci_link_fallback_mapping_and_run_dir_key() {
 }
 
 #[test]
-fn readings_and_boolean_truth_include_unknown_negation() {
+fn readings_and_kleene_truth_keep_unread_negation_unknown() {
     let scope = tempfile::tempdir().unwrap();
-    for (input, expected) in [
-        ("ci=failed", false),
-        ("!ci=failed", true),
-        ("team.stage=Done", false),
-    ] {
+    for input in ["ci=failed", "!ci=failed", "team.stage=Done"] {
         let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
         assert_eq!(
-            evaluate(&expr, scope.path(), None, None, None, &no_windows()).ok,
-            expected,
+            evaluate(&expr, scope.path(), None, None, None, &no_windows()).truth,
+            None,
             "{input}"
         );
     }
@@ -764,8 +806,8 @@ fn readings_and_boolean_truth_include_unknown_negation() {
     ] {
         let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
         assert_eq!(
-            evaluate(&expr, scope.path(), Some(&cache), None, None, &no_windows()).ok,
-            expected,
+            evaluate(&expr, scope.path(), Some(&cache), None, None, &no_windows()).truth,
+            Some(expected),
             "{input}"
         );
     }
@@ -803,8 +845,8 @@ fn grammar_and_canonical_display() {
         ),
         (vec![" window.5h.left >= 40 "], "window.5h.left>=40"),
         (
-            vec!["team.stage[feat/x] = Done,unknown"],
-            "team.stage[feat/x]=Done,unknown",
+            vec!["team.stage[feat/x] = Done,Review"],
+            "team.stage[feat/x]=Done,Review",
         ),
         (
             vec!["window.7d.left<10 || !window.5h.left>90"],
@@ -948,16 +990,21 @@ fn window_terms_read_percent_left_at_the_boundaries() {
     };
     let check = |input: &str, provider: Option<&AgentKind>| read(input, provider, None);
     for (input, expected) in [
-        ("window.5h.left>=40", true),
-        ("window.5h.left>40", false),
-        ("window.5h.left<=40", true),
-        ("window.5h.left<40", false),
-        ("window.5h.left>=41", false),
-        ("window.7d.left>=0", false),
-        ("!window.7d.left>=0", true),
-        ("window.7d.left<=100 || window.5h.left>39", true),
+        ("window.5h.left>=40", Some(true)),
+        ("window.5h.left>40", Some(false)),
+        ("window.5h.left<=40", Some(true)),
+        ("window.5h.left<40", Some(false)),
+        ("window.5h.left>=41", Some(false)),
+        ("window.7d.left>=0", None),
+        ("!window.7d.left>=0", None),
+        ("window.7d.left<=100 || window.5h.left>39", Some(true)),
+        ("window.7d.left<=100 && window.5h.left>40", Some(false)),
     ] {
-        assert_eq!(check(input, Some(&claude)).ok, expected, "claude {input}");
+        assert_eq!(
+            check(input, Some(&claude)).truth,
+            expected,
+            "claude {input}"
+        );
     }
     let verdict = check("window.5h.left>=40 && window.7d.left<10", Some(&claude));
     assert_eq!(
@@ -968,9 +1015,16 @@ fn window_terms_read_percent_left_at_the_boundaries() {
         ])
     );
     let verdict = check("window.5h.left>=100 && window.7d.left>=100", Some(&codex));
-    assert!(verdict.ok, "a lifted window and a rolled window are full");
-    assert!(!check("window.5h.left>=0", None).ok);
-    assert!(!check("window.5h.left>=0", Some(&AgentKind::new_unchecked("pi"))).ok);
+    assert_eq!(
+        verdict.truth,
+        Some(true),
+        "a lifted window and a rolled window are full"
+    );
+    assert_eq!(check("window.5h.left>=0", None).truth, None);
+    assert_eq!(
+        check("window.5h.left>=0", Some(&AgentKind::new_unchecked("pi"))).truth,
+        None
+    );
     // A row's account reads its own stored window, never the room's.
     for (pin, left) in [
         (Some("default"), Some("40")),
@@ -1022,7 +1076,7 @@ fn branch_selectors_read_only_the_scopes_repository() {
     assert_eq!(expr.to_string(), input);
     assert_eq!(WhenExpr::parse(&[expr.to_string()]).unwrap(), expr);
     assert!(expr.reads_forge());
-    assert!(
+    assert_eq!(
         evaluate(
             &expr,
             Path::new("/scope"),
@@ -1031,7 +1085,8 @@ fn branch_selectors_read_only_the_scopes_repository() {
             None,
             &no_windows()
         )
-        .ok
+        .truth,
+        Some(true)
     );
     for scope in ["/unclassified", "/unsupported"] {
         let verdict = evaluate(
@@ -1044,23 +1099,23 @@ fn branch_selectors_read_only_the_scopes_repository() {
         );
         assert!(verdict.readings.values().all(Option::is_none), "{scope}");
     }
+    // No probe has succeeded for the repository, so an absent branch is unread, not `none`.
     let expr = WhenExpr::parse(&[
-        "pr[absent]=unknown && ci[absent]=unknown && pr.queue[absent]=unknown".to_owned(),
+        "!pr[absent]=open || ci[absent]=none || pr.queue[absent]=none".to_owned(),
     ])
     .unwrap();
-    assert!(
-        evaluate(
-            &expr,
-            Path::new("/scope"),
-            Some(&source),
-            None,
-            None,
-            &no_windows()
-        )
-        .ok
+    let verdict = evaluate(
+        &expr,
+        Path::new("/scope"),
+        Some(&source),
+        None,
+        None,
+        &no_windows(),
     );
+    assert_eq!(verdict.truth, None);
+    assert!(verdict.readings.values().all(Option::is_none));
     let expr =
-        WhenExpr::parse(&["pr[feat/a]=merged && pr[b]=open && pr[feat/a]!=unknown".to_owned()])
+        WhenExpr::parse(&["pr[feat/a]=merged && pr[b]=open && pr[feat/a]!=closed".to_owned()])
             .unwrap();
     let verdict = evaluate(
         &expr,
@@ -1070,7 +1125,7 @@ fn branch_selectors_read_only_the_scopes_repository() {
         None,
         &no_windows(),
     );
-    assert!(verdict.ok);
+    assert_eq!(verdict.truth, Some(true));
     assert_eq!(verdict.readings.len(), 2);
     assert_eq!(
         expr.readings(&verdict).collect::<Vec<_>>(),
@@ -1117,7 +1172,7 @@ fn refusals_suggest_nearby_keys_values_and_stages() {
         ("pr.que[b]=queued", Some("pr.queue")),
         ("ci=pased", Some("passed")),
         ("ci[b]=pased", Some("passed")),
-        ("ci=unknwon", Some("unknown")),
+        ("ci=noen", Some("none")),
         ("team.stage=Reveiw", Some("Review")),
         ("unrecognizable=passed", None),
         ("ci=unrecognizable", None),
@@ -1191,7 +1246,7 @@ fn loop_freshness_holds_forge_keys_probed_before_the_fire_stamp_or_without_a_sou
         let label = format!("{fired_at:?}, {reason:?}");
         match reason {
             Some(reason) => {
-                assert!(!verdict.ok, "{label}");
+                assert_eq!(verdict.truth, None, "{label}");
                 assert_eq!(
                     verdict.unread,
                     BTreeMap::from([("ci".into(), reason.into()), ("pr".into(), reason.into())]),
@@ -1201,7 +1256,7 @@ fn loop_freshness_holds_forge_keys_probed_before_the_fire_stamp_or_without_a_sou
                 assert_eq!(verdict.readings["pr"], None, "{label}");
             }
             None => {
-                assert!(verdict.ok, "{label}");
+                assert_eq!(verdict.truth, Some(true), "{label}");
                 assert!(verdict.unread.is_empty(), "{label}");
                 assert_eq!(verdict.readings["ci"].as_deref(), Some("passed"), "{label}");
             }
@@ -1215,6 +1270,158 @@ fn loop_freshness_holds_forge_keys_probed_before_the_fire_stamp_or_without_a_sou
             .freshen(&stage, scope, None, Some(fired), None, true),
         verdict
     );
+}
+
+#[test]
+fn forge_keys_read_none_only_when_a_successful_probe_found_nothing() {
+    use serde_json::json;
+
+    let scope = Path::new("/checkout");
+    let probed = |ok: bool, link: serde_json::Value| {
+        CiSource(
+            serde_json::from_value(json!({
+                "branch_ci": {}, "path_repos": {"/checkout": "repo"},
+                "repos": {"repo": {"ok": ok, "refreshed_at_ms": 10_000}},
+                "states": if link.is_null() { json!({}) } else { json!({"/checkout": link}) },
+                "branches": {"repo": {"topic": {}}},
+            }))
+            .unwrap(),
+        )
+    };
+    let unsupported = CiSource(
+        serde_json::from_value(json!({
+            "branch_ci": {}, "path_repos": {"/checkout": UNSUPPORTED_REPO_KEY},
+        }))
+        .unwrap(),
+    );
+    let open = json!({"state": "open", "open": {"head": "a"}});
+    for (label, source, key, reason, reading) in [
+        (
+            "no PR",
+            probed(true, json!(null)),
+            "pr",
+            UnreadReason::NoPr { branch: None },
+            Some("none"),
+        ),
+        (
+            "no PR on a branch",
+            probed(true, json!(null)),
+            "pr.queue[topic]",
+            UnreadReason::NoPr {
+                branch: Some("topic".into()),
+            },
+            Some("none"),
+        ),
+        (
+            "a branch the probe has no row for",
+            probed(true, json!(null)),
+            "pr[other]",
+            UnreadReason::NotChecked,
+            None,
+        ),
+        (
+            "CI on a branch the probe has no row for",
+            probed(true, json!(null)),
+            "ci[other]",
+            UnreadReason::NotChecked,
+            None,
+        ),
+        (
+            "no CI",
+            probed(true, json!(null)),
+            "ci",
+            UnreadReason::NoCi { branch: None },
+            Some("none"),
+        ),
+        (
+            "no open PR",
+            probed(true, json!({"state": "merged"})),
+            "pr.mergeable",
+            UnreadReason::NoOpenPr { branch: None },
+            Some("none"),
+        ),
+        (
+            "open PR without the fact",
+            probed(true, open.clone()),
+            "pr.review",
+            UnreadReason::PrFactsUnavailable { branch: None },
+            None,
+        ),
+        (
+            "lookup failing",
+            probed(false, json!(null)),
+            "pr",
+            UnreadReason::LookupFailing { last_tried: 10_000 },
+            None,
+        ),
+        ("no forge", unsupported, "pr", UnreadReason::NoForge, None),
+        (
+            "not checked",
+            CiSource(PrStateCache::default()),
+            "pr",
+            UnreadReason::NotChecked,
+            None,
+        ),
+    ] {
+        assert_eq!(
+            source.probe_unread_reason(key, scope),
+            Some(reason),
+            "{label}"
+        );
+        let expr = WhenExpr::parse(&[format!("{key}=none")]).unwrap();
+        let verdict = evaluate(&expr, scope, Some(&source), None, None, &no_windows());
+        assert_eq!(verdict.readings[key].as_deref(), reading, "{label}");
+        assert_eq!(verdict.truth, reading.map(|_| true), "{label}");
+    }
+    // After a fresh look with no PR, `!pr=open` is true on a loop; behind the floor it is unknown.
+    let expr = WhenExpr::parse(&["!pr=open".into()]).unwrap();
+    let source = probed(true, json!(null));
+    for (fired, truth) in [(9_999, Some(true)), (10_001, None)] {
+        let fired = Timestamp::from_millisecond(fired).unwrap();
+        let verdict = evaluate(&expr, scope, Some(&source), None, None, &no_windows()).freshen(
+            &expr,
+            scope,
+            Some(&source),
+            Some(fired),
+            None,
+            true,
+        );
+        assert_eq!(verdict.truth, truth, "{fired}");
+    }
+}
+
+#[test]
+fn loop_truth_is_kleene_with_one_key_unread_and_no_veto() {
+    let scope = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(scope.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        scope.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
+    for (input, truth) in [
+        ("team.stage=Done || ci=passed", Some(true)),
+        ("team.stage=Plan && ci=passed", Some(false)),
+        ("team.stage=Done && ci=passed", None),
+        ("!(team.stage=Done || ci=failed)", Some(false)),
+    ] {
+        let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
+        // Without a sidebar source, every forge key is held unread.
+        let verdict = evaluate(&expr, scope.path(), None, None, None, &no_windows()).freshen(
+            &expr,
+            scope.path(),
+            None,
+            None,
+            None,
+            true,
+        );
+        assert_eq!(
+            verdict.unread,
+            BTreeMap::from([("ci".into(), "no sidebar source".into())]),
+            "{input}"
+        );
+        assert_eq!(verdict.truth, truth, "{input}");
+    }
 }
 
 #[test]
@@ -1257,18 +1464,24 @@ fn team_stage_branch_reads_the_board_of_the_checkout_on_that_branch() {
     let read = |input: &str| {
         let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
         let verdict = evaluate(&expr, &repo, None, None, None, &no_windows());
-        (verdict.ok, verdict.readings.into_values().next().flatten())
+        (
+            verdict.truth,
+            verdict.readings.into_values().next().flatten(),
+        )
     };
     assert_eq!(
         read("team.stage[feat/x]=Review"),
-        (true, Some("Review".to_owned()))
+        (Some(true), Some("Review".to_owned()))
     );
     assert_eq!(
         read("team.stage[main]=Plan"),
-        (true, Some("Plan".to_owned()))
+        (Some(true), Some("Plan".to_owned()))
     );
-    assert_eq!(read("team.stage=Plan"), (true, Some("Plan".to_owned())));
-    assert_eq!(read("team.stage[gone]=unknown"), (true, None));
+    assert_eq!(
+        read("team.stage=Plan"),
+        (Some(true), Some("Plan".to_owned()))
+    );
+    assert_eq!(read("!team.stage[gone]=Review"), (None, None));
     let expr = WhenExpr::parse(&["team.stage[feat/x]=Review".to_owned()]).unwrap();
     let (selector, matches) = expr.terms().next().unwrap().wake_subscription().unwrap();
     assert_eq!(
@@ -1331,7 +1544,7 @@ fn loop_commit_fence_holds_bare_ci_only_on_a_fresh_true_verdict() {
         let label = format!("{clause}, {ci_sha:?}");
         match fenced {
             Some(reason) => {
-                assert!(!verdict.ok, "{label}");
+                assert_eq!(verdict.truth, None, "{label}");
                 assert_eq!(
                     verdict.unread,
                     BTreeMap::from([("ci".into(), reason.into())]),

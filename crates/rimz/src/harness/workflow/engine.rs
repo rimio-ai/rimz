@@ -544,7 +544,8 @@ fn window_wait(
     let expr = spec::parse_window(raw)?;
     let verdict =
         crate::harness::when::evaluate(&expr, scope, None, Some(provider), account, windows);
-    Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
+    Ok((verdict.truth != Some(true))
+        .then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 
 /// The start groups an agent launch admits, by kind and account, which an attempt host's

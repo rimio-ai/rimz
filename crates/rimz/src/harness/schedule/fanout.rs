@@ -39,6 +39,9 @@ pub enum CheckoutState {
     Waiting {
         verdict: Verdict,
     },
+    Unknown {
+        verdict: Verdict,
+    },
 }
 
 pub fn inspect(
@@ -97,8 +100,10 @@ pub fn inspect(
                     .get(&key)
                     .filter(|clock| clock.matches_condition(expr, *hold, &entry.run_dir()));
                 let since = clock.map_or(now, |clock| clock.since);
-                if !verdict.ok {
+                if verdict.truth == Some(false) {
                     CheckoutState::Waiting { verdict }
+                } else if verdict.truth.is_none() {
+                    CheckoutState::Unknown { verdict }
                 } else if let Some(hold) = hold
                     && u128::try_from(now.duration_since(since).as_millis()).unwrap_or(0)
                         < hold.as_millis()

@@ -409,11 +409,11 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
         (">42", Some("42"), "window.5h.left=42<=42"),
         ("<=42", Some("80"), "window.5h.left=80>42"),
         ("<42", Some("42"), "window.5h.left=42>=42"),
-        (">=42", None, "window.5h.left=unknown>=42"),
+        (">=42", None, "window.5h.left unread"),
     ] {
         let expr = spec::parse_window(&format!("5h.left{comparison}")).unwrap();
         let verdict = crate::harness::when::Verdict {
-            ok: false,
+            truth: Some(false),
             readings: BTreeMap::from([("window.5h.left".into(), reading.map(str::to_owned))]),
             unread: Default::default(),
         };
@@ -426,7 +426,7 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
     ] {
         let expr = spec::parse_window(raw).unwrap();
         let verdict = crate::harness::when::Verdict {
-            ok: false,
+            truth: Some(false),
             readings: BTreeMap::from([
                 ("window.5h.left".into(), Some("12".into())),
                 ("window.7d.left".into(), Some("12".into())),
@@ -435,6 +435,20 @@ fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
         };
         assert_eq!(expr.blocking_evidence(&verdict), expected);
     }
+}
+
+#[test]
+fn window_wait_evidence_names_the_known_leaf_that_decides_over_an_unread_one() {
+    let expr = spec::parse_window("!(5h.left>=40 || 7d.left>=40)").unwrap();
+    let verdict = crate::harness::when::Verdict {
+        truth: Some(false),
+        readings: BTreeMap::from([
+            ("window.5h.left".into(), None),
+            ("window.7d.left".into(), Some("80".into())),
+        ]),
+        unread: Default::default(),
+    };
+    assert_eq!(expr.blocking_evidence(&verdict), "!window.7d.left=80>=40");
 }
 
 #[test]
@@ -881,6 +895,17 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
             assert!(current.wait.is_none());
             assert!(workflow::journal(&state.workflow(&record.id)).unwrap().iter().any(|row| matches!(&row.event, JournalEvent::Wait { outcome, count:2, .. } if outcome == "window")));
         }
+    }
+    // An unread window is unknown, and the gate admits on true alone, negated or not.
+    let unread = WindowReadings::fixed(now, BTreeMap::new());
+    for raw in ["5h.left >= 20", "!(5h.left >= 20)"] {
+        assert_eq!(
+            window_wait(raw, Path::new("/project"), &kind, None, &unread)
+                .unwrap()
+                .as_deref(),
+            Some("5h.left unread"),
+            "{raw}"
+        );
     }
     let (home, state, mut record, spec) = fixture(
         "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.ok='@done'\n",

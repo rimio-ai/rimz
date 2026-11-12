@@ -355,10 +355,10 @@ pub(super) fn push(
                 let label = format!("{}{term}", if negated { "!" } else { "" });
                 match reading {
                     None => terms.push(format!("{label}: unread")),
-                    Some(reading) if term.matches(Some(reading)) == negated => {
+                    Some(reading) if term.matches(reading) == negated => {
                         terms.push(format!(
                             "{label}: false ({})",
-                            term.comparison_evidence(Some(reading))
+                            term.comparison_evidence(reading)
                         ));
                     }
                     Some(_) => {}

@@ -412,6 +412,12 @@ mod tests {
                 "unknown",
                 None,
             ),
+            (
+                ["!pr=open", "ci=passed"],
+                [Some("none"), None],
+                "first",
+                Some(0),
+            ),
         ] {
             let check: Check = toml::from_str(&format!("else='pending'\n[[cases]]\nwhen=['{}']\noutcome='first'\n[[cases]]\nwhen=['{}']\noutcome='second'\n", conditions[0], conditions[1])).unwrap();
             let expressions: Vec<_> = conditions

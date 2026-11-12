@@ -45,7 +45,7 @@ fn loop_show_condition_evidence_and_watch_command_are_not_repeated_or_cut() {
     );
     let text = loop_ok(&env, &["loop", "show", "condition"]);
     assert!(
-        text.starts_with("condition · routine · waiting · 0 of 2 met\n"),
+        text.starts_with("condition · routine · unknown · 0 of 2 met\n"),
         "{text}"
     );
     assert!(!text.contains("condition:"), "{text}");
@@ -100,7 +100,7 @@ fn loop_fire_warns_for_unmet_conditions_and_keeps_them_armed() {
     );
     let text = loop_ok(&env, &["loop", "fire", "condition"]);
     assert!(
-        text.contains("condition not met (0 of 1); running anyway, task stays armed"),
+        text.contains("condition unknown (0 of 1); running anyway, task stays armed"),
         "{text}"
     );
     assert!(text.contains("launched"), "{text}");
@@ -2594,7 +2594,7 @@ fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
             .as_ref()
     );
     assert_eq!(shown["worktrees"][0]["name"], "waiting");
-    assert_eq!(shown["worktrees"][0]["state"], "waiting");
+    assert_eq!(shown["worktrees"][0]["state"], "unknown");
     assert_eq!(
         shown["worktrees"][0]["readings"],
         json!({"pr": null, "ci": null, "team.stage": null})
@@ -2930,8 +2930,10 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         let source = rimz::harness::when::CiSource::read(&runtime);
         let expr = rimz::harness::when::WhenExpr::parse(&["pr=open".to_owned()]).unwrap();
         let windows = rimz::harness::when::WindowReadings::new(Some(&runtime), Timestamp::now());
-        assert!(
-            rimz::harness::when::evaluate(&expr, &checkout, Some(&source), None, None, &windows).ok
+        assert_eq!(
+            rimz::harness::when::evaluate(&expr, &checkout, Some(&source), None, None, &windows)
+                .truth,
+            Some(true)
         );
     }
     let store = env.store();
@@ -13328,17 +13330,17 @@ fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
     let env = Env::new();
     let output = env
         .rimz()
-        .args(["loop", "explain", "ci=unknown", "window.5h.left>=40"])
+        .args(["loop", "explain", "ci=passed", "window.5h.left>=40"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
-        text.contains("when: ci=unknown && window.5h.left>=40"),
+        text.contains("when: ci=passed && window.5h.left>=40"),
         "{text}"
     );
     assert!(
-        text.contains("  ci=unknown   ? readings paused (room closed)"),
+        text.contains("  ci=passed   ? readings paused (room closed)"),
         "{text}"
     );
     assert!(text.contains("  window.5h.left>=40   ? not read"), "{text}");
@@ -13349,7 +13351,7 @@ fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
         "{text}"
     );
     assert!(text.contains("--provider"), "{text}");
-    assert!(text.contains("now: false"), "{text}");
+    assert!(text.contains("now: unknown"), "{text}");
     let output = env
         .rimz()
         .args(["loop", "explain", "ci=pased"])
@@ -13359,6 +13361,20 @@ fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(
         error.contains("clause 1, position") && error.contains("did you mean passed?"),
+        "{error}"
+    );
+    let output = env
+        .rimz()
+        .args(["loop", "explain", "ci=unknown"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains(
+            "clause 1, position 11: unknown is not a value: a term over an unread key is \
+             unknown by itself; match a value the key reads"
+        ),
         "{error}"
     );
 }
@@ -13381,12 +13397,12 @@ fn explain_json_reports_live_terms_truth_and_leaves_inputs_unchanged() {
         "branch_ci": {env.project_root.to_string_lossy().to_string(): "passing"},
         "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"},
         "repos": {"repo": {"refreshed_at_ms": 1_700_000_000_123_u64, "ok": true}},
-        "branches": {"repo": {"a": {"pr": {"state": "merged"}}}}
+        "branches": {"repo": {"a": {"pr": {"state": "merged"}}, "missing": {}}}
     })
     .to_string();
     std::fs::write(&cache, &bytes).unwrap();
     for (ci, truth, code) in [("passed", true, 0), ("pending", false, 1)] {
-        let condition = format!("!(pr[a]=open || ci=failed) && ci={ci} && pr[missing]=unknown");
+        let condition = format!("!(pr[a]=open || ci=failed) && ci={ci} && pr[missing]=none");
         let output = env
             .rimz()
             .args(["loop", "explain", "--json", &condition])
@@ -13415,23 +13431,28 @@ fn explain_json_reports_live_terms_truth_and_leaves_inputs_unchanged() {
                      "reading": "passed", "met": true, "unread": null},
                     {"term": format!("ci={ci}"), "key": "ci", "negated": false,
                      "reading": "passed", "met": truth, "unread": null},
-                    {"term": "pr[missing]=unknown", "key": "pr[missing]", "negated": false,
-                     "reading": null, "met": true, "unread": "no PR for branch missing"}
+                    {"term": "pr[missing]=none", "key": "pr[missing]", "negated": false,
+                     "reading": "none", "met": true, "unread": null}
                 ]
             })
         );
     }
-    let output = loop_ok(&env, &["loop", "explain", "--json", "team.stage=unknown"]);
+    let output = env
+        .rimz()
+        .args(["loop", "explain", "--json", "team.stage=Done"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&output).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
         json!({
-            "when": "team.stage=unknown",
+            "when": "team.stage=Done",
             "scope": env.project_root,
             "room_open": true,
-            "now": true,
+            "now": null,
             "checked_at": null,
-            "terms": [{"term": "team.stage=unknown", "key": "team.stage", "negated": false,
-                       "reading": null, "met": true, "unread": "not read"}]
+            "terms": [{"term": "team.stage=Done", "key": "team.stage", "negated": false,
+                       "reading": null, "met": null, "unread": "not read"}]
         })
     );
     assert_eq!(std::fs::read_to_string(cache).unwrap(), bytes);
@@ -13448,7 +13469,7 @@ fn explain_json_outside_a_room_reports_unknown_and_usage_errors() {
             "loop",
             "explain",
             "--json",
-            "ci=unknown",
+            "ci=passed",
             "window.5h.left>=40",
             "!pr=open",
         ])
@@ -13465,18 +13486,18 @@ fn explain_json_outside_a_room_reports_unknown_and_usage_errors() {
     assert_eq!(
         value.unwrap(),
         json!({
-            "when": "ci=unknown && window.5h.left>=40 && !pr=open",
+            "when": "ci=passed && window.5h.left>=40 && !pr=open",
             "scope": env.project_root,
             "room_open": false,
-            "now": false,
+            "now": null,
             "checked_at": null,
             "terms": [
-                {"term": "ci=unknown", "key": "ci", "negated": false,
-                 "reading": null, "met": false, "unread": "readings paused (room closed)"},
+                {"term": "ci=passed", "key": "ci", "negated": false,
+                 "reading": null, "met": null, "unread": "readings paused (room closed)"},
                 {"term": "window.5h.left>=40", "key": "window.5h.left", "negated": false,
-                 "reading": null, "met": false, "unread": "not read"},
+                 "reading": null, "met": null, "unread": "not read"},
                 {"term": "pr=open", "key": "pr", "negated": true,
-                 "reading": null, "met": false, "unread": "readings paused (room closed)"}
+                 "reading": null, "met": null, "unread": "readings paused (room closed)"}
             ]
         })
     );
@@ -13578,7 +13599,7 @@ fn explain_root_and_account_select_the_same_readings_as_tasks() {
     assert_eq!(output.status.code(), Some(1));
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
-        text.contains("now: false") && !text.contains("need --provider"),
+        text.contains("now: unknown") && !text.contains("need --provider"),
         "{text}"
     );
 }

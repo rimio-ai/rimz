@@ -90,7 +90,7 @@ A condition's cases are an ordered array of tables. Write it inline in `[checks.
 
 | Field | Rule |
 | --- | --- |
-| `when` | Required loop-grammar term array. A term may not match the value `unknown`: route `on.unknown` instead. Stage names are checked against the effective teams plus `Done` when validation runs from a workspace, and a warning says so otherwise. |
+| `when` | Required loop-grammar term array. A term may not match the value `unknown`: the shared `WhenExpr` parser refuses it at every condition site, since a term over an unread key is unknown by itself. Stage names are checked against the effective teams plus `Done` when validation runs from a workspace, and a warning says so otherwise. |
 | `outcome` | Required. Not a reserved outcome. |
 | `for` | Optional nonzero hold in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`. |
 

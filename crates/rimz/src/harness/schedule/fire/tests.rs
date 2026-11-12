@@ -495,7 +495,7 @@ fn worktree_retries_use_each_checkouts_last_fire() {
         verdicts.insert(
             key.clone(),
             Verdict {
-                ok: true,
+                truth: Some(true),
                 readings: BTreeMap::new(),
                 unread: Default::default(),
             },
@@ -557,7 +557,7 @@ fn worktree_holds_have_independent_clocks() {
                 (
                     key.clone(),
                     Verdict {
-                        ok: minute >= 20 || scope.checkout.as_ref() == Some(&owned[0]),
+                        truth: Some(minute >= 20 || scope.checkout.as_ref() == Some(&owned[0])),
                         readings: BTreeMap::new(),
                         unread: Default::default(),
                     },
@@ -593,6 +593,12 @@ fn condition_write_failure_preserves_clock_fires() {
         RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     std::fs::create_dir(when_state_path(&runtime)).unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Plan\n",
+    )
+    .unwrap();
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let prior = seconds_before(now.timestamp(), 60);
     write_temp_then_rename_cache(
@@ -828,7 +834,7 @@ fn condition_replacement_resets_fired_and_hold_state() {
                 &now,
                 &old,
                 &one(Verdict {
-                    ok: true,
+                    truth: Some(true),
                     readings: BTreeMap::new(),
                     unread: Default::default(),
                 }),
@@ -869,7 +875,7 @@ fn condition_tick(
         &verdict
             .map(|ok| {
                 one(Verdict {
-                    ok,
+                    truth: Some(ok),
                     readings: BTreeMap::new(),
                     unread: Default::default(),
                 })
@@ -898,7 +904,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             }
         }));
         let verdicts = one(Verdict {
-            ok: true,
+            truth: Some(true),
             readings: BTreeMap::new(),
             unread: Default::default(),
         });
@@ -1095,7 +1101,7 @@ fn condition_false_then_true_rearms() {
 }
 
 #[test]
-fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires() {
+fn condition_unknown_of_any_cause_holds_the_stamp_and_clock_and_false_drops_them() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let prior = seconds_before(now.timestamp(), 60);
     let state = condition_state(None, seconds_before(now.timestamp(), 120), false);
@@ -1104,7 +1110,7 @@ fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires
         when: Some(vec!["team.stage=Done".to_owned()]),
         ..TaskEntry::default()
     }));
-    let tick = |ok: bool, unread: &[(&str, &str)]| {
+    let tick = |truth: Option<bool>, unread: &[(&str, &str)]| {
         plan(
             &tasks,
             &one(prior),
@@ -1112,7 +1118,7 @@ fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires
             &now,
             &one(state.clone()),
             &one(Verdict {
-                ok,
+                truth,
                 readings: BTreeMap::new(),
                 unread: unread
                     .iter()
@@ -1122,14 +1128,25 @@ fn condition_unread_forge_key_holds_the_stamp_and_clock_until_a_fresh_true_fires
             &BTreeSet::new(),
         )
     };
-    for ok in [false, true] {
-        let (actions, stamps, states) =
-            tick(ok, &[("ci", "probed before the last fire or first sight")]);
-        assert!(actions.is_empty(), "ok={ok}");
-        assert_eq!(stamps, one(prior), "ok={ok}");
-        assert_eq!(states, one(state.clone()), "ok={ok}");
+    // A forge key held unread and a stage or window that reads nothing are both unknown.
+    for unread in [
+        &[("ci", "probed before the last fire or first sight")][..],
+        &[],
+    ] {
+        let (actions, stamps, states) = tick(None, unread);
+        assert!(actions.is_empty(), "{unread:?}");
+        assert_eq!(stamps, one(prior), "{unread:?}");
+        assert_eq!(states, one(state.clone()), "{unread:?}");
     }
-    let (actions, stamps, states) = tick(true, &[]);
+    let (actions, stamps, states) = tick(Some(false), &[]);
+    assert!(actions.is_empty());
+    assert_eq!(stamps, one(prior));
+    assert!(states.is_empty(), "false drops the clock");
+    // Kleene truth decides: an unread key under a true disjunction does not veto the fire.
+    let (actions, stamps, states) = tick(
+        Some(true),
+        &[("ci", "probed before the last fire or first sight")],
+    );
     assert_eq!(actions, vec![(NAME.to_owned(), Action::Fire)]);
     assert_eq!(stamps, one(now.timestamp()));
     assert_eq!(states[NAME].since, state.since);
@@ -1249,7 +1266,7 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
     let task = loaded(TaskEntry {
         root: repo.clone(),
         check: Some("true".into()),
-        when: Some(vec!["ci=unknown".to_owned()]),
+        when: Some(vec!["ci=none".to_owned()]),
         each_worktree: true,
         ..TaskEntry::default()
     });
@@ -1281,12 +1298,13 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
         assert_eq!(rows.len(), 1, "{rows:?}");
         rows.into_iter().next().unwrap().state
     };
-    // `ci=unknown` matches the `None` an unread key reads, so only the hold keeps it waiting.
-    let super::super::fanout::CheckoutState::Waiting { verdict } =
+    // A fresh probe that found no CI reads `none`; a stale one leaves `ci` unread, so unknown.
+    let super::super::fanout::CheckoutState::Unknown { verdict } =
         inspect(seconds_before(stamp, 1))
     else {
-        panic!("a probe before the fire stamp holds the checkout");
+        panic!("a probe before the fire stamp leaves the checkout unknown");
     };
+    assert_eq!(verdict.truth, None);
     assert_eq!(
         verdict.unread,
         BTreeMap::from([(

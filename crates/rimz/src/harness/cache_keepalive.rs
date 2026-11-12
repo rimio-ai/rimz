@@ -56,9 +56,10 @@ impl SeatPolicy {
     }
 
     /// The role-over-team or solo profile maximum, falling back to the harness default and
-    /// admitted by the TTL floor and current stage condition. Unknown board readings permit
-    /// a hold; a while with no resolved maximum takes the ping cap. A `rimz subagents` child
-    /// has no configured horizon; an explicit session override also applies to a child.
+    /// admitted by the TTL floor and current stage condition. Only a false condition stops
+    /// the hold, so an unknown one keeps it; a while with no resolved maximum takes the ping
+    /// cap. A `rimz subagents` child has no configured horizon; an explicit session override
+    /// also applies to a child.
     pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
         let (horizon, while_clause) = match agent.tune.keep_warm() {
             Some(horizon) => (horizon?, None),
@@ -81,7 +82,7 @@ impl SeatPolicy {
                 None,
                 &WindowReadings::new(None, Timestamp::now()),
             );
-            if !verdict.ok && verdict.readings.values().all(Option::is_some) {
+            if verdict.truth == Some(false) {
                 return None;
             }
         }

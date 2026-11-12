@@ -381,7 +381,7 @@ fn arrival_details_are_bounded_escaped_and_tied_to_the_matched_condition_case() 
     assert_eq!(live.input.as_ref().unwrap()["case"], 1);
     let text = note(&host);
     assert!(
-        text.contains("answered `red` (ci=unread, pr=open)."),
+        text.contains("answered `red` (ci=none, pr=open)."),
         "{text}"
     );
     assert!(!text.split("\n\n").nth(3).unwrap().contains("pr.review="));

@@ -43,7 +43,7 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
     writeln!(out, "when: {expr}")?;
     writeln!(out, "scope: {}", entry.run_dir().display())?;
     condition::write_terms(&mut out, &entry, &expr, &verdict)?;
-    writeln!(out, "now: {}", verdict.ok)?;
+    writeln!(out, "now: {}", condition::truth_label(verdict.truth))?;
     if !render::room_open(&entry.resolved_root()) {
         condition::write_no_room_hint(
             &mut out,
@@ -59,7 +59,7 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
             "window readings need --provider <KIND>; without it they are unknown"
         )?;
     }
-    if !verdict.ok {
+    if verdict.truth != Some(true) {
         return Err(ui::AlreadyReported.into());
     }
     Ok(())

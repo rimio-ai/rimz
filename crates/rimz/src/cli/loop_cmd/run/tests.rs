@@ -1,21 +1,29 @@
 use super::*;
 
 #[test]
-fn manual_condition_notice_only_warns_when_unmet_and_counts_conjunctions() {
+fn manual_condition_notice_reports_unmet_or_unknown_and_counts_conjunctions() {
     let now = Timestamp::now();
-    for (condition, ok, expected) in [
+    for (condition, truth, stage, expected) in [
         (
             Some("team.stage=Done"),
-            false,
+            Some(false),
+            Some("Plan"),
             "condition not met (0 of 1); running anyway, task stays armed\n",
         ),
         (
-            Some("team.stage=Done || ci=passed"),
-            false,
-            "condition not met; running anyway, task stays armed\n",
+            Some("team.stage=Done"),
+            None,
+            None,
+            "condition unknown (0 of 1); running anyway, task stays armed\n",
         ),
-        (Some("!team.stage=Done"), true, ""),
-        (None, false, ""),
+        (
+            Some("team.stage=Done || ci=passed"),
+            None,
+            None,
+            "condition unknown; running anyway, task stays armed\n",
+        ),
+        (Some("!team.stage=Done"), Some(true), Some("Plan"), ""),
+        (None, Some(false), None, ""),
     ] {
         let entry = TaskEntry {
             when: condition.map(|expr| vec![expr.into()]),
@@ -33,8 +41,11 @@ fn manual_condition_notice_only_warns_when_unmet_and_counts_conjunctions() {
         let timing = if condition.is_some() {
             timing.with_condition(
                 &rimz::harness::when::Verdict {
-                    ok,
-                    readings: BTreeMap::from([("team.stage".into(), None), ("ci".into(), None)]),
+                    truth,
+                    readings: BTreeMap::from([
+                        ("team.stage".into(), stage.map(str::to_owned)),
+                        ("ci".into(), None),
+                    ]),
                     unread: Default::default(),
                 },
                 None,

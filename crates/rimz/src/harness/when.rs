@@ -134,18 +134,11 @@ impl<'a> ForgeKey<'a> {
 
     fn values(self) -> &'static [&'static str] {
         match self {
-            Self::Ci(_) => &["passed", "failed", "pending", "unknown"],
-            Self::Pr(_) => &["open", "merged", "closed", "unknown"],
-            Self::PrQueue(_) => &["queued", "dequeued", "armed", "none", "unknown"],
-            Self::PrMergeable(_) => &["mergeable", "conflicting", "unknown"],
-            Self::PrReview(_) => &[
-                "draft",
-                "changes_requested",
-                "required",
-                "approved",
-                "none",
-                "unknown",
-            ],
+            Self::Ci(_) => &["passed", "failed", "pending", "none"],
+            Self::Pr(_) => &["open", "merged", "closed", "none"],
+            Self::PrQueue(_) => &["queued", "dequeued", "armed", "none"],
+            Self::PrMergeable(_) => &["mergeable", "conflicting", "none"],
+            Self::PrReview(_) => &["draft", "changes_requested", "required", "approved", "none"],
         }
     }
 
@@ -210,7 +203,7 @@ impl CiSource {
 
     /// Explain an absent forge reading without changing condition truth.
     pub fn unread_reason(&self, key: &str, scope: &Path) -> Option<UnreadReason> {
-        if ForgeKey::parse(key)?.read(&self.0, scope).is_some() {
+        if self.reading(ForgeKey::parse(key)?, scope).is_some() {
             return None;
         }
         self.probe_unread_reason(key, scope)
@@ -218,36 +211,54 @@ impl CiSource {
 
     /// Explain a missing forge reading from the probe, ignoring retained facts.
     pub(crate) fn probe_unread_reason(&self, key: &str, scope: &Path) -> Option<UnreadReason> {
-        let key = ForgeKey::parse(key)?;
+        Some(self.probe_unread(ForgeKey::parse(key)?, scope))
+    }
+
+    /// A forge key's reading: its value, or `none` when the last successful probe found no PR,
+    /// no CI, or no open PR to carry the fact. A probe that has not succeeded, and an open PR
+    /// whose fact the forge has not reported, leave it unread.
+    fn reading(&self, key: ForgeKey<'_>, scope: &Path) -> Option<&'static str> {
+        key.read(&self.0, scope)
+            .or_else(|| match self.probe_unread(key, scope) {
+                UnreadReason::NoPr { .. }
+                | UnreadReason::NoCi { .. }
+                | UnreadReason::NoOpenPr { .. } => Some("none"),
+                UnreadReason::NotChecked
+                | UnreadReason::NoForge
+                | UnreadReason::LookupFailing { .. }
+                | UnreadReason::PrFactsUnavailable { .. } => None,
+            })
+    }
+
+    fn probe_unread(&self, key: ForgeKey<'_>, scope: &Path) -> UnreadReason {
         let path = scope.to_string_lossy();
         let Some(repo) = self.0.path_repos.get(path.as_ref()) else {
-            return Some(UnreadReason::NotChecked);
+            return UnreadReason::NotChecked;
         };
         if repo.is_empty() || repo == UNSUPPORTED_REPO_KEY {
-            return Some(UnreadReason::NoForge);
+            return UnreadReason::NoForge;
         }
         let Some(probe) = self.0.repos.get(repo) else {
-            return Some(UnreadReason::NotChecked);
+            return UnreadReason::NotChecked;
         };
         if !probe.ok {
-            return Some(UnreadReason::LookupFailing {
+            return UnreadReason::LookupFailing {
                 last_tried: probe.refreshed_at_ms,
-            });
+            };
         }
         let link = match key.branch() {
-            Some(branch) => self
-                .0
-                .branches
-                .get(repo)
-                .and_then(|rows| rows.get(branch))
-                .and_then(|row| row.pr.as_ref()),
+            // A probe writes a row for every branch it looked at; no row is no look.
+            Some(branch) => match self.0.branches.get(repo).and_then(|rows| rows.get(branch)) {
+                Some(row) => row.pr.as_ref(),
+                None => return UnreadReason::NotChecked,
+            },
             None => self.0.states.get(path.as_ref()),
         };
         let branch = key.branch().map(str::to_owned);
         if link.is_none() && !matches!(key, ForgeKey::Ci(None)) {
-            return Some(UnreadReason::NoPr { branch });
+            return UnreadReason::NoPr { branch };
         }
-        Some(match key {
+        match key {
             ForgeKey::Ci(_) | ForgeKey::Pr(_) => UnreadReason::NoCi { branch },
             ForgeKey::PrQueue(_) | ForgeKey::PrMergeable(_) | ForgeKey::PrReview(_) => {
                 if link.is_some_and(|link| link.state != WorktreePrState::Open) {
@@ -256,7 +267,7 @@ impl CiSource {
                     UnreadReason::PrFactsUnavailable { branch }
                 }
             }
-        })
+        }
     }
 
     /// The successful probe time, available only when the latest attempt succeeded.
@@ -463,7 +474,8 @@ pub(super) fn percent_left(window: &RateLimitWindow) -> Option<u8> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
-    pub ok: bool,
+    /// The expression's three-valued truth: `None` is unknown.
+    pub truth: Option<bool>,
     pub readings: BTreeMap<String, Option<String>>,
     /// Each forge key held unread by [`Verdict::freshen`], with its reason; each reads `None`.
     pub unread: BTreeMap<String, String>,
@@ -474,7 +486,8 @@ impl Verdict {
     /// without a source or without a successful probe at or after `fired_at`, the task's fire
     /// stamp, and bare `ci` under the commit fence when `fence` is set. The fence's git reads
     /// run only for a true verdict on a fresh probe. Each unread key reads `None`, and the
-    /// verdict is false while any key is unread. Pass `now` to age a failing lookup's reason.
+    /// verdict's truth is the Kleene walk over what remains: an unread key leaves it unknown only
+    /// where the known terms do not settle it. Pass `now` to age a failing lookup's reason.
     pub fn freshen(
         mut self,
         expr: &WhenExpr,
@@ -501,7 +514,7 @@ impl Verdict {
                     stale: "probed before the last fire or first sight",
                 };
                 let fence = (fence
-                    && self.ok
+                    && self.truth == Some(true)
                     && forge_keys.contains("ci")
                     && checked_at.is_some_and(|at| at >= floor.at))
                 .then(|| source.ci_fence(scope))
@@ -514,7 +527,7 @@ impl Verdict {
         for key in self.unread.keys() {
             self.readings.insert(key.clone(), None);
         }
-        self.ok &= self.unread.is_empty();
+        self.truth = expr.truth(&self.readings);
         self
     }
 }
@@ -568,7 +581,7 @@ pub fn evaluate(
             }
             if let Some(key) = ForgeKey::parse(&term.key) {
                 return ci_source
-                    .and_then(|source| key.read(&source.0, scope))
+                    .and_then(|source| source.reading(key, scope))
                     .map(str::to_owned);
             }
             // WhenExpr can only be constructed through the key-validating parser.
@@ -578,7 +591,7 @@ pub fn evaluate(
         });
     }
     Verdict {
-        ok: expr.0.matches(&readings),
+        truth: expr.truth(&readings),
         readings,
         unread: BTreeMap::new(),
     }
@@ -687,8 +700,9 @@ impl WhenTerm {
         Some((SignalSelector::Family(family.into()), BTreeMap::new()))
     }
 
-    pub(in crate::harness) fn comparison_evidence(&self, reading: Option<&str>) -> String {
-        let op = if reading.is_none() || self.matches(reading) {
+    /// The term against a known reading, with the operator turned to show which way it fails.
+    pub(in crate::harness) fn comparison_evidence(&self, reading: &str) -> String {
+        let op = if self.matches(reading) {
             self.op.token()
         } else {
             match self.op {
@@ -700,24 +714,19 @@ impl WhenTerm {
                 Op::Lt => ">=",
             }
         };
-        format!(
-            "{}={}{op}{}",
-            self.key,
-            reading.unwrap_or("unknown"),
-            self.values.join(",")
-        )
+        format!("{}={reading}{op}{}", self.key, self.values.join(","))
     }
 
-    pub fn matches(&self, reading: Option<&str>) -> bool {
+    /// The term's truth over a reading; an unread key (`None`) leaves it unknown.
+    pub fn truth(&self, reading: Option<&str>) -> Option<bool> {
+        reading.map(|reading| self.matches(reading))
+    }
+
+    /// Whether a known reading satisfies the term.
+    pub fn matches(&self, reading: &str) -> bool {
         if self.op == Op::In {
-            return self
-                .values
-                .iter()
-                .any(|value| value == reading.unwrap_or("unknown"));
+            return self.values.iter().any(|value| value == reading);
         }
-        let Some(reading) = reading else {
-            return false;
-        };
         if self.op == Op::NotIn {
             return !self.values.iter().any(|value| value == reading);
         }
@@ -758,34 +767,17 @@ pub struct WhenError {
 }
 
 impl WhenExpr {
-    /// Three-valued truth for workflow cases; unread leaves remain unknown.
+    /// Three-valued (Kleene) truth: an unread leaf is unknown, `true || unknown` is true and
+    /// `false && unknown` is false. Every reader of a condition decides on this one walk.
     pub fn truth(&self, readings: &BTreeMap<String, Option<String>>) -> Option<bool> {
-        fn truth(node: &Node, readings: &BTreeMap<String, Option<String>>) -> Option<bool> {
-            match node {
-                Node::Term(term) => readings
-                    .get(&term.key)
-                    .and_then(|reading| reading.as_deref())
-                    .map(|reading| term.matches(Some(reading))),
-                Node::Not(node) => truth(node, readings).map(|value| !value),
-                Node::And(left, right) => match (truth(left, readings), truth(right, readings)) {
-                    (Some(false), _) | (_, Some(false)) => Some(false),
-                    (Some(true), Some(true)) => Some(true),
-                    _ => None,
-                },
-                Node::Or(left, right) => match (truth(left, readings), truth(right, readings)) {
-                    (Some(true), _) | (_, Some(true)) => Some(true),
-                    (Some(false), Some(false)) => Some(false),
-                    _ => None,
-                },
-            }
-        }
-        truth(&self.0, readings)
+        self.0.truth(readings)
     }
 
+    /// Leaves met, counting repeats; a leaf over an unread key counts as not read. A
+    /// `satisfied` expression counts every leaf met.
     pub(super) fn condition_count(
         &self,
         readings: &[(String, Option<String>)],
-        unread: &std::collections::BTreeSet<String>,
         satisfied: bool,
     ) -> Option<ConditionCount> {
         if !self.0.is_conjunction() {
@@ -802,19 +794,28 @@ impl WhenExpr {
                 .iter()
                 .find(|(key, _)| key == &term.key)
                 .and_then(|(_, value)| value.as_deref());
-            if satisfied || (!unread.contains(&term.key) && term.matches(reading) != negated) {
-                count.met += 1;
-            } else if reading.is_none() {
-                count.not_read += 1;
+            match term.truth(reading).map(|truth| truth != negated) {
+                _ if satisfied => count.met += 1,
+                Some(true) => count.met += 1,
+                Some(false) => {}
+                None => count.not_read += 1,
             }
         }
         Some(count)
     }
 
+    /// The leaf that keeps the expression from true: its comparison against the reading, or
+    /// the key named unread.
     pub(crate) fn blocking_evidence(&self, verdict: &Verdict) -> String {
         let (term, negated) = self.0.blocking_term(&verdict.readings, true);
-        let evidence = term.comparison_evidence(verdict.readings[&term.key].as_deref());
-        format!("{}{evidence}", if negated { "!" } else { "" })
+        match verdict.readings[&term.key].as_deref() {
+            Some(reading) => format!(
+                "{}{}",
+                if negated { "!" } else { "" },
+                term.comparison_evidence(reading)
+            ),
+            None => format!("{} unread", term.key),
+        }
     }
 
     pub fn parse(clauses: &[String]) -> Result<Self, WhenError> {
@@ -868,7 +869,7 @@ impl WhenExpr {
     }
 
     /// Leaf terms in expression order, each with whether an odd number of `!` wraps it:
-    /// a leaf is satisfied when `term.matches(reading) != negated`.
+    /// a leaf's truth is `term.truth(reading)` flipped when `negated`.
     pub fn leaves(&self) -> impl Iterator<Item = (&WhenTerm, bool)> {
         let mut leaves = Vec::new();
         self.0.leaves(false, &mut leaves);
@@ -951,8 +952,10 @@ impl Node {
         match self {
             Self::Term(term) => (term, !expected),
             Self::Not(node) => node.blocking_term(readings, !expected),
+            // A child sharing the node's own truth decides it, so an unread child that the
+            // known one outweighs is never named.
             Self::And(left, right) | Self::Or(left, right) => {
-                if left.matches(readings) != expected {
+                if left.truth(readings) == self.truth(readings) {
                     left.blocking_term(readings, expected)
                 } else {
                     right.blocking_term(readings, expected)
@@ -972,12 +975,20 @@ impl Node {
         }
     }
 
-    fn matches(&self, readings: &BTreeMap<String, Option<String>>) -> bool {
+    fn truth(&self, readings: &BTreeMap<String, Option<String>>) -> Option<bool> {
         match self {
-            Self::Term(term) => term.matches(readings[&term.key].as_deref()),
-            Self::Not(node) => !node.matches(readings),
-            Self::And(left, right) => left.matches(readings) && right.matches(readings),
-            Self::Or(left, right) => left.matches(readings) || right.matches(readings),
+            Self::Term(term) => term.truth(readings.get(&term.key).and_then(Option::as_deref)),
+            Self::Not(node) => node.truth(readings).map(|value| !value),
+            Self::And(left, right) => match (left.truth(readings), right.truth(readings)) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (Some(true), Some(true)) => Some(true),
+                _ => None,
+            },
+            Self::Or(left, right) => match (left.truth(readings), right.truth(readings)) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
+                _ => None,
+            },
         }
     }
 
@@ -1101,7 +1112,8 @@ impl Parser<'_> {
                 "{key} cannot take a branch selector; only {branch_keys} take one; use {key}>=40"
             )));
         }
-        let fix = format!("{key}[branch]=unknown");
+        let value = ForgeKey::parse(&key).map_or("Done", |forge| forge.values()[0]);
+        let fix = format!("{key}[branch]={value}");
         let Some(end) = self.rest().find(']') else {
             return Err(self.error(format!("missing ']' in branch selector; use {fix}")));
         };
@@ -1181,17 +1193,20 @@ impl Parser<'_> {
             while self.take(",") {
                 values.push(self.word()?);
             }
+            if values.iter().any(|value| value == "unknown") {
+                return Err(self.error(
+                    "unknown is not a value: a term over an unread key is unknown by itself; \
+                     match a value the key reads",
+                ));
+            }
             if TeamStageKey::parse(&key).is_some()
                 && let Some(stages) = self.stages
             {
                 for value in &values {
-                    if value != "unknown" && !stages.contains(value) {
+                    if !stages.contains(value) {
                         let suggestion = crate::utils::suggest::nearest_name(
                             value,
-                            stages
-                                .iter()
-                                .map(String::as_str)
-                                .chain(std::iter::once("unknown")),
+                            stages.iter().map(String::as_str),
                         )
                         .map(|name| format!("did you mean {name}? "))
                         .unwrap_or_default();

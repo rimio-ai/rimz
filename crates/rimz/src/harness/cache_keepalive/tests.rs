@@ -914,6 +914,41 @@ roles = [{role = "coder", profile = "claude"}]"#,
 }
 
 #[test]
+fn keep_warm_while_stops_on_false_alone_even_beside_an_unread_term() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Implement\n",
+    )
+    .unwrap();
+    let harness = HarnessConfig::default();
+    // The board reads Implement; no checkout is on branch `gone`, so its stage is unread.
+    for (clause, horizon) in [
+        ("team.stage=Done && team.stage[gone]=Done", None),
+        (
+            "team.stage=Done || team.stage[gone]=Done",
+            harness.cache_keepalive_max,
+        ),
+        ("team.stage[gone]=Done", harness.cache_keepalive_max),
+    ] {
+        let roster = toml::from_str::<Team>(&format!(
+            "keep-warm = {{while = \"{clause}\"}}\nroles = [{{role = \"coder\", profile = \"claude\"}}]"
+        ))
+        .unwrap();
+        let held = SeatPolicy {
+            teams: TeamsConfig(std::collections::BTreeMap::from([("forge".into(), roster)])),
+            ..SeatPolicy::default()
+        };
+        let mut seat = idle();
+        seat.team = Some("forge".into());
+        seat.role = Some("coder".into());
+        seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
+        assert_eq!(held.horizon(&seat, &harness), horizon, "{clause}");
+    }
+}
+
+#[test]
 fn keep_warm_horizon_follows_role_or_profile_and_ttl_admission() {
     let two_hours = Some(KeepWarm::For(TWO_HOURS));
     let config = HarnessConfig::default();
