@@ -67,6 +67,12 @@ pub enum NotesErr {
     EmptyBody,
     #[error("--meta `{arg}`: {reason}")]
     BadMeta { arg: String, reason: &'static str },
+    #[error(
+        "the note header is {bytes} bytes, past the {limit} bytes `rimz notes list` reads; \
+         shorten the title or the --meta values",
+        limit = HEADER_MAX
+    )]
+    HeaderTooLarge { bytes: usize },
     #[error("cannot write note {path}: {source}")]
     Write {
         path: PathBuf,
@@ -209,7 +215,14 @@ fn add_at(
                 .map(|(fact, value)| (*fact, value.clone())),
         );
     }
-    let bytes = render(&header, &meta, &request.body, request.fence);
+    let header = render_header(&header, &meta);
+    // `list` stops reading at HEADER_MAX, so a longer header would never list.
+    if !u64::try_from(header.len()).is_ok_and(|len| len <= HEADER_MAX) {
+        return Err(NotesErr::HeaderTooLarge {
+            bytes: header.len(),
+        });
+    }
+    let bytes = render(header, &request.body, request.fence);
     let levels = [
         root.to_owned(),
         root.join(&kind),
@@ -284,12 +297,8 @@ fn parse_meta(raw: &[String]) -> Result<(MetaEntries, Vec<String>), NotesErr> {
     Ok((meta, dropped))
 }
 
-fn render(
-    header: &[(&'static str, String)],
-    meta: &[(String, String)],
-    body: &[u8],
-    fence: bool,
-) -> Vec<u8> {
+/// The header block, its opening and closing `---` lines included.
+fn render_header(header: &[(&'static str, String)], meta: &[(String, String)]) -> String {
     let mut text = String::from("---\n");
     // Keys go bare so a reader can match `^written:`. Of the keys the grammar
     // admits, YAML reads only a bare `null` as no string, so that one is quoted.
@@ -320,7 +329,11 @@ fn render(
         text.push_str(&format!("{key}: {value}\n"));
     }
     text.push_str("---\n");
-    let mut bytes = text.into_bytes();
+    text
+}
+
+fn render(header: String, body: &[u8], fence: bool) -> Vec<u8> {
+    let mut bytes = header.into_bytes();
     if !fence {
         bytes.extend_from_slice(body);
         return bytes;
