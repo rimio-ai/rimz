@@ -158,6 +158,17 @@ fn project(
                 .detail
                 .as_ref()
                 .map_or_else(|| "holding".into(), |detail| format!("holding {detail}")),
+            // A retried launch's reason is an error's text, which can span lines; the strip
+            // is one line, so it reads as the CLI's waiting line does.
+            "retry" => wait.detail.as_deref().map_or_else(
+                || "retry".into(),
+                |detail| {
+                    format!(
+                        "retry: {}",
+                        detail.split_whitespace().collect::<Vec<_>>().join(" ")
+                    )
+                },
+            ),
             _ => wait.outcome.clone(),
         }
     } else if kind == WorkflowNodeKind::Step {
@@ -328,6 +339,7 @@ mod tests {
             ("capacity", "held"),
             ("takeover", "takeover"),
             ("hold", "holding checks"),
+            ("retry", "retry: checks"),
         ] {
             record.wait = Some(
                 serde_json::from_value(json!({
@@ -346,6 +358,24 @@ mod tests {
                 (outcome == "hold").then_some("30m")
             );
         }
+        record.wait = Some(
+            serde_json::from_value(json!({
+                "node":"watch", "outcome":"retry", "detail":"stop failed:\n  pane gone",
+                "first":record.created_at, "last":record.entered_at, "count":1
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            project(&record, Some(&spec), None).unwrap().word,
+            "retry: stop failed: pane gone"
+        );
+        record.wait = Some(
+            serde_json::from_value(json!({
+                "node":"watch", "outcome":"hold", "detail":"checks", "case":0,
+                "first":record.created_at, "last":record.entered_at, "count":1
+            }))
+            .unwrap(),
+        );
         let projected = project(&record, None, None);
         assert_eq!(
             projected.and_then(|run| run.hold_limit).as_deref(),
