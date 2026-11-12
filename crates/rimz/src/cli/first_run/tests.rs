@@ -372,11 +372,62 @@ fn room_keys_text_quotes_the_resolved_chords_per_multiplexer() {
         toml::from_str("[keys.bind.normal]\n\"Alt+5\" = \"none\"\n").expect("config");
     let gap = room_keys_options(&KeyFacts::from_config(&gap), MuxName::Tmux, true).join("\n");
     assert!(!gap.contains("Alt+1..9"), "{gap}");
-    assert!(
-        gap.contains("Alt+1/Alt+2/Alt+3/Alt+4/Alt+6/Alt+7/Alt+8/Alt+9 jump"),
-        "{gap}"
-    );
+    assert!(gap.contains("Alt+1..4/Alt+6..9 jump"), "{gap}");
     assert_fits(&gap);
+
+    let ctrl: MachineConfig = toml::from_str(concat!(
+        "[keys.bind.normal]\n",
+        "\"Alt+1\" = \"none\"\n\"Alt+2\" = \"none\"\n\"Alt+4\" = \"none\"\n",
+        "\"Alt+5\" = \"none\"\n\"Alt+6\" = \"none\"\n\"Alt+7\" = \"none\"\n",
+        "\"Alt+9\" = \"none\"\n",
+        "\"Ctrl+1\" = \"card.slot.1\"\n\"Ctrl+2\" = \"card.slot.2\"\n",
+        "\"Ctrl+4\" = \"card.slot.4\"\n\"Ctrl+5\" = \"card.slot.5\"\n",
+        "\"Ctrl+6\" = \"card.slot.6\"\n\"Ctrl+7\" = \"card.slot.7\"\n",
+        "\"Ctrl+9\" = \"card.slot.9\"\n",
+    ))
+    .expect("config");
+    let ctrl = room_keys_options(&KeyFacts::from_config(&ctrl), MuxName::Tmux, true).join("\n");
+    assert_fits(&ctrl);
+    assert!(
+        ctrl.contains("Ctrl+1..2/Alt+3/Ctrl+4..7/Alt+8/Ctrl+9 jump"),
+        "{ctrl}"
+    );
+
+    let mixed: MachineConfig = toml::from_str(concat!(
+        "[keys.bind.normal]\n",
+        "\"Alt+1\" = \"none\"\n\"Alt+2\" = \"none\"\n\"Alt+3\" = \"none\"\n",
+        "\"Alt+4\" = \"none\"\n\"Alt+5\" = \"none\"\n\"Alt+6\" = \"none\"\n",
+        "\"Alt+7\" = \"none\"\n\"Alt+8\" = \"none\"\n\"Alt+9\" = \"none\"\n",
+        "\"Ctrl+Right\" = \"card.slot.1\"\n\"Ctrl+Left\" = \"card.slot.2\"\n",
+        "\"Ctrl+Down\" = \"card.slot.3\"\n\"Ctrl+Up\" = \"card.slot.4\"\n",
+        "\"Alt+Right\" = \"card.slot.5\"\n\"Alt+Left\" = \"card.slot.6\"\n",
+        "\"Alt+Down\" = \"card.slot.7\"\n\"Alt+Up\" = \"card.slot.8\"\n",
+        "\"Ctrl+q\" = \"card.slot.9\"\n",
+    ))
+    .expect("config");
+    let mixed = room_keys_options(&KeyFacts::from_config(&mixed), MuxName::Tmux, true).join("\n");
+    assert_fits(&mixed);
+    let chords: String = mixed.split_whitespace().collect();
+    assert!(
+        chords.contains(
+            "Ctrl+Right/Ctrl+Left/Ctrl+Down/Ctrl+Up/Alt+Right/Alt+Left/Alt+Down/Alt+Up/Ctrl+qjump"
+        ),
+        "every bound chord is shown in slot order:\n{mixed}"
+    );
+
+    let mut bare = KeyFacts::from_config(&MachineConfig::default());
+    bare.focus = None;
+    bare.zoom = None;
+    let bare = room_keys_options(&bare, MuxName::Tmux, true);
+    assert!(
+        bare[0].ends_with("your tmux config and bindings, as they are."),
+        "{bare:?}"
+    );
+    assert!(
+        bare.iter()
+            .all(|line| line.is_empty() || !line.trim().is_empty()),
+        "no line of only spaces: {bare:?}"
+    );
 
     let mut arrows = MachineConfig::default();
     arrows.sidebar.focus_key = "Ctrl+Right".to_owned();
@@ -658,6 +709,19 @@ fn a_reopened_mux_question_keeps_its_reason_beside_the_default() {
     );
     assert!(rendered.contains("Multiplexer? [2]"), "{rendered}");
     assert_eq!(rendered.matches("← default").count(), 1, "{rendered}");
+    let (_, first) = ask(
+        &mut self::questions(&MachineConfig::default(), false, setup(MuxName::Tmux, true)),
+        Question::Mux,
+        b"\n",
+    );
+    for screen in [&first, &rendered] {
+        for line in screen.lines() {
+            assert!(
+                !line.ends_with(' ') || line.ends_with("] "),
+                "{line:?} ends in a space"
+            );
+        }
+    }
 }
 
 #[test]
