@@ -62,7 +62,7 @@ class FakeRimz:
         self.calls.append(args)
         match args:
             case ("agents", "list", "--all", "--json"):
-                return json.dumps(dict(schema=1, agents=self.roster))
+                return json.dumps(dict(schema=2, agents=self.roster))
             case ("agents", "stop", pane):
                 if self.stop_refusal:
                     raise RuntimeError(f"rimz failed: {self.stop_refusal}")
