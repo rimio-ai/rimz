@@ -67,6 +67,164 @@ fn tickets(room: &Room) -> Vec<Value> {
         .collect()
 }
 
+/// Hold the home's start-queue lock, as a slow admission elsewhere would.
+fn hold_queue(room: &Room) -> WorkspaceLock {
+    WorkspaceLock::acquire(&room.env.rimz_home().join("loops/throttle.lock")).unwrap()
+}
+
+/// Advance with admission's queue-lock wait cut short, so a held lock times out.
+fn advance_queue_busy(room: &Room, record: &records::RunRecord) -> Value {
+    success(
+        room.command(&["workflow", "advance", record.id.as_str()])
+            .env("RIMZ_TEST_THROTTLE_LOCK_WAIT_MS", "100")
+            .output()
+            .unwrap(),
+    );
+    show(&room.env, record.id.as_str())
+}
+
+#[test]
+fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees() {
+    for task in [Some("nightly"), None] {
+        let room = Room::new("capacity-wait='2h'\n[steps.build.limit]\nmax-parallel=5\n");
+        let record = pending(&room, task);
+        let queue = hold_queue(&room);
+        let value = advance_queue_busy(&room, &record);
+        let wait = &value["record"]["wait"];
+        assert_eq!(value["record"]["state"], "active", "{value:#}");
+        assert_eq!(wait["outcome"], "capacity", "{value:#}");
+        assert_eq!(wait["hold"], "queue", "{value:#}");
+        let detail = wait["detail"].as_str().unwrap();
+        assert!(
+            detail.starts_with("waiting for the start queue: timed out after")
+                && detail.contains("loops/throttle.lock"),
+            "{detail}"
+        );
+        assert_eq!(wait["kinds"], json!(["codex"]), "{value:#}");
+        assert_eq!(wait["gives_up_at"].is_string(), task.is_some(), "{value:#}");
+        assert_eq!(value["record"]["visits"], json!({}), "{value:#}");
+        assert!(value["record"]["attempt"].is_null(), "{value:#}");
+        assert!(events(&value, "attempt").is_empty(), "{value:#}");
+        let shown = success(
+            room.command(&["workflow", "show", record.id.as_str()])
+                .output()
+                .unwrap(),
+        );
+        assert!(shown.contains(detail), "{shown}");
+        let again = advance_queue_busy(&room, &record);
+        assert_eq!(again["record"]["wait"], *wait, "{again:#}");
+        if task.is_none() {
+            let mut expired = again["record"].clone();
+            expired["wait"]["gives_up_at"] =
+                json!(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
+            save(&room, &expired);
+            let value = advance_queue_busy(&room, &record);
+            assert_eq!(value["record"]["state"], "active", "{value:#}");
+            assert_eq!(value["record"]["wait"]["outcome"], "capacity", "{value:#}");
+            assert!(
+                !events(&value, "route")
+                    .iter()
+                    .any(|row| row["outcome"] == "capacity"),
+                "{value:#}"
+            );
+        }
+        drop(queue);
+        let value = advance(&room, &record);
+        assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+        assert!(value["record"]["attempt"].is_object(), "{value:#}");
+        success(
+            room.command(&["workflow", "cancel", record.id.as_str()])
+                .output()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time() {
+    for restart in [false, true] {
+        let room = Room::new("capacity-wait='2h'\n[steps.build.limit]\nmax-parallel=5\n");
+        let record = pending(&room, Some("nightly"));
+        let queue = hold_queue(&room);
+        let value = if restart {
+            let receipt = success(
+                room.command(&["workflow", "restart", record.id.as_str()])
+                    .env("RIMZ_TEST_THROTTLE_LOCK_WAIT_MS", "100")
+                    .output()
+                    .unwrap(),
+            );
+            assert!(
+                receipt.contains("step build · fresh · awaiting launch; visits reset"),
+                "{receipt}"
+            );
+            show(&room.env, record.id.as_str())
+        } else {
+            let mut manual = show(&room.env, record.id.as_str())["record"].clone();
+            manual["manual"] = json!(true);
+            save(&room, &manual);
+            advance_queue_busy(&room, &record)
+        };
+        let wait = &value["record"]["wait"];
+        assert_eq!(value["record"]["state"], "active", "{value:#}");
+        assert_eq!(value["record"]["restart"].is_object(), restart, "{value:#}");
+        assert_eq!(wait["outcome"], "capacity", "{value:#}");
+        assert_eq!(wait["hold"], "queue", "{value:#}");
+        let detail = wait["detail"].as_str().unwrap();
+        assert!(
+            detail.starts_with("waiting for the start queue: timed out after")
+                && detail.contains("loops/throttle.lock"),
+            "{detail}"
+        );
+        assert!(wait["gives_up_at"].is_null(), "{value:#}");
+        assert_eq!(value["record"]["visits"], json!({}), "{value:#}");
+        assert!(value["record"]["attempt"].is_null(), "{value:#}");
+        assert!(events(&value, "attempt").is_empty(), "{value:#}");
+        let again = advance_queue_busy(&room, &record);
+        assert_eq!(again["record"]["state"], "active", "{again:#}");
+        assert!(
+            !events(&again, "route")
+                .iter()
+                .any(|row| row["outcome"] == "capacity"),
+            "{again:#}"
+        );
+        drop(queue);
+        let value = advance(&room, &record);
+        assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+        assert!(value["record"]["attempt"].is_object(), "{value:#}");
+        success(
+            room.command(&["workflow", "cancel", record.id.as_str()])
+                .output()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn capacity_lock_timeout_waits_still_give_up_through_capacity() {
+    let room = Room::new("capacity-wait='2h'\n");
+    write_capacity_config(&room, "[throttle]\nmax-parallel-agents=5\n").unwrap();
+    let record = pending(&room, Some("nightly"));
+    let _queue = hold_queue(&room);
+    let mut value = advance_queue_busy(&room, &record);
+    assert_eq!(value["record"]["wait"]["hold"], "queue", "{value:#}");
+    value["record"]["wait"]["gives_up_at"] =
+        json!(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
+    save(&room, &value["record"]);
+    let value = advance_queue_busy(&room, &record);
+    assert_eq!(value["record"]["state"], "failed", "{value:#}");
+    assert!(
+        events(&value, "route")
+            .iter()
+            .any(|row| row["outcome"] == "capacity"
+                && row["input"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.starts_with("waiting for the start queue"))),
+        "{value:#}"
+    );
+    assert_eq!(value["record"]["visits"], json!({}), "{value:#}");
+    assert!(events(&value, "attempt").is_empty(), "{value:#}");
+}
+
 #[test]
 fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
     let mut actual = Vec::new();

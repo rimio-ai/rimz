@@ -369,7 +369,7 @@ pub(super) fn try_admit_in(
         return Err(ThrottleError::Unreadable(problem));
     }
     let turn = {
-        let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+        let _lock = WorkspaceLock::acquire_with_timeout(&host.queue_lock(), admission_lock_wait())?;
         let now = host.now_ms();
         let started_past_limit = match pass(host.as_ref(), config, run, None, now, &mut None)? {
             Pass::Admitted(note) => note,
@@ -395,7 +395,8 @@ pub(super) fn try_admit_in(
         }
         None => {
             if run.machine_gated && config.check.is_some() {
-                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+                let _lock =
+                    WorkspaceLock::acquire_with_timeout(&host.queue_lock(), admission_lock_wait())?;
                 if let Some(hold) = pass(
                     host.as_ref(),
                     config,
@@ -412,6 +413,18 @@ pub(super) fn try_admit_in(
             Ok(Attempt::Turn(turn))
         }
     }
+}
+
+/// How long admission waits for the queue lock; a `testkit` build can shorten it.
+fn admission_lock_wait() -> Duration {
+    #[cfg(feature = "testkit")]
+    if let Some(ms) = std::env::var("RIMZ_TEST_THROTTLE_LOCK_WAIT_MS")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    crate::disk::lock::LOCK_TIMEOUT
 }
 
 /// The latest capacity-check errors, read without running a check or taking a turn.
@@ -467,7 +480,8 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
     let mut details = Vec::new();
     for group in &run.groups {
         let cached = {
-            let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+            let _lock =
+                WorkspaceLock::acquire_with_timeout(&host.queue_lock(), admission_lock_wait())?;
             let now = host.now_ms();
             read_verdicts(host).into_iter().find(|verdict| {
                 verdict.kind == group.kind
@@ -509,7 +523,8 @@ fn check_groups(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Result<O
                         _ => format!("{label}: {detail}"),
                     },
                 };
-                let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+                let _lock =
+                    WorkspaceLock::acquire_with_timeout(&host.queue_lock(), admission_lock_wait())?;
                 let mut verdicts = read_verdicts(host);
                 let current = verdicts
                     .iter_mut()
