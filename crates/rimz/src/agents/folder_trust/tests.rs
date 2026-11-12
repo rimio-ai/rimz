@@ -94,10 +94,10 @@ fn empty_dir_launch_refusal_names_the_machine_wide_grant() {
             crate::agents::LaunchDirMode::Supervised,
         )
         .unwrap_err();
-        let crate::agents::LaunchDirRefusal::Untrusted(refusal) = error else {
+        let crate::agents::LaunchDirRefusal::Undecided { fix, .. } = error else {
             panic!("expected an undecided folder, got {error:?}");
         };
-        assert_eq!(refusal.fix, "run `rimz trust grant --empty-dir`");
+        assert_eq!(fix, "run `rimz trust grant --empty-dir`");
     }
 }
 

@@ -373,7 +373,7 @@ upward-dependencies = ["address"]
 # LinkMaintenance and ShareReport's launch_warnings/maintenance split launch notices from quiet evidence (+3).
 # pane_title, Seat, Seat::from_launch, short_label and title share pane and tab identity (+5).
 # LaunchCapability::supports_added_dirs and allow_added_dirs_args expose non-trusting file access (+2).
-# LaunchDirUntrusted::is_undecided distinguishes a fallback from a saved refusal (+1).
+# LaunchDirRefusal::Undecided distinguishes a fallback from a saved refusal.
 # LaunchCapability::added_dirs_unloaded_files keeps target reminder wording in the adapter (+1).
 # LaunchFrontend carries provider frontend placement and extension auto-approval (+1).
 # LaunchCapability::take_frontend finalizes frontend arguments before compilation (+1).
