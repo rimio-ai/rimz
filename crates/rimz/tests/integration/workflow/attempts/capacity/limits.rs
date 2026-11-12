@@ -379,3 +379,32 @@ fn limited_off_admission_errors_settle_as_died_instead_of_bypassing_admission() 
     );
     assert_eq!(value["record"]["state"], "failed");
 }
+
+#[test]
+fn lock_timeouts_leave_a_limit_wait_as_recorded_and_its_standing_ahead() {
+    let room = Room::new("capacity-wait='1h'\n[steps.build.limit]\nmax-parallel=1\n");
+    let record = pending(&room, Some("nightly"));
+    fill_limit(&room, &record);
+    let limited = advance(&room, &record);
+    assert_eq!(
+        limited["record"]["wait"]["hold"], "step_limit",
+        "{limited:#}"
+    );
+    let queue = hold_queue(&room);
+    let value = advance_queue_busy(&room, &record);
+    assert_eq!(value["record"]["state"], "active", "{value:#}");
+    assert_eq!(
+        value["record"]["wait"], limited["record"]["wait"],
+        "{value:#}"
+    );
+    assert_eq!(value["record"]["visits"], json!({}), "{value:#}");
+    assert!(events(&value, "attempt").is_empty(), "{value:#}");
+    drop(queue);
+    let later = pending(&room, Some("nightly"));
+    let value = advance(&room, &later);
+    assert_eq!(value["record"]["wait"]["hold"], "step_limit", "{value:#}");
+    assert_eq!(
+        value["record"]["wait"]["detail"], "step build: 1 earlier start waiting",
+        "{value:#}"
+    );
+}

@@ -1125,7 +1125,10 @@ fn prepare(
                 || step.limit().is_some()
                 || t.record.restart.is_some()
                 || (t.record.task.is_some() && !t.record.manual);
-            if admits && let Some((_, _, Err(reason))) = &admission.capacity {
+            if admits
+                && let Some((_, _, Err(reason))) = &admission.capacity
+                && !queue_lock_timed_out(reason)
+            {
                 launch_error = Some(reason.to_string());
             }
             let groups = if admits || step.window().is_some() {
@@ -1398,31 +1401,56 @@ fn prepare_capacity(
             },
         )))));
     };
-    if let Ok(throttle::Attempt::Held(hold)) = answer {
-        t.step_wait("capacity", Some(hold.text.clone()));
-        let wait = t
-            .record
-            .wait
-            .as_mut()
-            .expect("capacity wait was just recorded");
-        wait.kinds = hold.kinds.clone();
-        wait.hold = Some(hold.kind);
-        if wait.kinds.is_empty() {
-            wait.kinds = groups.into_iter().map(|group| group.kind).collect();
-            wait.kinds.sort();
-            wait.kinds.dedup();
-        }
-        wait.gives_up_at = match step.capacity_wait() {
-            Some(crate::config::CapacityWait::Duration(duration)) => {
-                wait.first.checked_add(duration).ok()
+    let hold = match answer {
+        Ok(throttle::Attempt::Held(hold)) => hold.clone(),
+        // Admission could not answer; a standing capacity wait keeps what it last learned.
+        Err(error) if queue_lock_timed_out(error) => {
+            if t.record
+                .wait
+                .as_ref()
+                .is_some_and(|wait| wait.outcome == "capacity")
+            {
+                return Ok(Some(Decision::Stop));
             }
-            Some(crate::config::CapacityWait::Forever) => None,
-            None => t.record.capacity_until,
-        };
-        persist(t, guard)?;
-        return Ok(Some(Decision::Stop));
+            throttle::Hold {
+                kind: crate::ids::HoldKind::Queue,
+                text: format!("waiting for the start queue: {error}"),
+                kinds: Vec::new(),
+            }
+        }
+        _ => return Ok(None),
+    };
+    t.step_wait("capacity", Some(hold.text));
+    let wait = t
+        .record
+        .wait
+        .as_mut()
+        .expect("capacity wait was just recorded");
+    wait.kinds = hold.kinds;
+    wait.hold = Some(hold.kind);
+    if wait.kinds.is_empty() {
+        wait.kinds = groups.into_iter().map(|group| group.kind).collect();
+        wait.kinds.sort();
+        wait.kinds.dedup();
     }
-    Ok(None)
+    wait.gives_up_at = match step.capacity_wait() {
+        _ if !may_wait => None,
+        Some(crate::config::CapacityWait::Duration(duration)) => {
+            wait.first.checked_add(duration).ok()
+        }
+        Some(crate::config::CapacityWait::Forever) => None,
+        None => t.record.capacity_until,
+    };
+    persist(t, guard)?;
+    Ok(Some(Decision::Stop))
+}
+
+/// Contention on the machine's start queue, which a later advance retries as a capacity wait.
+fn queue_lock_timed_out(error: &throttle::ThrottleError) -> bool {
+    matches!(
+        error,
+        throttle::ThrottleError::Lock(crate::disk::lock::LockErr::Timeout { .. })
+    )
 }
 
 /// Whether a lifecycle signal came from the attempt's own leader: its handle, compared
