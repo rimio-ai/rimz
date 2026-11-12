@@ -190,7 +190,10 @@ pub(crate) fn pane(raw: &str, view: &str) -> PaneRef {
     }
 }
 
+/// Rows draw in the order passed: process rows rank newest `last_activity` first, so each
+/// later row is stamped one millisecond older than the one before it.
 pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> SidebarSnapshot {
+    let newest = Timestamp::now();
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);
     snapshot.pane_session_name = Some("rimz-test".to_owned());
@@ -208,7 +211,8 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
         status_counts: Vec::new(),
         rows: panes
             .into_iter()
-            .map(|pane| crate::store::snapshot::SidebarRow {
+            .zip(0..)
+            .map(|(pane, age_ms)| crate::store::snapshot::SidebarRow {
                 checkout: None,
                 id: pane.pane_id.to_string(),
                 name: pane.command.clone().unwrap_or_else(|| "process".to_owned()),
@@ -221,7 +225,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
                 archived: false,
                 attention_score: 0,
                 attention_at_ms: None,
-                last_activity: Timestamp::now(),
+                last_activity: newest - jiff::SignedDuration::from_millis(age_ms),
                 card: crate::store::snapshot::RowCard::Process(
                     crate::store::snapshot::ProcessCard::default(),
                 ),
