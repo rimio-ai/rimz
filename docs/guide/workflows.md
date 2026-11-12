@@ -35,7 +35,7 @@ max-visits = 3
 timeout = "1h"
 ```
 
-Every fireable failure edge needs an explicit route or on-break; validation and launch refuse `@user` targets. For failures, set `[workflow] on-break = { agent = "debugger" }` to open your chosen agent profile with a debug trace, or `on-break = "@failed"` to end silently (`"@done"` is also supported). Explicit failure routes override this catch-all. The agent is a staying step named `@break`: it may fix the cause and run `rimz workflow resume <run> [--at <node>]`, cancel, ask urgently through its native UI, or end its turn and wait for you. Resume defaults to the node that failed and leaves the debugger's pane open; cancel also leaves it open. Closing its pane ends the run as failed. Its deadline cannot interrupt it. See [on-break](../reference/cli/workflow.md#failure-handling-with-on-break) for custom prompts, failure input, and legacy runs.
+Every fireable failure edge needs an explicit route or on-break; validation and launch refuse `@user` targets. For failures, set `[workflow] on-break = { agent = "debugger" }` to open your chosen agent profile with a debug trace, or `on-break = "@failed"` to end silently (`"@done"` is also supported). Explicit failure routes override this catch-all. The agent is a staying step named `@break`: it may fix the cause and run `rimz workflow resume <run> [--at <node>]`, cancel, ask urgently through its native UI, or end its turn and wait for you. Resume defaults to the node that failed and leaves the debugger's pane open; cancel also leaves it open. Closing its pane ends the run as failed. Its deadline cannot interrupt it. See [on-break](../reference/cli/workflow.md#failure-handling-with-on-break) for custom prompts and failure input.
 
 `shell` runs the command in the checkout through `sh -c`. Exit 0 answers `pass`; any other exit or signal answers `fail`. RimZ saves both output streams in a per-evaluation log and gives its absolute path to the next node as `input.log`. Replace `cargo test` with your suite's command. A shell check requires both `on.pass` and `on.fail`; its only other routes are `on.timeout` and `on.invalid`. Use `run` instead when a script needs to answer more than pass or fail.
 
@@ -59,7 +59,7 @@ For distinct failures to get their own tries while the same failure stops retryi
 
 To give a later failure new tries after a success, use `max-visits-per-outcome = { limit = 2, reset-on = "queued" }` when a check answers `queued`. `reset-on` also accepts a nonempty list of outcomes. That answer clears this step's outcome counts even when it routes to `@wait` or `@done`; the total is unchanged by this automatic reset. A `for`-held answer resets only when its hold completes. Switching between failure outcomes does not reset anything. Without `reset-on`, counts last until a manual restart or cap resume.
 
-Keep `max-visits` to cap the total: a check naming a new outcome or key each time must not retry forever, and a per-outcome bound alone does not bound a cycle. Both limits must be positive, and the per-outcome limit must be below the total when both are set. `reset-on` requires a total bound and outcomes that a check can answer. A cap without `reset-on` warns when only one outcome reaches a non-start step with no incoming `then`: it repeats `max-visits` unless a check answers keys. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (on-break, else `@failed`; legacy default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-outcome"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
+Keep `max-visits` to cap the total: a check naming a new outcome or key each time must not retry forever, and a per-outcome bound alone does not bound a cycle. Both limits must be positive, and the per-outcome limit must be below the total when both are set. `reset-on` requires a total bound and outcomes that a check can answer. A cap without `reset-on` warns when only one outcome reaches a non-start step with no incoming `then`: it repeats `max-visits` unless a check answers keys. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (on-break, else `@failed`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-outcome"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
 
 Select exactly one of `run`, `shell`, `agent`, `sleep`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined. `sleep` waits for a duration, optionally ending early on a condition.
 
@@ -156,9 +156,9 @@ rimz workflow show fix-tests  # definition rail, then live runs
 
 From a workflow step or one of its subagents, omit the target: `rimz workflow show` finds that run, as do `rimz workflow show --history` and `rimz workflow show --json`. Outside a workflow, name a run or use `rimz workflow list`. The compact view prints the absolute notes folder when the run has one.
 
-`list` puts parks, blocking questions, and capacity holds needing a fix under NEEDS YOU, longest waiting first, with a full address and a hint to inspect the first run. The other rows group by workflow, with active and held counts and self-clearing capacity holds last. Each row has a status glyph, a lane such as `#feat-x`, what it is doing, and its age, followed by a horizontal progress rail. Staying sessions name their agent card as `with you in @<handle>`; a cached PR adds ` · PR #N`. A shared origin appears in the group heading; mixed origins appear on each row. Combine the workflow name and lane, such as `fix-tests#feat-x`, instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.
+`list` puts blocking questions and capacity holds needing a fix under NEEDS YOU, longest waiting first, with a full address and a hint to inspect the first run. The other rows group by workflow, with active and held counts and self-clearing capacity holds last. Each row has a status glyph, a lane such as `#feat-x`, what it is doing, and its age, followed by a horizontal progress rail. Staying sessions name their agent card as `with you in @<handle>`; a cached PR adds ` · PR #N`. A shared origin appears in the group heading; mixed origins appear on each row. Combine the workflow name and lane, such as `fix-tests#feat-x`, instead of `$RUN` in `show`, `resume`, and `cancel`; the part after `#` is the checkout directory's name (the project directory for project scope). Several rooms get separate headings.
 
-Legacy parks and capacity holds needing a fix use `⊘`, not an agent's `?` question or paused mark. The same held glyph appears in `show` and at the current rail node; its [theme role](./theme.md#glyphs) is `workflow.held` in both glyph sets.
+Capacity holds needing a fix use `⊘`, not an agent's `?` question or paused mark. The same held glyph appears in `show` and at the current rail node; its [theme role](./theme.md#glyphs) is `workflow.held` in both glyph sets.
 
 A row marked `· N ignored` has fields RimZ ignored in that run's sealed definition. `show` names each path and reason, even after the run finishes. These notices reflect how the current version reads the sealed definition, so an upgrade can add them to an existing run. A clean run has no mark. Start-time warnings about auto-continue or background reporting do not mark runs.
 
@@ -211,7 +211,7 @@ Use `then = ["tests", "review"]` to put a cheap check before a costly judge with
 
 A child check's push-back names the check that actually answered, including a later listed check. Its `reason`, when present, comes before `output: <path> (<size label>)`: script stderr or shell output at `<seq>.check.log`, or the judge's whole saved answer at `<seq>.check.json`. An empty or missing file reads `no output`. The prompt never copies a tail or file content; condition explanations stay unchanged.
 
-Set `keep = true` on a `turn` or `until` agent step to leave its leader and companions open outside the run when the attempt finishes naturally. The workflow moves on and no longer owns those agents. With `turn`, a check that returns to the step leaves the old agent beside the next launch; normal occupancy still applies, and `takeover = true` may stop that old agent once idle. Cancel, restart, deadline, a turn step's timeout, and a push-back cap that parks the run still stop the layout. A cap routed to another node detaches it instead. `keep` defaults to false; on `stay` steps and non-agent nodes it warns and is ignored.
+Set `keep = true` on a `turn` or `until` agent step to leave its leader and companions open outside the run when the attempt finishes naturally. The workflow moves on and no longer owns those agents. With `turn`, a check that returns to the step leaves the old agent beside the next launch; normal occupancy still applies, and `takeover = true` may stop that old agent once idle. Cancel, restart, deadline, and a turn step's timeout still stop the layout. A push-back cap detaches it instead. `keep` defaults to false; on `stay` steps and non-agent nodes it warns and is ignored.
 
 To leave time for another turn before an `until` session closes, give the closing route a delay:
 
@@ -391,7 +391,7 @@ subscribe = ["ci.failed", { signal = "review.changes", match = { repo = "acme/ap
 
 Entries take the same forms and the same checkout and board defaults as `wake`, read for the checkout the agent launched in, so a step with its own `worktree` hears that worktree's CI and board. A step also hears team lifecycle signals such as `team.idle`, from its team's cohort in that checkout unless the entry matches `team` or `instance`, and another agent's `agent.*` signals when the entry matches its `handle` or `session`. The step's own agent never hears its own `agent.*` signals, even when an entry names its handle. An invalid entry drops alone the same way. Each matching entry is queued for the agent as a `Type: SIGNAL` message from `@rimz` at its next turn boundary, sent at once when it is resting. The message opens with the signal's subject and payload details, as a loop's signal delivery does, then names the workflow, the step and the run, so the agent can run `rimz workflow show <run>`. A forward moves the run nowhere: when the current check also subscribes to the same signal, both take effect. Subscriptions last while the step's attempt does: once it ends, a `keep = true` agent that lives on receives nothing more, and a message still queued when the attempt ends is canceled rather than delivered. The agent's launch brief lists what it subscribes to, and `rimz workflow show --history` prints one `signal` row per forward. `subscribe` on a turn or command step warns and is ignored, since a turn ends where the message would land.
 
-A check that can wait must have a `timeout`, except a sleep, which has its own duration. The timeout starts each time the run enters the check and runs across every wait there. When it passes, the run follows `on.timeout` or on-break; legacy runs park by default. Here each return from `sweep` starts a new two days.
+A check that can wait must have a `timeout`, except a sleep, which has its own duration. The timeout starts each time the run enters the check and runs across every wait there. When it passes, the run follows `on.timeout` or on-break. Here each return from `sweep` starts a new two days.
 
 Keep `run` for custom, many-outcome answers. A rate limit is another thing to wait for: when the last attempt ended as `limited`, `context.json` carries `prev_attempt.limited.reset_at`, and a script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py` in the RimZ repository](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this, and waits ten minutes after an attempt that died.
 
@@ -448,7 +448,7 @@ change that is not already on the branch. Otherwise answer "approve".
 
 A judge runs headless in the checkout. Its permission mode is automatic unless its profile sets one, so it does not stop on prompts. Its Judge note points to `rimz workflow show $RIMZ_WORKFLOW_RUN --history`; its prompt requires one JSON object of the same shape a script prints, written to the supplied `output_path`. A judge must leave the checkout alone. Under [scoped isolation](./security.md#scoped-isolation), RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation, which is the default, only the prompt tells it so. `rimz workflow validate` refuses a judge whose agent has no headless mode.
 
-A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure follows `on.invalid`, falling back to on-break (legacy runs still park). An [unsupported agent version](../reference/agent-support.md) refuses before the judge runs and follows the same retry and failure-route policy; `workflow show` includes the upgrade instruction.
+A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure follows `on.invalid`, falling back to on-break. An [unsupported agent version](../reference/agent-support.md) refuses before the judge runs and follows the same retry and failure-route policy; `workflow show` includes the upgrade instruction.
 
 `window` holds a judge until its provider's usage window has room, or an agent step until every agent cell's provider has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows detail such as `window 5h.left=12<40`, with its relative age and progress rail.
 
@@ -456,25 +456,15 @@ Put the cheap case in a script and the unclear case in a judge. A script that an
 
 ## When a run needs you
 
-New runs send failures to explicit routes or `[workflow] on-break`. With an agent handler, the run waits at `@break` in that agent's pane: ask there, or fix the cause and resume to the source node. Closing the pane ends the run as failed; resume and cancel leave the pane open.
-
-A legacy run, one whose record has no `route_defaults`, parks when it would otherwise have to guess:
-
-- a step reached `max-visits` or `max-visits-per-outcome`, and `on.cap` defaults or routes to `@user`,
-- a check's `timeout` passed,
-- a run check exited nonzero or printed a bad answer, or a shell check could not start or its log could not open,
-- a judge failed twice,
-- a turn step's leader or child blocked on a question or permission prompt, and `on.asked = "@user"` routes it to you,
-- the run's `deadline` passed,
-- a check routed an outcome to `@user`, with its `reason` as the text.
+A run sends failures to explicit routes or `[workflow] on-break`. With an agent handler, the run waits at `@break` in that agent's pane: ask there, or fix the cause and resume to the source node. Closing the pane ends the run as failed; resume and cancel leave the pane open.
 
 A condition's unread data normally waits rather than breaking. An explicit `on.unknown` can choose another node or end the run.
 
-A blocking question or permission prompt from a turn step's leader or its subagent keeps the attempt live: answer in the agent's pane. `workflow list` reads `asking you: <handle> (<kind>): <text>`, and the step's `timeout` pauses from when the ask opened until RimZ sees it answered. A subagent's ask or answer is noticed within about a minute. Set `on.asked` to end the attempt on a question instead: RimZ stops the layout and follows that edge, with the question in `prev_attempt.asked` in `context.json`. For a legacy edge to `@user`, fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume to relaunch it.
+A blocking question or permission prompt from a turn step's leader or its subagent keeps the attempt live: answer in the agent's pane. `workflow list` reads `asking you: <handle> (<kind>): <text>`, and the step's `timeout` pauses from when the ask opened until RimZ sees it answered. A subagent's ask or answer is noticed within about a minute. Set `on.asked` to end the attempt on a question instead: RimZ stops the layout and follows that edge, with the question in `prev_attempt.asked` in `context.json`.
 
 `[workflow] deadline = "2026-11-01"` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and follows `on.deadline` or on-break; the debugger at `@break` is exempt.
 
-Legacy parked runs raise no sidebar notice; a deployed workflow's strip keeps its yellow `parked` word, whether you or a loop task's `workflow =` started the run, and a run compiled from a loop task's own fields has no strip. They remain under NEEDS YOU in `rimz workflow list` with their addresses and reasons, and in `rimz loop list` when a loop task started them. Blocking questions and capacity holds needing a fix also appear under NEEDS YOU; a staying session that is simply `with you` stays in its workflow group. The [park reasons table](../reference/cli/workflow.md#park-reasons) gives the exact word for each legacy park.
+Blocking questions and capacity holds needing a fix appear under NEEDS YOU in `rimz workflow list`; a staying session that is simply `with you` stays in its workflow group.
 
 Active and parked runs of a deployed workflow keep their checkout's sidebar group even while no agent pane exists. A [workflow strip](../interface/sidebar.md#workflow-strips) heads its own section above the team: workflow badge, rail with the current node named, a state word when no step card stands for it, that state's duration, and the run total pinned right. Click it to reach the current step's card when present. The header keeps PR, CI and queue facts live, including the cockpit's open-PR count. The strip and a rowless group vanish when the run ends; a team whose panes closed leaves no finished cards. A run compiled from a loop task's own fields (a task without `workflow =`) draws no strip and keeps no group: its agents show as ordinary cards in their lane, and the run shows in `rimz loop list` and `rimz loop show`.
 
@@ -493,7 +483,7 @@ A run that is still active takes `--extend` too, without `--at`. An extension is
 
 ## Stop a run and clean up
 
-To replace an agent step without leaving it, run `rimz workflow restart "$RUN"` for a fresh agent, or add `--continue` to retain its conversation. Both modes work while it is running, held at an `until` check, or parked at the agent step. From a cap or asked park, `--continue` resumes that step's previous session, stopping its card first if it is still live. It keeps the routed input and key, resets the step's visits to 1, skips window and capacity waits, and still respects checkout occupancy. `--continue` refuses before stopping if the conversation cannot resume or belongs to another account's history pool. Switch accounts with `rimz accounts use`, or restart without `--continue` to start fresh. If resuming fails after the old agent stops, new runs follow step `on.invalid`. Legacy runs park at the step, and the park reason in `rimz workflow show` names the fresh restart command. `rimz agents restart @<step-agent>` routes through the same continued workflow restart.
+To replace an agent step without leaving it, run `rimz workflow restart "$RUN"` for a fresh agent, or add `--continue` to retain its conversation. Both modes work while it is running, held at an `until` check, or parked at the agent step. From a cap or asked park, `--continue` resumes that step's previous session, stopping its card first if it is still live. It keeps the routed input and key, resets the step's visits to 1, skips window and capacity waits, and still respects checkout occupancy. `--continue` refuses before stopping if the conversation cannot resume or belongs to another account's history pool. Switch accounts with `rimz accounts use`, or restart without `--continue` to start fresh. If resuming fails after the old agent stops, the run follows step `on.invalid`. `rimz agents restart @<step-agent>` routes through the same continued workflow restart.
 
 ```sh
 rimz workflow cancel "$RUN"
@@ -620,7 +610,7 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `outcome` | yes | The edge to follow, from the check's `on` table. |
-| `reason` | no | Text for the history, and for legacy parks when the outcome routes to `@user`. |
+| `reason` | no | Text for the history. |
 | `recheck_at` | no | An RFC 3339 time. On `@wait`, nothing runs the check again before it, unless a subscribed signal arrives. |
 | `key` | no | A string or integer naming the item or failure the run now works on, such as an issue number or `"lint"`. Later context files carry it. |
 
@@ -651,7 +641,7 @@ Scripts and command steps can read `$RIMZ_WORKFLOW_DIR/context.json` for structu
 
 ## See also
 
-- [Workflow CLI](../reference/cli/workflow.md): every command and flag, the waiting line, park reasons, and the JSON shapes.
+- [Workflow CLI](../reference/cli/workflow.md): every command and flag, the waiting line, failure text, and the JSON shapes.
 - [Loops](./loops.md): loop tasks that start runs, signals, and window conditions.
 - [Scripting](./scripting.md): the supervised run each agent step's leader owns.
 - [Workflow internals](../internals/harness/workflow.md): how the engine decides, for readers of the code.
