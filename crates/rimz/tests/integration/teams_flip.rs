@@ -2631,7 +2631,7 @@ fn same_role_and_foreign_stage_do_not_compact_or_enqueue() {
 }
 
 #[test]
-fn queued_flip_compaction_survives_a_later_turn() {
+fn queued_flip_compaction_is_withdrawn_by_a_later_turn() {
     let fixture = Fixture::new();
     fixture.running("coder", Some("terminal_3"));
     fixture.running("reviewer", None);
@@ -2675,32 +2675,28 @@ fn queued_flip_compaction_survives_a_later_turn() {
         .clone();
     assert!(receiver.turn_started_at > Some(command.enqueued_at));
     fixture.hook("coder", "Stop", Some("terminal_3"));
-    fixture.sweep_until(&command.message_id, MessageStatus::Sent);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let lines = crate::common::trace_lines(&fixture.trace);
-        if lines.iter().any(|line| crate::common::is_enter_key(line)) {
-            assert_eq!(
-                lines
-                    .iter()
-                    .filter(|line| line.ends_with("\t/compact "))
-                    .count(),
-                1,
-                "trace={lines:?}"
-            );
-            assert_eq!(
-                lines
-                    .iter()
-                    .filter(|line| crate::common::is_enter_key(line))
-                    .count(),
-                1,
-                "trace={lines:?}"
-            );
-            break;
-        }
-        assert!(Instant::now() < deadline, "trace={lines:?}");
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    success(
+        fixture
+            .command()
+            .args(["message", "sweep"])
+            .output()
+            .unwrap(),
+    );
+    let history = store.list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|message| message.message_id == command.message_id)
+        .unwrap_or_else(|| panic!("compaction withdrawn into history: {history:?}"));
+    assert_eq!(withdrawn.status, MessageStatus::Canceled);
+    assert_eq!(
+        withdrawn.last_error.as_deref(),
+        Some("agent was prompted after this message was queued")
+    );
+    let lines = crate::common::trace_lines(&fixture.trace);
+    assert!(
+        !lines.iter().any(|line| line.ends_with("\t/compact ")),
+        "trace={lines:?}"
+    );
 }
 
 #[test]

@@ -116,6 +116,8 @@ fn targetless_send_flags_refuse_with_usage_error() {
         vec!["--schedule", "1h"],
         vec!["--after", "@planner"],
         vec!["--when", "@coder idle 58m"],
+        vec!["--ttl", "10m"],
+        vec!["--unless-prompted"],
         vec!["--worktree", "auth"],
         vec!["--channel", "auth"],
         vec!["--no-enter"],
@@ -445,6 +447,82 @@ fn deadline_stop_interrupts_a_key_kind_steers_a_pane_kind_and_spares_a_waiting_c
 
     let (_env, lines) = deadline_stop_trace("claude", true);
     assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+}
+
+#[test]
+fn a_parked_deadline_stop_is_withdrawn_when_its_run_ends() {
+    // The pane is gone from the room, so the stop parks for the agent's next pane.
+    let (env, _) = interrupt_fixture("kimi");
+    let panes = env.write_pane_fixture(&[]);
+    let mut record = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("kimi"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    record.status = rimz::store::run::RunStatus::Running;
+    record.subagent = true;
+    record.agent_id = Some(AgentSessionId::from("sess-interrupt"));
+    record.deadline_at = Some(jiff::Timestamp::now() - Duration::from_secs(11));
+    record.grace = Some(Duration::from_secs(180));
+    let store = env.store();
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let trace = env.project_root.join("parked-deadline-stop.log");
+    let output = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .args(rimz::child_process::agent_helper_argv(
+            "run-timeout",
+            &rimz::harness::run_timeout::RunTimeoutRequest {
+                workspace_id: env.workspace_id.clone(),
+                run_id: record.run_id.clone(),
+                interrupted_at: None,
+            },
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let queued = store.list_messages().unwrap();
+    let [stop] = queued.as_slice() else {
+        panic!("one parked deadline stop: {queued:?}");
+    };
+    assert_eq!(
+        (stop.status, stop.about_run.as_ref()),
+        (MessageStatus::Queued, Some(&record.run_id)),
+        "{stop:?}"
+    );
+
+    rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
+
+    let history = store.list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|message| message.message_id == stop.message_id)
+        .unwrap_or_else(|| panic!("stop withdrawn into history: {history:?}"));
+    assert_eq!(
+        (withdrawn.status, withdrawn.last_error.as_deref()),
+        (
+            MessageStatus::Canceled,
+            Some("child run canceled before delivery")
+        )
+    );
+    assert!(store.list_messages().unwrap().is_empty());
+    // A run-linked record keeps its premise in `about_run`, not `premises`; show still names
+    // the broken premise as the withdrawal.
+    let shown = run_success(
+        env.rimz()
+            .args(["message", "show", stop.message_id.as_str()]),
+        "show the withdrawn stop",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("withdrawn") && !shown.contains("last_error"),
+        "{shown}"
+    );
+    assert!(
+        !trace_lines(&trace).iter().any(|line| is_paste_start(line)),
+        "a withdrawn stop is never typed"
+    );
 }
 
 #[test]
@@ -3442,6 +3520,8 @@ fn auto_continue_queues_a_system_resume_then_defers_on_a_closed_gate() {
         false,
     );
     seed_rate_limit_budget(&env, 100);
+    let parked_since = jiff::Timestamp::now();
+    seed_rate_limit_park(&env, "sess-resume-ready", parked_since);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let request = rimz::harness::AutoContinueRequest {
         workspace_id: env.workspace_id.clone(),
@@ -3449,10 +3529,11 @@ fn auto_continue_queues_a_system_resume_then_defers_on_a_closed_gate() {
         agent_id: AgentSessionId::from("sess-resume-ready"),
         pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
         message_id: None,
-        parked_since: jiff::Timestamp::now(),
+        parked_since,
         text: "continue".to_owned(),
         reason: "overloaded_backoff_retry".to_owned(),
         label: None,
+        last_prompt_at: None,
     };
     run_success(
         env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args(
@@ -3546,6 +3627,68 @@ fn auto_continue_queues_a_system_resume_then_defers_on_a_closed_gate() {
         .find(|message| message.text == "month reset")
         .expect("month-reset message");
     assert_eq!(message.gate, DeliveryGate::Done);
+}
+
+#[test]
+fn auto_continue_withdraws_when_a_prompt_landed_after_the_producer_decided() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-resume-ready",
+        "feature-resume",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_turn_error(
+        &env,
+        "sess-resume-ready",
+        TurnErrorClass::PausedRateLimit,
+        false,
+    );
+    seed_rate_limit_budget(&env, 100);
+    let parked_since = jiff::Timestamp::now();
+    seed_rate_limit_park(&env, "sess-resume-ready", parked_since);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let prompted = env
+        .store()
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-resume-ready")
+        .and_then(|agent| agent.last_prompt_at)
+        .expect("the registration prompt");
+    let decided = prompted - jiff::SignedDuration::from_secs(1);
+    let request = rimz::harness::AutoContinueRequest {
+        workspace_id: env.workspace_id.clone(),
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("sess-resume-ready"),
+        pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+        message_id: None,
+        parked_since,
+        text: "continue".to_owned(),
+        reason: "overloaded_backoff_retry".to_owned(),
+        label: None,
+        last_prompt_at: Some(Some(decided)),
+    };
+    run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args(
+            rimz::child_process::agent_helper_argv("auto-continue", &request),
+        ),
+        "auto-continue after a later prompt",
+    );
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    let history = env.store().list_message_history().unwrap();
+    let continued = history
+        .iter()
+        .find(|message| message.text == "continue")
+        .expect("the continue in history");
+    assert_eq!(
+        (continued.status, continued.withdrawn),
+        (MessageStatus::Canceled, true),
+        "a prompt after the producer's decision withdraws the continue"
+    );
 }
 
 #[test]
@@ -8040,6 +8183,15 @@ fn assert_ended_run_notice_canceled(command: &str, notice: HarnessNotice, busy: 
     assert_run_notice_canceled(&env, &message, 0, "child run canceled before delivery");
 }
 
+/// Ends a run by rewriting its record, past the owner close that `harness::run::cancel` runs, as
+/// the room reset does: only delivery's own recheck can then retire the run's notices.
+fn cancel_run_past_its_owner(env: &Env, run_id: &rimz::ids::RunId) {
+    let paths = env.store().paths().clone();
+    let mut run = rimz::harness::run::load(&paths, run_id).unwrap();
+    run.status = rimz::store::run::RunStatus::Canceled;
+    rimz::harness::run::create(&paths, &run).unwrap();
+}
+
 fn assert_run_notice_canceled(env: &Env, message: &MessageRecord, attempts: u32, reason: &str) {
     let store = env.store();
     assert!(
@@ -8201,12 +8353,7 @@ fn delivery_filters_ended_run_notices_from_a_batch() {
     };
     stale_stop.text = "Time is up.".to_owned();
     queue_messages(&env, &[&head, &moot, &stale_stop, &live]);
-    rimz::harness::run::cancel(
-        store.paths(),
-        store.runtime_paths(),
-        moot.about_run.as_ref().unwrap(),
-    )
-    .unwrap();
+    cancel_run_past_its_owner(&env, moot.about_run.as_ref().unwrap());
     let trace_log = env.project_root.join("run-notice-batch-trace.log");
     run_success(
         &mut run_notice_delivery(&env, &head, &pane_fixture, &trace_log, "deliver"),
@@ -8254,12 +8401,7 @@ fn delivery_rechecks_run_end_between_scan_and_claim() {
             .spawn()
             .unwrap();
         let mut release = before.arrive();
-        rimz::harness::run::cancel(
-            env.store().paths(),
-            env.store().runtime_paths(),
-            message.about_run.as_ref().unwrap(),
-        )
-        .unwrap();
+        cancel_run_past_its_owner(&env, message.about_run.as_ref().unwrap());
         release.write_all(&[1]).unwrap();
         let output = child.wait_with_output().unwrap();
         let (live, history) = env.store().list_messages_and_history().unwrap();
@@ -8332,12 +8474,7 @@ fn delivery_rebases_batches_after_retiring_their_head() {
             .spawn()
             .unwrap();
         let mut release = before.arrive();
-        rimz::harness::run::cancel(
-            env.store().paths(),
-            env.store().runtime_paths(),
-            head.about_run.as_ref().unwrap(),
-        )
-        .unwrap();
+        cancel_run_past_its_owner(&env, head.about_run.as_ref().unwrap());
         release.write_all(&[1]).unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -8855,7 +8992,11 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
 }
 
 fn assert_joined_subagent_report_canceled(deliver: bool) {
-    for notice in [HarnessNotice::SubagentReport, HarnessNotice::AgentReport] {
+    for notice in [
+        HarnessNotice::SubagentReport,
+        HarnessNotice::AgentReport,
+        HarnessNotice::TeamReport,
+    ] {
         let (env, mut digest, pane_fixture) = subagent_report_fixture(&[true]);
         digest.sender = MessageSender::Harness { notice };
         queue_messages(&env, &[&digest]);
@@ -12832,6 +12973,7 @@ fn idle_compaction_after_registration_at_rest_waits_then_delivers_once() {
         &env.resolve_workspace(&env.project_root),
         &env.store(),
         rimz::message::compact::CompactRequest {
+            premises: rimz::store::message::Premise::NONE,
             message_id: id.clone(),
             agent: &receiver,
             pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
@@ -12895,6 +13037,7 @@ fn idle_compaction_is_canceled_when_a_resumed_parked_turn_ends() {
         &env.resolve_workspace(&env.project_root),
         &env.store(),
         rimz::message::compact::CompactRequest {
+            premises: rimz::store::message::Premise::NONE,
             message_id: id.clone(),
             agent: &receiver,
             pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
@@ -13074,6 +13217,7 @@ fn idle_compaction_first_attempt_keeps_its_cancellation_reason() {
         &env.resolve_workspace(&env.project_root),
         &store,
         rimz::message::compact::CompactRequest {
+            premises: rimz::store::message::Premise::NONE,
             message_id: MessageId::new(),
             agent: &receiver,
             pane_id: command.pane_id.unwrap(),
@@ -14771,6 +14915,26 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass, ended_turn:
         rimz::agents::context::record::AgentContextRecord::new("claude", agent_id, context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed turn error");
+}
+
+/// Writes the provider-limit park record an auto-continue request is about, as the park path
+/// does before it spawns the helper: a continue whose park is missing is withdrawn.
+fn seed_rate_limit_park(env: &Env, agent_id: &str, parked_at: jiff::Timestamp) {
+    use sha2::Digest as _;
+    let mut digest = sha2::Sha256::new();
+    digest.update(b"claude");
+    digest.update([0]);
+    digest.update(agent_id.as_bytes());
+    let digest = hex::encode(digest.finalize());
+    let park = serde_json::json!({
+        "kind": {"park": "rate_limit", "deadline": "2099-01-01T00:00:00Z"},
+        "parked_at_activity": parked_at,
+        "retries": 0,
+    });
+    let path = env
+        .runtime_paths()
+        .lane_path(format!("auto-continue.{}.json", &digest[..32]));
+    std::fs::write(path, serde_json::to_vec(&park).unwrap()).expect("seed park record");
 }
 
 fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {

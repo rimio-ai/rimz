@@ -332,3 +332,70 @@ fn tune_budget_reset_restores_launch_spec_across_window_transitions() {
         assert!(!ledger.disabled && ledger.raised_cap_usd.is_none());
     }
 }
+
+#[test]
+fn tune_budget_continue_is_withdrawn_once_the_agent_is_prompted() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::harness::budget::{BudgetLedger, BudgetParkStamp, BudgetSpec, write_ledger};
+    use rimz::store::message::{MessageStatus, Premise};
+
+    let env = seat();
+    let kind = AgentKind::new_unchecked("claude");
+    let now = jiff::Timestamp::now();
+    let mut ledger = BudgetLedger::new(BudgetSpec {
+        cap_usd: 5.0,
+        window: rimz::agents::BudgetWindow::Session,
+    });
+    ledger.parked = Some(BudgetParkStamp {
+        at_cost: 5.0,
+        at: now,
+    });
+    ledger.last_interrupt_at = Some(now);
+    write_ledger(&env.runtime_paths(), &kind, &"sess-tune".into(), &ledger).unwrap();
+
+    loop_ok(&env, &["agents", "tune", "@claude", "budget", "off"]);
+    let store = env.store();
+    let queued = store.list_messages().unwrap();
+    let [continued] = queued.as_slice() else {
+        panic!("one budget continue queued: {queued:?}");
+    };
+    assert!(
+        matches!(
+            continued.premises.as_slice(),
+            [Premise::NotPromptedSince { .. }]
+        ),
+        "{continued:?}"
+    );
+
+    let prompt = AgentLifecycleObservation::new(
+        Some("sess-tune".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    store
+        .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "session",
+            "claude",
+            "UserPromptSubmit",
+            &prompt,
+        ))
+        .unwrap();
+    loop_ok(&env, &["message", "sweep"]);
+
+    let history = store.list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|record| record.message_id == continued.message_id)
+        .unwrap_or_else(|| panic!("continue withdrawn into history: {history:?}"));
+    assert_eq!(
+        (withdrawn.status, withdrawn.last_error.as_deref()),
+        (
+            MessageStatus::Canceled,
+            Some("agent was prompted after this message was queued")
+        )
+    );
+    assert!(
+        withdrawn.last_sent_at.is_none(),
+        "never typed: {withdrawn:?}"
+    );
+}

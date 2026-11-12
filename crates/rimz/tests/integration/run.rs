@@ -5088,7 +5088,7 @@ fn red_verify_at_attempt_cap_exits_123_with_forensics() {
 
 #[cfg(unix)]
 #[test]
-fn verify_reprompt_closed_gate_records_retryable_miss() {
+fn verify_reprompt_behind_a_closed_gate_is_withdrawn_with_its_run() {
     let env = Env::new();
     let store = env.store();
     let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
@@ -5115,25 +5115,22 @@ fn verify_reprompt_closed_gate_records_retryable_miss() {
 
     let out = child.wait_with_output().expect("wait closed-gate verify");
     assert!(!out.status.success());
-    let pending = store
-        .list_pending_messages()
-        .expect("pending verify re-prompt");
-    assert_eq!(pending.len(), 1);
-    let message = &pending[0];
+    // The re-prompt is about the reopened run, so the run's end withdraws it from the queue the
+    // closed gate held it in: it is never typed and never errored.
+    let run = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+    assert!(store.list_pending_messages().unwrap().is_empty());
+    let history = store.list_message_history().unwrap();
+    let [message] = history.as_slice() else {
+        panic!("one re-prompt in history: {history:?}");
+    };
     assert!(message.text.contains("Verification failed"));
-    assert_eq!(message.status, rimz::store::message::MessageStatus::Queued);
     assert_eq!(message.pane_id, None);
-    let wake = std::fs::read(env.runtime_paths().lane_path("message-wake.json"))
-        .ok()
-        .and_then(|bytes| {
-            serde_json::from_slice::<Option<Timestamp>>(&bytes).expect("wake stamp json")
-        });
     assert_eq!(
+        (message.status, message.last_error.clone()),
         (
-            message.last_error.as_deref(),
-            wake.is_some_and(|wake| wake <= Timestamp::now()),
+            rimz::store::message::MessageStatus::Canceled,
+            Some(format!("child run {} before delivery", run.status.as_str())),
         ),
-        (Some("compacting"), true),
     );
 }
 

@@ -126,7 +126,9 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                         text: continue_text.to_owned(),
                         sender: MessageSender::System,
                         gate: DeliveryGate::Done,
-                        premises: rimz::store::message::Premise::NONE,
+                        premises: vec![rimz::store::message::Premise::NotPromptedSince {
+                            last_prompt_at: agent.last_prompt_at,
+                        }],
                     }
                     .record(workspace),
                     &workspace.session_name,

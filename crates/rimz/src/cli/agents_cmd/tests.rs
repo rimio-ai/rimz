@@ -798,6 +798,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
         text: "--resume with spaces".to_owned(),
         reason: "overloaded_backoff_retry".to_owned(),
         label: Some("@coder # lane".to_owned()),
+        last_prompt_at: None,
     };
     let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
         "auto-continue",

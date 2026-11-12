@@ -135,6 +135,12 @@ impl HarnessNotice {
         matches!(self, Self::SubagentReport | Self::AgentReport)
     }
 
+    /// Whether the notice reports runs the receiver may join first: a fleet digest or a team
+    /// result, withdrawn once every run it links is joined.
+    pub fn awaits_join(&self) -> bool {
+        self.is_fleet_digest() || matches!(self, Self::TeamReport)
+    }
+
     pub(crate) fn header_type(&self) -> String {
         match self {
             Self::CacheKeepalive => "CACHE_KEEPALIVE".to_owned(),
@@ -442,6 +448,13 @@ impl AfterCondition {
     pub fn card_ref(&self) -> AgentCardRef<'_> {
         AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
     }
+
+    pub fn expiry_reason(&self) -> String {
+        format!(
+            "watched agent {} ended before it finished its queued work",
+            self.address
+        )
+    }
 }
 
 impl WhenCondition {
@@ -482,6 +495,11 @@ pub enum Premise {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         started_at: Option<Timestamp>,
     },
+    /// Holds while the receiver's provider-limit park that began at `parked_since` is still
+    /// open: its park record names the same episode. A record that cannot be parsed holds it.
+    ProviderPark { parked_since: Timestamp },
+    /// Holds while the message `message_id` is still waiting to be typed (queued or claimed).
+    StillQueued { message_id: MessageId },
     /// A premise a newer binary wrote, kept verbatim through queue rewrites; it holds.
     #[serde(untagged)]
     Other(serde_json::Value),
@@ -641,6 +659,11 @@ pub struct MessageRecord {
     /// The premises this message is delivered under, beside the older ones above.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub premises: Vec<Premise>,
+    /// Set only by a premise withdrawal (`store::writer::queue::withdraw_if`): the record ended
+    /// `Canceled` because a premise broke, and `last_error` names it. A user's cancel of the same
+    /// record leaves it unset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub withdrawn: bool,
     /// Shared stamp for records sent in one batched paste; the message id of the
     /// first member left after the write check withdraws the broken ones.
     /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
@@ -771,6 +794,7 @@ impl MessageRecord {
             compacted_context_tokens: None,
             idle_since: None,
             premises: Vec::new(),
+            withdrawn: false,
             batch_id: None,
         }
     }
@@ -1003,14 +1027,28 @@ impl MessageRecord {
         })
     }
 
+    /// The withdrawal reason when this record warns about a message that `still_waiting` no
+    /// longer finds waiting to be typed.
+    pub(crate) fn outlived_original(
+        &self,
+        still_waiting: impl Fn(&MessageId) -> bool,
+    ) -> Option<String> {
+        self.premises.iter().find_map(|premise| match premise {
+            Premise::StillQueued { message_id } if !still_waiting(message_id) => Some(format!(
+                "message {message_id} left the queue before this warning"
+            )),
+            _ => None,
+        })
+    }
+
     /// Whether the record holds only while some premise does, in the new field or in one of the
-    /// older fields that store a premise; a `Canceled` ending of such a record keeps its reason.
+    /// older fields that store a premise.
     pub(crate) fn carries_premise(&self) -> bool {
         !self.premises.is_empty()
             || self.idle_since.is_some()
             || self.about_run.is_some()
             || self.soft_compact == Some(SoftCompactStep::Continue)
-            || matches!(&self.sender, MessageSender::Harness { notice } if notice.is_fleet_digest())
+            || matches!(&self.sender, MessageSender::Harness { notice } if notice.awaits_join())
     }
 
     /// The earliest lifespan premise's deadline.

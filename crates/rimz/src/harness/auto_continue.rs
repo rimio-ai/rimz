@@ -179,6 +179,24 @@ pub struct AutoContinueRequest {
     pub text: String,
     pub reason: String,
     pub label: Option<String>,
+    /// The receiver's `last_prompt_at` on the producer's row at its decision, so a prompt that
+    /// lands before the helper starts withdraws the continue. `None` on a request an older
+    /// producer wrote; the helper then copies the stamp from its own snapshot.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub last_prompt_at: Option<Option<Timestamp>>,
+}
+
+/// Decodes a field that is present, `null` included, as `Some`; an absent one defaults to `None`.
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 impl AutoContinueRequest {
@@ -639,6 +657,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
             reason: record.kind.reason(),
             parked_since: record.parked_at_activity,
             label: Some(&label),
+            last_prompt_at: agent.last_prompt_at,
         },
     ) {
         return;
@@ -702,6 +721,7 @@ struct AutoContinueFacts<'a> {
     reason: &'a str,
     parked_since: Timestamp,
     label: Option<&'a str>,
+    last_prompt_at: Option<Timestamp>,
 }
 
 /// Whether the agent has done nothing since the park was armed. Equal or
@@ -751,7 +771,11 @@ fn evidenced_attempts(messages: &[ResumeMessage], agent: &AgentState, record: &P
     let since = record.attempts_since.unwrap_or(record.parked_at_activity);
     let count = messages
         .iter()
-        .filter(|message| message.same_agent_card(agent) && message.enqueued_at >= since)
+        .filter(|message| {
+            message.was_attempted()
+                && message.same_agent_card(agent)
+                && message.enqueued_at >= since
+        })
         .map(|message| message.message_id.as_str())
         .collect::<BTreeSet<_>>()
         .len();
@@ -760,7 +784,8 @@ fn evidenced_attempts(messages: &[ResumeMessage], agent: &AgentState, record: &P
 
 fn recent_resume_attempt(messages: &[ResumeMessage], agent: &AgentState, now: Timestamp) -> bool {
     messages.iter().any(|message| {
-        message.same_agent_card(agent)
+        message.was_attempted()
+            && message.same_agent_card(agent)
             && now.duration_since(message.enqueued_at)
                 < jiff::SignedDuration::from_secs(AUTO_CONTINUE_RETRY_INTERVAL.as_secs() as i64)
     })
@@ -802,6 +827,12 @@ impl ResumeMessage {
             enqueued_at: outcome.enqueued_at,
             updated_at: outcome.updated_at,
         }
+    }
+
+    /// A `Canceled` continue was never typed: a broken premise withdrew it (or a user canceled
+    /// it), so it is no attempt to count against the cap or to wait out before the next one.
+    fn was_attempted(&self) -> bool {
+        self.status != MessageStatus::Canceled
     }
 
     fn same_agent_card(&self, agent: &AgentState) -> bool {
@@ -909,6 +940,24 @@ pub(super) fn arm_budget_park(
     );
 }
 
+/// Whether the provider-limit park of `kind`/`agent_id` whose episode began at or before
+/// `parked_since` is still open: its record exists and a later park has not replaced it. A record
+/// that cannot be parsed holds; a missing one is the park's close.
+pub(crate) fn park_episode_open(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    parked_since: Timestamp,
+) -> bool {
+    let path = park_record_path(runtime, kind, agent_id);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return path.exists();
+    };
+    serde_json::from_slice::<ParkRecord>(&bytes).map_or(true, |record| {
+        record.attempts_since.unwrap_or(record.parked_at_activity) <= parked_since
+    })
+}
+
 pub fn clear_budget_park(runtime: &RuntimePaths, kind: &AgentKind, agent_id: &AgentSessionId) {
     let path = park_record_path(runtime, kind, agent_id);
     if !cached_park(&path).is_some_and(|record| {
@@ -966,6 +1015,7 @@ fn spawn_auto_continue(
         text: text.to_owned(),
         reason: facts.reason.to_owned(),
         label: facts.label.map(str::to_owned),
+        last_prompt_at: Some(facts.last_prompt_at),
     };
     let args = crate::child_process::agent_helper_argv("auto-continue", &request);
     tracing::info!(

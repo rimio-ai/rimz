@@ -70,6 +70,8 @@ pub struct CompactRequest<'a> {
     pub sender: MessageSender,
     pub automated: bool,
     pub idle: bool,
+    /// What must still hold for the compaction to be worth sending, beside the idle tag.
+    pub premises: Vec<crate::store::message::Premise>,
 }
 
 pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Result<()> {
@@ -107,7 +109,7 @@ pub fn send_compact(
         text: request.command,
         sender: request.sender,
         gate: DeliveryGate::Done,
-        premises: crate::store::message::Premise::NONE,
+        premises: request.premises,
     }
     .record(workspace)
     .with_automated(request.automated)
@@ -288,6 +290,7 @@ mod tests {
                     &workspace,
                     &store,
                     CompactRequest {
+                        premises: crate::store::message::Premise::NONE,
                         message_id: id.clone(),
                         agent: &agent,
                         pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_3"),

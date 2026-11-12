@@ -46,6 +46,10 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 | Steer | `--steer` | Writes into the live turn once the typing hold clears. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
 | Interrupt | `--interrupt` | Types the text into the live turn, then presses Escape three seconds later to stop it. Claude Code and Codex only; other agents are refused. Codex starts the text as a fresh turn only if it has not already taken it into the running turn; an expanded question editor takes the text as an answer instead. Conflicts with `--steer`, `--on`, `--schedule`, `--after`, and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
+| Lifespan | `--ttl <DUR>` | Withdraws the message if it is still undelivered that long after the send. Takes `s`, `m`, `h`, or `d`. Conflicts with `--steer` and `--interrupt`. |
+| Unless prompted | `--unless-prompted` | Withdraws the message if the agent takes any other prompt before it is delivered, a prompt RimZ types included. Conflicts with `--steer` and `--interrupt`. |
+
+A withdrawn message ends `canceled` with the reason in `message show`, and its sender gets no undelivered notice. A lifespan ends at its deadline through the room's sweep with no delivery attempt; an unless-prompted message is withdrawn when the agent's next prompt starts its turn, or at the pane write if that prompt lands first.
 
 `--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar host wakes due messages.
 
@@ -105,7 +109,7 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 | --- | --- |
 | Target | Exactly one existing agent with lifecycle state. A fan-out address, or the message's own recipient, is refused. |
 | Already satisfied | An agent that is idle with no ready work meets the condition at send time, and it stays met. Queue the upstream work before the message that waits on it. |
-| Missing agent | A referenced agent that is gone keeps the message waiting. |
+| Watched agent ends | While the condition is unmet, the message is archived with the reason, and an agent sender gets an undelivered notice. |
 
 **`--when '<ADDR> <STATUS> <DURATION>'`** waits until one agent has stayed in a status continuously for the duration, for example `--when '@coder running 2h'`.
 
@@ -198,10 +202,10 @@ Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED`
 | `delivered` | The agent acknowledged it: a turn started with the prompt, or compaction started for a command. |
 | `timed_out` | The agent never acknowledged it. A command is never resent, because repeating `/compact` can discard context. |
 | `errored` | Delivery could not happen, for example the address matched no agent. |
-| `canceled` | `message cancel` or `message clear` stopped it, a fleet digest was fully joined, a restart or stall notice's child run ended, a subagent deadline stop's run ended or reopened before it was typed, a soft-compaction cycle cleared, an idle compaction's agent took a turn after its idle decision, or a workflow attempt ended before consuming its push-back. `message show` keeps the reason in its timeline. |
+| `canceled` | `message cancel` or `message clear` stopped it, or RimZ withdrew it because a premise it was sent under broke first: a fleet digest or team result was fully joined, the run a notice, re-prompt, or deadline stop is about ended (or, for a deadline stop, reopened), a soft-compaction cycle cleared, an idle compaction's agent took a turn after its idle decision, the agent took another prompt (an auto-continue, budget continuation, cache keepalive, stalled-team nudge, stage-flip compaction, restart continue or recovery notice, or an `--unless-prompted` send), a team stage was left (a stage notice or stall nudge), a provider-limit park closed (an auto-continue), the message a "still queued" warning is about left the queue, a `--ttl` or cache keepalive lifespan ended, or a workflow attempt ended before consuming its push-back. `message show` prints the reason as `withdrawn`. No canceled message sends its sender a notice. |
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
 | `expired` | An automatic command remained queued for ten minutes without delivery, or a resumed child did not register by its follow-up's deadline. Automatic commands stop blocking later messages even before the next sweep records expiry; registration expiry is recorded only while the card is absent or ended no later than enqueue. Other prompts and operator commands never expire. |
-| `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
+| `archived` | The recipient, its channel, or a watched `--after` or `--when` agent ended first. |
 
 The last seven are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to [`gc.transcript_retention`](../../guide/configuration.md#garbage-collection), which defaults to `forever` and governs transcript history too. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained. Requeueing an expired automatic command starts a fresh ten-minute window. Steer and interrupt cannot deliver an expired queued command.
 
@@ -251,11 +255,11 @@ Trailing lines report what the view left out:
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
-`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. `gate` is `done`, `any`, or `resume` (an auto-continue or budget continuation RimZ queues for a `paused` agent, which opens only while the agent reads `paused`). When set, a row adds `about_run` (the run a subagent restart or stall notice, a subagent deadline stop, or a signal forwarded to a workflow step's leader, is about), `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id` (the pane a delivery attempt wrote to; a queued row carries none, so delivery writes to the pane the agent holds then), `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), and `compacted_context_tokens`.
+`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. `gate` is `done`, `any`, or `resume` (an auto-continue or budget continuation RimZ queues for a `paused` agent, which opens only while the agent reads `paused`). When set, a row adds `about_run` (the run a subagent restart or stall notice, a subagent deadline stop, a verify re-prompt, or a signal forwarded to a workflow step's leader, is about), `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id` (the pane a delivery attempt wrote to; a queued row carries none, so delivery writes to the pane the agent holds then), `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` or `continue`), `compacted_context_tokens`, and `premises` (each an object whose `premise` is `lifespan`, `not_prompted_since`, `stage_visit`, `provider_park`, or `still_queued`).
 
 ### Show one message
 
-`rimz message show <id>` (alias `status`) prints the record's fields, its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with rows for an active `typing hold`, `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one:
+`rimz message show <id>` (alias `status`) prints the record's fields (a `premises` row lists what must still hold for the message to be delivered, and a withdrawn message prints the premise that broke as `withdrawn`), its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with rows for an active `typing hold`, `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one:
 
 ```text
 DELIVERY CHECK

@@ -200,6 +200,8 @@ struct QueueTxn<'txn, 'paths> {
     undelivered: Vec<(MessageRecord, Option<String>, String)>,
     events: Vec<EventEnvelope>,
     live_changed: bool,
+    /// The room session the commit's status changes were staged under.
+    session_name: Option<String>,
 }
 
 impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
@@ -216,6 +218,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
             undelivered: Vec::new(),
             events: Vec::new(),
             live_changed: false,
+            session_name: None,
         })
     }
 
@@ -271,6 +274,9 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
     }
 
     fn stage_event(&mut self, event: EventEnvelope) {
+        if self.session_name.is_none() {
+            self.session_name = Some(event.session_name.clone());
+        }
         self.events.push(event);
     }
 
@@ -305,6 +311,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         reason: Option<&str>,
         now: Timestamp,
     ) -> MessageRecord {
+        self.session_name = Some(session_name.to_owned());
         let message = normalize_terminal(message, status, now, reason);
         if message.wants_undelivered_notice() {
             self.undelivered.push((
@@ -331,6 +338,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         now: Timestamp,
         mut update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
     ) -> Vec<MessageRecord> {
+        self.session_name = Some(session_name.to_owned());
         let mut updated = Vec::new();
         let mut live = Vec::with_capacity(self.live.len());
         for mut message in std::mem::take(&mut self.live) {
@@ -381,6 +389,31 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         })
     }
 
+    /// Withdraw every open "still queued" warning whose original is no longer waiting to be
+    /// typed, closed or sent in this commit or before it: the original still waiting is the
+    /// warning's subject.
+    fn withdraw_outlived_warnings(&mut self, now: Timestamp) {
+        let Some(session_name) = self.session_name.clone() else {
+            return;
+        };
+        let waiting: BTreeSet<MessageId> = self
+            .live
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message.status,
+                    MessageStatus::Queued | MessageStatus::Claimed
+                )
+            })
+            .map(|message| message.message_id.clone())
+            .collect();
+        self.apply_all(&session_name, now, |message| {
+            let eligible = message.status.is_open();
+            let reason = message.outlived_original(|original| waiting.contains(original));
+            withdraw_if(message, eligible, reason)
+        });
+    }
+
     fn claim_indices(&mut self, indices: &[usize], now: Timestamp) -> Vec<MessageRecord> {
         let mut claimed = Vec::with_capacity(indices.len());
         for index in indices {
@@ -397,7 +430,10 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         claimed
     }
 
-    fn finish(self, store: &Store) -> Result<()> {
+    fn finish(mut self, store: &Store) -> Result<()> {
+        if self.live_changed {
+            self.withdraw_outlived_warnings(Timestamp::now());
+        }
         if self.live_changed {
             message::write_queue(&self.txn.paths.messages_dir, &self.live)?;
             store.refresh_message_wake(&self.live, Timestamp::now());
@@ -424,7 +460,7 @@ fn normalize_terminal(
     message.status = status;
     message.updated_at = now;
     if (matches!(status, MessageStatus::Archived | MessageStatus::Expired)
-        || (status == MessageStatus::Canceled && message.carries_premise()))
+        || (status == MessageStatus::Canceled && message.idle_since.is_some()))
         && let Some(reason) = reason
     {
         message.last_error = Some(reason.to_owned());
@@ -447,6 +483,7 @@ fn withdraw_if(
         return MessageUpdate::Keep;
     };
     message.last_error = Some(reason.clone());
+    message.withdrawn = true;
     MessageUpdate::Finalize {
         status: MessageStatus::Canceled,
         reason: Some(reason),
@@ -1420,10 +1457,8 @@ impl Store {
                     };
                 }
                 if message.status == MessageStatus::Queued && message.lifespan_over(now) {
-                    return MessageUpdate::Finalize {
-                        status: MessageStatus::Canceled,
-                        reason: message.broken_row_premise(None, now),
-                    };
+                    let reason = message.broken_row_premise(None, now);
+                    return withdraw_if(message, true, reason);
                 }
                 if message.awaiting_registration(&agents)
                     && let Some(register_by) = message.register_by.filter(|deadline| now >= *deadline)
@@ -1765,25 +1800,30 @@ impl Store {
                 if !message.status.is_open() {
                     return MessageUpdate::Keep;
                 }
-                let reason = if !live_agents
-                    .iter()
-                    .any(|agent| message.same_agent_card(agent))
-                {
-                    Some("receiver ended".to_owned())
-                } else if message.status == MessageStatus::Queued {
-                    message
-                        .when
+                let reason =
+                    if !live_agents
                         .iter()
-                        .filter(|condition| condition.met_at.is_none())
-                        .find(|condition| {
+                        .any(|agent| message.same_agent_card(agent))
+                    {
+                        Some("receiver ended".to_owned())
+                    } else if message.status == MessageStatus::Queued {
+                        let gone = |card: AgentCardRef<'_>| {
                             !live_agents
                                 .iter()
-                                .any(|agent| condition.card_ref().matches(agent.card_ref()))
-                        })
-                        .map(crate::store::message::WhenCondition::expiry_reason)
-                } else {
-                    None
-                };
+                                .any(|agent| card.matches(agent.card_ref()))
+                        };
+                        let unmet_when = message.when.iter().find(|condition| {
+                            condition.met_at.is_none() && gone(condition.card_ref())
+                        });
+                        let unmet_after = message.after.iter().find(|condition| {
+                            condition.met_at.is_none() && gone(condition.card_ref())
+                        });
+                        unmet_when
+                            .map(message::WhenCondition::expiry_reason)
+                            .or_else(|| unmet_after.map(message::AfterCondition::expiry_reason))
+                    } else {
+                        None
+                    };
                 let Some(reason) = reason else {
                     return MessageUpdate::Keep;
                 };
@@ -1840,12 +1880,18 @@ impl Store {
                 {
                     return MessageUpdate::Keep;
                 }
-                let Some(condition) = message.when.iter().find(|condition| {
+                let unmet_when = message.when.iter().find(|condition| {
                     condition.met_at.is_none() && condition.card_ref().matches(card)
-                }) else {
+                });
+                let unmet_after = message.after.iter().find(|condition| {
+                    condition.met_at.is_none() && condition.card_ref().matches(card)
+                });
+                let Some(reason) = unmet_when
+                    .map(message::WhenCondition::expiry_reason)
+                    .or_else(|| unmet_after.map(message::AfterCondition::expiry_reason))
+                else {
                     return MessageUpdate::Keep;
                 };
-                let reason = condition.expiry_reason();
                 MessageUpdate::Finalize {
                     status: MessageStatus::Archived,
                     reason: Some(reason),

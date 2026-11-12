@@ -154,9 +154,9 @@ struct MessageDraft {
     not_before: Option<Timestamp>,
     after: Vec<AfterCondition>,
     when: Vec<WhenCondition>,
-    about_run: Option<crate::ids::RunId>,
     reply_wanted: bool,
     premises: Vec<Premise>,
+    about_run: Option<crate::ids::RunId>,
 }
 
 enum Recipient<'a> {

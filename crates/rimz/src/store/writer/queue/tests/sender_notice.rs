@@ -478,3 +478,46 @@ fn queued_notice_refuses_a_claimed_sent_or_terminal_record() {
         assert_eq!(serde_json::to_value(q.events()).unwrap(), events);
     }
 }
+
+#[test]
+fn an_unmet_after_on_an_ended_agent_archives_and_tells_its_sender() {
+    let q = Queue::new();
+    register_sender(&q, false);
+    let watched = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
+    let after = |met_at| crate::store::message::AfterCondition {
+        kind: watched.kind.clone(),
+        agent_id: watched.agent_id.clone(),
+        agent_name: Some("planner".to_owned()),
+        address: "@planner".to_owned(),
+        met_at,
+    };
+    let original = q.queue_with(1, |record| {
+        record.sender = sender();
+        record.after = vec![after(None)];
+    });
+
+    let archived = q
+        .archive_messages_watching_card(
+            &watched.kind,
+            &watched.agent_id,
+            Some("planner"),
+            None,
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(archived, 1);
+    let history = q.history();
+    let record = history
+        .iter()
+        .find(|message| message.message_id == original.message_id)
+        .expect("archived into history");
+    assert_eq!(
+        (record.status, record.last_error.as_deref()),
+        (
+            MessageStatus::Archived,
+            Some("watched agent @planner ended before it finished its queued work")
+        )
+    );
+    assert_notice(&q, &original, "archived");
+}

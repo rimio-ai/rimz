@@ -33,7 +33,7 @@ impl LaneScope {
 pub(super) struct MessageListRow {
     pub(super) message_id: MessageId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    about_run: Option<rimz::ids::RunId>,
+    pub(super) about_run: Option<rimz::ids::RunId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) address: Option<String>,
     pub(super) kind: AgentKind,
@@ -79,6 +79,15 @@ pub(super) struct MessageListRow {
     pub(super) soft_compact: Option<rimz::store::message::SoftCompactStep>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) compacted_context_tokens: Option<u64>,
+    /// The idle compaction's turn edge (`MessageRecord::idle_since`), a premise `show` names.
+    #[serde(skip)]
+    pub(super) idle_since: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) premises: Vec<rimz::store::message::Premise>,
+    /// The record ended in a premise withdrawal (`MessageRecord::withdrawn`); its `last_error` is
+    /// the premise that broke.
+    #[serde(skip)]
+    pub(super) withdrawn: bool,
 }
 
 impl MessageListRow {
@@ -149,6 +158,9 @@ impl MessageListRow {
             auto_compact: message.auto_compact,
             soft_compact: message.soft_compact,
             compacted_context_tokens: message.compacted_context_tokens,
+            idle_since: message.idle_since,
+            premises: message.premises,
+            withdrawn: message.withdrawn,
         }
     }
 
@@ -194,6 +206,9 @@ impl MessageListRow {
             auto_compact: None,
             soft_compact: payload.soft_compact,
             compacted_context_tokens: payload.compacted_context_tokens,
+            idle_since: None,
+            premises: Vec::new(),
+            withdrawn: false,
         })
     }
 }

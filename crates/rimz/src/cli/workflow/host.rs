@@ -69,6 +69,27 @@ impl<'a> Host<'a> {
         })
     }
 
+    /// Retire the push-back the run's attempt queued, so no ending of the attempt (a stop or a
+    /// detach) leaves it to be typed.
+    fn retire_push(&self, ctx: &Ctx, run: &RunRecord) -> Result<()> {
+        let Some(pin) = &run.workflow else {
+            return Ok(());
+        };
+        let record = rimz::store::workflow::load(&self.state.workflow(&pin.run))?;
+        if let Some(push) = record
+            .session_attempt()
+            .filter(|current| current.seq == pin.seq)
+            .and_then(|current| current.push.as_ref())
+        {
+            ctx.store.retire_message(
+                &push.message,
+                &ctx.workspace.session_name,
+                "workflow attempt ended",
+            )?;
+        }
+        Ok(())
+    }
+
     fn owns_push(&self, run: &RunRecord, push: &rimz::store::workflow::PushBack) -> Result<bool> {
         let pin = run
             .workflow
@@ -424,6 +445,7 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
+            self.retire_push(&ctx, &run)?;
             supervised::cancel_supervised_run(&ctx.store, &run)?;
             let Some(pin) = &run.workflow else {
                 return Ok(Children::default());
@@ -524,20 +546,7 @@ impl workflow::AttemptHost for Host<'_> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
-            if let Some(pin) = &run.workflow {
-                let record = rimz::store::workflow::load(&self.state.workflow(&pin.run))?;
-                if let Some(push) = record
-                    .session_attempt()
-                    .filter(|current| current.seq == pin.seq)
-                    .and_then(|current| current.push.as_ref())
-                {
-                    ctx.store.retire_message(
-                        &push.message,
-                        &ctx.workspace.session_name,
-                        "workflow attempt ended",
-                    )?;
-                }
-            }
+            self.retire_push(&ctx, &run)?;
             let snapshot = ctx.cached_snapshot()?;
             let Some(cohort) = workflow::stop_cohort(&snapshot, &run) else {
                 supervised::stop_supervised_run(&ctx.workspace, &ctx.store, self.globals, &run)?;

@@ -48,7 +48,8 @@ pub(super) fn deliver_reprompt(
         gate: DeliveryGate::Any,
         premises: rimz::store::message::Premise::NONE,
     }
-    .record(workspace);
+    .record(workspace)
+    .with_about_run(Some(record.run_id.clone()));
     let delivered = synthetic::deliver_now(
         workspace,
         store,

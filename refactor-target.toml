@@ -4419,7 +4419,8 @@ path = "crates/rimz/src/store"
 # workflow::RunFire freezes what a loop fire tells its run's briefs (+1).
 # workflow::remove_refused clears a run home whose record another RimZ version wrote, for `workflow cancel` (+1).
 # Premise, MessageRecord::with_premises and the row-only premise checks broken_row_premise and ended_stage_visit share the premise model with message and harness (+4).
-surface-budget = 608
+# HarnessNotice::awaits_join and MessageRecord::outlived_original let owners and the write check judge a team result and a still-queued warning; AfterCondition::expiry_reason words an unmet `--after` archive (+3).
+surface-budget = 611
 
 [[verdict]]
 kind = "item"
@@ -5471,6 +5472,8 @@ allowed-dependencies = [
     "ids",
     "proc",
     "store",
+    # A newly terminal run withdraws its messages in the room the workspace record names.
+    "workspace::record",
 ]
 # The lifecycle fold parks on an owed wake, and the stranded-park settle reads the same predicate.
 # Response paths, the publisher and its typed error cross the CLI/library boundary.

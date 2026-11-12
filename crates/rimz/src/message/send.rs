@@ -744,6 +744,7 @@ fn compact_message_for_target<'a>(
         return None;
     }
     let mut record = MessageDraft {
+        about_run: None,
         premises: crate::store::message::Premise::NONE,
         body: MessageBody::Command,
         enter: true,
@@ -755,7 +756,6 @@ fn compact_message_for_target<'a>(
         not_before: None,
         after: Vec::new(),
         when: Vec::new(),
-        about_run: None,
         reply_wanted: false,
     }
     .record(

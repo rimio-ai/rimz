@@ -256,10 +256,68 @@ fn render_message_kv(
             render::cell(message.unconfirmed_sends.to_string()),
         );
     }
+    let premises = premise_labels(message, now);
+    if !premises.is_empty() {
+        kv.push("premises", render::cell(premises.join(" · ")));
+    }
     if let Some(last_error) = message.last_error.as_deref() {
-        kv.push("last_error", render::cell(last_error));
+        kv.push(
+            if message.withdrawn {
+                "withdrawn"
+            } else {
+                "last_error"
+            },
+            render::cell(last_error),
+        );
     }
     kv
+}
+
+/// Every premise the record is delivered under, in the words `message show` prints.
+fn premise_labels(message: &MessageListRow, now: Timestamp) -> Vec<String> {
+    let run = message
+        .about_run
+        .as_ref()
+        .map(|run| format!("run {run} not ended"));
+    let idle = message
+        .idle_since
+        .map(|at| format!("no turn since {}", time_with_absolute(at, now)));
+    let cycle = (message.soft_compact == Some(rimz::store::message::SoftCompactStep::Continue))
+        .then(|| "soft-compaction cycle not cleared".to_owned());
+    let join = matches!(&message.sender, MessageSender::Harness { notice } if notice.awaits_join())
+        .then(|| "linked runs not all joined".to_owned());
+    [run, idle, cycle, join]
+        .into_iter()
+        .flatten()
+        .chain(
+            message
+                .premises
+                .iter()
+                .map(|premise| premise_label(premise, now)),
+        )
+        .collect()
+}
+
+/// What a premise needs to keep holding, in the words `message show` prints.
+fn premise_label(premise: &rimz::store::message::Premise, now: Timestamp) -> String {
+    use rimz::store::message::Premise;
+
+    match premise {
+        Premise::Lifespan { until } => format!("until {}", time_until_with_absolute(*until, now)),
+        Premise::NotPromptedSince {
+            last_prompt_at: Some(at),
+        } => format!("not prompted since {}", time_with_absolute(*at, now)),
+        Premise::NotPromptedSince {
+            last_prompt_at: None,
+        } => "never prompted".to_owned(),
+        Premise::StageVisit { stage, .. } => format!("stage {stage} not left"),
+        Premise::ProviderPark { parked_since } => format!(
+            "provider-limit park since {} still open",
+            time_with_absolute(*parked_since, now)
+        ),
+        Premise::StillQueued { message_id } => format!("{message_id} still queued"),
+        Premise::Other(_) => "a premise a newer RimZ wrote".to_owned(),
+    }
 }
 
 struct CollapsedTimelineRow<'a> {
@@ -997,6 +1055,38 @@ mod tests {
 
     use rimz::agents::AgentStatus;
     use rimz::ids::{MessageId, MuxName, PaneId};
+
+    #[test]
+    fn the_premises_row_names_the_premises_the_older_fields_hold_too() {
+        use rimz::store::message::{
+            DeliveryGate, HarnessNotice, MessageRecord, MessageSender, Premise, SoftCompactStep,
+        };
+        let now = Timestamp::UNIX_EPOCH;
+        let agent = rimz::testkit::agent_state("claude", "sess", now);
+        let workspace = rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/w"));
+        let run = rimz::ids::RunId::new();
+        let mut message =
+            MessageRecord::new(workspace, &agent, "text".to_owned(), DeliveryGate::Done)
+                .with_about_run(Some(run.clone()));
+        message.idle_since = Some(now);
+        message.soft_compact = Some(SoftCompactStep::Continue);
+        message.sender = MessageSender::Harness {
+            notice: HarnessNotice::TeamReport,
+        };
+        message.premises = vec![Premise::StillQueued {
+            message_id: MessageId::parse("msg_0000000000000001").unwrap(),
+        }];
+        assert_eq!(
+            premise_labels(&MessageListRow::from_record(message), now),
+            [
+                format!("run {run} not ended"),
+                format!("no turn since {}", time_with_absolute(now, now)),
+                "soft-compaction cycle not cleared".to_owned(),
+                "linked runs not all joined".to_owned(),
+                "msg_0000000000000001 still queued".to_owned(),
+            ]
+        );
+    }
 
     #[test]
     fn ended_verdict_offers_only_a_launched_child_the_parent_message_retry() {

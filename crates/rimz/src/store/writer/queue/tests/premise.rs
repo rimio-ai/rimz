@@ -213,7 +213,7 @@ fn lifespan_arms_the_wake_stamp_and_ends_through_reconcile_without_a_notice() {
 }
 
 #[test]
-fn every_premise_withdrawal_keeps_its_reason_on_the_record() {
+fn a_withdrawal_is_marked_by_its_writer_and_a_cancel_of_a_premised_record_is_not() {
     use crate::store::message::{HarnessNotice, SoftCompactStep};
 
     let q = Queue::new();
@@ -229,22 +229,89 @@ fn every_premise_withdrawal_keeps_its_reason_on_the_record() {
             notice: HarnessNotice::SubagentReport,
         };
     });
-    let plain = q.queue(5);
-    for record in [&premised, &about_run, &soft, &digest, &plain] {
-        q.settle(&record.message_id, MessageStatus::Canceled, Some("broke"));
+    let withdrawn = [&premised.message_id, &about_run.message_id];
+    q.withdraw_messages("session", |record| {
+        withdrawn
+            .contains(&&record.message_id)
+            .then(|| "broke".to_owned())
+    })
+    .unwrap();
+    for record in [&soft, &digest] {
+        q.settle(&record.message_id, MessageStatus::Canceled, Some("cancel"));
     }
 
-    assert_eq!(
-        q.history()
+    let history = q.history();
+    let ended = |id: &crate::ids::MessageId| {
+        let record = history
             .iter()
-            .map(|record| record.last_error.as_deref())
-            .collect::<Vec<_>>(),
-        [
-            Some("broke"),
-            Some("broke"),
-            Some("broke"),
-            Some("broke"),
-            None
-        ]
-    );
+            .find(|record| &record.message_id == id)
+            .expect("ended into history");
+        (
+            record.status,
+            record.last_error.as_deref(),
+            record.withdrawn,
+        )
+    };
+    for id in withdrawn {
+        assert_eq!(ended(id), (MessageStatus::Canceled, Some("broke"), true));
+    }
+    for id in [&soft.message_id, &digest.message_id] {
+        assert_eq!(ended(id), (MessageStatus::Canceled, None, false));
+    }
+}
+
+#[test]
+fn a_still_queued_warning_is_withdrawn_in_the_commit_its_original_leaves_the_queue() {
+    for (index, close) in [
+        MessageStatus::Sent,
+        MessageStatus::Delivered,
+        MessageStatus::Canceled,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let q = Queue::new();
+        let base = 10 * index as u64;
+        let original = q.queue_with(base + 1, |record| record.agent_id = "busy-card".into());
+        let warning = q.queue_with(base + 2, |record| {
+            record.premises = vec![Premise::StillQueued {
+                message_id: original.message_id.clone(),
+            }];
+        });
+        q.queue_message(&q.record(base + 3), "session").unwrap();
+        assert_eq!(q.live().len(), 3, "a waiting original keeps its warning");
+
+        if close == MessageStatus::Sent {
+            let claimed = q
+                .claim_message_for_delivery(&original.message_id, Timestamp::now())
+                .unwrap()
+                .expect("claimed");
+            assert!(
+                q.live()
+                    .iter()
+                    .any(|record| record.message_id == warning.message_id),
+                "a claimed original is still waiting to be typed"
+            );
+            q.record_sent_message(&claimed, "session").unwrap();
+        } else {
+            q.settle(&original.message_id, close, None);
+        }
+
+        let withdrawn = q
+            .history()
+            .into_iter()
+            .find(|record| record.message_id == warning.message_id)
+            .unwrap_or_else(|| panic!("{close:?}: warning withdrawn into history"));
+        assert_eq!(
+            (withdrawn.status, withdrawn.last_error),
+            (
+                MessageStatus::Canceled,
+                Some(format!(
+                    "message {} left the queue before this warning",
+                    original.message_id
+                ))
+            ),
+            "{close:?}"
+        );
+    }
 }

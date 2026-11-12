@@ -746,7 +746,9 @@ fn notify_long_queued(
             sender,
             HarnessNotice::MessageQueued,
             sender_notice::still_queued(record, &cause, waited),
-            crate::store::message::Premise::NONE,
+            vec![crate::store::message::Premise::StillQueued {
+                message_id: record.message_id.clone(),
+            }],
         );
         store.queue_still_queued_notice(&record.message_id, &notice, &workspace.session_name)?;
     }

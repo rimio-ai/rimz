@@ -216,6 +216,42 @@ fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
 }
 
 #[test]
+fn a_cancel_retires_an_unacknowledged_push_back() {
+    let room = room();
+    let (id, run) = room.launch();
+    let store = room.env.store();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().lane_path("workflow-tick.json"),
+        &BTreeMap::from([(
+            id.clone(),
+            jiff::Timestamp::now() + Duration::from_secs(3600),
+        )]),
+    )
+    .unwrap();
+    opened_turn(&room, &id, &run);
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let pushed = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["push"]["queued"] == true
+    });
+    let message_id = pushed["record"]["attempt"]["push"]["message"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    // Unacknowledged, so reconciliation would requeue it and type it again.
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Sent),
+    );
+    wait_for_advances_to_exit(&room.env, &id);
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Canceled),
+    );
+}
+
+#[test]
 fn continued_restart_retires_a_pending_push_before_judging_the_next_stop() {
     restart_after_pending_push(true);
 }

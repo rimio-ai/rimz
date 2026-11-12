@@ -2486,6 +2486,24 @@ fn duplicate_resume_messages_count_as_one_attempt() {
 }
 
 #[test]
+fn a_withdrawn_continue_is_neither_an_attempt_nor_a_recent_one() {
+    let agent = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "You've hit your usage limit",
+    );
+    let record = rate_record(5_000, 1_000, Some(5_000), 0);
+    let withdrawn = [resume_message(1, MessageStatus::Canceled, 5_950)];
+    let typed = [resume_message(1, MessageStatus::TimedOut, 5_950)];
+
+    assert_eq!(evidenced_attempts(&withdrawn, &agent, &record), 0);
+    assert!(!recent_resume_attempt(&withdrawn, &agent, ts(6_000)));
+    assert_eq!(evidenced_attempts(&typed, &agent, &record), 1);
+    assert!(recent_resume_attempt(&typed, &agent, ts(6_000)));
+}
+
+#[test]
 fn delivered_resume_message_clears_the_park() {
     assert_eq!(fire_with_resume_message(MessageStatus::Delivered), None);
 }
@@ -2751,4 +2769,59 @@ fn a_ping_the_provider_limit_rejected_never_arms_a_resume() {
             "a rejected ping armed a resume at {now}"
         );
     }
+}
+
+#[test]
+fn a_park_continue_holds_only_while_its_own_episode_is_on_record() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    let kind = AgentKind::new_unchecked("claude");
+    let open = |since| park_episode_open(&runtime, &kind, &"sess".into(), ts(since));
+
+    assert!(!open(1_000), "a cleared park withdraws its continue");
+    write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
+    assert!(open(1_000), "the episode the continue was sent for");
+    write_park(&path, &rate_record(9_000, 2_000, None, 0));
+    assert!(!open(1_000), "a later park is another episode");
+    std::fs::write(&path, b"not a park").unwrap();
+    assert!(open(1_000), "an unreadable record holds");
+}
+
+#[test]
+fn a_request_carries_the_producers_prompt_stamp_and_an_older_one_decodes_without_it() {
+    let request = AutoContinueRequest {
+        workspace_id: WorkspaceId::from_project_root(std::path::Path::new("/w")),
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("sess"),
+        pane_id: PaneId::parse("tmux:%3").unwrap(),
+        message_id: None,
+        parked_since: "2026-01-02T03:04:05Z".parse().unwrap(),
+        text: "continue".to_owned(),
+        reason: "overloaded_backoff_retry".to_owned(),
+        label: None,
+        last_prompt_at: Some(None),
+    };
+    let round_trip = |request: &AutoContinueRequest| {
+        serde_json::from_str::<AutoContinueRequest>(&serde_json::to_string(request).unwrap())
+            .unwrap()
+            .last_prompt_at
+    };
+    assert_eq!(
+        round_trip(&request),
+        Some(None),
+        "never prompted stays known"
+    );
+    let prompted = Some(Some("2026-01-02T03:00:00Z".parse().unwrap()));
+    let request = AutoContinueRequest {
+        last_prompt_at: prompted,
+        ..request
+    };
+    assert_eq!(round_trip(&request), prompted);
+    let mut older = serde_json::to_value(&request).unwrap();
+    older.as_object_mut().unwrap().remove("last_prompt_at");
+    let older: AutoContinueRequest = serde_json::from_value(older).unwrap();
+    assert_eq!(
+        older.last_prompt_at, None,
+        "an older producer's request decodes"
+    );
 }

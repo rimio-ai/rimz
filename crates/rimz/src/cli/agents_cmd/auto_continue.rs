@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::message::synthetic::{self, SyntheticMessage};
-use rimz::store::message::MessageSender;
+use rimz::store::message::{DeliveryGate, MessageSender, Premise};
 use rimz::store::snapshot::find_agent;
 use rimz::store::writer::DeliveryFailureDisposition;
 
@@ -46,7 +46,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
 
     let reason = format!("resume delivery gate closed ({})", request.reason);
     let gate = request.delivery_gate();
-    let (message_id, outcome) = match request.message_id {
+    let (message_id, outcome) = match request.message_id.clone() {
         Some(message_id) => {
             let outcome = synthetic::attempt_now(
                 workspace,
@@ -60,12 +60,13 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             (message_id, outcome)
         }
         None => {
+            let premises = continue_premises(agent, &request, gate);
             let message = SyntheticMessage {
                 agent,
                 text: text.to_owned(),
                 sender: MessageSender::System,
                 gate,
-                premises: rimz::store::message::Premise::NONE,
+                premises,
             }
             .record(workspace);
             let outcome = synthetic::deliver_now(
@@ -95,4 +96,20 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
     });
     outcome?;
     Ok(())
+}
+
+/// A continue is moot once the agent was prompted some other way; a provider-limit continue is
+/// moot as well once its park closed or a later park replaced it.
+fn continue_premises(
+    agent: &rimz::agents::AgentState,
+    request: &AutoContinueRequest,
+    gate: DeliveryGate,
+) -> Vec<Premise> {
+    let unprompted = Premise::NotPromptedSince {
+        last_prompt_at: request.last_prompt_at.unwrap_or(agent.last_prompt_at),
+    };
+    let park = (gate == DeliveryGate::Resume).then_some(Premise::ProviderPark {
+        parked_since: request.parked_since,
+    });
+    std::iter::once(unprompted).chain(park).collect()
 }

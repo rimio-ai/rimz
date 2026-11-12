@@ -156,6 +156,7 @@ fn agent_helper_request_stays_one_typed_argv_value() {
         text: "--resume with spaces".to_owned(),
         reason: "overloaded_backoff_retry".to_owned(),
         label: None,
+        last_prompt_at: None,
     };
 
     let argv = agent_helper_argv("auto-continue", &request);

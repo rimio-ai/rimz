@@ -488,7 +488,58 @@ fn wake_workflow(paths: &StatePaths, record: &RunRecord) {
     }
 }
 
+/// Apply `update` under the workspace lock; once the lock is released, a run that became
+/// terminal withdraws the queued messages about it.
 fn write_record<T>(
+    paths: &StatePaths,
+    run_id: &RunId,
+    update: impl FnOnce(&mut RunRecord, Timestamp) -> Result<RecordMutation<T>>,
+) -> Result<(RunRecord, T, bool)> {
+    let written = write_record_locked(paths, run_id, update)?;
+    if written.2 {
+        withdraw_about_run(paths, &written.0);
+    }
+    Ok(written)
+}
+
+/// Withdraw every open message whose `about_run` names `record`, a run that just ended, while
+/// the run still reads terminal under the queue's lock: a run reopened since keeps them. A
+/// failure only warns: the write check withdraws them at their write.
+fn withdraw_about_run(paths: &StatePaths, record: &RunRecord) {
+    let withdraw = || -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let about = |message: &crate::store::message::MessageRecord| {
+            message.about_run.as_ref() == Some(&record.run_id)
+        };
+        let Some(store) = Store::open_existing(paths.clone(), RuntimePaths::for_state(paths)?)
+        else {
+            return Ok(());
+        };
+        if !store.list_messages()?.iter().any(about) {
+            return Ok(());
+        }
+        let session_name = crate::workspace::record::read(&paths.workspace_record)?.session_name;
+        let ended = std::cell::OnceCell::new();
+        store.withdraw_messages(&session_name, |message| {
+            if !about(message) {
+                return None;
+            }
+            ended
+                .get_or_init(|| {
+                    load(paths, &record.run_id)
+                        .ok()
+                        .filter(|run| run.status.is_terminal())
+                        .map(|run| format!("child run {} before delivery", run.status.as_str()))
+                })
+                .clone()
+        })?;
+        Ok(())
+    };
+    if let Err(error) = withdraw() {
+        tracing::warn!(run_id = %record.run_id, %error, "could not withdraw the ended run's messages");
+    }
+}
+
+fn write_record_locked<T>(
     paths: &StatePaths,
     run_id: &RunId,
     update: impl FnOnce(&mut RunRecord, Timestamp) -> Result<RecordMutation<T>>,
