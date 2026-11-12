@@ -356,7 +356,7 @@ pub(super) fn refresh_heavy_lanes(
         )
     });
     steps.step("soft_compact", || {
-        crate::harness::soft_compact::compact_agents(base, runtime, config, &policy)
+        crate::harness::soft_compact::compact_agents(base, runtime, &capacities, config, &policy)
     });
     steps.step("idle_stop", || {
         crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime)

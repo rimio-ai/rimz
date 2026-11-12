@@ -1,6 +1,7 @@
 use super::*;
-use crate::agents::AgentStatus;
+use crate::agents::credits::CreditsCache;
 use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+use crate::agents::{AgentStatus, Entitlement, ExtraCredits};
 use crate::ids::MuxName;
 use crate::store::snapshot::PaneAgent;
 
@@ -53,6 +54,7 @@ fn due(agent: &AgentState) -> Option<SoftCompactStep> {
         Some(AutoCompact::Tokens(100_000)),
         "continue",
         ts(20),
+        || false,
     )
 }
 
@@ -113,12 +115,20 @@ fn wrap_up_requires_a_live_participating_open_turn_above_its_line() {
             &candidate,
             Some(AutoCompact::Tokens(100_000)),
             "continue",
-            ts(20)
+            ts(20),
+            || false
         ),
         None
     );
     assert_eq!(
-        due_step(&snapshot(&candidate), &candidate, None, "continue", ts(20)),
+        due_step(
+            &snapshot(&candidate),
+            &candidate,
+            None,
+            "continue",
+            ts(20),
+            || false
+        ),
         None
     );
     assert_eq!(
@@ -127,7 +137,8 @@ fn wrap_up_requires_a_live_participating_open_turn_above_its_line() {
             &candidate,
             Some(AutoCompact::Tokens(100_000)),
             " \n ",
-            ts(20)
+            ts(20),
+            || false
         ),
         None
     );
@@ -189,7 +200,14 @@ fn continue_follows_the_first_later_turn_end_even_if_native_compaction_or_config
     candidate.compacted_awaiting_prompt = Some(ts(13));
     candidate.usage.total_tokens = Some(1);
     assert_eq!(
-        due_step(&snapshot(&candidate), &candidate, None, "continue", ts(20)),
+        due_step(
+            &snapshot(&candidate),
+            &candidate,
+            None,
+            "continue",
+            ts(20),
+            || false
+        ),
         Some(SoftCompactStep::Continue)
     );
     candidate.status = AgentStatus::Waiting;
@@ -203,6 +221,7 @@ fn continue_follows_the_first_later_turn_end_even_if_native_compaction_or_config
 fn produce(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
     spawned: bool,
@@ -211,6 +230,7 @@ fn produce(
     compact_agents_with(
         snapshot,
         runtime,
+        capacities,
         config,
         policy,
         || snapshot.now,
@@ -244,7 +264,16 @@ fn producer_uses_each_seats_line_including_a_pane_backed_child() {
         toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'coder'\nsmart-compact = 'off'")
             .unwrap(),
     );
-    let fire = |seat: &AgentState| produce(&snapshot(seat), &runtime, &config, &policy, false);
+    let fire = |seat: &AgentState| {
+        produce(
+            &snapshot(seat),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            false,
+        )
+    };
     let requests = fire(&candidate);
     assert_eq!(requests.len(), 1, "the seat overrides the 258k fallback");
     assert_eq!(requests[0].workspace_id, runtime.workspace_id);
@@ -283,7 +312,14 @@ fn producer_pacing_survives_passes_but_does_not_hold_a_new_step_or_epoch() {
     let fire = |seat: &AgentState, now| {
         let mut snapshot = snapshot(seat);
         snapshot.now = ts(now);
-        produce(&snapshot, &runtime, &config, &SeatPolicy::default(), true)
+        produce(
+            &snapshot,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &SeatPolicy::default(),
+            true,
+        )
     };
     assert_eq!(fire(&candidate, 20).len(), 1);
     assert!(fire(&candidate, 79).is_empty());
@@ -321,17 +357,41 @@ fn producer_retries_a_failed_spawn_and_paces_cards_independently() {
     let policy = SeatPolicy::default();
     let mut candidate = agent();
     assert_eq!(
-        produce(&snapshot(&candidate), &runtime, &config, &policy, false).len(),
+        produce(
+            &snapshot(&candidate),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            false
+        )
+        .len(),
         1
     );
     assert_eq!(
-        produce(&snapshot(&candidate), &runtime, &config, &policy, true).len(),
+        produce(
+            &snapshot(&candidate),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            true
+        )
+        .len(),
         1,
         "a failed spawn consumes no pacing window"
     );
     candidate.agent_id = "another-card".into();
     assert_eq!(
-        produce(&snapshot(&candidate), &runtime, &config, &policy, true).len(),
+        produce(
+            &snapshot(&candidate),
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            true
+        )
+        .len(),
         1,
         "one card never paces another"
     );
@@ -355,12 +415,160 @@ fn producer_continues_with_the_line_off_but_never_with_blank_continue_text() {
     config.harness.smart_compact = None;
     config.resume.auto_continue = false;
     assert_eq!(
-        produce(&snapshot, &runtime, &config, &SeatPolicy::default(), false)
-            .first()
-            .map(|request| request.step),
+        produce(
+            &snapshot,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &SeatPolicy::default(),
+            false
+        )
+        .first()
+        .map(|request| request.step),
         Some(SoftCompactStep::Continue),
         "continue does not depend on either opt-in"
     );
     config.resume.auto_continue_text = " \n ".to_owned();
-    assert!(produce(&snapshot, &runtime, &config, &SeatPolicy::default(), false).is_empty());
+    assert!(
+        produce(
+            &snapshot,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &SeatPolicy::default(),
+            false
+        )
+        .is_empty()
+    );
+}
+
+/// A 5-hour window on `agent`'s login at `used`%, resetting at 500 s.
+fn five_hour(agent: &AgentState, used: u8) -> RoomCapacities<'static> {
+    let window = crate::agents::RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at: Some(ts(500)),
+        duration_mins: Some(300),
+        ..Default::default()
+    };
+    std::collections::BTreeMap::from([(
+        agent.login_key(),
+        crate::agents::ProviderCapacity::from_windows(vec![window]),
+    )])
+    .into()
+}
+
+#[test]
+fn a_spent_window_withholds_both_steps_until_the_reset_and_paces_neither() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let mut config = MachineConfig::default();
+    config.harness.smart_compact = Some(AutoCompact::Tokens(100_000));
+    let policy = SeatPolicy::default();
+    let wrapping = agent();
+    let mut ended = agent();
+    ended.status = AgentStatus::Success;
+    ended.turn_ended_at = Some(ts(12));
+    ended.soft_compact = Some(SoftCompactMark {
+        steered_at: ts(11),
+        compactions: Some(0),
+        progress: SoftCompactProgress::TurnEnded,
+    });
+    let pacing = || std::fs::read_dir(runtime.live_path("soft-compact")).is_ok();
+    for (case, seat, step) in [
+        ("wrap-up", &wrapping, SoftCompactStep::WrapUp),
+        ("continue", &ended, SoftCompactStep::Continue),
+    ] {
+        let steps = |now: i64, capacities: &RoomCapacities<'_>| {
+            let mut snapshot = snapshot(seat);
+            snapshot.now = ts(now);
+            produce(&snapshot, &runtime, capacities, &config, &policy, true)
+                .into_iter()
+                .map(|request| request.step)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            steps(20, &five_hour(seat, 40)),
+            [step],
+            "{case}: a window with room left"
+        );
+        std::fs::remove_dir_all(runtime.live_path("soft-compact")).unwrap();
+        assert!(
+            steps(20, &five_hour(seat, 100)).is_empty(),
+            "{case}: withheld at a spent window"
+        );
+        assert!(!pacing(), "{case}: a withheld step paces nothing");
+        assert_eq!(
+            steps(600, &five_hour(seat, 100)),
+            [step],
+            "{case}: proposed again once the reset passed"
+        );
+        std::fs::remove_dir_all(runtime.live_path("soft-compact")).unwrap();
+        assert_eq!(
+            steps(20, &RoomCapacities::default()),
+            [step],
+            "{case}: no reading"
+        );
+        std::fs::remove_dir_all(runtime.live_path("soft-compact")).unwrap();
+        let paid = |extra, entitlement| {
+            five_hour(seat, 100).with_credits(CreditsCache::with_extra_credits(
+                seat.login_key(),
+                extra,
+                entitlement,
+                ts(20),
+            ))
+        };
+        assert_eq!(
+            steps(20, &paid(ExtraCredits::Unlimited, Entitlement::Ok)),
+            [step],
+            "{case}: usable paid extra usage carries the spent window"
+        );
+        std::fs::remove_dir_all(runtime.live_path("soft-compact")).unwrap();
+        for (why, extra, entitlement) in [
+            ("disabled", ExtraCredits::Disabled, Entitlement::Ok),
+            (
+                "lapsed",
+                ExtraCredits::Unlimited,
+                Entitlement::Lapsed { since_ms: 1 },
+            ),
+        ] {
+            assert!(
+                steps(20, &paid(extra, entitlement)).is_empty(),
+                "{case}: paid extra usage {why} carries nothing"
+            );
+        }
+        let mut opus = seat.clone();
+        opus.model = Some("claude-opus-4-6".to_owned());
+        let sub_cap = crate::agents::RateLimitWindow {
+            scope: Some(crate::agents::RateLimitWindowScope {
+                id: "model:opus".into(),
+                label: "Opus".into(),
+            }),
+            used_percentage: Some(100),
+            resets_at: Some(ts(500)),
+            duration_mins: Some(10_080),
+            ..Default::default()
+        };
+        let capped = RoomCapacities::from(std::collections::BTreeMap::from([(
+            opus.login_key(),
+            crate::agents::ProviderCapacity::from_windows(vec![sub_cap]),
+        )]))
+        .with_credits(CreditsCache::with_extra_credits(
+            opus.login_key(),
+            ExtraCredits::Unlimited,
+            Entitlement::Ok,
+            ts(20),
+        ));
+        let mut snapshot = snapshot(&opus);
+        snapshot.now = ts(20);
+        assert!(
+            produce(&snapshot, &runtime, &capped, &config, &policy, true).is_empty(),
+            "{case}: the model's own sub-cap, even with usable paid extra usage"
+        );
+    }
+    assert_eq!(
+        ended.soft_compact.map(|mark| mark.progress),
+        Some(SoftCompactProgress::TurnEnded),
+        "the decision leaves the mark owed"
+    );
 }

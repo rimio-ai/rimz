@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
+use rimz::agents::ProviderCapacity;
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::SeatPolicy;
@@ -30,8 +31,12 @@ pub(super) fn run(request: SoftCompactRequest) -> Result<()> {
         .live_agent_pane(&request.kind, &request.agent_id)
         .as_ref()
         != Some(&request.pane_id)
-        || due_step(&snapshot, agent, threshold, continue_text, Timestamp::now())
-            != Some(request.step)
+        || {
+            let now = Timestamp::now();
+            due_step(&snapshot, agent, threshold, continue_text, now, || {
+                ProviderCapacity::login_compaction_blocked(ctx.runtime(), agent, now)
+            }) != Some(request.step)
+        }
     {
         return Ok(());
     }

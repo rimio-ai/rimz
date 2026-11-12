@@ -10,7 +10,7 @@ use crate::agents::AgentState;
 use crate::agents::state::SoftCompactProgress;
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
-use crate::harness::cache_keepalive::SeatPolicy;
+use crate::harness::cache_keepalive::{RoomCapacities, SeatPolicy};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::message::{AutoCompact, SoftCompactStep};
 use crate::store::snapshot::SidebarSnapshot;
@@ -38,12 +38,20 @@ pub struct SoftCompactRequest {
     pub step: SoftCompactStep,
 }
 
+/// The smart-compaction step due for `agent`, if any: the continue once the wrapped-up turn
+/// ended, otherwise the wrap-up steer into an open turn above its line. Neither is due while
+/// the agent's login's usage holds a compaction back. `compaction_blocked` answers that, as
+/// `RoomCapacities::compaction_blocked` in the host pass and as
+/// [`login_compaction_blocked`](crate::agents::ProviderCapacity::login_compaction_blocked) in
+/// the helper, only for a step otherwise due. The mark is left as it is, so a withheld continue
+/// stays owed and is proposed again once the window resets.
 pub fn due_step(
     snapshot: &SidebarSnapshot,
     agent: &AgentState,
     threshold: Option<AutoCompact>,
     continue_text: &str,
     now: Timestamp,
+    compaction_blocked: impl FnOnce() -> bool,
 ) -> Option<SoftCompactStep> {
     if continue_text.trim().is_empty()
         || agent.ended_at.is_some()
@@ -59,7 +67,7 @@ pub fn due_step(
         .soft_compact
         .is_some_and(|mark| mark.progress == SoftCompactProgress::TurnEnded)
     {
-        return Some(SoftCompactStep::Continue);
+        return (!compaction_blocked()).then_some(SoftCompactStep::Continue);
     }
     let definition = crate::agents::definition_by_kind(agent.kind.as_str()).ok()?;
     if crate::agents::soft_compact_skip(definition).is_some()
@@ -74,7 +82,7 @@ pub fn due_step(
     {
         return None;
     }
-    Some(SoftCompactStep::WrapUp)
+    (!compaction_blocked()).then_some(SoftCompactStep::WrapUp)
 }
 
 pub fn spawn_soft_compact(runtime: &RuntimePaths, request: &SoftCompactRequest) -> bool {
@@ -96,12 +104,14 @@ pub fn spawn_soft_compact(runtime: &RuntimePaths, request: &SoftCompactRequest) 
 pub(crate) fn compact_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
 ) {
     compact_agents_with(
         snapshot,
         runtime,
+        capacities,
         config,
         policy,
         Timestamp::now,
@@ -112,6 +122,7 @@ pub(crate) fn compact_agents(
 fn compact_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
     mut now: impl FnMut() -> Timestamp,
@@ -124,6 +135,7 @@ fn compact_agents_with(
             policy.smart_compact(agent, &config.harness),
             &config.resume.auto_continue_text,
             snapshot.now,
+            || capacities.compaction_blocked(agent, snapshot.now),
         ) else {
             continue;
         };
