@@ -773,19 +773,25 @@ fn settle_after_exit(
         stamp_own_end_if_deliberate(invocation, request, abrupt, || {
             session_accepts_agent_close(globals, session_name)
         });
+    // The end stamp above is a durable end no hook will ever report, and a
+    // failed replacement can end an agent whose old session ended first: either
+    // settles what the agent was owed here rather than waiting for gc. A
+    // wrapper whose session has moved to another pane stamps nothing and so
+    // reaches none of this (`resolve_own_agent_end_trace`).
     if let Some(ended) = &ended_session {
-        // The stamp above is a durable end no hook will ever report; its
-        // subscriptions die with it here rather than waiting for gc. A wrapper
-        // whose session has moved to another pane stamps nothing and so reaches
-        // none of this (`resolve_own_agent_end_trace`).
-        if let Err(err) = rimz::harness::schedule::arm::retire_session(
-            &invocation.workspace.project_root,
+        settle_ended_agent(
+            invocation,
             &ended.kind,
             &ended.agent_id,
-            rimz::harness::schedule::arm::RetireScope::Session,
-        ) {
-            tracing::warn!(error = %err, "could not retire the exiting session's deliveries");
-        }
+            ended.name.as_deref(),
+        );
+    } else if startup_failure && let Some(identity) = launch_identity {
+        settle_ended_agent(
+            invocation,
+            &identity.kind,
+            &identity.agent_id,
+            Some(&identity.name),
+        );
     }
     let unbound_pick = matches!(
         request.action,
@@ -1684,6 +1690,35 @@ fn mark_launch_failed_if_provisional(
     }
     record_launch_failed(invocation, identity);
     true
+}
+
+/// Retire the deliveries of every ended session whose agent ended, and archive
+/// the queue's debt to the agent `(kind, agent_id)` belongs to once it has
+/// ended. A session its agent outlives keeps the agent's waits and messages.
+fn settle_ended_agent(
+    invocation: &ExecInvocationContext<'_>,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    name: Option<&str>,
+) {
+    let Ok(store) = invocation.store() else {
+        return;
+    };
+    if let Err(err) = rimz::harness::schedule::arm::retire_ended_sessions(
+        &invocation.workspace.project_root,
+        || store.audit_rows().unwrap_or_default(),
+    ) {
+        tracing::warn!(error = %err, "could not retire the ended agent's deliveries");
+    }
+    if let Err(err) = rimz::message::deliver::archive_for_ended_agent(
+        &store,
+        &invocation.workspace.session_name,
+        kind,
+        agent_id,
+        name,
+    ) {
+        tracing::warn!(error = %err, "could not archive the ended agent's messages");
+    }
 }
 
 fn record_own_agent_end_trace(

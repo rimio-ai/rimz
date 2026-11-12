@@ -583,3 +583,84 @@ fn adapter_ask_without_id_does_not_hold_a_sibling_tool_waiting() {
     assert_eq!(tool.transition, crate::agents::LifecycleTransition::Normal);
     assert!(tool.waiting_cleared);
 }
+
+fn stamped(
+    follower: &EventFollower,
+    epoch: u32,
+    signal: LifecycleSignal,
+) -> crate::store::event::EventEnvelope {
+    let mut observation =
+        crate::agents::AgentLifecycleObservation::new(Some(AgentSessionId::from("s1")), signal);
+    observation.launch_id = Some(AgentSessionId::from("launch_a"));
+    observation.launch.epoch = (epoch > 0).then_some(epoch);
+    crate::store::event::EventEnvelope::agent_lifecycle(
+        follower.paths.workspace_id.clone(),
+        "room",
+        "claude",
+        "test",
+        &observation,
+    )
+}
+
+fn resume_attach(follower: &EventFollower, epoch: u32) -> crate::store::event::EventEnvelope {
+    crate::store::event::EventEnvelope::agent_attached(
+        follower.paths.workspace_id.clone(),
+        "room",
+        &AgentKind::new_unchecked("claude"),
+        crate::store::event::AgentAttachPayload {
+            epoch: Some(epoch),
+            login: None,
+            record: None,
+            tier: None,
+            mode: None,
+            effective_isolation: None,
+            agent_id: AgentSessionId::from("s1"),
+            isolation: None,
+            launch_id: Some(AgentSessionId::from("launch_a")),
+            pane_id: crate::ids::PaneId::parse("tmux:%2").unwrap(),
+            pane_pid: None,
+            runtime_owner: crate::pane::RuntimeOwner::new(
+                crate::pane::RuntimeOwnerKind::Agent,
+                "s1",
+                9,
+                Some("start-9".into()),
+            ),
+        },
+    )
+}
+
+#[test]
+fn a_replaced_process_late_interrupt_is_not_followed_from_the_log_or_the_seed() {
+    let interrupt = || LifecycleSignal::TurnInterrupted { turn_id: None };
+    let (_dir, _store, paths) = fixture();
+    let mut follower = EventFollower::open(paths.clone(), true).unwrap();
+    let opening = vec![
+        stamped(&follower, 0, LifecycleSignal::Registered),
+        stamped(&follower, 0, LifecycleSignal::TurnStarted { turn_id: None }),
+        resume_attach(&follower, 1),
+    ];
+    assert_eq!(follower.fold(opening.clone()).len(), 2);
+    assert!(
+        follower
+            .fold(vec![stamped(&follower, 0, interrupt())])
+            .is_empty(),
+        "an interrupt of the process the resume replaced is stale"
+    );
+    let current = follower.fold(vec![stamped(&follower, 1, interrupt())]);
+    assert_eq!(
+        current.len(),
+        1,
+        "the resumed process's own interrupt is followed"
+    );
+
+    for event in &opening {
+        event_log::append(&paths.events_log, event).unwrap();
+    }
+    let mut seeded = EventFollower::open(paths, false).unwrap();
+    assert!(
+        seeded
+            .fold(vec![stamped(&seeded, 0, interrupt())])
+            .is_empty(),
+        "the live seed carries the row's epoch"
+    );
+}

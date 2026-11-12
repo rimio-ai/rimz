@@ -947,14 +947,42 @@ impl Stopper<'_> {
             if outcome.is_err() && !(ending.closed && !ending.still_hosted) {
                 continue;
             }
-            let (kind, session) = &ending.asked;
-            if let Err(err) = rimz::harness::schedule::arm::retire_session(
-                &self.ctx.workspace.project_root,
-                kind,
-                session,
-                rimz::harness::schedule::arm::RetireScope::Session,
-            ) {
-                stop.failures.push(format!("{}: {err}", ending.label));
+            // The stop ends the agent, so the waits armed in any of its sessions go,
+            // including those a swap's replaced session kept for the holder.
+            let rows = match self.ctx.store.audit_rows() {
+                Ok(rows) => rows,
+                Err(err) => {
+                    stop.failures.push(format!("{}: {err:#}", ending.label));
+                    continue;
+                }
+            };
+            let members = rows
+                .iter()
+                .find(|row| (&row.kind, &row.agent_id) == (&ending.key.0, &ending.key.1))
+                .map(|agent| {
+                    rimz::agents::state::launch_members(
+                        rows.iter(),
+                        &agent.kind,
+                        agent.launch_key(),
+                    )
+                })
+                .unwrap_or_default();
+            let sessions = std::iter::once((&ending.asked.0, &ending.asked.1))
+                .chain(
+                    members
+                        .iter()
+                        .map(|member| (&member.kind, &member.agent_id)),
+                )
+                .collect::<std::collections::BTreeSet<_>>();
+            for (kind, session) in sessions {
+                if let Err(err) = rimz::harness::schedule::arm::retire_session(
+                    &self.ctx.workspace.project_root,
+                    kind,
+                    session,
+                    rimz::harness::schedule::arm::RetireScope::Session,
+                ) {
+                    stop.failures.push(format!("{}: {err}", ending.label));
+                }
             }
         }
         stop

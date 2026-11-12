@@ -112,6 +112,7 @@ pub(super) fn handle_lifecycle_frame(
             )?;
             let derived = if let Some(recorded) = recorded.as_ref().filter(|recorded| {
                 recorded.receipt.side_conversation.is_none()
+                    && !recorded.receipt.stale
                     && !recorded.observation.is_state_snapshot()
                     && recorded.observation.agent_id.is_some()
                     && recorded.observation.parent_agent_id.is_none()
@@ -139,6 +140,18 @@ pub(super) fn handle_lifecycle_frame(
         }
         return Ok(decoded.reply().clone());
     }
+    // A replaced process's late event is kept in the log and triggers nothing.
+    if recorded
+        .as_ref()
+        .is_some_and(|recorded| recorded.receipt.stale)
+    {
+        return Ok(decoded.reply().clone());
+    }
+    // A replaced session's event keeps its session-level effects only: none
+    // of the agent's runs, deliveries, or archives answer to it.
+    let replaced = recorded
+        .as_ref()
+        .is_some_and(|recorded| recorded.receipt.replaced);
     // The role index is read whole on each write, and this runs in a fresh child per frame, so
     // only a session new to this room or one (re)registering reaches it.
     let new_sessions = released
@@ -219,7 +232,9 @@ pub(super) fn handle_lifecycle_frame(
         .as_ref()
         .and_then(|recorded| recorded.receipt.transition.as_ref())
         .is_some_and(|transition| transition.ping.is_some());
-    let mut run_id = session_run_id(store, agent, agent_id.as_ref());
+    let mut run_id = (!replaced)
+        .then(|| session_run_id(store, agent, agent_id.as_ref()))
+        .flatten();
     let assistant_message = if replay {
         decoded.event_agent_id().cloned().zip(
             decoded
@@ -324,7 +339,7 @@ pub(super) fn handle_lifecycle_frame(
         let assistant_message = assistant_message_for_lifecycle(recorded, run_id.is_some(), || {
             decoded.final_message().map(ToOwned::to_owned)
         });
-        if !ping_edge {
+        if !ping_edge && !replaced {
             run_completion = record_run_lifecycle(
                 store,
                 agent,
@@ -334,9 +349,15 @@ pub(super) fn handle_lifecycle_frame(
                 run_id.as_ref(),
             );
         }
-        let in_flight = in_flight_messages_for_lifecycle(store, agent, recorded);
-        let delivered = confirm_sent_message_for_lifecycle(store, agent, recorded, workspace);
-        if run_id.is_none() {
+        let (in_flight, delivered) = if replaced {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                in_flight_messages_for_lifecycle(store, agent, recorded),
+                confirm_sent_message_for_lifecycle(store, agent, recorded, workspace),
+            )
+        };
+        if run_id.is_none() && !replaced {
             run_id = session_run_id(store, agent, recorded.observation.agent_id.as_ref());
         }
         let sections = rimz::store::message::classify_submitted_prompt(
@@ -415,6 +436,7 @@ pub(super) fn handle_lifecycle_frame(
                 .as_ref()
                 .and_then(|recorded| recorded.receipt.primary_event_id.as_ref()),
             run_completion: run_completion.as_ref(),
+            replaced,
         },
         &events,
     );

@@ -1080,6 +1080,79 @@ fn inspection_is_read_only_and_scopes_to_live_roster() {
     assert!(!fixture.paths.crashes_dir.exists());
 }
 
+/// A swap's old session lost at the death is never offered: its agent lives
+/// on in the holder, here still owned by a live process, and reviving the old
+/// session would give the agent a second one.
+#[test]
+fn rebirth_never_offers_a_replaced_session() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let worktree = dir.path().join("live");
+    let fixture = Fixture::new(&[("old", &worktree, true)]);
+    let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
+    let scope = crate::store::writer::AgentLaunchScope {
+        session_name: "rimz-test".into(),
+        cwd: worktree.clone(),
+        branch: None,
+        description: None,
+    };
+    let old = store
+        .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| agent.agent_id == "old")
+        .unwrap();
+    let request = crate::store::writer::AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("launch_b"),
+        name: crate::store::writer::AgentLaunchName::Mint,
+        launch: Default::default(),
+        run_id: None,
+        prompt: None,
+    };
+    let swap = store.begin_agent_swap(&old, &request, scope).unwrap();
+    let pane = PaneId::from_parts(MuxName::Tmux, "%new");
+    store
+        .bind_agent_launch(
+            swap.single_identity().unwrap(),
+            "rimz-test",
+            &worktree,
+            &pane,
+            None,
+        )
+        .unwrap();
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("new")),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("old".to_owned());
+    observation.launch_id = Some(AgentSessionId::from("old"));
+    observation.launch.epoch = Some(1);
+    observation.worktree_path = Some(worktree.display().to_string());
+    observation.pane_id = Some(pane);
+    store
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let mut roster = live_roster::read(&fixture.paths.live_roster)
+        .unwrap()
+        .agents;
+    roster.insert((AgentKind::new_unchecked("claude"), "new".into()));
+    live_roster::publish(&fixture.paths.live_roster, roster).unwrap();
+
+    let plan = fixture.inspect(false);
+
+    let preview = plan.preview();
+    assert_eq!(preview.death().unwrap().lost_agents.len(), 2);
+    assert_eq!(preview.candidate_count(), 0, "{:?}", preview.labels());
+}
+
 #[test]
 fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
     let dir = tempfile::tempdir().expect("worktrees");

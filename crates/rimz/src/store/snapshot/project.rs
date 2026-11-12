@@ -46,8 +46,34 @@ impl<'a> EventStamp<'a> {
 
     /// A row of this launch that a later swap moved past: the event is stale.
     fn stale_on(self, row: &AgentState) -> bool {
-        row.launch_id.as_ref() == Some(self.launch) && row.epoch > self.epoch
+        self.stale_at(row.launch_id.as_ref(), row.epoch)
     }
+
+    /// A row of `launch` at `epoch` that a later swap of this event's launch
+    /// moved past.
+    fn stale_at(self, launch: Option<&AgentSessionId>, epoch: u32) -> bool {
+        launch == Some(self.launch) && epoch > self.epoch
+    }
+}
+
+/// Whether the fold keeps `observation` without effect on `row`: a root event
+/// stamped with an epoch a later swap of `row`'s launch moved past.
+pub(in crate::store) fn observation_stale_on(
+    observation: &AgentLifecycleObservation,
+    row: &AgentState,
+) -> bool {
+    observation_stale_at(observation, row.launch_id.as_ref(), row.epoch)
+}
+
+/// [`observation_stale_on`] for a row known only by its `launch` and
+/// `epoch`, as the lifecycle follower tracks it.
+pub(in crate::store) fn observation_stale_at(
+    observation: &AgentLifecycleObservation,
+    launch: Option<&AgentSessionId>,
+    epoch: u32,
+) -> bool {
+    observation.parent_agent_id.is_none()
+        && EventStamp::of(observation).is_some_and(|stamp| stamp.stale_at(launch, epoch))
 }
 
 /// Whether an event may adopt or release `provisional`: a stamped event only

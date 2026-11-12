@@ -540,6 +540,8 @@ fn side_conversation_receipts_append_only_the_registration() {
             primary_event_id: None,
             events: Vec::new(),
             rotation_due: false,
+            stale: false,
+            replaced: false,
             side_conversation: Some(SideConversation {
                 host: Some(AgentSessionId::from("sess-1")),
                 host_running: true,
@@ -1679,4 +1681,194 @@ fn a_native_child_row_takes_its_parents_lane_on_either_creating_path() {
             .unwrap_or_else(|| panic!("{id} row"));
         assert_eq!(child.lane.as_ref(), Some(&lane), "{id}");
     }
+}
+
+#[test]
+fn receipts_mark_a_replaced_sessions_events_and_drop_a_stale_ones_effects() {
+    use crate::store::writer::{
+        AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
+    };
+    let (dir, store) = test_store();
+    let scope = AgentLaunchScope {
+        session_name: "rimz-test".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let request = |id: &str, name| AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from(id),
+        name,
+        launch: Default::default(),
+        run_id: None,
+        prompt: None,
+    };
+    let bind = |identity: &AgentLaunchIdentity, pane: &str| {
+        store
+            .bind_agent_launch(
+                identity,
+                "rimz-test",
+                dir.path(),
+                &PaneId::parse(pane).unwrap(),
+                None,
+            )
+            .unwrap();
+    };
+    let audit_row = |key: &str| {
+        store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == key)
+            .unwrap_or_else(|| panic!("row {key}"))
+    };
+    let append_with = |observation: &mut AgentLifecycleObservation,
+                       epoch: u32,
+                       pane: &str,
+                       children: &[SpawnedSubagent],
+                       rotation_threshold: u64| {
+        observation.pane_id = Some(PaneId::parse(pane).unwrap());
+        observation.agent_name = Some("coder".into());
+        observation.launch_id = Some(AgentSessionId::from("launch_a"));
+        observation.launch.epoch = (epoch > 0).then_some(epoch);
+        store
+            .append_agent_lifecycle_with_threshold(
+                AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "hook",
+                    observation,
+                    spawned_subagents: children,
+                },
+                rotation_threshold,
+            )
+            .expect("append lifecycle")
+    };
+    let append = |session: &str, epoch: u32, pane: &str, signal| {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(session)), signal);
+        append_with(&mut observation, epoch, pane, &[], u64::MAX)
+    };
+    let turn = || LifecycleSignal::TurnStarted { turn_id: None };
+
+    let first = store
+        .begin_agent_launch_batch(
+            &[request(
+                "launch_a",
+                AgentLaunchName::Explicit("coder".into()),
+            )],
+            scope.clone(),
+        )
+        .unwrap();
+    bind(first.single_identity().unwrap(), "tmux:%1");
+    let receipt = append("s1", 0, "tmux:%1", LifecycleSignal::Registered);
+    assert!(!receipt.stale && !receipt.replaced, "{receipt:?}");
+
+    // A fresh swap: the new session takes the reservation, the old one is
+    // replaced but its own events still land on its own row.
+    let swap = store
+        .begin_agent_swap(
+            &audit_row("s1"),
+            &request("launch_b", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap();
+    bind(swap.single_identity().unwrap(), "tmux:%2");
+    let receipt = append("s2", 1, "tmux:%2", LifecycleSignal::Registered);
+    assert!(!receipt.stale && !receipt.replaced, "{receipt:?}");
+    let receipt = append("s1", 0, "tmux:%1", turn());
+    assert!(receipt.replaced && !receipt.stale, "{receipt:?}");
+    assert!(receipt.transition.is_some(), "{receipt:?}");
+
+    // A resumed swap: the same session continues at the next epoch, and an
+    // event its old process stamped with the epoch before is stale.
+    let swap = store
+        .begin_agent_swap(
+            &audit_row("s2"),
+            &request("launch_c", AgentLaunchName::Mint),
+            scope,
+        )
+        .unwrap();
+    bind(swap.single_identity().unwrap(), "tmux:%3");
+    let receipt = append("s2", 2, "tmux:%3", LifecycleSignal::Registered);
+    assert!(!receipt.stale && !receipt.replaced, "{receipt:?}");
+    let receipt = append("s2", 1, "tmux:%2", turn());
+    assert!(receipt.stale, "{receipt:?}");
+    assert!(
+        receipt.transition.is_none() && receipt.events.is_empty(),
+        "{receipt:?}"
+    );
+    assert!(!receipt.waiting_cleared);
+    // A stale frame keeps its own record and stages nothing derived from it:
+    // no child stop, no compaction rebind, no rotation claim.
+    let queued = crate::store::message::MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &audit_row("s1"),
+        "for the old session".to_owned(),
+        crate::store::message::DeliveryGate::Any,
+    );
+    store.queue_message(&queued, "rimz-test").unwrap();
+    let logged = || store.read_events().unwrap().len();
+    let before = logged();
+    let child = SpawnedSubagent {
+        child_agent_id: AgentSessionId::from("child-1"),
+        agent_name: None,
+        role: Some("reviewer".into()),
+        prompt: None,
+        model: None,
+        usage: Default::default(),
+    };
+    let mut stop = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("s2")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let receipt = append_with(&mut stop, 1, "tmux:%2", std::slice::from_ref(&child), 0);
+    assert!(receipt.stale && !receipt.rotation_due, "{receipt:?}");
+    let mut compacted = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("s2")),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true),
+            failed: false,
+        },
+    );
+    compacted.compacted_from = Some(AgentSessionId::from("s1"));
+    let receipt = append_with(&mut compacted, 1, "tmux:%2", &[], 0);
+    assert!(receipt.stale && !receipt.rotation_due, "{receipt:?}");
+    assert_eq!(logged(), before + 2, "only the two primary records land");
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != "child-1"),
+        "a stale stop adopts no child"
+    );
+    let kept = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == queued.message_id)
+        .expect("queued message");
+    assert_eq!(kept.agent_id, "s1", "a stale compaction rebinds nothing");
+    let receipt = append_with(
+        &mut AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("s2")),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+        2,
+        "tmux:%3",
+        &[],
+        0,
+    );
+    assert!(
+        receipt.rotation_due,
+        "the holder's own frame claims rotation"
+    );
 }

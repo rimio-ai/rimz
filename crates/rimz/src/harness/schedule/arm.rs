@@ -310,16 +310,7 @@ fn retire_session_in(
     scope: RetireScope,
     cgroup_root: &Path,
 ) -> Result<usize, RetireFailure> {
-    for entry in crate::store::hibernate::read(paths)
-        .into_iter()
-        .filter(|entry| &entry.kind == kind && &entry.agent_id == session)
-    {
-        if let Err(error) =
-            crate::harness::hibernate::wake_pane_in(paths, &entry.pane_id, cgroup_root)
-        {
-            tracing::warn!(%error, "retire: waking hibernating session");
-        }
-    }
+    thaw_session(paths, kind, session, cgroup_root);
     let retired = super::instances::retire_session(paths, kind, session, scope)
         .map_err(RetireFailure::before_removal)?;
     let mut dropped = 0;
@@ -342,60 +333,74 @@ fn retire_session_in(
             tracing::warn!(task = name, error = %err, "retire: clearing the strike overlay");
         }
     }
-    // A pending idle stop belongs to the pane it would close, so it goes under
-    // either scope: a resumed restart must not inherit it.
-    crate::store::idle_stop::withdraw(paths, kind, session).map_err(|err| RetireFailure {
-        message: err.to_string(),
-        dropped,
-    })?;
-    if scope == RetireScope::Session {
-        let closed =
-            crate::store::raised::retire(paths, kind, session).map_err(|err| RetireFailure {
-                message: err.to_string(),
-                dropped,
-            })?;
-        if let Some(ask) = closed {
-            let record =
-                crate::workspace::record::read(&paths.workspace_record).map_err(|err| {
-                    RetireFailure {
-                        message: err.to_string(),
-                        dropped,
-                    }
-                })?;
-            let store =
-                crate::Store::open_existing(paths.clone(), runtime.clone()).ok_or_else(|| {
-                    RetireFailure {
-                        message: "retiring raised attention requires a readable room record".into(),
-                        dropped,
-                    }
-                })?;
-            let mut params = serde_json::json!({"ask_id": ask.ask_id, "cause": "retired"});
-            if let Some(caller) = crate::harness::ancestry::CallerIdentity::from_env() {
-                let actor = crate::store::message::MessageSender::Agent {
-                    kind: caller.kind,
-                    agent_id: caller.launch_id,
-                    name: caller.name,
-                    profile: caller.profile,
-                    role: caller.role,
-                    channel: None,
-                };
-                params["actor"] = serde_json::json!(actor.render());
-            }
-            crate::store::raised::audit(
-                &store,
-                &record.session_name,
-                "ask.closed",
-                kind,
-                session,
-                params,
-            )
-            .map_err(|err| RetireFailure {
-                message: err.to_string(),
-                dropped,
-            })?;
+    release_session(paths, runtime, kind, session, scope == RetireScope::Session)
+        .map_err(|message| RetireFailure { message, dropped })?;
+    Ok(dropped)
+}
+
+/// Thaw every hibernation record of one session; a failure only warns.
+fn thaw_session(
+    paths: &crate::disk::paths::StatePaths,
+    kind: &crate::ids::AgentKind,
+    session: &crate::ids::AgentSessionId,
+    cgroup_root: &Path,
+) {
+    for entry in crate::store::hibernate::read(paths)
+        .into_iter()
+        .filter(|entry| &entry.kind == kind && &entry.agent_id == session)
+    {
+        if let Err(error) =
+            crate::harness::hibernate::wake_pane_in(paths, &entry.pane_id, cgroup_root)
+        {
+            tracing::warn!(%error, "retire: waking hibernating session");
         }
     }
-    Ok(dropped)
+}
+
+/// Withdraw what belongs to one session rather than to its agent: the idle
+/// stop of the pane it would close, which a resumed restart must not inherit
+/// either, and, when `retire_raised`, the conversation's raised attention.
+fn release_session(
+    paths: &crate::disk::paths::StatePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
+    kind: &crate::ids::AgentKind,
+    session: &crate::ids::AgentSessionId,
+    retire_raised: bool,
+) -> Result<(), String> {
+    crate::store::idle_stop::withdraw(paths, kind, session).map_err(|err| err.to_string())?;
+    if !retire_raised {
+        return Ok(());
+    }
+    let Some(ask) =
+        crate::store::raised::retire(paths, kind, session).map_err(|err| err.to_string())?
+    else {
+        return Ok(());
+    };
+    let record =
+        crate::workspace::record::read(&paths.workspace_record).map_err(|err| err.to_string())?;
+    let store = crate::Store::open_existing(paths.clone(), runtime.clone())
+        .ok_or_else(|| "retiring raised attention requires a readable room record".to_owned())?;
+    let mut params = serde_json::json!({"ask_id": ask.ask_id, "cause": "retired"});
+    if let Some(caller) = crate::harness::ancestry::CallerIdentity::from_env() {
+        let actor = crate::store::message::MessageSender::Agent {
+            kind: caller.kind,
+            agent_id: caller.launch_id,
+            name: caller.name,
+            profile: caller.profile,
+            role: caller.role,
+            channel: None,
+        };
+        params["actor"] = serde_json::json!(actor.render());
+    }
+    crate::store::raised::audit(
+        &store,
+        &record.session_name,
+        "ask.closed",
+        kind,
+        session,
+        params,
+    )
+    .map_err(|err| err.to_string())
 }
 
 /// Retire every instance row in this workspace pinned to a durably ended
@@ -460,7 +465,17 @@ fn retire_ended_sessions_in(
     }
     let mut dropped = 0;
     let mut failures = Vec::new();
-    for (kind, session) in ended_pinned_sessions(agents().iter(), &pinned) {
+    let agents = agents();
+    for ((kind, session), agent_ended) in ended_pinned_sessions(agents.iter(), &pinned) {
+        // A replaced session's end leaves its agent's waits armed; only what
+        // belonged to the session itself goes.
+        if !agent_ended {
+            thaw_session(paths, kind, session, Path::new("/sys/fs/cgroup"));
+            if let Err(message) = release_session(paths, runtime, kind, session, true) {
+                failures.push(message);
+            }
+            continue;
+        }
         match retire_session_in(
             paths,
             runtime,
@@ -487,13 +502,18 @@ fn retire_ended_sessions_in(
 }
 
 /// The retirement predicate: which of the `pinned` sessions `agents` proves
-/// durably ended. Collecting the ended identities first keeps the scan over an
-/// audit list, which holds every session the room ever saw, allocation-free.
+/// durably ended, each with whether its agent ended too
+/// ([`crate::agents::state::agent_end`]). A session another swap replaced can
+/// end while its agent lives on in the holder.
 fn ended_pinned_sessions<'a, 'agents>(
-    agents: impl IntoIterator<Item = &'agents AgentState>,
+    agents: impl IntoIterator<Item = &'agents AgentState> + Clone,
     pinned: &'a std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
-) -> Vec<&'a (crate::ids::AgentKind, crate::ids::AgentSessionId)> {
+) -> Vec<(
+    &'a (crate::ids::AgentKind, crate::ids::AgentSessionId),
+    bool,
+)> {
     let ended = agents
+        .clone()
         .into_iter()
         .filter(|agent| agent.ended_at.is_some() && !agent.is_provider_subagent())
         .map(|agent| (&agent.kind, &agent.agent_id))
@@ -501,6 +521,11 @@ fn ended_pinned_sessions<'a, 'agents>(
     pinned
         .iter()
         .filter(|(kind, session)| ended.contains(&(kind, session)))
+        .map(|key| {
+            let agent_ended = crate::agents::state::agent_end(agents.clone(), &key.0, &key.1)
+                != crate::agents::state::AgentEnd::Live;
+            (key, agent_ended)
+        })
         .collect()
 }
 
@@ -1099,6 +1124,54 @@ mod tests {
         assert_eq!(idle_stop_sessions(&paths), ["resting"]);
     }
 
+    /// A swap's replaced session ending leaves the agent's waits armed for the
+    /// holder and takes only what was the session's own; the holder's end
+    /// then retires them.
+    #[test]
+    fn a_replaced_sessions_end_keeps_its_agents_waits_until_the_agent_ends() {
+        let (dir, paths, runtime) = idle_stop_fixture();
+        let entry = TaskEntry {
+            wait: Some(TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: "stopping".into(),
+                handle: "@coder".to_owned(),
+            }),
+            root: dir.path().to_path_buf(),
+            ..TaskEntry::default()
+        };
+        super::super::instances::insert_delivery(&paths, None, &entry, &Default::default())
+            .expect("wait row");
+        let now = Timestamp::UNIX_EPOCH;
+        let session = |id: &str, epoch: u32| {
+            let mut agent = crate::testkit::agent_state("claude", id, now);
+            agent.launch_id = Some("launch_a".into());
+            agent.epoch = epoch;
+            agent
+        };
+        let mut old = session("stopping", 0);
+        old.ended_at = Some(now);
+        let mut holder = session("resting", 1);
+
+        let dropped = retire_ended_sessions_in(&paths, &runtime, dir.path(), || {
+            vec![old.clone(), holder.clone()].into()
+        })
+        .expect("reconcile");
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            super::super::instances::pinned_sessions(&paths.root).len(),
+            1,
+            "the agent lives on in the holder"
+        );
+        assert_eq!(idle_stop_sessions(&paths), ["resting"]);
+
+        holder.ended_at = Some(now);
+        let dropped =
+            retire_ended_sessions_in(&paths, &runtime, dir.path(), || vec![old, holder].into())
+                .expect("reconcile");
+        assert_eq!(dropped, 1);
+        assert!(super::super::instances::pinned_sessions(&paths.root).is_empty());
+    }
+
     /// The retirement predicate: a pinned session is retired on positive
     /// evidence of its own durable end, and on nothing else.
     #[test]
@@ -1133,9 +1206,13 @@ mod tests {
         assert_eq!(
             selected
                 .iter()
-                .map(|(kind, session)| (kind.as_str(), session.as_str()))
+                .map(|((kind, session), agent_ended)| (
+                    kind.as_str(),
+                    session.as_str(),
+                    *agent_ended
+                ))
                 .collect::<Vec<_>>(),
-            vec![("claude", "ended")]
+            vec![("claude", "ended", true)]
         );
     }
 }

@@ -34,6 +34,8 @@ pub(super) struct ReactorCtx<'a> {
     pub(super) store: &'a Store,
     pub(super) primary_event_id: Option<&'a rimz::ids::EventId>,
     pub(super) run_completion: Option<&'a rimz::store::run::RunRecord>,
+    /// The events' row is a replaced session of its agent.
+    pub(super) replaced: bool,
 }
 
 pub(super) fn dispatch(ctx: &ReactorCtx<'_>, events: &[rimz::agents::LifecycleEvent]) {
@@ -47,6 +49,9 @@ pub(super) fn dispatch(ctx: &ReactorCtx<'_>, events: &[rimz::agents::LifecycleEv
 }
 
 fn queued_delivery(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
+    if ctx.replaced {
+        return;
+    }
     spawn_queue_delivery_if_checkpoint(ctx.workspace, ctx.store, event);
 }
 
@@ -70,50 +75,25 @@ fn run_wake(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
     }
 }
 
+/// An end archives the queue's debt to the agent only once the agent has
+/// ended; a replaced session's end, or one whose agent lives on, archives
+/// nothing.
 fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
-    if let Err(err) = ctx.store.archive_messages_watching_card(
-        &event.kind,
-        &event.agent_id,
-        event.agent_name.as_deref(),
-        None,
-        &ctx.workspace.session_name,
-    ) {
-        warn!(
-            error = %err,
-            kind = %event.kind,
-            agent_id = %event.agent_id,
-            "lifecycle: failed to archive messages watching ended agent",
-        );
+    if ctx.replaced {
+        return;
     }
-    let reason = ctx
-        .store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .ok()
-        .and_then(|snapshot| {
-            let receiver = find_agent(&snapshot.agents, &event.kind, &event.agent_id)?;
-            let peers: Vec<_> = snapshot
-                .agents
-                .iter()
-                .filter(|agent| !agent.is_provider_subagent())
-                .collect();
-            Some(rimz::message::deliver::ended_receiver_reason(
-                receiver, None, &peers,
-            ))
-        })
-        .unwrap_or_else(|| "receiver ended".to_owned());
-    if let Err(err) = ctx.store.archive_messages_for_card(
+    if let Err(err) = rimz::message::deliver::archive_for_ended_agent(
+        ctx.store,
+        &ctx.workspace.session_name,
         &event.kind,
         &event.agent_id,
         event.agent_name.as_deref(),
-        None,
-        &reason,
-        &ctx.workspace.session_name,
     ) {
         warn!(
             error = %err,
             kind = %event.kind,
             agent_id = %event.agent_id,
-            "lifecycle: failed to archive receiver messages",
+            "lifecycle: failed to archive messages for ended agent",
         );
     }
 }

@@ -107,6 +107,10 @@ struct FollowState {
     started_turn_id: Option<String>,
     superseded_turn_id: Option<String>,
     closed_turn_id: Option<String>,
+    /// The row's launch and epoch, as the fold raises them, for the stale
+    /// decision the snapshot makes.
+    launch: Option<AgentSessionId>,
+    epoch: u32,
 }
 
 /// Events and non-fatal archive-gap warnings observed in one poll.
@@ -168,6 +172,8 @@ impl EventFollower {
                     started_turn_id: agent.started_turn_id.clone(),
                     superseded_turn_id: agent.superseded_turn_id.clone(),
                     closed_turn_id: agent.closed_turn_id.clone(),
+                    launch: agent.launch_id.clone(),
+                    epoch: agent.epoch,
                 };
                 (key, state)
             })
@@ -268,8 +274,13 @@ impl EventFollower {
                 events.push(FollowEvent::Signal(signal));
                 continue;
             }
-            let EventKind::AgentLifecycle(payload) = envelope.kind() else {
-                continue;
+            let payload = match envelope.kind() {
+                EventKind::AgentLifecycle(payload) => payload,
+                EventKind::AgentAttach(attach) => {
+                    self.fold_attach(&envelope.source, &attach);
+                    continue;
+                }
+                _ => continue,
             };
             let observation = &payload.observation;
             if observation.origin == Some(SessionOrigin::SideConversation) {
@@ -281,6 +292,12 @@ impl EventFollower {
             let kind = AgentKind::new_unchecked(envelope.source.clone());
             let key = (kind.clone(), agent_id.clone());
             let prior = self.states.get(&key);
+            if prior.is_some_and(|state| {
+                snapshot::observation_stale_at(observation, state.launch.as_ref(), state.epoch)
+            }) {
+                continue;
+            }
+            let (launch, epoch) = launch_after(prior, observation);
             if observation.is_state_snapshot() {
                 let next = AgentState::snapshot_transition(
                     prior.map(|state| &state.lifecycle),
@@ -293,9 +310,12 @@ impl EventFollower {
                     started_turn_id: None,
                     superseded_turn_id: None,
                     closed_turn_id: None,
+                    launch: None,
+                    epoch: 0,
                 });
                 state.lifecycle = next;
                 state.open_ask_key = None;
+                (state.launch, state.epoch) = (launch, epoch);
                 self.ended.retain(|ended| ended != &key);
                 continue;
             }
@@ -350,6 +370,8 @@ impl EventFollower {
                     started_turn_id,
                     superseded_turn_id,
                     closed_turn_id,
+                    launch,
+                    epoch,
                 },
             );
             self.ended.retain(|ended| ended != &key);
@@ -360,6 +382,37 @@ impl EventFollower {
         }
         events
     }
+
+    /// A wrapper's attach raises a known row's launch and epoch, as the fold
+    /// does, so the process it replaced reads stale from then on.
+    fn fold_attach(&mut self, source: &str, attach: &crate::store::event::AgentAttachPayload) {
+        let key = (AgentKind::new_unchecked(source), attach.agent_id.clone());
+        let Some(state) = self.states.get_mut(&key) else {
+            return;
+        };
+        if let Some(launch) = &attach.launch_id {
+            state.launch = Some(launch.clone());
+        }
+        if let Some(epoch) = attach.epoch {
+            state.epoch = state.epoch.max(epoch);
+        }
+    }
+}
+
+/// The launch and epoch a row holds after a fresh `observation`. As in the
+/// fold, a stamp never assigns the launch; a root event stamped with the
+/// row's launch at a later epoch (a resumed swap) raises the row to it.
+fn launch_after(
+    prior: Option<&FollowState>,
+    observation: &crate::agents::AgentLifecycleObservation,
+) -> (Option<AgentSessionId>, u32) {
+    let launch = prior.and_then(|state| state.launch.clone());
+    let mut epoch = prior.map_or(0, |state| state.epoch);
+    if observation.parent_agent_id.is_none() && launch.is_some() && observation.launch_id == launch
+    {
+        epoch = epoch.max(observation.launch.epoch.unwrap_or(0));
+    }
+    (launch, epoch)
 }
 
 fn open_ask_key(agent: &AgentState) -> Option<String> {
