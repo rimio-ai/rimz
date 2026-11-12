@@ -32,8 +32,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use crate::agents::context::CacheWriteRetention;
+use crate::agents::context::{CacheWriteRetention, TurnErrorClass};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_ms, iso_to_unix_secs,
@@ -336,6 +337,41 @@ pub(super) struct ClaudeSpendState {
     pub(super) pricing_fingerprint: Option<String>,
     latest_user_ms: Option<u64>,
     current_message: Option<ClaudeResponseStart>,
+    #[serde(default, skip_serializing_if = "MainRequests::is_empty")]
+    main_requests: MainRequests,
+}
+
+/// The main conversation's requests, carried across suffix parses: the newest request record
+/// no answer has reached yet, and the latest before it. Claude records a request before
+/// refusing it for a usage limit, so a limit-class error entry takes the pending record back,
+/// even when the error lands in a later parse than its record.
+#[derive(Default, PartialEq, Serialize, Deserialize)]
+struct MainRequests {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ran: Option<jiff::Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending: Option<jiff::Timestamp>,
+}
+
+impl MainRequests {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The latest request by timestamp, since a record can be appended before the input that
+    /// triggered it.
+    fn latest(&self) -> Option<jiff::Timestamp> {
+        self.ran.max(self.pending)
+    }
+
+    fn open(&mut self, at: jiff::Timestamp) {
+        self.settle();
+        self.pending = Some(at);
+    }
+
+    fn settle(&mut self) {
+        self.ran = self.ran.max(self.pending.take());
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -377,13 +413,14 @@ pub fn parse_claude_spend(
     parse_claude_spend_with_retention(path, resume, prices, false).0
 }
 
-/// What a suffix parse saw of the main conversation's cache: the latest write tier and the
-/// latest request the provider recorded (`api-request` from `repl_main_thread`, by timestamp,
-/// since a record can be appended before the input that triggered it).
+/// What a suffix parse saw of the main conversation's cache: the latest write tier and, when
+/// the parse moved it, the latest request the provider recorded (`api-request` from
+/// `repl_main_thread`) that a usage limit did not refuse; `Some(None)` once a refusal took
+/// back the only record.
 #[derive(Default)]
 pub(super) struct MainCacheTail {
     pub(super) last_cache_write: Option<CacheWriteRetention>,
-    pub(super) last_request_at: Option<jiff::Timestamp>,
+    pub(super) last_request_at: Option<Option<jiff::Timestamp>>,
 }
 
 #[derive(Deserialize)]
@@ -404,6 +441,23 @@ fn main_request_at(line: &[u8]) -> Option<jiff::Timestamp> {
     (record.kind == "api-request" && record.query_source.as_deref() == Some("repl_main_thread"))
         .then_some(record.timestamp)
         .flatten()
+}
+
+/// The class of a main-conversation API-error entry, or `None` for any other line.
+fn main_api_error_class(line: &[u8]) -> Option<TurnErrorClass> {
+    if !bytes_contains(line, br#""isApiErrorMessage":true"#) {
+        return None;
+    }
+    let entry = serde_json::from_slice::<Value>(line).ok()?;
+    let main = entry.get("type").and_then(Value::as_str) == Some("assistant")
+        && entry.get("isSidechain").and_then(Value::as_bool) != Some(true);
+    main.then(|| {
+        super::statusline::classify_api_error(
+            entry.get("error").and_then(Value::as_str),
+            entry.get("apiErrorStatus").and_then(Value::as_u64),
+            super::statusline::turn_error_label(&entry).as_deref(),
+        )
+    })
 }
 
 pub(super) fn parse_claude_spend_with_retention(
@@ -444,8 +498,15 @@ pub(super) fn parse_claude_spend_with_retention(
 
     for line in read.content.split(|&b| b == b'\n') {
         if read_requests && let Some(request_at) = main_request_at(line) {
-            tail.last_request_at = tail.last_request_at.max(Some(request_at));
+            state.main_requests.open(request_at);
+            tail.last_request_at = Some(state.main_requests.latest());
             continue;
+        }
+        if read_requests && let Some(class) = main_api_error_class(line) {
+            if class.is_limit() && state.main_requests.pending.take().is_some() {
+                tail.last_request_at = Some(state.main_requests.latest());
+            }
+            state.main_requests.settle();
         }
         if bytes_contains(line, br#""user""#)
             && let Ok(input) = serde_json::from_slice::<ClaudeInput>(line)
@@ -464,6 +525,9 @@ pub(super) fn parse_claude_spend_with_retention(
         };
         if !is_valid_claude_entry(&entry) {
             continue;
+        }
+        if read_requests && entry.is_sidechain != Some(true) {
+            state.main_requests.settle();
         }
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;
