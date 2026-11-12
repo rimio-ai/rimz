@@ -8,10 +8,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{Hold, HoldKind, Host, LimitScope, NAMED_AGENTS, ThrottleError, cap_hold, duration_ms};
-use crate::harness::throttle::Limit;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::RunState;
-use crate::utils::time::format_duration_compact;
+use crate::utils::time::{TimeInputErr, format_duration_compact};
 
 #[derive(Clone, Debug)]
 pub(in crate::harness) struct WorkflowStart {
@@ -19,9 +18,16 @@ pub(in crate::harness) struct WorkflowStart {
     pub(in crate::harness) step: String,
     pub(in crate::harness) run: WorkflowRunId,
     pub(in crate::harness) arrival: Timestamp,
-    pub(in crate::harness) workflow_limit: Option<Limit>,
-    pub(in crate::harness) step_limit: Option<Limit>,
+    pub(in crate::harness) workflow_limit: Option<StartLimit>,
+    pub(in crate::harness) step_limit: Option<StartLimit>,
     pub(in crate::harness) may_wait: bool,
+}
+
+/// A workflow or step `limit` table as its definition parsed it.
+#[derive(Clone, Debug)]
+pub(in crate::harness) struct StartLimit {
+    pub(in crate::harness) max_parallel: Option<u32>,
+    pub(in crate::harness) stagger: Option<Result<Duration, TimeInputErr>>,
 }
 
 #[derive(Default)]
@@ -163,7 +169,7 @@ pub(super) fn evaluate(host: &dyn Host, start: &WorkflowStart) -> Result<Option<
         }
     }
     let staggered =
-        |limit: &Option<Limit>| limit.as_ref().is_some_and(|limit| limit.stagger.is_some());
+        |limit: &Option<StartLimit>| limit.as_ref().is_some_and(|limit| limit.stagger.is_some());
     if !staggered(&start.workflow_limit) && !staggered(&start.step_limit) {
         return Ok(None);
     }
@@ -183,10 +189,10 @@ pub(super) fn evaluate(host: &dyn Host, start: &WorkflowStart) -> Result<Option<
             workflow.and_then(|stamp| stamp.steps.get(&start.step).copied()),
         ),
     ] {
-        let Some(limit) = limit else { continue };
-        let Some(gap) = limit.stagger().map_err(|error| error.to_string())? else {
+        let Some(gap) = limit.as_ref().and_then(|limit| limit.stagger.as_ref()) else {
             continue;
         };
+        let gap = *gap.as_ref().map_err(ToString::to_string)?;
         if let Some(remaining) = remaining(host, gap, stamp) {
             return Ok(Some(hold(
                 kind,

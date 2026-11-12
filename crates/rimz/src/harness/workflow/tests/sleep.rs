@@ -74,7 +74,13 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_visit_buc
         ]
     );
     let spec = load(&state.workflow(&record.id).home).unwrap();
-    assert!(spec.checks["cooldown"].subscriptions().unwrap().is_empty());
+    assert!(
+        spec.check("cooldown")
+            .unwrap()
+            .subscriptions()
+            .unwrap()
+            .is_empty()
+    );
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
     let routes: Vec<_> = hops(&spec, &journal, next.held.as_ref())
         .into_iter()
@@ -388,7 +394,9 @@ fn sleep_derives_the_same_subscriptions_and_forge_demand_as_a_condition() {
         ))
         .unwrap();
         [sleep, condition].map(|spec| {
-            let selectors = spec.checks["cooldown"]
+            let selectors = spec
+                .check("cooldown")
+                .unwrap()
                 .subscriptions()
                 .unwrap()
                 .iter()

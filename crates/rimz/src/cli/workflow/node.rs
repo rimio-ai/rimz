@@ -82,7 +82,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
             from.join(", ")
         }),
     );
-    if let Some(check) = check {
+    if let Some(check) = spec.check(node) {
         let wakes = check
             .subscriptions()?
             .into_iter()
@@ -104,7 +104,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
         wakes.push("the minute tick".into());
         facts.push("wakes on", render::cell(wakes.join(", ")));
     }
-    if let Some(step) = step {
+    if let Some(step) = spec.step(node) {
         let receives = step
             .subscription_labels()?
             .into_iter()

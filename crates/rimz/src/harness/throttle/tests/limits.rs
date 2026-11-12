@@ -1,9 +1,20 @@
 use super::*;
 use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
-use crate::harness::throttle::WorkflowStart;
+use crate::harness::throttle::{StartLimit, WorkflowStart};
 use crate::ids::{RunId, WorkflowRunId};
 use crate::store::workflow::{self, StepLifecycle};
 use serde_json::json;
+
+fn limit(text: &str) -> StartLimit {
+    let limit: Limit = toml::from_str(text).unwrap();
+    StartLimit {
+        max_parallel: limit.max_parallel,
+        stagger: limit
+            .stagger
+            .as_deref()
+            .map(crate::harness::duration::duration),
+    }
+}
 
 fn limited(workflow: Option<&str>, step: Option<&str>) -> Run {
     Run {
@@ -13,8 +24,8 @@ fn limited(workflow: Option<&str>, step: Option<&str>) -> Run {
             step: "build".into(),
             run: WorkflowRunId::new(),
             arrival: Timestamp::from_millisecond(1_000_000).unwrap(),
-            workflow_limit: workflow.map(|text| toml::from_str(text).unwrap()),
-            step_limit: step.map(|text| toml::from_str(text).unwrap()),
+            workflow_limit: workflow.map(limit),
+            step_limit: step.map(limit),
             may_wait: true,
         }),
         ..run("nightly")
@@ -158,7 +169,7 @@ fn limits_count_one_start_per_live_run_attempt_across_rooms() {
         let mut step_request = request.clone();
         let start = step_request.limits.as_mut().unwrap();
         start.workflow_limit = None;
-        start.step_limit = Some(toml::from_str(cap).unwrap());
+        start.step_limit = Some(limit(cap));
         start.step = step.into();
         step_request
     };

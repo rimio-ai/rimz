@@ -4,7 +4,7 @@
 //! of the parser its consumer runs. Compiling never fails: a value admission would refuse loads
 //! with its failure, and each consumer keeps the arm it has for that failure.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -13,6 +13,7 @@ use super::graph::Edge;
 use super::spec::{self, Check, SpecErr, Step, Wake, WorkflowSpec};
 use crate::harness::budget::{BudgetParseError, BudgetSpec};
 use crate::harness::signal::SignalSelector;
+use crate::harness::signal::default_signal_match_key;
 use crate::harness::when::{WhenError, WhenExpr};
 use crate::store::workflow::StepLifecycle;
 use crate::utils::time::TimeInputErr;
@@ -145,6 +146,13 @@ impl<T, E> Parsed<T, E> {
     }
 }
 
+impl<T: Clone, E: Clone> Parsed<T, E> {
+    /// The parse result, owned, for a reader outside the workflow module.
+    pub(in crate::harness) fn result(&self) -> Result<T, E> {
+        self.value.clone()
+    }
+}
+
 impl<T, E> Serialize for Parsed<T, E> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.text)
@@ -163,6 +171,9 @@ pub struct Node {
     wakes: Vec<Subscribed>,
     stagger: Option<Parsed<Duration, TimeInputErr>>,
     budget: Option<Parsed<BudgetSpec, BudgetParseError>>,
+    fallback: Option<String>,
+    provider: Option<crate::ids::AgentKind>,
+    account: Option<crate::ids::LoginName>,
 }
 
 /// What runs at a node, with the runner's own data. A node that sets no runner, or several,
@@ -325,6 +336,83 @@ impl Node {
     pub(super) fn resolved_edges(&self) -> &[Edge] {
         &self.edges
     }
+
+    /// A condition answer's outcome when no case holds: a sleep's `sleeping`, else `else`.
+    pub(super) fn fallback_outcome(&self) -> Option<&str> {
+        self.fallback.as_deref()
+    }
+
+    /// A check's provider for window readings.
+    pub(super) fn provider(&self) -> Option<&crate::ids::AgentKind> {
+        self.provider.as_ref()
+    }
+
+    /// The account a check reads windows on, or the one an agent step's launch pins.
+    pub(super) fn account(&self) -> Option<&crate::ids::LoginName> {
+        self.account.as_ref()
+    }
+
+    /// The signals that wake a check or reach a staying step: a condition or sleep's from its
+    /// cases' terms, any other node's from its wakes.
+    pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
+        if !matches!(self.kind, Some(Kind::Condition(_) | Kind::Sleep(_))) {
+            return self
+                .wakes
+                .iter()
+                .map(|wake| wake.subscription.value().cloned().map_err(SpecErr::reissue))
+                .collect();
+        }
+        let mut subscriptions = Vec::new();
+        for case in self.cases() {
+            let expression = case.when.expression().map_err(|error| error.clone())?;
+            subscriptions.extend(
+                expression
+                    .terms()
+                    .filter_map(|term| term.wake_subscription()),
+            );
+        }
+        Ok(subscriptions)
+    }
+
+    /// Each subscription's selector beside the scope a forward resolves it to, in definition order.
+    pub fn subscription_labels(&self) -> Result<Vec<(String, String)>, SpecErr> {
+        Ok(self
+            .subscriptions()?
+            .into_iter()
+            .map(|(selector, matches)| {
+                let scope = match default_signal_match_key(&selector, &matches) {
+                    Some("path") => Some("for this checkout"),
+                    Some("instance") if selector.to_string() != "team.stage" => {
+                        Some("for this checkout's team")
+                    }
+                    Some("instance") if !matches.contains_key("board") => {
+                        Some("for this checkout's team board")
+                    }
+                    _ => None,
+                };
+                let filter = (!matches.is_empty()).then(|| {
+                    let pairs = matches
+                        .iter()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>();
+                    format!("where {}", pairs.join(", "))
+                });
+                let label = match (scope, filter) {
+                    (Some(scope), Some(filter)) => format!("{scope} {filter}"),
+                    (Some(scope), None) => scope.into(),
+                    (None, Some(filter)) => filter,
+                    (None, None) => "anywhere in the room".into(),
+                };
+                (selector.to_string(), label)
+            })
+            .collect())
+    }
+
+    /// Compile a check a test built alone, as a load compiles each check.
+    #[cfg(test)]
+    pub(super) fn of_check(check: &Check) -> Self {
+        check_node(check)
+    }
 }
 
 impl Definition {
@@ -393,6 +481,40 @@ impl Definition {
         self.check(name)?.kind()
     }
 
+    /// `Some(empty)` demands checkout facts; `None` means no condition, wake or subscription needs
+    /// them.
+    pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
+        let mut branches = None;
+        for step in self.steps.values() {
+            for (selector, matches) in step.subscriptions()? {
+                if default_signal_match_key(&selector, &matches) == Some("path") {
+                    branches.get_or_insert_with(BTreeSet::new);
+                }
+            }
+        }
+        for check in self.checks.values() {
+            if !matches!(check.kind(), Some(Kind::Condition(_) | Kind::Sleep(_))) {
+                for wake in &check.wakes {
+                    let (selector, matches) =
+                        wake.subscription.value().map_err(SpecErr::reissue)?;
+                    if default_signal_match_key(selector, matches) == Some("path") {
+                        branches.get_or_insert_with(BTreeSet::new);
+                    }
+                }
+                continue;
+            }
+            for case in check.cases() {
+                let expression = case.when.expression().map_err(|error| error.clone())?;
+                if expression.reads_forge() {
+                    branches
+                        .get_or_insert_with(BTreeSet::new)
+                        .extend(expression.forge_branches().map(str::to_owned));
+                }
+            }
+        }
+        Ok(branches)
+    }
+
     /// The workflow-wide start stagger.
     pub fn stagger(&self) -> Option<&Parsed<Duration, TimeInputErr>> {
         self.stagger.as_ref()
@@ -426,8 +548,8 @@ fn stagger(
     limit?.stagger.as_deref().map(duration)
 }
 
-fn window(text: Option<&str>) -> Option<Parsed<WhenExpr, SpecErr>> {
-    text.map(|text| Parsed::new(text, spec::parse_window))
+pub(super) fn window(text: &str) -> Parsed<WhenExpr, SpecErr> {
+    Parsed::new(text, spec::parse_window)
 }
 
 fn cases(cases: &[spec::Case]) -> Vec<Case> {
@@ -488,10 +610,13 @@ fn check_node(check: &Check) -> Node {
             .collect(),
         lifecycle: StepLifecycle::Turn,
         timeout: check.timeout.as_deref().map(duration),
-        window: window(check.window.as_deref()),
+        window: check.window.as_deref().map(window),
         wakes: subscribed(check.wake.as_ref(), Wake::subscription),
         stagger: None,
         budget: None,
+        fallback: check.fallback_outcome().map(str::to_owned),
+        provider: check.provider.clone(),
+        account: check.account.clone(),
     }
 }
 
@@ -512,12 +637,15 @@ fn step_node(step: &Step) -> Node {
             .collect(),
         lifecycle: step.lifecycle(),
         timeout: step.timeout.as_deref().map(duration),
-        window: window(step.window.as_deref()),
+        window: step.window.as_deref().map(window),
         wakes: subscribed(step.subscribe.as_ref(), Wake::step_subscription),
         stagger: stagger(step.limit.as_ref()),
         budget: step
             .budget
             .as_deref()
             .map(|text| Parsed::new(text, str::parse)),
+        fallback: None,
+        provider: None,
+        account: step.account.clone(),
     }
 }

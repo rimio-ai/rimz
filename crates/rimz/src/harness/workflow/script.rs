@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Definition, Kind, spec, state::Transition};
+use super::{Definition, Kind, Node, SpecErr, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
 use crate::harness::headless::exit_failure;
@@ -56,12 +56,14 @@ pub(super) fn digest(bytes: &[u8]) -> String {
 
 fn command_words(
     record: &RunRecord,
-    run: &str,
+    run: &super::definition::Command,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<Vec<std::ffi::OsString>, String> {
-    let argv = spec::resolve_argv(&record.spec_dir, run).map_err(|e| e.to_string())?;
-    // resolve_argv has parsed this exact command successfully.
-    let words = shlex::split(run).expect("resolved workflow argv");
+    let words = run
+        .words()
+        .ok_or(SpecErr::Command)
+        .map_err(|e| e.to_string())?;
+    let argv = spec::resolve_words(&record.spec_dir, words).map_err(|e| e.to_string())?;
     for (word, path) in words.iter().zip(&argv) {
         if word.contains('/') {
             let bytes =
@@ -78,24 +80,26 @@ pub(super) fn evaluate(
     spec: &Definition,
     record: &RunRecord,
 ) -> Evaluation {
-    let run = match spec.check_kind(&record.node) {
+    let Some(check) = spec.check(&record.node) else {
+        return Evaluation::failed("invalid", "check needs exactly one runner");
+    };
+    let run = match check.kind() {
         Some(Kind::Judge(_)) => return judge::evaluate(state, paths, spec, record),
         Some(Kind::Shell(shell)) => {
             return evaluate_shell(state, paths, spec, record, shell);
         }
         Some(Kind::Condition(_)) => {
             let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
-            result.object = condition::evaluate(state, &spec.checks[&record.node], record);
+            result.object = condition::evaluate(state, check, record);
             return result;
         }
         Some(Kind::Sleep(_)) => {
             let mut result = Evaluation::failed("invalid", "sleep evaluation interrupted");
             result.object =
-                condition_now(state, &spec.checks[&record.node], record, record.entered_at)
-                    .map(|(object, _)| object);
+                condition_now(state, check, record, record.entered_at).map(|(object, _)| object);
             return result;
         }
-        Some(Kind::Run(run)) => run.text(),
+        Some(Kind::Run(run)) => run,
         Some(Kind::Agent(_) | Kind::Message(_)) | None => {
             return Evaluation::failed("invalid", "check needs exactly one runner");
         }
@@ -159,7 +163,7 @@ pub(super) fn evaluate(
                 Err("evaluation timed out".into())
             } else if !output.status.success() {
                 // command_words resolved this exact, nonempty argv successfully.
-                let words = shlex::split(run).expect("resolved workflow argv");
+                let words = run.words().expect("resolved workflow argv");
                 let label = words
                     .iter()
                     .find(|word| word.contains('/'))
@@ -182,23 +186,22 @@ pub(super) fn evaluate(
 /// forge key is read.
 pub fn condition_now(
     state: &StatePaths,
-    check: &super::Check,
+    check: &Node,
     record: &RunRecord,
     slept_from: Timestamp,
 ) -> Result<(Value, Option<Timestamp>), String> {
-    if let Some(sleep) = &check.sleep {
+    if let Some(Kind::Sleep(sleep)) = check.kind() {
+        let duration = sleep.duration();
         let end = slept_from
-            .checked_add(
-                crate::harness::duration::duration(sleep).map_err(|error| error.to_string())?,
-            )
+            .checked_add(*duration.value().map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
         if Timestamp::now() >= end {
             return Ok((
-                json!({"outcome":"then", "reason":format!("slept {sleep}")}),
+                json!({"outcome":"then", "reason":format!("slept {}", duration.text())}),
                 None,
             ));
         }
-        if check.when.is_none() {
+        if check.cases().is_empty() {
             return Ok((json!({"outcome":"sleeping", "recheck_at":end}), None));
         }
     }
@@ -277,7 +280,7 @@ pub(super) fn execute_step(
     let (command, argv) = match spec.step_kind(&record.node).expect("command step runner") {
         Kind::Run(run) => (
             run.text(),
-            Some(command_words(record, run.text(), &mut digests).map_err(ChildError::Failed)?),
+            Some(command_words(record, run, &mut digests).map_err(ChildError::Failed)?),
         ),
         Kind::Shell(shell) => (shell.as_str(), None),
         _ => unreachable!("advance sends agent and message steps to the attempt host"),

@@ -712,7 +712,7 @@ fn wrong_typed_optionals_are_absent_and_other_wakes_survive() {
             step.lifecycle,
             step.throttle,
             step.takeover,
-            spec.checks["pick"].subscriptions().unwrap().len(),
+            spec.check("pick").unwrap().subscriptions().unwrap().len(),
             paths
         ),
         (

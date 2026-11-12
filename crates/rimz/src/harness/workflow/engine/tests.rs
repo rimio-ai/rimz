@@ -856,7 +856,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
         );
         assert_eq!(
             window_wait(
-                "window.5h.left >= 20",
+                &crate::harness::workflow::definition::window("window.5h.left >= 20"),
                 Path::new("/project"),
                 &kind,
                 None,
@@ -900,9 +900,15 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
     let unread = WindowReadings::fixed(now, BTreeMap::new());
     for raw in ["5h.left >= 20", "!(5h.left >= 20)"] {
         assert_eq!(
-            window_wait(raw, Path::new("/project"), &kind, None, &unread)
-                .unwrap()
-                .as_deref(),
+            window_wait(
+                &crate::harness::workflow::definition::window(raw),
+                Path::new("/project"),
+                &kind,
+                None,
+                &unread
+            )
+            .unwrap()
+            .as_deref(),
             Some("5h.left unread"),
             "{raw}"
         );

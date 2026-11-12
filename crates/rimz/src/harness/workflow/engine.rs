@@ -4,15 +4,16 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde_json::json;
 
+use super::definition::Parsed;
 use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
-use super::{Definition, Kind, Target, script, spec, state::Transition};
+use super::{Definition, Kind, SpecErr, Target, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::signal::{
     Signal, SignalResolution, default_signal_match_key, resolve_subscription,
 };
 use crate::harness::throttle::{self};
-use crate::harness::when::WindowReadings;
+use crate::harness::when::{WhenExpr, WindowReadings};
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEntry, JournalEvent,
@@ -533,15 +534,15 @@ pub(super) fn entered_act(spec: &Definition, record: &RunRecord) -> bool {
 }
 
 fn window_wait(
-    raw: &str,
+    window: &Parsed<WhenExpr, SpecErr>,
     scope: &Path,
     provider: &crate::ids::AgentKind,
     account: Option<&crate::ids::LoginName>,
     windows: &WindowReadings<'_>,
 ) -> Result<Option<String>> {
-    let expr = spec::parse_window(raw)?;
+    let expr = window.value().map_err(SpecErr::reissue)?;
     let verdict =
-        crate::harness::when::evaluate(&expr, scope, None, Some(provider), account, windows);
+        crate::harness::when::evaluate(expr, scope, None, Some(provider), account, windows);
     Ok((verdict.truth != Some(true))
         .then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
@@ -623,14 +624,14 @@ pub fn launch_groups(
 fn window_wait_for_launch(
     record: &RunRecord,
     agent: &str,
-    raw: &str,
+    window: &Parsed<WhenExpr, SpecErr>,
     windows: &WindowReadings<'_>,
     host: &dyn AttemptHost,
 ) -> Result<Option<String>> {
     window_wait_for_groups(
         record,
         &host.start_groups(record, agent, None)?,
-        raw,
+        window,
         windows,
     )
 }
@@ -638,12 +639,12 @@ fn window_wait_for_launch(
 fn window_wait_for_groups(
     record: &RunRecord,
     groups: &[throttle::StartGroup],
-    raw: &str,
+    window: &Parsed<WhenExpr, SpecErr>,
     windows: &WindowReadings<'_>,
 ) -> Result<Option<String>> {
     for group in groups {
         if let Some(detail) = window_wait(
-            raw,
+            window,
             &record.scope.path,
             &group.kind,
             group.account.as_ref(),
@@ -1109,7 +1110,7 @@ fn prepare(
     }
     let mut launch_error = None;
     let mut evict = None;
-    if let Some(step) = spec.steps.get(&t.record.node) {
+    if let (Some(step), Some(node)) = (spec.steps.get(&t.record.node), spec.step(&t.record.node)) {
         if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
@@ -1128,7 +1129,7 @@ fn prepare(
             if admits && let Some((_, _, Err(reason))) = &admission.capacity {
                 launch_error = Some(reason.to_string());
             }
-            let groups = if admits || step.window.is_some() {
+            let groups = if admits || node.window().is_some() {
                 match host.start_groups(&t.record, agent, step.account.as_ref()) {
                     Ok(groups) => groups,
                     Err(error) => {
@@ -1141,8 +1142,8 @@ fn prepare(
             };
             if t.record.restart.is_none()
                 && launch_error.is_none()
-                && let Some(raw) = &step.window
-                && let Some(detail) = window_wait_for_groups(&t.record, &groups, raw, windows)?
+                && let Some(window) = node.window()
+                && let Some(detail) = window_wait_for_groups(&t.record, &groups, window, windows)?
             {
                 t.step_wait("window", Some(detail));
                 persist(&mut t, &guard)?;
@@ -1172,17 +1173,15 @@ fn prepare(
                 return Ok(decision);
             }
         }
-    } else if spec.checks.contains_key(&t.record.node) {
-        let check = &spec.checks[&t.record.node];
-        if let (Some(raw), Some(Kind::Judge(profile))) =
-            (&check.window, spec.check_kind(&t.record.node))
-            && let Some(detail) = window_wait_for_launch(&t.record, profile, raw, windows, host)?
+    } else if let Some(node) = spec.check(&t.record.node) {
+        if let (Some(window), Some(Kind::Judge(profile))) = (node.window(), node.kind())
+            && let Some(detail) = window_wait_for_launch(&t.record, profile, window, windows, host)?
         {
             t.step_wait("window", Some(detail));
             persist(&mut t, &guard)?;
             return Ok(Decision::Stop);
         }
-        if check.window.is_some()
+        if node.window().is_some()
             && t.record
                 .wait
                 .as_ref()
@@ -1341,8 +1340,23 @@ fn prepare_capacity(
                     .as_ref()
                     .filter(|wait| wait.outcome == "capacity")
                     .map_or(t.now, |wait| wait.first),
-                workflow_limit: t.spec.workflow.limit.clone(),
-                step_limit: step.limit.clone(),
+                workflow_limit: t
+                    .spec
+                    .workflow
+                    .limit
+                    .as_ref()
+                    .map(|limit| throttle::StartLimit {
+                        max_parallel: limit.max_parallel,
+                        stagger: t.spec.stagger().map(Parsed::result),
+                    }),
+                step_limit: step.limit.as_ref().map(|limit| throttle::StartLimit {
+                    max_parallel: limit.max_parallel,
+                    stagger: t
+                        .spec
+                        .step(&t.record.node)
+                        .and_then(|node| node.stagger())
+                        .map(Parsed::result),
+                }),
                 may_wait,
             });
     if !may_wait && limits.is_none() {
@@ -2102,7 +2116,11 @@ fn subscribers(
     let Some(attempt) = record.session_attempt() else {
         return Ok(Vec::new());
     };
-    let (Some(step), Some(run)) = (spec.steps.get(&attempt.node), &attempt.run) else {
+    let (Some(step), Some(node), Some(run)) = (
+        spec.steps.get(&attempt.node),
+        spec.step(&attempt.node),
+        &attempt.run,
+    ) else {
         return Ok(Vec::new());
     };
     if attempt.lifecycle.is_turn()
@@ -2114,8 +2132,12 @@ fn subscribers(
     let checkout = destination(record, step)?;
     let mut seen = Vec::new();
     let mut forwards = Vec::new();
-    for wake in step.subscribe.iter().flatten() {
-        let subscription = wake.step_subscription()?;
+    for wake in node.wakes() {
+        let subscription = wake
+            .subscription()
+            .value()
+            .map_err(SpecErr::reissue)?
+            .clone();
         if seen.contains(&subscription) {
             continue;
         }
@@ -2178,7 +2200,7 @@ pub(crate) fn hears_lifecycle(
             continue;
         }
         let spec = spec::load(&state.workflow(&record.id).home)?;
-        let Some(step) = spec.steps.get(&attempt.node) else {
+        let Some(step) = spec.step(&attempt.node) else {
             continue;
         };
         if step
@@ -2202,7 +2224,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
                 return Ok(());
             }
             let spec = spec::load(&paths.home)?;
-            let woken = match spec.checks.get(&current.node) {
+            let woken = match spec.check(&current.node) {
                 Some(check) => check.subscriptions()?.into_iter().any(|subscription| {
                     delivers(
                         &current.project_root,

@@ -6,7 +6,6 @@ use super::{Definition, Fireability, HopKind, Kind, Node, Step, Target, routing_
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
-use crate::harness::when::WhenExpr;
 use crate::store::workflow::{
     self, AttemptOutcome, JournalEvent, Key, RunFire, RunRecord, StepLifecycle, TurnEndAction,
 };
@@ -227,7 +226,7 @@ fn detail(check: &Node, input: &Value) -> Option<String> {
                 check
                     .cases()
                     .get(case)
-                    .and_then(|case| WhenExpr::parse(case.when().clauses()).ok())
+                    .and_then(|case| case.when().expression().ok())
             })
             .map(|expression| {
                 expression
@@ -260,7 +259,7 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
             .cases()
             .iter()
             .map(|case| {
-                let expression = WhenExpr::parse(case.when().clauses()).ok()?;
+                let expression = case.when().expression().ok()?;
                 Some(format!(
                     "{}: {} → {}",
                     span(&case.outcome),
@@ -345,12 +344,12 @@ pub(super) fn push(
             text.push_str(&format!("\n\n{reason}"));
         }
     } else {
-        let marks = super::case_marks(&spec.checks[name], input, None)?;
+        let marks = super::case_marks(check, input, None)?;
         for (case, mark) in check.cases().iter().zip(marks.cases) {
             if !matches!(mark, super::CaseMark::False | super::CaseMark::Unread) {
                 break;
             }
-            let expression = WhenExpr::parse(case.when().clauses())?;
+            let expression = case.when().expression().map_err(|error| error.clone())?;
             let mut terms = Vec::new();
             for (term, negated) in expression.leaves() {
                 let reading = input["readings"][&term.key].as_str();
@@ -590,7 +589,7 @@ fn lifecycle(spec: &Definition, step: &Step, record: &RunRecord) -> (String, Str
                     "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn.{timeout}"
                 )
             };
-            if let Some(subscriptions) = subscriptions(step) {
+            if let Some(subscriptions) = subscriptions(node) {
                 after.push_str(&format!(
                     " You subscribe to {subscriptions}. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
                 ));
@@ -604,7 +603,7 @@ fn lifecycle(spec: &Definition, step: &Step, record: &RunRecord) -> (String, Str
     }
 }
 
-fn subscriptions(step: &Step) -> Option<String> {
+fn subscriptions(step: &Node) -> Option<String> {
     let mut labels = step
         .subscription_labels()
         .ok()?

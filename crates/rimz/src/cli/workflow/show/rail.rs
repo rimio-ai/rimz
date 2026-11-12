@@ -132,7 +132,7 @@ impl View<'_> {
                     row.heading
                         .push_str(&format!(" · last checked {}", self.clock(entry.at)));
                 }
-                if let Some(check) = self.spec.checks.get(&row.name) {
+                if let Some(check) = self.spec.check(&row.name) {
                     let wakes = check
                         .subscriptions()?
                         .into_iter()
@@ -150,7 +150,7 @@ impl View<'_> {
                     ));
                     self.cases(row)?;
                 }
-                if let Some(step) = self.spec.steps.get(&row.name) {
+                if let Some(step) = self.spec.step(&row.name) {
                     let receives = step
                         .subscriptions()?
                         .into_iter()
@@ -247,7 +247,9 @@ impl View<'_> {
             return Ok(());
         }
         let object = object.unwrap_or(&Value::Null);
-        let marks = workflow::case_marks(check, object, wait)?;
+        // The row names a check, so its compiled node exists.
+        let node = self.spec.check(&row.name).expect("check node");
+        let marks = workflow::case_marks(node, object, wait)?;
         let reasons = workflow::unread_reasons(object);
         let mut seen = BTreeSet::new();
         for case in &mut row.cases {
