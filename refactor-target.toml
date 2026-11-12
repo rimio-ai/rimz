@@ -79,11 +79,9 @@ path = "crates/rimz/src/address.rs"
 # AddressContext and ChannelOrigin carry room identity and lane provenance
 # from the binary into the shared resolver and library dispatch callers;
 # Root-lane labels and record/filter predicates keep CLI readers on one rule (+4).
-# `launch_word_matches` lets the bare `rimz agents <word>` refusal reuse the
-# role and name tiers instead of matching them a second time (+1).
 # Reader-relative paste addresses share the resolver's verified selector chain (+1).
 # launch_rows narrows Prompt sender context reads to launch members (+1).
-surface-budget = 47
+surface-budget = 46
 allowed-dependencies = ["agents", "ids", "store"]
 
 [[verdict]]
@@ -4707,7 +4705,8 @@ surface-budget = 31
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # `AgentsArgs::launch_verb` lets `rimz teams <name>` launch through the explicit
-# verb, past the bare-word live-agent refusal, without a caller flag (+1).
+# verb, whose refusals leave out the scene's verb suggestions, without a caller
+# flag (+1).
 # The launch module and shared placement leave the published CLI surface (-2).
 # Sidebar close/reopen share resume_command and resume_worktree_name with stop receipts (+2).
 # Sidebar close shares offers_resume with the stop receipt's eligibility gate (+1).

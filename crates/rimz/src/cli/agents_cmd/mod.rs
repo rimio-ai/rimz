@@ -607,8 +607,8 @@ impl AgentsArgs {
         }
     }
 
-    /// `rimz agents launch <SPEC>`: the explicit verb, which a bare word's
-    /// live-agent refusal never stops.
+    /// `rimz agents launch <SPEC>`: the explicit verb, whose refusal of an
+    /// unresolved name leaves the scene's verbs out of its suggestions.
     pub(crate) fn launch_verb(launch: AgentLaunchArgs) -> Self {
         Self {
             command: Some(AgentsSubcmd::Launch(Box::new(launch))),
@@ -1199,17 +1199,6 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         ))
         .into());
     }
-    if let Some(word) = lone_launch_word(&launch)
-        && let Some((snapshot, current_channel)) = live_room_snapshot(globals)
-        && let Some(refusal) = collision_refusal(
-            word,
-            &snapshot.pane_bound_roots().collect::<Vec<_>>(),
-            &snapshot,
-            &current_channel,
-        )
-    {
-        return Err(refusal.into());
-    }
     dispatch_launch(launch, json, globals, true)
 }
 
@@ -1562,64 +1551,6 @@ fn launch_refusal(launch: &AgentLaunchArgs, all: bool, json: bool) -> Option<Usa
         "a launch spec",
         &flags,
     ))
-}
-
-/// The word of a bare `rimz agents <word>` with no prompt and no launch flag,
-/// unless it is a kind: the only launch the live-agent refusal can stop.
-fn lone_launch_word(launch: &AgentLaunchArgs) -> Option<&str> {
-    let word = launch.spec.as_deref()?;
-    let lone = AgentLaunchArgs {
-        spec: launch.spec.clone(),
-        ..Default::default()
-    };
-    (*launch == lone
-        && top_level_spec_route(word) == TopLevelSpecRoute::Launch
-        && !rimz::agents::known_kinds().any(|kind| kind == word))
-    .then_some(word)
-}
-
-/// The refusal for a lone launch `word` that also names one of the `live`
-/// agents: launching it silently would start a second agent the user likely
-/// meant to inspect.
-fn collision_refusal(
-    word: &str,
-    live: &[&AgentState],
-    snapshot: &rimz::store::snapshot::SidebarSnapshot,
-    current_channel: &rimz::address::AddressContext,
-) -> Option<UsageError> {
-    let matches = rimz::address::launch_word_matches(word, live, current_channel);
-    let newest = matches.iter().max_by_key(|agent| agent.last_activity)?;
-    let address = rimz::address::paste_address(newest, snapshot, current_channel);
-    let named = match matches.len() {
-        1 => format!("a live agent ({address})"),
-        count => format!("{count} live agents"),
-    };
-    let mut message = format!(
-        "`{word}` names {named} as well as a launch spec\n  inspect: {}",
-        shell_command(["rimz", "agents", "show", &address])
-    );
-    if matches.len() > 1 {
-        message.push_str("\n  all:     rimz agents list --all");
-    }
-    message.push_str(&format!(
-        "\n  launch:  {}",
-        shell_command(["rimz", "agents", "launch", word])
-    ));
-    Some(UsageError::new(message))
-}
-
-/// The room's live agents, as `rimz agents list --all` sees them, beside the
-/// caller's address context; none when no room is live, so the launch meets
-/// its own room check as before.
-fn live_room_snapshot(
-    globals: &GlobalFlags,
-) -> Option<(
-    rimz::store::snapshot::SidebarSnapshot,
-    rimz::address::AddressContext,
-)> {
-    let ctx = crate::cli::Ctx::open(globals).ok()?;
-    rimz::room::require_live_mux(globals.mux, &ctx.workspace).ok()?;
-    Some((ctx.published_snapshot().ok()?, ctx.address_context()))
 }
 
 fn scope_refusal(scope: &str, json: bool) -> UsageError {

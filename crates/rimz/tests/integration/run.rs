@@ -6343,20 +6343,39 @@ fn agents_list_tells_an_unknown_lane_from_an_empty_one() {
     assert!(empty_json(&stdout), "{stdout}");
 }
 
+#[cfg(unix)]
 #[test]
-fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
+fn bare_word_naming_a_live_agent_launches_without_reading_the_room() {
+    if crate::common::git::git_missing() {
+        return;
+    }
     let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
     env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
+    let made = env
+        .rimz()
+        .args(["worktree", "new", "auth"])
+        .bounded_output()
+        .expect("worktree new");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let auth = env.home_root.join("project-worktrees/auth");
     let mut observation = rimz::agents::AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-planner")),
         LifecycleSignal::Registered,
     );
-    observation.worktree_path = Some(env.home_root.join("auth").display().to_string());
+    observation.worktree_path = Some(auth.display().to_string());
     observation.worktree_branch = Some("auth".to_owned());
     observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
-    observation.launch.profile = Some("coder".to_owned());
+    observation.launch.profile = Some("worker".to_owned());
     observation.launch.role = Some("planner".to_owned());
+    observation.launch.team = Some("forge".to_owned());
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
@@ -6369,21 +6388,46 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
     publish_pane_frame(
         &env,
         &workspace.session_name,
-        vec![list_pane(
-            &workspace.session_name,
-            "%1",
-            "claude",
-            &env.home_root.join("auth"),
-        )],
+        vec![list_pane(&workspace.session_name, "%1", "claude", &auth)],
     );
+    let profile = |name: &str| {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: {name}\nagent: claude\ntools: []"),
+            "",
+        )
+    };
+    profile("worker");
+    profile("coder");
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "forge",
+        "leader: planner\nstages: [Build]\nroles:\n  - {role: planner, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
+    // A run home another RimZ version wrote: reading the room's workflows
+    // warns about it, so a launch that reads them says so on stderr.
+    let stale = env
+        .state_path_for(&env.project_root)
+        .workflow(&rimz::ids::WorkflowRunId::new());
+    std::fs::create_dir_all(&stale.home).unwrap();
+    std::fs::write(&stale.record, r#"{"version":1}"#).unwrap();
+    let agent_bin = crate::common::write_long_lived_agent_shim(&env, "claude");
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
 
     let run_in = |args: &[&str], channel: Option<&str>| {
         let mut command = env.rimz();
         command
             .args(["--mux", "zellij"])
             .args(args)
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", &shell)
             .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
             .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("zellij.log"))
+            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                 format!("{} [Created 1s ago]\n", workspace.session_name),
@@ -6391,53 +6435,50 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         if let Some(channel) = channel {
             command.env(rimz::workspace::ENV_CHANNEL, channel);
         }
-        command.output().expect("bare agents word")
+        if channel == Some("auth") {
+            command.current_dir(&auth);
+        }
+        command.bounded_output().expect("bare agents word")
     };
-    let bare_planner = |channel: Option<&str>| run_in(&["agents", "planner"], channel);
+    let launches = |args: &[&str], channel: Option<&str>, receipt: &str| {
+        let out = run_in(args, channel);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{args:?} in {channel:?} launches whoever is live:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.starts_with(receipt),
+            "{args:?} in {channel:?} prints its receipt:\n{stdout}"
+        );
+        assert!(
+            !stderr.contains("skipping workflow with unreadable record"),
+            "{args:?} in {channel:?} reads no workflow record: {stderr}"
+        );
+        stdout.into_owned()
+    };
 
-    let out = bare_planner(Some("billing"));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("names a live agent"),
-        "a live agent in another lane leaves the word a launch: {stderr}"
+    let seat = launches(
+        &["agents", "planner"],
+        Some("auth"),
+        "launched forge in worktree #auth\n",
     );
+    assert!(
+        seat.contains("  @forge.planner ("),
+        "the bare role beside its live seat starts a second planner under a minted name:\n{seat}"
+    );
+    let planner_profile = profile("planner");
+    launches(
+        &["agents", "planner"],
+        Some("billing"),
+        "launched @planner (",
+    );
+    launches(&["agents", "planner"], None, "launched @planner (");
+    launches(&["agents", "coder"], None, "launched @coder (");
 
-    let out = run_in(&["agents", "coder"], None);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("names a live agent"),
-        "the profile a live agent was launched from stays a launch: {stderr}"
-    );
-
-    let out = bare_planner(None);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let shown = run_in(&["agents", "show", "@planner", "--json"], None);
-    assert!(
-        shown.status.success(),
-        "{}",
-        String::from_utf8_lossy(&shown.stderr)
-    );
-    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(shown["agent"]["id"], "sess-planner");
-    assert_eq!(shown["agent"]["handle"], "@planner");
-    assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
-    assert!(
-        out.stdout.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&out.stdout)
-    );
-    assert_eq!(
-        stderr,
-        "error: `planner` names a live agent (@planner) as well as a launch spec\n    inspect: rimz agents show @planner\n    launch:  rimz agents launch planner\n"
-    );
-
-    crate::common::write_definition(
-        &env,
-        "agents",
-        "worker",
-        "description: Team worker\nagent: claude\ntools: []",
-        "",
-    );
+    std::fs::remove_file(planner_profile).expect("drop the planner profile");
     crate::common::write_definition(
         &env,
         "teams",
@@ -6445,13 +6486,7 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         "leader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
         "Complete the work.",
     );
-    let out = run_in(&["teams", "planner"], None);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("names a live agent")
-            && !stderr.contains("no team, profile, or command named"),
-        "`rimz teams <name>` launches through the explicit verb, past the bare-word check: {stderr}"
-    );
+    launches(&["teams", "planner"], None, "launched planner in ");
 }
 
 #[test]
