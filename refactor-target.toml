@@ -6503,6 +6503,81 @@ reason = "Drop for FramedTransport stops the child app-server (stop_child) on ev
 
 [[verdict]]
 kind = "item"
+key = "agents::adapters::codex::CodexAdapter::configure_room_permissions"
+reason = "Permission precedence reads argv first, then the config layers key-first, and abstains on a malformed selection so the host's native sandbox and network choices survive (2eb6e0973, 44dd32518); each grant takes a different Codex argv form, so the ladder is the policy (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::project_trust::trust_gap_at"
+reason = "Strict base-file consent precedence tells saved-untrusted from projectless folders (e36b51cfc, bd51342d2) and previews stay lossless over the config bytes (c21387025); it reads another file under other validation than the permission layers, so a shared resolver changes behaviour (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::build_codex_observation"
+reason = "With the child name, task and role set in one block, the residual is header filtering, per-field fallbacks, the question-reply suppression that must follow the child block, then the model, effort and usage reads, each a separate lazy read (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::hook_ingress_decision"
+reason = "Internal-server suppression precedes daemon and agent ownership, overlapping inputs included; a pure two-input decision with one caller and a direct test (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::local_sessions::CodexPaneDiscovery::refresh"
+reason = "An IO-budgeted ordered sequence: named lookups in demand order (each arms a retry clock and spends read budget), the per-workspace windows, the catalog, the late window admission, then retention, over a per-workspace name index built once; the two passes keep the learned-header IO bounds and the named-exempt window cap (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::local_sessions::CodexPaneDiscovery::named_session"
+reason = "Hint equality, id before admission, missing-file twin recovery and the remembered-path backstop are distinct IO-budgeted states; merging them changes path precedence or retry and read counts (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::local_sessions::locate"
+reason = "Explicit resume searches unbounded account-local history over active and archived revisions by authoritative header id and absolute cwd, unlike the bounded pane resolver CodexPaneDiscovery::named_session (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::spend::parse::parse_codex_session"
+reason = "The Codex format, replay and timing state machine over rollout lines: first-header helper exclusion, copied-history cumulative baselines, the usage-only replay exit and distinct Session versus ResponseItem suppression survive persisted CodexSpendState cursors (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::spend::parse::CodexSpendState"
+reason = "Its fields are the stored cursor's keys; a replay enum behind a serde mapping adds about fifty lines and removes no decision (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::transcript::permission_settle_from_tail"
+reason = "Asking-cell proof is an ordered exec and wait protocol: the last pre-ask call, cell lineage, the native header and strict post-ask time are independent guards from c63362444 (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::app_server::wire::parse_loaded_threads"
+reason = "Ordered aliases, tolerant entries, trusted-empty versus unreadable, and pagination are observable cases; a defaulting typed decode brings back the mass reap ffc8f946d fixed, and an equivalent typed model grows the code (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::local_sessions::ClaudePaneDiscovery::refresh"
+reason = "An IO-budgeted sequence: uncapped account-confined named probes, stable catalog epochs, pending-age retries, the shared checked memo and the post-read creation recheck; PaneCandidate's Pending, Rejected and Found states keep the warm-work bound. It is keyed by PaneDiscoveryKey alone and each window group carries its ranking creation (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::spend::parse_claude_spend_with_retention"
+reason = "One ordered fold over each line: mode-dependent consumption, parent and advisor gating, root cache retention and response timing (per-read request maximum, last accepted root write, fixed message start) are separate rules; pricing already has one home (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::ClaudeAdapter::decode_hook"
+reason = "Class-only Cursor quarantine, keyed native asks, validated child identity, pause-aware StopFailure and lazy checkpoint enrichment are distinct pinned policies over the already-normalized ClaudeHook, not duplicated enrichment (pass 33g)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::remote_control::Issue::blocker"
+reason = "A provider table of exact refusal text with ordered user-run remedies and the security and privacy surfaces; the shared prefix, account quoting and auth accumulation already have one home, and per-issue text and command differences are observable policy (pass 33g)."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::app::RoomConfig"
 reason = "The CLI builds room-owned settings for the host separately from each pane's identity and cadence."
 
@@ -8000,6 +8075,11 @@ reason = "Stays pub(super), with NormalizedToolCall(s) and CopilotHookError: mod
 kind = "pass-through"
 key = "agents::adapters::copilot::paths::validated_transcript_path"
 reason = "Five production callers (otel, subagent, spend, two in mod.rs) share the provider transcript-validation boundary; the _from twin takes injected roots for tests. Inlining duplicates the boundary (pass 20c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::copilot::CopilotAdapter::decode_hook"
+reason = "With every AwaitingInput built through one constructor, the residual is the per-event fact table with asymmetric enrichment gates: prompt-seeded registration, batch-aware ask selection, exact-command permission correlation (the native key on permissionRequest alone), elicitation-only questions, non-ending error markers and validated transcript and final-output checkpoints (pass 33g)."
 
 [[verdict]]
 kind = "item"
