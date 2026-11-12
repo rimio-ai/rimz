@@ -207,6 +207,17 @@ enum SidebarSubcmd {
         #[arg(long)]
         toggle: bool,
     },
+    /// Split the work pane behind the sidebar `--from-pane` names, where a split
+    /// key pressed on the sidebar lands. Hidden — the keybinds call it.
+    #[command(hide = true)]
+    Split {
+        #[arg(value_enum)]
+        direction: SplitSide,
+        #[arg(long)]
+        from_pane: PaneId,
+        #[arg(long)]
+        session_name: String,
+    },
     /// Append renderer-owned focus-repair evidence. Hidden — detached helper
     /// infrastructure, not a human verb.
     #[command(hide = true)]
@@ -237,6 +248,12 @@ enum SidebarSubcmd {
 enum WalkDirection {
     Next,
     Prev,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SplitSide {
+    Right,
+    Down,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -447,6 +464,7 @@ impl SidebarArgs {
             SidebarSubcmd::Click { .. } => "sidebar click",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::Focus { .. } => "sidebar focus",
+            SidebarSubcmd::Split { .. } => "sidebar split",
             SidebarSubcmd::RecordFocusRepair { .. } => "sidebar record-focus-repair",
             SidebarSubcmd::NotifyTest { .. } => "sidebar notify-test",
         }
@@ -645,6 +663,11 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
             toggle,
         } => focus(globals, session_name, toggle),
+        SidebarSubcmd::Split {
+            direction,
+            from_pane,
+            session_name,
+        } => split(globals, direction, &from_pane, &session_name),
         SidebarSubcmd::RecordFocusRepair { record_json } => {
             rimz::diag::focus_repair::append_raw(&record_json)
                 .context("parsing focus-repair diagnostic record")?;
@@ -1409,6 +1432,68 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         rimz::mux::focus_anchor::execute_action(backend.as_ref(), &runtime, &session_name, target)
             .context("focusing pane")?;
     }
+    Ok(())
+}
+
+/// Focus the work pane behind `from_pane` and split it as a split key pressed
+/// there would, except on a tmux stack member with other members, where the
+/// backend opens the pane beside the whole stack. Focus moves first: a
+/// focus-taking directional split on Zellij lands on the client's focused pane
+/// whatever pane it names.
+fn split(
+    globals: &GlobalFlags,
+    direction: SplitSide,
+    from_pane: &PaneId,
+    session_name: &str,
+) -> Result<()> {
+    let backend = rimz::mux::backend_for(rimz::mux::auto_detect_backend(globals.mux)?);
+    let listing = backend
+        .list_panes(rimz::mux::PaneListOptions {
+            session_name: Some(session_name.to_owned()),
+            ..Default::default()
+        })
+        .context("listing panes")?;
+    if !listing
+        .panes
+        .iter()
+        .any(|pane| &pane.pane_id == from_pane && pane.is_rimz_sidebar())
+    {
+        bail!("pane {from_pane} is not a RimZ sidebar in session {session_name}");
+    }
+    let workspace = rimz::room::session::workspace_record_for_session(session_name)?
+        .ok_or_else(|| anyhow!("session {session_name} is not a managed RimZ room"))?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
+    let Some(work_pane) =
+        super::sidebar_work_pane(&listing.panes, from_pane, &runtime, session_name)
+    else {
+        writeln!(
+            render::err(),
+            "rimz: sidebar is the only pane in its view; nothing to split"
+        )?;
+        return Ok(());
+    };
+    rimz::mux::focus_anchor::execute_action(
+        backend.as_ref(),
+        &runtime,
+        session_name,
+        work_pane.pane_id.clone(),
+    )
+    .context("focusing the work pane before the split")?;
+    backend
+        .split_pane(rimz::mux::SplitPaneOptions {
+            target: rimz::mux::SplitTarget::SessionPane {
+                session_name: session_name.to_owned(),
+                pane_id: work_pane.pane_id.clone(),
+            },
+            cwd: work_pane.cwd.clone(),
+            placement: rimz::mux::SplitPlacement::Directional(match direction {
+                SplitSide::Right => rimz::mux::SplitDirection::Right,
+                SplitSide::Down => rimz::mux::SplitDirection::Down,
+            }),
+            focus: true,
+            ..Default::default()
+        })
+        .context("splitting the work pane")?;
     Ok(())
 }
 

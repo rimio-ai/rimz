@@ -1533,6 +1533,8 @@ rimz help sidebar slot
 
 rimz help sidebar snapshot
 
+rimz help sidebar split [hidden]
+
 rimz help sidebar wake [hidden]
 
 rimz help sidebar walk
@@ -3146,6 +3148,8 @@ rimz sidebar help slot
 
 rimz sidebar help snapshot
 
+rimz sidebar help split [hidden]
+
 rimz sidebar help wake [hidden]
 
 rimz sidebar help walk
@@ -3272,6 +3276,17 @@ rimz sidebar snapshot
     --session-name <SESSION_NAME>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz sidebar split [hidden]
+    <direction>  [action=set takes=1..=1 required values=right|down]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --from-pane <FROM_PANE>  [action=set takes=1..=1 required]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --session-name <SESSION_NAME>  [action=set takes=1..=1 required]
+    --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz sidebar wake [hidden]

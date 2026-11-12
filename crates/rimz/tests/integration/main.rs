@@ -59,6 +59,7 @@ mod sandbox_containment;
 mod sessions;
 mod sidebar_cards;
 mod sidebar_snapshot;
+mod sidebar_split;
 mod sidebar_supervisor;
 mod sidebar_unread;
 mod sidebar_wakeup;

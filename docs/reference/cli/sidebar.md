@@ -15,7 +15,7 @@ Native room style, the default, binds none of these commands to multiplexer keys
 
 ## Room and view
 
-Every command accepts `--session-name S`. Without it, RimZ resolves the room from the current directory (or the global `--root`) and its room pin, as other participant commands do. With it, RimZ uses the room of multiplexer session `S`, even from an unrelated directory. Use the global `--mux tmux` or `--mux zellij` when backend detection would choose the wrong multiplexer.
+Every command accepts `--session-name S`, and [`split`](#split-from-the-sidebar) requires it. Without it, RimZ resolves the room from the current directory (or the global `--root`) and its room pin, as other participant commands do. With it, RimZ uses the room of multiplexer session `S`, even from an unrelated directory. Use the global `--mux tmux` or `--mux zellij` when backend detection would choose the wrong multiplexer.
 
 `walk`, `slot`, `last`, `filter`, and `close` ask the room's sidebar host to act on its current view, including its selection, order, and layout freeze. The acting card is the highlight: it follows the focused card, but stays on the last card while focus is on the sidebar or another non-card pane. All attached clients must share one view. With no attached client, a client on a tab without a sidebar, or clients on different tabs, the command is a no-op rather than a guess at whose selection to change.
 
@@ -77,6 +77,23 @@ rimz sidebar reopen
 `reopen` resumes the most recently sidebar-closed agent that is not already live. It runs the resume outside any pane, so the agent opens in a new focused tab, not its old tab. A team seat runs `rimz agents TEAM.ROLE --continue`, adding `-w NAME` when it ran in a managed worktree; a solo session runs `rimz agents resume @SESSION-ID`. The resume's own receipt stays off stdout. Each command tries one entry. A failed resume reports its error and drops only that entry, leaving older cards for the next `reopen`.
 
 The room remembers at most 32 closed agent cards, in `lanes/closed-cards.json` under the room's runtime directory. A successful reopen consumes its entry and discards newer entries whose agents are already live again. An empty or all-live list is a no-op that keeps the list. The list is a convenience undo, not session history: room reset, teardown, and reboot discard it, and other ways of closing an agent add no entry. Use [`rimz agents resume`](./agents.md#resume-agents) to recover sessions independently of this list.
+
+## Split from the sidebar
+
+```sh
+rimz --mux tmux sidebar split down --from-pane tmux:%1 --session-name my-room
+```
+
+`split right|down` is the hidden verb a room keymap's split key runs when it is pressed on the sidebar; the sidebar itself never splits. `--from-pane` names that sidebar and `--session-name` its multiplexer session; both are required. The command focuses the work pane behind the sidebar (the tab's last focused work pane while it is still open in the sidebar's view, else the first work pane there), then splits it to the right or below with focus in the new pane, in that pane's directory. On tmux, when that work pane is a member of a collapsed stack with other members, the new pane opens beside the whole stack, where the split key pressed in that member splits the member alone. On Zellij 0.44.x it can make no pane. It samples the attached clients' view to focus the work pane, and never refuses on how many clients are attached.
+
+| Outcome | Exit | stderr |
+| --- | --- | --- |
+| Split | 0 | Nothing. |
+| The sidebar is alone in its view | 0 | `rimz: sidebar is the only pane in its view; nothing to split` |
+| `--from-pane` is not a RimZ sidebar in the session | 1 | `error: pane PANE_ID is not a RimZ sidebar in session S` |
+| The session is not a RimZ room | 1 | `error: session S is not a managed RimZ room` |
+
+stdout stays empty.
 
 ## Output and exit codes
 
