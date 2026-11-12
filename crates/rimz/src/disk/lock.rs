@@ -274,6 +274,12 @@ fn open_lock_inode(path: &Path, mode: Option<u32>) -> io::Result<File> {
     options.create(true).open(path)
 }
 
+/// Opens `path` for write as every lock here does, creating it and its parents, and
+/// takes no lock.
+pub(crate) fn probe(path: &Path) -> Result<()> {
+    open_lock_file(path).map(drop)
+}
+
 fn open_lock_file(path: &Path) -> Result<File> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| LockErr::Open {

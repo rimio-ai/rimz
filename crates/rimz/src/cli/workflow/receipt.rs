@@ -67,6 +67,7 @@ pub(super) fn resume(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let run = select(target, "resume", globals, at, extend)?;
+    refuse_unwritable_home("resumed")?;
     let spec = workflow::load(&run.paths.home)?;
     let resumed = run.record.state == RunState::Parked || run.record.node == "@break";
     let record = workflow::resume(&run.state, &run.record.id, at, extend)?;
@@ -151,6 +152,7 @@ pub(in crate::cli) fn restart(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let run = select(target, "restart", globals, None, &[])?;
+    refuse_unwritable_home("restarted")?;
     let resume = if continued {
         Some(continue_session(&run, globals)?)
     } else {
