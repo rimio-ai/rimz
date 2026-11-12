@@ -1060,6 +1060,8 @@ fn run_setup_pty_args(
     cmd.env("RIMZ_PETS_OFFLINE", "1");
     cmd.env("TERM", "dumb");
     cmd.env_remove("COLORTERM");
+    // A set `CI` turns colour on whatever `TERM` says, and these tests match plain text.
+    cmd.env_remove("CI");
     let empty_path = env.home_root.join("empty-bin");
     std::fs::create_dir_all(&empty_path).expect("mkdir empty PATH");
     cmd.env("PATH", path.unwrap_or(&empty_path));

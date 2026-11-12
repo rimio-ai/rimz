@@ -1719,6 +1719,8 @@ fn first_attended_start_asks_only_the_mux_and_hooks_and_opens_past_a_broken_file
     command.args(["start", "--no-attach"]);
     command.env("PATH", &bin_dir);
     command.env("TERM", "dumb");
+    // A set `CI` turns colour on whatever `TERM` says, and this test matches plain text.
+    command.env_remove("CI");
     command.env("RIMZ_PETS_OFFLINE", "1");
     command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
     command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
