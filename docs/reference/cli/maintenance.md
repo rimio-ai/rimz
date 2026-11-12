@@ -454,7 +454,7 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | RimZ role, effort, and closed-day spend history under `accounts/.history/` | Always kept: other homes sharing the accounts folder use these durable ledgers | |
 | Durable room stores, logs, and registries (`ws/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
 | Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `cursor-statusline.json`, `trust/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
-| Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`), installed `packs/`, and `handoffs/` | Always kept, including linked pack checkouts | |
+| Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`), installed `packs/`, `handoffs/`, and `notes/` | Always kept, including linked pack checkouts | |
 | `rimz` binaries at the running executable, Cargo's bin directory, and `/usr/local/bin` | Removed | `--keep-binary` keeps them; `RIMZ_SYSTEM_BIN_DIR` replaces `/usr/local/bin` |
 | Project `.rimz/` directories and RimZ-owned worktrees | Always kept: they can hold project config and unlanded work | |
 

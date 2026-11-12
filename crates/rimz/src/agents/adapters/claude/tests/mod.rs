@@ -338,6 +338,8 @@ fn routine_rimz_settings_union_and_idempotence() {
             "lsp check",
             "lsp list",
             "lsp status",
+            "notes add",
+            "notes list",
         ];
         let mut expected: Vec<_> = prefixes
             .iter()

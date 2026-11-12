@@ -30,6 +30,7 @@ mod loop_cmd;
 mod loop_timer;
 mod lsp;
 mod message;
+mod notes;
 mod packs;
 mod palette;
 mod pane;
@@ -287,6 +288,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Palette(args)) => palette::run(args, &globals),
         Some(Subcmd::PricingRefresh(args)) => pricing_refresh::run(args),
         Some(Subcmd::Message(args)) => message::run(*args, &globals),
+        Some(Subcmd::Notes(args)) => notes::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
@@ -794,6 +796,8 @@ enum Subcmd {
     Trust(trust::TrustArgs),
     /// Inspect agent or channel conversation transcripts.
     Transcript(transcript::TranscriptArgs),
+    /// Save and list Markdown notes in the home-wide note store.
+    Notes(notes::NotesArgs),
     /// List signals, follow durable events, or emit a signal.
     Events(events::EventsArgs),
     /// Environment and backend report.

@@ -37,6 +37,7 @@ mod loop_schedule;
 mod lsp;
 mod message;
 mod mux_command;
+mod notes;
 mod oauth_usage;
 mod output_files;
 mod packs;
