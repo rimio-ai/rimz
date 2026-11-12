@@ -2841,12 +2841,28 @@ fn pane_return_focuses_the_work_pane_the_room_frame_lists_beside_the_sidebar() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let mut rig = Rig::new();
     let mut snapshot = process_snapshot(&rig.ws, 1);
-    snapshot.own_view = Some(own_view());
+    let remembered = pane("terminal_8", "tab_0").pane_id;
+    let mut view = own_view();
+    view.working_pane_ids.push(remembered.clone());
+    view.sibling_count = 2;
+    snapshot.own_view = Some(view);
     let own = rig.state.pane.config.own_pane.clone();
-    let fold = super::super::super::fixtures::fold(snapshot.clone(), Some(&own), Vec::new());
+    let mut fold = super::super::super::fixtures::fold(snapshot.clone(), Some(&own), Vec::new());
+    let frame = Arc::make_mut(fold.frame.as_mut().unwrap());
+    let tab = frame
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.panes.iter().any(|pane| pane.pane_id == own))
+        .unwrap();
+    assert_eq!(
+        tab.panes[0].pane_id.raw(),
+        "terminal_9",
+        "the first work pane"
+    );
+    tab.work_pane = Some(remembered.clone());
     rig.views.lock().fold = Some(Arc::new(fold));
     rig.view().ctx().current = snapshot;
-    let focus = vec![InputEffect::Focus(pane("terminal_9", "tab_0").pane_id)];
+    let focus = vec![InputEffect::Focus(remembered)];
     // The attach wire delivers the raw press; the key resolves only inside the reducer.
     let press = Wakeup::Press {
         code: KeyCode::Char('q'),

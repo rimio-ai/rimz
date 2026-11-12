@@ -254,6 +254,11 @@ fn reprobe_publishes_pane_switches_without_changing_topology_or_input_clocks() {
     assert_eq!(published.viewed_panes, prior.viewed_panes);
     assert_eq!(published.focused_pane, prior.focused_pane);
     assert_eq!(published.client_view_fresh, prior.client_view_fresh);
+    assert_eq!(
+        published.work_panes().collect::<Vec<_>>(),
+        [&panes[1]],
+        "the re-sampled focus is the tab's work pane"
+    );
 }
 
 #[test]
@@ -310,7 +315,7 @@ fn reprobe_publishes_client_modes_while_reusing_fresh_topology() {
                         None,
                         &crate::diag::DiagSink::disabled(),
                         &mut |_, _| panic!("mode sampling must reuse the fresh pane roster"),
-                        &|_, _| Some(presence_sample_from_client_view(&view)),
+                        &|_, _| Some(presence_sample_from_client_view(&view, unix_now_ms())),
                         &|_| None,
                     )
                     .unwrap();
@@ -629,4 +634,147 @@ mod terminal_typing {
             .unwrap();
         assert_eq!(resolutions.get(), 3, "only the changed pid is re-resolved");
     }
+}
+
+#[test]
+fn focus_on_a_pane_the_frame_lacks_waits_for_the_next_produced_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let in_tab = |raw: &str, command: &str| crate::pane::PaneRef {
+        view_id: Some("tab_0".to_owned()),
+        ..pane(raw, Some(command), Some("/repo"))
+    };
+    let [s, a, b, c] = [
+        in_tab("terminal_0", "rimz-sidebar"),
+        in_tab("terminal_1", "zsh"),
+        in_tab("terminal_2", "zsh"),
+        in_tab("terminal_3", "zsh"),
+    ];
+    let ids = [&s, &a, &b, &c].map(|pane| pane.pane_id.clone());
+    let disk = crate::diag::DiagSink::disabled();
+    let mut prior =
+        crate::sidebar::frame::assemble_frame(vec![s.clone(), a.clone()], unix_now_ms(), "s");
+    prior.produced_at_ms = unix_now_ms() + 60_000;
+    let mut producer = PaneProducer::seeded(&runtime, "s");
+    producer.seed_test_frame(Some(Arc::new(prior)));
+    // B was split from A and the user went to the sidebar; C is named but
+    // never listed.
+    let events = [
+        (10, vec![ids[1].clone(), ids[2].clone()]),
+        (11, vec![ids[2].clone(), ids[0].clone()]),
+        (12, vec![ids[3].clone()]),
+    ];
+    producer.remember_focus(&runtime, &events, None, &disk);
+    let produced = |listed: Vec<crate::pane::PaneRef>| {
+        move |_: &mut FrameContext<'_>, prior: Option<&PaneFrame>| {
+            let client = ClientPaneView {
+                client_id: MuxClientId::Zellij(1),
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_0"),
+            };
+            let now = unix_now_ms();
+            let (frame, _) = crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+                panes: listed.clone(),
+                views: Vec::new(),
+                positions: Vec::new(),
+                produced_at_ms: now,
+                observed_at_ms: now,
+                session_name: "s".to_owned(),
+                session_focus: None,
+                client_viewed: &[],
+                client_views: std::slice::from_ref(&client),
+                client_view_at_ms: now,
+                client_view_fresh: true,
+                client_sample_withheld: false,
+                prior,
+            });
+            Ok(Accepted::Fresh(frame))
+        }
+    };
+    let tick = |producer: &mut PaneProducer,
+                produce: &mut dyn FnMut(
+        &mut FrameContext<'_>,
+        Option<&PaneFrame>,
+    ) -> Result<Accepted>| {
+        producer
+            .tick_with(
+                &runtime,
+                MuxName::Zellij,
+                "s",
+                None,
+                None,
+                &disk,
+                produce,
+                &|_, _| None,
+                &|_| None,
+            )
+            .unwrap()
+    };
+    let remembered = |frame: &PaneFrame| frame.work_panes().cloned().collect::<Vec<_>>();
+
+    let cached = tick(&mut producer, &mut |_, _| panic!("a fresh prior is reused"));
+    assert_eq!(remembered(&cached), [ids[1].clone()], "cached: still A");
+    let mut stale = (*cached).clone();
+    stale.produced_at_ms = 1;
+    producer.seed_test_frame(Some(Arc::new(stale.clone())));
+    let held = tick(&mut producer, &mut |_, _| Ok(Accepted::Held(stale.clone())));
+    assert_eq!(remembered(&held), [ids[1].clone()], "held: still A");
+
+    let fresh = tick(
+        &mut producer,
+        &mut produced(vec![s.clone(), a.clone(), b.clone()]),
+    );
+    assert_eq!(remembered(&fresh), [ids[2].clone()], "produced: B");
+    let published: PaneFrame =
+        serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
+    assert_eq!(remembered(&published), [ids[2].clone()], "published: B");
+
+    let later = tick(&mut producer, &mut produced(vec![s, a, b, c]));
+    assert_eq!(
+        remembered(&later),
+        [ids[2].clone()],
+        "C was dropped once a produced frame lacked it"
+    );
+}
+
+#[test]
+fn client_samples_are_stamped_when_the_read_starts_and_withheld_frames_ignore_them() {
+    let pane_at = |raw: &str| PaneId::from_parts(MuxName::Zellij, raw);
+    let view = ClientView {
+        clients: vec![ClientPaneView {
+            client_id: MuxClientId::Zellij(1),
+            pane_id: pane_at("terminal_2"),
+        }],
+        viewed_panes: vec![pane_at("terminal_2")],
+        presence: ClientPresence::default(),
+    };
+    let read_started = std::cell::Cell::new(0);
+    let (_, _, _, presence, _) = frame_client_view(None, None, MuxName::Tmux, || {
+        read_started.set(unix_now_ms());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        Ok(view.clone())
+    });
+    let (sample, modes) = (presence.unwrap(), Vec::new());
+    assert!(
+        sample.sampled_at_ms <= read_started.get(),
+        "stamped at the read's start"
+    );
+
+    let in_tab = |raw: &str| crate::pane::PaneRef {
+        view_id: Some("tab_0".to_owned()),
+        ..pane(raw, Some("zsh"), Some("/repo"))
+    };
+    let mut withheld = frame(vec![in_tab("terminal_1"), in_tab("terminal_2")]);
+    withheld.client_sample_withheld = true;
+    withheld.tabs[0].work_pane = Some(pane_at("terminal_1"));
+    apply_presence_sample(&mut withheld, (sample, modes));
+    assert_eq!(
+        withheld.work_panes().collect::<Vec<_>>(),
+        [&pane_at("terminal_1")],
+        "a withheld frame keeps its work pane"
+    );
 }

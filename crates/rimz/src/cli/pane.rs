@@ -97,7 +97,8 @@ enum PaneSubcmd {
     },
     /// Toggle fullscreen for the focused pane.
     ///
-    /// If the sidebar is focused, focus and fullscreen a working sibling instead.
+    /// If the sidebar is focused, focus and fullscreen the work pane you were last
+    /// in in that tab instead (else its first work pane).
     Zoom {
         /// Session to inspect. Defaults to the cwd's workspace session.
         #[arg(long)]
@@ -715,16 +716,11 @@ fn zoom(
         .find(|pane| pane.pane_id == focused)
         .is_some_and(PaneRef::is_rimz_sidebar)
     {
-        let sidebar_view = listing
-            .panes
-            .iter()
-            .find(|pane| pane.pane_id == focused)
-            .and_then(|pane| pane.view_id.as_ref());
-        let Some(sibling) = listing
-            .panes
-            .iter()
-            .filter(|pane| pane.pane_id != focused && !pane.is_rimz_sidebar())
-            .find(|pane| sidebar_view.is_none() || pane.view_id.as_ref() == sidebar_view)
+        let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
+            .ok_or_else(|| anyhow::anyhow!("pane zoom requires a managed RimZ room session"))?;
+        let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+        let Some(work_pane) =
+            super::sidebar_work_pane(&listing.panes, &focused, &runtime, &session_name)
         else {
             writeln!(
                 render::err(),
@@ -732,17 +728,14 @@ fn zoom(
             )?;
             return Ok(());
         };
-        let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
-            .ok_or_else(|| anyhow::anyhow!("pane zoom requires a managed RimZ room session"))?;
-        let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
         rimz::mux::focus_anchor::execute_action(
             backend,
             &runtime,
             &session_name,
-            sibling.pane_id.clone(),
+            work_pane.pane_id.clone(),
         )
         .context("focusing working pane before zoom")?;
-        &sibling.pane_id
+        &work_pane.pane_id
     } else {
         &focused
     };

@@ -1063,7 +1063,7 @@ An active `Sidebar degraded` alert hides the hook-drainer line. Pressing `Esc` c
 
 ## Keys and mouse
 
-These keys work while the sidebar has focus. With native room style, `Alt+p` focuses the sidebar from another pane, and pressing it again returns to a work pane in the sidebar's tab: Zellij returns to the exact pane you left, and tmux takes the first work pane in that tab. `Alt+g` zooms the focused work pane to fullscreen and never zooms the sidebar. Both are set by `[sidebar] focus_key` and `zoom_key` ([configuration](../guide/configuration.md#sidebar-rendering)). RimZ room style replaces those chords with a [room keymap](../guide/configuration.md#room-keymap): under the default `rimz` keymap `Alt+p` enters its prefix and `Alt+p z` zooms, and no bundled keymap binds sidebar focus. Use `rimz keys` to see your resolved keymap; the sidebar's help overlay shows the `[sidebar]` chords under either style, even where the room keymap leaves them unbound.
+These keys work while the sidebar has focus. With native room style, `Alt+p` focuses the sidebar from another pane, and pressing it again returns to the work pane you were last in in the sidebar's tab, on both backends; when the room remembers none, or that pane has closed, it takes the first work pane in the tab. `Alt+g` zooms the focused work pane to fullscreen, from the sidebar zooms that same work pane, and never zooms the sidebar. Both are set by `[sidebar] focus_key` and `zoom_key` ([configuration](../guide/configuration.md#sidebar-rendering)). RimZ room style replaces those chords with a [room keymap](../guide/configuration.md#room-keymap): under the default `rimz` keymap `Alt+p` enters its prefix and `Alt+p z` zooms, and no bundled keymap binds sidebar focus. Use `rimz keys` to see your resolved keymap; the sidebar's help overlay shows the `[sidebar]` chords under either style, even where the room keymap leaves them unbound.
 
 | key | action |
 |-----|--------|
@@ -1089,7 +1089,7 @@ These keys work while the sidebar has focus. With native room style, `Alt+p` foc
 | `:` | open the [command palette](../reference/cli/palette.md) in a popup, starting on the selected card |
 | `o` / `O` | open the palette's [`+` mode](../reference/cli/palette.md#launch-an-agent) in a popup to launch an agent, starting on the selected card; `O` selects `new worktree from trunk` in the where step |
 | `.` | run the room's [last palette launch](../reference/cli/palette.md#repeat-the-last-launch) again in a popup |
-| `q` | focus the first work pane in the sidebar's tab, the pane `rimz sidebar focus --toggle` returns to; a notice says when the tab has none |
+| `q` | focus the work pane you were last in in the sidebar's tab (else the first work pane there), the pane `rimz sidebar focus --toggle` returns to; a notice says when the tab has none |
 | `Ctrl+l` | clear the pane and paint it again from scratch |
 | `R` | reload this tab's sidebar |
 | `?` | open the help overlay |

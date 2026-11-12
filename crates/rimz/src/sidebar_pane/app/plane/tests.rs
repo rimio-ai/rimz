@@ -101,7 +101,7 @@ fn fold_request_maps_each_event_kind() {
                 focused: vec![pane.clone()],
                 unfocused: Vec::new(),
             },
-            None,
+            Some(FetchMode::Normal),
         ),
         (SidebarEvent::WidthTargetChanged, None),
         (SidebarEvent::BodyFilterChanged, None),

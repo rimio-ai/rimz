@@ -29,9 +29,9 @@ pub struct SidebarConfig {
     /// keybinds untouched.
     pub focus_key: String,
     /// The global multiplexer chord that toggles fullscreen for the focused
-    /// work pane. When the sidebar is focused, RimZ selects a working sibling
-    /// first so chrome is never fullscreened. Default `Alt+g`; set empty or
-    /// `off` to disable it.
+    /// work pane. When the sidebar is focused, RimZ selects the work pane the
+    /// room last saw focused in that tab (else the first) so chrome is never
+    /// fullscreened. Default `Alt+g`; set empty or `off` to disable it.
     pub zoom_key: String,
     /// Seconds of input idle before the footer shows `zᶻ idle` on either backend,
     /// adding `· Nm` after the first minute. Both report per-client input clocks;

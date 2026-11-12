@@ -388,6 +388,8 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
                 name: prior_tab.name.clone(),
                 naming: prior_tab.naming.clone(),
                 panes: Vec::new(),
+                work_pane: None,
+                work_pane_at_ms: 0,
             });
             fresh.tabs.last_mut().expect("just pushed tab")
         }
@@ -398,6 +400,11 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
         .any(|pane| pane.pane_id == prior_pane.pane_id)
     {
         tab.panes.push(prior_pane.clone());
+    }
+    let remembered = prior_tab.work_pane.as_ref() == Some(&prior_pane.pane_id);
+    if remembered && (tab.work_pane.is_none() || tab.work_pane_at_ms < prior_tab.work_pane_at_ms) {
+        tab.work_pane = Some(prior_pane.pane_id.clone());
+        tab.work_pane_at_ms = prior_tab.work_pane_at_ms;
     }
 }
 

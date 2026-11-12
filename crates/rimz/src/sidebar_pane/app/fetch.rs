@@ -830,6 +830,7 @@ impl FetchWorker {
         sink: &mut ResultSink,
     ) {
         sink.begin_cycle();
+        self.remember_focus(sink);
         let Some(tick) = room_tick(&sink.cycle) else {
             return;
         };
@@ -901,6 +902,37 @@ impl FetchWorker {
             .clone();
         if let Some(event) = self.window.finish(&views, Instant::now()) {
             self.diag.emit_unlimited(event);
+        }
+    }
+
+    /// Fold the focus events recorded since the last cycle into the retained
+    /// frame's work-pane memory, ahead of this cycle's fold.
+    fn remember_focus(&mut self, sink: &ResultSink) {
+        let views = sink
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .views
+            .clone();
+        let events = views.lock().take_work_focus();
+        if events.is_empty() {
+            return;
+        }
+        let witness = sink.witness();
+        let Some(frame) =
+            self.producer
+                .remember_focus(&self.runtime, &events, witness.as_ref(), &self.diag)
+        else {
+            return;
+        };
+        if let Some(inputs) = sink
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .inputs
+            .as_mut()
+        {
+            inputs.frame = frame;
         }
     }
 

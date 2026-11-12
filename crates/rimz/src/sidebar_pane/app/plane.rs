@@ -107,6 +107,8 @@ fn fold_request(event: &SidebarEvent) -> Option<FetchRequest> {
         | SidebarEvent::Notify { .. }
         | SidebarEvent::FocusStranded { .. }
         | SidebarEvent::FocusIntent { .. } => None,
+        // The cycle folds the focus into the frame's per-tab work-pane memory.
+        SidebarEvent::FocusChanged { .. } => Some(FetchRequest::default()),
         event if event.is_overlay() => None,
         _ => Some(FetchRequest::default()),
     }

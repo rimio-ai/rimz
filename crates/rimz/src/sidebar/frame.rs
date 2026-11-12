@@ -90,6 +90,19 @@ pub struct TabFrame {
     #[serde(default)]
     pub naming: crate::mux::tab_name::ViewNaming,
     pub panes: Vec<PaneState>,
+    /// The non-sidebar pane of this tab the host most recently saw holding a
+    /// client's focus: set by a fresh client view at assembly, a presence
+    /// re-sample, or a recorded focus event; carried by pane id across
+    /// assemblies while that pane stays a non-sidebar pane of the tab that
+    /// holds it, and dropped once it closes or turns sidebar. Absent when no
+    /// focus was seen. Split, zoom, and return from the sidebar go here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_pane: Option<PaneId>,
+    /// When the pull or event behind `work_pane` was taken, so an event older
+    /// than a pull never overrides it. Memory-only: a frame read from disk
+    /// starts at zero.
+    #[serde(skip)]
+    pub(crate) work_pane_at_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -187,6 +200,30 @@ impl PaneFrame {
                     .is_some()
             })
             .map(|tab| &tab.view_id)
+    }
+
+    /// Each tab's remembered work pane ([`TabFrame::work_pane`]).
+    pub fn work_panes(&self) -> impl Iterator<Item = &PaneId> {
+        self.tabs.iter().filter_map(|tab| tab.work_pane.as_ref())
+    }
+
+    /// Remember `pane` as its tab's work pane, seen focused at `at_ms`. A
+    /// sidebar, a pane no tab holds, and an observation older than the one
+    /// behind the tab's current value change nothing. Returns whether the
+    /// remembered pane changed.
+    pub(super) fn remember_work_pane(&mut self, pane: &PaneId, at_ms: u64) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| {
+            tab.panes
+                .iter()
+                .any(|state| state.pane_id == *pane && !pane_is_sidebar_chrome(state))
+        }) else {
+            return false;
+        };
+        if at_ms < tab.work_pane_at_ms {
+            return false;
+        }
+        tab.work_pane_at_ms = at_ms;
+        tab.work_pane.replace(pane.clone()).as_ref() != Some(pane)
     }
 
     pub fn to_pane_refs(&self) -> Vec<PaneRef> {
@@ -366,6 +403,9 @@ pub(super) struct FrameInputs<'a> {
     pub session_focus: Option<PaneId>,
     pub client_viewed: &'a [PaneId],
     pub client_views: &'a [crate::pane::ClientPaneView],
+    /// When `client_views` were sampled: the listing's own instant when the
+    /// listing carried them, else the start of the direct client read.
+    pub client_view_at_ms: u64,
     pub client_view_fresh: bool,
     pub client_sample_withheld: bool,
     pub prior: Option<&'a PaneFrame>,
@@ -386,6 +426,7 @@ pub fn assemble_frame(
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: produced_at_ms,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: None,
@@ -404,6 +445,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         session_focus,
         client_viewed,
         client_views,
+        client_view_at_ms,
         client_view_fresh,
         client_sample_withheld,
         prior,
@@ -436,6 +478,8 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
             kind,
             name: pane.view_name.clone(),
             panes: Vec::new(),
+            work_pane: None,
+            work_pane_at_ms: 0,
         });
         if tab.name.is_none() {
             tab.name = pane.view_name.clone();
@@ -473,6 +517,8 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         .values()
         .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
         .collect::<HashSet<_>>();
+    let mut frame_tabs = tabs.into_values().collect::<Vec<_>>();
+    carry_work_panes(&mut frame_tabs, prior);
     let (focused_pane, focus_origin) = resolve_session_focus(
         session_focus.as_ref(),
         prior,
@@ -482,26 +528,60 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
         client_sample_withheld,
         &live,
     );
-    (
-        PaneFrame {
-            produced_at_ms,
-            observed_at_ms,
-            topology_stamp_ms,
-            build: crate::build_id::current().map(str::to_owned),
-            session_name,
-            tabs: tabs.into_values().collect(),
-            carried_panes: Vec::new(),
-            viewed_panes: client_viewed.to_vec(),
-            client_views: client_views.to_vec(),
-            client_modes: Vec::new(),
-            focused_pane,
-            focus_origin,
-            client_view_fresh,
-            client_sample_withheld,
-            presence: None,
-        },
-        diagnostics,
-    )
+    // A withheld sample is remembered only where the focus ladder admitted it.
+    let admitted_while_withheld = focused_pane
+        .clone()
+        .filter(|_| focus_origin == FocusOrigin::ClientView);
+    let mut frame = PaneFrame {
+        produced_at_ms,
+        observed_at_ms,
+        topology_stamp_ms,
+        build: crate::build_id::current().map(str::to_owned),
+        session_name,
+        tabs: frame_tabs,
+        carried_panes: Vec::new(),
+        viewed_panes: client_viewed.to_vec(),
+        client_views: client_views.to_vec(),
+        client_modes: Vec::new(),
+        focused_pane,
+        focus_origin,
+        client_view_fresh,
+        client_sample_withheld,
+        presence: None,
+    };
+    if client_view_fresh {
+        for client in client_views {
+            if !client_sample_withheld || admitted_while_withheld.as_ref() == Some(&client.pane_id)
+            {
+                frame.remember_work_pane(&client.pane_id, client_view_at_ms);
+            }
+        }
+    }
+    (frame, diagnostics)
+}
+
+/// Carry a prior tab's work pane to each tab that now holds it, while it is
+/// still a non-sidebar pane there. When several prior tabs' panes land in one
+/// tab, the prior tab of the same view wins, then the newer observation.
+fn carry_work_panes(tabs: &mut [TabFrame], prior: Option<&PaneFrame>) {
+    let prior_tabs = prior.map_or(&[][..], |prior| prior.tabs.as_slice());
+    for tab in tabs {
+        let Some(prior_tab) = prior_tabs
+            .iter()
+            .filter(|prior_tab| {
+                prior_tab.work_pane.as_ref().is_some_and(|work_pane| {
+                    tab.panes
+                        .iter()
+                        .any(|pane| pane.pane_id == *work_pane && !pane_is_sidebar_chrome(pane))
+                })
+            })
+            .max_by_key(|prior_tab| (prior_tab.view_id == tab.view_id, prior_tab.work_pane_at_ms))
+        else {
+            continue;
+        };
+        tab.work_pane = prior_tab.work_pane.clone();
+        tab.work_pane_at_ms = prior_tab.work_pane_at_ms;
+    }
 }
 
 fn resolve_session_focus(

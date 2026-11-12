@@ -3615,7 +3615,7 @@ path = "crates/rimz/src/pane"
 # PaneTitle, PaneTitleOrigin and the title's text/lead accessors and builders carry origin metadata (+6).
 # The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
 # RoomMode and ClientRoomMode carry non-normal client modes without changing pane-view identity (+2).
-# toggle_back_pane is the one sidebar toggle-back rule `rimz sidebar focus --toggle` and the in-pane `q` share (+1).
+# work_pane_behind is the one work-pane-behind-the-sidebar rule `rimz sidebar focus --toggle`, `rimz pane zoom` and the in-pane `q` share (+1).
 surface-budget = 53
 
 [[verdict]]
@@ -3635,8 +3635,8 @@ reason = "Off Linux, live message sends and sidebar pens share the attached-clie
 
 [[verdict]]
 kind = "item"
-key = "pane::toggle_back_pane"
-reason = "`rimz sidebar focus --toggle` over a pane listing and the sidebar's `q` over the room frame return to the same work pane; the CLI reaches only pub items."
+key = "pane::work_pane_behind"
+reason = "`rimz sidebar focus --toggle` and `rimz pane zoom` over a pane listing and the sidebar's `q` over the room frame go to the same work pane, preferring the frame's remembered per-tab work pane; the CLI reaches only pub items."
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -3967,7 +3967,8 @@ path = "crates/rimz/src/sidebar"
 # engine::reconcile_final_fold reconciles final folds before observation and publication.
 # stall and stall::read share classified host PSI with the host and CLI producers (+2).
 # marks shares target resolution, typed errors, and runtime read/unread operations (+5).
-surface-budget = 246
+# PaneFrame::work_panes gives the CLI and the return key each tab's remembered work pane (+1).
+surface-budget = 247
 
 [[verdict]]
 kind = "item"

@@ -4303,3 +4303,75 @@ fn produced_frames_start_one_heal_pass_and_cached_folds_none() {
         "the cycle stayed cached",
     );
 }
+
+#[test]
+fn focus_events_reach_the_work_pane_in_the_cycle_they_request() {
+    use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
+    let (s, a, b) = (
+        pane("terminal_0", "tab_1").pane_id,
+        pane("terminal_1", "tab_1").pane_id,
+        pane("terminal_2", "tab_1").pane_id,
+    );
+    let focus = |sent: u64, focused: &PaneId, unfocused: &PaneId| {
+        SidebarEventEnvelope::new(
+            workspace(),
+            None,
+            sent,
+            SidebarEvent::FocusChanged {
+                focused: vec![focused.clone()],
+                unfocused: vec![unfocused.clone()],
+            },
+        )
+    };
+    let walk = [focus(10, &b, &a), focus(11, &s, &b)];
+    for events in [&walk[..], &walk[1..]] {
+        let fixture = FetchFixture::new();
+        let mut sidebar = pane("terminal_0", "tab_1");
+        sidebar.command = Some("rimz-sidebar".into());
+        let frame = crate::sidebar::frame::assemble_frame(
+            vec![
+                sidebar,
+                pane("terminal_1", "tab_1"),
+                pane("terminal_2", "tab_1"),
+            ],
+            crate::utils::time::unix_now_ms(),
+            "rimz-test",
+        );
+        fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
+        let mut worker = fixture.worker();
+        let views = fixture.host_data.lock().unwrap().views.clone();
+        let (requests, requested) = std::sync::mpsc::channel();
+        let ingress = super::super::plane::RoomEvents::new(
+            &fixture.runtime,
+            views.clone(),
+            Arc::default(),
+            Subscribers::default(),
+            requests,
+        );
+        for event in events {
+            ingress.dispatch(event.clone());
+        }
+        let request = requested
+            .try_recv()
+            .expect("a focus event requests a cycle");
+        fixture.run_with(request, &mut worker);
+
+        let fold = views.lock().fold.clone().unwrap();
+        let folded = fold.frame.as_ref().unwrap();
+        assert_eq!(
+            folded.work_panes().collect::<Vec<_>>(),
+            [&b],
+            "the fold's frame"
+        );
+        let published = crate::sidebar::cache::read_snapshot_cache(
+            &fixture.runtime.pane_frame_path(),
+            "rimz-test",
+        )
+        .expect("the focus event published the frame");
+        assert_eq!(
+            published.work_panes().collect::<Vec<_>>(),
+            [&b],
+            "the frame file"
+        );
+    }
+}
