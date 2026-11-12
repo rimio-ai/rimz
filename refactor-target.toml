@@ -2374,7 +2374,8 @@ path = "crates/rimz/src/harness"
 # harness::notes and its NotesErr, AddRequest, Added, ListFilter, Note, Listing, add and list own the home-wide note store behind `rimz notes` (+9).
 # throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
 # deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
-surface-budget = 1175
+# schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_ticket and of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it (+28).
+surface-budget = 1203
 
 [[verdict]]
 kind = "item"
@@ -2540,6 +2541,106 @@ reason = "Planner, runner and CLI share strict versioned workflow launch reads."
 kind = "item"
 key = "harness::schedule::launch_ledger::launched"
 reason = "One kind-aware checkout query shares the remembering task's workflow memory, project-covering entries included, across dedupe."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention"
+reason = "The loop task verdict is decided once, in the sidebar graph, for loop list, loop watch, and the sidebar."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::Attention"
+reason = "The NEEDS YOU causes, their priority, and their `--json` names, shared by every loop view."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::Hold"
+reason = "A held start's age, kind, and reason, read alike from a run's capacity wait and a queue ticket."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::Facts"
+reason = "Every fact the verdict reads for one loop row, filled by the CLI's row and by the read-only reader."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::TaskFacts"
+reason = "A catalog row's verdict facts: timing, checkout, run lock, last fire, strikes, watcher."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::decide"
+reason = "The one body of the NEEDS YOU priority and reason texts."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::parked_overrides"
+reason = "The parked override: a parked run replaces only a lost watcher."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::run_summary"
+reason = "The one wording of a workflow run's summary line, parked runs included."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::parked_words"
+reason = "The parked reason's wording, shared by the verdict and the list's clipped cell."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::since_wait_armed"
+reason = "Which run-log records belong to a wait's current arming, for the verdict and the CLI's last-run cells."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::fired"
+reason = "The fired rule that puts a staying one-off under DONE."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::capacity_waits"
+reason = "A task's active runs waiting on capacity, for the verdict and the CLI's held rows."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::RoomReadings"
+reason = "A room's condition readings, read once and folded into each task's timing."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::BlockingTerm"
+reason = "The term that blocks a waiting condition, with its reading and pull request."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::TaskReading"
+reason = "One task's verdict as the sidebar reads it."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::ReadContext"
+reason = "The reader's inputs that do not come from the room's paths."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::read_room"
+reason = "The read-only, path-explicit verdict reader the sidebar calls once per room, for every task there."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::ProcessExit"
+reason = "How a fire's process ended, shared by the verdict's failing reason and loop show's exit cells."
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::one_line"
+reason = "One-line collapse of a diagnostic, shared by CLI renderers and the loop verdict."
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::checkout_name"
+reason = "A checkout's display name, shared by CLI renderers and the loop verdict."
 
 [[verdict]]
 kind = "item"
@@ -4538,7 +4639,8 @@ upward-dependencies = ["agents"]
 # fmt::age_label and fmt::rel_age give CLI reports and launcher entry facts one age vocabulary (+2).
 # fmt::held_start shares held ages and local give-up clocks across loop and workflow surfaces.
 # fmt::local_clock gives workflow and capacity instants one day-qualified clock (+1).
-surface-budget = 41
+# fmt::one_line and fmt::checkout_name move with the loop verdict's reason text out of the CLI, whose copies delegate (+2).
+surface-budget = 43
 
 [[verdict]]
 kind = "item"
@@ -5690,7 +5792,8 @@ allowed-dependencies = [
     "worktree",
 ]
 # `WhenTerm::truth` gives the CLI's leaf rows the term's three-valued truth (+1).
-surface-budget = 49
+# WhenExpr::blocking_term and CiSource::term_pr_number name a waiting loop task's blocking term and its pull request for the loop verdict (+2).
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

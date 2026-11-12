@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::account::{RateLimitsCache, read_rate_limits_cache};
 use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
 use crate::forge::pr_state::{
-    PrQueueFact, PrReview, PrStateCache, SettledMergeability, UNSUPPORTED_REPO_KEY,
+    PrLink, PrQueueFact, PrReview, PrStateCache, SettledMergeability, UNSUPPORTED_REPO_KEY,
 };
 use crate::ids::{AgentKind, LoginKey, LoginName};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
@@ -142,9 +142,14 @@ impl<'a> ForgeKey<'a> {
         }
     }
 
-    fn read(self, cache: &PrStateCache, scope: &Path) -> Option<&'static str> {
+    /// The cached pull request this key reads, and the head's CI when no link carries it.
+    fn link<'c>(
+        self,
+        cache: &'c PrStateCache,
+        scope: &Path,
+    ) -> Option<(Option<&'c PrLink>, Option<WorktreeCi>)> {
         let scope = scope.to_string_lossy();
-        let (link, head_ci) = if let Some(branch) = self.branch() {
+        Some(if let Some(branch) = self.branch() {
             let repo = cache.path_repos.get(scope.as_ref())?;
             let row = cache.branches.get(repo)?.get(branch)?;
             (row.pr.as_ref(), row.ci)
@@ -153,7 +158,11 @@ impl<'a> ForgeKey<'a> {
                 cache.states.get(scope.as_ref()),
                 cache.branch_ci.get(scope.as_ref()).copied(),
             )
-        };
+        })
+    }
+
+    fn read(self, cache: &PrStateCache, scope: &Path) -> Option<&'static str> {
+        let (link, head_ci) = self.link(cache, scope)?;
         let open = link
             .filter(|link| link.state == WorktreePrState::Open)
             .and_then(|link| link.open.as_ref());
@@ -199,6 +208,11 @@ impl CiSource {
     /// The cached PR number for this checkout, without probing the forge.
     pub fn pr_number(&self, scope: &Path) -> Option<u64> {
         self.0.states.get(scope.to_string_lossy().as_ref())?.number
+    }
+
+    /// The cached PR number behind forge key `key` read from `scope`, without probing.
+    pub fn term_pr_number(&self, key: &str, scope: &Path) -> Option<u64> {
+        ForgeKey::parse(key)?.link(&self.0, scope)?.0?.number
     }
 
     /// Explain an absent forge reading without changing condition truth.
@@ -804,10 +818,15 @@ impl WhenExpr {
         Some(count)
     }
 
+    /// The leaf that keeps the expression from true, and whether it sits under a negation.
+    pub fn blocking_term(&self, verdict: &Verdict) -> (&WhenTerm, bool) {
+        self.0.blocking_term(&verdict.readings, true)
+    }
+
     /// The leaf that keeps the expression from true: its comparison against the reading, or
     /// the key named unread.
     pub(crate) fn blocking_evidence(&self, verdict: &Verdict) -> String {
-        let (term, negated) = self.0.blocking_term(&verdict.readings, true);
+        let (term, negated) = self.blocking_term(verdict);
         match verdict.readings[&term.key].as_deref() {
             Some(reading) => format!(
                 "{}{}",

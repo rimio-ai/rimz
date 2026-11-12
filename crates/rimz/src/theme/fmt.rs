@@ -146,6 +146,24 @@ pub fn age_label(secs: u64) -> String {
     }
 }
 
+/// A diagnostic collapsed onto one line: trimmed lines, blanks dropped, joined by `; `.
+pub fn one_line(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// A checkout's display name: its directory's own name, or the whole path when it has none.
+pub fn checkout_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// How long before `now` a stamp was, `5m ago`, or `now` for a future stamp.
 pub fn rel_age(at: Timestamp, now: Timestamp) -> String {
     let age = now.duration_since(at);

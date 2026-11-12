@@ -2136,6 +2136,366 @@ fn json_tasks(stdout: &str) -> (serde_json::Value, BTreeMap<String, serde_json::
     (room, tasks)
 }
 
+/// Names the file the reader re-exec reads its rooms from and writes its readings to.
+#[cfg(target_os = "linux")]
+const CAUSE_READS: &str = "RIMZ_TEST_ATTENTION_CAUSE_READS";
+
+/// Seed a workflow run of loop task `task` in the room at `root`, parked at `park` or
+/// active and waiting as `wait` says.
+#[cfg(target_os = "linux")]
+fn seed_room_run(
+    env: &Env,
+    root: &Path,
+    task: &str,
+    park: Option<Timestamp>,
+    wait: Option<serde_json::Value>,
+) {
+    let paths = env.state_path_for(root);
+    let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+    let now = Timestamp::now();
+    let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
+        "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
+        "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
+        "scope":{"kind":"worktree","path":root}, "project_root":root,
+        "created_at":now, "entered_at":now, "node":"agent", "wait":wait,
+        "state":if park.is_some() { "parked" } else { "active" },
+        "park":park.map(|at| json!({"reason":"user","text":"needs a look","at":at})),
+        "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
+    }))
+    .unwrap();
+    rimz::store::workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+}
+
+/// Every cause the D9 test leaves out, each in a room of its own, read by `loop list` and
+/// by the library reader: both name the same cause with the same reason, and a running
+/// task whose last fire failed has none on either. The reader runs in a re-exec of this
+/// test under the fixture's home, since the machine records it reads (strikes, arming, the
+/// start queue, the run log) resolve from the process's home.
+#[cfg(target_os = "linux")]
+#[test]
+fn every_cause_reads_alike_in_list_and_reader() {
+    if let Some(path) = std::env::var_os(CAUSE_READS) {
+        return read_causes_in_child(Path::new(&path));
+    }
+    let env = Env::new();
+    let old: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+    let wake = |root: &Path| TaskEntry {
+        root: root.to_owned(),
+        wait: Some(TaskTarget {
+            kind: AgentKind::new_unchecked("claude"),
+            session: "session".into(),
+            handle: "@coder".into(),
+        }),
+        watch: Some(rimz::config::WatchSpec::Command("true".into())),
+        ..TaskEntry::default()
+    };
+    let rooms = [
+        "failing",
+        "failing-strikes",
+        "failing-exit",
+        "strikes",
+        "held-ticket",
+        "held-wait",
+        "parked-one",
+        "parked-two",
+        "parked-lost",
+        "parked-failing",
+        "lost",
+        "blocked",
+        "invalid",
+        "running-failed",
+        "running-each",
+    ]
+    .into_iter()
+    .map(|name| {
+        let root = env.home_root.join(name);
+        env.record(&root);
+        (name.to_owned(), root)
+    })
+    .collect::<BTreeMap<_, _>>();
+    let mut runs = Vec::new();
+    for (name, root) in &rooms {
+        let mut entry = match name.as_str() {
+            "lost" | "parked-lost" => wake(root),
+            "invalid" => TaskEntry {
+                every: Some("soon".into()),
+                ..task(root)
+            },
+            "running-each" => TaskEntry {
+                root: root.clone(),
+                agent: Some("codex".into()),
+                prompt: Some("review".into()),
+                stay: true,
+                each_worktree: true,
+                when: Some(vec!["pr=merged".into()]),
+                hold: Some("3m".into()),
+                ..TaskEntry::default()
+            },
+            _ => task(root),
+        };
+        if matches!(name.as_str(), "failing" | "parked-failing") {
+            entry.max_strikes = Some(0);
+        }
+        if name == "blocked" {
+            write_project_config_at(root, "[tasks.blocked]\ncheck = \"true\"\nevery = \"1h\"\n");
+            continue;
+        }
+        let path = env
+            .state_path_for(root)
+            .root
+            .join("records/loop-instances.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            serde_json::to_vec(&Tasks(BTreeMap::from([(name.clone(), entry)]))).unwrap(),
+        )
+        .unwrap();
+        if name.starts_with("failing") || name.starts_with("running") || name == "parked-failing" {
+            let mut failed = record(name, root, LoopRunResult::Failed, 5);
+            if name == "failing-exit" {
+                failed.check = Some(
+                    serde_json::from_value(json!({"code": 2, "timed_out": false, "output": ""}))
+                        .unwrap(),
+                );
+            }
+            runs.push(failed);
+        }
+        if name.starts_with("parked") {
+            seed_room_run(&env, root, name, Some(old), None);
+        }
+    }
+    seed_room_run(&env, &rooms["parked-two"], "parked-two", Some(old), None);
+    write_loop_run_records(&env, &runs);
+    let key = |name: &str| project_task_key(&rooms[name], name);
+    std::fs::create_dir_all(loop_strikes_path(&env).parent().unwrap()).unwrap();
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([
+            (key("failing-strikes"), 1_u32),
+            (key("failing-exit"), 2),
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        loop_arming_path(&env),
+        serde_json::to_vec(&BTreeMap::from([(
+            key("strikes"),
+            Arming {
+                enabled: false,
+                at: Some(old),
+                pause_until: None,
+                strikes: Some(3),
+            },
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let queue = env.rimz_home().join("loops/throttle");
+    std::fs::create_dir_all(&queue).unwrap();
+    let pid = std::process::id();
+    let enqueued_ms = old.as_millisecond();
+    std::fs::write(
+        queue.join(format!("{enqueued_ms:020}-{}", uuid::Uuid::from_u128(1))),
+        serde_json::to_vec(&json!({
+            "owner": {"pid": pid, "start": rimz::proc::process_start_token(pid)},
+            "task": "held-ticket", "root": rooms["held-ticket"],
+            "checkout": rooms["held-ticket"], "enqueued_ms": enqueued_ms,
+            "state": "waiting", "reason": {"kind": "disk", "text": "free disk low at the queue"},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    seed_room_run(
+        &env,
+        &rooms["held-wait"],
+        "held-wait",
+        None,
+        Some(json!({
+            "node":"agent", "outcome":"capacity", "detail":"free disk low at the wait",
+            "hold":"disk", "kinds":["claude"], "first":old, "last":old, "count":2,
+            "recheck_at":null,
+        })),
+    );
+    let holder = RunLockInfo {
+        pid: 42_424,
+        started_at: Timestamp::now(),
+    };
+    let lock = |name: &str, file: String| {
+        let state = env.state_path_for(&rooms[name]);
+        let runtime = rimz::RuntimePaths::for_state_under(&state, &env.runtime_root);
+        hold_loop_run_lock(&runtime.lock_path(file), &holder)
+    };
+    let _bare = lock("running-failed", "loop-run-running-failed.lock".into());
+    let checkout = WorkspaceId::from_project_root(&env.home_root.join("one"));
+    let _each = lock(
+        "running-each",
+        format!("loop-run-running-each-{checkout}.lock"),
+    );
+
+    let reads = env.home_root.join("cause-reads.json");
+    std::fs::write(&reads, serde_json::to_vec(&rooms).unwrap()).unwrap();
+    let output = env
+        .rimz_at(&std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "loop_schedule::list_tests::every_cause_reads_alike_in_list_and_reader",
+            "--nocapture",
+        ])
+        .env(CAUSE_READS, &reads)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+        "the child must run exactly this test:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let read: BTreeMap<String, Option<(serde_json::Value, String)>> =
+        serde_json::from_slice(&std::fs::read(&reads).unwrap()).unwrap();
+    // `--all` finds a room by its loop rows, which a project task's room has none of.
+    let blocked = ["--root", rooms["blocked"].to_str().unwrap()];
+    let all = ["loop", "list", "--all"];
+    let blocked = [&blocked[..], &["loop", "list"][..]].concat();
+    let mut listed = BTreeMap::new();
+    let mut text = String::new();
+    for args in [&all[..], &blocked[..]] {
+        let json: serde_json::Value =
+            serde_json::from_str(&loop_ok(&env, &[args, &["--json"][..]].concat())).unwrap();
+        listed.extend(
+            json["rooms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|room| room["tasks"].as_array().unwrap())
+                .map(|row| (row["name"].as_str().unwrap().to_owned(), row.clone())),
+        );
+        text.push_str(&loop_ok(&env, args));
+    }
+
+    let expected: [(&str, Option<&str>, Option<&str>); 15] = [
+        ("failing", Some("failing"), Some("✗ failing")),
+        (
+            "failing-strikes",
+            Some("failing"),
+            Some("✗ failing · 1/3 strikes"),
+        ),
+        (
+            "failing-exit",
+            Some("failing"),
+            Some("✗ failing · 2/3 strikes · exit 2"),
+        ),
+        ("strikes", Some("strikes"), Some("disabled after 3 strikes")),
+        (
+            "held-ticket",
+            Some("held"),
+            Some("free disk low at the queue"),
+        ),
+        ("held-wait", Some("held"), Some("free disk low at the wait")),
+        ("parked-one", Some("parked"), None),
+        ("parked-two", Some("parked"), None),
+        ("parked-lost", Some("parked"), None),
+        ("parked-failing", Some("failing"), Some("✗ failing")),
+        (
+            "lost",
+            Some("lost"),
+            Some("watcher gone · will not wake @coder"),
+        ),
+        (
+            "blocked",
+            Some("blocked"),
+            Some("blocked · project untrusted"),
+        ),
+        ("invalid", Some("invalid"), None),
+        ("running-failed", None, None),
+        ("running-each", None, None),
+    ];
+    for (name, cause, reason) in expected {
+        let row = listed
+            .get(name)
+            .unwrap_or_else(|| panic!("{name}: not listed\n{text}"));
+        assert_eq!(row["attention"].as_str(), cause, "{name}: {row}");
+        let (read_cause, read_reason) = match &read[name] {
+            Some((cause, reason)) => (cause.as_str(), reason.as_str()),
+            None => (None, ""),
+        };
+        assert_eq!(read_cause, cause, "{name}: the reader and the list agree");
+        if let Some(reason) = reason {
+            assert_eq!(read_reason, reason, "{name}");
+        }
+        if cause.is_none() {
+            continue;
+        }
+        assert!(
+            text.lines().any(|line| {
+                line.trim_start().starts_with(&format!("{name} ")) && line.contains(read_reason)
+            }),
+            "{name}: list prints the reader's reason `{read_reason}`\n{text}"
+        );
+    }
+    for (name, more) in [
+        ("parked-one", ""),
+        ("parked-two", " (+1 more)"),
+        ("parked-lost", ""),
+    ] {
+        let reason = read[name]
+            .as_ref()
+            .map(|(_, reason)| reason.as_str())
+            .unwrap();
+        assert!(
+            reason.starts_with(if more.is_empty() {
+                "1 run(s) parked: "
+            } else {
+                "2 run(s) parked: "
+            }) && reason.contains("agent user: needs a look")
+                && reason.ends_with(more),
+            "{name}: {reason}"
+        );
+    }
+    assert!(
+        read["invalid"].as_ref().unwrap().1.starts_with("invalid: "),
+        "{:?}",
+        read["invalid"]
+    );
+}
+
+/// The re-exec half: read each room's task through the library reader, with the run-log
+/// stats of the library's own fold over the same log.
+#[cfg(target_os = "linux")]
+fn read_causes_in_child(path: &Path) {
+    use rimz::harness::schedule::{attention, run_log};
+    let rooms: BTreeMap<String, PathBuf> =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let home = PathBuf::from(std::env::var_os("RIMZ_HOME").unwrap());
+    let runtime_root = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
+    let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let reads = rooms
+        .iter()
+        .map(|(name, root)| {
+            let state = rimz::StatePaths::for_project_root_under(root, &home).unwrap();
+            let runtime = rimz::RuntimePaths::for_state_under(&state, &runtime_root);
+            let stats = run_log::stats(&home.join("logs"), &now, Some(root));
+            let read = attention::read_room(
+                root,
+                &state,
+                &runtime,
+                attention::ReadContext {
+                    open: false,
+                    stats: &stats,
+                    now: &now,
+                },
+            )
+            .remove(name)
+            .unwrap_or_else(|| panic!("the reader finds {name}"));
+            let cause = read
+                .attention
+                .map(|(cause, reason)| (serde_json::to_value(cause).unwrap(), reason));
+            (name.clone(), cause)
+        })
+        .collect::<BTreeMap<_, _>>();
+    std::fs::write(path, serde_json::to_vec(&reads).unwrap()).unwrap();
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn active_timer_shows_closed_room_clocks_as_live() {

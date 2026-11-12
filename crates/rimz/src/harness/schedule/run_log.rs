@@ -644,6 +644,45 @@ impl RunStage<'_> {
     }
 }
 
+/// How a fire's process ended: its first check's exit, else a spawned run's mapped code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessExit {
+    Code(i32),
+    Timeout,
+    Signal,
+}
+
+impl ProcessExit {
+    pub fn of(record: &LoopRunRecord) -> Option<Self> {
+        if let Some(RunStage::Check(check)) = record.stages().next() {
+            return Some(if check.timed_out {
+                Self::Timeout
+            } else {
+                check.code.map_or(Self::Signal, Self::Code)
+            });
+        }
+        record
+            .run_id
+            .as_ref()
+            .and_then(|_| record.result.spawn_exit_code())
+            .map(Self::Code)
+    }
+}
+
+impl LoopRunRecord {
+    /// The fire's exit in words: a watch's outcome, else its process exit.
+    pub fn exit_label(&self) -> Option<String> {
+        if let Some(verdict) = &self.watch {
+            return Some(verdict.label());
+        }
+        ProcessExit::of(self).map(|exit| match exit {
+            ProcessExit::Code(code) => code.to_string(),
+            ProcessExit::Timeout => "timeout".to_owned(),
+            ProcessExit::Signal => "signal".to_owned(),
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignalRecord {
     pub name: SignalName,

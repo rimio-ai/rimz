@@ -27,8 +27,8 @@ use rimz::config::{CheckOn, Judge, MachineConfig, TaskCheck, TaskEntry, TaskTarg
 use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{
-    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, RunStage,
-    RunTransition,
+    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, ProcessExit,
+    RunStage, RunTransition,
 };
 use rimz::harness::schedule::runner::{
     AfterReset, InFlightRun, RunLockInfo, RunLockState, RunLocks,

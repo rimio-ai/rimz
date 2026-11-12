@@ -609,10 +609,7 @@ pub(super) fn worktree_name(entry: &TaskEntry, run_dir: &Path) -> Option<String>
 }
 
 pub(super) fn checkout_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
+    rimz::theme::fmt::checkout_name(path)
 }
 
 pub(super) fn action_text(
@@ -621,41 +618,7 @@ pub(super) fn action_text(
     entry: Option<&TaskEntry>,
     you: bool,
 ) -> String {
-    let mut action = match kind {
-        TaskActionKind::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
-        TaskActionKind::Spawn => format!("start {subject}"),
-        TaskActionKind::Workflow => format!("start workflow {subject}"),
-        TaskActionKind::CheckOnly => "run check".into(),
-    };
-    if let Some(entry) = entry {
-        let guard = entry.guard();
-        let stages = guard
-            .shell
-            .map(|_| "check".to_owned())
-            .into_iter()
-            .chain(
-                guard
-                    .judges
-                    .iter()
-                    .map(|judge| format!("judge `{}`", judge.agent)),
-            )
-            .collect::<Vec<_>>();
-        if !stages.is_empty() && kind.has_effect() {
-            let guard = stages.join(", then ");
-            action = if kind.is_spawn() {
-                format!("{guard}, then start {subject}")
-            } else {
-                format!("{action} · {guard}")
-            };
-        }
-    }
-    if you {
-        action.push_str(" (you)");
-    }
-    if let Some(account) = entry.and_then(|entry| entry.account.as_ref()) {
-        action.push_str(&format!(" · account {account}"));
-    }
-    action
+    kind.text(subject, entry, you)
 }
 
 #[cfg(test)]
