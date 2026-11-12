@@ -398,7 +398,9 @@ upward-dependencies = ["address"]
 # AgentState::lane_name, in_trunk, own_lane_path and stamp_label replace channel, lane_label and
 # is_root_lane as the one reading of a row's lane, lane-less rows included (+1).
 # AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
-surface-budget = 1292
+# PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
+# over from the fold to the cache clock's read (+2).
+surface-budget = 1294
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -438,6 +440,11 @@ reason = "Durable launch origin is stamped by launchers, inherited by agent laun
 kind = "item"
 key = "agents::state::SoftCompactProgress"
 reason = "Only a real clean turn end makes the marked wrap-up's continuation due."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::PriorTurn"
+reason = "The store folds the turn stamps a turn opened over; the cache clock reads them back while a usage-limit refusal explains that turn."
 
 [[verdict]]
 kind = "item"

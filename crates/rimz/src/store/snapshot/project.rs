@@ -865,6 +865,7 @@ fn carried_base(
         state.keepalive_since = prior.keepalive_since;
         state.pinged_at = prior.pinged_at;
         state.ping_opened_at = prior.ping_opened_at;
+        state.prior_turn = prior.prior_turn;
         state.registered_at = prior.registered_at.or(Some(event_ts));
         state.on_screen_at = prior.on_screen_at;
     }
@@ -1296,6 +1297,7 @@ fn assemble_launch_state(
     state.finished_at = finish_clock(prior, status, phase, event.timestamp);
     state.phase = phase;
     if status == AgentStatus::Running {
+        state.prior_turn = prior.and_then(AgentState::prior_turn_for_next);
         state.turn_started_at = Some(event.timestamp);
         state.user_turn_started_at = Some(event.timestamp);
         state.keepalive_since = None;
@@ -1348,6 +1350,7 @@ fn fold_lifecycle(
             state.ping_turn = prior.ping_turn;
         }
         if opened_turn {
+            state.prior_turn = prior.and_then(AgentState::prior_turn_for_next);
             state.turn_started_at = Some(timestamp);
         }
         return false;
@@ -1414,6 +1417,13 @@ fn fold_lifecycle(
         );
     if opened_turn || resets_context {
         state.turn_started_at = Some(timestamp);
+    }
+    // The cache clock reads the stamps a turn opened over while that turn reads as a
+    // limit refusal; a context reset leaves no request to read back to.
+    if resets_context {
+        state.prior_turn = None;
+    } else if opened_turn {
+        state.prior_turn = prior.and_then(AgentState::prior_turn_for_next);
     }
     let closes_request = !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
         && matches!(

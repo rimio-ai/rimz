@@ -115,7 +115,7 @@ A parked message delivers the moment the agent can take it, which means all of t
 
 - No counted input to its pane is recent enough to keep the typing hold active.
 - Its `--schedule` floor has passed and every `--after` and `--when` condition is met.
-- It is the oldest ready message for that agent. Messages to one agent deliver oldest first, and scheduled or condition-held ones step out of line until they are ready. A cache keepalive sent 30 seconds before the cache expires goes ahead of messages still queued, so a held message cannot let the cache go cold.
+- It is the oldest ready message for that agent. Messages to one agent deliver oldest first, and scheduled or condition-held ones step out of line until they are ready. A cache keepalive sent 30 seconds before the cache expires goes ahead of messages still queued, so a held message cannot let the cache go cold. A request the provider refuses for a usage limit, after a prompt typed or delivered or after a tool result, is no request: it leaves the cache's expiry where the last request that ran put it.
 - The agent is not [compacting its context](#compact-before-the-message-lands), and its status opens the `--on` gate.
 - No open prompt in its pane is holding the input. A question owns the agent's next input until it is answered, and `--force` sends past one.
 - A live pane exists to receive the text, and the agent's [reporting hooks](./setup.md#install-agent-hooks) are installed, since a turn-end hook is how RimZ learns the turn ended. A send that would park for an agent without them is refused up front.
