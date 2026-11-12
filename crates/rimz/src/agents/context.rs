@@ -62,7 +62,7 @@ pub struct ContextObservation {
 }
 
 impl ContextObservation {
-    pub fn new(agent_id: impl Into<AgentSessionId>, context: AgentContext) -> Option<Self> {
+    pub(super) fn new(agent_id: impl Into<AgentSessionId>, context: AgentContext) -> Option<Self> {
         let agent_id = agent_id.into();
         (!agent_id.as_str().trim().is_empty()).then_some(Self { agent_id, context })
     }
@@ -262,7 +262,7 @@ pub struct PermissionSettle {
 
 impl PermissionSettle {
     /// Whether this proof closes the ask that arrived at `since`.
-    pub fn answers(self, since: Timestamp) -> bool {
+    pub(super) fn answers(self, since: Timestamp) -> bool {
         self.ask_since == since && self.at > since
     }
 }
@@ -370,7 +370,7 @@ pub enum FieldPatch<T> {
 }
 
 impl<T> FieldPatch<T> {
-    pub fn apply(self, target: &mut Option<T>) {
+    fn apply(self, target: &mut Option<T>) {
         match self {
             Self::Keep => {}
             Self::Set(value) => *target = Some(value),
@@ -378,7 +378,7 @@ impl<T> FieldPatch<T> {
         }
     }
 
-    pub fn is_keep(&self) -> bool {
+    pub(super) fn is_keep(&self) -> bool {
         matches!(self, Self::Keep)
     }
 
@@ -434,7 +434,7 @@ pub struct LocalContextPatch {
 }
 
 impl LocalContextPatch {
-    pub fn authoritative_current() -> Self {
+    pub(crate) fn authoritative_current() -> Self {
         Self {
             tokens: LocalTokenPatch::PreserveEstablished(None),
             settle: FieldPatch::Clear,
@@ -443,7 +443,7 @@ impl LocalContextPatch {
     }
 
     /// Apply adapter-owned policy without consulting provider identity.
-    pub fn apply(self, context: &mut AgentContext, definition: &AgentSpec) {
+    pub(super) fn apply(self, context: &mut AgentContext, definition: &AgentSpec) {
         let prior_model_id = context.model_id.clone();
         let prior_model_display_name = context.model_display_name.clone();
         let prior_tokens = context.tokens.clone();
@@ -557,7 +557,7 @@ fn replace_current_preserving_session(
     merge_session_usage(&mut incoming.session_usage, prior.session_usage.clone());
 }
 
-pub(crate) fn merge_session_usage(
+fn merge_session_usage(
     target: &mut Option<AgentSessionUsage>,
     incoming: Option<AgentSessionUsage>,
 ) {
@@ -887,7 +887,7 @@ pub enum CostCoverage {
 }
 
 impl CostCoverage {
-    pub const fn contributes_to_live_spend(self) -> bool {
+    pub(crate) const fn contributes_to_live_spend(self) -> bool {
         matches!(self, Self::Session)
     }
 
@@ -938,7 +938,7 @@ pub struct AgentTokenUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_usage: Option<AgentCurrentUsage>,
     /// Cumulative session-lifetime counters. These never establish context
-    /// occupancy and stay out of [`Self::used_tokens`].
+    /// occupancy and stay out of `Self::used_tokens`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_usage: Option<AgentSessionUsage>,
 }
@@ -949,7 +949,7 @@ impl AgentTokenUsage {
     /// `input + cache_creation + cache_read`. This is the numerator
     /// [`AgentTokenUsage::used_percentage`] scales (output joins the window only
     /// next turn). `None` before the first measurement clears the breakdown.
-    pub fn used_tokens(&self) -> Option<u64> {
+    pub(crate) fn used_tokens(&self) -> Option<u64> {
         self.current_context_tokens.or_else(|| {
             let usage = self.current_usage.as_ref()?;
             Some(
@@ -1011,32 +1011,32 @@ pub(crate) fn cache_hit_percent(cache_read: u64, fresh_or_written_input: u64) ->
 }
 
 impl AgentSessionUsage {
-    pub fn displayed_input_tokens(&self) -> u64 {
+    pub(crate) fn displayed_input_tokens(&self) -> u64 {
         self.input_tokens
             .unwrap_or(0)
             .saturating_add(self.cache_creation_input_tokens.unwrap_or(0))
     }
 
-    pub fn displayed_output_tokens(&self) -> u64 {
+    pub(crate) fn displayed_output_tokens(&self) -> u64 {
         self.output_tokens
             .unwrap_or(0)
             .saturating_add(self.thinking_tokens.unwrap_or(0))
     }
 
-    pub fn displayed_total_tokens(&self) -> u64 {
+    pub(crate) fn displayed_total_tokens(&self) -> u64 {
         self.displayed_input_tokens()
             .saturating_add(self.displayed_output_tokens())
     }
 
-    pub fn cache_read_tokens(&self) -> u64 {
+    pub(crate) fn cache_read_tokens(&self) -> u64 {
         self.cache_read_input_tokens.unwrap_or(0)
     }
 
-    pub fn cache_hit_percent(&self) -> Option<u8> {
+    pub(crate) fn cache_hit_percent(&self) -> Option<u8> {
         cache_hit_percent(self.cache_read_tokens(), self.displayed_input_tokens())
     }
 
-    pub fn is_zero(&self) -> bool {
+    pub(crate) fn is_zero(&self) -> bool {
         self.displayed_total_tokens() == 0 && self.cache_read_tokens() == 0
     }
 }
@@ -1059,7 +1059,7 @@ pub struct AgentCurrentUsage {
 impl AgentCurrentUsage {
     /// Whether the breakdown carries no token count at all: every field is
     /// either absent or explicitly zero.
-    pub fn is_zero(&self) -> bool {
+    pub(super) fn is_zero(&self) -> bool {
         [
             self.input_tokens,
             self.output_tokens,
@@ -1083,7 +1083,7 @@ impl AgentRateLimits {
     /// Ingest builders set the `source`; statusline persistence carries the
     /// prior stamp of unchanged best-effort content, while an authoritative
     /// refresh keeps its query time so fusion can rank freshness.
-    pub fn stamped_at(mut self, observed_at: Timestamp) -> Self {
+    pub(crate) fn stamped_at(mut self, observed_at: Timestamp) -> Self {
         for window in &mut self.windows {
             window.observed_at.get_or_insert(observed_at);
         }
@@ -1097,7 +1097,7 @@ impl AgentRateLimits {
     /// per-window content stamps: a longer window can remain unchanged across
     /// the shortest window's reset. A reading with no dated window remains
     /// fresh as a last-resort backstop.
-    pub fn content_stale_at(&self, now: Timestamp) -> bool {
+    pub(crate) fn content_stale_at(&self, now: Timestamp) -> bool {
         let duration_reset = self
             .windows
             .iter()
@@ -1143,7 +1143,7 @@ pub struct WindowAmount {
 
 impl WindowAmount {
     /// Floor the used share; only reaching the cap exhausts the window.
-    pub fn used_percentage(self) -> u8 {
+    pub(crate) fn used_percentage(self) -> u8 {
         if self.used >= self.limit {
             return 100;
         }
@@ -1233,7 +1233,7 @@ impl WindowSource {
     }
 
     /// Whether this reading came from an official-API query.
-    pub fn is_authoritative(&self) -> bool {
+    pub(crate) fn is_authoritative(&self) -> bool {
         matches!(self, WindowSource::Authoritative)
     }
 }
@@ -1244,7 +1244,7 @@ impl WindowSource {
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
 /// Usage at or below this percentage still represents a fresh provider window.
-pub(crate) const FRESH_WINDOW_USAGE_FLOOR: u8 = 1;
+const FRESH_WINDOW_USAGE_FLOOR: u8 = 1;
 
 /// Treat the first five percent of a budget window as already elapsed for pace
 /// math. This damps early-window tones and marks the
@@ -1309,7 +1309,7 @@ impl RateLimitWindow {
     }
 
     /// Project dated unscoped windows to `now`, refilling and rolling their reset forward. Scoped readings retain provider truth so status consumers can distinguish spent and elapsed quotas; display consumers clear expired scoped usage separately.
-    pub fn projected_at(self, now: Timestamp) -> Self {
+    pub(crate) fn projected_at(self, now: Timestamp) -> Self {
         match (self.resets_at, self.duration_mins) {
             (Some(resets_at), Some(mins)) if self.scope.is_none() && resets_at <= now => {
                 let resets_at = self.rolled_reset(resets_at, mins, now);
@@ -1358,7 +1358,7 @@ impl RateLimitWindow {
     /// Whether this spent duration window still has a future natural reset.
     /// Missing and elapsed reset clocks cannot drive redemption or attention
     /// policy.
-    pub fn spent_with_future_reset(&self, now: Timestamp) -> bool {
+    pub(super) fn spent_with_future_reset(&self, now: Timestamp) -> bool {
         self.scope.is_none()
             && self.duration_mins.is_some_and(|mins| mins > 0)
             && self.is_spent()
@@ -1458,7 +1458,7 @@ impl TurnErrorClass {
     }
 
     /// The class in words, for a surface whose marker carries no provider label.
-    pub fn words(self) -> &'static str {
+    pub(crate) fn words(self) -> &'static str {
         match self {
             Self::PausedRateLimit => "rate limit",
             Self::PausedSpendLimit => "spend limit",
@@ -1476,7 +1476,7 @@ impl TurnErrorClass {
 
     /// Classify a capped upstream provider-error label into the display and
     /// auto-resume bucket shared by every adapter.
-    pub(crate) fn classify_label(label: Option<&str>) -> Self {
+    pub(super) fn classify_label(label: Option<&str>) -> Self {
         let Some(label) = label else {
             return Self::Failed;
         };
