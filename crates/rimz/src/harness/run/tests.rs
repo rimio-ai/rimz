@@ -4713,3 +4713,157 @@ fn a_withdrawn_message_park_completes_with_the_parked_answer() {
         socket.recv(&mut frame).unwrap();
     }
 }
+
+#[test]
+fn releasing_a_workflow_frees_every_pin_of_that_run_and_nothing_else() {
+    use crate::agents::{WorkflowAttemptRef, WorkflowAttemptRole};
+    use crate::store::run::{StoppedTurn, StoppedTurnDisposition};
+
+    let (dir, paths, base) = setup();
+    let runtime = RuntimePaths::under(base.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let stranded = crate::ids::WorkflowRunId::new();
+    let other = crate::ids::WorkflowRunId::new();
+    let pin = |run: &crate::ids::WorkflowRunId, seq, role| WorkflowAttemptRef {
+        run: run.clone(),
+        seq,
+        role,
+    };
+    let rows = [
+        ("leader", Some(pin(&stranded, 1, WorkflowAttemptRole::Step))),
+        ("judge", Some(pin(&stranded, 2, WorkflowAttemptRole::Judge))),
+        (
+            "earlier",
+            Some(pin(&stranded, 3, WorkflowAttemptRole::Step)),
+        ),
+        (
+            "reassigned",
+            Some(pin(&other, 1, WorkflowAttemptRole::Step)),
+        ),
+        ("unrelated", None),
+    ];
+    for (agent, workflow) in &rows {
+        let mut observation =
+            AgentLifecycleObservation::new(Some((*agent).into()), LifecycleSignal::Registered);
+        observation.launch.workflow = workflow.clone();
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let run = |agent: &str, workflow: Option<WorkflowAttemptRef>, status, lifecycle| {
+        let mut record = RunRecord::new(
+            base.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "step".into(),
+            dir.path().into(),
+        );
+        record.agent_id = Some(agent.into());
+        record.workflow = workflow;
+        record.status = status;
+        record.lifecycle = lifecycle;
+        record.report_to = ReportTo::Nobody;
+        create(&paths, &record).unwrap();
+        record
+    };
+    let mut leader = run(
+        "leader",
+        rows[0].1.clone(),
+        RunStatus::Running,
+        RunLifecycle::Turn,
+    );
+    leader.parked_at = Some(leader.started_at);
+    leader.parked_on = Some(crate::store::run::ParkCause::Message);
+    leader.stopped_turn = Some(StoppedTurn {
+        at: leader.started_at,
+        disposition: StoppedTurnDisposition::Failed,
+    });
+    create(&paths, &leader).unwrap();
+    let judge = run(
+        "judge",
+        rows[1].1.clone(),
+        RunStatus::Pending,
+        RunLifecycle::Turn,
+    );
+    let earlier = run(
+        "earlier",
+        rows[2].1.clone(),
+        RunStatus::Running,
+        RunLifecycle::Session,
+    );
+    let settled = run(
+        "earlier",
+        Some(pin(&stranded, 0, WorkflowAttemptRole::Step)),
+        RunStatus::Completed,
+        RunLifecycle::Turn,
+    );
+    let foreign = run(
+        "reassigned",
+        rows[3].1.clone(),
+        RunStatus::Running,
+        RunLifecycle::Turn,
+    );
+
+    let released = release_workflow(&store, &stranded, "rimz-test").unwrap();
+    let mut names = released
+        .iter()
+        .map(|agent| agent.agent_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, ["earlier", "judge", "leader"]);
+    for (open, status) in [
+        (&leader, RunStatus::Running),
+        (&judge, RunStatus::Pending),
+        (&earlier, RunStatus::Running),
+    ] {
+        let record = load(&paths, &open.run_id).unwrap();
+        assert_eq!(record.workflow, None, "{:?}", open.agent_id);
+        assert_eq!(
+            record.lifecycle,
+            RunLifecycle::Session,
+            "{:?}",
+            open.agent_id
+        );
+        assert!(record.keep, "{:?}", open.agent_id);
+        assert_eq!(record.status, status, "release ends nothing");
+        assert_eq!(
+            record.parked_at, None,
+            "no park is left for the strand check"
+        );
+        assert_eq!(record.parked_on, None);
+        assert_eq!(record.stopped_turn, None);
+    }
+    assert_eq!(
+        load(&paths, &settled.run_id).unwrap(),
+        settled,
+        "a terminal run is left alone"
+    );
+    assert_eq!(load(&paths, &foreign.run_id).unwrap(), foreign);
+    let audit = store.audit_rows().unwrap();
+    let pins = rows
+        .iter()
+        .map(|(agent, _)| {
+            audit
+                .find("claude", &AgentSessionId::from(*agent))
+                .unwrap()
+                .workflow
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(pins, [None, None, None, rows[3].1.clone(), None]);
+
+    let before = list(&paths).unwrap();
+    assert!(
+        release_workflow(&store, &stranded, "rimz-test")
+            .unwrap()
+            .is_empty(),
+        "a second release finds nothing to release"
+    );
+    assert_eq!(list(&paths).unwrap(), before, "and writes nothing");
+}

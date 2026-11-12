@@ -348,6 +348,51 @@ pub(super) fn cancel_unserved_workflow_run(store: &Store, run_id: &RunId) -> Res
     Ok(())
 }
 
+/// Let every agent the workflow run `workflow` holds go on as an ordinary session, without
+/// reading that run's record. Each open supervised run pinned to it, at any sequence or role,
+/// becomes a kept Session run with no workflow link under its own locked update, so no turn end
+/// settles it and its wrapper never sees the terminal record it cleans up on; the park and stop
+/// evidence only the workflow read goes with the link. Then each agent row still pinned to the
+/// run has that exact pin cleared. Nothing is signaled, closed or canceled, a terminal run is
+/// left alone, and a second release finds nothing. Returns the agents whose pin this call cleared.
+pub fn release_workflow(
+    store: &Store,
+    workflow: &crate::ids::WorkflowRunId,
+    session_name: &str,
+) -> std::result::Result<Vec<AgentState>, crate::store::StoreErr> {
+    let pinned = |record: &RunRecord| {
+        !record.status.is_terminal()
+            && record
+                .workflow
+                .as_ref()
+                .is_some_and(|pin| pin.run == *workflow)
+    };
+    for run in list(store.paths())?.iter().filter(|run| pinned(run)) {
+        update_record(store.paths(), &run.run_id, |record, _| {
+            if !pinned(record) {
+                return Ok(RecordMutation::Keep(()));
+            }
+            record.workflow = None;
+            record.lifecycle = RunLifecycle::Session;
+            record.keep = true;
+            record.parked_at = None;
+            record.parked_on = None;
+            record.stopped_turn = None;
+            Ok(RecordMutation::Write(()))
+        })?;
+    }
+    let mut released = Vec::new();
+    for agent in store.audit_rows()?.iter() {
+        let Some(pin) = agent.workflow.as_ref().filter(|pin| pin.run == *workflow) else {
+            continue;
+        };
+        if store.clear_workflow_pin(&agent.kind, &agent.agent_id, pin, session_name)? {
+            released.push(agent.clone());
+        }
+    }
+    Ok(released)
+}
+
 /// Cancel using only durable paths and the waiter's runtime socket.
 pub fn cancel_and_wake_paths(
     paths: &StatePaths,

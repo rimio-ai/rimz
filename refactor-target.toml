@@ -2391,7 +2391,8 @@ path = "crates/rimz/src/harness"
 # RoomCapacities::compaction_blocked reads the pass's credits cache once for both compactions (+1).
 # team_prompt::SHIPPED_REFLECT and team_prompt::reflect_copy_path let team loads and explain resolve and label the shipped `reflect` consensus piece (+2).
 # workflow::{StartArgs, Advance, parse_give_up}, TaskFire::advance and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI and loop fires to admission (+5).
-surface-budget = 1217
+# run::release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow pass and cancel (+1).
+surface-budget = 1218
 
 [[verdict]]
 kind = "item"
@@ -5580,7 +5581,13 @@ allowed-dependencies = [
 # fail_if_owned lets the exec wrapper fail its run only while its pane still owns it (+1).
 # hold_interrupted_turn and expire_interrupt stamp and settle an interrupted subagent turn's hold for the timeout helper; one fits the slack left before (+1).
 # release_rung restores a claimed stop rung the helper's interrupt could not deliver (+1).
-surface-budget = 65
+# release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow reconcile pass and cancel (+1).
+surface-budget = 66
+
+[[verdict]]
+kind = "item"
+key = "harness::run::release_workflow"
+reason = "A stranded workflow run's open supervised runs become kept Session runs with no workflow link under their own locked updates, then each exact agent pin is cleared; nothing is signaled, closed or canceled."
 
 [[verdict]]
 kind = "item"

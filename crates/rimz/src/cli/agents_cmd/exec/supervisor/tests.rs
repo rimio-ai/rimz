@@ -208,6 +208,79 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
     );
 }
 
+/// A cleanup-enabled workflow agent whose stranded run is released keeps its pane through the
+/// next clean turn end, which the hook settles through the production lifecycle entry; the same
+/// turn end on an unreleased run is the wrapper's cleanup cue, so the control proves the path.
+#[test]
+fn a_released_workflow_agent_survives_its_next_turn_end() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal, WorkflowAttemptRef};
+    use rimz::store::run::{ReportTo, RunLifecycle, RunStatus};
+
+    for released in [false, true] {
+        let state = tempfile::tempdir().unwrap();
+        let runtime_root = tempfile::tempdir_in("/tmp").unwrap();
+        let workspace_id = rimz::WorkspaceId::from_project_root(state.path());
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).unwrap();
+        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).unwrap();
+        let store = rimz::Store::open(paths.clone(), runtime.clone()).unwrap();
+        let stranded = rimz::ids::WorkflowRunId::new();
+        let mut record = rimz::store::run::RunRecord::new(
+            workspace_id,
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "step".to_owned(),
+            state.path().to_owned(),
+        );
+        record.agent_id = Some("leader".into());
+        record.status = RunStatus::Running;
+        record.lifecycle = RunLifecycle::Turn;
+        record.report_to = ReportTo::Nobody;
+        record.workflow = Some(WorkflowAttemptRef {
+            run: stranded.clone(),
+            seq: 1,
+            role: rimz::agents::WorkflowAttemptRole::Step,
+        });
+        rimz::harness::run::create(&paths, &record).unwrap();
+        if released {
+            rimz::harness::run::release_workflow(&store, &stranded, "rimz-test").unwrap();
+        }
+        let agent = rimz::agents::definition_by_kind("claude").unwrap();
+        let turn_end = AgentLifecycleObservation::new(
+            Some("leader".into()),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        );
+        rimz::harness::run::settle_lifecycle(
+            &store,
+            &record.run_id,
+            agent,
+            &turn_end,
+            Some("done".into()),
+        )
+        .unwrap();
+        let context = RunPaths {
+            run_id: record.run_id.clone(),
+            paths,
+            runtime,
+        };
+        let now = Instant::now();
+        let mut monitor = RunMonitor::new(true, StopPolicy::RunTerminal, None, now);
+        let mut spawn = |duty| panic!("no helper is owed: {duty:?}");
+        let status = rimz::harness::run::load(&context.paths, &record.run_id)
+            .unwrap()
+            .status;
+        assert_eq!(
+            monitor.poll(&context, now, false, &mut spawn),
+            !released,
+            "released {released}: the wrapper cleans up only an unreleased run ({status:?})"
+        );
+        assert_eq!(status.is_terminal(), !released);
+    }
+}
+
 struct RelaunchClock(std::cell::Cell<Instant>);
 
 impl RelaunchClock {
