@@ -10224,7 +10224,7 @@ reason = "The binary's hook tests name it (cli/hooks/tests.rs:148,151,248) and t
 [[verdict]]
 kind = "item"
 key = "agents::login::LoginErr"
-reason = "The error of public ProviderLogin::named, LoginCatalog::select, room and room_login (login.rs:110,270-305); LoginMismatch, RoomLoginErr, session_login_env, birth_selection, between, room and default_named_home are floored by the same public signatures (pass 24b)."
+reason = "The error of public ProviderLogin::named, LoginCatalog::select, room and room_login (login.rs:110,270-305); LoginMismatch, RoomLoginErr, session_login_env, between and room are floored by the same public signatures (pass 24b)."
 
 [[verdict]]
 kind = "item"

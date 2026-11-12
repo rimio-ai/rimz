@@ -626,56 +626,6 @@ fn room_selection_names_one_login_per_kind() {
 }
 
 #[test]
-fn birth_selection_prefers_requested_over_project() {
-    let catalog = LoginCatalog::from_config_under(
-        &accounts("[claude.work]\n[claude.personal]\n[codex.work]\n"),
-        Some(Path::new("/home/u")),
-    )
-    .expect("catalog");
-    let requested = RoomLogins::from([(kind("claude"), name("work"))]);
-    let project = RoomLogins::from([
-        (kind("claude"), name("personal")),
-        (kind("codex"), name("work")),
-    ]);
-
-    let born = catalog
-        .birth_selection(&requested, &project, &RoomLogins::new())
-        .expect("fresh birth");
-    assert_eq!(
-        born,
-        RoomLogins::from([
-            (kind("claude"), name("work")),
-            (kind("codex"), name("work")),
-            (kind("pi"), LoginName::default_login()),
-        ])
-    );
-    assert_eq!(
-        catalog
-            .birth_selection(&RoomLogins::new(), &RoomLogins::new(), &RoomLogins::new())
-            .expect("default birth"),
-        RoomLogins::from([
-            (kind("claude"), LoginName::default_login()),
-            (kind("codex"), LoginName::default_login()),
-            (kind("pi"), LoginName::default_login()),
-        ])
-    );
-
-    let unknown = RoomLogins::from([(kind("claude"), name("travel"))]);
-    assert!(matches!(
-        catalog.birth_selection(&RoomLogins::new(), &unknown, &RoomLogins::new()),
-        Err(BirthLoginErr::Login(LoginErr::Unknown { .. }))
-    ));
-    let escape = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
-    assert_eq!(
-        catalog
-            .birth_selection(&escape, &unknown, &RoomLogins::new())
-            .expect("a flag overrides an undeclared project account")
-            .get(&kind("claude")),
-        Some(&LoginName::default_login())
-    );
-}
-
-#[test]
 fn a_named_account_preflights_its_home_and_hooks() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("work");
@@ -710,51 +660,13 @@ fn a_named_account_preflights_its_home_and_hooks() {
 }
 
 #[test]
-fn machine_selection_fills_only_unset_kinds() {
-    let catalog = LoginCatalog::from_config_under(
-        &accounts("[claude.work]\n[codex.work]\n"),
-        Some(Path::new("/home/u")),
-    )
-    .unwrap();
-    let empty = RoomLogins::new();
-    let machine = RoomLogins::from([
-        (kind("claude"), name("work")),
-        (kind("codex"), name("work")),
-    ]);
-    let born = catalog.birth_selection(&empty, &empty, &machine).unwrap();
-    let mut expected = machine.clone();
-    expected.insert(kind("pi"), LoginName::default_login());
-    assert_eq!(born, expected);
-    let requested = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
-    let project = RoomLogins::from([(kind("codex"), LoginName::default_login())]);
-    let overridden = catalog
-        .birth_selection(&requested, &project, &machine)
-        .unwrap();
-    assert!(overridden.values().all(LoginName::is_default));
-    let dangling = RoomLogins::from([(kind("codex"), name("missing"))]);
-    assert_eq!(
-        catalog
-            .birth_selection(&project, &empty, &dangling)
-            .unwrap()[&kind("codex")],
-        LoginName::default_login()
-    );
-    assert_eq!(
-        catalog
-            .birth_selection(&empty, &project, &dangling)
-            .unwrap()[&kind("codex")],
-        LoginName::default_login()
-    );
-}
-
-#[test]
 fn deciding_machine_selection_refuses_unknown_names_and_unsupported_kinds() {
     let catalog =
         LoginCatalog::from_config_under(&AccountsConfig::default(), Some(Path::new("/home/u")))
             .unwrap();
     for provider in ["codex", "grok"] {
-        let machine = RoomLogins::from([(kind(provider), name("missing"))]);
         let error = catalog
-            .birth_selection(&RoomLogins::new(), &RoomLogins::new(), &machine)
+            .select_machine(&kind(provider), &name("missing"))
             .unwrap_err()
             .to_string();
         assert!(error.contains("[accounts.use]"), "{error}");
