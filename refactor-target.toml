@@ -3310,6 +3310,8 @@ upward-dependencies = [
     "harness::hibernate",
     "harness::run",
     "harness::schedule::pending",
+    # The write check reads a stage-visit premise's open visit from the team board.
+    "harness::scratch",
     "sidebar::produce",
 ]
 # The turn-completion wait view is shared by `agents wait` and owed-report wakes.
@@ -4416,7 +4418,8 @@ path = "crates/rimz/src/store"
 # workflow::{RunOutcome, RunEnding} carry a terminal run's outcome from the engine to the scheduler's collector (+2).
 # workflow::RunFire freezes what a loop fire tells its run's briefs (+1).
 # workflow::remove_refused clears a run home whose record another RimZ version wrote, for `workflow cancel` (+1).
-surface-budget = 604
+# Premise, MessageRecord::with_premises and the row-only premise checks broken_row_premise and ended_stage_visit share the premise model with message and harness (+4).
+surface-budget = 608
 
 [[verdict]]
 kind = "item"

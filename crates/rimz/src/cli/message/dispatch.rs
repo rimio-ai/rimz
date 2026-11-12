@@ -78,6 +78,7 @@ pub(super) fn send_message(
     let request = || DispatchRequest {
         about_run: None,
         reply_wanted,
+        premises: rimz::store::message::Premise::NONE,
         resuming_recipient: None,
         target: target.clone(),
         text: text.clone(),

@@ -80,6 +80,11 @@ pub(super) enum Receipt {
     /// A cache keepalive whose cache went cold before its write: the ping would only pay to
     /// rebuild it.
     CacheCold,
+    /// Every member's premise broke before the write and each was withdrawn, or one could not
+    /// be checked and the batch's claims were released.
+    Withdrawn {
+        compacted: bool,
+    },
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -317,10 +322,7 @@ fn write_live(
     send: &mut LiveSend,
     writer: &PaneWriter,
 ) -> Result<(Receipt, Option<AgentState>)> {
-    let head = batch
-        .first()
-        .expect("send_batch_to_live_pane requires at least one message");
-    let decide = |send: &mut LiveSend, compacted: bool| {
+    let decide = |send: &mut LiveSend, batch: &[MessageRecord], compacted: bool| {
         wait_and_decide(
             workspace,
             store,
@@ -332,17 +334,20 @@ fn write_live(
             send,
         )
     };
-    let fresh = match decide(send, false)? {
-        Decided::Write(row) => row,
+    let (fresh, batch) = match decide(send, batch, false)? {
+        Decided::Write { row, batch } => (row, batch),
         Decided::Stop(receipt) => return Ok((receipt, None)),
     };
+    let head = batch
+        .first()
+        .expect("a write decision keeps at least one message");
     let sent = |compacted| Receipt::Sent {
         compacted,
         interrupt: InterruptConfirmation::NotChecked,
     };
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
-        write_text(workspace, store, snapshot, writer, batch, send)?;
+        write_text(workspace, store, snapshot, writer, &batch, send)?;
         return Ok((sent(false), fresh));
     }
     debug_assert!(
@@ -354,7 +359,7 @@ fn write_live(
         .iter()
         .find_map(|message| compact_message_for_target(store, target, fresh.as_ref(), message));
     let Some((command, threshold, agent)) = compact else {
-        write_text(workspace, store, snapshot, writer, batch, send)?;
+        write_text(workspace, store, snapshot, writer, &batch, send)?;
         return Ok((sent(false), fresh));
     };
     // Claimed only once the decisions above passed, so the command record
@@ -388,11 +393,11 @@ fn write_live(
         return Ok((Receipt::CompactionPending, fresh));
     }
     // The prompts wait their own turn and decide on the row as it stands after the command.
-    let fresh = match decide(send, true)? {
-        Decided::Write(row) => row,
+    let (fresh, batch) = match decide(send, &batch, true)? {
+        Decided::Write { row, batch } => (row, batch),
         Decided::Stop(receipt) => return Ok((receipt, None)),
     };
-    write_text(workspace, store, snapshot, writer, batch, send)?;
+    write_text(workspace, store, snapshot, writer, &batch, send)?;
     Ok((sent(true), fresh))
 }
 
@@ -458,13 +463,19 @@ impl Pacer {
     reason = "built once per pane write and matched at once"
 )]
 enum Decided {
-    Write(Option<AgentState>),
+    /// Write `batch`, the members whose premises still hold, deciding on `row`.
+    Write {
+        row: Option<AgentState>,
+        batch: Vec<MessageRecord>,
+    },
     Stop(Receipt),
 }
 
-/// Run a write's waits, then read the receiver's row once and make every
-/// write decision on it: the receiver can open a turn, raise a prompt, or
-/// start compacting while the write waits.
+/// Run a write's waits, then read the receiver's row and make every write
+/// decision on it: the receiver can open a turn, raise a prompt, or start
+/// compacting while the write waits. Every member whose premise that row (or
+/// its harness subject) shows broken is withdrawn here and never typed; after
+/// a withdrawal the row is read again and the survivors judged again.
 #[expect(
     clippy::too_many_arguments,
     reason = "one live write under the caller's pane lock"
@@ -498,9 +509,30 @@ fn wait_and_decide(
     if !store.message_claims_held(batch)? {
         return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
     }
-    let fresh = row_under_lock(store, head)?;
+    let mut fresh = row_under_lock(store, head)?;
+    let mut batch = batch.to_vec();
+    // A withdrawal commit waits on the workspace lock, behind any hook frame applied meanwhile,
+    // and can cancel a "still queued" warning in the batch: judge the survivors again on a
+    // fresh row until a pass withdraws nothing.
+    while let Some(survivors) = withdraw_broken(
+        workspace,
+        store,
+        &batch,
+        fresh.as_ref().or(bound),
+        compacted,
+    )? {
+        if survivors.is_empty() {
+            return Ok(Decided::Stop(Receipt::Withdrawn { compacted }));
+        }
+        if !store.message_claims_held(&survivors)? {
+            return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
+        }
+        fresh = row_under_lock(store, &survivors[0])?;
+        batch = survivors;
+    }
+    let head = &batch[0];
     let Some(agent) = fresh.as_ref().or(bound) else {
-        return Ok(Decided::Write(fresh));
+        return Ok(Decided::Write { row: fresh, batch });
     };
     if matches!(
         head.sender,
@@ -529,7 +561,59 @@ fn wait_and_decide(
             return Ok(Decided::Stop(Receipt::Deferred(Deferral::ProviderStarting)));
         }
     }
-    Ok(Decided::Write(fresh))
+    Ok(Decided::Write { row: fresh, batch })
+}
+
+/// Withdraw each member of `batch` whose premise no longer holds and return the rest, in order,
+/// or `None` when every member holds; the survivors alone set their `batch_id`. A premise that
+/// cannot be checked (a fleet digest's run scan failing) releases the whole batch's claims and
+/// returns no survivors.
+fn withdraw_broken(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    batch: &[MessageRecord],
+    row: Option<&AgentState>,
+    compacted: bool,
+) -> Result<Option<Vec<MessageRecord>>> {
+    let now = Timestamp::now();
+    let mut broken = Vec::new();
+    let mut held = Vec::with_capacity(batch.len());
+    for message in batch {
+        match super::premise::broken(store, message, row, now) {
+            Ok(Some(reason)) => broken.push((message.message_id.clone(), reason)),
+            Ok(None) => held.push(message.clone()),
+            Err(error) => {
+                tracing::warn!(
+                    message_id = %message.message_id,
+                    %error,
+                    "deferring message: cannot check whether its premises hold"
+                );
+                store.release_message_claims(
+                    batch,
+                    "deferred: cannot check or settle joined runs",
+                    compacted,
+                    &workspace.session_name,
+                )?;
+                return Ok(Some(Vec::new()));
+            }
+        }
+    }
+    if broken.is_empty() {
+        return Ok(None);
+    }
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WITHDRAW");
+    store.withdraw_messages(&workspace.session_name, |message| {
+        broken
+            .iter()
+            .find(|(id, _)| *id == message.message_id)
+            .map(|(_, reason)| reason.clone())
+    })?;
+    let batch_id = (held.len() > 1).then(|| held[0].message_id.clone());
+    for message in &mut held {
+        message.batch_id = batch_id.clone();
+    }
+    Ok(Some(held))
 }
 
 /// Paste or type the batch, record it `Sent`, then submit it.
@@ -660,6 +744,7 @@ fn compact_message_for_target<'a>(
         return None;
     }
     let mut record = MessageDraft {
+        premises: crate::store::message::Premise::NONE,
         body: MessageBody::Command,
         enter: true,
         gate: prompt.gate,

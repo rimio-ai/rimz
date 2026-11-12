@@ -1852,3 +1852,84 @@ fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_th
         "two refusals"
     );
 }
+
+#[test]
+fn prompt_copy_premise_breaks_only_on_a_real_prompt_after_restart_or_launch_adoption() {
+    use crate::store::message::{DeliveryGate, MessageRecord, Premise};
+
+    let held_after = |events: &[EventEnvelope], copy_at: usize| {
+        let copied = reduce_agent_states(&events[..copy_at]).remove(0);
+        let record = MessageRecord::new(
+            crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-fold")),
+            &copied,
+            "continue".to_owned(),
+            DeliveryGate::Any,
+        )
+        .with_premises(vec![Premise::NotPromptedSince {
+            last_prompt_at: copied.last_prompt_at,
+        }]);
+        (copy_at + 1..=events.len())
+            .map(|len| {
+                let row = reduce_agent_states(&events[..len]).remove(0);
+                record.broken_row_premise(Some(&row), epoch()).is_none()
+            })
+            .collect::<Vec<_>>()
+    };
+    let lifecycle = |offset, params: serde_json::Value| {
+        let mut params = params;
+        params["agent_id"] = json!("session");
+        raw_lifecycle_at("claude", offset, params)
+    };
+    let restart = [
+        lifecycle(
+            1,
+            json!({"signal": {"signal": "turn_started"}, "prompt": "task"}),
+        ),
+        lifecycle(
+            2,
+            json!({"signal": {"signal": "turn_ended", "errored": false,
+            "parked_on_background": false}}),
+        ),
+        lifecycle(
+            3,
+            json!({"signal": {"signal": "registered"}, "event_name": "rimz.agent-resumed"}),
+        ),
+        lifecycle(
+            4,
+            json!({"signal": {"signal": "registered"}, "event_name": "SessionStart"}),
+        ),
+        lifecycle(
+            5,
+            json!({"signal": {"signal": "turn_started"},
+            "prompt": "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nKeep warm."}),
+        ),
+        lifecycle(
+            6,
+            json!({"signal": {"signal": "turn_started"}, "prompt": "next task"}),
+        ),
+    ];
+    assert_eq!(held_after(&restart, 2), [true, true, true, false]);
+
+    let mut payload = launch_payload("launch_a", "lucid-atlas");
+    payload.prompt = None;
+    payload.state = AgentLaunchState::Bound;
+    payload.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+    let mut launch = launch_event("codex", payload);
+    launch.timestamp = epoch();
+    let native = |offset, event_name: &str, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "codex",
+            offset,
+            json!({
+                "event_name": event_name, "agent_id": "native-a",
+                "agent_name": "lucid-atlas", "pane_id": "tmux:%1", "signal": signal,
+            }),
+        )
+    };
+    let adopted = [
+        launch,
+        native(1, "SessionStart", json!({"signal": "registered"})),
+        native(2, "UserPromptSubmit", json!({"signal": "turn_started"})),
+    ];
+    assert_eq!(held_after(&adopted, 1), [true, false]);
+}

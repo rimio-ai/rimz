@@ -459,6 +459,39 @@ impl WhenCondition {
     }
 }
 
+/// A condition a queued message is worth delivering under. Every premise on a record must
+/// hold; once one breaks, the record is withdrawn `Canceled` with the broken premise as its
+/// reason, and its sender is never told. `about_run`, `idle_since`, `soft_compact` and the
+/// fleet-digest sender keep the older premises in their own fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "premise")]
+pub enum Premise {
+    /// Holds until this instant.
+    Lifespan { until: Timestamp },
+    /// Holds while the receiver's `last_prompt_at` is no later than this copy, taken at the
+    /// sender's decision; `None` is earlier than any prompt.
+    NotPromptedSince {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_prompt_at: Option<Timestamp>,
+    },
+    /// Holds while the team board in `checkout` stays on the visit to `stage` that began at
+    /// `started_at`. A board that cannot be read holds it.
+    StageVisit {
+        checkout: std::path::PathBuf,
+        stage: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<Timestamp>,
+    },
+    /// A premise a newer binary wrote, kept verbatim through queue rewrites; it holds.
+    #[serde(untagged)]
+    Other(serde_json::Value),
+}
+
+impl Premise {
+    /// No premise: written out at a sender whose message stays true until it is delivered.
+    pub const NONE: Vec<Self> = Vec::new();
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypingHoldReplay {
@@ -605,8 +638,11 @@ pub struct MessageRecord {
     /// `store::writer::queue::normalize_terminal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_since: Option<Timestamp>,
+    /// The premises this message is delivered under, beside the older ones above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub premises: Vec<Premise>,
     /// Shared stamp for records sent in one batched paste; the message id of the
-    /// first member left after delivery cancels the moot ones.
+    /// first member left after the write check withdraws the broken ones.
     /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<MessageId>,
@@ -734,6 +770,7 @@ impl MessageRecord {
             soft_compact: None,
             compacted_context_tokens: None,
             idle_since: None,
+            premises: Vec::new(),
             batch_id: None,
         }
     }
@@ -755,6 +792,7 @@ impl MessageRecord {
         .with_automated(record.automated)
         .with_in_reply_to(record.in_reply_to.clone())
         .with_about_run(record.about_run.clone())
+        .with_premises(record.premises.clone())
         .with_force(record.force)
         .with_auto_compact(record.auto_compact)
         .with_body(record.body)
@@ -808,6 +846,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_about_run(mut self, about_run: Option<RunId>) -> Self {
         self.about_run = about_run;
+        self
+    }
+
+    #[must_use]
+    pub fn with_premises(mut self, premises: Vec<Premise>) -> Self {
+        self.premises = premises;
         self
     }
 
@@ -908,6 +952,82 @@ impl MessageRecord {
             })
     }
 
+    /// The first premise `row`, the receiver's live row, shows broken, as the withdrawal reason:
+    /// a lifespan past `now`, a prompt later than the sender's copy, a turn edge after an idle
+    /// compaction's decision, or a soft-compaction continue whose cycle cleared. The harness
+    /// subjects (`about_run`, a fleet digest's joins, a stage visit) are judged on the
+    /// `message` side, which calls this first.
+    pub(crate) fn broken_row_premise(
+        &self,
+        row: Option<&AgentState>,
+        now: Timestamp,
+    ) -> Option<String> {
+        if self.lifespan_over(now) {
+            return Some("lifespan ended before delivery".to_owned());
+        }
+        if self.soft_compact == Some(SoftCompactStep::Continue)
+            && row.is_none_or(|row| row.ended_at.is_some() || row.soft_compact.is_none())
+        {
+            return Some("soft-compaction cycle cleared before delivery".to_owned());
+        }
+        let row = row?;
+        if row.ended_at.is_none() && self.idle_compaction_lapsed(row) {
+            return Some("agent took a turn after this idle compaction was queued".to_owned());
+        }
+        self.premises
+            .iter()
+            .any(|premise| {
+                matches!(premise, Premise::NotPromptedSince { last_prompt_at }
+                    if row.last_prompt_at > *last_prompt_at)
+            })
+            .then(|| "agent was prompted after this message was queued".to_owned())
+    }
+
+    /// The withdrawal reason when this record waits on a visit to `checkout`'s board other than
+    /// the open one, the visit to `stage` that began at `started_at`.
+    pub(crate) fn ended_stage_visit(
+        &self,
+        checkout: &std::path::Path,
+        stage: &str,
+        started_at: Option<Timestamp>,
+    ) -> Option<String> {
+        self.premises.iter().find_map(|premise| match premise {
+            Premise::StageVisit {
+                checkout: visited,
+                stage: visit,
+                started_at: visit_started_at,
+            } if visited == checkout && (visit != stage || *visit_started_at != started_at) => {
+                Some(format!("stage {visit} ended before delivery"))
+            }
+            _ => None,
+        })
+    }
+
+    /// Whether the record holds only while some premise does, in the new field or in one of the
+    /// older fields that store a premise; a `Canceled` ending of such a record keeps its reason.
+    pub(crate) fn carries_premise(&self) -> bool {
+        !self.premises.is_empty()
+            || self.idle_since.is_some()
+            || self.about_run.is_some()
+            || self.soft_compact == Some(SoftCompactStep::Continue)
+            || matches!(&self.sender, MessageSender::Harness { notice } if notice.is_fleet_digest())
+    }
+
+    /// The earliest lifespan premise's deadline.
+    fn lifespan_until(&self) -> Option<Timestamp> {
+        self.premises
+            .iter()
+            .filter_map(|premise| match premise {
+                Premise::Lifespan { until } => Some(*until),
+                _ => None,
+            })
+            .min()
+    }
+
+    pub(super) fn lifespan_over(&self, now: Timestamp) -> bool {
+        self.lifespan_until().is_some_and(|until| now >= until)
+    }
+
     pub fn is_ready(&self, now: Timestamp) -> bool {
         self.not_before.is_none_or(|not_before| not_before <= now)
     }
@@ -931,6 +1051,7 @@ impl MessageRecord {
             && self.is_ready(now)
             && self.conditions_met()
             && !self.expired(now)
+            && !self.lifespan_over(now)
     }
 
     pub(crate) fn is_open_and_due(&self, now: Timestamp) -> bool {
@@ -986,8 +1107,9 @@ impl MessageRecord {
 
     /// Next time the elder should sweep this record, or `None` if it arms nothing.
     ///
-    /// Queued [`DeliveryGate::Resume`] records ordinarily arm nothing: [`queue_head`] excludes
-    /// their control lane. `queue_wake_deadline` adds active typing holds and expired-hold
+    /// Queued [`DeliveryGate::Resume`] records arm only a lifespan's end: [`queue_head`] excludes
+    /// their control lane. Every queued record arms its lifespan's end, which the reconciler
+    /// withdraws at. `queue_wake_deadline` adds active typing holds and expired-hold
     /// retries for replay and resume records. Claimed and sent resume records still arm recovery.
     /// Steer-only wrap-ups arm cleanup after the claim TTL, including while queued.
     pub fn wake_deadline(&self, now: Timestamp) -> Option<Timestamp> {
@@ -995,7 +1117,7 @@ impl MessageRecord {
             MessageStatus::Queued if self.soft_compact == Some(SoftCompactStep::WrapUp) => {
                 Some(self.updated_at + CLAIM_TTL)
             }
-            MessageStatus::Queued if self.gate == DeliveryGate::Resume => None,
+            MessageStatus::Queued if self.gate == DeliveryGate::Resume => self.lifespan_until(),
             MessageStatus::Queued => {
                 let deadline = self
                     .not_before
@@ -1005,6 +1127,7 @@ impl MessageRecord {
                 Some(
                     self.expires_at()
                         .into_iter()
+                        .chain(self.lifespan_until())
                         .chain(self.register_by.filter(|register_by| *register_by > now))
                         .fold(deadline, Timestamp::min),
                 )
@@ -1099,6 +1222,7 @@ pub(super) fn queue_wake_deadline(pending: &[MessageRecord], now: Timestamp) -> 
                 message
                     .expires_at()
                     .into_iter()
+                    .chain(message.lifespan_until())
                     .chain(message.register_by.filter(|deadline| *deadline > now))
                     .min()
             } else {

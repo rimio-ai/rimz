@@ -96,8 +96,10 @@ pub(crate) fn compose(
     sender_card: &AgentState,
     notice: HarnessNotice,
     text: String,
+    premises: Vec<super::Premise>,
 ) -> MessageRecord {
     MessageRecord::new(workspace_id, sender_card, text, DeliveryGate::Done)
         .with_channel(sender_card.lane_name())
         .with_sender(MessageSender::Harness { notice })
+        .with_premises(premises)
 }

@@ -65,6 +65,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
                 text: text.to_owned(),
                 sender: MessageSender::System,
                 gate,
+                premises: rimz::store::message::Premise::NONE,
             }
             .record(workspace);
             let outcome = synthetic::deliver_now(

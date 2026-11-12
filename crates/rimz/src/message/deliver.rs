@@ -18,7 +18,6 @@ use crate::store::message::{
     QUEUED_NOTICE_IDLE_ENV, TypingHold, TypingHoldReplay, WhenCondition, env_ms,
     older_ready_blocker, queue_head, sender_notice,
 };
-use crate::store::run::RunStoreErr;
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::store::writer::BlockerUpdate;
 use crate::workspace::ResolvedWorkspace;
@@ -359,14 +358,14 @@ fn attempt_delivery(
         .iter()
         .find(|message| &message.message_id == message_id)
     {
-        match cancel_moot_message(workspace, store, message) {
+        match super::premise::withdraw_before_candidacy(workspace, store, message) {
             Ok(false) => {}
             Ok(true) => return Ok(DeliveryReport::Stopped),
             Err(error) => {
                 tracing::warn!(
                     %message_id,
                     %error,
-                    "deferring message: cannot check or cancel obsolete message"
+                    "deferring message: cannot check whether its premises hold"
                 );
                 return Ok(DeliveryReport::Stopped);
             }
@@ -413,27 +412,14 @@ fn attempt_delivery(
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
-    let mut send_messages = Vec::with_capacity(claimed.len());
-    for message in &claimed {
-        match cancel_moot_message(workspace, store, message) {
-            Ok(false) => send_messages.push(
-                message
-                    .clone()
-                    .with_pane_id(candidate.target.pane_id.clone()),
-            ),
-            Ok(true) => {}
-            Err(error) => {
-                tracing::warn!(
-                    message_id = %message.message_id,
-                    %error,
-                    "deferring message: cannot check or cancel obsolete message"
-                );
-                let reason = moot_check_failure_reason(message);
-                store.release_message_claims(&claimed, reason, false, &workspace.session_name)?;
-                return Ok(DeliveryReport::Stopped);
-            }
-        }
-    }
+    let mut send_messages = claimed
+        .iter()
+        .map(|message| {
+            message
+                .clone()
+                .with_pane_id(candidate.target.pane_id.clone())
+        })
+        .collect::<Vec<_>>();
     let Some(first) = send_messages.first() else {
         return Ok(DeliveryReport::Stopped);
     };
@@ -471,80 +457,6 @@ fn attempt_delivery(
         }
         _ => DeliveryReport::Stopped,
     })
-}
-
-fn moot_check_failure_reason(message: &MessageRecord) -> &'static str {
-    if message.soft_compact == Some(crate::store::message::SoftCompactStep::Continue) {
-        "deferred: cannot check soft-compaction cycle"
-    } else if message.idle_since.is_some() {
-        "deferred: cannot check idle-compaction turn"
-    } else if message.about_run.is_some() {
-        "deferred: cannot cancel ended run notice"
-    } else {
-        "deferred: cannot check or settle joined runs"
-    }
-}
-
-fn cancel_moot_message(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    message: &MessageRecord,
-) -> crate::store::Result<bool> {
-    let reason = if message.soft_compact == Some(crate::store::message::SoftCompactStep::Continue)
-        && !store.audit_rows()?.iter().any(|agent| {
-            message.same_agent_card(agent)
-                && agent.ended_at.is_none()
-                && agent.soft_compact.is_some()
-        }) {
-        "soft-compaction cycle cleared before delivery".to_owned()
-    } else if message.idle_since.is_some()
-        && store
-            .audit_rows()?
-            .iter()
-            .any(|agent| agent.ended_at.is_none() && message.idle_compaction_lapsed(agent))
-    {
-        "agent took a turn after this idle compaction was queued".to_owned()
-    } else if matches!(
-        &message.sender,
-        MessageSender::Harness { notice } if notice.is_fleet_digest()
-    ) && crate::harness::run::report::digest_fully_joined(
-        store.paths(),
-        &message.message_id,
-    )? {
-        "joined before delivery".to_owned()
-    } else {
-        let Some(run_id) = &message.about_run else {
-            return Ok(false);
-        };
-        match crate::harness::run::load(store.paths(), run_id) {
-            Ok(run) if run.status.is_terminal() => {
-                format!("child run {} before delivery", run.status.as_str())
-            }
-            Ok(run)
-                if matches!(
-                    message.sender,
-                    MessageSender::Harness {
-                        notice: HarnessNotice::Deadline
-                    }
-                ) && !crate::harness::deadline::stop_claimed(&run) =>
-            {
-                "deadline stop superseded before delivery".to_owned()
-            }
-            Err(RunStoreErr::NotFound(_)) => "child run gone before delivery".to_owned(),
-            Ok(_) => return Ok(false),
-            Err(error) => {
-                tracing::warn!(
-                    message_id = %message.message_id,
-                    %run_id,
-                    %error,
-                    "delivering notice: cannot read linked run"
-                );
-                return Ok(false);
-            }
-        }
-    };
-    store.cancel_message(&message.message_id, &workspace.session_name, &reason)?;
-    Ok(true)
 }
 
 pub(super) fn execute_attempt(
@@ -628,7 +540,9 @@ pub(super) fn execute_attempt(
             compacted,
             interrupt,
         }),
-        Ok(send::Receipt::ClaimLost { .. }) => Ok(AttemptOutcome::Queued),
+        Ok(send::Receipt::ClaimLost { .. } | send::Receipt::Withdrawn { .. }) => {
+            Ok(AttemptOutcome::Queued)
+        }
         Ok(send::Receipt::CacheCold) => {
             // The cold check reads the ping at the head; whatever was batched behind it waits for
             // the next attempt rather than failing with the ping.
@@ -832,6 +746,7 @@ fn notify_long_queued(
             sender,
             HarnessNotice::MessageQueued,
             sender_notice::still_queued(record, &cause, waited),
+            crate::store::message::Premise::NONE,
         );
         store.queue_still_queued_notice(&record.message_id, &notice, &workspace.session_name)?;
     }

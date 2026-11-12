@@ -2833,3 +2833,142 @@ fn every_harness_notice_header_is_indexed_in_user_docs() {
         );
     }
 }
+
+#[test]
+fn unknown_premise_round_trips_and_holds() {
+    let receiver = agent("receiver", None);
+    let record = delivery_message(1, &receiver, DeliveryGate::Any, None);
+    let mut encoded = serde_json::to_value(&record).unwrap();
+    encoded["premises"] = serde_json::json!([
+        {"premise": "lifespan", "until": "2025-01-01T00:00:00Z"},
+        {"premise": "board_quiet", "board": "/tmp/x", "since": 3},
+    ]);
+    let decoded: MessageRecord = serde_json::from_value(encoded.clone()).unwrap();
+    assert!(matches!(decoded.premises[1], Premise::Other(_)));
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), encoded);
+    assert_eq!(
+        serde_json::to_value(MessageRecord::requeue_from(&decoded)).unwrap()["premises"],
+        encoded["premises"]
+    );
+    let mut unknown_only = decoded;
+    unknown_only.premises.remove(0);
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    assert_eq!(unknown_only.broken_row_premise(Some(&receiver), now), None);
+    assert_eq!(unknown_only.broken_row_premise(None, now), None);
+}
+
+#[test]
+fn row_premises_break_on_lifespan_prompt_idle_turn_and_cleared_soft_cycle() {
+    use crate::agents::state::{SoftCompactMark, SoftCompactProgress};
+
+    let at = Timestamp::from_second(1_000).unwrap();
+    let later = at + Duration::from_secs(1);
+    let receiver = agent("receiver", None);
+    let plain = delivery_message(1, &receiver, DeliveryGate::Any, None);
+    let prompted = |stamp: Option<Timestamp>| {
+        let mut row = receiver.clone();
+        row.last_prompt_at = stamp;
+        row
+    };
+    let copy = |stamp: Option<Timestamp>| {
+        plain.clone().with_premises(vec![Premise::NotPromptedSince {
+            last_prompt_at: stamp,
+        }])
+    };
+    let lifespan = plain
+        .clone()
+        .with_premises(vec![Premise::Lifespan { until: later }]);
+    let mut idle = plain.clone().with_body(MessageBody::Command);
+    idle.idle_since = Some(at);
+    let mut idle_turned = receiver.clone();
+    idle_turned.turn_started_at = Some(later);
+    let mut soft = plain.clone();
+    soft.soft_compact = Some(SoftCompactStep::Continue);
+    let mut soft_live = receiver.clone();
+    soft_live.soft_compact = Some(SoftCompactMark {
+        steered_at: at,
+        compactions: Some(1),
+        progress: SoftCompactProgress::Continued,
+    });
+    let mut soft_ended = soft_live.clone();
+    soft_ended.ended_at = Some(later);
+    let cases: [(&MessageRecord, Option<AgentState>, Timestamp, Option<&str>); 13] = [
+        (&plain, Some(prompted(Some(later))), later, None),
+        (&lifespan, Some(receiver.clone()), at, None),
+        (
+            &lifespan,
+            None,
+            later,
+            Some("lifespan ended before delivery"),
+        ),
+        (&copy(Some(at)), Some(prompted(Some(at))), later, None),
+        (&copy(Some(at)), Some(prompted(None)), later, None),
+        (&copy(None), Some(prompted(None)), later, None),
+        (&copy(Some(at)), None, later, None),
+        (
+            &copy(Some(at)),
+            Some(prompted(Some(later))),
+            later,
+            Some("agent was prompted after this message was queued"),
+        ),
+        (
+            &copy(None),
+            Some(prompted(Some(at))),
+            later,
+            Some("agent was prompted after this message was queued"),
+        ),
+        (
+            &idle,
+            Some(idle_turned),
+            later,
+            Some("agent took a turn after this idle compaction was queued"),
+        ),
+        (&soft, Some(soft_live), later, None),
+        (
+            &soft,
+            Some(soft_ended),
+            later,
+            Some("soft-compaction cycle cleared before delivery"),
+        ),
+        (
+            &soft,
+            Some(receiver.clone()),
+            later,
+            Some("soft-compaction cycle cleared before delivery"),
+        ),
+    ];
+    let actual = cases
+        .iter()
+        .map(|(record, row, now, _)| record.broken_row_premise(row.as_ref(), *now))
+        .collect::<Vec<_>>();
+    let expected = cases
+        .iter()
+        .map(|(_, _, _, reason)| reason.map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn stage_visit_ends_on_another_stage_or_a_later_visit_to_the_same_stage() {
+    let at = Timestamp::from_second(1_000).unwrap();
+    let later = at + Duration::from_secs(1);
+    let checkout = std::path::Path::new("/tmp/rimz-checkout");
+    let record = delivery_message(1, &agent("receiver", None), DeliveryGate::Any, None)
+        .with_premises(vec![Premise::StageVisit {
+            checkout: checkout.to_path_buf(),
+            stage: "Review".to_owned(),
+            started_at: Some(at),
+        }]);
+    let ended = Some("stage Review ended before delivery".to_owned());
+    let other = std::path::Path::new("/tmp/rimz-other");
+    assert_eq!(
+        [
+            record.ended_stage_visit(checkout, "Review", Some(at)),
+            record.ended_stage_visit(other, "Done", Some(later)),
+            record.ended_stage_visit(checkout, "Done", Some(later)),
+            record.ended_stage_visit(checkout, "Review", Some(later)),
+            record.ended_stage_visit(checkout, "Review", None),
+        ],
+        [None, None, ended.clone(), ended.clone(), ended]
+    );
+}

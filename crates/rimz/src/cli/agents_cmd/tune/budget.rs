@@ -145,6 +145,7 @@ pub(super) fn run_budget(
                         text,
                         sender: MessageSender::System,
                         gate: DeliveryGate::Done,
+                        premises: rimz::store::message::Premise::NONE,
                     }
                     .record(workspace),
                     &workspace.session_name,

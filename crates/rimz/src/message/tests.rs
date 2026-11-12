@@ -658,6 +658,7 @@ fn schedule_parser_accepts_durations_and_rolls_wall_clock_forward() {
 
 fn draft(not_before: Option<Timestamp>) -> MessageDraft {
     MessageDraft {
+        premises: crate::store::message::Premise::NONE,
         body: MessageBody::Prompt,
         enter: true,
         gate: DeliveryGate::Done,

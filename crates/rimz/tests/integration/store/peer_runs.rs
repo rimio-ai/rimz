@@ -76,6 +76,7 @@ fn ack_in_run(
         .confirm_delivered_for_card_with(
             AgentCardRef::new(&peer.kind, &peer.agent_id, peer.name.as_deref()),
             ack,
+            None,
             "test",
             |records, selection| {
                 observed = true;

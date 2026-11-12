@@ -2640,6 +2640,7 @@ fn terminal_resume_outcomes_exhaust_park_through_store_projection() {
             .confirm_delivered_for_card_with(
                 agent.card_ref(),
                 crate::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                None,
                 "session",
                 |_, _| {},
             )

@@ -1876,41 +1876,10 @@ fn registration_rewake_reaches_stop_and_message_sweep_consumer() {
             .text
             .contains("The team resumed at stage Build, which is yours.")
     );
+    // A real prompt answers the re-wake: its turn start withdraws the notice, which is never
+    // typed, not even at the Stop that would have been its boundary.
     fixture.hook("coder", "UserPromptSubmit", Some("terminal_3"));
     fixture.live_panes(&["terminal_3"]);
-    success(
-        fixture
-            .command()
-            .args(["message", "sweep"])
-            .output()
-            .unwrap(),
-    );
-    assert_eq!(
-        fixture.env.store().list_pending_messages().unwrap()[0].message_id,
-        id
-    );
-    fixture.hook("coder", "Stop", Some("terminal_3"));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        success(
-            fixture
-                .command()
-                .args(["message", "sweep"])
-                .output()
-                .unwrap(),
-        );
-        let messages = fixture.env.store().list_messages().unwrap();
-        let status = messages
-            .iter()
-            .find(|message| message.message_id == id)
-            .unwrap()
-            .status;
-        if status == MessageStatus::Sent {
-            break;
-        }
-        assert!(Instant::now() < deadline, "re-wake remained {status}");
-        std::thread::sleep(Duration::from_millis(25));
-    }
     assert!(
         fixture
             .env
@@ -1919,21 +1888,37 @@ fn registration_rewake_reaches_stop_and_message_sweep_consumer() {
             .unwrap()
             .is_empty()
     );
-    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
-    for text in [
-        "Type: STAGE",
-        "The team resumed at stage Build, which is yours.",
-    ] {
-        let bytes = text
-            .bytes()
-            .map(|byte| byte.to_string())
-            .collect::<Vec<_>>()
-            .join("\t");
-        assert!(
-            trace.contains(&bytes),
-            "missing {text} in mux writes: {trace}"
-        );
-    }
+    let withdrawn = fixture
+        .env
+        .store()
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == id)
+        .unwrap();
+    assert_eq!(withdrawn.status, MessageStatus::Canceled);
+    assert_eq!(
+        withdrawn.last_error.as_deref(),
+        Some("agent was prompted after this message was queued")
+    );
+    fixture.hook("coder", "Stop", Some("terminal_3"));
+    success(
+        fixture
+            .command()
+            .args(["message", "sweep"])
+            .output()
+            .unwrap(),
+    );
+    let trace = std::fs::read_to_string(&fixture.trace).unwrap_or_default();
+    let stage = "Type: STAGE"
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    assert!(
+        !trace.contains(&stage),
+        "a withdrawn notice reached the pane: {trace}"
+    );
     assert_eq!(fixture.signals().len(), 1, "Stop must not reopen the stage");
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
 }
@@ -2742,8 +2727,9 @@ fn pending_compaction_does_not_repeat_or_prevent_owner_handoff() {
     success(fixture.flip("Build", None, Some("return to build")));
     let output = success(fixture.flip("Review", Some("coder"), Some("handoff")));
     assert!(output.contains("skipped"), "{output}");
+    // The first Review visit's notice and the Build visit's notice ended with their visits.
     let messages = store.list_pending_messages().unwrap();
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 2);
     assert_eq!(
         messages
             .iter()

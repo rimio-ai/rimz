@@ -126,6 +126,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                         text: continue_text.to_owned(),
                         sender: MessageSender::System,
                         gate: DeliveryGate::Done,
+                        premises: rimz::store::message::Premise::NONE,
                     }
                     .record(workspace),
                     &workspace.session_name,

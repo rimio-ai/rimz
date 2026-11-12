@@ -22,6 +22,7 @@ use crate::common::{
     trust_codex_preflight_hooks, wait_for_text_then_enter, zellij_trace_shim,
 };
 
+mod premise;
 mod soft_compact;
 mod typing_hold;
 

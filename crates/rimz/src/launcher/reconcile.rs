@@ -98,6 +98,7 @@ pub(super) fn reconcile_cohort_launch(
                     DispatchRequest {
                         about_run: None,
                         reply_wanted: false,
+                        premises: crate::store::message::Premise::NONE,
                         resuming_recipient: None,
                         target: target.clone(),
                         text: prompt.to_owned(),

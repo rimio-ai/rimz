@@ -105,6 +105,7 @@ pub fn queue(
             notice: HarnessNotice::TeamStalled,
         },
         gate: DeliveryGate::Done,
+        premises: crate::store::message::Premise::NONE,
     }
     .record(workspace);
     store.queue_message(&message, &workspace.session_name)?;

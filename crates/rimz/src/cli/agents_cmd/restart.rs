@@ -945,6 +945,7 @@ fn notify_parent_restarted(
             notice: HarnessNotice::SubagentRestarted,
         },
         gate: DeliveryGate::Done,
+        premises: rimz::store::message::Premise::NONE,
     }
     .record(&ctx.workspace)
     .with_about_run(Some(run.run_id.clone()));

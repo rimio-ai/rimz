@@ -238,6 +238,7 @@ fn answer_raised(
         DispatchRequest {
             about_run: None,
             reply_wanted: false,
+            premises: rimz::store::message::Premise::NONE,
             target: handle.to_owned(),
             text,
             target_scope: None,

@@ -11,6 +11,7 @@ pub mod compact;
 pub mod deliver;
 pub mod dispatch;
 pub(crate) mod fire;
+mod premise;
 pub mod send;
 pub mod soft_compact;
 pub mod synthetic;
@@ -72,7 +73,7 @@ use crate::address::recipient_channel;
 use crate::agents::{AgentCardRef, AgentState, AgentStatus, RefreshSpawn};
 use crate::ids::{AgentKind, AgentSessionId, LaneName, PaneId, WorkspaceId};
 use crate::store::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, Premise,
     WhenCondition, env_ms, gate_open,
 };
 use crate::store::snapshot::PaneAgent;
@@ -155,6 +156,7 @@ struct MessageDraft {
     when: Vec<WhenCondition>,
     about_run: Option<crate::ids::RunId>,
     reply_wanted: bool,
+    premises: Vec<Premise>,
 }
 
 enum Recipient<'a> {
@@ -234,7 +236,8 @@ impl MessageDraft {
         .with_not_before(self.not_before)
         .with_after(self.after.clone())
         .with_when(self.when.clone())
-        .with_about_run(self.about_run.clone());
+        .with_about_run(self.about_run.clone())
+        .with_premises(self.premises.clone());
         record.reply_wanted = self.reply_wanted;
         match recipient.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),
