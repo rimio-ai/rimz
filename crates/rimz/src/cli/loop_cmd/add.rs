@@ -113,6 +113,7 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
     let mutation = if args.project {
         catalog.replace_project(&args.name, &project_root, &entry)?
     } else {
+        entry.booked_by = booking_chain(&workspace);
         catalog.replace_machine(&args.name, &entry)?
     };
 
@@ -150,6 +151,21 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
         condition::write_no_room_hint(&mut out, parsed)?;
     }
     Ok(())
+}
+
+/// The booking chain of an agent calling from the task's room. A shell, a caller this room's
+/// rows do not resolve, and any read failure book without one: the add never fails on it.
+fn booking_chain(workspace: &rimz::ResolvedWorkspace) -> Vec<rimz::agents::LaunchedBy> {
+    let Ok(Some(store)) = super::super::open_existing_store(workspace) else {
+        return Vec::new();
+    };
+    let Ok(rows) = store.runtime_projection(rimz::RuntimeScope::Audit) else {
+        return Vec::new();
+    };
+    let Ok(booker) = rimz::harness::ancestry::resolve_calling_agent(&rows.agents) else {
+        return Vec::new();
+    };
+    rimz::harness::ancestry::booking_chain(&rows.agents, booker)
 }
 
 fn add_delivery(

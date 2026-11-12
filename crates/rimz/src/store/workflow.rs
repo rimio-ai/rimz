@@ -592,19 +592,36 @@ pub enum RunEnding {
     },
 }
 
-/// The loop fire that started a run, as the run's briefs name it.
+/// The loop fire that started a run, as the run's briefs name it. `booked_by` is the
+/// fired task row's booking chain as the fire read it, which every agent the run launches
+/// carries; a fire of a row with no chain, or of a record written before the field, has none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum RunFire {
     /// `rimz loop fire <task>` started the run by hand.
-    Manual { task: String },
+    Manual {
+        task: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        booked_by: Vec<crate::agents::LaunchedBy>,
+    },
     /// The task's trigger started the run; `trigger` words it as the brief does
     /// (``on the cron schedule `0 * * * *` ``), and a watch trigger has none.
     Scheduled {
         task: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        booked_by: Vec<crate::agents::LaunchedBy>,
     },
+}
+
+impl RunFire {
+    /// The fired task row's booking chain, nearest booker first.
+    pub fn booked_by(&self) -> &[crate::agents::LaunchedBy] {
+        match self {
+            Self::Manual { booked_by, .. } | Self::Scheduled { booked_by, .. } => booked_by,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

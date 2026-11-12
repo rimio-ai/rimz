@@ -273,6 +273,71 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     }
     use crate::config::{CheckOn, TaskTarget};
 
+    /// The machine row's text and the room's instance file, each written, read back, and
+    /// written again.
+    fn rewritten(entry: &TaskEntry) -> [(String, String); 2] {
+        let machine = |entry: &TaskEntry| {
+            DocumentMut::from(task_entry_table(entry, true).unwrap()).to_string()
+        };
+        let first = machine(entry);
+        let read: TaskEntry = toml::from_str(&first).unwrap();
+        let machine = (first, machine(&read));
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::disk::paths::StatePaths::for_project_root_under(
+            &entry.root,
+            &dir.path().join("home"),
+        )
+        .unwrap();
+        let workspace = crate::workspace::WorkspaceResolver::resolve(&entry.root, None).unwrap();
+        crate::workspace::record::write(
+            &state,
+            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+        )
+        .unwrap();
+        let instance = || {
+            let bytes = std::fs::read(super::super::instances::path(&state.root)).unwrap();
+            String::from_utf8(bytes).unwrap()
+        };
+        super::super::instances::insert(&state, "booking", entry).unwrap();
+        let first = instance();
+        let read = super::super::instances::load_strict_from(&state.root).unwrap();
+        super::super::instances::insert(&state, "booking", &read.0["booking"]).unwrap();
+        [machine, (first, instance())]
+    }
+
+    #[test]
+    fn booking_chains_round_trip_and_old_rows_rewrite_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = TaskEntry {
+            agent: Some("claude".to_owned()),
+            prompt: Some("start the next stage".to_owned()),
+            stay: true,
+            when: Some(vec!["pr[x]=merged".to_owned()]),
+            root: dir.path().to_path_buf(),
+            ..TaskEntry::default()
+        };
+        for (first, again) in rewritten(&old) {
+            assert_eq!(first, again);
+            assert!(!first.contains("booked"), "{first}");
+        }
+        let booked = TaskEntry {
+            booked_by: ["launch_lead", "launch_user_shell"]
+                .map(|id| crate::agents::LaunchedBy {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    agent_id: crate::ids::AgentSessionId::from(id),
+                })
+                .to_vec(),
+            ..old
+        };
+        for (first, again) in rewritten(&booked) {
+            assert_eq!(first, again);
+            assert!(
+                first.contains("booked-by") && first.contains("launch_user_shell"),
+                "{first}"
+            );
+        }
+    }
+
     #[test]
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
@@ -335,6 +400,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             capacity_wait: None,
             overlap: None,
             overlap_limit: None,
+            booked_by: Vec::new(),
         };
 
         let machine = task_entry_table(&entry, true).expect("serialize machine");

@@ -746,6 +746,17 @@ fn loop_check_identity_excludes_agent_and_room_environments() {
     );
     assert_eq!(check_task_from_identity(Some(String::new()), false), None);
     assert_eq!(check_task_from_identity(None, false), None);
+    assert_eq!(
+        check_booked_by(Some(
+            r#"[{"kind":"claude","agent_id":"booker"}]"#.to_owned()
+        )),
+        [crate::agents::LaunchedBy {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            agent_id: "booker".into(),
+        }]
+    );
+    assert!(check_booked_by(Some("not json".to_owned())).is_empty());
+    assert!(check_booked_by(None).is_empty());
 }
 
 #[test]

@@ -2712,3 +2712,156 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
     );
     assert!(!text.contains("fired-checkout is gone"), "{text}");
 }
+
+/// The booking chain `loop add` stored for `name`, or `None` with no row.
+fn stored_chain(env: &Env, name: &str) -> Option<Vec<String>> {
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(env)).unwrap()).unwrap();
+    let entry = config.tasks.0.get(name)?;
+    assert_eq!(entry.resolved_root(), env.project_root, "{name}: workspace");
+    Some(
+        entry
+            .booked_by
+            .iter()
+            .map(|link| link.agent_id.to_string())
+            .collect(),
+    )
+}
+
+fn add_as(env: &Env, caller: Option<&str>, args: &[&str]) {
+    let mut command = match caller {
+        Some(id) => calling_loop(env, id),
+        None => env.rimz(),
+    };
+    let output = command.args(["loop", "add"]).args(args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn an_agent_booking_records_its_chain_and_shows_its_booker() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_agent_launch(&env, &env.project_root, "lead", Default::default(), None);
+    let coder = rimz::agents::LaunchParams {
+        launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("launch_lead"),
+        })),
+        ..Default::default()
+    };
+    seed_agent_launch(&env, &env.project_root, "coder", coder, None);
+    let check = ["--check", "true", "--every", "1h"];
+    let booking = |name: &'static str| [&[name][..], &check[..]].concat();
+
+    add_as(&env, Some("launch_coder"), &booking("booked"));
+    add_as(&env, None, &booking("shell"));
+    add_as(&env, Some("launch_ghost"), &booking("stale"));
+    add_as(&env, Some("launch_coder"), &booking("readded"));
+    add_as(&env, None, &booking("readded"));
+    let mut hook = env.hook_command("claude");
+    hook.current_dir(&env.project_root)
+        .env("RIMZ_AGENT_ID", "launch_coder")
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "coder");
+    let registered = env
+        .spawn_payload(
+            hook,
+            &json!({"hook_event_name": "SessionStart", "session_id": "coder", "cwd": env.project_root})
+                .to_string(),
+        )
+        .wait_with_output()
+        .unwrap();
+    env.drain_hooks();
+    assert!(
+        registered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&registered.stderr)
+    );
+    add_as(
+        &env,
+        Some("launch_coder"),
+        &["delivery", "--wait", "--in", "1h"],
+    );
+    add_as(
+        &env,
+        Some("launch_coder"),
+        &[&booking("shared")[..], &["--project"][..]].concat(),
+    );
+
+    let delivery = read_loop_instances(&env).0.remove("delivery");
+    let delivery = delivery
+        .or_else(|| {
+            let config: LoopConfig =
+                toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+            config.tasks.0.get("delivery").cloned()
+        })
+        .expect("the delivery's row");
+    assert_eq!(delivery.booked_by, Vec::new(), "a delivery is not stamped");
+    let project: toml::Value = toml::from_str(
+        &std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
+    )
+    .unwrap();
+    let shared = &project["tasks"]["shared"];
+    assert!(
+        shared.get("check").is_some() && shared.get("booked-by").is_none(),
+        "a project task is not stamped: {project}"
+    );
+    assert_eq!(stored_chain(&env, "shared"), None, "{project}");
+
+    assert_eq!(
+        stored_chain(&env, "booked"),
+        Some(vec!["launch_coder".to_owned(), "launch_lead".to_owned()])
+    );
+    for name in ["shell", "stale", "readded"] {
+        assert_eq!(stored_chain(&env, name), Some(Vec::new()), "{name}");
+    }
+    let text = loop_ok(&env, &["loop", "show", "booked"]);
+    let booker = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("booked by"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(booker.contains("@coder"), "{text}");
+    assert!(
+        !loop_ok(&env, &["loop", "show", "shell"]).contains("booked by"),
+        "a shell booking has no booker"
+    );
+    let chain = json!([
+        {"kind": "claude", "agent_id": "launch_coder"},
+        {"kind": "claude", "agent_id": "launch_lead"},
+    ]);
+    let show: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "booked", "--json"])).unwrap();
+    assert_eq!(show["booked_by"], chain);
+    let list: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    let rows = list["rooms"][0]["tasks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{list}"));
+    for row in rows {
+        let expected = if row["name"] == "booked" {
+            &chain
+        } else {
+            &serde_json::Value::Null
+        };
+        assert_eq!(&row["booked_by"], expected, "{row}");
+    }
+
+    let other = env.home_root.join("other");
+    env.record(&other);
+    let other_root = other.to_str().unwrap();
+    add_as(
+        &env,
+        Some("launch_coder"),
+        &[&booking("elsewhere")[..], &["--root", other_root][..]].concat(),
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert_eq!(
+        config.tasks.0["elsewhere"].booked_by,
+        Vec::new(),
+        "a booking in another room is not stamped"
+    );
+}

@@ -406,16 +406,27 @@ fn child_env(
     env
 }
 
-/// A task-started run's checks name their task and, as a loop guard's did, their directory.
+/// A task-started run's checks name their task and, as a loop guard's did, their directory,
+/// and carry the booking chain its fire froze, for an agent a check launches.
 fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
     let Some(task) = record.task.clone() else {
         return Vec::new();
     };
-    vec![
+    let mut env = vec![
         (crate::harness::loop_task::LOOP_TASK_ENV.to_owned(), task),
         (
             crate::workspace::ENV_WORKTREE_PATH.to_owned(),
             record.scope.path.display().to_string(),
         ),
-    ]
+    ];
+    if let Some(fire) = record.fire.as_ref()
+        && !fire.booked_by().is_empty()
+        && let Ok(chain) = serde_json::to_string(fire.booked_by())
+    {
+        env.push((
+            crate::harness::loop_task::LOOP_BOOKED_BY_ENV.to_owned(),
+            chain,
+        ));
+    }
+    env
 }

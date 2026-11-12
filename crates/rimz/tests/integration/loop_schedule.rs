@@ -1204,6 +1204,145 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     );
 }
 
+/// A booking's chain travels with the launch its fire starts: agent B, started by the fire of
+/// `rimzd` that agent A booked, books with `[B, A]` after `rimzd` was consumed by that fire,
+/// after an unrelated agent C booked the name again, and after that row was removed.
+#[cfg(unix)]
+#[test]
+fn a_fired_bookings_chain_travels_with_the_agent_it_starts() {
+    use crate::common::CommandTimeoutExt;
+
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    seed_agent_launch(&env, &env.project_root, "a", Default::default(), None);
+    seed_agent_launch(&env, &env.project_root, "c", Default::default(), None);
+    let root = env.project_root.to_str().unwrap();
+    let book = |caller: &str, args: &[&str]| {
+        let output = calling_loop(&env, caller)
+            .args(["--root", root, "loop", "add"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let fired = [
+        "rimzd",
+        "--agent",
+        "codex",
+        "--prompt",
+        "repair",
+        "--stay",
+        "--in",
+        "1h",
+        "--throttle",
+        "off",
+    ];
+    book("launch_a", &fired);
+    assert!(read_loop_instances(&env).0.contains_key("rimzd"));
+    let trace = env.home_root.join("scheduled-tab.log");
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(panes).unwrap(),
+    );
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "loop", "run", "rimzd"])
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.0")
+        .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    let trace = loop {
+        let text = std::fs::read_to_string(&trace).unwrap_or_default();
+        if text.contains("layout-json\t") || Instant::now() >= deadline {
+            break text;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let layout: String = serde_json::from_str(
+        trace
+            .lines()
+            .find_map(|line| line.strip_prefix("layout-json\t"))
+            .unwrap_or_else(|| panic!("{trace}\n{}", String::from_utf8_lossy(&output.stderr))),
+    )
+    .unwrap();
+    let layout: kdl::KdlDocument = layout.parse().unwrap();
+    let (_, argv) = loop_agent_pane(&layout).expect("agent pane args");
+    let request = argv
+        .windows(2)
+        .find(|pair| pair[0] == "--request-file")
+        .unwrap();
+    let payload = std::fs::read_to_string(&request[1]).unwrap();
+    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
+    let launched = request.identity.launch_id.clone().unwrap();
+    let chain_a = json!([{"kind": "claude", "agent_id": "launch_a"}]);
+    assert_eq!(
+        serde_json::to_value(&request.identity.params).unwrap()["loop_booked_by"],
+        chain_a,
+        "the fire stamps its booking's chain on the launch"
+    );
+    assert!(
+        !read_loop_instances(&env).0.contains_key("rimzd"),
+        "the fire consumed its one-shot row"
+    );
+    let chain_of = |name: &str| {
+        let config: LoopConfig =
+            toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+        config.tasks.0[name]
+            .booked_by
+            .iter()
+            .map(|link| link.agent_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let book_as_b = |name: &str| {
+        let output = env
+            .rimz()
+            .args([
+                "--root", root, "loop", "add", name, "--check", "true", "--every", "1h",
+            ])
+            .env("RIMZ_AGENT_KIND", "codex")
+            .env("RIMZ_AGENT_ID", &launched)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        chain_of(name)
+    };
+    let expected = [launched.as_str(), "launch_a"];
+
+    assert_eq!(book_as_b("after-consumed"), expected, "consumed");
+    book("launch_c", &fired);
+    assert_eq!(book_as_b("after-readded"), expected, "re-added by C");
+    loop_ok(&env, &["loop", "remove", "rimzd"]);
+    assert_eq!(book_as_b("after-removed"), expected, "removed");
+}
+
 #[cfg(unix)]
 fn loop_agent_pane(document: &kdl::KdlDocument) -> Option<(&kdl::KdlNode, Vec<String>)> {
     for node in document.nodes() {

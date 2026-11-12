@@ -295,6 +295,12 @@ pub struct LaunchParams {
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    /// The booking chain of the loop task whose fire launched this agent, nearest booker
+    /// first, as the fire's run froze it. Every cell of the launch carries it, team members
+    /// included, so a booking the agent makes later reads it here and never from the task's
+    /// row, which the fire may have consumed or someone may have removed or replaced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loop_booked_by: Vec<LaunchedBy>,
     /// The inline multi-agent launch cohort the launcher minted, passed through
     /// `RIMZ_LAUNCH_GROUP`. Team launches use `RIMZ_TEAM` as the cohort key.
     #[serde(default, skip_serializing_if = "Option::is_none")]

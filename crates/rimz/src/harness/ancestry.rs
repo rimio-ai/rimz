@@ -322,6 +322,64 @@ pub fn resolve_launch_caller<'a>(
     Ok(resolved)
 }
 
+/// The agents behind a loop booking, nearest first: `booker`, then each agent that started
+/// the one before it, through its peer launcher or its subagent parent. A row that a loop
+/// fire started takes the firing booking's chain, which the fire stamped on it
+/// (`AgentState::loop_booked_by`), in place of walking further. A link whose row is
+/// unreadable is recorded and ends the walk, as do a repeated id and the bound.
+pub fn booking_chain(
+    agents: &[crate::agents::AgentState],
+    booker: &crate::agents::AgentState,
+) -> Vec<crate::agents::LaunchedBy> {
+    let mut chain = Vec::new();
+    let mut row = Some(booker);
+    let mut next = Some(launch_link(booker));
+    while let Some(link) = next.take()
+        && extend(&mut chain, link)
+        && let Some(agent) = row
+    {
+        if !agent.loop_booked_by.is_empty() {
+            agent
+                .loop_booked_by
+                .iter()
+                .all(|link| extend(&mut chain, link.clone()));
+            break;
+        }
+        next = agent.launched_by.clone().or_else(|| {
+            Some(crate::agents::LaunchedBy {
+                kind: agent.parent_agent_kind.clone()?,
+                agent_id: agent.parent_agent_id.clone()?,
+            })
+        });
+        row = next
+            .as_ref()
+            .and_then(|link| crate::address::launch_row(agents, &link.kind, &link.agent_id));
+    }
+    chain
+}
+
+/// The most agents a booking chain records.
+const BOOKING_CHAIN_BOUND: usize = 16;
+
+/// Append `link` unless the chain is full or already holds it; whether it was appended.
+fn extend(chain: &mut Vec<crate::agents::LaunchedBy>, link: crate::agents::LaunchedBy) -> bool {
+    let fits = chain.len() < BOOKING_CHAIN_BOUND && !chain.contains(&link);
+    if fits {
+        chain.push(link);
+    }
+    fits
+}
+
+fn launch_link(agent: &crate::agents::AgentState) -> crate::agents::LaunchedBy {
+    crate::agents::LaunchedBy {
+        kind: agent.kind.clone(),
+        agent_id: agent
+            .launch_id
+            .clone()
+            .unwrap_or_else(|| agent.agent_id.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +646,68 @@ mod tests {
 
         assert_eq!(identity.name.as_deref(), Some("ambient"));
         assert_eq!(identity.pane_id.as_ref(), Some(&ambient_pane));
+    }
+
+    fn link(id: &str) -> crate::agents::LaunchedBy {
+        crate::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from(id),
+        }
+    }
+
+    fn launched(id: &str, by: &str) -> crate::agents::AgentState {
+        let mut agent = crate::agents::AgentState::stub("claude", id, AgentStatus::Idle);
+        agent.launched_by = Some(link(by));
+        agent
+    }
+
+    #[test]
+    fn booking_chain_walks_launchers_and_parents_into_a_booked_chain() {
+        let booker = launched("booker", "lead");
+        let mut lead = crate::agents::AgentState::stub("claude", "lead", AgentStatus::Idle);
+        lead.parent_agent_id = Some(AgentSessionId::from("leader"));
+        lead.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        lead.launch_depth = Some(1);
+        lead.ended_at = Some(jiff::Timestamp::now());
+        let mut leader = launched("leader", "unbooked-launcher");
+        leader.loop_task = Some("booked".to_owned());
+        leader.loop_booked_by = vec![link("first-booker"), link("its-launcher")];
+        let mut unbooked = launched("unbooked-launcher", "never-read");
+        unbooked.loop_task = Some("unbooked".to_owned());
+        // A team member the fire launched: no `loop_task`, no `launched_by`, only the chain.
+        let mut member = crate::agents::AgentState::stub("claude", "member", AgentStatus::Idle);
+        member.loop_booked_by = vec![link("first-booker")];
+        let ids = |chain: Vec<crate::agents::LaunchedBy>| {
+            chain
+                .into_iter()
+                .map(|link| link.agent_id.to_string())
+                .collect::<Vec<_>>()
+        };
+        let agents = [booker.clone(), lead, leader.clone(), unbooked.clone()];
+
+        assert_eq!(
+            ids(booking_chain(&agents, &booker)),
+            ["booker", "lead", "leader", "first-booker", "its-launcher"],
+            "an ended parent is read, and a fired row's stamped chain ends the walk"
+        );
+        assert_eq!(
+            ids(booking_chain(&agents, &unbooked)),
+            ["unbooked-launcher", "never-read"],
+            "a row with no stamped chain walks on, and an unreadable row ends the walk"
+        );
+        assert_eq!(
+            ids(booking_chain(&agents, &member)),
+            ["member", "first-booker"]
+        );
+        let cycle = [launched("a", "b"), launched("b", "a")];
+        assert_eq!(ids(booking_chain(&cycle, &cycle[0])), ["a", "b"]);
+        let long = (0..40)
+            .map(|n| launched(&n.to_string(), &(n + 1).to_string()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids(booking_chain(&long, &long[0])),
+            (0..16).map(|n| n.to_string()).collect::<Vec<_>>()
+        );
     }
 
     fn owned_agent(

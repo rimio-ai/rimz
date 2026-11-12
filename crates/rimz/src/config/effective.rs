@@ -1053,6 +1053,7 @@ fn reject_project_task_state_fields(
             "takeover",
             "subscribe",
             "loop-task",
+            "booked-by",
         ] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
@@ -1077,6 +1078,7 @@ fn reject_project_task_state_fields(
                         "loop-task" => {
                             "resident subscription provenance is machine state; remove `loop-task`"
                         }
+                        "booked-by" => "booking provenance is machine state; remove `booked-by`",
                         _ => unreachable!("field list is fixed"),
                     },
                 });

@@ -243,6 +243,7 @@ impl workflow::AttemptHost for Host<'_> {
                     warn: Vec::new(),
                     grace: None,
                     loop_task: step.task,
+                    loop_booked_by: step.booked_by,
                     workflow: Some(step.workflow),
                     throttle_turn: step.throttle_turn,
                     reader: None,

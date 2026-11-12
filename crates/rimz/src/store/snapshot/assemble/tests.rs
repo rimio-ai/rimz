@@ -601,8 +601,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_agent_prior_turn_contract_is_version_96() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 96);
+fn snapshot_loop_booking_chain_contract_is_version_97() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 97);
+}
+
+#[test]
+fn pre_97_chainless_loop_launch_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(96);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose loop-fired rows carry no booking chain must refold"
+    );
 }
 
 #[test]

@@ -1700,6 +1700,10 @@ fn project_tasks_reject_machine_local_fields() {
             "[tasks.wait]\nagent = \"codex\"\nsignal = \"ci.failed\"\nwait-meta = { armed_by = { kind = \"human\" }, armed_at = \"2026-07-01T12:00:00Z\" }\n",
             "wait-meta",
         ),
+        (
+            "[tasks.wait]\nagent = \"codex\"\nevery = \"day\"\nat = \"08:00\"\nbooked-by = [{ kind = \"claude\", agent_id = \"launch_lead\" }]\n",
+            "booked-by",
+        ),
     ];
     for (text, field) in cases {
         let project = tempdir().expect("project");

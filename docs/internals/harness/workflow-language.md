@@ -130,6 +130,7 @@ Row fields after R41:
 - Strikes: `max-strikes`.
 - Start arguments: `prompt`, `prompt-file`, `fresh-worktree`, `give-up`, `capacity`.
 - Action: `workflow`, `[agent]`, `[command]`, or `wait` with `wait-meta`, `team`, `loop-task`.
+- Provenance: `booked-by`.
 
 Fields leaving the row (today's row is `crates/rimz/src/config/loop_.rs::TaskEntry`): `stay`, `takeover`, `check`, `check-timeout`, `judge`, `verify`, `max-attempts` and `on` go with the guards; `agent` as a string, `subscribe`, `notes`, `worktree`, `mode`, `effort`, `fast`, `budget`, `system-prompt-file`, `timeout`, `account`, `throttle` and `capacity-wait` each become a field of the inline node or a start argument.
 

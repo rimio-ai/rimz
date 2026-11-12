@@ -38,6 +38,9 @@ pub struct LeaderRun {
     pub warn: Vec<Duration>,
     pub grace: Option<Duration>,
     pub loop_task: Option<String>,
+    /// The booking chain of the loop fire behind a workflow step's launch, stamped on every
+    /// cell.
+    pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     pub reminder_section: Option<crate::harness::launch::ReminderSection>,
     pub throttle_turn: Option<crate::harness::throttle::Turn>,
@@ -307,6 +310,10 @@ fn open_fresh(
         request.launch.checkout.clone_from(&fresh.checkout);
         if let Some(leader) = &leader {
             request.launch.workflow.clone_from(&leader.workflow);
+            request
+                .launch
+                .loop_booked_by
+                .clone_from(&leader.loop_booked_by);
             if fresh.soft_name
                 && let AgentLaunchName::Explicit(name) = &request.name
             {
