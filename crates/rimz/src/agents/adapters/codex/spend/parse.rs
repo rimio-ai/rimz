@@ -266,9 +266,6 @@ pub(super) fn parse_codex_session(
         if state.excluded_helper {
             break;
         }
-        if line.is_empty() {
-            continue;
-        }
         match codex_line_kind(line) {
             Some(CodexLineKind::SessionMeta) => {
                 let Some(record) = decode_line(line) else {
@@ -330,9 +327,7 @@ pub(super) fn parse_codex_session(
             None => {}
         }
     }
-    if let Some(last) = out.last_mut()
-        && !state.pending_tool_calls.is_empty()
-    {
+    if let Some(last) = out.last_mut() {
         for (name, count) in std::mem::take(&mut state.pending_tool_calls) {
             let total = last.tool_calls.entry(name).or_default();
             *total = total.saturating_add(count);
