@@ -390,7 +390,7 @@ When the resolved isolation differs from what the session last ran under, stderr
 
 From the session's recorded directory inside the room, default placement takes over the current pane and returns to its existing shell on exit. From elsewhere it opens a focused tab. The configured placement policy still applies; `--bg` and agent callers keep focus, turning an in-place resume into a split instead. See [placement](#channel-worktree-and-placement).
 
-A closed session's record is retained for at least 14 days after it ended; `rimz agents list --all` and `rimz agents show @<name>` still find it. Resuming also needs its working directory and the provider's saved conversation. A resumable solo exit prints `resume with rimz agents resume @<name>`, naming that exact session rather than matching a newer one by profile.
+A closed session's record is retained for at least 14 days after it ended; `rimz agents list --all --filter live=no` and `rimz agents show @<name>` still find it. Resuming also needs its working directory and the provider's saved conversation. A resumable solo exit prints `resume with rimz agents resume @<name>`, naming that exact session rather than matching a newer one by profile.
 
 ### Continue a cohort
 
@@ -595,6 +595,7 @@ The scaffold holds the manifest, a setup guide, the canonical forwarding shim, a
 rimz agents list                         # root-agent cards, current channel
 rimz agents list '#auth-refresh'         # one lane's cards
 rimz agents list --all                   # every channel in the room
+rimz agents list --filter 'parent=*,none' -q # roots and launched children, one address each
 rimz agents show swift-otter --capture   # full report plus the pane's visible text
 rimz agents logs swift-otter -f          # follow the transcript
 rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
@@ -613,7 +614,7 @@ rimz agents tune @coder keep-warm off    # release this session's idle cache hol
 
 | Verb | Acts on | Does |
 | --- | --- | --- |
-| `list` (aliases `ls`, `ps`) | the current channel; a scope; `--all` for the room | attention-ordered agent cards |
+| `list` (aliases `ls`, `ps`) | the current channel; a scope; `--all` for the room; `--filter` narrows | attention-ordered agent cards |
 | `show` (alias `inspect`) | one agent, live or stopped | full report: activity, context, placement, run, messages, transcript tail |
 | `logs` | one agent | transcript tail; `-f` follows |
 | `history` | one agent, live or stopped | per-turn duration, tokens, cost, and outcome |
@@ -673,7 +674,7 @@ rimz agents mark '#review' alert "Check the result"
 
 #### `list`
 
-`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards, scoped to the current channel. Groups holding asks or failures lead by urgency, then the main checkout. Other groups put unlanded work before landed work, then sort by newest agent launch within each set, [as in the sidebar](../../guide/sidebar.md#how-the-column-is-ordered), without a fold partition. Landed facts come from the published sidebar snapshot. Cards within each group keep their attention order, without the sidebar's cohort blocks or workflow-owner section. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Listing needs the verb: bare `rimz agents` and `rimz agents '#auth'` refuse with exit 2 and print the `list` command that would run, carrying over `--all`, `--json`, `-w NAME`, and the scope; bare `rimz agents` follows it with the [orientation](#agent-control-cli). It needs a live room: enter one with `rimz start` or `rimz attach`. When nothing live matches, `list` says why instead of printing an empty table: a named scope that is no lane at all (by the rule [`resume`](#resume-a-lane-by-place) uses) fails with exit 1 and `no lane '#x' in this workspace; lanes: …`, naming up to eight known lanes freshest first, while a real lane with no live agent, including the current channel, prints `no live agents in '#x'; reopen closed ones with rimz agents resume '#x'`, and `--all` prints `no live agents in this room`, both with exit 0. With `--json` an unknown lane prints only the error, and an empty one prints `{"schema": 1, "agents": []}`.
+`rimz agents list [SCOPE] [--filter QUERY]... [-q]` prints the room's pane-backed root agents as cards, scoped to the current channel; a [filter](#filter-the-list) can select launched children and closed sessions too, in the same columns. Groups holding asks or failures lead by urgency, then the main checkout. Other groups put unlanded work before landed work, then sort by newest agent launch within each set, [as in the sidebar](../../guide/sidebar.md#how-the-column-is-ordered), without a fold partition. Landed facts come from the published sidebar snapshot. Cards within each group keep their attention order, without the sidebar's cohort blocks or workflow-owner section. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Listing needs the verb: bare `rimz agents` and `rimz agents '#auth'` refuse with exit 2 and print the `list` command that would run, carrying over `--all`, `--json`, `-w NAME`, and the scope; bare `rimz agents` follows it with the [orientation](#agent-control-cli). It needs a live room: enter one with `rimz start` or `rimz attach`. When nothing live matches, `list` says why instead of printing an empty table: a named scope that is no lane at all (by the rule [`resume`](#resume-a-lane-by-place) uses) fails with exit 1 and `no lane '#x' in this workspace; lanes: …`, naming up to eight known lanes freshest first, while a real lane with no live agent, including the current channel, prints `no live agents in '#x'; reopen closed ones with rimz agents resume '#x'`, and `--all` prints `no live agents in this room`, both with exit 0. With `--json` an unknown lane prints only the error, and an empty one prints `{"schema": 2, "agents": []}`. A [filter](#filter-the-list) that matches nothing prints `no agent in '#<lane>' matches the filter`, or `no agent in this room matches the filter`, with no resume command, since an empty match says nothing about closed sessions; `-q` prints nothing.
 
 ```console
 $ rimz agents list
@@ -692,7 +693,7 @@ HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
   wire up the refresh-token path
 ```
 
-The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, including a parent whose current child of either origin waits or whose provider-native child fails, using the sidebar's rule. Everything except attention, running, or sleeping counts as `at rest`. The `needs you` block lists paste-ready addresses, status, age, and ask summaries or pause/failure reasons, oldest first. Age is the open ask's age while awaiting input, otherwise time since the card's last activity.
+The summary counts agents, lanes, and states in the selected scope. Zero state counts are omitted; waiting, failed, and paused cards count as `needs you`, including a parent whose current child of either origin waits or whose provider-native child fails, using the sidebar's rule. Everything except attention, running, or sleeping counts as `at rest`. A closed session's row (`live=no`) counts as `at rest` whatever its status, since nothing can be answered in a closed pane. The `needs you` block lists paste-ready addresses, status, age, and ask summaries or pause/failure reasons, oldest first. Age is the open ask's age while awaiting input, otherwise time since the card's last activity.
 
 Cards group by place and channel, using the sidebar's rule. `⑂` marks a checkout group and every named lane, which groups at its lane's checkout; a foreign checkout's own lane groups by its home path, listed or not. Only a channel from a record that carries no lane keeps `#`, unless a listed worktree's marker names it. A non-repo room's root has a bare label. A checkout group's header names its lane, then a dim `· <branch>` when the checkout's branch differs from that label, the sidebar's last-known branch or else the one its agents reported. An agent's git root outside this project and its listed worktrees adds a dim `· <repo folder>` chip unless that repeats the label, and labels that collide add the sidebar's qualifier, the shortest path suffix that tells the checkouts apart (`· a/dotfiles`); an agent with no known place or channel collects under `external`. When the displayed label is not a selector for the group, the header adds `· #<channel>`. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
 
@@ -721,7 +722,51 @@ Under each row, the sidebar's description rule chooses the error reason, first w
 
 The status is derived for display. Codex launched in `auto` mode shows `running` with no blocking ask during its first 60 seconds of automatic permission review, then `waiting` if the ask is still open; a rollout-proven finish of the asking Code Mode cell closes the ask and keeps `running`; questions and plan approvals remain immediate ([limits](../../internals/agents/adapter_codex.md#asks-and-answers)). [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`, except that an in-review or asking-cell-settled permission matches `running`. An unsettled permission's `waiting` dwell starts at the 60-second visibility instant. Hibernation does not change the displayed status. `show` adds the turn phase and, whenever a hibernation record exists, `hibernating since <t>, step <k> of <n>, <bytes> reclaimed` (cumulative bytes for this frozen stretch).
 
-`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, `model.tier`, and a child's `tokens` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+##### Filter the list
+
+`--filter QUERY` narrows the listed rows, and `-q, --quiet` prints one address per row and nothing else. Each `-q` address is the shortest that resolves back to that one agent through the resolver the agent commands use, a closed session included; `-q` conflicts with `--json`. Every agent with an address can be a row: a pane-backed root (team seats included), a launched child, and a closed session from the audit record. A provider-native child has no row.
+
+```sh
+rimz agents list --filter 'status=waiting,failed'      # attention only
+rimz agents list --filter 'parent=*'                   # launched children, no roots
+rimz agents list --filter 'parent=@coder' -q           # @coder's children, one address each
+rimz agents list --all --filter 'live=no'              # closed sessions in the room
+rimz agents list --filter 'lane=*' --filter 'ctx>=80%' # the room's nearly full contexts
+rimz agents list --filter help                         # the field table
+```
+
+A query is terms separated by spaces, each `<field><op><value>[,<value>...]`. Repeated `--filter` flags and the terms of one query all must match. Under `=` a term matches when any of its values does; under `!=` when none does. `>`, `>=`, `<`, and `<=` take one value and only the ordered fields. Field names and enum values are case-insensitive. Quote a value holding a space, comma, or quote as a JSON string (`name="my agent"`). `none` matches a missing value and `*` any present one, so `error=none` and `error!=rate-limit` both match a row with no error, and `ctx>50%` never matches a row with no context reading. A text value takes `*` as a wildcard anywhere in it. `=` and `!=` on `age`, `ctx`, `tokens`, and `cost` compare the exact value, not the unit the table prints, so `age=5m` matches only a row idle exactly 300 seconds; a range (`age>=5m age<6m`) matches what the table shows. `--filter help` prints the field table below and exits 0.
+
+Without a filter, `list` shows live, top-level agents in its scope. A term naming `live` replaces the `live=yes` default, one naming `parent` replaces the top-level default (`parent=none`), and one naming `lane` replaces the current-lane default, so `lane=*` covers the room. An explicit scope (`SCOPE`, `-w`, `--all`) applies first, and a filter never widens it. Closed sessions are read only when a `live` term can match `no`; a failed audit read fails the command.
+
+| Field | Type | Holds |
+| --- | --- | --- |
+| `name` | text | The agent's name. |
+| `handle` | text | The `HANDLE` address; a leading `@` is optional, and a value without `#lane` ignores the address's lane. |
+| `profile` | text | The launch profile. |
+| `kind` | text | The provider kind. |
+| `account` | text | The named login, or `default`. |
+| `model` | text | The model id. |
+| `lane` | address | The agent's lane, matched by the rule `SCOPE` uses; a value with `*` compares the lane label. |
+| `team` | address | The team name, optionally `team#lane`. |
+| `role` | text | The team role. |
+| `parent` | address | The launching agent's address; a value without `*` resolves as an address and must name the parent. |
+| `status` | enum | The `STATUS` column: `running`, `waiting`, `idle`, `success`, `failed`, `paused`, `sleeping`. |
+| `error` | enum | The turn error class: `rate-limit`, `spend-limit`, `overloaded`, `not-entitled`, `failed`, `unknown`, or `none`. It is independent of `status`: a child parked on a rate limit keeps `rate-limit` once it shows `failed`, and a budget park is `paused` with `error=none`. |
+| `live` | enum | `yes` while the agent has a live pane, `no` for an ended or closed session. |
+| `age` | duration | The `AGE` column, as `30s`, `5m`, `1h`, or `2d`. |
+| `ctx` | percent | The `CTX` column, as `80` or `80%`. |
+| `tokens` | size | The `TOKENS` column, as `500`, `100k`, `2M`, or `1B`. |
+| `cost` | dollars | The card's cost, as `1.50` or `$1.50`. A root's cost includes its pane-backed children. A launched child has no card of its own, so its `cost` is `none` and a sum of `cost` across rows counts its spend once, inside its parent's. |
+
+A malformed query refuses with exit 2 and names the term: an empty filter, a term with no operator or no field, an empty value (`name=a,`), an unterminated quote, an unknown field (with the nearest name), an enum value outside its set (with the valid values), an ordering operator on an unordered field, a value that does not parse as its field's type, or more than one value under a comparison.
+
+```console
+$ rimz agents list --filter stauts=idle
+error: filter term `stauts=idle`: unknown field `stauts`; did you mean `status`?
+```
+
+`--json` emits `{"schema":2,"agents":[...]}`, one entry per listed row. Each entry carries the field table's 17 keys, with `null` for a missing value, beside the card the table renders, not the store's provider-shaped record. `age` is whole seconds, `ctx` a whole percent, `tokens` a count, and `cost` dollars. A launched child is its own entry with `parent` set. `login`, `checkout`, `add_dirs`, `untrusted_checkout`, `idle_stop`, `hibernation`, and `model_detail.tier` are omitted when unset; every other key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
 | Field | Contents |
 | --- | --- |
@@ -735,19 +780,19 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 | `hibernation` | `frozen_at`, `step`, and cumulative `reclaimed_bytes`; present whenever a hibernation record exists, regardless of displayed status. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order, followed by any OpenCode model-pick notice; empty after a clean launch. |
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
-| `model` | `id`, `effort`, `fast` (always a boolean), and the glyph-free rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
+| `model_detail` | `id`, `effort`, `fast` (always a boolean), and the glyph-free rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
 | `context` | `fill_pct`, `used_tokens`, `window`, `capacity`, `severity`, `compactions` (completed), and `compacting` (in progress). `capacity` is the label's published size, falling back to the usable `window`, and is present whenever `window` is. `severity` follows the configured context-meter scale; `fill_pct`, `used_tokens`, and `window` remain usable-window-based. |
 | `stats` | The token split (`total_tokens`, `fresh_input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`); `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
 | `timeline` | UTC timestamps: `registered_at`, `turn_started_at`, `last_activity` (real activity), `last_seen` (liveness), and `idle_since` (the displayed `AGE` origin, always present). |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. Inspect or change the cap with [`tune … budget`](#tune). |
-| `sub_agents` | Nested children, each with `id`, `name`, `status`, `phase`, `model`, optional `tokens`, and `elapsed_secs`. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
+| `sub_agents` | `show --json` only (a launched child is its own `list` entry): nested children, each with `id`, `name`, `status`, `phase`, `model`, optional `tokens`, and `elapsed_secs`. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
 
 #### `show` / `inspect`
 
 `rimz agents show <REF>` leads with identity, state, and the shared card description, followed by Run, Messages, Recent transcript, Context, and Identity. Optional sections appear only when present; Capture is last with `--capture`. It works for live agents and for stopped ones still in the audit record. To see what an agent would launch or restart with, use [`explain`](#explain-a-launch).
 
-The identity line's model names its launch tier when stamped. If routing moved it, the model also lists every passed entry and its reason, including full build errors. The same stamp appears under `model.tier` in both `show --json` and `list --json`.
+The identity line's model names its launch tier when stamped. If routing moved it, the model also lists every passed entry and its reason, including full build errors. The same stamp appears under `model.tier` in `show --json` and `model_detail.tier` in `list --json`.
 
 The state line shows the phase and `last request` age, using the same origin as `list`'s `AGE`, plus the turn duration while running. Waiting cards include the ask summary and the next supported answer command, or `rimz agents focus` for a pane-only prompt, even when no ask was recorded. A live Run shows its elapsed duration without an exit code; a terminal one shows its result, exit code, and completed duration.
 
