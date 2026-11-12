@@ -485,25 +485,23 @@ fn host_reconcile_under_a_held_lock_only_derives_and_opens_next_pass() {
 }
 
 /// An unlanded group quiet past the archive window whose only needs-a-look row
-/// has no episode yet: the final-fold order decides its `inactive`.
+/// has no episode yet: only the bit the final fold writes keeps it active.
 fn quiet_unlanded_success() -> SidebarSnapshot {
     let quiet_ms = jiff::Timestamp::now().as_millisecond() - 2 * 86_400_000;
     snapshot(vec![row("done", AgentStatus::Success, quiet_ms)])
 }
 
 #[test]
-fn attention_sorts_on_enrichment_bits_before_unread_writes_its_own() {
-    let (_dir, ordered_runtime) = runtime();
-    let mut snapshot = quiet_unlanded_success();
-    crate::sidebar::engine::reconcile_final_fold(&ordered_runtime, &mut snapshot);
-    assert!(snapshot.worktree_groups[0].inactive.is_some());
-    assert!(snapshot.worktree_groups[0].rows[0].unread);
+fn a_final_fold_judges_group_inactivity_on_the_unread_bits_it_writes() {
+    let mut read = quiet_unlanded_success();
+    read.sort_groups_for_presentation();
+    assert!(read.worktree_groups[0].inactive.is_some());
 
-    let (_swapped_dir, swapped_runtime) = runtime();
-    let mut swapped = quiet_unlanded_success();
-    reconcile_snapshot(&swapped_runtime, &mut swapped);
-    crate::sidebar::attention::reconcile_snapshot(&swapped_runtime, &mut swapped);
-    assert!(swapped.worktree_groups[0].inactive.is_none());
+    let (_dir, runtime) = runtime();
+    let mut snapshot = quiet_unlanded_success();
+    crate::sidebar::engine::reconcile_final_fold(&runtime, &mut snapshot);
+    assert!(snapshot.worktree_groups[0].rows[0].unread);
+    assert!(snapshot.worktree_groups[0].inactive.is_none());
 }
 
 #[test]
