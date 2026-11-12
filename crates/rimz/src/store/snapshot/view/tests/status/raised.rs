@@ -80,6 +80,79 @@ fn alerts_override_work_and_results_but_native_waiting_wins() {
 }
 
 #[test]
+fn native_wait_marker_wins_before_the_alert_overlay_writes_anything() {
+    // A permission under automatic review seeds the card `running`, so the
+    // row's own native-wait rung, not a held wait, decides it.
+    let mut state = agent("codex", "alerted", AgentStatus::Waiting, 0)
+        .worktree("/repo/main")
+        .active_ago(50)
+        .settle(10, TurnSettleOutcome::NativeWait);
+    state.mode = Some(crate::agents::PermissionMode::Auto);
+    state.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: None,
+        native_key: None,
+        since: ago(50),
+    });
+    state.alert = Some(CardAlert {
+        text: "Please check the result".into(),
+        raised_at: ago(1),
+        raised_by: None,
+    });
+    let seed = crate::store::snapshot::AgentCard::from_agent(&state, epoch());
+    assert_eq!(
+        (seed.status, seed.phase),
+        (AgentStatus::Running, TurnPhase::Reasoning)
+    );
+    let snapshot = room_with_agent_panes(vec![state]);
+    let row = row(&snapshot, "alerted");
+    assert_eq!(row.status(), Some(AgentStatus::Waiting));
+    assert_eq!(row.phase(), TurnPhase::Idle);
+    let card = row.as_agent().unwrap();
+    assert_eq!(card.turn_error_label, seed.turn_error_label);
+    assert_eq!(card.overlay_raised_at, None);
+}
+
+#[test]
+fn raised_attention_clock_is_the_later_of_the_ask_and_the_rest() {
+    // (status, opened_at, raised_at, turn_ended_at, completion marker, expected)
+    for (status, opened, raised_at, ended, marker, expected) in [
+        (AgentStatus::Idle, Some(20), 10, None, None, 20),
+        (AgentStatus::Idle, None, 10, None, None, 10),
+        (AgentStatus::Idle, Some(20), 10, Some(5), None, 5),
+        (AgentStatus::Idle, Some(20), 10, Some(30), None, 20),
+        (AgentStatus::Idle, Some(5), 1, Some(5), None, 5),
+        (AgentStatus::Running, Some(20), 10, None, Some(5), 5),
+        (AgentStatus::Running, Some(20), 10, Some(8), Some(5), 5),
+        (AgentStatus::Running, Some(20), 10, Some(3), Some(5), 3),
+    ] {
+        let mut state = agent("claude", "raised", status, 0)
+            .worktree("/repo/main")
+            .active_ago(100);
+        if let Some(marker) = marker {
+            state = state.settle(marker, TurnSettleOutcome::Complete);
+        }
+        state.turn_ended_at = ended.map(ago);
+        state.raised_ask = Some(RaisedAsk {
+            opened_at: opened.map(ago),
+            raised_at: ago(raised_at),
+            ..raised()
+        });
+        let snapshot = room_with_agent_panes(vec![state]);
+        let row = row(&snapshot, "raised");
+        let case = format!("{status:?} opened {opened:?} ended {ended:?} marker {marker:?}");
+        assert_eq!(row.status(), Some(AgentStatus::Waiting), "{case}");
+        assert_eq!(
+            row.as_agent().unwrap().overlay_raised_at,
+            Some(ago(expected)),
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn an_old_raised_row_stays_actionable_instead_of_sinking() {
     let mut state = agent("claude", "old", AgentStatus::Idle, 0)
         .worktree("/repo/main")

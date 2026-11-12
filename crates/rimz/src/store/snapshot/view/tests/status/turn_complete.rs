@@ -75,3 +75,33 @@ fn turn_error_outranks_completion_marker() {
         "the failure keeps the upstream reason on the card"
     );
 }
+
+#[test]
+fn budget_park_outranks_completion_and_background_park() {
+    let park = crate::agents::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::agents::BudgetWindow::Session,
+        at: epoch(),
+        scope: crate::agents::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+        reset_window: None,
+    };
+    let mut completed = agent("codex", "completed", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .settle(10, TurnSettleOutcome::Complete);
+    completed.budget_park = Some(park.clone());
+    let mut parked = agent("codex", "parked", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .parked();
+    parked.budget_park = Some(park.clone());
+
+    let snapshot = room_with_agent_panes(vec![completed, parked]);
+    for id in ["completed", "parked"] {
+        let row = row(&snapshot, id);
+        assert_eq!(row.status(), Some(AgentStatus::Paused), "{id}");
+        assert_eq!(row.turn_error_label(), Some(park.label().as_str()), "{id}");
+    }
+}

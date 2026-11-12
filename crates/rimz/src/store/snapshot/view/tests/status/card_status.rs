@@ -220,3 +220,50 @@ fn card_and_reader_agree_on_pausing_rows() {
         );
     }
 }
+
+#[test]
+fn promoted_child_row_without_a_source_settles_on_its_own_card() {
+    // A launched child whose parent has no row is promoted to a top-level card,
+    // and the projection finds no source agent for it.
+    let promoted = |status: AgentStatus| {
+        let mut child = agent("claude", "child-1", status, 1_000)
+            .worktree("/repo/child")
+            .in_pane("%2");
+        child.parent_agent_id = Some("parent-gone".into());
+        child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        child.launch_depth = Some(1);
+        child
+    };
+    let project = |child: AgentState| {
+        let snapshot = room(vec![child]).with_live_panes_and_provider_capacities(
+            vec![pane("%2", "claude", "/repo/child")],
+            None,
+            &provider_capacity("claude", vec![unprojectable_spent_window(-60)]),
+        );
+        let row = row(&snapshot, "child-1");
+        (row.status(), row.turn_error_label().map(str::to_owned))
+    };
+
+    let interrupted = promoted(AgentStatus::Waiting).settle(10, TurnSettleOutcome::Interrupted);
+    assert_eq!(project(interrupted).0, Some(AgentStatus::Idle));
+
+    // The spent window would demote a sourced pause to failed.
+    let paused = promoted(AgentStatus::Running).paused_turn_error(10, "rate limited");
+    assert_eq!(
+        project(paused),
+        (Some(AgentStatus::Paused), Some("rate limited".to_owned()))
+    );
+
+    let mut budgeted = promoted(AgentStatus::Running);
+    budgeted.budget_park = Some(crate::agents::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::agents::BudgetWindow::Session,
+        at: epoch(),
+        scope: crate::agents::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+        reset_window: None,
+    });
+    assert_eq!(project(budgeted), (Some(AgentStatus::Running), None));
+}

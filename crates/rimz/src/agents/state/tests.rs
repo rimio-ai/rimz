@@ -1525,6 +1525,55 @@ fn effective_status_settles_background_park_to_success() {
 }
 
 #[test]
+fn settle_marker_tied_with_last_activity_admits_no_outcome() {
+    for outcome in [
+        TurnSettleOutcome::Complete,
+        TurnSettleOutcome::Interrupted,
+        TurnSettleOutcome::PlanProposed,
+        TurnSettleOutcome::NativeWait,
+    ] {
+        let context = context_settle(Some(1_000), outcome);
+        let at = Timestamp::from_second(1_000).unwrap();
+        let earlier = Timestamp::from_second(999).unwrap();
+        assert_eq!(
+            settled_outcome(AgentStatus::Running, Some(&context), at),
+            None,
+            "{outcome:?} at the activity instant"
+        );
+        assert_eq!(
+            settled_outcome(AgentStatus::Running, Some(&context), earlier),
+            Some(outcome),
+            "{outcome:?} past the activity instant"
+        );
+    }
+}
+
+#[test]
+fn budget_park_outranks_completion_and_background_park() {
+    let now = Timestamp::from_second(2_000).unwrap();
+    let park = BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 6.0,
+        window: BudgetWindow::Day,
+        at: Timestamp::from_second(1_000).unwrap(),
+        scope: BudgetScope::Fleet,
+        account_kind: None,
+        resets_at: None,
+        reset_window: None,
+    };
+    let mut completed = test_agent(AgentStatus::Running, 1_000);
+    completed.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Complete));
+    assert_eq!(completed.effective_status(now), AgentStatus::Success);
+    completed.budget_park = Some(park.clone());
+    assert_eq!(completed.effective_status(now), AgentStatus::Paused);
+
+    let mut parked = test_agent(AgentStatus::Running, 1_000);
+    parked.phase = TurnPhase::Parked;
+    parked.budget_park = Some(park);
+    assert_eq!(parked.effective_status(now), AgentStatus::Paused);
+}
+
+#[test]
 fn budget_park_serializes_verbatim_in_persisted_state() {
     let at = Timestamp::from_second(1_000).unwrap();
     let mut agent = test_agent(AgentStatus::Running, 1_000);
