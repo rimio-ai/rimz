@@ -471,6 +471,27 @@ fn process_rows_interleave_calm_cards_by_stamp_and_break_ties_after_cards() {
 }
 
 #[test]
+fn process_rows_draw_newest_activity_first_and_break_ties_by_pane_order() {
+    let actual =
+        [(epoch(), ago(1)), (epoch(), epoch())].map(|(second_activity, first_activity)| {
+            let mut snapshot =
+                room_with_agent_panes(vec![agent_in("calm", "/repo/main", AgentStatus::Idle, 0)]);
+            let rows = [("%2", second_activity), ("%1", first_activity)].map(|(id, activity)| {
+                let mut row = process_row(id, "/repo/main");
+                row.last_activity = activity;
+                row
+            });
+            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows = rows.to_vec().into();
+            snapshot.sort_groups_for_presentation();
+            snapshot
+                .rows()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        });
+    assert_eq!(actual, [vec!["%2", "%1"], vec!["%1", "%2"]]);
+}
+
+#[test]
 fn process_rows_follow_asks_and_failures_but_lead_older_calm_cards() {
     let mut snapshot = room_with_agent_panes(vec![
         agent_in("ask", "/repo/main", AgentStatus::Waiting, 0),
