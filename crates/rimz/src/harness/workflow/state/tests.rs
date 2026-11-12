@@ -63,6 +63,9 @@ fn inspection_timeout_uses_the_node_entry_time() {
         super::super::timeout_at(&spec(), &record).unwrap(),
         Some(record.entered_at + jiff::SignedDuration::from_hours(1)),
     );
+    let mut spec = spec();
+    spec.edit(|spec| spec.checks.get_mut("pr").unwrap().timeout = Some("soon".into()));
+    assert!(super::super::timeout_at(&spec, &record).is_err());
 }
 
 #[test]

@@ -62,7 +62,7 @@ fn command_notes_warn_and_wrong_typed_optional_notes_are_ignored() {
         );
         let spec = crate::harness::workflow::spec::parse(&text).unwrap();
         actual.push(
-            spec.ignored
+            spec.ignored()
                 .iter()
                 .map(|issue| (issue.path.clone(), issue.message.contains("unknown field")))
                 .collect::<Vec<_>>(),

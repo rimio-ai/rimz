@@ -25,10 +25,11 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
     if attempt.lifecycle != StepLifecycle::Until || attempt.judged.as_ref() == Some(&turn.end) {
         return Ok(false);
     }
-    let check = t.spec.steps[&attempt.node]
-        .then
-        .first()
-        .cloned()
+    let check = t
+        .spec
+        .step(&attempt.node)
+        .and_then(|step| step.then().first())
+        .map(|check| check.as_str().to_owned())
         .ok_or_else(|| {
             WorkflowErr::Refused(format!(
                 "steps.{}.then: an until step requires a then check",
@@ -184,7 +185,10 @@ pub(super) fn prepare(
             .get("key")
             .and_then(|key| serde_json::from_value(key.clone()).ok());
         t.record.input = Some(verdict.object.clone());
-        let step = &t.spec.steps[&t.record.node];
+        let step = t
+            .spec
+            .step(&t.record.node)
+            .expect("a held session sits at its step");
         if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
             let route = t.cap_route(bound, visits, max);
             t.stage_agent_end(

@@ -31,7 +31,7 @@ for = "2m"
             report.errors.is_empty() && report.warnings.is_empty(),
             "{report:?}"
         );
-        load(&dir).unwrap().checks["pr"]
+        load(&dir).unwrap().authored().checks["pr"]
             .cases
             .iter()
             .map(|case| {
@@ -425,7 +425,7 @@ fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
             vec![],
         ),
     ] {
-        let check: Check = toml::from_str(&format!(
+        let check: super::spec::Check = toml::from_str(&format!(
             "else='pending'\n[[cases]]\nwhen=['{terms}']\noutcome='ready'\n"
         ))
         .unwrap();

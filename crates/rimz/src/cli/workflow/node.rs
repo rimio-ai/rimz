@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-use rimz::harness::when::WhenExpr;
-use rimz::harness::workflow::{Check, CheckKind, Edge, Fireability, Step, StepKind};
+use rimz::harness::workflow::{Edge, Fireability, Kind, Node};
 use rimz::store::workflow::StepLifecycle;
 
 use super::*;
@@ -10,33 +9,26 @@ use super::*;
 pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<()> {
     let spec = definition::load(definition)?;
     let name = definition.name();
-    let check = spec.checks.get(node);
-    let step = spec.steps.get(node);
+    let check = spec.check(node);
+    let step = spec.step(node);
+    let runner = |node: &Node| match node.kind() {
+        Some(Kind::Run(_)) => "run",
+        Some(Kind::Shell(_)) => "shell",
+        Some(Kind::Judge(_) | Kind::Agent(_)) => "agent",
+        Some(Kind::Condition(_)) => "condition",
+        Some(Kind::Sleep(_)) => "sleep",
+        Some(Kind::Message(_)) => "message",
+        None => "invalid runner",
+    };
     let (kind, runner, summary) = if let Some(check) = check {
-        let runner = match check.kind() {
-            Some(CheckKind::Run(_)) => "run",
-            Some(CheckKind::Shell(_)) => "shell",
-            Some(CheckKind::Agent(_)) => "agent",
-            Some(CheckKind::Condition) => "condition",
-            Some(CheckKind::Sleep) => "sleep",
-            None => "invalid runner",
-        };
-        ("check", runner, &check.summary)
+        ("check", runner(check), check.summary())
     } else if let Some(step) = step {
-        let runner = match step.kind() {
-            Some(StepKind::Run(_)) => "run",
-            Some(StepKind::Shell(_)) => "shell",
-            Some(StepKind::Agent(_)) => "agent",
-            Some(StepKind::Message(_)) => "message",
-            None => "invalid runner",
-        };
-        ("step", runner, &step.summary)
+        ("step", runner(step), step.summary())
     } else {
         let nodes = spec
-            .checks
-            .keys()
-            .chain(spec.steps.keys())
-            .cloned()
+            .checks()
+            .chain(spec.steps())
+            .map(|(name, _)| name.clone())
             .collect::<BTreeSet<_>>();
         bail!(
             "unknown node {node} in {name}; nodes: {}",
@@ -58,10 +50,10 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
     writeln!(out)?;
     let mut facts = render::KeyVals::new();
     let mut from = Vec::new();
-    if spec.workflow.start == node {
+    if spec.start() == node {
         from.push("workflow start".into());
     }
-    for source in spec.checks.keys().chain(spec.steps.keys()) {
+    for (source, _) in spec.checks().chain(spec.steps()) {
         for edge in spec.edges(source) {
             if edge.target.as_str() == node && edge.fires != Fireability::Never {
                 from.push(format!(
@@ -82,7 +74,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
             from.join(", ")
         }),
     );
-    if let Some(check) = spec.check(node) {
+    if let Some(check) = check {
         let wakes = check
             .subscriptions()?
             .into_iter()
@@ -104,7 +96,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
         wakes.push("the minute tick".into());
         facts.push("wakes on", render::cell(wakes.join(", ")));
     }
-    if let Some(step) = spec.step(node) {
+    if let Some(step) = step {
         let receives = step
             .subscription_labels()?
             .into_iter()
@@ -117,7 +109,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
     facts.render(&mut out)?;
     let edges = spec.edges(node);
     if let Some(check) = check
-        && !check.cases.is_empty()
+        && !check.listed_cases().is_empty()
     {
         let walk = spec.walk();
         let order = walk
@@ -169,32 +161,31 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
     Ok(())
 }
 
-fn cases(out: &mut impl Write, check: &Check, edges: &[Edge], note: Option<&str>) -> Result<()> {
+fn cases(out: &mut impl Write, check: &Node, edges: &[Edge], note: Option<&str>) -> Result<()> {
     writeln!(
         out,
         "\ncases:{}",
         note.map(|note| format!(" {note}")).unwrap_or_default()
     )?;
-    for (index, case) in check.cases.iter().enumerate() {
+    for (index, case) in check.listed_cases().iter().enumerate() {
         let target = edges
             .iter()
             .find(|edge| edge.outcome == case.outcome)
             .map(|edge| format!("{}{}", edge.target, rail::after(edge)))
             .unwrap_or_else(|| "unmapped".into());
         let hold = case
-            .hold
-            .as_ref()
-            .map(|hold| format!(" for {hold}"))
+            .hold()
+            .map(|hold| format!(" for {}", hold.text()))
             .unwrap_or_default();
         writeln!(
             out,
             "  {}  {}{hold}  {} → {target}",
             index + 1,
-            WhenExpr::parse(&case.when)?,
+            case.when().expression().map_err(Clone::clone)?,
             case.outcome
         )?;
     }
-    if let Some(outcome) = &check.else_outcome {
+    if let Some(outcome) = check.else_outcome() {
         let target = edges
             .iter()
             .find(|edge| edge.outcome == *outcome)
@@ -217,61 +208,70 @@ fn field(facts: &mut render::KeyVals, key: &str, value: Option<impl Display>) {
     }
 }
 
-fn check_facts(facts: &mut render::KeyVals, check: &Check) {
-    field(facts, "sleep", check.sleep.as_ref());
+fn check_facts(facts: &mut render::KeyVals, check: &Node) {
+    field(facts, "sleep", check.sleep());
     field(
         facts,
         "when",
-        check
-            .when
-            .as_ref()
-            .and_then(|when| WhenExpr::parse(when).ok()),
+        check.when().and_then(|when| when.expression().ok()),
     );
-    field(facts, "for", check.hold.as_ref());
-    field(facts, "run", check.run.as_ref());
-    field(facts, "shell", check.shell.as_ref());
-    field(facts, "agent", check.agent.as_ref());
-    field(facts, "prompt-file", check.prompt_file.as_ref());
-    field(facts, "window", check.window.as_ref());
-    field(facts, "timeout", check.timeout.as_ref());
-    field(facts, "provider", check.provider.as_ref());
-    field(facts, "account", check.account.as_ref());
+    field(facts, "for", check.hold());
+    field(facts, "run", check.run());
+    field(facts, "shell", check.shell());
+    field(facts, "agent", check.agent());
+    field(facts, "prompt-file", check.prompt_file());
+    field(facts, "window", check.window().map(|window| window.text()));
+    field(
+        facts,
+        "timeout",
+        check.timeout().map(|timeout| timeout.text()),
+    );
+    field(facts, "provider", check.provider());
+    field(facts, "account", check.account());
 }
 
-fn step_facts(facts: &mut render::KeyVals, step: &Step) {
-    field(facts, "run", step.run.as_ref());
-    field(facts, "shell", step.shell.as_ref());
-    field(facts, "agent", step.agent.as_ref());
-    field(facts, "message", step.message.as_ref());
-    field(facts, "prompt-file", step.prompt_file.as_ref());
+fn step_facts(facts: &mut render::KeyVals, step: &Node) {
+    field(facts, "run", step.run());
+    field(facts, "shell", step.shell());
+    field(facts, "agent", step.agent());
+    field(facts, "message", step.message());
+    field(facts, "prompt-file", step.prompt_file());
     field(
         facts,
         "lifecycle",
-        matches!(step.kind(), Some(StepKind::Agent(_))).then(|| match step.lifecycle() {
+        matches!(step.kind(), Some(Kind::Agent(_))).then(|| match step.lifecycle() {
             StepLifecycle::Turn => "turn",
             StepLifecycle::Stay => "stay",
             StepLifecycle::Until => "until",
         }),
     );
-    field(facts, "takeover", step.takeover);
-    field(facts, "share", step.share);
-    field(facts, "keep", step.keep);
-    field(facts, "window", step.window.as_ref());
-    field(facts, "timeout", step.timeout.as_ref());
+    field(facts, "takeover", step.takeover());
+    field(facts, "share", step.share());
+    field(facts, "keep", step.keep());
+    field(facts, "window", step.window().map(|window| window.text()));
+    field(
+        facts,
+        "timeout",
+        step.timeout().map(|timeout| timeout.text()),
+    );
     field(
         facts,
         "throttle",
-        step.throttle.map(|throttle| match throttle {
+        step.throttle().map(|throttle| match throttle {
             rimz::config::ThrottleSwitch::On => "on",
             rimz::config::ThrottleSwitch::Off => "off",
         }),
     );
-    field(facts, "limit", step.limit.as_ref().map(limit_text));
-    field(facts, "capacity-wait", step.capacity_wait.map(String::from));
-    field(facts, "max-visits", step.max_visits);
+    field(facts, "limit", step.limit().map(limit_text));
+    field(
+        facts,
+        "capacity-wait",
+        step.capacity_wait().map(String::from),
+    );
+    field(facts, "max-visits", step.max_visits());
     field(
         facts,
         "max-visits-per-outcome",
-        step.max_visits_per_outcome.as_ref(),
+        step.max_visits_per_outcome(),
     );
 }

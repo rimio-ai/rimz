@@ -10,12 +10,14 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::graph::Edge;
-use super::spec::{self, Check, SpecErr, Step, Wake, WorkflowSpec};
+use super::spec::{
+    self, Check, Issue, LaunchOverrides, OutcomeCap, SpecErr, Step, Wake, WorkflowSpec,
+};
 use crate::harness::budget::{BudgetParseError, BudgetSpec};
 use crate::harness::signal::SignalSelector;
 use crate::harness::signal::default_signal_match_key;
 use crate::harness::when::{WhenError, WhenExpr};
-use crate::store::workflow::StepLifecycle;
+use crate::store::workflow::{RunRecord, ScopeKind, StepLifecycle};
 use crate::utils::time::TimeInputErr;
 
 type Subscription = (SignalSelector, BTreeMap<String, String>);
@@ -23,24 +25,15 @@ type Subscription = (SignalSelector, BTreeMap<String, String>);
 /// The name of the step `workflow.on-break` synthesizes.
 pub(super) const BREAK: &str = "@break";
 
-/// A sealed definition as the engine and its readers consume it.
-///
-/// It dereferences to the authored tables it was compiled from, the bridge for the fields
-/// and readers that do not read a typed node yet.
+/// A sealed definition as the engine and its readers consume it. The authored tables it was
+/// compiled from stay inside the workflow module, for admission validation alone.
 #[derive(Debug)]
 pub struct Definition {
     authored: WorkflowSpec,
     checks: BTreeMap<String, Node>,
     steps: BTreeMap<String, Node>,
-    stagger: Option<Parsed<Duration, TimeInputErr>>,
-}
-
-impl std::ops::Deref for Definition {
-    type Target = WorkflowSpec;
-
-    fn deref(&self) -> &WorkflowSpec {
-        &self.authored
-    }
+    limit: Option<Limit>,
+    on_deadline: Option<Target>,
 }
 
 /// Where a route sends the run: an engine outcome, or a node by name. A name that is no node
@@ -159,21 +152,38 @@ impl<T, E> Serialize for Parsed<T, E> {
     }
 }
 
+/// A workflow or step `limit` table, its stagger parsed.
+#[derive(Clone, Debug)]
+pub struct Limit {
+    pub max_parallel: Option<u32>,
+    pub stagger: Option<Parsed<Duration, TimeInputErr>>,
+}
+
 /// A check or a step.
 #[derive(Debug)]
 pub struct Node {
     kind: Option<Kind>,
+    authored: Authored,
     edges: Vec<Edge>,
     then: Vec<Target>,
     lifecycle: StepLifecycle,
     timeout: Option<Parsed<Duration, TimeInputErr>>,
     window: Option<Parsed<WhenExpr, SpecErr>>,
     wakes: Vec<Subscribed>,
-    stagger: Option<Parsed<Duration, TimeInputErr>>,
+    limit: Option<Limit>,
     budget: Option<Parsed<BudgetSpec, BudgetParseError>>,
     fallback: Option<String>,
-    provider: Option<crate::ids::AgentKind>,
-    account: Option<crate::ids::LoginName>,
+    /// A check's cases and `when` that no condition or sleep kind took, kept for the views
+    /// that print a node with no single runner.
+    stray_cases: Vec<Case>,
+    stray_when: Option<Condition>,
+}
+
+/// The authored table a node was compiled from, read through the node's accessors.
+#[derive(Debug)]
+enum Authored {
+    Check(Box<Check>),
+    Step(Box<Step>),
 }
 
 /// What runs at a node, with the runner's own data. A node that sets no runner, or several,
@@ -224,7 +234,7 @@ impl Sleep {
 }
 
 /// One condition case, in the order the definition lists it: case indices are durable.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Case {
     pub outcome: String,
     when: Condition,
@@ -242,7 +252,7 @@ impl Case {
 }
 
 /// A condition's authored clauses beside the expression `WhenExpr::parse` makes of them.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Condition {
     clauses: Vec<String>,
     expression: Result<WhenExpr, WhenError>,
@@ -322,14 +332,30 @@ impl Node {
         &self.wakes
     }
 
-    /// A step's own start stagger.
-    pub fn stagger(&self) -> Option<&Parsed<Duration, TimeInputErr>> {
-        self.stagger.as_ref()
+    /// A step's own start limit.
+    pub fn limit(&self) -> Option<&Limit> {
+        self.limit.as_ref()
     }
 
     /// A step's per-launch budget.
     pub fn budget(&self) -> Option<&Parsed<BudgetSpec, BudgetParseError>> {
         self.budget.as_ref()
+    }
+
+    /// Whether a step's own `on` table writes an edge for `outcome`; a check writes none.
+    pub(super) fn routes(&self, outcome: &str) -> bool {
+        let Some(step) = self.step_table() else {
+            return false;
+        };
+        match outcome {
+            "asked" => step.on.asked.is_some(),
+            "cap" => step.on.cap.is_some(),
+            "capacity" => step.on.capacity.is_some(),
+            "invalid" => step.on.invalid.is_some(),
+            "undelivered" => step.on.undelivered.is_some(),
+            "failed" => step.on.failed.is_some(),
+            _ => false,
+        }
     }
 
     /// Every edge out of the node, conditional and never-firing ones included.
@@ -342,14 +368,189 @@ impl Node {
         self.fallback.as_deref()
     }
 
+    fn check_table(&self) -> Option<&Check> {
+        match &self.authored {
+            Authored::Check(check) => Some(check),
+            Authored::Step(_) => None,
+        }
+    }
+
+    fn step_table(&self) -> Option<&Step> {
+        match &self.authored {
+            Authored::Step(step) => Some(step),
+            Authored::Check(_) => None,
+        }
+    }
+
+    pub fn summary(&self) -> Option<&str> {
+        match &self.authored {
+            Authored::Check(check) => check.summary.as_deref(),
+            Authored::Step(step) => step.summary.as_deref(),
+        }
+    }
+
+    pub fn prompt_file(&self) -> Option<&str> {
+        match &self.authored {
+            Authored::Check(check) => check.prompt_file.as_deref(),
+            Authored::Step(step) => step.prompt_file.as_deref(),
+        }
+    }
+
+    /// The authored `run`, set whether or not it is the node's one runner; so are `shell`,
+    /// `agent`, `message` and `sleep`.
+    pub fn run(&self) -> Option<&str> {
+        match &self.authored {
+            Authored::Check(check) => check.run.as_deref(),
+            Authored::Step(step) => step.run.as_deref(),
+        }
+    }
+
+    pub fn shell(&self) -> Option<&str> {
+        match &self.authored {
+            Authored::Check(check) => check.shell.as_deref(),
+            Authored::Step(step) => step.shell.as_deref(),
+        }
+    }
+
+    pub fn agent(&self) -> Option<&str> {
+        match &self.authored {
+            Authored::Check(check) => check.agent.as_deref(),
+            Authored::Step(step) => step.agent.as_deref(),
+        }
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.step_table()?.message.as_deref()
+    }
+
+    pub fn sleep(&self) -> Option<&str> {
+        self.check_table()?.sleep.as_deref()
+    }
+
+    /// A check's `when`, a sleep's own or one no sleep took.
+    pub fn when(&self) -> Option<&Condition> {
+        match &self.kind {
+            Some(Kind::Sleep(sleep)) => sleep.cases.first().map(Case::when),
+            _ => self.stray_when.as_ref(),
+        }
+    }
+
+    /// A check's `for`.
+    pub fn hold(&self) -> Option<&str> {
+        self.check_table()?.hold.as_deref()
+    }
+
+    /// A check's listed cases, a condition's own or ones no condition took.
+    pub fn listed_cases(&self) -> &[Case] {
+        match &self.kind {
+            Some(Kind::Condition(cases)) => cases,
+            _ => &self.stray_cases,
+        }
+    }
+
+    pub fn else_outcome(&self) -> Option<&str> {
+        self.check_table()?.else_outcome.as_deref()
+    }
+
     /// A check's provider for window readings.
-    pub(super) fn provider(&self) -> Option<&crate::ids::AgentKind> {
-        self.provider.as_ref()
+    pub fn provider(&self) -> Option<&crate::ids::AgentKind> {
+        self.check_table()?.provider.as_ref()
     }
 
     /// The account a check reads windows on, or the one an agent step's launch pins.
-    pub(super) fn account(&self) -> Option<&crate::ids::LoginName> {
-        self.account.as_ref()
+    pub fn account(&self) -> Option<&crate::ids::LoginName> {
+        match &self.authored {
+            Authored::Check(check) => check.account.as_ref(),
+            Authored::Step(step) => step.account.as_ref(),
+        }
+    }
+
+    pub fn keep(&self) -> Option<bool> {
+        self.step_table()?.keep
+    }
+
+    pub fn notes(&self) -> Option<bool> {
+        self.step_table()?.notes
+    }
+
+    pub fn takeover(&self) -> Option<bool> {
+        self.step_table()?.takeover
+    }
+
+    pub fn share(&self) -> Option<bool> {
+        self.step_table()?.share
+    }
+
+    pub fn throttle(&self) -> Option<crate::config::ThrottleSwitch> {
+        self.step_table()?.throttle
+    }
+
+    pub fn capacity_wait(&self) -> Option<crate::config::CapacityWait> {
+        self.step_table()?.capacity_wait
+    }
+
+    pub fn max_visits(&self) -> Option<u64> {
+        self.step_table()?.max_visits
+    }
+
+    pub fn max_visits_per_outcome(&self) -> Option<&OutcomeCap> {
+        self.step_table()?.max_visits_per_outcome.as_ref()
+    }
+
+    pub fn mode(&self) -> Option<crate::agents::PermissionMode> {
+        self.step_table()?.mode
+    }
+
+    pub fn effort(&self) -> Option<&str> {
+        self.step_table()?.effort.as_deref()
+    }
+
+    pub fn fast(&self) -> Option<bool> {
+        self.step_table()?.fast
+    }
+
+    pub fn system_prompt_file(&self) -> Option<&str> {
+        self.step_table()?.system_prompt_file.as_deref()
+    }
+
+    pub fn worktree(&self) -> Option<&str> {
+        self.step_table()?.worktree.as_deref()
+    }
+
+    /// The agent session a message step delivers to.
+    pub fn session(&self) -> Option<&crate::ids::AgentSessionId> {
+        self.step_table()?.session.as_ref()
+    }
+
+    /// A step's configured visit bounds as (name, used, limit including grant), total before
+    /// per-outcome; a check has none.
+    pub fn visit_bounds(
+        &self,
+        visits: Option<&crate::store::workflow::StepVisits>,
+        bucket: (Option<&str>, Option<&crate::store::workflow::Key>),
+        grant: u64,
+    ) -> impl Iterator<Item = (&'static str, u64, u64)> {
+        self.step_table()
+            .into_iter()
+            .flat_map(move |step| step.visit_bounds(visits, bucket, grant))
+    }
+
+    /// The first exhausted bound for the record's current step and bucket.
+    pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(&'static str, u64, u64)> {
+        self.step_table()?.tripped_visit_bound(record)
+    }
+
+    /// A step's launch overrides, its system-prompt file resolved inside `dir`, with the budget
+    /// the definition parsed; a budget that failed to parse is no budget.
+    pub(super) fn launch_overrides(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<LaunchOverrides, SpecErr> {
+        let budget = self.budget().and_then(|budget| budget.value().ok());
+        match self.step_table() {
+            Some(step) => step.launch_overrides(dir, budget),
+            None => Ok(LaunchOverrides::default()),
+        }
     }
 
     /// The signals that wake a check or reach a staying step: a condition or sleep's from its
@@ -359,7 +560,7 @@ impl Node {
             return self
                 .wakes
                 .iter()
-                .map(|wake| wake.subscription.value().cloned().map_err(SpecErr::reissue))
+                .map(|wake| wake.subscription.value().cloned().map_err(SpecErr::clone))
                 .collect();
         }
         let mut subscriptions = Vec::new();
@@ -428,12 +629,14 @@ impl Definition {
             .iter()
             .map(|(name, step)| (name.clone(), step_node(step)))
             .collect();
-        let stagger = stagger(authored.workflow.limit.as_ref());
+        let limit = limit(authored.workflow.limit.as_ref());
+        let on_deadline = authored.workflow.on.deadline.as_deref().map(Target::parse);
         let mut definition = Self {
             authored,
             checks,
             steps,
-            stagger,
+            limit,
+            on_deadline,
         };
         let edges = definition
             .checks
@@ -447,8 +650,9 @@ impl Definition {
             })
             .collect::<Vec<_>>();
         for (name, edges) in edges {
-            // A name both tables carry gets the edges the check resolves, as every lookup
-            // reads the check first.
+            // A name both tables carry gets the edges the check resolves on both nodes, as
+            // every target lookup reads the check first; `Node::routes` reads the step's own
+            // `on` table.
             if let Some(node) = definition.checks.get_mut(&name) {
                 node.edges = edges.clone();
             }
@@ -457,6 +661,55 @@ impl Definition {
             }
         }
         definition
+    }
+
+    pub fn checks(&self) -> impl Iterator<Item = (&String, &Node)> {
+        self.checks.iter()
+    }
+
+    pub fn steps(&self) -> impl Iterator<Item = (&String, &Node)> {
+        self.steps.iter()
+    }
+
+    /// The authored tables, for admission validation and the compile.
+    pub(super) fn authored(&self) -> &WorkflowSpec {
+        &self.authored
+    }
+
+    pub(super) fn is_break(&self, node: &str) -> bool {
+        node == BREAK
+    }
+
+    /// The fields cleanup ignored, each with its path.
+    pub fn ignored(&self) -> &[Issue] {
+        &self.authored.ignored
+    }
+
+    pub fn summary(&self) -> Option<&str> {
+        self.authored.workflow.summary.as_deref()
+    }
+
+    pub fn scope(&self) -> ScopeKind {
+        self.authored.workflow.scope
+    }
+
+    pub fn start(&self) -> &str {
+        &self.authored.workflow.start
+    }
+
+    /// The header deadline as written; publish resolves it against the clock.
+    pub fn deadline(&self) -> Option<&str> {
+        self.authored.workflow.deadline.as_deref()
+    }
+
+    /// The workflow-wide start limit.
+    pub fn limit(&self) -> Option<&Limit> {
+        self.limit.as_ref()
+    }
+
+    /// The header's `on.deadline` target, when written.
+    pub fn on_deadline(&self) -> Option<&Target> {
+        self.on_deadline.as_ref()
     }
 
     pub fn check(&self, name: &str) -> Option<&Node> {
@@ -472,7 +725,7 @@ impl Definition {
         self.check(name).or_else(|| self.step(name))
     }
 
-    /// The step's typed node and its kind, for a step the engine reads only by kind.
+    /// The step's kind, for a step the engine reads only by kind.
     pub(super) fn step_kind(&self, name: &str) -> Option<&Kind> {
         self.step(name)?.kind()
     }
@@ -495,8 +748,7 @@ impl Definition {
         for check in self.checks.values() {
             if !matches!(check.kind(), Some(Kind::Condition(_) | Kind::Sleep(_))) {
                 for wake in &check.wakes {
-                    let (selector, matches) =
-                        wake.subscription.value().map_err(SpecErr::reissue)?;
+                    let (selector, matches) = wake.subscription.value().map_err(SpecErr::clone)?;
                     if default_signal_match_key(selector, matches) == Some("path") {
                         branches.get_or_insert_with(BTreeSet::new);
                     }
@@ -515,13 +767,6 @@ impl Definition {
         Ok(branches)
     }
 
-    /// The workflow-wide start stagger.
-    pub fn stagger(&self) -> Option<&Parsed<Duration, TimeInputErr>> {
-        self.stagger.as_ref()
-    }
-
-    /// Compile authored tables a test built without `parse`, skipping cleanup, `@break`
-    /// synthesis and validation as the fixture does.
     /// Change a test fixture's authored form and compile it again, as a load would.
     #[cfg(test)]
     pub(super) fn edit(&mut self, change: impl FnOnce(&mut WorkflowSpec)) {
@@ -542,10 +787,11 @@ pub(super) fn duration(text: &str) -> Parsed<Duration, TimeInputErr> {
     Parsed::new(text, crate::harness::duration::duration)
 }
 
-fn stagger(
-    limit: Option<&crate::harness::throttle::Limit>,
-) -> Option<Parsed<Duration, TimeInputErr>> {
-    limit?.stagger.as_deref().map(duration)
+fn limit(limit: Option<&crate::harness::throttle::Limit>) -> Option<Limit> {
+    limit.map(|limit| Limit {
+        max_parallel: limit.max_parallel,
+        stagger: limit.stagger.as_deref().map(duration),
+    })
 }
 
 pub(super) fn window(text: &str) -> Parsed<WhenExpr, SpecErr> {
@@ -588,6 +834,14 @@ fn subscribed(
 }
 
 fn check_node(check: &Check) -> Node {
+    let stray_cases = if check.kind().is_none() {
+        cases(&check.cases)
+    } else {
+        Vec::new()
+    };
+    let stray_when = (!check.is_sleep())
+        .then(|| check.when.as_deref().map(Condition::new))
+        .flatten();
     let kind = check.kind().map(|kind| match kind {
         spec::CheckKind::Run(run) => Kind::Run(command(run)),
         spec::CheckKind::Shell(shell) => Kind::Shell(shell.into()),
@@ -612,11 +866,12 @@ fn check_node(check: &Check) -> Node {
         timeout: check.timeout.as_deref().map(duration),
         window: check.window.as_deref().map(window),
         wakes: subscribed(check.wake.as_ref(), Wake::subscription),
-        stagger: None,
+        limit: None,
         budget: None,
         fallback: check.fallback_outcome().map(str::to_owned),
-        provider: check.provider.clone(),
-        account: check.account.clone(),
+        stray_cases,
+        stray_when,
+        authored: Authored::Check(Box::new(check.clone())),
     }
 }
 
@@ -639,13 +894,14 @@ fn step_node(step: &Step) -> Node {
         timeout: step.timeout.as_deref().map(duration),
         window: step.window.as_deref().map(window),
         wakes: subscribed(step.subscribe.as_ref(), Wake::step_subscription),
-        stagger: stagger(step.limit.as_ref()),
+        limit: limit(step.limit.as_ref()),
         budget: step
             .budget
             .as_deref()
             .map(|text| Parsed::new(text, str::parse)),
         fallback: None,
-        provider: None,
-        account: step.account.clone(),
+        stray_cases: Vec::new(),
+        stray_when: None,
+        authored: Authored::Step(Box::new(step.clone())),
     }
 }

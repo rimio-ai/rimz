@@ -35,9 +35,9 @@ fn agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
             "an optional agent route must not strand a sealed run: {loaded:?}"
         );
         let spec = loaded.unwrap();
-        assert!(spec.steps["build"].on.invalid.is_none());
+        assert!(spec.authored().steps["build"].on.invalid.is_none());
         assert!(
-            spec.ignored
+            spec.ignored()
                 .iter()
                 .any(|issue| issue.path == "steps.build.on.invalid")
         );
@@ -241,9 +241,9 @@ fn on_break_handler_fields_warn_individually() {
             &format!("on-break={{agent='claude',{field}}}"),
         );
         let spec = loaded(&text).unwrap();
-        assert!(spec.steps.contains_key("@break"), "{spec:?}");
-        assert_eq!(spec.ignored.len(), 1, "{spec:?}");
-        assert_eq!(spec.ignored[0].path, path);
+        assert!(spec.authored().steps.contains_key("@break"), "{spec:?}");
+        assert_eq!(spec.ignored().len(), 1, "{spec:?}");
+        assert_eq!(spec.ignored()[0].path, path);
     }
 }
 
@@ -315,8 +315,8 @@ fn keep_warns_and_is_ignored_except_on_turn_and_until_agent_steps() {
             );
         let spec = loaded(&text).unwrap();
         actual.push((
-            spec.steps["build"].keep,
-            spec.ignored
+            spec.authored().steps["build"].keep,
+            spec.ignored()
                 .iter()
                 .any(|issue| issue.path == "steps.build.keep"),
         ));
@@ -338,7 +338,7 @@ fn keep_warns_and_is_ignored_except_on_turn_and_until_agent_steps() {
             )
             .unwrap();
             assert!(
-                spec.ignored
+                spec.ignored()
                     .iter()
                     .any(|issue| issue.path == format!("{prefix}.keep"))
             );
@@ -351,7 +351,7 @@ fn delayed_routes_load_and_only_delayed_edges_serialize_a_delay() {
     let result = loaded(DELAY);
     assert!(result.is_ok(), "a delayed route must load: {result:?}");
     let spec = result.unwrap();
-    assert!(spec.ignored.is_empty(), "{:?}", spec.ignored);
+    assert!(spec.ignored().is_empty(), "{:?}", spec.ignored());
     let edges = serde_json::to_value(spec.edges("pick")).unwrap();
     let edges = edges.as_array().unwrap();
     assert_eq!(
@@ -373,7 +373,7 @@ fn delayed_routes_load_and_only_delayed_edges_serialize_a_delay() {
 fn omitted_lifecycle_keeps_delays_bans_sleep_and_explains_turn_only_fields() {
     let text = DELAY.replace("lifecycle='until'\n", "");
     let spec = loaded(&text).unwrap();
-    let delay_kept = spec.checks["pick"].on["ok"].delay() == Some("30m");
+    let delay_kept = spec.authored().checks["pick"].on["ok"].delay() == Some("30m");
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
@@ -390,7 +390,7 @@ fn omitted_lifecycle_keeps_delays_bans_sleep_and_explains_turn_only_fields() {
     ))
     .unwrap();
     let cleanup = ["steps.build.timeout", "steps.build.on.asked"].map(|path| {
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == path && issue.message.contains("lifecycle = \"turn\""))
     });
@@ -398,13 +398,13 @@ fn omitted_lifecycle_keeps_delays_bans_sleep_and_explains_turn_only_fields() {
         (
             delay_kept,
             sleep_refused_with_fix,
-            spec.steps["build"].timeout.is_some(),
-            spec.steps["build"].on.asked.is_none(),
+            spec.authored().steps["build"].timeout.is_some(),
+            spec.authored().steps["build"].on.asked.is_none(),
             cleanup,
         ),
         (true, true, true, true, [false, true]),
         "default lifecycle must use until rules: {report:?}; {:?}",
-        spec.ignored
+        spec.ignored()
     );
 }
 
@@ -434,8 +434,8 @@ fn invalid_or_misplaced_delays_warn_and_keep_the_route() {
                 .map(|target| target.as_str()),
             Some(target)
         );
-        assert_eq!(spec.ignored.len(), 1, "{text}: {:?}", spec.ignored);
-        assert_eq!(spec.ignored[0].path, "checks.pick.on.ok.delay");
+        assert_eq!(spec.ignored().len(), 1, "{text}: {:?}", spec.ignored());
+        assert_eq!(spec.ignored()[0].path, "checks.pick.on.ok.delay");
         let edges = serde_json::to_value(spec.edges("pick")).unwrap();
         assert!(
             edges
@@ -454,13 +454,13 @@ fn delay_placement_reads_the_step_after_its_misplaced_lifecycle_is_ignored() {
         "run='true'\ntimeout='1m'",
     );
     let spec = loaded(&text).unwrap();
-    assert!(spec.steps["build"].lifecycle.is_none());
+    assert!(spec.authored().steps["build"].lifecycle.is_none());
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "checks.pick.on.ok.delay"),
         "a command step cannot make a delay valid: {:?}",
-        spec.ignored
+        spec.ignored()
     );
 }
 
@@ -489,15 +489,15 @@ fn route_tables_require_a_string_target_and_warn_on_unknown_keys() {
         "unknown route fields must only warn: {result:?}"
     );
     let spec = result.unwrap();
-    assert_eq!(spec.ignored.len(), 1, "{:?}", spec.ignored);
-    assert_eq!(spec.ignored[0].path, "checks.pick.on.ok.future");
+    assert_eq!(spec.ignored().len(), 1, "{:?}", spec.ignored());
+    assert_eq!(spec.ignored()[0].path, "checks.pick.on.ok.future");
     let dead = CONDITION.replace("yes='@done'", "yes='@done',dead={delay='30m'}");
     let result = loaded(&dead);
     assert!(
         result.is_ok(),
         "a malformed dead route must only warn: {result:?}"
     );
-    assert_eq!(result.unwrap().ignored[0].path, "checks.pick.on.dead");
+    assert_eq!(result.unwrap().ignored()[0].path, "checks.pick.on.dead");
 }
 
 #[test]
@@ -513,7 +513,7 @@ fn per_outcome_number_and_reset_tables_load_without_ignored_fields() {
             &format!("max-visits=3\nmax-visits-per-outcome={cap}"),
         );
         let spec = loaded(&text).unwrap();
-        assert!(spec.ignored.is_empty(), "{cap}: {:?}", spec.ignored);
+        assert!(spec.ignored().is_empty(), "{cap}: {:?}", spec.ignored());
     }
 }
 
@@ -526,7 +526,7 @@ fn per_outcome_inner_unknown_fields_warn_and_invalid_values_drop_the_whole_cap()
     );
     let spec = loaded(&text).unwrap();
     assert_eq!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .map(|issue| issue.path.as_str())
             .collect::<Vec<_>>(),
@@ -550,8 +550,8 @@ fn per_outcome_inner_unknown_fields_warn_and_invalid_values_drop_the_whole_cap()
             &format!("max-visits=3\nmax-visits-per-outcome={cap}"),
         ))
         .unwrap();
-        assert_eq!(spec.ignored.len(), 1, "{cap}: {:?}", spec.ignored);
-        assert_eq!(spec.ignored[0].path, path, "{cap}");
+        assert_eq!(spec.ignored().len(), 1, "{cap}: {:?}", spec.ignored());
+        assert_eq!(spec.ignored()[0].path, path, "{cap}");
     }
 }
 
@@ -560,14 +560,14 @@ fn old_per_key_caps_and_case_keys_warn_unknown_and_do_not_cap_steps() {
     let text = VALID.replace("max-visits = 3", "max-visits=3\nmax-visits-per-key=1");
     let spec = loaded(&text).unwrap();
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "steps.build.max-visits-per-key"
                 && issue.message.contains("unknown field"))
     );
     let spec = loaded(&CONDITION.replace("outcome='yes'", "outcome='yes',key='ci'")).unwrap();
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "checks.pick.cases.0.key"
                 && issue.message.contains("unknown field"))
@@ -604,7 +604,7 @@ fn a_check_wake_binding_ignores_its_prompt_with_a_warning() {
     ))
     .unwrap();
     assert_eq!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .map(|i| (
                 i.path.as_str(),
@@ -614,7 +614,7 @@ fn a_check_wake_binding_ignores_its_prompt_with_a_warning() {
         [("checks.pick.wake.0.prompt", true)]
     );
     assert_eq!(
-        spec.checks["pick"]
+        spec.authored().checks["pick"]
             .wake
             .iter()
             .flatten()
@@ -644,13 +644,13 @@ fn unknown_keys_warn_at_every_table_including_wake_bindings() {
         loaded(&text)
             .map(|spec| {
                 let mut paths = spec
-                    .ignored
+                    .ignored()
                     .iter()
                     .map(|i| i.path.as_str())
                     .collect::<Vec<_>>();
                 paths.sort_unstable();
                 let paths = paths.into_iter().map(str::to_owned).collect::<Vec<_>>();
-                let messages = spec.ignored.iter().all(|i| {
+                let messages = spec.ignored().iter().all(|i| {
                     i.message.contains(&i.path)
                         && i.message.contains("ignored")
                         && i.message.contains("unknown field")
@@ -699,9 +699,9 @@ fn wrong_typed_optionals_are_absent_and_other_wakes_survive() {
         "optional values must not prevent loading: {actual:?}"
     );
     let spec = actual.unwrap();
-    let step = &spec.steps["build"];
+    let step = &spec.authored().steps["build"];
     let mut paths = spec
-        .ignored
+        .ignored()
         .iter()
         .map(|i| i.path.as_str())
         .collect::<Vec<_>>();
@@ -738,14 +738,14 @@ fn wrong_typed_optionals_are_absent_and_other_wakes_survive() {
         "optional case fields must be ignored: {result:?}"
     );
     let spec = result.unwrap();
-    assert!(spec.checks["pick"].cases[0].hold.is_none());
+    assert!(spec.authored().checks["pick"].cases[0].hold.is_none());
     assert!(
-        spec.ignored
+        spec.ignored()
             .iter()
             .any(|issue| issue.path == "checks.pick.cases.0.key"
                 && issue.message.contains("unknown field"))
     );
-    assert_eq!(spec.ignored.len(), 2);
+    assert_eq!(spec.ignored().len(), 2);
 }
 
 #[test]
@@ -912,7 +912,9 @@ fn wrong_typed_live_routes_refuse_but_dead_routes_warn() {
             let report = validate(&dir, &LoadedDefinitions::default(), None);
             let matches = match &result {
                 Err(SpecErr::Toml { path: actual, .. }) => *refuses && actual == path,
-                Ok(spec) => !*refuses && spec.ignored.len() == 1 && spec.ignored[0].path == *path,
+                Ok(spec) => {
+                    !*refuses && spec.ignored().len() == 1 && spec.ignored()[0].path == *path
+                }
                 _ => false,
             };
             (
@@ -967,13 +969,22 @@ fn overlong_optional_durations_warn_and_are_dropped() {
             let text = text.replace("VALUE", raw);
             let spec = loaded(&text).unwrap();
             let dropped = match path {
-                "checks.pick.timeout" => spec.checks["pick"].timeout.is_none(),
-                "checks.pick.cases.0.for" => spec.checks["pick"].cases[0].hold.is_none(),
-                "checks.nap.for" => spec.checks["nap"].hold.is_none(),
-                "steps.build.timeout" => spec.steps["build"].timeout.is_none(),
-                "checks.pick.on.ok.delay" => spec.checks["pick"].on["ok"].delay().is_none(),
-                "workflow.limit.stagger" => spec.workflow.limit.as_ref().unwrap().stagger.is_none(),
-                "steps.build.limit.stagger" => spec.steps["build"]
+                "checks.pick.timeout" => spec.authored().checks["pick"].timeout.is_none(),
+                "checks.pick.cases.0.for" => spec.authored().checks["pick"].cases[0].hold.is_none(),
+                "checks.nap.for" => spec.authored().checks["nap"].hold.is_none(),
+                "steps.build.timeout" => spec.authored().steps["build"].timeout.is_none(),
+                "checks.pick.on.ok.delay" => {
+                    spec.authored().checks["pick"].on["ok"].delay().is_none()
+                }
+                "workflow.limit.stagger" => spec
+                    .authored()
+                    .workflow
+                    .limit
+                    .as_ref()
+                    .unwrap()
+                    .stagger
+                    .is_none(),
+                "steps.build.limit.stagger" => spec.authored().steps["build"]
                     .limit
                     .as_ref()
                     .unwrap()
@@ -984,7 +995,7 @@ fn overlong_optional_durations_warn_and_are_dropped() {
             actual.push((
                 path,
                 raw,
-                spec.ignored.iter().any(|issue| {
+                spec.ignored().iter().any(|issue| {
                     issue.path == path
                         && issue.message.contains("ignored field:")
                         && issue
@@ -1002,9 +1013,9 @@ fn overlong_optional_durations_warn_and_are_dropped() {
             ))
             .unwrap();
             assert!(
-                !valid.ignored.iter().any(|issue| issue.path == path),
+                !valid.ignored().iter().any(|issue| issue.path == path),
                 "{path}: {:?}",
-                valid.ignored
+                valid.ignored()
             );
         }
     }
@@ -1302,10 +1313,10 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             let report = validate(&dir, &LoadedDefinitions::default(), None);
             let outcome = result.as_ref().map(|spec| {
                 let value = match *path {
-                    "workflow.summary" => spec.workflow.summary.is_none(),
-                    "workflow.deadline" => spec.workflow.deadline.is_none(),
+                    "workflow.summary" => spec.authored().workflow.summary.is_none(),
+                    "workflow.deadline" => spec.authored().workflow.deadline.is_none(),
                     path if path.starts_with("steps.") => {
-                        let step = &spec.steps["build"];
+                        let step = &spec.authored().steps["build"];
                         match path.strip_prefix("steps.build.").unwrap() {
                             "summary" => step.summary.is_none(),
                             "timeout" => step.timeout.is_none(),
@@ -1340,7 +1351,7 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                         }
                     }
                     path => {
-                        let check = &spec.checks["pick"];
+                        let check = &spec.authored().checks["pick"];
                         match path.strip_prefix("checks.pick.").unwrap() {
                             "summary" => check.summary.is_none(),
                             "timeout" => check.timeout.is_none(),
@@ -1363,14 +1374,14 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                     }
                 };
                 (
-                    spec.ignored
+                    spec.ignored()
                         .iter()
                         .map(|i| i.path.as_str())
                         .collect::<Vec<_>>()
                         == [*path],
                     value,
                     report.errors.is_empty(),
-                    spec.ignored
+                    spec.ignored()
                         .iter()
                         .all(|i| i.message.contains("ignored") && i.message.contains(&i.path)),
                 )

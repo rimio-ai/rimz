@@ -824,6 +824,31 @@ fn step_window_waits_for_a_closed_companion_provider() {
 }
 
 #[test]
+fn a_window_or_stagger_that_does_not_parse_reaches_its_consumer_as_an_error() {
+    use crate::harness::when::WindowReadings;
+    let spec: Definition = toml::from_str(
+        "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n[steps.build]\n\
+         agent='claude'\nprompt-file='p.md'\nwindow='window.5h.bogus>=x'\nthen='@done'\n",
+    )
+    .unwrap();
+    let windows = WindowReadings::fixed(Timestamp::UNIX_EPOCH, BTreeMap::new());
+    assert!(
+        window_wait(
+            spec.step("build").unwrap().window().unwrap(),
+            Path::new("/project"),
+            &crate::ids::AgentKind::new_unchecked("claude"),
+            None,
+            &windows,
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        start_limit(spec.limit().unwrap()).stagger,
+        Some(Err(_))
+    ));
+}
+
+#[test]
 fn provider_windows_close_and_reopen_on_fresh_capacity() {
     use crate::agents::{ProviderCapacity, RateLimitWindow};
     use crate::harness::when::WindowReadings;
@@ -1064,8 +1089,7 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
         agent::compose(
             &record,
             &paths,
-            &spec.steps["fix"],
-            false,
+            spec.step("fix").unwrap(),
             &mut BTreeMap::new()
         )
         .unwrap(),

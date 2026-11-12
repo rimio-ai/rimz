@@ -114,9 +114,7 @@ pub(super) fn render(definition: &Definition, globals: &super::super::GlobalFlag
         }
     };
     let title = spec
-        .workflow
-        .summary
-        .as_ref()
+        .summary()
         .map_or_else(|| name.to_owned(), |summary| format!("{name} · {summary}"));
     writeln!(out, "{}", render::paint(render::palette::header(), &title))?;
     header(&mut out, definition, &spec, globals)?;
@@ -128,7 +126,7 @@ pub(super) fn render(definition: &Definition, globals: &super::super::GlobalFlag
     }
     let command = resolve::command(
         "show",
-        &[&definition.raw, &spec.workflow.start],
+        &[&definition.raw, spec.start()],
         globals.root.as_deref(),
         None,
         &[],
@@ -168,7 +166,7 @@ fn header(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let name = definition.name.as_str();
-    let scope = match spec.workflow.scope {
+    let scope = match spec.scope() {
         ScopeKind::Worktree => "worktree",
         ScopeKind::Project => "project",
     };
@@ -193,7 +191,7 @@ fn header(
         })
         .collect::<Vec<_>>();
     if tasks.is_empty() {
-        let worktree = spec.workflow.scope == ScopeKind::Worktree;
+        let worktree = spec.scope() == ScopeKind::Worktree;
         let flags: &[&str] = if worktree { &["-w", "<worktree>"] } else { &[] };
         let root = globals.root.as_deref();
         let command = resolve::command("run", &[name], root, None, &[], flags);
@@ -210,15 +208,15 @@ fn header(
     } else {
         writeln!(out, "one run per {scope} · {}", tasks.join(" · "))?;
     }
-    if let Some(limit) = &spec.workflow.limit {
+    if let Some(limit) = spec.limit() {
         writeln!(out, "limit {}", limit_text(limit))?;
     }
     let edge = spec
-        .edges(&spec.workflow.start)
+        .edges(spec.start())
         .into_iter()
         .find(|edge| edge.outcome == "deadline");
     if let Some(edge) = edge {
-        if let Some(deadline) = &spec.workflow.deadline {
+        if let Some(deadline) = spec.deadline() {
             writeln!(
                 out,
                 "deadline {deadline} → {} (a live attempt is canceled)",

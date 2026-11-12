@@ -100,7 +100,7 @@ fn run_origin(record: &RunRecord) -> String {
     )
 }
 
-fn limit_text(limit: &rimz::harness::throttle::Limit) -> String {
+fn limit_text(limit: &rimz::harness::workflow::Limit) -> String {
     limit
         .max_parallel
         .map(|cap| format!("max-parallel={cap}"))
@@ -109,7 +109,7 @@ fn limit_text(limit: &rimz::harness::throttle::Limit) -> String {
             limit
                 .stagger
                 .as_ref()
-                .map(|stagger| format!("stagger={stagger}")),
+                .map(|stagger| format!("stagger={}", stagger.text())),
         )
         .collect::<Vec<_>>()
         .join(" · ")

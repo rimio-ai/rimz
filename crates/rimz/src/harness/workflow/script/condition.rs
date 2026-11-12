@@ -264,7 +264,7 @@ pub fn unread_reasons(object: &Value) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::workflow::Check;
+    use crate::harness::workflow::spec::Check;
     use serde_json::json;
 
     #[test]

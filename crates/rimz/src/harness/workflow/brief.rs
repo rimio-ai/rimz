@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{Definition, Fireability, HopKind, Kind, Node, Step, Target, routing_hop};
+use super::{Definition, Fireability, HopKind, Kind, Node, Target, routing_hop};
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
@@ -14,7 +14,9 @@ const DEFINITION: &str = "a graph of steps and checks that the user defined. Rim
 const MORE: &str = "`rimz workflow show` draws the graph with this run's position and trail, and `rimz workflow show --history` lists every step and check so far; a subagent of yours runs the same commands to find this run.";
 
 pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord) -> String {
-    let step = &spec.steps[&record.node];
+    let step = spec
+        .step(&record.node)
+        .expect("a step brief is composed at the current step");
     let mut origin = origin(record);
     origin.push_str(" Your prompt is the step's fixed text, not a message someone just typed.");
     if record.prompt.is_some() {
@@ -71,10 +73,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
         arrival.push(visits);
     }
     if let Some(previous) = &record.prev_attempt {
-        let messaged = spec
-            .steps
-            .get(&previous.step)
-            .is_some_and(|_| matches!(spec.step_kind(&previous.step), Some(Kind::Message(_))));
+        let messaged = matches!(spec.step_kind(&previous.step), Some(Kind::Message(_)));
         let who = match &previous.handle {
             None => format!("the step {}", span(&previous.step)),
             Some(handle) if messaged => {
@@ -93,13 +92,13 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
         arrival.push(format!("The previous attempt, {who}, {ended}."));
     }
     let (mut after, questions) = lifecycle(spec, step, record);
-    for check in &step.then {
-        if let Some(note) = check_note(spec, check) {
+    for check in step.then() {
+        if let Some(note) = check_note(spec, check.as_str()) {
             after.push(' ');
             after.push_str(&note);
         }
     }
-    let memory = match record.notes.as_ref().filter(|_| step.notes != Some(false)) {
+    let memory = match record.notes.as_ref().filter(|_| step.notes() != Some(false)) {
         Some(_) => paths.notes().canonicalize().ok().map(|folder| {
             format!(
                 "`{}/{}-notes.md` is this step's working memory. Only this step's agent writes it, across visits, restarts and its subagents. Write it for someone arriving cold. Note any change you made outside this repository: pushes, PR or issue comments, databases, remote services. {MORE}",
@@ -252,7 +251,6 @@ fn detail(check: &Node, input: &Value) -> Option<String> {
 }
 
 fn check_note(spec: &Definition, name: &str) -> Option<String> {
-    let check = spec.checks.get(name)?;
     let node = spec.check(name)?;
     if !node.cases().is_empty() {
         let cases = node
@@ -275,7 +273,7 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
         ));
     }
     let name = span(name);
-    let summary = check.summary.as_deref().map(span);
+    let summary = node.summary().map(span);
     let clause = summary
         .as_ref()
         .map_or_else(String::new, |summary| format!(" ({summary})"));
@@ -294,7 +292,7 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
         ),
         Kind::Sleep(sleep) => format!(
             "The check {name} tests {}.",
-            span(check.summary.as_deref().unwrap_or(sleep.duration().text()))
+            span(node.summary().unwrap_or(sleep.duration().text()))
         ),
         Kind::Condition(_) => unreachable!("condition cases returned their note above"),
         Kind::Agent(_) | Kind::Message(_) => unreachable!("a check runs no step kind"),
@@ -326,12 +324,15 @@ pub(super) fn push(
             .and_then(|entry| entry.seq);
         Some((name.clone(), seq))
     });
-    let name = pushed.as_ref().map(|(name, _)| name).unwrap_or_else(|| {
-        spec.steps[&record.node]
-            .then
-            .first()
-            .expect("validated step then")
-    });
+    let name = pushed.as_ref().map_or_else(
+        || {
+            spec.step(&record.node)
+                .and_then(|step| step.then().first())
+                .expect("validated step then")
+                .as_str()
+        },
+        |(name, _)| name.as_str(),
+    );
     let check = spec.check(name).expect("pushed check");
     let input = record.input.as_ref().expect("published push-back answer");
     let mut text = format!(
@@ -405,13 +406,12 @@ pub(super) fn push(
     Ok(text)
 }
 
-fn visits(spec: &Definition, step: &Step, record: &RunRecord) -> Option<String> {
+fn visits(spec: &Definition, step: &Node, record: &RunRecord) -> Option<String> {
     let (outcome, key) = record.visit_bucket();
     let mut counts = Vec::new();
     let mut last = Vec::new();
     let resets = step
-        .max_visits_per_outcome
-        .as_ref()
+        .max_visits_per_outcome()
         .map_or(&[][..], |cap| cap.reset_on())
         .iter()
         .map(|outcome| span(outcome))
@@ -510,36 +510,35 @@ fn ordinal(count: u64) -> String {
     }
 }
 
-fn lifecycle(spec: &Definition, step: &Step, record: &RunRecord) -> (String, String) {
+fn lifecycle(spec: &Definition, step: &Node, record: &RunRecord) -> (String, String) {
     if spec.is_break(&record.node) {
         return (
             "You stay open across turns. Fix the cause and resume the run, cancel it, or wait for the user. RimZ detaches rather than stops you on resume or cancel. Closing your pane ends the run @failed.".into(),
             "If the user must act now, ask through your own native question; otherwise end your turn and wait for their instructions.".into(),
         );
     }
-    let node = spec.step(&record.node).expect("current step");
     // Validation requires a nonempty `then`: checks, or one terminal on a turn or stay step.
-    let first = node.then().first().expect("validated step then");
+    let first = step.then().first().expect("validated step then");
     let check = span(first.as_str());
     let next = if matches!(first, Target::Done | Target::Failed) {
         format!("ends the run at {check}")
     } else {
         format!("runs the check {check}")
     };
-    match node.lifecycle() {
+    match step.lifecycle() {
         StepLifecycle::Turn => {
-            let cleanup = if step.keep.unwrap_or(false) {
+            let cleanup = if step.keep().unwrap_or(false) {
                 "leaves your pane open outside this run"
             } else {
                 "closes your pane"
             };
-            let timeout = step.timeout.as_ref().map_or_else(String::new, |timeout| {
-                format!(", within the step's {} timeout", verbatim(timeout))
+            let timeout = step.timeout().map_or_else(String::new, |timeout| {
+                format!(", within the step's {} timeout", verbatim(timeout.text()))
             });
             let after = format!(
                 "This is one turn. When it ends cleanly with nothing owed, RimZ {cleanup} and {next}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
             );
-            let questions = if step.on.asked.is_some() {
+            let questions = if step.routes("asked") {
                 // An explicit asked edge always has a resolved target.
                 let target = spec
                     .target(&record.node, "asked")
@@ -554,7 +553,7 @@ fn lifecycle(spec: &Definition, step: &Step, record: &RunRecord) -> (String, Str
                 } else {
                     ""
                 };
-                let pause = if step.timeout.is_some() {
+                let pause = if step.timeout().is_some() {
                     ", and the timeout pauses meanwhile"
                 } else {
                     ""
@@ -569,27 +568,27 @@ fn lifecycle(spec: &Definition, step: &Step, record: &RunRecord) -> (String, Str
                     "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and {next}."
                 )
             } else {
-                let close = if step.keep.unwrap_or(false) {
+                let close = if step.keep().unwrap_or(false) {
                     "Other routes move the run on; RimZ leaves your pane open outside this run."
                 } else {
                     "Other routes close your pane and move the run on."
                 };
-                let listed = if step.then.len() > 1 {
+                let listed = if step.then().len() > 1 {
                     " You stay open while the run moves between the listed checks; your next turn end starts at the first check."
                 } else {
                     ""
                 };
-                let timeout = step.timeout.as_ref().map_or_else(String::new, |timeout| {
+                let timeout = step.timeout().map_or_else(String::new, |timeout| {
                     format!(
                         " The step's {} timeout counts from your launch and ends this session when it passes.",
-                        verbatim(timeout)
+                        verbatim(timeout.text())
                     )
                 });
                 format!(
                     "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn.{timeout}"
                 )
             };
-            if let Some(subscriptions) = subscriptions(node) {
+            if let Some(subscriptions) = subscriptions(step) {
                 after.push_str(&format!(
                     " You subscribe to {subscriptions}. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
                 ));

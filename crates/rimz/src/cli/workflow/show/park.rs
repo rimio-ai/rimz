@@ -93,21 +93,20 @@ impl View<'_> {
                     "run the step once more; every capped step gets one more visit",
                 )?;
                 if let Sender::Edge(node, _) = self.sender(self.journal)
-                    && self.spec.checks.contains_key(&node)
+                    && self.spec.check(&node).is_some()
                 {
                     self.option(out, Some(&node), &[], "check again after a fix by hand")?;
                 }
             }
             ParkReason::User => {
                 self.option(out, None, &[], &format!("run {} again", self.record.node))?;
-                if self.spec.checks.contains_key(&self.record.node) {
+                if self.spec.check(&self.record.node).is_some() {
                     let nodes = self
                         .spec
                         .edges(&self.record.node)
                         .into_iter()
                         .filter(|edge| edge.outcome != "deadline")
-                        .map(|edge| edge.target.to_string())
-                        .filter(|target| !target.starts_with('@'))
+                        .filter_map(|edge| edge.target.authored_node().map(str::to_owned))
                         .collect::<std::collections::BTreeSet<_>>();
                     for node in nodes {
                         self.option(out, Some(&node), &[], &format!("continue at {node}"))?;
@@ -133,7 +132,7 @@ impl View<'_> {
                 out,
                 None,
                 &[],
-                if self.spec.steps.contains_key(&self.record.node) {
+                if self.spec.step(&self.record.node).is_some() {
                     "retry after fixing the launch"
                 } else {
                     "retry after fixing the check"
@@ -169,8 +168,7 @@ impl View<'_> {
     fn cap(&self, out: &mut impl Write) -> Result<()> {
         let Some((bound, used, max)) = self
             .spec
-            .steps
-            .get(&self.record.node)
+            .step(&self.record.node)
             .and_then(|step| step.tripped_visit_bound(self.record))
         else {
             return Ok(());
@@ -322,12 +320,11 @@ impl View<'_> {
     fn timeout(&self, out: &mut impl Write) -> Result<()> {
         let timeout = self
             .spec
-            .checks
-            .get(&self.record.node)
-            .and_then(|check| check.timeout.as_ref())
-            .or_else(|| self.spec.steps.get(&self.record.node)?.timeout.as_ref());
+            .check(&self.record.node)
+            .and_then(|check| check.timeout())
+            .or_else(|| self.spec.step(&self.record.node)?.timeout());
         if let Some(timeout) = timeout {
-            writeln!(out, "waited the full {timeout}")?;
+            writeln!(out, "waited the full {}", timeout.text())?;
         }
         if let Some(entry) = self.journal.iter().rev().find(|entry| {
             entry.node == self.record.node

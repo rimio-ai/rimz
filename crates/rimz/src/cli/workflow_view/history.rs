@@ -2,7 +2,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use jiff::Timestamp;
-use rimz::harness::workflow::{self, Definition};
+use rimz::harness::workflow::{self, Definition, Kind};
 use rimz::store::workflow::{
     self as records, Children, JournalEntry, JournalEvent, RunRecord, TurnEndAction,
 };
@@ -218,7 +218,7 @@ pub(in crate::cli) fn terminal(
             &format!("{glyph} {} {}", record.state.as_str(), dated_clock(now))
         )
     )?;
-    for warning in &spec.ignored {
+    for warning in spec.ignored() {
         writeln!(out, "warning: {}", warning.message)?;
     }
     render(record, spec, journal, now, prose, out)
@@ -379,8 +379,9 @@ impl History<'_> {
                             ended_at.duration_since(*started_at).as_secs().max(0) as u64
                         )
                     )?;
-                    let step = self.spec.steps.get(&entry.node);
-                    let message = step.is_some_and(|step| step.message.is_some());
+                    let step = self.spec.step(&entry.node);
+                    let message =
+                        step.is_some_and(|step| matches!(step.kind(), Some(Kind::Message(_))));
                     if message {
                         match (handle, reason) {
                             (Some(handle), _) => {
@@ -391,7 +392,7 @@ impl History<'_> {
                             }
                             (None, None) => writeln!(out, "    to — · {}", outcome.as_str())?,
                         }
-                    } else if step.is_some_and(|step| step.agent.is_some()) {
+                    } else if step.is_some_and(|step| matches!(step.kind(), Some(Kind::Agent(_)))) {
                         writeln!(
                             out,
                             "    {} HEAD {} → {} cost {}",

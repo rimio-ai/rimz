@@ -240,10 +240,9 @@ impl Transition<'_> {
         );
         if origin == EvaluationOrigin::Check && outcome != "hold" {
             let spec = self.spec;
-            for (step, definition) in &spec.steps {
+            for (step, definition) in spec.steps() {
                 if definition
-                    .max_visits_per_outcome
-                    .as_ref()
+                    .max_visits_per_outcome()
                     .is_some_and(|cap| cap.reset_on().contains(&outcome))
                     && let Some(visits) = self.record.visits.get_mut(step)
                     && !visits.outcomes.is_empty()
@@ -945,7 +944,7 @@ impl Transition<'_> {
         head_end: Option<String>,
         reason: Option<String>,
     ) -> Result<bool, TimeInputErr> {
-        if !self.spec.steps.contains_key(&self.record.node) {
+        if self.spec.step(&self.record.node).is_none() {
             self.abandon_check(if ending.outcome == AttemptOutcome::Timeout {
                 "timeout"
             } else {
@@ -1086,11 +1085,16 @@ impl Transition<'_> {
         )? {
             return Ok(true);
         }
-        let check = &self.spec.checks[&self.record.node];
+        let timeout = self
+            .spec
+            .check(&self.record.node)
+            .expect("a check timeout fires at its check")
+            .timeout()
+            .map(super::definition::Parsed::text);
         let target = self.spec.engine_target(&self.record.node, "timeout");
         self.engine_route(
             "timeout",
-            json!({"outcome":"timeout", "node":self.record.node, "timeout":check.timeout}),
+            json!({"outcome":"timeout", "node":self.record.node, "timeout":timeout}),
             &target,
             ParkReason::Timeout,
         )?;
@@ -1107,7 +1111,7 @@ impl Transition<'_> {
         let Some(child) = &attempt.child else {
             return false;
         };
-        self.spec.steps.contains_key(&self.record.node)
+        self.spec.step(&self.record.node).is_some()
             && !crate::proc::process_is_live(child.pid, child.start.as_deref())
             && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
     }

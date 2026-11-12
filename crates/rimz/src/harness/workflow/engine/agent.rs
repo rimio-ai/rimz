@@ -14,19 +14,18 @@ pub(super) fn identity() -> Host {
 pub(super) fn compose(
     record: &RunRecord,
     paths: &WorkflowPaths,
-    step: &super::super::Step,
-    message: bool,
+    step: &Node,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<String> {
     let mut parts = Vec::new();
-    if record.node == "@break" && step.prompt_file.is_none() {
+    if record.node == "@break" && step.prompt_file().is_none() {
         parts.push(break_prompt(record, paths)?);
-    } else if let Some(prompt_file) = step.prompt_file.as_deref() {
+    } else if let Some(prompt_file) = step.prompt_file() {
         let file = spec::confined_file(&record.spec_dir, prompt_file)?;
         let prompt = std::fs::read_to_string(file)?;
         digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
         parts.push(prompt);
-    } else if !message {
+    } else if !matches!(step.kind(), Some(Kind::Message(_))) {
         return Err(WorkflowErr::Refused(format!(
             "steps.{}.prompt-file: an agent step requires prompt-file",
             record.node
@@ -87,16 +86,11 @@ fn break_prompt(record: &RunRecord, paths: &WorkflowPaths) -> Result<String> {
         .collect::<Vec<_>>();
     let invalid = input.is_some_and(|input| input["edge"] == "invalid");
     let failure = if invalid
-        && spec.steps.contains_key(from)
+        && spec.step(from).is_some()
         && input.is_some_and(|input| input["outcome"] == "died")
     {
         "launch failure"
-    } else if invalid
-        && spec
-            .checks
-            .get(from)
-            .is_some_and(|check| check.agent.is_some())
-    {
+    } else if invalid && matches!(spec.check_kind(from), Some(Kind::Judge(_))) {
         "judge failure"
     } else {
         "workflow failure"
@@ -362,14 +356,10 @@ pub(super) fn launch(
     let record = &record;
     // Preparation publishes the attempt before entering this off-lock launch.
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
-    let step = &spec.steps[&record.node];
+    let step = spec.step(&record.node).expect("prepared agent step");
     let prepared = prompt.and_then(|prompt| {
-        // Cleanup drops a budget that does not parse.
-        let budget = spec
-            .step(&record.node)
-            .and_then(|node| node.budget()?.value().ok());
         let overrides = step
-            .launch_overrides(&record.spec_dir, budget)
+            .launch_overrides(&record.spec_dir)
             .map_err(|error| error.to_string())?;
         Ok((prompt, overrides))
     });
@@ -386,9 +376,12 @@ pub(super) fn launch(
                     role: WorkflowAttemptRole::Step,
                 },
                 // Preparation dispatches only validated agent steps here.
-                agent: step.agent.clone().expect("agent step layout"),
+                agent: match step.kind() {
+                    Some(Kind::Agent(agent)) => agent.clone(),
+                    _ => unreachable!("agent step layout"),
+                },
                 lifecycle: attempt.lifecycle,
-                keep: spec.is_break(&record.node) || step.keep.unwrap_or(false),
+                keep: spec.is_break(&record.node) || step.keep().unwrap_or(false),
                 resume: record
                     .restart
                     .as_ref()
@@ -398,7 +391,7 @@ pub(super) fn launch(
                 cwd: record.scope.path.clone(),
                 throttle_turn,
                 overrides,
-                takeover: step.takeover.unwrap_or_default(),
+                takeover: step.takeover().unwrap_or_default(),
                 task: record.task.clone(),
                 evict,
             })
@@ -455,7 +448,7 @@ pub(super) fn launch(
         Err(NotLaunched::Taken(occupancy)) => {
             // The step waits as the first read would have, with no attempt counted.
             t.withdraw_attempt();
-            let wait = super::occupancy_wait(&occupancy, step.takeover.unwrap_or_default());
+            let wait = super::occupancy_wait(&occupancy, step.takeover().unwrap_or_default());
             if let Some(wait) = wait {
                 t.step_wait(wait, None);
             }
@@ -531,7 +524,8 @@ fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
         return true;
     }
     let ending = attempt.ending.as_ref().expect("published agent ending");
-    spec.steps[&attempt.node].keep.unwrap_or(false) && ending.cause == EndCause::Lifecycle
+    let keep = spec.step(&attempt.node).and_then(Node::keep);
+    keep.unwrap_or(false) && ending.cause == EndCause::Lifecycle
 }
 
 pub(super) fn finish(

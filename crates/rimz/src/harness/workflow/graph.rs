@@ -104,9 +104,8 @@ pub struct WalkNode {
 impl Definition {
     /// What one run reserves against a daily cap: its agent steps' per-launch budgets, summed.
     pub(in crate::harness) fn reserved_usd(&self) -> f64 {
-        self.steps
-            .keys()
-            .filter_map(|name| self.step(name))
+        self.steps()
+            .map(|(_, step)| step)
             .filter(|step| matches!(step.kind(), Some(Kind::Agent(_))))
             .filter_map(|step| step.budget()?.value().ok())
             .fold(0.0, |total, budget| total + budget.cap_usd)
@@ -115,33 +114,27 @@ impl Definition {
     /// The profile of every agent step and agent check, beside the account a step pins; a
     /// judge runs on its profile's own login.
     pub(in crate::harness) fn agent_launches(&self) -> Vec<(&str, Option<&crate::ids::LoginName>)> {
-        let steps = self
-            .steps
-            .iter()
-            .filter_map(|(name, step)| match self.step_kind(name) {
-                Some(Kind::Agent(agent)) => Some((agent.as_str(), step.account.as_ref())),
-                _ => None,
-            });
-        let checks = self
-            .checks
-            .keys()
-            .filter_map(|name| match self.check_kind(name) {
-                Some(Kind::Judge(agent)) => Some((agent.as_str(), None)),
-                _ => None,
-            });
+        let steps = self.steps().filter_map(|(_, step)| match step.kind() {
+            Some(Kind::Agent(agent)) => Some((agent.as_str(), step.account())),
+            _ => None,
+        });
+        let checks = self.checks().filter_map(|(_, check)| match check.kind() {
+            Some(Kind::Judge(agent)) => Some((agent.as_str(), None)),
+            _ => None,
+        });
         steps.chain(checks).collect()
     }
 
     /// Reverse postorder, with returning steps below their earlier sending check.
     pub fn walk(&self) -> Walk {
         let mut seen = BTreeSet::new();
-        let mut order = self.walk_component(&self.workflow.start, &mut seen);
-        if self.workflow.deadline.is_some()
-            && let Some(target) = self.target(&self.workflow.start, "deadline")
+        let mut order = self.walk_component(self.start(), &mut seen);
+        if self.deadline().is_some()
+            && let Some(target) = self.target(self.start(), "deadline")
         {
             order.extend(self.walk_component(target.as_str(), &mut seen));
-        } else if let Some(target) = &self.workflow.on.deadline {
-            order.extend(self.walk_component(target, &mut seen));
+        } else if let Some(target) = self.on_deadline() {
+            order.extend(self.walk_component(target.as_str(), &mut seen));
         }
         let parents = self.hanging_steps(&order);
         let mut nodes = Vec::new();
@@ -167,9 +160,9 @@ impl Definition {
             }
         }
         let unreachable = self
-            .checks
-            .keys()
-            .chain(self.steps.keys())
+            .checks()
+            .chain(self.steps())
+            .map(|(name, _)| name)
             .filter(|node| !seen.contains(*node))
             .cloned()
             .collect::<BTreeSet<_>>()
@@ -209,9 +202,8 @@ impl Definition {
             .enumerate()
             .map(|(index, node)| (node, index))
             .collect::<BTreeMap<_, _>>();
-        self.steps
-            .keys()
-            .filter_map(|node| {
+        self.steps()
+            .filter_map(|(node, _)| {
                 let parent = self.step(node)?.then().iter().find_map(|parent| {
                     let parent = parent.node()?;
                     (self.check(parent).is_some()
@@ -283,10 +275,7 @@ impl Definition {
     /// inspection alike.
     pub(super) fn routes_on_failed(&self, node: &str, ending: &str) -> bool {
         matches!(ending, "died" | "timeout" | "limited")
-            && self
-                .steps
-                .get(node)
-                .is_some_and(|step| step.on.failed.is_some())
+            && self.step(node).is_some_and(|step| step.routes("failed"))
     }
 
     pub(super) fn engine_target(&self, node: &str, outcome: &str) -> Target {
@@ -301,7 +290,8 @@ impl Definition {
 
     pub(super) fn compile_edges(&self, node: &str) -> Option<Vec<Edge>> {
         let mut edges = self.node_edges(node)?;
-        let outcomes = if let Some(check) = self.checks.get(node) {
+        let authored = self.authored();
+        let outcomes = if let Some(check) = authored.checks.get(node) {
             if self.check(node).is_some_and(|check| check.is_sleep()) {
                 ["then", "sleeping", "unknown", "invalid", "deadline"]
                     .map(str::to_owned)
@@ -332,7 +322,7 @@ impl Definition {
                     let (target, explicit) = edges.remove(&outcome)?;
                     let (fires, because) = self.fireability(node, &outcome);
                     Some(Edge {
-                        delay: self
+                        delay: authored
                             .checks
                             .get(node)
                             .and_then(|check| check.on.get(&outcome))
@@ -344,7 +334,7 @@ impl Definition {
                         } else if explicit {
                             EdgeSource::Default
                         } else if !self.is_break(node)
-                            && self.workflow.on_break.is_some()
+                            && authored.workflow.on_break.is_some()
                             && FAILURE_EDGES.contains(&outcome.as_str())
                         {
                             EdgeSource::OnBreak
@@ -361,17 +351,19 @@ impl Definition {
     }
 
     /// Whether the check's route for `outcome` is written and marked `default = true`.
-    pub(super) fn declared_default(&self, node: &str, outcome: &str) -> bool {
-        self.checks
+    pub fn declared_default(&self, node: &str, outcome: &str) -> bool {
+        self.authored()
+            .checks
             .get(node)
             .and_then(|check| check.on.get(outcome))
             .is_some_and(super::spec::Route::is_default)
     }
 
     fn fireability(&self, node: &str, outcome: &str) -> (Fireability, Option<NeverReason>) {
+        let authored = self.authored();
         if outcome == "deadline" {
             return (
-                if self.workflow.deadline.is_some() {
+                if authored.workflow.deadline.is_some() {
                     Fireability::Yes
                 } else {
                     Fireability::WithDeadline
@@ -379,7 +371,7 @@ impl Definition {
                 None,
             );
         }
-        if let Some(check) = self.checks.get(node) {
+        if let Some(check) = authored.checks.get(node) {
             let because =
                 (outcome == "timeout" && check.timeout.is_none()).then_some(NeverReason::NoTimeout);
             return (
@@ -391,7 +383,7 @@ impl Definition {
                 because,
             );
         }
-        let Some(step) = self.steps.get(node) else {
+        let Some(step) = authored.steps.get(node) else {
             return (Fireability::Yes, None);
         };
         if outcome == "cap" && step.max_visits.is_none() && step.max_visits_per_outcome.is_none() {
@@ -407,7 +399,8 @@ impl Definition {
     }
 
     fn node_edges(&self, node: &str) -> Option<BTreeMap<String, (Target, bool)>> {
-        let mut edges = if let Some(check) = self.checks.get(node) {
+        let authored = self.authored();
+        let mut edges = if let Some(check) = authored.checks.get(node) {
             let sleep = self.check(node).is_some_and(|check| check.is_sleep());
             check
                 .edges(self.check_kind(node))
@@ -423,14 +416,15 @@ impl Definition {
                 })
                 .collect()
         } else {
-            self.steps
+            authored
+                .steps
                 .get(node)?
                 .edges()
                 .into_iter()
                 .map(|(outcome, edge)| (outcome.to_owned(), edge))
                 .collect::<BTreeMap<_, _>>()
         };
-        if let Some(step) = self.steps.get(node) {
+        if let Some(step) = authored.steps.get(node) {
             let failure = match self.step_kind(node) {
                 Some(Kind::Agent(_)) => Some(("invalid", &step.on.invalid)),
                 Some(Kind::Message(_)) => Some(("undelivered", &step.on.undelivered)),
@@ -450,16 +444,12 @@ impl Definition {
             edges.insert(
                 "deadline".into(),
                 (
-                    self.workflow
-                        .on
-                        .deadline
-                        .as_deref()
-                        .map_or(Target::User, Target::parse),
-                    self.workflow.on.deadline.is_some(),
+                    self.on_deadline().cloned().unwrap_or(Target::User),
+                    self.on_deadline().is_some(),
                 ),
             );
         }
-        let target = match &self.workflow.on_break {
+        let target = match &authored.workflow.on_break {
             _ if self.is_break(node) => Target::Failed,
             Some(OnBreak::Target(target)) => Target::parse(target),
             Some(OnBreak::Agent { .. }) => Target::Node(BREAK.into()),

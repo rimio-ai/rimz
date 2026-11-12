@@ -85,7 +85,7 @@ pub(super) fn resume(
     } else {
         format!("extended {address}")
     };
-    let step = spec.steps.get(node);
+    let step = spec.step(node);
     if resumed
         && let Some((_, used, max)) = step.and_then(|step| {
             let mut destination = record.clone();
@@ -132,7 +132,7 @@ pub(super) fn resume(
             render::err(),
             "warning: deadline {} has already passed; {} — {}",
             render::workflow_clock(deadline, now),
-            immediate(target.as_str()),
+            immediate(&target),
             resolve::run_command(
                 &record,
                 "resume",
@@ -264,7 +264,7 @@ fn continue_session(
         let spec = workflow::load(&run.paths.home).ok();
         let kind = if spec
             .as_ref()
-            .is_some_and(|spec| spec.checks.contains_key(&run.record.node))
+            .is_some_and(|spec| spec.check(&run.record.node).is_some())
         {
             "check"
         } else {
@@ -307,8 +307,8 @@ fn continue_session(
     Ok((seq, agent.agent_id.clone()))
 }
 
-fn immediate(target: &str) -> String {
-    if target == "@user" {
+fn immediate(target: &workflow::Target) -> String {
+    if *target == workflow::Target::User {
         "the run will park again at once".into()
     } else {
         format!("the run goes to {target} at once")

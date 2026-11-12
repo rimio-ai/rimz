@@ -54,10 +54,10 @@ R20 differs from shipped: today `crates/rimz/src/harness/workflow/engine.rs::res
 
 Differs from shipped, for R13 to R19:
 
-- A command's non-zero exit, signal or lost host is `died` and does not follow `then`. Today `crates/rimz/src/harness/workflow/engine.rs::command_step` ends a non-zero exit or a signal `died`, `crates/rimz/src/harness/workflow/engine.rs::prepare` reclaims a lost host as `canceled`, and `crates/rimz/src/harness/workflow/graph.rs::WorkflowSpec::target` sends a step's `ended`, `died`, `canceled`, `limited` and `timeout` through `then` unless `on.failed` is set and the ending is `died`, `timeout` or `limited`.
+- A command's non-zero exit, signal or lost host is `died` and does not follow `then`. Today `crates/rimz/src/harness/workflow/engine.rs::command_step` ends a non-zero exit or a signal `died`, `crates/rimz/src/harness/workflow/engine.rs::prepare` reclaims a lost host as `canceled`, and `crates/rimz/src/harness/workflow/graph.rs::Definition::target` sends a step's `ended`, `died`, `canceled`, `limited` and `timeout` through `then` unless `on.failed` is set and the ending is `died`, `timeout` or `limited`.
 - An agent launch failure is `died`. Today the engine routes it to the step's `invalid` edge (the launch failure branch in `crates/rimz/src/harness/workflow/engine/agent.rs`).
 - A script's non-zero exit is `died`. Today `crates/rimz/src/harness/workflow/script.rs::evaluate` turns it into an unusable answer, `invalid`.
-- A judge's budget refusal is `limited` and routable. Today `WorkflowSpec::target` sends a check's `budget` outcome to `@failed`, hardwired.
+- A judge's budget refusal is `limited` and routable. Today `Definition::target` sends a check's `budget` outcome to `@failed`, hardwired.
 - A start too large for its cap is `capacity` and routable. Today `crates/rimz/src/harness/workflow/engine.rs::prepare` ends the attempt `died` with a route to `@failed`.
 - An expired capacity wait takes the whole chain. Today `capacity` is not among the edges that fall back to `on-break` (`crates/rimz/src/harness/workflow/graph.rs::FAILURE_EDGES`).
 - A session that crashes mid-turn is `died`. Today `settle_session_exit_with_spend` settles any non-pending session as completed, without reading the exit.

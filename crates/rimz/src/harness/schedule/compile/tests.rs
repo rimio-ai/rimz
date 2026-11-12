@@ -7,7 +7,7 @@ use crate::harness::schedule::catalog::TaskSource;
 use crate::harness::schedule::run_log::LoopRunResult;
 use crate::harness::signal::Signal;
 use crate::harness::workflow::tests::{
-    FakeHost, declines, evaluate, finish_judge, resolved_edges, subscription_prompts,
+    FakeHost, authored, declines, evaluate, finish_judge, resolved_edges, subscription_prompts,
 };
 use crate::harness::workflow::{
     Definition, DefinitionSource, EdgeSource, InlineDefinition, LaunchFailure, LeaderTurn,
@@ -111,7 +111,7 @@ fn polarity_picks_which_verdict_acts_and_check_only_ignores_it() {
             let row = format!("agent='claude'\nprompt='go'\nevery='1h'\n{guard}\non='{on}'\n");
             let (report, spec) = report(&row);
             assert_eq!(errors(&report), Vec::<(String, String)>::new(), "{row}");
-            let node = &spec.workflow.start;
+            let node = &authored(&spec).workflow.start;
             assert_eq!(
                 (route(&spec, node, "pass"), route(&spec, node, "fail")),
                 (pass.to_owned(), fail.to_owned()),
@@ -133,8 +133,11 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     let (_, spec) = report(
         "agent='claude'\nprompt='go'\nevery='1h'\ncheck='true'\ncheck-timeout='30s'\non='fail'\njudge=[{agent='claude',prompt='a'},{agent='claude',prompt='b'}]\n",
     );
-    assert_eq!(spec.workflow.start, "check");
-    assert_eq!(spec.checks["check"].timeout.as_deref(), Some("30s"));
+    assert_eq!(authored(&spec).workflow.start, "check");
+    assert_eq!(
+        authored(&spec).checks["check"].timeout.as_deref(),
+        Some("30s")
+    );
     assert_eq!(
         (
             route(&spec, "check", "fail"),
@@ -162,7 +165,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
             );
         }
     }
-    let agent = &spec.steps["agent"];
+    let agent = &authored(&spec).steps["agent"];
     assert_eq!(
         (
             agent.lifecycle(),
@@ -183,13 +186,16 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
 
     let (_, spec) = report("agent='claude'\nprompt='go'\nevery='1h'\nworktree='x'\n");
     assert_eq!(
-        (spec.workflow.scope, spec.steps["agent"].worktree.as_deref()),
+        (
+            authored(&spec).workflow.scope,
+            authored(&spec).steps["agent"].worktree.as_deref()
+        ),
         (records::ScopeKind::Worktree, Some("x")),
         "a hand-written named tree is every fire's agent tree, under the row's checkout"
     );
 
     let (_, spec) = report("agent='claude'\nprompt='go'\nevery='1h'\nverify='make test'\n");
-    let agent = &spec.steps["agent"];
+    let agent = &authored(&spec).steps["agent"];
     assert_eq!(
         (agent.lifecycle(), agent.max_visits, agent.on.cap.as_deref()),
         (
@@ -209,7 +215,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     let (_, spec) = report(
         "wait={kind='claude',session='s-1',handle='coder'}\nprompt='go'\ncheck='true'\non='fail'\nsignal='ci.passed'\n",
     );
-    let deliver = &spec.steps["deliver"];
+    let deliver = &authored(&spec).steps["deliver"];
     assert_eq!(
         (
             deliver.message.as_deref(),
@@ -240,7 +246,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
             "@wait".into()
         )
     );
-    let stay = &spec.steps["agent"];
+    let stay = &authored(&spec).steps["agent"];
     assert_eq!(
         (stay.lifecycle(), stay.timeout.as_deref()),
         (crate::store::workflow::StepLifecycle::Stay, None),
@@ -258,7 +264,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     assert_eq!(
         (
             route(&spec, "check", "fail"),
-            spec.workflow.deadline.as_deref()
+            authored(&spec).workflow.deadline.as_deref()
         ),
         ("@done".into(), None),
         "a declined poll ends its run and the graph carries no deadline"
@@ -335,7 +341,10 @@ fn assets_are_read_when_a_fire_materializes_the_definition() {
         )
     );
     let spec = crate::harness::workflow::parse(&first.text).unwrap();
-    assert_eq!(spec.steps["agent"].timeout.as_deref(), Some("15m"));
+    assert_eq!(
+        authored(&spec).steps["agent"].timeout.as_deref(),
+        Some("15m")
+    );
     fs::remove_file(&judge).unwrap();
     assert!(
         compiled
@@ -1324,7 +1333,7 @@ fn a_judge_decline_waits_for_the_declining_judges_own_recheck() {
         "agent='claude'\nprompt='settle'\nstay=true\nwhen=['ci=failed']\ncheck='true'\non='success'\njudge=[{agent='claude',prompt='a',recheck='1h'},{agent='claude',prompt='b',recheck='10m'},{agent='claude',prompt='c'}]\n",
     );
     let wait = |node: &str| {
-        let check = &spec.checks[node];
+        let check = &authored(&spec).checks[node];
         (check.timeout.clone(), route(&spec, node, "timeout"))
     };
     assert_eq!(
@@ -1367,7 +1376,7 @@ fn a_clock_tasks_judge_decline_without_a_recheck_holds_its_run_untimed() {
     };
     let (_, spec) = report(&row(""));
     assert_eq!(route(&spec, "judge-1", "fail"), "hold-judge-1");
-    let hold = &spec.checks["hold-judge-1"];
+    let hold = &authored(&spec).checks["hold-judge-1"];
     assert_eq!(
         (hold.sleep.as_deref(), hold.then.as_deref()),
         (Some("365d"), Some("@done")),
@@ -1413,10 +1422,9 @@ fn eject_nightly(root: &std::path::Path, workflow: &str) -> std::path::PathBuf {
 
 /// Every node with its resolved edges, in a comparable form.
 fn graph(spec: &Definition) -> Vec<(String, Value)> {
-    spec.checks
-        .keys()
-        .chain(spec.steps.keys())
-        .map(|node| {
+    spec.checks()
+        .chain(spec.steps())
+        .map(|(node, _)| {
             let edges = serde_json::to_value(resolved_edges(spec, node).unwrap()).unwrap();
             (node.clone(), edges)
         })

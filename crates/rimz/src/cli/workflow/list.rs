@@ -75,9 +75,9 @@ pub(super) fn render(
                 let detail = workflow_view::detail(&run.record, spec.as_ref(), now, None);
                 let mut row = json_row(&run.record, &detail);
                 if let Some(spec) = spec
-                    && !spec.ignored.is_empty()
+                    && !spec.ignored().is_empty()
                 {
-                    row["warnings"] = serde_json::json!(spec.ignored);
+                    row["warnings"] = serde_json::json!(spec.ignored());
                 }
                 row
             })
@@ -132,7 +132,7 @@ pub(super) fn render(
                 record,
                 spec: spec.as_ref(),
                 journal: records::journal(&run.paths).unwrap_or_default(),
-                ignored: spec.as_ref().map_or(&[], |spec| spec.ignored.as_slice()),
+                ignored: spec.as_ref().map_or(&[], |spec| spec.ignored()),
                 address: record.address().to_string(),
                 glyph: glyph(role),
                 state: record.state,

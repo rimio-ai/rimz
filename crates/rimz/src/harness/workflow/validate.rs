@@ -74,24 +74,33 @@ pub(super) fn validate_spec(
     project_root: Option<&Path>,
 ) -> Validation {
     let mut report = Validation {
-        warnings: spec.ignored.clone(),
+        warnings: spec.authored().ignored.clone(),
         ..Default::default()
     };
     if let Err(err) = crate::harness::name::validate_name(name) {
         report.error("workflow", err);
     }
-    if !spec.checks.contains_key(&spec.workflow.start)
-        && !spec.steps.contains_key(&spec.workflow.start)
+    if !spec
+        .authored()
+        .checks
+        .contains_key(&spec.authored().workflow.start)
+        && !spec
+            .authored()
+            .steps
+            .contains_key(&spec.authored().workflow.start)
     {
         report.error(
             "workflow.start",
-            format!("{} must name a check or a step", spec.workflow.start),
+            format!(
+                "{} must name a check or a step",
+                spec.authored().workflow.start
+            ),
         );
     }
-    if let Some(target) = &spec.workflow.on.deadline {
+    if let Some(target) = &spec.authored().workflow.on.deadline {
         report.target(spec, "workflow.on.deadline", target);
     }
-    if let Some(spec::OnBreak::Target(target)) = &spec.workflow.on_break
+    if let Some(spec::OnBreak::Target(target)) = &spec.authored().workflow.on_break
         && !matches!(target.as_str(), "@done" | "@failed")
     {
         report.error(
@@ -99,10 +108,10 @@ pub(super) fn validate_spec(
             "use @failed, @done, or { agent = \"<profile>\" }",
         );
     }
-    for (node, check) in &spec.checks {
+    for (node, check) in &spec.authored().checks {
         let path = format!("checks.{node}");
         report.node_name(&path, node);
-        if spec.steps.contains_key(node) {
+        if spec.authored().steps.contains_key(node) {
             report.error(&path, "name is also used by a step");
         }
         if check.kind().is_none() {
@@ -230,13 +239,14 @@ pub(super) fn validate_spec(
         });
     }
     let answerable = spec
+        .authored()
         .checks
         .keys()
         .flat_map(|node| spec.edges(node))
         .map(|edge| edge.outcome)
         .filter(|outcome| !RESERVED_OUTCOMES.contains(&outcome.as_str()))
         .collect::<BTreeSet<_>>();
-    for (node, step) in &spec.steps {
+    for (node, step) in &spec.authored().steps {
         let at_break = spec.is_break(node);
         let path = if at_break {
             "workflow.on-break".into()
@@ -262,11 +272,12 @@ pub(super) fn validate_spec(
                     );
                 }
             }
-            if cap.reset_on().is_empty() && spec.workflow.start != *node {
+            if cap.reset_on().is_empty() && spec.authored().workflow.start != *node {
                 let inbound = spec
+                    .authored()
                     .checks
                     .keys()
-                    .chain(spec.steps.keys())
+                    .chain(spec.authored().steps.keys())
                     .flat_map(|source| spec.edges(source))
                     .filter(|edge| edge.target.node() == Some(node.as_str()))
                     .map(|edge| edge.outcome)
@@ -364,7 +375,7 @@ pub(super) fn validate_spec(
             && step
                 .then
                 .iter()
-                .any(|target| !spec.checks.contains_key(target))
+                .any(|target| !spec.authored().checks.contains_key(target))
         {
             report.error(
                 &format!("{path}.then"),
@@ -397,7 +408,7 @@ pub(super) fn validate_spec(
             && step
                 .then
                 .iter()
-                .filter_map(|node| spec.checks.get(node))
+                .filter_map(|node| spec.authored().checks.get(node))
                 .any(|check| check.is_sleep())
         {
             report.error(
@@ -511,6 +522,7 @@ pub(super) fn validate_spec(
         .collect::<BTreeSet<_>>();
     if !missing.is_empty()
         && let Some(issue) = spec
+            .authored()
             .ignored
             .iter()
             .find(|issue| issue.path.starts_with("workflow.on-break"))
@@ -559,12 +571,12 @@ pub(super) fn validate_spec(
             }
         }
     }
-    for (node, step) in &spec.steps {
+    for (node, step) in &spec.authored().steps {
         if let Some(visits) = step.max_visits
             && never_waits(step)
             && cycles_to(spec, node, |name| {
-                spec.steps.get(name).is_some_and(never_waits)
-                    || (spec.checks.contains_key(name)
+                spec.authored().steps.get(name).is_some_and(never_waits)
+                    || (spec.authored().checks.contains_key(name)
                         && !spec
                             .edges(name)
                             .iter()
@@ -583,6 +595,7 @@ pub(super) fn validate_spec(
         if step.max_visits.is_none()
             && cycles_to(spec, node, |name| {
                 !spec
+                    .authored()
                     .steps
                     .get(name)
                     .is_some_and(|step| step.max_visits.is_some())
@@ -602,13 +615,13 @@ pub(super) fn validate_spec(
             );
         }
     }
-    for node in spec.checks.keys() {
+    for node in spec.authored().checks.keys() {
         if !spec
             .edges(node)
             .iter()
             .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait)
             && cycles_to(spec, node, |name| {
-                spec.checks.contains_key(name)
+                spec.authored().checks.contains_key(name)
                     && !spec
                         .edges(name)
                         .iter()
@@ -737,8 +750,8 @@ impl Validation {
 
     fn target(&mut self, spec: &Definition, path: &str, target: &str) {
         if !matches!(target, "@wait" | "@done" | "@failed")
-            && !spec.checks.contains_key(target)
-            && !spec.steps.contains_key(target)
+            && !spec.authored().checks.contains_key(target)
+            && !spec.authored().steps.contains_key(target)
         {
             self.error(path, format!("unknown target {target}"));
         }
@@ -881,7 +894,8 @@ fn cycles_to(spec: &Definition, start: &str, allowed: impl Fn(&str) -> bool) -> 
         }
         for edge in spec.resolved_edges(&node).unwrap_or_default() {
             if edge.outcome == "deadline"
-                || (spec.steps.contains_key(&node) && edge.source != EdgeSource::Explicit)
+                || (spec.authored().steps.contains_key(&node)
+                    && edge.source != EdgeSource::Explicit)
             {
                 continue;
             }

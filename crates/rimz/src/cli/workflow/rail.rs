@@ -2,10 +2,8 @@ use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
 use rimz::config::GlyphRole;
-use rimz::harness::when::WhenExpr;
 use rimz::harness::workflow::{
-    Check, CheckKind, Definition, Edge, EdgeSource, Fireability, Hop, Route, StepKind, Target,
-    WalkNode, reached,
+    Condition, Definition, Edge, EdgeSource, Fireability, Hop, Kind, Target, WalkNode, reached,
 };
 use rimz::store::workflow::{JournalEntry, RunRecord, RunState, StepLifecycle};
 
@@ -127,7 +125,7 @@ pub(super) fn horizontal(
                         .as_ref()
                         .is_some_and(|held| held.attempt.node == node.node));
             let reached = counts.contains_key(node.node.as_str());
-            let check = spec.checks.contains_key(&node.node);
+            let check = spec.check(&node.node).is_some();
             let terminal = record.state.is_terminal() && node.node == record.node;
             let state_style = render::status::workflow(
                 record.state,
@@ -314,6 +312,8 @@ pub(super) struct CaseRow {
     pub(super) when: String,
     pub(super) outcome: String,
     pub(super) target: String,
+    /// The terminal an undelayed route ends the run at; `None` for a node or a delayed route.
+    pub(super) ends: Option<Target>,
     pub(super) readings: Vec<String>,
 }
 
@@ -339,7 +339,7 @@ impl Rail {
         Self {
             rows,
             unreachable,
-            start: spec.workflow.start.clone(),
+            start: spec.start().to_owned(),
         }
     }
 
@@ -372,7 +372,7 @@ impl Row {
         let mut row = Self {
             name: name.into(),
             hangs_under,
-            glyph: if spec.checks.contains_key(name) {
+            glyph: if spec.check(name).is_some() {
                 GlyphRole::PipelineCheckFuture
             } else {
                 GlyphRole::PipelineFuture
@@ -384,96 +384,79 @@ impl Row {
             details: Vec::new(),
             cases: Vec::new(),
         };
-        if let Some(check) = spec.checks.get(name) {
+        if let Some(check) = spec.check(name) {
             let runner = match check.kind() {
-                Some(CheckKind::Run(run)) => render::one_line(run),
-                Some(CheckKind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
-                Some(CheckKind::Agent(agent)) => format!("{agent}, headless"),
-                Some(CheckKind::Condition) => "condition".into(),
-                Some(CheckKind::Sleep) => {
-                    format!("sleep {}", check.sleep.as_deref().unwrap_or_default())
+                Some(Kind::Run(run)) => render::one_line(run.text()),
+                Some(Kind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
+                Some(Kind::Judge(agent)) => format!("{agent}, headless"),
+                Some(Kind::Condition(_)) => "condition".into(),
+                Some(Kind::Sleep(sleep)) => format!("sleep {}", sleep.duration().text()),
+                Some(Kind::Agent(_) | Kind::Message(_)) | None => {
+                    "invalid runner; see workflow validate".into()
                 }
-                None => "invalid runner; see workflow validate".into(),
             };
             row.heading = format!("check  {runner}");
-            row.summary.clone_from(&check.summary);
+            row.summary = check.summary().map(str::to_owned);
             if check.is_sleep() {
-                if let Some(when) = &check.when {
-                    row.details.push(format!(
-                        "when {}",
-                        WhenExpr::parse(when)
-                            .map(|expression| expression.to_string())
-                            .unwrap_or_else(|_| format!("invalid condition: {when:?}"))
-                    ));
+                if let Some(when) = check.when() {
+                    row.details.push(format!("when {}", condition_text(when)));
                 }
-                if let Some(hold) = &check.hold {
+                if let Some(hold) = check.hold() {
                     row.details.push(format!("for {hold}"));
                 }
-                if let Some(then) = &check.then {
+                if let Some(then) = check.then().first() {
                     row.details
                         .push(format!("then {}", target(name, then, order)));
                 }
             }
-            if let Some(timeout) = &check.timeout
+            if let Some(timeout) = check.timeout()
                 && let Some(edge) = live.iter().find(|edge| edge.outcome == "timeout")
             {
                 row.heading.push_str(&format!(
-                    " · waits ≤{timeout}, then {}{}",
+                    " · waits ≤{}, then {}{}",
+                    timeout.text(),
                     edge_target(name, edge, order),
-                    declared_mark(check, "timeout")
+                    declared_mark(spec, name, "timeout")
                 ));
             }
-            if let Some(window) = &check.window {
-                row.heading.push_str(&format!(" · window {window}"));
+            if let Some(window) = check.window() {
+                row.heading
+                    .push_str(&format!(" · window {}", window.text()));
             }
-            if !check.cases.is_empty() {
+            let cases = check.listed_cases();
+            if !cases.is_empty() {
                 if let Some(note) = case_note(name, &edges, order) {
                     row.details.push(note);
                 }
-                for (index, case) in check.cases.iter().enumerate() {
+                for (index, case) in cases.iter().enumerate() {
                     if let Some(edge) = live.iter().find(|edge| edge.outcome == case.outcome) {
                         let hold = case
-                            .hold
-                            .as_ref()
-                            .map(|hold| format!(" for {hold}"))
+                            .hold()
+                            .map(|hold| format!(" for {}", hold.text()))
                             .unwrap_or_default();
                         row.cases.push(CaseRow {
                             mark: String::new(),
-                            style: match edge.target.as_str() {
-                                "@done" => render::palette::good(),
-                                "@failed" => render::palette::alarm(),
-                                _ => render::palette::body(),
-                            },
+                            style: target_style(&edge.target),
                             number: Some(index + 1),
-                            when: format!(
-                                "{}{hold}",
-                                WhenExpr::parse(&case.when)
-                                    .map(|expression| expression.to_string())
-                                    .unwrap_or_else(|_| format!(
-                                        "invalid condition: {:?}",
-                                        case.when
-                                    ))
-                            ),
+                            when: format!("{}{hold}", condition_text(case.when())),
                             outcome: case.outcome.clone(),
                             target: edge_target(name, edge, order),
+                            ends: ends(edge),
                             readings: Vec::new(),
                         });
                     }
                 }
-                if let Some(outcome) = &check.else_outcome
-                    && let Some(edge) = live.iter().find(|edge| edge.outcome == *outcome)
+                if let Some(outcome) = check.else_outcome()
+                    && let Some(edge) = live.iter().find(|edge| edge.outcome == outcome)
                 {
                     row.cases.push(CaseRow {
                         mark: String::new(),
-                        style: match edge.target.as_str() {
-                            "@done" => render::palette::good(),
-                            "@failed" => render::palette::alarm(),
-                            _ => render::palette::body(),
-                        },
+                        style: target_style(&edge.target),
                         number: None,
                         when: "none true".into(),
-                        outcome: outcome.clone(),
+                        outcome: outcome.to_owned(),
                         target: edge_target(name, edge, order),
+                        ends: ends(edge),
                         readings: Vec::new(),
                     });
                 }
@@ -489,28 +472,28 @@ impl Row {
                     || edge.outcome == "deadline"
                     || (edge.outcome == "invalid"
                         && edge.source == EdgeSource::Default
-                        && !declared_default(check, "invalid"))
-                    || (!check.cases.is_empty()
+                        && !spec.declared_default(name, "invalid"))
+                    || (!cases.is_empty()
                         && (edge.outcome == "unknown"
-                            || check.cases.iter().any(|case| case.outcome == edge.outcome)
-                            || check.else_outcome.as_deref() == Some(&edge.outcome)))
+                            || cases.iter().any(|case| case.outcome == edge.outcome)
+                            || check.else_outcome() == Some(edge.outcome.as_str())))
                 {
                     continue;
                 }
                 routes.push(format!(
                     "{}{}",
                     edge_text(name, edge, order),
-                    declared_mark(check, &edge.outcome)
+                    declared_mark(spec, name, &edge.outcome)
                 ));
             }
             if !routes.is_empty() {
                 row.details.push(routes.join(" · "));
             }
-        } else if let Some(step) = spec.steps.get(name) {
+        } else if let Some(step) = spec.step(name) {
             let runner = match step.kind() {
-                Some(StepKind::Run(run)) => render::one_line(run),
-                Some(StepKind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
-                Some(StepKind::Agent(agent)) => format!(
+                Some(Kind::Run(run)) => render::one_line(run.text()),
+                Some(Kind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
+                Some(Kind::Agent(agent)) => format!(
                     "{agent} · {}",
                     match step.lifecycle() {
                         StepLifecycle::Turn => "1 turn",
@@ -518,24 +501,26 @@ impl Row {
                         StepLifecycle::Until => "lifecycle until",
                     }
                 ),
-                Some(StepKind::Message(target)) => target.into(),
-                None => "invalid runner; see workflow validate".into(),
+                Some(Kind::Message(target)) => target.clone(),
+                Some(Kind::Judge(_) | Kind::Condition(_) | Kind::Sleep(_)) | None => {
+                    "invalid runner; see workflow validate".into()
+                }
             };
             row.heading = format!("step  {runner}");
-            if let Some(timeout) = &step.timeout {
-                row.heading.push_str(&format!(" ≤{timeout}"));
+            if let Some(timeout) = step.timeout() {
+                row.heading.push_str(&format!(" ≤{}", timeout.text()));
             }
-            row.summary.clone_from(&step.summary);
-            if step.takeover == Some(true) {
+            row.summary = step.summary().map(str::to_owned);
+            if step.takeover() == Some(true) {
                 row.details.push("takes over".into());
             }
-            if step.share == Some(true) {
+            if step.share() == Some(true) {
                 row.details.push("shares the checkout".into());
             }
-            if let Some(window) = &step.window {
-                row.details.push(format!("window {window}"));
+            if let Some(window) = step.window() {
+                row.details.push(format!("window {}", window.text()));
             }
-            if let Some(wait) = step.capacity_wait
+            if let Some(wait) = step.capacity_wait()
                 && wait != rimz::config::CapacityWait::Forever
             {
                 row.details
@@ -545,13 +530,13 @@ impl Row {
                 match edge.outcome.as_str() {
                     "deadline" => continue,
                     "cap" => {
-                        if let Some(max) = step.max_visits {
+                        if let Some(max) = step.max_visits() {
                             row.details.push(format!(
                                 "{max} visits, then {}",
-                                target(name, edge.target.as_str(), order)
+                                target(name, &edge.target, order)
                             ));
                         }
-                        if let Some(max) = &step.max_visits_per_outcome {
+                        if let Some(max) = step.max_visits_per_outcome() {
                             let reset_on = match max.reset_on() {
                                 [] => String::new(),
                                 outcomes => format!(" (reset-on {})", outcomes.join(", ")),
@@ -559,11 +544,11 @@ impl Row {
                             row.details.push(format!(
                                 "max-visits-per-outcome {}{reset_on}, then {}",
                                 max.limit(),
-                                target(name, edge.target.as_str(), order)
+                                target(name, &edge.target, order)
                             ));
                         }
                     }
-                    "then" => row.details.push(target(name, edge.target.as_str(), order)),
+                    "then" => row.details.push(target(name, &edge.target, order)),
                     _ => row.details.push(edge_text(name, edge, order)),
                 }
             }
@@ -653,20 +638,37 @@ pub(super) fn after(edge: &Edge) -> String {
 }
 
 fn edge_target(node: &str, edge: &Edge, order: &[&str]) -> String {
-    format!(
-        "{}{}",
-        target(node, edge.target.as_str(), order),
-        after(edge)
-    )
+    format!("{}{}", target(node, &edge.target, order), after(edge))
 }
 
-fn target(node: &str, target: &str, order: &[&str]) -> String {
-    if target.starts_with('@') {
-        return target.into();
-    }
+fn target(node: &str, target: &Target, order: &[&str]) -> String {
+    let Some(target) = target.authored_node() else {
+        return target.as_str().into();
+    };
     let above = order.iter().position(|name| *name == target)
         <= order.iter().position(|name| *name == node);
     format!("{} {target}", if above { "↑" } else { "→" })
+}
+
+fn ends(edge: &Edge) -> Option<Target> {
+    (matches!(edge.target, Target::Done | Target::Failed) && edge.delay.is_none())
+        .then(|| edge.target.clone())
+}
+
+fn target_style(target: &Target) -> anstyle::Style {
+    match target {
+        Target::Done => render::palette::good(),
+        Target::Failed => render::palette::alarm(),
+        _ => render::palette::body(),
+    }
+}
+
+/// A condition as its expression prints, or its authored clauses when they do not parse.
+pub(super) fn condition_text(condition: &Condition) -> String {
+    condition.expression().map_or_else(
+        |_| format!("invalid condition: {:?}", condition.clauses()),
+        ToString::to_string,
+    )
 }
 
 fn write_wrapped(
@@ -712,16 +714,8 @@ fn write_wrapped(
     Ok(())
 }
 
-/// Whether the check's route for `outcome` is written and marked `default = true`.
-fn declared_default(check: &Check, outcome: &str) -> bool {
-    matches!(
-        check.on.get(outcome),
-        Some(Route::Delayed { default: true, .. })
-    )
-}
-
-fn declared_mark(check: &Check, outcome: &str) -> &'static str {
-    if declared_default(check, outcome) {
+fn declared_mark(spec: &Definition, node: &str, outcome: &str) -> &'static str {
+    if spec.declared_default(node, outcome) {
         " (default)"
     } else {
         ""
@@ -731,21 +725,17 @@ fn declared_mark(check: &Check, outcome: &str) -> &'static str {
 pub(super) fn defaults(spec: &Definition) -> Vec<&'static str> {
     let mut sentences = Vec::new();
     let edges = spec
-        .checks
-        .keys()
-        .chain(spec.steps.keys())
-        .flat_map(|name| {
-            spec.edges(name).into_iter().filter(move |edge| {
-                spec.checks
-                    .get(name)
-                    .is_none_or(|check| !declared_default(check, &edge.outcome))
-            })
+        .checks()
+        .chain(spec.steps())
+        .flat_map(|(name, _)| {
+            spec.edges(name)
+                .into_iter()
+                .filter(move |edge| !spec.declared_default(name, &edge.outcome))
         })
         .collect::<Vec<_>>();
     if spec
-        .steps
-        .values()
-        .any(|step| matches!(step.kind(), Some(StepKind::Agent(_))) && step.lifecycle().is_turn())
+        .steps()
+        .any(|(_, step)| matches!(step.kind(), Some(Kind::Agent(_))) && step.lifecycle().is_turn())
     {
         sentences.push("A turn step goes on to its next check when its turn ends cleanly or its provider exits.");
     }
@@ -756,7 +746,7 @@ pub(super) fn defaults(spec: &Definition) -> Vec<&'static str> {
     }) {
         sentences.push("An unrouted failure ends the run as failed.");
     }
-    if spec.workflow.deadline.is_none()
+    if spec.deadline().is_none()
         && edges
             .iter()
             .any(|edge| edge.outcome == "deadline" && edge.source == EdgeSource::Default)

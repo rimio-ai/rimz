@@ -1,6 +1,6 @@
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
-use rimz::harness::workflow::{Definition, HopKind};
+use rimz::harness::workflow::{Definition, HopKind, Kind, Target};
 use rimz::store::workflow::{JournalEntry, JournalEvent, RunState};
 
 use super::*;
@@ -43,7 +43,7 @@ pub(super) fn render(
             "dir":run.paths.work,"record":run.record,"journal":journal,
         });
         if let Ok(spec) = &spec {
-            value["warnings"] = serde_json::json!(spec.ignored);
+            value["warnings"] = serde_json::json!(spec.ignored());
         }
         if let Some(notes) = notes {
             value["notes"] = serde_json::json!(notes);
@@ -80,7 +80,7 @@ pub(super) fn render(
     let mut out = render::out();
     view.headline(&mut out, pr_number, agent.as_deref())?;
     if history {
-        for warning in &spec.ignored {
+        for warning in spec.ignored() {
             writeln!(out, "warning: {}", warning.message)?;
         }
         return view.history(&mut out);
@@ -107,7 +107,7 @@ pub(super) fn render(
         view.park(&mut out)?;
     }
     view.rail(&mut out)?;
-    for warning in &spec.ignored {
+    for warning in spec.ignored() {
         writeln!(out, "warning: {}", warning.message)?;
     }
     view.visits(&mut out)?;
@@ -181,7 +181,7 @@ impl View<'_> {
             forecast = bound;
             state
         } else if let Some(wait) = workflow_view::wait(record, Some(self.spec), self.now) {
-            if let Some(check) = self.spec.checks.get(&record.node) {
+            if let Some(check) = self.spec.check(&record.node) {
                 if let Some((at, target)) = workflow::next_bound(self.spec, record, None, self.now)?
                 {
                     forecast = format!(" · gives up {}, then {target}", self.clock(at));
@@ -240,8 +240,8 @@ impl View<'_> {
         if asking.is_some() {
             let timeout = record
                 .session_attempt()
-                .and_then(|a| self.spec.steps.get(&a.node))
-                .and_then(|step| step.timeout.as_ref());
+                .and_then(|a| self.spec.step(&a.node))
+                .and_then(|step| step.timeout());
             writeln!(
                 out,
                 "answer in its pane or with rimz answer · {}",
@@ -257,7 +257,7 @@ impl View<'_> {
 
     fn running(&self) -> String {
         let record = self.record;
-        if !self.spec.steps.contains_key(&record.node) {
+        if !self.spec.step(&record.node).is_some() {
             return format!(
                 "checking {} {}",
                 record.node,
@@ -278,8 +278,7 @@ impl View<'_> {
 
     fn visit(&self) -> String {
         self.spec
-            .steps
-            .get(&self.record.node)
+            .step(&self.record.node)
             .and_then(|step| {
                 step.visit_bounds(
                     self.record.visits.get(&self.record.node),
@@ -296,8 +295,7 @@ impl View<'_> {
     fn hold(&self) -> Result<Option<(String, String)>> {
         if self
             .spec
-            .checks
-            .get(&self.record.node)
+            .check(&self.record.node)
             .is_some_and(|check| check.is_sleep())
         {
             return Ok(None);
@@ -318,13 +316,12 @@ impl View<'_> {
         };
         let Some(case) = self
             .spec
-            .checks
-            .get(&wait.node)
-            .and_then(|check| check.condition_cases().get(index as usize).cloned())
+            .check(&wait.node)
+            .and_then(|check| check.cases().get(index as usize))
         else {
             return Ok(None);
         };
-        let Some(raw) = case.hold.as_deref() else {
+        let Some(raw) = case.hold().map(|hold| hold.text()) else {
             return Ok(None);
         };
         let Some((at, target)) =
@@ -375,7 +372,7 @@ impl View<'_> {
     }
 
     fn readings(&self, out: &mut impl Write) -> Result<()> {
-        if !self.spec.checks.contains_key(&self.record.node) {
+        if !self.spec.check(&self.record.node).is_some() {
             return Ok(());
         }
         let Some((entry, object)) = self.evaluation() else {
@@ -405,31 +402,31 @@ impl View<'_> {
         if !matches!(self.record.state, RunState::Active | RunState::Parked) {
             return Ok(());
         }
-        let name = match self.spec.steps.get(&self.record.node) {
-            Some(step) if step.agent.is_some() => step.then.first(),
+        let name = match self.spec.step(&self.record.node) {
+            Some(step) if matches!(step.kind(), Some(Kind::Agent(_))) => {
+                step.then().first().map(Target::as_str)
+            }
             Some(_) => None,
-            None => Some(&self.record.node),
+            None => Some(self.record.node.as_str()),
         };
-        let Some((name, check)) =
-            name.and_then(|name| self.spec.checks.get(name).map(|check| (name, check)))
+        let Some((name, node)) =
+            name.and_then(|name| self.spec.check(name).map(|check| (name, check)))
         else {
             return Ok(());
         };
-        if !matches!(check.kind(), Some(workflow::CheckKind::Condition))
-            && !(check.is_sleep() && check.when.is_some())
+        if !matches!(node.kind(), Some(Kind::Condition(_)))
+            && !(node.is_sleep() && node.when().is_some())
         {
             return Ok(());
         }
         let mut preview = self.record.clone();
-        preview.node = name.clone();
-        preview.wait = preview.wait.filter(|wait| wait.node == *name);
-        let slept_from = if *name == self.record.node {
+        preview.node = name.to_owned();
+        preview.wait = preview.wait.filter(|wait| wait.node == name);
+        let slept_from = if name == self.record.node {
             self.record.entered_at
         } else {
             self.now
         };
-        // A check table entry always has its compiled node.
-        let node = self.spec.check(name).expect("check node");
         let (object, probed_at) = workflow::condition_now(state, node, &preview, slept_from)
             .map_err(anyhow::Error::msg)?;
         let hold = object["case"]
@@ -488,7 +485,7 @@ impl View<'_> {
 
     fn visits(&self, out: &mut impl Write) -> Result<()> {
         for (name, visits) in &self.record.visits {
-            let Some(step) = self.spec.steps.get(name).filter(|_| visits.total > 0) else {
+            let Some(step) = self.spec.step(name).filter(|_| visits.total > 0) else {
                 continue;
             };
             let total = step
@@ -771,7 +768,13 @@ mod tests {
         );
     }
 
+    const GATE: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[checks.future]\nshell='true'\non={pass='@done',fail='@failed'}\n[steps.build]\nshell='true'\nthen='gate'\n";
+
     fn output(with_you: bool) -> (String, String) {
+        output_of(GATE, with_you)
+    }
+
+    fn output_of(definition: &str, with_you: bool) -> (String, String) {
         let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
         let record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
@@ -788,7 +791,7 @@ mod tests {
                     "run":{"run_id":rimz::ids::RunId::new(),"handle":"@pet"}}})),
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[checks.future]\nshell='true'\non={pass='@done',fail='@failed'}\n[steps.build]\nshell='true'\nthen='gate'\n").unwrap();
+        let spec = toml::from_str(definition).unwrap();
         let journal: Vec<JournalEntry> = serde_json::from_value(serde_json::json!([
             {"event":"attempt","node":"build","seq":1,"visit":1,"outcome":"ended",
                 "started_at":Timestamp::UNIX_EPOCH,"ended_at":Timestamp::UNIX_EPOCH,
@@ -888,6 +891,64 @@ mod tests {
             ],
             [true; 6],
             "{rail}\n{held}"
+        );
+    }
+
+    #[test]
+    fn a_delayed_terminal_case_draws_as_a_route_to_a_node() {
+        let mut actual = Vec::new();
+        for route in ["'@done'", "{to='@done',delay='30m'}"] {
+            let definition = GATE
+                .replace(
+                    "outcome='pending'}]",
+                    "outcome='pending'},{when=['ci=passed'],outcome='ready'}]",
+                )
+                .replace("pending='@wait'", &format!("pending={route},ready={route}"));
+            let (_, rail) = output_of(&definition, false);
+            let line = |outcome: &str| {
+                rail.lines()
+                    .find(|line| line.contains(&format!(" {outcome} @")))
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            actual.push((line("pending"), line("ready")));
+        }
+        let painted = |style: anstyle::Style, text: &str| render::paint(style, text);
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    format!(
+                        "│ {} {}",
+                        painted(render::palette::good().bold(), "▸"),
+                        painted(
+                            render::palette::good().bold(),
+                            "1  ci=pending  pending @done"
+                        )
+                    ),
+                    format!(
+                        "│   {}",
+                        painted(render::palette::good(), "2  ci=passed  ready @done")
+                    ),
+                ),
+                (
+                    format!(
+                        "│ {} {}",
+                        painted(render::palette::cool().bold(), "▸"),
+                        painted(
+                            render::palette::cool().bold(),
+                            "1  ci=pending  pending @done after 30m"
+                        )
+                    ),
+                    format!(
+                        "│   {}",
+                        painted(
+                            render::palette::muted(),
+                            "2  ci=passed  ready @done after 30m"
+                        )
+                    ),
+                ),
+            ],
         );
     }
 }

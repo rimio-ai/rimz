@@ -92,7 +92,7 @@ fn project(
     let held = record.held.as_ref();
     let name = held.map_or(record.node.as_str(), |held| held.attempt.node.as_str());
     let entered_at = held.map_or(record.entered_at, |held| held.entered_at);
-    let kind = if spec.is_some_and(|spec| spec.steps.contains_key(name))
+    let kind = if spec.is_some_and(|spec| spec.step(name).is_some())
         || (spec.is_none()
             && (record.session_attempt().is_some() || record.visits.contains_key(name)))
     {
@@ -109,7 +109,7 @@ fn project(
             .filter(|node| node.hangs_under.is_none())
             .map(|node| SidebarWorkflowNode {
                 name: node.node.clone(),
-                kind: if spec.is_some_and(|spec| spec.steps.contains_key(&node.node)) {
+                kind: if spec.is_some_and(|spec| spec.step(&node.node).is_some()) {
                     WorkflowNodeKind::Step
                 } else {
                     WorkflowNodeKind::Check
@@ -120,28 +120,23 @@ fn project(
     } else {
         Vec::new()
     };
-    let capped = spec
-        .and_then(|spec| spec.steps.get(name))
-        .is_some_and(|step| {
-            step.visit_bounds(
-                record.visits.get(name),
-                record.visit_bucket(),
-                record.visit_grant,
-            )
-            .any(|(_, used, max)| used >= max)
-        });
+    let capped = spec.and_then(|spec| spec.step(name)).is_some_and(|step| {
+        step.visit_bounds(
+            record.visits.get(name),
+            record.visit_bucket(),
+            record.visit_grant,
+        )
+        .any(|(_, used, max)| used >= max)
+    });
     let hold_limit = record
         .wait
         .as_ref()
         .filter(|wait| wait.outcome == "hold" && wait.unknown.is_none())
         .map(|wait| {
-            spec.and_then(|spec| spec.checks.get(&wait.node))
+            spec.and_then(|spec| spec.check(&wait.node))
                 .and_then(|check| {
-                    check
-                        .condition_cases()
-                        .get(wait.case? as usize)?
-                        .hold
-                        .clone()
+                    let hold = check.cases().get(wait.case? as usize)?.hold()?;
+                    Some(hold.text().to_owned())
                 })
                 .unwrap_or_else(|| "?".into())
         });

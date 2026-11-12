@@ -446,10 +446,9 @@ fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
         "{text}"
     );
     assert_eq!(
-        spec.checks
-            .keys()
-            .chain(spec.steps.keys())
-            .map(|name| text.matches(&render::paint(good, name)).count())
+        spec.checks()
+            .chain(spec.steps())
+            .map(|(name, _)| text.matches(&render::paint(good, name)).count())
             .sum::<usize>(),
         1,
         "{text}"
@@ -1155,7 +1154,7 @@ fn land_rail_agrees(text: &str) {
             .write(&mut out, 140)
             .unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
-        let glyph = if spec.checks.contains_key(&row.node) {
+        let glyph = if spec.check(&row.node).is_some() {
             "◇"
         } else {
             "○"
@@ -1286,8 +1285,8 @@ mod horizontal_sweep {
 
     fn path_to(spec: &Definition, goal: &str) -> Vec<Hop> {
         let mut previous = BTreeMap::new();
-        let mut queue = VecDeque::from([spec.workflow.start.clone()]);
-        let mut seen = BTreeSet::from([spec.workflow.start.clone()]);
+        let mut queue = VecDeque::from([spec.start().to_owned()]);
+        let mut seen = BTreeSet::from([spec.start().to_owned()]);
         while let Some(node) = queue.pop_front() {
             if node == goal {
                 break;
@@ -1330,7 +1329,7 @@ mod horizontal_sweep {
             std::iter::once(hop.node.as_str())
                 .chain(hop.target.as_ref().map(|target| target.as_str()))
         })) {
-            if spec.steps.contains_key(name) {
+            if spec.step(name).is_some() {
                 base.visits.entry(name.into()).or_default().total = 1;
             }
         }
@@ -1366,10 +1365,10 @@ mod horizontal_sweep {
             }
             runs.push((state.as_str(), record, hops));
         }
-        if let Some(step) = spec.steps.get(node)
+        if let Some(step) = spec.step(node)
             && step.lifecycle() == StepLifecycle::Until
         {
-            base.node = step.then.first().unwrap().clone();
+            base.node = step.then().first().unwrap().as_str().to_owned();
             base.held = Some(
                 serde_json::from_value(serde_json::json!({
                     "attempt": {
@@ -1392,7 +1391,7 @@ mod horizontal_sweep {
             .chain(record.held.as_ref().map(|held| held.attempt.node.as_str()))
             .map(|name| {
                 let role = if record.state.is_terminal() {
-                    if spec.checks.contains_key(name) {
+                    if spec.check(name).is_some() {
                         GlyphRole::PipelineCheckPassed
                     } else {
                         GlyphRole::PipelinePassed
@@ -1579,7 +1578,7 @@ mod horizontal_sweep {
         let mut long_floor_cases = 0;
         for (shape, definition) in shapes() {
             let spec: Definition = toml::from_str(&definition).unwrap();
-            for node in spec.checks.keys().chain(spec.steps.keys()) {
+            for node in spec.checks().chain(spec.steps()).map(|(name, _)| name) {
                 for repeated_detours in [false, true] {
                     for (state, record, hops) in runs(&spec, node, repeated_detours) {
                         for width in [40, 60, 80] {
