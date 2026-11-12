@@ -231,3 +231,300 @@ fn pty_a_colliding_tmux_prefix_reaches_rimz_and_is_restored() {
             .contains("@rimz_prefix")
     );
 }
+
+fn poll(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `pane_id left` for each pane of `target`'s window, in tmux's order.
+fn layout(server: &TmuxServer, target: &str) -> String {
+    server.stdout(&[
+        "list-panes",
+        "-t",
+        target,
+        "-F",
+        "#{pane_id} #{pane_left} #{pane_top}",
+    ])
+}
+
+/// A sidebar titled as the room titles it, with work panes `A` and `B` to its right.
+fn sidebar_window(server: &TmuxServer, session: &str) -> [String; 3] {
+    server.ensure_with_shell(session);
+    let sidebar = server.display(session, "#{pane_id}");
+    server.tmux(&["select-pane", "-t", &sidebar, "-T", "rimz-sidebar"]);
+    server.tmux(&["split-window", "-h", "-t", &sidebar, "-c", "/", "sh"]);
+    let a = server.display(session, "#{pane_id}");
+    server.tmux(&["split-window", "-h", "-t", &a, "-c", "/", "sh"]);
+    let b = server.display(session, "#{pane_id}");
+    [sidebar, a, b]
+}
+
+#[test]
+fn pty_split_close_and_swap_never_act_on_the_sidebar() {
+    use std::os::unix::fs::PermissionsExt;
+
+    require_tmux!();
+    let server = TmuxServer::new();
+    let [sidebar, a, b] = sidebar_window(&server, "keys");
+    server.ensure_with_shell("other");
+    let pressed = server._tempdir.path().join("pressed");
+    let bin = server._tempdir.path().join("rimz-stub");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+            pressed.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    apply(
+        &server,
+        "[room]\nstyle='rimz'\n[keys.bind.normal]\n\"Alt+m\"='mode.move'",
+        &bin,
+    );
+    let mut client = AttachedTmuxClient::attach(&server.socket, "keys", 160, 40);
+    let mut other = AttachedTmuxClient::attach(&server.socket, "other", 160, 40);
+    let table = |server: &TmuxServer| {
+        server.stdout(&["list-clients", "-t", "keys", "-F", "#{client_key_table}"])
+    };
+    poll("both clients", || {
+        server
+            .stdout(&["list-clients", "-F", "#{session_name}"])
+            .lines()
+            .count()
+            == 2
+    });
+    let before = layout(&server, "keys");
+
+    // Split on the sidebar runs `sidebar split` for the pressing session, even
+    // when another session's client was active last.
+    server.tmux(&["select-pane", "-t", &sidebar]);
+    other.send(b"x");
+    thread::sleep(Duration::from_millis(50));
+    client.send(b"\x1bps");
+    poll("the sidebar split command", || pressed.exists());
+    poll("the whole argv", || {
+        std::fs::read_to_string(&pressed)
+            .unwrap_or_default()
+            .ends_with("keys\n")
+    });
+    assert_eq!(
+        std::fs::read_to_string(&pressed).unwrap(),
+        format!(
+            "--mux\ntmux\nsidebar\nsplit\ndown\n--from-pane\ntmux:{sidebar}\n--session-name\nkeys\n"
+        )
+    );
+    std::fs::remove_file(&pressed).unwrap();
+
+    // Close and swap on the sidebar change nothing; move mode stays entered.
+    client.send(b"\x1bpX");
+    // tmux 3.5 reads an Alt chord written right behind another key as Esc and the key.
+    thread::sleep(Duration::from_millis(300));
+    client.send(b"\x1bm");
+    poll("move mode", || table(&server).trim() == "rimz-move");
+    client.send(b"l");
+    client.send(b"h");
+    thread::sleep(Duration::from_millis(600));
+    assert_eq!(table(&server).trim(), "rimz-move");
+    assert_eq!(layout(&server, "keys"), before);
+    assert_eq!(server.display("keys", "#{pane_id}"), sidebar);
+
+    // Beside the sidebar: left reaches it and does nothing; right swaps A and B;
+    // right again from the rightmost pane wraps to the sidebar and does nothing.
+    server.tmux(&["select-pane", "-t", &a]);
+    client.send(b"h");
+    thread::sleep(Duration::from_millis(600));
+    assert_eq!(layout(&server, "keys"), before);
+    client.send(b"l");
+    poll("A swapped right", || {
+        let left = |pane: &str| server.display(pane, "#{pane_left}").parse::<u32>().unwrap();
+        left(&a) > left(&b)
+    });
+    let swapped = layout(&server, "keys");
+    assert_eq!(server.display("keys", "#{pane_id}"), a);
+    client.send(b"l");
+    thread::sleep(Duration::from_millis(600));
+    assert_eq!(layout(&server, "keys"), swapped);
+    assert_eq!(table(&server).trim(), "rimz-move");
+
+    // No neighbour above: tmux's own error, as the bare swap gives.
+    client.send(b"k");
+    poll("tmux's missing-pane error", || {
+        client.screen().contains("find pane")
+    });
+    client.send(b"\x1b");
+    poll("normal mode", || table(&server).trim() == "root");
+
+    // On a work pane, split and close are the bare commands.
+    client.send(b"\x1bps");
+    poll("a native split below A", || {
+        layout(&server, "keys").lines().count() == 4
+    });
+    let below = server.display("keys", "#{pane_id}");
+    assert!(![&sidebar, &a, &b].contains(&&below));
+    client.send(b"\x1bpX");
+    poll("the split pane closed", || {
+        layout(&server, "keys") == swapped
+    });
+    assert!(!pressed.exists(), "a work pane starts no rimz process");
+}
+
+#[test]
+fn pty_split_on_the_sidebar_splits_the_remembered_work_pane_in_its_directory() {
+    require_tmux!();
+    let env = Env::new();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    env.rimz()
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .assert_success_within_timeout("start the split room");
+    let panes = list_session_panes(&server, &session);
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.is_rimz_sidebar())
+        .expect("a sidebar");
+    let window = server.display(sidebar.pane_id.raw(), "#{window_id}");
+    let first = server.stdout(&["list-panes", "-t", &window, "-F", "#{pane_id}"]);
+    let first = first
+        .lines()
+        .find(|pane| *pane != sidebar.pane_id.raw())
+        .expect("a work pane beside the sidebar");
+    let dir = env.project_root.join("second");
+    std::fs::create_dir_all(&dir).unwrap();
+    let second = server.stdout(&[
+        "split-window",
+        "-v",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        first,
+        "-c",
+        dir.to_str().unwrap(),
+        "sh",
+    ]);
+    let second = second.trim();
+    let config: rimz::config::MachineConfig = toml::from_str("[room]\nstyle='rimz'").unwrap();
+    server
+        .backend
+        .apply_room_keymap(&config.room_keymap(), &env.rimz_bin())
+        .unwrap();
+    let mut client = AttachedTmuxClient::attach(&server.socket, &session, 160, 50);
+    let frame = env.runtime_paths().pane_frame_path();
+    let remembered = format!("tmux:{second}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    server.tmux(&["select-window", "-t", &window]);
+    loop {
+        server.tmux(&["select-pane", "-t", second]);
+        let published = std::fs::read(&frame)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let tabs = published.as_ref().map(|frame| frame["tabs"].clone());
+        if tabs
+            .as_ref()
+            .and_then(|tabs| tabs.as_array())
+            .is_some_and(|tabs| {
+                tabs.iter()
+                    .any(|tab| tab["work_pane"].as_str() == Some(&remembered))
+            })
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the sidebar must remember {remembered}: {tabs:#?}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    server.tmux(&["select-pane", "-t", sidebar.pane_id.raw()]);
+    let before = layout(&server, sidebar.pane_id.raw());
+    client.send(b"\x1bps");
+    poll("a pane split below the second work pane", || {
+        layout(&server, sidebar.pane_id.raw()).lines().count() == before.lines().count() + 1
+    });
+    let created = server.display(&session, "#{pane_id}");
+    assert!(
+        !before.contains(&format!("{created} ")),
+        "focus lands in the new pane"
+    );
+    assert_eq!(
+        server.display(&created, "#{pane_left}"),
+        server.display(second, "#{pane_left}")
+    );
+    assert!(
+        server
+            .display(&created, "#{pane_top}")
+            .parse::<u32>()
+            .unwrap()
+            > server
+                .display(second, "#{pane_top}")
+                .parse::<u32>()
+                .unwrap()
+    );
+    poll("the new pane's shell in the work pane's directory", || {
+        server.display(&created, "#{pane_current_path}") == dir.to_str().unwrap()
+    });
+
+    // A window whose only pane is the sidebar: split changes nothing.
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = tempfile::tempdir().unwrap();
+    let (stderr, done) = (scratch.path().join("stderr"), scratch.path().join("done"));
+    let bin = scratch.path().join("rimz");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\n'{}' \"$@\" 2>'{}'\necho $? >'{}'\n",
+            env.rimz_bin().display(),
+            stderr.display(),
+            done.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    server
+        .backend
+        .apply_room_keymap(&config.room_keymap(), &bin)
+        .unwrap();
+    let lone = server.stdout(&[
+        "new-window",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &format!("{session}:"),
+        "sh",
+    ]);
+    let lone = lone.trim();
+    let lone_window = server.display(lone, "#{window_id}");
+    // Let the room dock its own sidebar, then leave a sidebar-titled pane alone.
+    thread::sleep(Duration::from_millis(1_000));
+    for pane in layout(&server, &lone_window).lines() {
+        let pane = pane.split(' ').next().unwrap();
+        if pane != lone {
+            server.tmux(&["kill-pane", "-t", pane]);
+        }
+    }
+    server.tmux(&["select-pane", "-t", lone, "-T", "rimz-sidebar"]);
+    server.tmux(&["select-window", "-t", &lone_window]);
+    server.tmux(&["select-pane", "-t", lone]);
+    let windows = || server.stdout(&["list-windows", "-t", &session, "-F", "#{window_id}"]);
+    let (before, before_windows) = (layout(&server, &lone_window), windows());
+    assert_eq!(before.lines().count(), 1, "{before}");
+    client.send(b"\x1bps");
+    poll("the split command to finish", || done.exists());
+    poll("its exit status", || {
+        std::fs::read_to_string(&done).is_ok_and(|rc| rc.ends_with('\n'))
+    });
+    assert_eq!(std::fs::read_to_string(&done).unwrap(), "0\n");
+    assert_eq!(
+        std::fs::read_to_string(&stderr).unwrap().trim(),
+        "rimz: sidebar is the only pane in its view; nothing to split"
+    );
+    assert_eq!(layout(&server, &lone_window), before);
+    assert_eq!(windows(), before_windows);
+}

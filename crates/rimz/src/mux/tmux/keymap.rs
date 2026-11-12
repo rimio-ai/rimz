@@ -200,43 +200,83 @@ fn bind_body_word(word: &str) -> String {
     }
 }
 
+/// True in a RimZ sidebar pane: the format twin of the listing's title-or-spawn-command
+/// classification (`options::spawn_command_is_sidebar_serve`). Split, close and swap
+/// bodies test it so a key pressed on the sidebar never acts on it.
+const ON_SIDEBAR: &str =
+    "#{||:#{==:#{pane_title},rimz-sidebar},#{m:* sidebar serve*,#{pane_start_command}}}";
+
+/// The pressed pane, as a command's `--from-pane`.
+const FROM_PANE: &str = " '--from-pane' 'tmux:#{pane_id}'";
+
+/// `command` as one command string that `if-shell` parses when it runs; it expands no
+/// formats first, so each nested command expands its own.
+fn nested(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|word| super::status::quote(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn action_command(action: &KeyAction, rimz_bin: &Path, prefix: Option<KeyChord>) -> Vec<String> {
     let name = match action {
         KeyAction::Run { args } => {
-            return run_command(rimz_bin, args, false, false);
+            return run_command(rimz_bin, args, false, "");
         }
         KeyAction::Named(name) => *name,
     };
     match name {
-        KeyActionName::Command { args, .. } => run_command(rimz_bin, &words(args), true, false),
-        KeyActionName::Palette(mode) => run_command(rimz_bin, &words(&mode.command()), true, true),
+        KeyActionName::Command { args, .. } => run_command(rimz_bin, &words(args), true, ""),
+        KeyActionName::Palette(mode) => run_command(
+            rimz_bin,
+            &words(&mode.command()),
+            true,
+            &format!(" '--client' '#{{client_name}}'{FROM_PANE}"),
+        ),
         KeyActionName::PaneFocus(direction) => words(&["select-pane", direction_flag(direction)]),
         KeyActionName::PaneFocusNext => words(&["select-pane", "-t", ":.+"]),
         // Native style resolves no prefix and binds no `pane.send_prefix`.
         KeyActionName::PaneSendPrefix => std::iter::once("send-keys".to_owned())
             .chain(prefix.and_then(|prefix| keys(prefix).into_iter().next()))
             .collect(),
-        KeyActionName::PaneSwap(direction) => words(&[
-            "swap-pane",
-            "-s",
-            match direction {
-                KeyDirection::Left => "{left-of}",
-                KeyDirection::Right => "{right-of}",
-                KeyDirection::Up => "{up-of}",
-                KeyDirection::Down => "{down-of}",
-            },
-        ]),
-        KeyActionName::PaneSplit(direction) => words(&[
-            "split-window",
-            match direction {
-                KeySplitDirection::Right => "-h",
-                KeySplitDirection::Down => "-v",
-            },
-            "-c",
-            "#{pane_current_path}",
-        ]),
+        KeyActionName::PaneSwap(direction) => {
+            let target = format!("{{{direction}-of}}");
+            let neighbour_is_sidebar = format!("#{{&&:#{{pane_format}},{ON_SIDEBAR}}}");
+            let swap = nested(&words(&["swap-pane", "-s", &target]));
+            let inner = words(&[
+                "if-shell",
+                "-F",
+                "-t",
+                &target,
+                &neighbour_is_sidebar,
+                "",
+                &swap,
+            ]);
+            words(&["if-shell", "-F", ON_SIDEBAR, "", &nested(&inner)])
+        }
+        KeyActionName::PaneSplit(direction) => {
+            let (side, flag) = match direction {
+                KeySplitDirection::Right => ("right", "-h"),
+                KeySplitDirection::Down => ("down", "-v"),
+            };
+            let child = run_command(
+                rimz_bin,
+                &words(&["sidebar", "split", side]),
+                true,
+                FROM_PANE,
+            );
+            let split = words(&["split-window", flag, "-c", "#{pane_current_path}"]);
+            words(&[
+                "if-shell",
+                "-F",
+                ON_SIDEBAR,
+                &nested(&child),
+                &nested(&split),
+            ])
+        }
         KeyActionName::PaneResize(direction) => words(&["resize-pane", direction_flag(direction)]),
-        KeyActionName::PaneClose => words(&["kill-pane"]),
+        KeyActionName::PaneClose => words(&["if-shell", "-F", ON_SIDEBAR, "", "kill-pane"]),
         KeyActionName::TabNew => words(&["new-window", "-c", "#{pane_current_path}"]),
         KeyActionName::TabNext => words(&["next-window"]),
         KeyActionName::TabPrev => words(&["previous-window"]),
@@ -262,15 +302,15 @@ fn direction_flag(direction: KeyDirection) -> &'static str {
     }
 }
 
-fn run_command(rimz_bin: &Path, args: &[String], session: bool, palette: bool) -> Vec<String> {
+/// `run-shell -b` of `rimz --mux tmux <args>`, followed by `context`: shell words left
+/// unescaped so the pressing client's formats expand in them.
+fn run_command(rimz_bin: &Path, args: &[String], session: bool, context: &str) -> Vec<String> {
     let mut command = shell_argv(rimz_bin, args);
     if !session {
         // tmux 3.5 expands command formats, but not run-shell's -c argument.
         command = format!("cd -- #{{q:session_path}} && {command}");
     }
-    if palette {
-        command.push_str(" '--client' '#{client_name}' '--from-pane' 'tmux:#{pane_id}'");
-    }
+    command.push_str(context);
     if session {
         command.push_str(" '--session-name' '#{session_name}'");
     }
@@ -499,14 +539,9 @@ mod tests {
             bind(&commands, "rimz-tab", "n"),
             [words(&["next-window"]), sticky("rimz-tab")].concat()
         );
-        assert_eq!(
-            bind(&commands, "rimz-move", "h"),
-            [
-                words(&["swap-pane", "-s", "{left-of}"]),
-                sticky("rimz-move")
-            ]
-            .concat()
-        );
+        let move_h = bind(&commands, "rimz-move", "h");
+        assert_eq!(move_h[0], "if-shell");
+        assert_eq!(move_h[5..], sticky("rimz-move"));
         for (table, key) in [
             ("rimz-pane", "z"),
             ("rimz-tab", "c"),
@@ -518,6 +553,93 @@ mod tests {
                 !bind(&commands, table, key).contains(&";".to_owned()),
                 "{table} {key} must return to normal"
             );
+        }
+    }
+
+    /// tmux's own parse of one nested command string.
+    fn parsed(command: &str) -> Vec<String> {
+        shlex::split(command).unwrap()
+    }
+
+    #[test]
+    fn split_close_and_swap_leave_the_sidebar_alone_in_every_bundled_keymap() {
+        let on_sidebar =
+            "#{||:#{==:#{pane_title},rimz-sidebar},#{m:* sidebar serve*,#{pane_start_command}}}";
+        for keymap in ["rimz", "tmux", "zellij", "vim"] {
+            let config = format!("[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\n");
+            let commands = commands(&config, "", None);
+            let machine: MachineConfig = toml::from_str(&config).unwrap();
+            let mut checked = 0;
+            for (&mode, bindings) in &machine.room_keymap().modes {
+                for (&key, action) in bindings {
+                    let KeyAction::Named(
+                        name @ (KeyActionName::PaneClose
+                        | KeyActionName::PaneSplit(_)
+                        | KeyActionName::PaneSwap(_)),
+                    ) = action
+                    else {
+                        continue;
+                    };
+                    let body = bind(&commands, table(mode), &keys(key)[0]);
+                    assert_eq!(
+                        body[..3],
+                        words(&["if-shell", "-F", on_sidebar]),
+                        "{keymap} {key:?}"
+                    );
+                    match *name {
+                        KeyActionName::PaneClose => {
+                            assert_eq!(body[3..5], words(&["", "kill-pane"]))
+                        }
+                        KeyActionName::PaneSplit(direction) => {
+                            let (side, flag) = match direction {
+                                KeySplitDirection::Right => ("right", "-h"),
+                                KeySplitDirection::Down => ("down", "-v"),
+                            };
+                            let child = parsed(&body[3]);
+                            assert_eq!(child[..2], words(&["run-shell", "-b"]));
+                            assert_eq!(
+                                parsed(&child[2]),
+                                words(&[
+                                    "/bin/rimz",
+                                    "--mux",
+                                    "tmux",
+                                    "sidebar",
+                                    "split",
+                                    side,
+                                    "--from-pane",
+                                    "tmux:#{pane_id}",
+                                    "--session-name",
+                                    "#{session_name}",
+                                ])
+                            );
+                            assert_eq!(
+                                parsed(&body[4]),
+                                words(&["split-window", flag, "-c", "#{pane_current_path}"])
+                            );
+                        }
+                        KeyActionName::PaneSwap(direction) => {
+                            let target = format!("{{{direction}-of}}");
+                            assert_eq!(body[3], "");
+                            let inner = parsed(&body[4]);
+                            assert_eq!(
+                                inner[..6],
+                                words(&[
+                                    "if-shell",
+                                    "-F",
+                                    "-t",
+                                    &target,
+                                    &format!("#{{&&:#{{pane_format}},{on_sidebar}}}"),
+                                    "",
+                                ])
+                            );
+                            assert_eq!(parsed(&inner[6]), words(&["swap-pane", "-s", &target]));
+                        }
+                        _ => unreachable!("filtered above"),
+                    }
+                    checked += 1;
+                }
+            }
+            assert!(checked >= 7, "{keymap}: close, both splits and four swaps");
         }
     }
 

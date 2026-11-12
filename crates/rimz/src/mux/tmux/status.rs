@@ -76,7 +76,7 @@ fn refresh_commands(session: Option<&str>) -> Vec<Vec<String>> {
     .collect()
 }
 
-fn quote(word: &str) -> String {
+pub(super) fn quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\\''"))
 }
 
