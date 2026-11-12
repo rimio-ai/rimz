@@ -470,8 +470,15 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
         if payload_has_context_observation(payload) {
             decoded.set_observed_context(self.observe_context(self.spec().kind, payload));
         }
-        let signal = match event_name {
-            "sessionStart"
+        let awaiting = |kind, detail, native_key| LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
+            kind,
+            ask_id: None,
+            detail,
+            native_key,
+        };
+        let signal = match (event_name, ask_kind) {
+            ("sessionStart", _)
                 if parsed
                     .initial_prompt
                     .as_deref()
@@ -479,55 +486,30 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
             {
                 LifecycleSignal::TurnStarted { turn_id: None }
             }
-            "sessionStart" => LifecycleSignal::Registered,
-            "userPromptSubmitted" => LifecycleSignal::TurnStarted { turn_id: None },
-            "notification" if ask_kind == Some(AskKind::Question) => {
-                LifecycleSignal::AwaitingInput {
-                    extra_questions: 0,
-                    kind: AskKind::Question,
-                    ask_id: None,
-                    detail: parsed.message.clone(),
-                    native_key: None,
-                }
-            }
-            "permissionRequest" => LifecycleSignal::AwaitingInput {
-                extra_questions: 0,
-                kind: AskKind::Permission,
-                ask_id: None,
-                detail: None,
-                native_key: tools.command_key(),
+            ("sessionStart", _) => LifecycleSignal::Registered,
+            ("userPromptSubmitted", _) => LifecycleSignal::TurnStarted { turn_id: None },
+            ("notification", Some(kind)) => awaiting(kind, parsed.message.clone(), None),
+            ("permissionRequest", Some(kind)) => awaiting(kind, None, tools.command_key()),
+            ("preToolUse", Some(kind)) => awaiting(kind, None, None),
+            ("preToolUse", None) => LifecycleSignal::ToolUsed {
+                effect: ToolEffect::Observed,
+                name: None,
+                native_key: None,
+                turn_id: None,
             },
-            "preToolUse" => match self
-                .spec()
-                .blocking_tool_kind(tool.and_then(|tool| tool.name))
-            {
-                Some(kind) => LifecycleSignal::AwaitingInput {
-                    extra_questions: 0,
-                    kind,
-                    ask_id: None,
-                    detail: None,
-                    native_key: None,
-                },
-                None => LifecycleSignal::ToolUsed {
-                    effect: ToolEffect::Observed,
-                    name: None,
-                    native_key: None,
-                    turn_id: None,
-                },
-            },
-            "postToolUse" | "postToolUseFailure" => LifecycleSignal::ToolUsed {
+            ("postToolUse" | "postToolUseFailure", _) => LifecycleSignal::ToolUsed {
                 effect: tools.strongest_effect(&self.spec().tools),
                 name: None,
                 native_key: tools.command_key(),
                 turn_id: None,
             },
-            "agentStop" => LifecycleSignal::TurnEnded {
+            ("agentStop", _) => LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
                 turn_id: None,
             },
-            "preCompact" => LifecycleSignal::Compacting,
-            "sessionEnd" => LifecycleSignal::Ended,
+            ("preCompact", _) => LifecycleSignal::Compacting,
+            ("sessionEnd", _) => LifecycleSignal::Ended,
             _ => return Ok(decoded),
         };
         let mut observation = AgentLifecycleObservation::new(
