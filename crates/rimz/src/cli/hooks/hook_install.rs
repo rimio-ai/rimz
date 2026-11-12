@@ -81,10 +81,19 @@ pub(super) fn detected_installable_adapters(
     detected
 }
 
-pub(in crate::cli) fn ensure_detected_agent_hooks(mode: HookInstallMode) -> Result<bool> {
+/// Ask for, or report, the hooks every detected agent lacks or has outdated.
+/// `heading` replaces the first-run header (setup's `N of M` step). An agent
+/// whose preview refuses is reported on its own `!` line and left out of the
+/// offer. Returns whether any agent needed an install or refresh.
+pub(in crate::cli) fn ensure_detected_agent_hooks(
+    mode: HookInstallMode,
+    heading: Option<&str>,
+) -> Result<bool> {
     let login_env = rimz::agents::ambient_env();
     let options = crate::cli::hook_install_options();
     let mut actionable = Vec::new();
+    let mut refused = Vec::new();
+    let mut untrusted_pending = false;
 
     for agent in detected_installable_adapters(&login_env) {
         let definition = agent.spec();
@@ -93,41 +102,60 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(mode: HookInstallMode) -> Resu
                 !integration.outdated_files(&login_env, options).is_empty()
             })
         {
-            actionable.push(agent.preview_hook_install(&login_env, options)?);
+            match agent.preview_hook_install(&login_env, options) {
+                Ok(preview) => actionable.push(preview),
+                Err(rimz::agents::AgentErr::Install { reason, .. }) => {
+                    refused.push(format!("{} hooks not installed: {reason}", definition.kind));
+                }
+                Err(error) => refused.push(format!(
+                    "{} hooks not installed: {:#}",
+                    definition.kind,
+                    anyhow::Error::from(error)
+                )),
+            }
             continue;
         }
 
         if mode != HookInstallMode::Reconnect {
-            warn_untrusted_hooks(
-                definition.kind,
-                &agent.untrusted_installed_hooks(&login_env),
-            )?;
+            let untrusted = agent.untrusted_installed_hooks(&login_env);
+            untrusted_pending |= !untrusted.is_empty();
+            warn_untrusted_hooks(definition.kind, &untrusted)?;
         }
     }
 
+    let mut out = render::err();
     if actionable.is_empty() {
-        return Ok(false);
+        if !refused.is_empty()
+            && let Some(heading) = heading
+        {
+            writeln!(out, "{}", render::paint(render::palette::header(), heading))?;
+            writeln!(out)?;
+        }
+        write_pending_lines(&mut out, &refused)?;
+        return Ok(!refused.is_empty());
     }
 
     if mode != HookInstallMode::Attended {
-        print_noninteractive_notice(&actionable, mode)?;
+        write_noninteractive_notice(&mut out, &actionable, mode, heading)?;
+        write_pending_lines(&mut out, &refused)?;
         return Ok(true);
     }
 
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
-    let mut out = render::err();
-    let selected = prompt_consent(&actionable, &mut input, &mut out)?;
-    install_selected(&selected, &mut out)?;
+    let selected = prompt_consent(&actionable, heading, &mut input, &mut out)?;
+    let pending = untrusted_pending || !refused.is_empty();
+    install_selected(&selected, &refused, pending, &mut out)?;
     Ok(true)
 }
 
 fn prompt_consent(
     previews: &[HookInstallPreview],
+    heading: Option<&str>,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Vec<&'static str>> {
-    write_intro_context(out, previews)?;
+    write_intro_context(out, previews, heading)?;
     writeln!(out)?;
     write_agent_table(out, previews)?;
     writeln!(out)?;
@@ -154,7 +182,15 @@ fn prompt_consent(
     }
 }
 
-fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()> {
+/// Install the selected agents and report each. `refused` are the agents the
+/// preview turned away, and `pending` says a step already waits (an untrusted
+/// hook on a current agent): either withholds "All set".
+fn install_selected(
+    selected: &[&'static str],
+    refused: &[String],
+    mut pending: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
     writeln!(out)?;
     if selected.is_empty() {
@@ -162,29 +198,47 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
             out,
             "Nothing changed - install or refresh agents any time with `rimz hooks install`."
         )?;
+        write_pending_lines(out, refused)?;
         return Ok(());
     }
 
+    let width = selected
+        .iter()
+        .map(|name| name.width())
+        .max()
+        .unwrap_or_default();
     for name in selected {
-        install_hooks_into(rimz::agents::definition_by_kind(name)?, &login_env, out)?;
+        let installed = rimz::agents::definition_by_kind(name)
+            .map_err(anyhow::Error::from)
+            .and_then(|agent| install_hooks_into(agent, &login_env, width, out));
+        match installed {
+            Ok(step_pending) => pending |= step_pending,
+            Err(error) => {
+                pending = true;
+                write_pending_line(out, &format!("{name} hooks not installed: {error:#}"))?;
+            }
+        }
     }
+    write_pending_lines(out, refused)?;
 
-    Ok(write_post_install_footer(out)?)
+    Ok(write_post_install_footer(out, pending)?)
 }
 
 /// Install one agent's hooks into the home `login_env` resolves, then report
-/// the result and any hooks the agent's own trust gate still skips.
+/// the result on one line padded to `name_width`, and any hooks the agent's
+/// own trust gate still skips. Returns whether a step is still pending.
 pub(in crate::cli) fn install_hooks_into(
     agent: &rimz::agents::AgentDefinition,
     login_env: &BTreeMap<String, String>,
+    name_width: usize,
     out: &mut dyn Write,
-) -> Result<()> {
+) -> Result<bool> {
     let options = crate::cli::hook_install_options();
     let disposition = install_disposition(agent, login_env, options);
     let (report, untrusted) = install_hooks_quietly(agent, login_env)?;
-    write_install_result(out, &report, disposition)?;
+    write_install_result(out, &report, disposition, name_width)?;
     write_untrusted_hooks_notice(report.agent, &untrusted, out)?;
-    Ok(())
+    Ok(!untrusted.is_empty())
 }
 
 /// Install without printing, returning the report and hooks still needing trust.
@@ -214,23 +268,70 @@ pub(super) fn write_untrusted_hooks_notice(
     if untrusted.is_empty() {
         return Ok(());
     }
-    writeln!(
+    write_pending_line(
         out,
-        "{}",
-        render::paint(
-            render::palette::warn(),
-            &format!(
-                "{kind} hooks are installed but untrusted ({}) — {kind} silently skips them; {}",
-                untrusted.join(", "),
-                rimz::agents::hook_trust_fix(kind),
-            )
-        )
+        &format!(
+            "{kind} ignores {} until trusted",
+            if untrusted.len() == 1 {
+                "1 hook".to_owned()
+            } else {
+                format!("{} hooks", untrusted.len())
+            }
+        ),
     )?;
+    writeln!(out, "  fix: {}", rimz::agents::hook_trust_fix(kind))?;
     Ok(())
 }
 
-fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
-    first_run::write_header(out)?;
+/// A step the install could not finish on its own, on its own `!` line,
+/// wrapped under a two-column indent within 80 columns without splitting a word.
+fn write_pending_line(out: &mut dyn Write, text: &str) -> std::io::Result<()> {
+    let mark = render::paint(render::palette::warn().bold(), "!");
+    let mut line = String::new();
+    let mut first = true;
+    for word in text.split_whitespace() {
+        if !line.is_empty() && 2 + line.width() + 1 + word.width() > RESULT_WIDTH {
+            write_pending_row(out, first, &mark, &line)?;
+            first = false;
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    write_pending_row(out, first, &mark, &line)
+}
+
+fn write_pending_row(
+    out: &mut dyn Write,
+    first: bool,
+    mark: &str,
+    text: &str,
+) -> std::io::Result<()> {
+    if first {
+        writeln!(out, "{mark} {text}")
+    } else {
+        writeln!(out, "  {text}")
+    }
+}
+
+fn write_pending_lines(out: &mut dyn Write, lines: &[String]) -> std::io::Result<()> {
+    for line in lines {
+        write_pending_line(out, line)?;
+    }
+    Ok(())
+}
+
+fn write_intro_context(
+    out: &mut dyn Write,
+    previews: &[HookInstallPreview],
+    heading: Option<&str>,
+) -> Result<()> {
+    match heading {
+        Some(heading) => writeln!(out, "{}", render::paint(render::palette::header(), heading))?,
+        None => first_run::write_header(out)?,
+    }
     writeln!(out)?;
     let agent_word = if previews.len() == 1 {
         "agent"
@@ -355,56 +456,55 @@ pub(super) fn render_dry_run(
     Ok(())
 }
 
+/// A headline per agent within 80 columns that names the first file when it
+/// fits, then one indented line for each file the headline does not name. A
+/// file that existed before the install and is gone after it reads `removed`.
 pub(super) fn write_install_result(
     out: &mut dyn Write,
     report: &HookInstallReport,
     disposition: InstallDisposition,
+    name_width: usize,
 ) -> std::io::Result<()> {
+    let count = report.installed_events.len();
     let summary = match disposition {
-        InstallDisposition::Installed => {
-            format!("installed {} hooks", report.installed_events.len())
-        }
-        InstallDisposition::Refreshed => {
-            format!("refreshed {} hooks", report.installed_events.len())
-        }
-        InstallDisposition::Current => {
-            format!("hooks up to date ({})", report.installed_events.len())
-        }
+        InstallDisposition::Installed => format!("installed {count} hooks"),
+        InstallDisposition::Refreshed => format!("refreshed {count} hooks"),
+        InstallDisposition::Current => format!("hooks up to date ({count})"),
     };
-    for (index, file) in report.files.iter().enumerate() {
-        let annotation = if file.existed && !file.path.exists() {
-            "(removed)"
-        } else if file.existed {
-            "(updated existing config)"
-        } else {
-            "(new file)"
-        };
-        let annotation = if disposition == InstallDisposition::Current {
-            String::new()
-        } else {
-            format!("  {}", render::paint(render::palette::muted(), annotation))
-        };
-        if index == 0 {
-            writeln!(
-                out,
-                "{} {}  {} → {}{}",
-                render::paint(render::palette::good().bold(), "✓"),
-                report.agent,
-                summary,
-                home_relative_path(&file.path),
-                annotation,
-            )?;
-        } else {
-            writeln!(
-                out,
-                "       config → {}{}",
-                home_relative_path(&file.path),
-                annotation,
-            )?;
+    let name = format!("{:<name_width$}", report.agent);
+    let mut line = format!("{name}  {summary}");
+    let removed = |file: &rimz::agents::HookInstallFileReport| {
+        file.existed && std::fs::symlink_metadata(&file.path).is_err()
+    };
+    let mut unnamed = report.files.as_slice();
+    if let Some((file, rest)) = report.files.split_first()
+        && !removed(file)
+    {
+        let with_path = format!("{line} → {}", home_relative_path(&file.path));
+        if 2 + with_path.width() <= RESULT_WIDTH {
+            line = with_path;
+            unnamed = rest;
         }
+    }
+    writeln!(
+        out,
+        "{} {line}",
+        render::paint(render::palette::good().bold(), "✓")
+    )?;
+    let indent = 2 + name_width + 2;
+    for file in unnamed {
+        let label = if removed(file) { "removed" } else { "config" };
+        writeln!(
+            out,
+            "{:indent$}{label} → {}",
+            "",
+            home_relative_path(&file.path)
+        )?;
     }
     Ok(())
 }
+
+const RESULT_WIDTH: usize = 80;
 
 pub(super) fn write_uninstall_result(
     out: &mut dyn Write,
@@ -432,20 +532,13 @@ pub(super) fn write_uninstall_result(
     Ok(())
 }
 
-fn print_noninteractive_notice(
-    previews: &[HookInstallPreview],
-    mode: HookInstallMode,
-) -> Result<()> {
-    let mut out = render::err();
-    write_noninteractive_notice(&mut out, previews, mode)
-}
-
 fn write_noninteractive_notice(
     out: &mut dyn Write,
     previews: &[HookInstallPreview],
     mode: HookInstallMode,
+    heading: Option<&str>,
 ) -> Result<()> {
-    write_intro_context(out, previews)?;
+    write_intro_context(out, previews, heading)?;
     writeln!(out)?;
     write_agent_table(out, previews)?;
     writeln!(out)?;
@@ -470,13 +563,16 @@ fn write_consent_footer(out: &mut dyn Write) -> Result<()> {
     Ok(write_undo_preview_hints(out)?)
 }
 
-pub(super) fn write_post_install_footer(out: &mut dyn Write) -> std::io::Result<()> {
+/// The undo and preview hints, then "All set" only when no step is `pending`.
+pub(super) fn write_post_install_footer(out: &mut dyn Write, pending: bool) -> std::io::Result<()> {
     writeln!(out)?;
     write_undo_preview_hints(out)?;
-    writeln!(
-        out,
-        "All set — your agents appear in the sidebar as they run."
-    )?;
+    if !pending {
+        writeln!(
+            out,
+            "All set — your agents appear in the sidebar as they run."
+        )?;
+    }
     Ok(())
 }
 
@@ -604,7 +700,7 @@ mod tests {
     fn drive(previews: &[HookInstallPreview], input: &[u8]) -> (Vec<&'static str>, String) {
         let mut input = Cursor::new(input.to_vec());
         let mut stream = anstream::StripStream::new(Vec::new());
-        let selected = prompt_consent(previews, &mut input, &mut stream).expect("prompt");
+        let selected = prompt_consent(previews, None, &mut input, &mut stream).expect("prompt");
         let rendered = String::from_utf8(stream.into_inner()).expect("utf8");
         (selected, rendered)
     }
@@ -631,10 +727,24 @@ mod tests {
             rendered.contains("Enter installs or refreshes hooks for every listed agent; n skips.")
         );
 
-        let (selected, _) = drive(&previews, b"");
+        let (selected, rendered) = drive(&previews, b"");
         assert!(selected.is_empty());
+        assert!(rendered.starts_with("rimz · first-run setup\n"));
 
-        let rendered = strip(|out| install_selected(&selected, out));
+        let mut stream = anstream::StripStream::new(Vec::new());
+        let heading = Some("1 of 6 · Reporting hooks");
+        prompt_consent(
+            &previews,
+            heading,
+            &mut Cursor::new(b"n\n".to_vec()),
+            &mut stream,
+        )
+        .expect("prompt");
+        let rendered = String::from_utf8(stream.into_inner()).expect("utf8");
+        assert!(rendered.starts_with("1 of 6 · Reporting hooks\n\nRimZ found 2 coding agents"));
+        assert!(!rendered.contains("first-run setup"));
+
+        let rendered = strip(|out| install_selected(&selected, &[], false, out));
         assert!(rendered.contains(
             "Nothing changed - install or refresh agents any time with `rimz hooks install`."
         ));
@@ -661,7 +771,7 @@ mod tests {
             let previews = [codex];
             let (_, consent) = drive(&previews, b"n\n");
             let notice = strip(|out| {
-                write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal)
+                write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal, None)
             });
             for rendered in [&consent, &notice] {
                 assert!(rendered.contains(if removed {
@@ -696,10 +806,12 @@ mod tests {
         let previews = [additive, created];
 
         let (_, interactive) = drive(&previews, b"n\n");
-        let noninteractive =
-            strip(|out| write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal));
-        let reconnect =
-            strip(|out| write_noninteractive_notice(out, &previews, HookInstallMode::Reconnect));
+        let noninteractive = strip(|out| {
+            write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal, None)
+        });
+        let reconnect = strip(|out| {
+            write_noninteractive_notice(out, &previews, HookInstallMode::Reconnect, None)
+        });
 
         for rendered in [&interactive, &noninteractive, &reconnect] {
             assert!(rendered.contains("RimZ found 2 coding agents: claude, codex."));
@@ -854,20 +966,118 @@ mod tests {
             (InstallDisposition::Refreshed, "refreshed 1 hooks"),
             (InstallDisposition::Current, "hooks up to date (1)"),
         ] {
-            let rendered = strip(|out| write_install_result(out, &report, disposition));
-            assert!(rendered.contains(&format!("✓ cursor  {summary}")));
-            assert!(rendered.contains(&hooks.display().to_string()));
-            assert!(rendered.contains(&format!("config → {}", cli_config.display())));
-            if disposition == InstallDisposition::Current {
-                assert!(!rendered.contains("(updated existing config)"));
-                assert!(!rendered.contains("(new file)"));
-                assert!(!rendered.contains("(removed)"));
+            let rendered = strip(|out| write_install_result(out, &report, disposition, 8));
+            let mut lines = rendered.lines();
+            let headline = lines.next().unwrap();
+            assert!(headline.starts_with(&format!("✓ cursor    {summary}")));
+            assert!(
+                headline.width() <= RESULT_WIDTH,
+                "headline passes 80 columns:\n{rendered}"
+            );
+            let path = format!(" → {}", hooks.display());
+            let named = format!("✓ cursor    {summary}{path}").width() <= RESULT_WIDTH;
+            assert_eq!(
+                headline,
+                if named {
+                    format!("✓ cursor    {summary}{path}")
+                } else {
+                    format!("✓ cursor    {summary}")
+                },
+                "the headline names the first file exactly when it fits:\n{rendered}"
+            );
+            let unnamed = if named {
+                &report.files[1..]
             } else {
-                assert!(rendered.contains("(updated existing config)"));
-                assert!(rendered.contains("(new file)"));
-                assert!(rendered.contains("rimz.rules  (removed)"));
-            }
+                &report.files[..]
+            };
+            let rest: Vec<_> = lines.collect();
+            let expected: Vec<_> = unnamed
+                .iter()
+                .map(|file| {
+                    let label = if file.path.exists() {
+                        "config"
+                    } else {
+                        "removed"
+                    };
+                    format!("            {label} → {}", file.path.display())
+                })
+                .collect();
+            assert_eq!(
+                rest, expected,
+                "every unnamed file gets its own line:\n{rendered}"
+            );
+            assert!(!rendered.contains(" +"), "no file is counted:\n{rendered}");
         }
+        let long = HookInstallReport {
+            agent: "cursor",
+            files: vec![rimz::agents::HookInstallFileReport {
+                path: PathBuf::from(format!("/{}/hooks.json", "d".repeat(80))),
+                // A missing path that existed reads as removed, so this
+                // stand-in for an on-disk file says it was not there before.
+                existed: false,
+            }],
+            installed_events: vec!["stop".to_owned()],
+        };
+        let rendered =
+            strip(|out| write_install_result(out, &long, InstallDisposition::Current, 6));
+        assert_eq!(
+            rendered,
+            format!(
+                "✓ cursor  hooks up to date (1)\n          config → {}\n",
+                long.files[0].path.display()
+            )
+        );
+        let two = HookInstallReport {
+            agent: "codex",
+            files: vec![
+                rimz::agents::HookInstallFileReport {
+                    path: PathBuf::from("/x/config.toml"),
+                    existed: false,
+                },
+                rimz::agents::HookInstallFileReport {
+                    path: PathBuf::from("/x/rules/rimz.rules"),
+                    existed: false,
+                },
+            ],
+            installed_events: vec!["stop".to_owned()],
+        };
+        let rendered =
+            strip(|out| write_install_result(out, &two, InstallDisposition::Installed, 6));
+        assert_eq!(
+            rendered,
+            "✓ codex   installed 1 hooks → /x/config.toml\n          config → /x/rules/rimz.rules\n"
+        );
+        let gone = HookInstallReport {
+            agent: "codex",
+            files: vec![
+                rimz::agents::HookInstallFileReport {
+                    path: PathBuf::from("/x/config.toml"),
+                    existed: false,
+                },
+                rimz::agents::HookInstallFileReport {
+                    path: PathBuf::from("/x/rules/rimz.rules"),
+                    existed: true,
+                },
+            ],
+            installed_events: vec!["stop".to_owned()],
+        };
+        let rendered =
+            strip(|out| write_install_result(out, &gone, InstallDisposition::Refreshed, 6));
+        assert_eq!(
+            rendered,
+            "✓ codex   refreshed 1 hooks → /x/config.toml\n          removed → /x/rules/rimz.rules\n"
+        );
+        let short = HookInstallReport {
+            agent: "pi",
+            files: vec![rimz::agents::HookInstallFileReport {
+                path: PathBuf::from("/x/hooks.json"),
+                existed: false,
+            }],
+            installed_events: vec!["stop".to_owned()],
+        };
+        let rendered =
+            strip(|out| write_install_result(out, &short, InstallDisposition::Installed, 2));
+        assert_eq!(rendered, "✓ pi  installed 1 hooks → /x/hooks.json\n");
 
         let uninstall = rimz::agents::HookUninstallReport {
             agent: "cursor",
@@ -886,9 +1096,47 @@ mod tests {
         let rendered = strip(|out| write_uninstall_result(out, &empty));
         assert_eq!(rendered, "codex — no RimZ-managed hooks found\n");
 
-        let rendered = strip(|out| write_post_install_footer(out));
-        assert!(rendered.contains("rimz hooks uninstall"));
-        assert!(rendered.contains("rimz hooks install --dry-run"));
-        assert!(rendered.contains("All set — your agents appear in the sidebar as they run."));
+        for pending in [false, true] {
+            let rendered = strip(|out| write_post_install_footer(out, pending));
+            assert!(rendered.contains("rimz hooks uninstall"));
+            assert!(rendered.contains("rimz hooks install --dry-run"));
+            assert_eq!(
+                rendered.contains("All set — your agents appear in the sidebar as they run."),
+                !pending,
+                "All set prints only when nothing is pending:\n{rendered}"
+            );
+        }
+
+        let refusal = format!(
+            "pi hooks not installed: refusing to overwrite an unmarked user extension at {}; move it aside or remove it",
+            "/home/me/.pi/agent/extensions/rimz.ts"
+        );
+        let rendered = strip(|out| write_pending_line(out, &refusal));
+        let lines: Vec<_> = rendered.lines().collect();
+        assert!(lines.len() > 1, "{rendered}");
+        assert!(
+            lines[0].starts_with("! pi hooks not installed: "),
+            "{rendered}"
+        );
+        for line in &lines {
+            assert!(line.width() <= RESULT_WIDTH, "{line:?} passes 80 columns");
+        }
+        for line in &lines[1..] {
+            assert!(
+                line.starts_with("  ") && !line.starts_with("   "),
+                "{line:?}"
+            );
+        }
+        assert!(rendered.contains(" /home/me/.pi/agent/extensions/rimz.ts;"));
+
+        let rendered = strip(|out| write_untrusted_hooks_notice("codex", &["stop".into()], out));
+        let mut lines = rendered.lines();
+        assert_eq!(lines.next(), Some("! codex ignores 1 hook until trusted"));
+        assert!(lines.next().is_some_and(|line| line.starts_with("  fix: ")));
+        assert_eq!(lines.next(), None);
+        assert_eq!(
+            strip(|out| write_untrusted_hooks_notice("codex", &[], out)),
+            ""
+        );
     }
 }

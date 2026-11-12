@@ -462,7 +462,7 @@ Zellij fullscreen holds width convergence; it is not geometry to repair. The pre
 
 One mux session per project holds the room, and the room claim decides whether a birth may proceed. The claim is a `RoomLock` in [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) at `RuntimePaths::room_lock`. It keeps a second backend or a renamed session from birthing a rival room. Backend selection decides nothing here, and no probe of the other backend does either.
 
-`admit_birth` in [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) runs on normal entry before hook detection, every startup prompt, and recovery inspection, before the `RoomContext` exists. It lists the selected backend's sessions and admits by the recorded session's state:
+`admit_birth` in [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) runs on normal entry before hook detection, every startup prompt but one, and recovery inspection, before the `RoomContext` exists. The exception is the multiplexer question a machine's first attended `rimz start` asks when both backends are installed and no flag, enclosing multiplexer, or live session of this name decides one (`crates/rimz/src/cli/room/mod.rs::ask_first_start_mux`): its answer picks the backend that admits the birth, so it runs before selection. `admit_birth` lists the selected backend's sessions and admits by the recorded session's state:
 
 | Recorded session | Admission |
 | --- | --- |

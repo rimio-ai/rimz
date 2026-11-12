@@ -675,9 +675,10 @@ impl ColorWhen {
 enum Subcmd {
     /// Navigate code through shared language servers.
     Lsp(lsp::LspArgs),
-    /// Open a directory's room and attach; first run asks questions.
+    /// Open a directory's room and attach; first run offers hooks.
     ///
-    /// The first run on a machine asks the setup questions before it opens the room.
+    /// The first run on a machine asks which multiplexer to use when both are installed,
+    /// offers reporting hooks, and opens the room on defaults; `rimz setup` changes the rest.
     Start(StartArgs),
     /// Enter a room by name; no first-run questions.
     ///
@@ -803,7 +804,7 @@ enum Subcmd {
     Events(events::EventsArgs),
     /// Environment and backend report.
     Doctor(doctor::DoctorArgs),
-    /// First-run setup report and default config bootstrap.
+    /// Set up this machine: config, reporting hooks, and settings.
     Setup(setup::SetupArgs),
     /// Machine-readable liveness check (prints `ok`).
     Ping,

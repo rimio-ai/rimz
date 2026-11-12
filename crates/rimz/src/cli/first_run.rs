@@ -1,51 +1,38 @@
-//! Shared first-run setup: appearance probes and hands-off automation consent.
+//! Shared setup questions for `rimz setup` and the first `rimz` start: the
+//! multiplexer, room keys, appearance probes and the while-you're-away rows, the
+//! review screen that writes their answers, and the first-start defaults line.
 
 use std::io::{BufRead, Write};
 
 use anyhow::Result;
-use rimz::config::{CellAspect, ColorDepth, ConfigEditor, IdleCompact, MachineConfig, PetsConfig};
+use rimz::agents::AgentStatus;
+use rimz::config::keys::{KeyChord, KeyMode, RoomKeymap};
+use rimz::config::{
+    CellAspect, ColorDepth, ConfigEditor, IdleCompact, MachineConfig, PetsConfig, RoomStyle,
+    ThemeMode,
+};
+use rimz::ids::MuxName;
 use rimz::sidebar_pane::pets::{self, PetRenderTier};
 use rimz::theme::{nerd_font_probe_glyphs, nerd_font_probe_gradient};
+use serde_json::Value;
 
 use super::list_pets::{LiveGraphicsPacer, write_pet_row, write_pixel_pet_row_with_pacer};
 use super::render;
-use super::render::status::{self, StateRole};
 
 const HEADER_RULE_WIDTH: usize = 48;
-const CONSENT_INTRO: &str = "RimZ routes attention across your coding agents into one sidebar.";
-const AUTOMATION_LABEL_WIDTH: usize = 15;
+const SCREEN_WIDTH: usize = 80;
+const AWAY_LABEL_WIDTH: usize = 16;
+const KEYS_LABEL_WIDTH: usize = 14;
+const REVIEW_LABEL_WIDTH: usize = 12;
+const IDLE_FLOOR_DEFAULT: &str = "100k";
 
-/// The three-way answer to the consent question, in prompt order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AutomationChoice {
-    AllOn,
-    AllOff,
-    Choose,
-}
-
-impl AutomationChoice {
-    const ALL: [Self; 3] = [Self::AllOn, Self::AllOff, Self::Choose];
-    const WORDS: [&str; 3] = ["yes", "no", "choose"];
-
-    fn suffix_label(self, is_default: bool) -> &'static str {
-        match (self, is_default) {
-            (Self::AllOn, false) => "y",
-            (Self::AllOn, true) => "Y",
-            (Self::AllOff, false) => "n",
-            (Self::AllOff, true) => "N",
-            (Self::Choose, false) => "choose",
-            (Self::Choose, true) => "Choose",
-        }
-    }
-}
-
-/// One hands-off behaviour the consent question offers: off by default
-/// because it acts on its own on the agent's session or the user's wallet.
+/// One hands-off behaviour the away question offers: each spends something of
+/// the user's (a session's context, a turn, a reset credit) on its own.
 #[derive(Debug)]
-struct AutomationRow {
+struct AwayRow {
     key: &'static str,
     label: &'static str,
-    cost: &'static str,
+    detail: fn(&MachineConfig) -> String,
     on_value: &'static str,
     off_value: &'static str,
     is_on: fn(&MachineConfig) -> bool,
@@ -53,65 +40,252 @@ struct AutomationRow {
 }
 
 // Rows are compared by their config key: the table holds each key once.
-impl PartialEq for AutomationRow {
+impl PartialEq for AwayRow {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key
     }
 }
 
-impl Eq for AutomationRow {}
+impl Eq for AwayRow {}
 
-static AUTOMATION_ROWS: [AutomationRow; 3] = [
-    AutomationRow {
+static AWAY_ROWS: [AwayRow; 3] = [
+    AwayRow {
         key: "resume.auto_continue",
         label: "auto-continue",
-        cost: "types continue after a rate limit or API error",
+        detail: |_| "types \"continue\" once a rate limit or API error clears".to_owned(),
         on_value: "true",
         off_value: "false",
         is_on: |config| config.resume.auto_continue,
         needs_codex: false,
     },
-    AutomationRow {
+    AwayRow {
         key: "resume.auto_redeem",
         label: "auto-redeem",
-        cost: "spends a Codex reset credit when a limit blocks hours",
+        detail: |config| {
+            format!(
+                "spends a Codex reset credit when a limit blocks {}+",
+                config.resume.auto_redeem_min_gain
+            )
+        },
         on_value: "true",
         off_value: "false",
         is_on: |config| config.resume.auto_redeem,
         needs_codex: true,
     },
-    AutomationRow {
+    AwayRow {
         key: "harness.idle_compact",
         label: "idle compaction",
-        cost: "compacts idle 100k+ agents before cache expiry; lossy",
-        on_value: "100k",
+        detail: |config| {
+            let floor = match config.harness.idle_compact {
+                IdleCompact::Off => IDLE_FLOOR_DEFAULT.to_owned(),
+                floor => floor.to_string(),
+            };
+            format!("summarizes an idle {floor}+ conversation; detail is gone")
+        },
+        on_value: IDLE_FLOOR_DEFAULT,
         off_value: "off",
         is_on: |config| config.harness.idle_compact != IdleCompact::Off,
         needs_codex: false,
     },
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct OfferedRow {
-    row: &'static AutomationRow,
+    row: &'static AwayRow,
     on: bool,
+    detail: String,
+}
+
+/// The three room-key answers, in option order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoomKeys {
+    /// `room.style = "native"`: the multiplexer's own keys plus two RimZ chords.
+    Yours,
+    /// `room.style = "rimz"` with the `rimz` keymap.
+    Rimz,
+    /// `room.style = "rimz"` with the keymap named after the room's multiplexer.
+    RimzMux,
+}
+
+impl RoomKeys {
+    const ALL: [Self; 3] = [Self::Yours, Self::Rimz, Self::RimzMux];
+
+    fn number(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|keys| *keys == self)
+            .unwrap_or_default()
+            + 1
+    }
+}
+
+/// The chords the room-keys text quotes, as the loaded config resolves them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyFacts {
+    focus: Option<KeyChord>,
+    zoom: Option<KeyChord>,
+    rimz: StyleFacts,
+    tmux_prefix: Option<KeyChord>,
+    zellij_prefix: Option<KeyChord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Defaults {
+struct StyleFacts {
+    next: Option<KeyChord>,
+    prev: Option<KeyChord>,
+    slots: Vec<Option<KeyChord>>,
+    needs_you: Option<KeyChord>,
+    prefix: Option<KeyChord>,
+    zoom: Option<KeyChord>,
+    resize: Option<KeyChord>,
+}
+
+impl KeyFacts {
+    fn from_config(config: &MachineConfig) -> Self {
+        let native = keymap_as(config, RoomStyle::Native, None);
+        let rimz = keymap_as(config, RoomStyle::Rimz, Some("rimz"));
+        let prefix_of = |name| {
+            keymap_as(config, RoomStyle::Rimz, Some(name))
+                .style
+                .map(|style| style.prefix)
+        };
+        Self {
+            focus: chord_for(&native, KeyMode::Normal, "sidebar.focus"),
+            zoom: chord_for(&native, KeyMode::Normal, "pane.zoom"),
+            rimz: StyleFacts {
+                next: chord_for(&rimz, KeyMode::Normal, "card.next"),
+                prev: chord_for(&rimz, KeyMode::Normal, "card.prev"),
+                slots: (1..=9)
+                    .map(|slot| chord_for(&rimz, KeyMode::Normal, &format!("card.slot.{slot}")))
+                    .collect(),
+                needs_you: chord_for(&rimz, KeyMode::Normal, "filter.needs_you"),
+                prefix: rimz.style.map(|style| style.prefix),
+                zoom: chord_for(&rimz, KeyMode::Prefix, "pane.zoom"),
+                resize: chord_for(&rimz, KeyMode::Prefix, "mode.resize"),
+            },
+            tmux_prefix: prefix_of("tmux"),
+            zellij_prefix: prefix_of("zellij"),
+        }
+    }
+
+    fn mux_prefix(&self, mux: MuxName) -> Option<KeyChord> {
+        match mux {
+            MuxName::Tmux => self.tmux_prefix,
+            MuxName::Zellij => self.zellij_prefix,
+        }
+    }
+}
+
+/// The keymap this config would resolve under `style` and, for rimz style, the
+/// named bundled keymap, keeping its prefix override and bindings.
+fn keymap_as(config: &MachineConfig, style: RoomStyle, keymap: Option<&str>) -> RoomKeymap {
+    let mut config = config.clone();
+    config.room.style = style;
+    if let Some(keymap) = keymap {
+        config.keys.set_keymap(keymap);
+    }
+    config.room_keymap()
+}
+
+fn chord_for(keymap: &RoomKeymap, mode: KeyMode, action: &str) -> Option<KeyChord> {
+    keymap
+        .modes
+        .get(&mode)?
+        .iter()
+        .find(|(_, bound)| bound.to_string() == action)
+        .map(|(chord, _)| *chord)
+}
+
+/// The multiplexer question's bracket and the reason printed beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MuxChoice {
+    bracket: MuxName,
+    reason: &'static str,
+    /// What the config resolves to outside a multiplexer with both installed.
+    resolved: MuxName,
+}
+
+impl MuxChoice {
+    fn new(enclosing: Option<MuxName>, stored: Option<MuxName>) -> Self {
+        let resolved = stored.unwrap_or(MuxName::Tmux);
+        let (bracket, reason) = match (enclosing, stored) {
+            (Some(mux), _) => (mux, "the one you are inside"),
+            (None, Some(mux)) => (mux, "your mux.default"),
+            (None, None) => (MuxName::Tmux, "the shipped default"),
+        };
+        Self {
+            bracket,
+            reason,
+            resolved,
+        }
+    }
+}
+
+/// Whether `rimz setup` asks for the multiplexer: both are installed and no
+/// `--mux`, `--tmux` or `--zellij` flag decided.
+pub(crate) fn setup_asks_mux(flag: Option<MuxName>, installed: impl Fn(MuxName) -> bool) -> bool {
+    flag.is_none() && installed(MuxName::Tmux) && installed(MuxName::Zellij)
+}
+
+/// The inputs that decide whether a first plain `rimz` asks for the multiplexer
+/// before it picks one. The question is the one startup prompt ahead of room
+/// admission, since its answer decides which backend admits the birth.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FirstStartMux {
+    pub(crate) first_run: bool,
+    pub(crate) attended: bool,
+    pub(crate) flag: Option<MuxName>,
+    pub(crate) enclosing: Option<MuxName>,
+}
+
+impl FirstStartMux {
+    /// `live_session` is asked last, since it lists both backends' sessions: a
+    /// live session of this name already decides the multiplexer.
+    pub(crate) fn asks(
+        self,
+        installed: impl Fn(MuxName) -> bool,
+        live_session: impl FnOnce() -> bool,
+    ) -> bool {
+        self.first_run
+            && self.attended
+            && self.enclosing.is_none()
+            && setup_asks_mux(self.flag, installed)
+            && !live_session()
+    }
+}
+
+/// What the loaded config holds for every question, and the facts its text quotes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Current {
+    mux: Option<MuxChoice>,
+    detected_mux: MuxName,
+    style: RoomStyle,
+    keymap: Value,
+    status_bar_unset: bool,
+    keys: KeyFacts,
     truecolor: bool,
     nerd_font: bool,
     pet_enabled: bool,
-    automation: Vec<OfferedRow>,
+    away: Vec<OfferedRow>,
+    also_on: Vec<String>,
 }
 
-impl Defaults {
+impl Current {
     fn from_config(
         config: &MachineConfig,
         truecolor_advertised: bool,
         codex_detected: bool,
+        mux: MuxSetup,
     ) -> Self {
         Self {
+            mux: mux
+                .ask
+                .then(|| MuxChoice::new(mux.enclosing, config.mux.default)),
+            detected_mux: mux.detected,
+            style: config.room.style,
+            keymap: config.keys.keymap().clone(),
+            status_bar_unset: config.mux.status_bar.is_none(),
+            keys: KeyFacts::from_config(config),
             truecolor: config
                 .theme
                 .effective_theme_mode()
@@ -119,322 +293,1019 @@ impl Defaults {
                 == ColorDepth::Truecolor,
             nerd_font: config.theme.glyph_set_source() == Some("nerd_font"),
             pet_enabled: config.theme.pets.enabled,
-            automation: AUTOMATION_ROWS
+            away: AWAY_ROWS
                 .iter()
                 .filter(|row| codex_detected || !row.needs_codex)
                 .map(|row| OfferedRow {
                     row,
                     on: (row.is_on)(config),
+                    detail: (row.detail)(config),
                 })
                 .collect(),
+            also_on: also_on(config),
         }
     }
 
-    fn automation_states(&self) -> Vec<bool> {
-        self.automation.iter().map(|offered| offered.on).collect()
+    /// The stored keys as one of the three options, or `None` for a state the
+    /// options do not cover (`vim`, the other multiplexer's keymap, an unknown
+    /// or non-string keymap under rimz style).
+    fn keys_option(&self, mux: MuxName) -> Option<RoomKeys> {
+        if self.style == RoomStyle::Native {
+            return Some(RoomKeys::Yours);
+        }
+        match self.keymap.as_str() {
+            Some("rimz") => Some(RoomKeys::Rimz),
+            Some(name) if name == mux.as_str() => Some(RoomKeys::RimzMux),
+            _ => None,
+        }
     }
 
-    /// The three-way answer that leaves every offered row as it is.
-    fn automation_choice(&self) -> AutomationChoice {
-        if self.automation.iter().all(|offered| offered.on) {
-            AutomationChoice::AllOn
-        } else if self.automation.iter().all(|offered| !offered.on) {
-            AutomationChoice::AllOff
-        } else {
-            AutomationChoice::Choose
+    fn stored_keys_text(&self) -> String {
+        match self.keymap.as_str() {
+            Some(name) => format!("RimZ style, {name} keymap"),
+            None => "RimZ style, an unreadable keys.keymap".to_owned(),
         }
     }
 }
 
+/// Settings that are on and that setup never asks about, from the loaded config.
+fn also_on(config: &MachineConfig) -> Vec<String> {
+    let mut items = Vec::new();
+    let notifications = &config.notifications;
+    if notifications.enabled {
+        let asks = notifications.triggers_status(AgentStatus::Waiting);
+        let fails = notifications.triggers_status(AgentStatus::Failed);
+        match (asks, fails) {
+            (true, true) => items.push("alerts when an agent asks or fails".to_owned()),
+            (true, false) => items.push("alerts when an agent asks".to_owned()),
+            (false, true) => items.push("alerts when an agent fails".to_owned()),
+            (false, false) => {}
+        }
+    }
+    if config.web.enabled {
+        let interface = config.web.interface.as_str();
+        let loopback = interface == "localhost"
+            || interface
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        items.push(if loopback {
+            "web access on loopback".to_owned()
+        } else {
+            format!("web access on {interface}")
+        });
+    }
+    items
+}
+
+/// Which multiplexer the questions speak of, and whether to ask for it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MuxSetup {
+    pub(crate) detected: MuxName,
+    pub(crate) enclosing: Option<MuxName>,
+    pub(crate) ask: bool,
+}
+
+/// What the user answered in this run. A question left unanswered keeps what
+/// the loaded config resolves to, so it writes nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Answers {
-    defaults: Defaults,
+    /// `None` until the multiplexer question is answered.
+    mux: Option<MuxName>,
+    /// `None` until a room-keys option is picked.
+    keys: Option<RoomKeys>,
     truecolor: bool,
     nerd_font: bool,
     pet_enabled: bool,
-    /// One state per offered row, in `defaults.automation` order.
-    automation: Vec<bool>,
+    /// One state per offered row, in `Current::away` order.
+    away: Vec<bool>,
 }
 
-pub(crate) fn run(config: &MachineConfig, intro_rendered: bool) -> Result<()> {
-    let defaults = Defaults::from_config(
-        config,
-        rimz::tui::truecolor(),
-        rimz::harness::auto_redeem::provider_located(),
-    );
-    let pets_config = config.theme.pets.clone();
-    let pet_preview = std::thread::spawn(move || build_pet_art(pets_config));
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let mut out = render::err();
-    if !intro_rendered {
-        write_header(&mut out)?;
-        writeln!(out)?;
-        writeln!(out, "{CONSENT_INTRO}")?;
-        writeln!(out)?;
+impl Answers {
+    fn kept(current: &Current) -> Self {
+        Self {
+            mux: None,
+            keys: None,
+            truecolor: current.truecolor,
+            nerd_font: current.nerd_font,
+            pet_enabled: current.pet_enabled,
+            away: current.away.iter().map(|offered| offered.on).collect(),
+        }
     }
-    let answers = ask(
-        defaults,
-        move || pet_preview.join().ok().flatten(),
-        &mut input,
-        &mut out,
-    )?;
-    apply(&answers, &mut out)?;
-    write_next_steps(&mut out)
 }
 
-fn ask(
-    defaults: Defaults,
-    pet_art: impl FnOnce() -> Option<String>,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<Answers> {
-    let kept = defaults.automation_states();
-    writeln!(out, "{}", gradient_line())?;
-    writeln!(out)?;
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::muted(),
-            "  Y if the bar above is one smooth sweep; N if it breaks into flat"
-        )
-    )?;
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::muted(),
-            "  bands — RimZ then falls back to 256 colors."
-        )
-    )?;
-    writeln!(out)?;
-
-    let Some(truecolor) = prompt_bool("  Use truecolor?", defaults.truecolor, input, out)? else {
-        return Ok(Answers {
-            truecolor: defaults.truecolor,
-            nerd_font: defaults.nerd_font,
-            pet_enabled: defaults.pet_enabled,
-            automation: kept,
-            defaults,
-        });
-    };
-    writeln!(out)?;
-
-    writeln!(out, "{}", glyph_line())?;
-    writeln!(out)?;
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::muted(),
-            "  Y if you see eight distinct icons; N for boxes or ? marks — RimZ"
-        )
-    )?;
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::muted(),
-            "  then falls back to plain text glyphs. (Needs a Nerd Font.)"
-        )
-    )?;
-    writeln!(out)?;
-
-    let Some(nerd_font) = prompt_bool("  Use Nerd Font icons?", defaults.nerd_font, input, out)?
-    else {
-        return Ok(Answers {
-            truecolor,
-            nerd_font: defaults.nerd_font,
-            pet_enabled: defaults.pet_enabled,
-            automation: kept,
-            defaults,
-        });
-    };
-    writeln!(out)?;
-
-    if let Some(art) = pet_art() {
-        out.write_all(art.as_bytes())?;
-        writeln!(out)?;
-    }
-
-    let Some(pet_enabled) = prompt_bool(
-        "  Want a pet? It lives in the sidebar and reacts to your fleet.",
-        defaults.pet_enabled,
-        input,
-        out,
-    )?
-    else {
-        return Ok(Answers {
-            truecolor,
-            nerd_font,
-            pet_enabled: defaults.pet_enabled,
-            automation: kept,
-            defaults,
-        });
-    };
-    writeln!(out)?;
-
-    let automation = ask_automation(&defaults, input, out)?.unwrap_or(kept);
-    Ok(Answers {
-        defaults,
-        truecolor,
-        nerd_font,
-        pet_enabled,
-        automation,
-    })
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Question {
+    Mux,
+    RoomKeys,
+    Color,
+    Icons,
+    Pet,
+    Away,
 }
 
-/// The consent question: one row per offered behaviour, answered for all of
-/// them at once or row by row. `None` on EOF before the three-way answer; EOF
-/// inside `choose` keeps the rows answered so far and defaults the rest.
-fn ask_automation(
-    defaults: &Defaults,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<Option<Vec<bool>>> {
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::muted(),
-            "  These act on their own, each action traced in `rimz stats`:"
-        )
-    )?;
-    for offered in &defaults.automation {
-        writeln!(out, "{}", automation_row_line(offered))?;
+impl Question {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Mux => "Multiplexer",
+            Self::RoomKeys => "Room keys",
+            Self::Color => "Color",
+            Self::Icons => "Icons",
+            Self::Pet => "Pet",
+            Self::Away => "While you're away",
+        }
     }
-    writeln!(out)?;
 
-    let Some(choice) = prompt_choice(
-        "  Enable hands-off automation?",
-        defaults.automation_choice(),
-        input,
-        out,
-    )?
-    else {
-        return Ok(None);
-    };
-    match choice {
-        AutomationChoice::AllOn => return Ok(Some(vec![true; defaults.automation.len()])),
-        AutomationChoice::AllOff => return Ok(Some(vec![false; defaults.automation.len()])),
-        AutomationChoice::Choose => {}
+    fn label(self) -> &'static str {
+        match self {
+            Self::Mux => "multiplexer",
+            Self::RoomKeys => "room keys",
+            Self::Color => "color",
+            Self::Icons => "icons",
+            Self::Pet => "pet",
+            Self::Away => "away",
+        }
     }
-    let mut states = defaults.automation_states();
-    for (state, offered) in states.iter_mut().zip(&defaults.automation) {
-        let prompt = format!("    {}?", offered.row.label);
-        let Some(on) = prompt_bool(&prompt, offered.on, input, out)? else {
-            break;
+}
+
+enum PetArt {
+    Pending(std::thread::JoinHandle<Option<String>>),
+    Ready(Option<String>),
+}
+
+impl PetArt {
+    fn get(&mut self) -> Option<&str> {
+        *self = match std::mem::replace(self, Self::Ready(None)) {
+            Self::Pending(handle) => Self::Ready(handle.join().ok().flatten()),
+            ready @ Self::Ready(_) => ready,
         };
-        *state = on;
+        match self {
+            Self::Ready(art) => art.as_deref(),
+            Self::Pending(_) => None,
+        }
     }
-    Ok(Some(states))
 }
 
-fn automation_row_line(offered: &OfferedRow) -> String {
-    let (state, role) = if offered.on {
-        ("on ", StateRole::Success)
-    } else {
-        ("off", StateRole::Neutral)
-    };
-    format!(
-        "  {:<width$}  {}  {}",
-        offered.row.label,
-        render::paint(status::role(role), state),
-        render::paint(render::palette::muted(), offered.row.cost),
-        width = AUTOMATION_LABEL_WIDTH,
-    )
+/// How the review screen was left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReviewExit {
+    /// Enter: write the answers.
+    Write,
+    /// `q` or end of input: write nothing.
+    Quit,
+    /// The hooks row's number: the caller asks the hooks question.
+    Hooks,
+    /// `a`: the caller walks every question again.
+    WalkAll,
 }
 
-fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
-    let editor = ConfigEditor::machine();
-    if answers.truecolor != answers.defaults.truecolor {
-        editor.set(
-            "theme.mode",
-            if answers.truecolor {
+/// One run of the setting questions: what the config holds and the answers so far.
+pub(crate) struct Questions {
+    current: Current,
+    answers: Answers,
+    pet_art: PetArt,
+}
+
+impl Questions {
+    pub(crate) fn new(config: &MachineConfig, mux: MuxSetup) -> Self {
+        let pets_config = config.theme.pets.clone();
+        let pet_art = PetArt::Pending(std::thread::spawn(move || build_pet_art(pets_config)));
+        let current = Current::from_config(
+            config,
+            rimz::tui::truecolor(),
+            rimz::harness::auto_redeem::provider_located(),
+            mux,
+        );
+        Self::from_parts(current, pet_art)
+    }
+
+    fn from_parts(current: Current, pet_art: PetArt) -> Self {
+        Self {
+            answers: Answers::kept(&current),
+            current,
+            pet_art,
+        }
+    }
+
+    fn questions(&self) -> Vec<Question> {
+        let mut questions = Vec::new();
+        if self.current.mux.is_some() {
+            questions.push(Question::Mux);
+        }
+        questions.extend([
+            Question::RoomKeys,
+            Question::Color,
+            Question::Icons,
+            Question::Pet,
+            Question::Away,
+        ]);
+        questions
+    }
+
+    /// How many questions a full walk asks.
+    pub(crate) fn count(&self) -> usize {
+        self.questions().len()
+    }
+
+    /// The multiplexer answer, or what the config resolves to while unanswered.
+    fn mux(&self) -> MuxName {
+        let current = &self.current;
+        self.answers
+            .mux
+            .unwrap_or_else(|| current.mux.map_or(current.detected_mux, |mux| mux.resolved))
+    }
+
+    /// The room-keys answer, or the stored keys under the current multiplexer
+    /// answer while unanswered; `None` is a stored state no option covers.
+    fn keys(&self) -> Option<RoomKeys> {
+        self.answers
+            .keys
+            .or_else(|| self.current.keys_option(self.mux()))
+    }
+
+    /// Ask every question in order, numbered from `first` of `total`. Returns
+    /// `false` when the walk was left by `q` or end of input.
+    pub(crate) fn walk(
+        &mut self,
+        first: usize,
+        total: usize,
+        input: &mut dyn BufRead,
+        out: &mut dyn Write,
+    ) -> Result<bool> {
+        for (index, question) in self.questions().into_iter().enumerate() {
+            let heading = format!("{} of {total} · {}", first + index, question.title());
+            if !self.ask(question, &heading, input, out)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn ask(
+        &mut self,
+        question: Question,
+        heading: &str,
+        input: &mut dyn BufRead,
+        out: &mut dyn Write,
+    ) -> Result<bool> {
+        writeln!(out)?;
+        writeln!(out, "{}", render::paint(render::palette::header(), heading))?;
+        writeln!(out)?;
+        let answered = match question {
+            Question::Mux => self.ask_mux(input, out)?,
+            Question::RoomKeys => self.ask_room_keys(input, out)?,
+            Question::Color => self.ask_color(input, out)?,
+            Question::Icons => self.ask_icons(input, out)?,
+            Question::Pet => self.ask_pet(input, out)?,
+            Question::Away => self.ask_away(input, out)?,
+        };
+        Ok(answered)
+    }
+
+    fn ask_mux(&mut self, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+        let Some(choice) = self.current.mux else {
+            return Ok(true);
+        };
+        let bracket = self.answers.mux.unwrap_or(choice.bracket);
+        let Some(mux) = prompt_mux(bracket, choice, input, out)? else {
+            return Ok(false);
+        };
+        self.answers.mux = Some(mux);
+        Ok(true)
+    }
+
+    fn ask_room_keys(&mut self, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+        let mux = self.mux();
+        writeln!(out, "Which keys move you between panes and agents?")?;
+        writeln!(out)?;
+        for line in room_keys_options(&self.current.keys, mux, self.current.status_bar_unset) {
+            writeln!(out, "{line}")?;
+        }
+        writeln!(out)?;
+        if self.keys().is_none() {
+            writeln!(
+                out,
+                "  Now: {}. Enter keeps it.",
+                self.current.stored_keys_text()
+            )?;
+        }
+        writeln!(
+            out,
+            "{}",
+            render::paint(
+                render::palette::muted(),
+                "  The vim keymap: rimz config set keys.keymap vim"
+            )
+        )?;
+        writeln!(out)?;
+        let bracket = self
+            .keys()
+            .map_or_else(|| "keep".to_owned(), |keys| keys.number().to_string());
+        loop {
+            write_prompt(out, "Room keys?", &bracket)?;
+            let Some(answer) = read_answer(input, out)? else {
+                return Ok(false);
+            };
+            if answer.is_empty() {
+                return Ok(true);
+            }
+            match answer.parse::<usize>() {
+                Ok(number @ 1..=3) => {
+                    self.answers.keys = Some(RoomKeys::ALL[number - 1]);
+                    return Ok(true);
+                }
+                _ => writeln!(
+                    out,
+                    "  Enter 1, 2 or 3, or press Enter to keep [{bracket}]."
+                )?,
+            }
+        }
+    }
+
+    fn ask_color(&mut self, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+        writeln!(out, "{}", gradient_line())?;
+        writeln!(out)?;
+        write_muted(
+            out,
+            &[
+                "  Y if the bar above is one smooth sweep; N if it breaks into flat",
+                "  bands — RimZ then falls back to 256 colors.",
+            ],
+        )?;
+        writeln!(out)?;
+        let Some(truecolor) = prompt_bool("Use truecolor?", self.answers.truecolor, input, out)?
+        else {
+            return Ok(false);
+        };
+        self.answers.truecolor = truecolor;
+        Ok(true)
+    }
+
+    fn ask_icons(&mut self, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+        writeln!(out, "{}", glyph_line())?;
+        writeln!(out)?;
+        write_muted(
+            out,
+            &[
+                "  Y if you see eight distinct icons; N for boxes or ? marks — RimZ",
+                "  then falls back to plain text glyphs. (Needs a Nerd Font.)",
+            ],
+        )?;
+        writeln!(out)?;
+        let Some(nerd_font) =
+            prompt_bool("Use Nerd Font icons?", self.answers.nerd_font, input, out)?
+        else {
+            return Ok(false);
+        };
+        self.answers.nerd_font = nerd_font;
+        Ok(true)
+    }
+
+    fn ask_pet(&mut self, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+        if let Some(art) = self.pet_art.get() {
+            out.write_all(art.as_bytes())?;
+            writeln!(out)?;
+        }
+        let Some(pet_enabled) = prompt_bool(
+            "Want a pet? It lives in the sidebar and reacts to your fleet.",
+            self.answers.pet_enabled,
+            input,
+            out,
+        )?
+        else {
+            return Ok(false);
+        };
+        self.answers.pet_enabled = pet_enabled;
+        Ok(true)
+    }
+
+    fn ask_away(&mut self, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+        writeln!(
+            out,
+            "Each of these spends something of yours and is logged (rimz stats --assists)."
+        )?;
+        let count = self.current.away.len();
+        let example = if count < 3 { "1 2" } else { "1 3" };
+        let ask = format!("Numbers flip a row (for example: {example}). Enter keeps these.");
+        loop {
+            writeln!(out)?;
+            for (index, offered) in self.current.away.iter().enumerate() {
+                writeln!(
+                    out,
+                    "{}",
+                    away_row_line(index + 1, offered, self.answers.away[index])
+                )?;
+            }
+            writeln!(out)?;
+            write_prompt(out, &ask, "keep")?;
+            let Some(answer) = read_answer(input, out)? else {
+                return Ok(false);
+            };
+            if answer.is_empty() {
+                return Ok(true);
+            }
+            match parse_rows(&answer, count) {
+                Some(rows) => {
+                    for row in rows {
+                        self.answers.away[row - 1] ^= true;
+                    }
+                }
+                None => writeln!(
+                    out,
+                    "  Enter row numbers from 1 to {count}, or press Enter."
+                )?,
+            }
+        }
+    }
+
+    /// Show the review and read one answer; a number of a setting question
+    /// reopens it in place. `hooks` is the hooks row's text, numbered first.
+    pub(crate) fn review(
+        &mut self,
+        hooks: Option<&str>,
+        input: &mut dyn BufRead,
+        out: &mut dyn Write,
+    ) -> Result<ReviewExit> {
+        loop {
+            self.write_review(hooks, out)?;
+            write_prompt(out, "Review?", "write")?;
+            let Some(answer) = read_answer(input, out)? else {
+                return Ok(ReviewExit::Quit);
+            };
+            if answer.is_empty() {
+                return Ok(ReviewExit::Write);
+            }
+            if answer.eq_ignore_ascii_case("a") {
+                return Ok(ReviewExit::WalkAll);
+            }
+            let offset = usize::from(hooks.is_some());
+            let questions = self.questions();
+            match answer.parse::<usize>() {
+                Ok(1) if hooks.is_some() => return Ok(ReviewExit::Hooks),
+                Ok(number) if (offset + 1..=offset + questions.len()).contains(&number) => {
+                    let question = questions[number - offset - 1];
+                    if !self.ask(question, question.title(), input, out)? {
+                        return Ok(ReviewExit::Quit);
+                    }
+                }
+                _ => writeln!(out, "  Enter a row number, a, q, or press Enter.")?,
+            }
+        }
+    }
+
+    fn write_review(&self, hooks: Option<&str>, out: &mut dyn Write) -> Result<()> {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{}",
+            render::paint(
+                render::palette::header(),
+                "Review · your settings are written when you press Enter"
+            )
+        )?;
+        writeln!(out)?;
+        let mut rows = Vec::new();
+        if let Some(hooks) = hooks {
+            rows.push(("hooks", hooks.to_owned(), None));
+        }
+        for question in self.questions() {
+            let (now, was) = self.review_values(question);
+            let was = (now != was).then_some(was);
+            rows.push((question.label(), now, was));
+        }
+        for (index, (label, now, was)) in rows.into_iter().enumerate() {
+            for line in review_row_lines(index + 1, label, &now, was.as_deref()) {
+                writeln!(out, "{line}")?;
+            }
+        }
+        if self.keys_change() {
+            write_muted(out, &self.reload_note())?;
+        }
+        writeln!(out)?;
+        if !self.current.also_on.is_empty() {
+            let first = "  Also on, not asked: ";
+            for line in wrap_items(first, first.len(), &self.current.also_on) {
+                writeln!(out, "{line}")?;
+            }
+        }
+        writeln!(out, "  Any setting: rimz config set <key> <value>")?;
+        writeln!(out)?;
+        let changes = self.changes();
+        if changes.is_empty() {
+            writeln!(
+                out,
+                "Nothing to write: Enter leaves every setting as it is."
+            )?;
+        } else {
+            let files = changed_files(&changes);
+            writeln!(
+                out,
+                "Enter writes {} to {}.",
+                count_noun(changes.len(), "change"),
+                files.join(" and ")
+            )?;
+        }
+        write_muted(
+            out,
+            &["A number reopens that question · a asks them all · q quits, settings unchanged."],
+        )?;
+        Ok(())
+    }
+
+    /// The answer and the stored value, as the review prints them.
+    fn review_values(&self, question: Question) -> (String, String) {
+        let current = &self.current;
+        let answers = &self.answers;
+        let on_off = |on: bool| if on { "on" } else { "off" }.to_owned();
+        match question {
+            Question::Mux => {
+                let stored = current.mux.map_or(current.detected_mux, |mux| mux.resolved);
+                (self.mux().to_string(), stored.to_string())
+            }
+            Question::RoomKeys => {
+                let stored = current.keys_option(self.mux());
+                (self.keys_text(self.keys()), self.keys_text(stored))
+            }
+            Question::Color => (color_text(answers.truecolor), color_text(current.truecolor)),
+            Question::Icons => (icons_text(answers.nerd_font), icons_text(current.nerd_font)),
+            Question::Pet => (on_off(answers.pet_enabled), on_off(current.pet_enabled)),
+            Question::Away => {
+                let stored: Vec<bool> = current.away.iter().map(|offered| offered.on).collect();
+                (self.away_text(&answers.away), self.away_text(&stored))
+            }
+        }
+    }
+
+    fn keys_text(&self, keys: Option<RoomKeys>) -> String {
+        let mux = self.mux();
+        let facts = &self.current.keys;
+        match keys {
+            None => self.current.stored_keys_text(),
+            Some(RoomKeys::Yours) => format!("yours ({} keys)", mux_label(mux)),
+            Some(RoomKeys::Rimz) => with_prefix("RimZ".to_owned(), facts.rimz.prefix),
+            Some(RoomKeys::RimzMux) => {
+                with_prefix(format!("RimZ + {}", mux_label(mux)), facts.mux_prefix(mux))
+            }
+        }
+    }
+
+    fn away_text(&self, states: &[bool]) -> String {
+        let on: Vec<&str> = self
+            .current
+            .away
+            .iter()
+            .zip(states)
+            .filter(|(_, on)| **on)
+            .map(|(offered, _)| offered.row.label)
+            .collect();
+        if on.is_empty() {
+            "all off".to_owned()
+        } else {
+            format!("{} on", on.join(" · "))
+        }
+    }
+
+    fn keys_change(&self) -> bool {
+        self.changes()
+            .iter()
+            .any(|(key, _)| *key == "room.style" || *key == "keys.keymap")
+    }
+
+    /// How an open room picks up changed keys: `rimz reload` re-applies the
+    /// keymap on both backends, but on Zellij only a fresh attach restores the
+    /// user's own bindings once RimZ style is left.
+    fn reload_note(&self) -> Vec<&'static str> {
+        let leaves_rimz_style =
+            self.current.style == RoomStyle::Rimz && self.keys() == Some(RoomKeys::Yours);
+        if self.mux() == MuxName::Zellij && leaves_rimz_style {
+            vec![
+                "  Open rooms drop RimZ's keys at `rimz reload`; your own Zellij keys",
+                "  return after a detach and reattach.",
+            ]
+        } else {
+            vec!["  Open rooms switch keys at `rimz reload`."]
+        }
+    }
+
+    /// Every setting whose answer differs from the loaded config, as the key and
+    /// the value `rimz config set` takes.
+    fn changes(&self) -> Vec<(&'static str, String)> {
+        let current = &self.current;
+        let answers = &self.answers;
+        let mut changes = Vec::new();
+        if let (Some(choice), Some(mux)) = (current.mux, answers.mux)
+            && mux != choice.resolved
+        {
+            changes.push(("mux.default", mux.as_str().to_owned()));
+        }
+        let rimz_keymap = match self.keys() {
+            Some(RoomKeys::Yours) => {
+                if current.style != RoomStyle::Native {
+                    changes.push(("room.style", "native".to_owned()));
+                }
+                None
+            }
+            Some(RoomKeys::Rimz) => Some("rimz"),
+            Some(RoomKeys::RimzMux) => Some(self.mux().as_str()),
+            None => None,
+        };
+        if let Some(keymap) = rimz_keymap {
+            if current.style != RoomStyle::Rimz {
+                changes.push(("room.style", "rimz".to_owned()));
+            }
+            if current.keymap.as_str() != Some(keymap) {
+                changes.push(("keys.keymap", keymap.to_owned()));
+            }
+        }
+        if answers.truecolor != current.truecolor {
+            let mode = if answers.truecolor {
                 "truecolor"
             } else {
                 "256"
-            },
-        )?;
-        writeln!(
-            out,
-            "✓ {}",
-            if answers.truecolor {
-                "truecolor"
-            } else {
-                "256-color palette"
-            }
-        )?;
-    }
-
-    if answers.nerd_font != answers.defaults.nerd_font {
-        editor.set(
-            "theme.glyphs.set",
-            if answers.nerd_font {
+            };
+            changes.push(("theme.mode", mode.to_owned()));
+        }
+        if answers.nerd_font != current.nerd_font {
+            let set = if answers.nerd_font {
                 "nerd_font"
             } else {
                 "unicode"
-            },
-        )?;
+            };
+            changes.push(("theme.glyphs.set", set.to_owned()));
+        }
+        if answers.pet_enabled != current.pet_enabled {
+            changes.push(("theme.pets.enabled", answers.pet_enabled.to_string()));
+        }
+        for (offered, &on) in current.away.iter().zip(&answers.away) {
+            if on != offered.on {
+                let row = offered.row;
+                let value = if on { row.on_value } else { row.off_value };
+                changes.push((row.key, value.to_owned()));
+            }
+        }
+        changes
+    }
+
+    /// Write every changed answer and report how many settings were written.
+    pub(crate) fn apply(&self, out: &mut dyn Write) -> Result<usize> {
+        let changes = self.changes();
+        if changes.is_empty() {
+            writeln!(out, "✓ nothing to write; your settings are unchanged")?;
+            return Ok(0);
+        }
+        let editor = ConfigEditor::machine();
+        for (key, value) in &changes {
+            editor.set(key, value)?;
+        }
         writeln!(
             out,
-            "✓ {}",
-            if answers.nerd_font {
-                "Nerd Font icons"
-            } else {
-                "Unicode glyphs"
-            }
+            "{} wrote {}",
+            render::paint(render::palette::good().bold(), "✓"),
+            count_noun(changes.len(), "setting")
         )?;
+        Ok(changes.len())
     }
-
-    if answers.pet_enabled {
-        editor.set("theme.pets.enabled", "true")?;
-        writeln!(out, "✓ rocky joins the room (rimz list-pets: more)")?;
-    } else if answers.defaults.pet_enabled {
-        editor.set("theme.pets.enabled", "false")?;
-        writeln!(out, "✓ pet disabled")?;
-    }
-
-    let mut turned_on = Vec::new();
-    let mut turned_off = Vec::new();
-    for (offered, &on) in answers.defaults.automation.iter().zip(&answers.automation) {
-        if on == offered.on {
-            continue;
-        }
-        let row = offered.row;
-        editor.set(row.key, if on { row.on_value } else { row.off_value })?;
-        if on {
-            turned_on.push(row.label);
-        } else {
-            turned_off.push(row.label);
-        }
-    }
-    if !turned_on.is_empty() {
-        writeln!(out, "✓ {} on", turned_on.join(" + "))?;
-    }
-    if !turned_off.is_empty() {
-        writeln!(out, "✓ {} off", turned_off.join(" + "))?;
-    }
-    Ok(())
 }
 
-pub(crate) fn write_next_steps(out: &mut dyn Write) -> Result<()> {
-    let loop_path = rimz::config::MachineConfig::loop_path();
-    let loop_path = render::home_relative(&loop_path.display().to_string());
-    let loop_hint = format!("Hands-off loop knobs: {loop_path}");
+fn count_noun(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
+fn changed_files(changes: &[(&'static str, String)]) -> Vec<String> {
+    let mut files = Vec::new();
+    for (key, _) in changes {
+        let path = if key.starts_with("theme.") {
+            MachineConfig::theme_path()
+        } else {
+            MachineConfig::config_path()
+        };
+        let path = render::home_relative_path(&path);
+        if !files.contains(&path) {
+            files.push(path);
+        }
+    }
+    files
+}
+
+fn with_prefix(name: String, prefix: Option<KeyChord>) -> String {
+    match prefix {
+        Some(prefix) => format!("{name}, prefix {prefix}"),
+        None => name,
+    }
+}
+
+fn color_text(truecolor: bool) -> String {
+    if truecolor { "truecolor" } else { "256 colors" }.to_owned()
+}
+
+fn icons_text(nerd_font: bool) -> String {
+    if nerd_font { "Nerd Font" } else { "plain" }.to_owned()
+}
+
+fn mux_label(mux: MuxName) -> &'static str {
+    match mux {
+        MuxName::Tmux => "tmux",
+        MuxName::Zellij => "Zellij",
+    }
+}
+
+/// One review row, with the stored value beside it when the answer differs, or
+/// on its own line when the pair would pass the screen width.
+fn review_row_lines(number: usize, label: &str, now: &str, was: Option<&str>) -> Vec<String> {
+    let indent = " ".repeat(5 + REVIEW_LABEL_WIDTH + 1);
+    let mut lines = vec![format!("  {number}  {label:<REVIEW_LABEL_WIDTH$} ")];
+    for (index, part) in render::wrap_words(now, SCREEN_WIDTH - indent.len())
+        .into_iter()
+        .enumerate()
+    {
+        match index {
+            0 => lines[0].push_str(&part),
+            _ => lines.push(format!("{indent}{part}")),
+        }
+    }
+    let Some(was) = was else {
+        return lines;
+    };
+    let was = format!("was: {was}");
+    if let [row] = lines.as_slice() {
+        let joined = format!("{row}   {was}");
+        if joined.chars().count() <= SCREEN_WIDTH {
+            return vec![joined];
+        }
+    }
+    lines.push(format!("{indent}{was}"));
+    lines
+}
+
+/// Wrap `items` joined by ` · ` under a hanging indent, within the screen width.
+fn wrap_items(first: &str, indent: usize, items: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = first.to_owned();
+    let mut fresh = true;
+    for item in items {
+        let candidate = if fresh {
+            format!("{line}{item}")
+        } else {
+            format!("{line} · {item}")
+        };
+        if !fresh && candidate.chars().count() > SCREEN_WIDTH {
+            lines.push(line);
+            line = format!("{}{item}", " ".repeat(indent));
+        } else {
+            line = candidate;
+        }
+        fresh = false;
+    }
+    lines.push(line);
+    lines
+}
+
+fn chord(chord: Option<KeyChord>) -> String {
+    chord.map_or_else(|| "(unbound)".to_owned(), |chord| chord.to_string())
+}
+
+/// The nine slot chords as one range when they are `Alt+1` to `Alt+9`, else
+/// each bound chord.
+fn slots_text(slots: &[Option<KeyChord>]) -> String {
+    let stock = slots.len() == 9
+        && slots
+            .iter()
+            .zip('1'..='9')
+            .all(|(slot, digit)| *slot == Some(KeyChord::Alt(digit)));
+    if stock {
+        return "Alt+1..9".to_owned();
+    }
+    let bound: Vec<String> = slots.iter().flatten().map(KeyChord::to_string).collect();
+    if bound.is_empty() {
+        return chord(None);
+    }
+    bound.join("/")
+}
+
+/// The three room-key options, each chord as the loaded config resolves it.
+fn room_keys_options(facts: &KeyFacts, mux: MuxName, status_bar_unset: bool) -> Vec<String> {
+    let indent = 5 + KEYS_LABEL_WIDTH;
+    let pad = " ".repeat(indent);
+    let head = |number: usize, label: &str| format!("  {number}  {label:<KEYS_LABEL_WIDTH$}");
+    let name = mux_label(mux);
+    let mut lines = Vec::new();
+
+    let adds: Vec<String> = [
+        facts.focus.map(|key| format!("{key}  sidebar and back")),
+        facts.zoom.map(|key| format!("{key}  fullscreen this pane")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let yours = if adds.is_empty() {
+        format!("your {name} config and bindings, as they are.")
+    } else {
+        format!("your {name} config and bindings, as they are. RimZ adds:")
+    };
+    lines.push(format!("{}{yours}", head(1, "Yours")));
+    let joined = format!("{pad}  {}", adds.join("     "));
+    if joined.chars().count() <= SCREEN_WIDTH {
+        lines.push(joined);
+    } else {
+        lines.extend(adds.iter().map(|add| format!("{pad}  {add}")));
+    }
+
+    let rimz = &facts.rimz;
+    lines.extend(wrap_items(
+        &head(2, "RimZ"),
+        indent,
+        &[
+            format!("{}/{} walk agents", chord(rimz.next), chord(rimz.prev)),
+            format!("{} jump", slots_text(&rimz.slots)),
+            format!("{} who needs you", chord(rimz.needs_you)),
+        ],
+    ));
+    lines.extend(wrap_items(
+        &pad,
+        indent,
+        &[
+            format!(
+                "{}, then: {} fullscreen",
+                chord(rimz.prefix),
+                chord(rimz.zoom)
+            ),
+            format!(
+                "{} resize mode, kept through moves until Esc",
+                chord(rimz.resize)
+            ),
+        ],
+    ));
+    if status_bar_unset {
+        lines.push(format!("{pad}Hides the {name} status bar in rooms."));
+    }
+
+    lines.extend(wrap_items(
+        &head(3, &format!("RimZ + {name}")),
+        indent,
+        &[
+            "the same agent keys".to_owned(),
+            format!(
+                "{} becomes RimZ's prefix, with {name}-like keys after it",
+                chord(facts.mux_prefix(mux))
+            ),
+            "your own prefix bindings do not fire in rooms".to_owned(),
+        ],
+    ));
+    lines.push(String::new());
+    match mux {
+        MuxName::Tmux => lines.push(
+            "  Rooms run on RimZ's own tmux server; sessions outside RimZ are untouched.".into(),
+        ),
+        MuxName::Zellij => lines.extend([
+            "  2 and 3 replace your own Zellij bindings in rooms; going back to yours".into(),
+            "  needs a detach and reattach.".into(),
+        ]),
+    }
+    lines
+}
+
+fn away_row_line(number: usize, offered: &OfferedRow, on: bool) -> String {
+    let mark = if on { "[x]" } else { "[ ]" };
+    format!(
+        "  {number}  {mark} {:<AWAY_LABEL_WIDTH$} {}",
+        offered.row.label,
+        render::paint(render::palette::muted(), &offered.detail),
+    )
+}
+
+/// Row numbers separated by spaces or commas, each within `1..=count`.
+fn parse_rows(answer: &str, count: usize) -> Option<Vec<usize>> {
+    let rows: Vec<usize> = answer
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            token
+                .parse::<usize>()
+                .ok()
+                .filter(|row| (1..=count).contains(row))
+        })
+        .collect::<Option<_>>()?;
+    (!rows.is_empty()).then_some(rows)
+}
+
+/// `bracket` is what Enter keeps; the reason prints beside the default it
+/// explains, and an answer that moved off that default is marked as yours.
+fn prompt_mux(
+    bracket: MuxName,
+    choice: MuxChoice,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<Option<MuxName>> {
+    const ORDER: [MuxName; 2] = [MuxName::Tmux, MuxName::Zellij];
+    writeln!(
+        out,
+        "Both tmux and Zellij are installed. A room keeps the one it was born in."
+    )?;
+    writeln!(out)?;
+    for (index, mux) in ORDER.iter().enumerate() {
+        let note = if *mux == choice.bracket {
+            format!("   ← default: {}", choice.reason)
+        } else if *mux == bracket {
+            "   ← your answer".to_owned()
+        } else {
+            String::new()
+        };
+        writeln!(out, "  {}  {:<8}{note}", index + 1, mux.as_str())?;
+    }
+    writeln!(out)?;
+    let default = ORDER
+        .iter()
+        .position(|mux| *mux == bracket)
+        .unwrap_or_default()
+        + 1;
+    loop {
+        write_prompt(out, "Multiplexer?", &default.to_string())?;
+        let Some(answer) = read_answer(input, out)? else {
+            return Ok(None);
+        };
+        if answer.is_empty() {
+            return Ok(Some(bracket));
+        }
+        let picked = match answer.to_ascii_lowercase().as_str() {
+            "1" | "tmux" => Some(MuxName::Tmux),
+            "2" | "zellij" => Some(MuxName::Zellij),
+            _ => None,
+        };
+        match picked {
+            Some(mux) => return Ok(Some(mux)),
+            None => writeln!(out, "  Enter 1 or 2, or press Enter to keep [{default}].")?,
+        }
+    }
+}
+
+/// The multiplexer question a first plain `rimz` asks before it picks one, with
+/// no review behind it. `None` when it was left by `q` or end of input.
+pub(crate) fn ask_first_start_mux(
+    config: &MachineConfig,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<Option<MuxName>> {
+    let choice = MuxChoice::new(None, config.mux.default);
     writeln!(
         out,
         "{}",
-        render::paint(
-            render::palette::muted(),
-            "Next → docs/guide/setup.md · rimz config for preferences"
-        )
+        render::paint(render::palette::header(), "Multiplexer")
+    )?;
+    writeln!(out)?;
+    prompt_mux(choice.bracket, choice, input, out)
+}
+
+/// Whether `answer` needs a `mux.default` write: it differs from what the
+/// config resolves to outside a multiplexer with both installed.
+pub(crate) fn mux_answer_differs(config: &MachineConfig, answer: MuxName) -> bool {
+    MuxChoice::new(None, config.mux.default).resolved != answer
+}
+
+/// The line a first plain `rimz` prints after hooks, naming the room keys,
+/// color and glyphs the loaded config holds.
+pub(crate) fn write_first_start_defaults(
+    config: &MachineConfig,
+    mux: MuxName,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let keys = Current::from_config(
+        config,
+        false,
+        false,
+        MuxSetup {
+            detected: mux,
+            enclosing: None,
+            ask: false,
+        },
+    );
+    let keys = match keys.keys_option(mux) {
+        Some(RoomKeys::Yours) => format!("your {} keys", mux_label(mux)),
+        Some(RoomKeys::Rimz) => "RimZ keys".to_owned(),
+        Some(RoomKeys::RimzMux) => format!("RimZ + {} keys", mux_label(mux)),
+        None => keys.stored_keys_text(),
+    };
+    let color = match config.theme.effective_theme_mode() {
+        ThemeMode::Auto => "auto color",
+        ThemeMode::Truecolor => "truecolor",
+        ThemeMode::Indexed => "256 colors",
+    };
+    let glyphs = match config.theme.glyph_set_source() {
+        None => "plain glyphs".to_owned(),
+        Some("nerd_font") => "Nerd Font icons".to_owned(),
+        Some("unicode") => "Unicode glyphs".to_owned(),
+        Some(set) => format!("{set} glyphs"),
+    };
+    writeln!(
+        out,
+        "Everything else is on defaults: {keys}, {color}, {glyphs}."
     )?;
     writeln!(
         out,
-        "{}",
-        render::paint(render::palette::muted(), &loop_hint)
+        "  {}   change any of it",
+        render::paint(render::palette::accent(), "rimz setup")
     )?;
     Ok(())
 }
@@ -506,26 +1377,49 @@ fn build_pet_art(pets_config: PetsConfig) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
+fn write_muted(out: &mut dyn Write, lines: &[&str]) -> Result<()> {
+    for line in lines {
+        writeln!(out, "{}", render::paint(render::palette::muted(), line))?;
+    }
+    Ok(())
+}
+
+fn write_prompt(out: &mut dyn Write, prompt: &str, bracket: &str) -> Result<()> {
+    write!(
+        out,
+        "{prompt} {} ",
+        render::paint(render::palette::accent().bold(), &format!("[{bracket}]"))
+    )?;
+    out.flush()?;
+    Ok(())
+}
+
+/// One trimmed answer line; `None` on end of input or `q`, which leave the walk.
+fn read_answer(input: &mut dyn BufRead, out: &mut dyn Write) -> Result<Option<String>> {
+    let mut answer = String::new();
+    if input.read_line(&mut answer)? == 0 {
+        writeln!(out)?;
+        return Ok(None);
+    }
+    let answer = answer.trim();
+    if answer.eq_ignore_ascii_case("q") {
+        return Ok(None);
+    }
+    Ok(Some(answer.to_owned()))
+}
+
 fn prompt_bool(
     prompt: &str,
     default_yes: bool,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Option<bool>> {
-    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    let suffix = if default_yes { "Y/n" } else { "y/N" };
     loop {
-        write!(
-            out,
-            "{prompt} {} ",
-            render::paint(render::palette::accent().bold(), suffix)
-        )?;
-        out.flush()?;
-        let mut answer = String::new();
-        if input.read_line(&mut answer)? == 0 {
-            writeln!(out)?;
+        write_prompt(out, prompt, suffix)?;
+        let Some(answer) = read_answer(input, out)? else {
             return Ok(None);
-        }
-        let answer = answer.trim();
+        };
         if answer.is_empty() {
             return Ok(Some(default_yes));
         }
@@ -535,410 +1429,9 @@ fn prompt_bool(
         if answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no") {
             return Ok(Some(false));
         }
-        writeln!(out, "  Enter y or n.")?;
-    }
-}
-
-fn prompt_choice(
-    prompt: &str,
-    default: AutomationChoice,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<Option<AutomationChoice>> {
-    let labels = AutomationChoice::ALL
-        .map(|choice| choice.suffix_label(choice == default))
-        .join("/");
-    let suffix = format!("[{labels}]");
-    let default_index = AutomationChoice::ALL
-        .iter()
-        .position(|&choice| choice == default)
-        .unwrap_or_default();
-    loop {
-        write!(
-            out,
-            "{prompt} {} ",
-            render::paint(render::palette::accent().bold(), &suffix)
-        )?;
-        out.flush()?;
-        let mut answer = String::new();
-        if input.read_line(&mut answer)? == 0 {
-            writeln!(out)?;
-            return Ok(None);
-        }
-        if let Some(index) = super::parse_choice(&answer, &AutomationChoice::WORDS, default_index) {
-            return Ok(Some(AutomationChoice::ALL[index]));
-        }
-        writeln!(out, "  Enter y, n, or choose.")?;
+        writeln!(out, "  Enter y or n (q quits).")?;
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    use rimz::config::{ThemeMode, ThemeStyle};
-
-    use super::*;
-
-    fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> Result<()>) -> String {
-        let mut stream = anstream::StripStream::new(Vec::new());
-        render_one(&mut stream).expect("render");
-        String::from_utf8(stream.into_inner()).expect("utf8")
-    }
-
-    fn drive(defaults: Defaults, input: &[u8]) -> (Answers, String) {
-        drive_with_art(defaults, input, || None)
-    }
-
-    fn drive_with_art(
-        defaults: Defaults,
-        input: &[u8],
-        pet_art: impl FnOnce() -> Option<String>,
-    ) -> (Answers, String) {
-        let mut input = Cursor::new(input.to_vec());
-        let mut stream = anstream::StripStream::new(Vec::new());
-        let answers = ask(defaults, pet_art, &mut input, &mut stream).expect("ask");
-        let rendered = String::from_utf8(stream.into_inner()).expect("utf8");
-        (answers, rendered)
-    }
-
-    fn fresh(codex_detected: bool) -> Defaults {
-        Defaults::from_config(&MachineConfig::default(), false, codex_detected)
-    }
-
-    fn all_on(codex_detected: bool) -> Defaults {
-        let mut config = MachineConfig::default();
-        config.theme.mode = ThemeMode::Truecolor;
-        config.theme.glyphs.set = Some("nerd_font".to_owned());
-        config.theme.pets.enabled = true;
-        config.resume.auto_continue = true;
-        config.resume.auto_redeem = true;
-        config.harness.idle_compact = IdleCompact::Tokens(100_000);
-        Defaults::from_config(&config, false, codex_detected)
-    }
-
-    fn offered_keys(defaults: &Defaults) -> Vec<&'static str> {
-        defaults
-            .automation
-            .iter()
-            .map(|offered| offered.row.key)
-            .collect()
-    }
-
-    #[test]
-    fn prompt_accepts_declines_and_defaults() {
-        let (answers, rendered) = drive(fresh(false), b"y\ny\nn\n\n");
-
-        assert!(answers.truecolor);
-        assert!(answers.nerd_font);
-        assert!(!answers.pet_enabled);
-        assert_eq!(answers.automation, vec![false, true]);
-        assert!(rendered.contains("Use truecolor?"));
-        assert!(rendered.contains("Use Nerd Font icons?"));
-        assert!(rendered.contains("Want a pet?"));
-        assert!(rendered.contains("Enable hands-off automation? [y/n/Choose]"));
-        assert!(rendered.contains("traced in `rimz stats`"));
-        assert_eq!(rendered.matches("[y/N] ").count(), 4);
-        assert_eq!(rendered.matches("[Y/n] ").count(), 0);
-    }
-
-    #[test]
-    fn prompt_eof_cascades_remaining_defaults() {
-        let defaults = Defaults {
-            nerd_font: false,
-            ..all_on(true)
-        };
-
-        let (at_truecolor, rendered) = drive(defaults.clone(), b"");
-        assert_eq!(
-            at_truecolor,
-            Answers {
-                defaults: defaults.clone(),
-                truecolor: true,
-                nerd_font: false,
-                pet_enabled: true,
-                automation: vec![true, true, true],
-            }
-        );
-        assert!(rendered.contains("Use truecolor?"));
-        assert!(!rendered.contains("Use Nerd Font icons?"));
-
-        let (at_nerd_font, rendered) = drive(defaults.clone(), b"n\n");
-        assert!(!at_nerd_font.truecolor);
-        assert!(!at_nerd_font.nerd_font);
-        assert!(at_nerd_font.pet_enabled);
-        assert_eq!(at_nerd_font.automation, vec![true, true, true]);
-        assert!(rendered.contains("Use Nerd Font icons?"));
-        assert!(!rendered.contains("Want a pet?"));
-
-        let (at_pet, rendered) = drive(defaults.clone(), b"n\ny\n");
-        assert!(at_pet.nerd_font);
-        assert!(at_pet.pet_enabled);
-        assert_eq!(at_pet.automation, vec![true, true, true]);
-        assert!(rendered.contains("Want a pet?"));
-
-        let (at_automation, rendered) = drive(defaults.clone(), b"n\ny\nn\n");
-        assert!(!at_automation.pet_enabled);
-        assert_eq!(at_automation.automation, vec![true, true, true]);
-        assert!(rendered.contains("Enable hands-off automation?"));
-
-        let (inside_choose, rendered) = drive(defaults, b"n\ny\nn\nc\nn\n");
-        assert_eq!(inside_choose.automation, vec![false, true, true]);
-        assert!(rendered.contains("    auto-redeem?"));
-        assert!(!rendered.contains("    idle compaction?"));
-    }
-
-    #[test]
-    fn rerun_defaults_flip_with_no_answers() {
-        let (answers, rendered) = drive(all_on(true), b"n\nn\nn\nn\n");
-
-        assert!(!answers.truecolor);
-        assert!(!answers.nerd_font);
-        assert!(!answers.pet_enabled);
-        assert_eq!(answers.automation, vec![false, false, false]);
-        assert_eq!(rendered.matches("[Y/n] ").count(), 3);
-        assert_eq!(rendered.matches("[Y/n/choose] ").count(), 1);
-    }
-
-    #[test]
-    fn enter_keeps_every_offered_row_in_each_state() {
-        for defaults in [fresh(true), all_on(true)] {
-            let states = defaults.automation_states();
-            let (answers, _) = drive(defaults, b"\n\n\n\n");
-            assert_eq!(answers.automation, states);
-        }
-
-        let mut mixed = MachineConfig::default();
-        mixed.resume.auto_continue = true;
-        mixed.harness.idle_compact = IdleCompact::Off;
-        let mixed = Defaults::from_config(&mixed, false, true);
-        let (answers, rendered) = drive(mixed.clone(), b"\n\n\n\n\n\n\n");
-        assert!(rendered.contains("[y/n/Choose]"));
-        assert_eq!(answers.automation, vec![true, false, false]);
-        assert_eq!(rendered.matches("    auto-continue? [Y/n]").count(), 1);
-        assert_eq!(rendered.matches("    idle compaction? [y/N]").count(), 1);
-
-        let (answers, _) = drive(mixed, b"\n\n\nn\n");
-        assert_eq!(answers.automation, vec![false, false, false]);
-    }
-
-    #[test]
-    fn codex_gate_hides_and_never_touches_auto_redeem() {
-        let mut config = MachineConfig::default();
-        config.resume.auto_redeem = true;
-        config.harness.idle_compact = IdleCompact::Off;
-
-        let without = Defaults::from_config(&config, false, false);
-        assert_eq!(
-            offered_keys(&without),
-            ["resume.auto_continue", "harness.idle_compact"]
-        );
-        assert_eq!(without.automation_choice(), AutomationChoice::AllOff);
-        for input in [&b"\n\n\ny\n"[..], b"\n\n\nn\n", b"\n\n\nc\ny\ny\n"] {
-            let (answers, rendered) = drive(without.clone(), input);
-            assert_eq!(answers.automation.len(), 2);
-            assert!(!rendered.contains("auto-redeem"));
-        }
-
-        let with = Defaults::from_config(&config, false, true);
-        assert_eq!(
-            offered_keys(&with),
-            [
-                "resume.auto_continue",
-                "resume.auto_redeem",
-                "harness.idle_compact"
-            ]
-        );
-        assert_eq!(with.automation_choice(), AutomationChoice::Choose);
-        let (_, rendered) = drive(with, b"\n\n\ny\n");
-        assert!(rendered.contains("auto-redeem"));
-        assert!(rendered.contains("Codex reset credit"));
-    }
-
-    #[test]
-    fn hand_set_floor_reads_on_and_survives_keeping_it_on() {
-        let mut config = MachineConfig::default();
-        config.harness.idle_compact = IdleCompact::Tokens(250_000);
-        let defaults = Defaults::from_config(&config, false, false);
-        assert_eq!(defaults.automation_states(), vec![false, true]);
-
-        for keep in [&b"\n\n\ny\n"[..], b"\n\n\n\n\n\n"] {
-            let (answers, _) = drive(defaults.clone(), keep);
-            assert!(answers.automation[1], "idle compaction stays on: no write");
-        }
-        let (answers, _) = drive(defaults, b"\n\n\nn\n");
-        assert!(!answers.automation[1]);
-    }
-
-    #[test]
-    fn three_way_prompt_parses_words_prefixes_and_reprompts() {
-        for (answer, expected) in [
-            ("y", AutomationChoice::AllOn),
-            ("Y", AutomationChoice::AllOn),
-            ("yes", AutomationChoice::AllOn),
-            ("N", AutomationChoice::AllOff),
-            ("no", AutomationChoice::AllOff),
-            ("c", AutomationChoice::Choose),
-            ("choose", AutomationChoice::Choose),
-            ("", AutomationChoice::AllOff),
-        ] {
-            let mut input = Cursor::new(format!("{answer}\n").into_bytes());
-            let mut out = Vec::new();
-            let choice =
-                prompt_choice("?", AutomationChoice::AllOff, &mut input, &mut out).expect("prompt");
-            assert_eq!(choice, Some(expected), "answer {answer:?}");
-        }
-
-        let mut input = Cursor::new(b"x\nc\n".to_vec());
-        let mut out = anstream::StripStream::new(Vec::new());
-        let choice =
-            prompt_choice("?", AutomationChoice::AllOn, &mut input, &mut out).expect("prompt");
-        let rendered = String::from_utf8(out.into_inner()).expect("utf8");
-        assert_eq!(choice, Some(AutomationChoice::Choose));
-        assert!(rendered.contains("Enter y, n, or choose."));
-        assert_eq!(rendered.matches("? [Y/n/choose]").count(), 2);
-
-        let mut eof = Cursor::new(Vec::new());
-        assert_eq!(
-            prompt_choice("?", AutomationChoice::AllOn, &mut eof, &mut Vec::new()).expect("eof"),
-            None
-        );
-    }
-
-    #[test]
-    fn automation_rows_fit_eighty_columns() {
-        for (row, on) in AUTOMATION_ROWS.iter().zip([true, false, true]) {
-            let line = strip(|w| {
-                writeln!(w, "{}", automation_row_line(&OfferedRow { row, on }))?;
-                Ok(())
-            });
-            let line = line.trim_end_matches('\n');
-            assert!(line.chars().count() <= 80, "{line:?} overflows 80 columns");
-            assert!(line.contains(row.label) && line.contains(row.cost));
-        }
-    }
-
-    #[test]
-    fn defaults_fold_terminal_advertisement_and_explicit_theme_choices() {
-        let fresh_config = MachineConfig::default();
-        assert_eq!(
-            Defaults::from_config(&fresh_config, false, false),
-            Defaults {
-                truecolor: false,
-                nerd_font: false,
-                pet_enabled: false,
-                automation: fresh(false).automation,
-            }
-        );
-        assert!(Defaults::from_config(&fresh_config, true, false).truecolor);
-
-        let mut modern = MachineConfig::default();
-        modern.theme.style = Some(ThemeStyle::Modern);
-        let modern_defaults = Defaults::from_config(&modern, false, false);
-        assert!(modern_defaults.truecolor);
-        assert!(modern_defaults.nerd_font);
-        assert!(!modern_defaults.pet_enabled);
-
-        modern.theme.mode = ThemeMode::Indexed;
-        modern.theme.glyphs.set = Some("unicode".to_owned());
-        let explicit_fallbacks = Defaults::from_config(&modern, true, false);
-        assert!(!explicit_fallbacks.truecolor);
-        assert!(!explicit_fallbacks.nerd_font);
-
-        let mut explicit_truecolor = MachineConfig::default();
-        explicit_truecolor.theme.mode = ThemeMode::Truecolor;
-        explicit_truecolor.theme.glyphs.set = Some("nerd_font".to_owned());
-        let explicit = Defaults::from_config(&explicit_truecolor, false, false);
-        assert!(explicit.truecolor);
-        assert!(explicit.nerd_font);
-        assert_eq!(explicit.automation_states(), vec![false, true]);
-
-        explicit_truecolor.resume.auto_continue = true;
-        assert_eq!(
-            Defaults::from_config(&explicit_truecolor, false, false).automation_states(),
-            vec![true, true]
-        );
-    }
-
-    #[test]
-    fn probe_lines_emit_truecolor_and_aligned_sidebar_glyphs() {
-        let gradient = gradient_line();
-        let glyphs = glyph_line();
-        let sample = nerd_font_probe_glyphs()[0];
-
-        assert!(gradient.contains("\x1b[38;2;"));
-        assert!(gradient.contains('█'));
-        assert!(gradient.contains("a full spread of colors"));
-        assert!(glyphs.contains(sample));
-        assert!(glyphs.contains("eight distinct icons"));
-        let glyph_field = glyphs
-            .strip_prefix("  ")
-            .and_then(|line| line.split("  ←").next())
-            .expect("glyph field");
-        assert_eq!(glyph_field.chars().count(), GRADIENT_WIDTH);
-    }
-
-    #[test]
-    fn probe_gradient_steps_smoothly_between_cells() {
-        let stops = nerd_font_probe_gradient(GRADIENT_WIDTH);
-
-        assert_eq!(stops.len(), GRADIENT_WIDTH);
-        // Adjacent cells differ by small perceptual steps: interpolating the
-        // anchors keeps neighbours close, which is what reads as one sweep
-        // rather than the hard bands the raw anchor list produced.
-        for pair in stops.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            let delta = (i32::from(a.0) - i32::from(b.0)).abs()
-                + (i32::from(a.1) - i32::from(b.1)).abs()
-                + (i32::from(a.2) - i32::from(b.2)).abs();
-            // Raw adjacent anchors jump by ~200; interpolation keeps every
-            // cell-to-cell step well under this bound.
-            assert!(delta <= 80, "harsh jump {a:?} -> {b:?} (delta {delta})");
-        }
-    }
-
-    #[test]
-    fn rendered_flow_names_each_question_once() {
-        let (_, rendered) = drive(fresh(true), b"\n\n\n\n");
-
-        assert_eq!(rendered.matches("Use truecolor?").count(), 1);
-        assert_eq!(rendered.matches("Use Nerd Font icons?").count(), 1);
-        assert_eq!(rendered.matches("Want a pet?").count(), 1);
-        assert_eq!(rendered.matches("Enable hands-off automation?").count(), 1);
-    }
-
-    #[test]
-    fn pet_art_is_injected_only_when_available() {
-        let (_, with_art) = drive_with_art(fresh(false), b"\n\n\n\n", || Some("ART\n".to_owned()));
-        let nerd = with_art.find("Use Nerd Font icons?").expect("nerd prompt");
-        let art = with_art.find("ART\n\n").expect("art with blank line");
-        let pet = with_art.find("Want a pet?").expect("pet prompt");
-        assert!(nerd < art && art < pet);
-
-        let (_, without_art) = drive(fresh(false), b"\n\n\n\n");
-        assert!(!without_art.contains("ART"));
-        assert!(without_art.contains("[y/N] \n  Want a pet?"));
-    }
-
-    #[test]
-    fn header_uses_title_and_terminal_width_rule_without_box() {
-        let rendered = strip(|w| write_header(w));
-
-        assert!(rendered.contains("rimz · first-run setup"));
-        assert!(rendered.contains('─'));
-        assert!(!rendered.contains('╭'));
-        assert!(!rendered.contains('╰'));
-        assert_eq!(header_rule(80).chars().count(), 48);
-        assert_eq!(header_rule(20).chars().count(), 20);
-    }
-
-    #[test]
-    fn next_steps_are_muted_setup_config_and_loop_pointers() {
-        let rendered = strip(|w| write_next_steps(w));
-
-        assert!(rendered.contains("docs/guide/setup.md"));
-        assert!(rendered.contains("rimz config"));
-        assert!(rendered.contains("loop.toml"));
-        assert!(rendered.contains("Hands-off loop knobs:"));
-    }
-}
+mod tests;

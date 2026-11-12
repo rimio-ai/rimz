@@ -123,7 +123,9 @@ pub struct BirthAdmission {
     recovery_lock: Option<WorkspaceLock>,
 }
 
-/// Admit before hook detection and startup prompts, without constructing a room context.
+/// Admit before hook detection and every startup prompt but one, without constructing a room
+/// context. The exception is the multiplexer question a first attended `rimz start` asks: it
+/// runs before admission, since its answer picks the backend that admits the birth.
 pub fn admit_birth(source: RoomBirthSource<'_>, mux: MuxName) -> Result<BirthAdmission> {
     let (project_root, session_name) = match source {
         RoomBirthSource::Resolved(workspace) => (&workspace.project_root, &workspace.session_name),

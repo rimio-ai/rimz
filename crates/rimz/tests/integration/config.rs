@@ -1032,6 +1032,16 @@ fn run_setup_pty(
     path: Option<&std::path::Path>,
     adapter_paths: &[(&str, &std::path::Path)],
 ) -> String {
+    run_setup_pty_args(env, &[], input, path, adapter_paths)
+}
+
+fn run_setup_pty_args(
+    env: &Env,
+    args: &[&str],
+    input: &str,
+    path: Option<&std::path::Path>,
+    adapter_paths: &[(&str, &std::path::Path)],
+) -> String {
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -1045,6 +1055,7 @@ fn run_setup_pty(
     let mut cmd = CommandBuilder::new(env.rimz_bin());
     env.pin_pty_command(&mut cmd);
     cmd.arg("setup");
+    cmd.args(args);
     cmd.cwd(env.project_root.as_os_str());
     cmd.env("RIMZ_PETS_OFFLINE", "1");
     cmd.env("TERM", "dumb");
@@ -1683,7 +1694,12 @@ fn setup_without_tty_reports_and_writes_nothing() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.contains("RimZ setup"));
+    assert!(stdout.contains("rimz setup · this machine"), "{stdout}");
+    assert!(
+        stdout.contains("antigravity, opencode, pi found · "),
+        "{stdout}"
+    );
+    assert!(stdout.contains("more supported: rimz doctor"), "{stdout}");
     assert!(
         stdout.contains("Setup changed nothing: there is no terminal to ask from."),
         "{stdout}"
@@ -1700,8 +1716,8 @@ fn setup_without_tty_reports_and_writes_nothing() {
     assert!(!stderr.contains("Use Nerd Font icons?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
-    assert!(!stdout.contains("Enable hands-off automation?"));
-    assert!(!stderr.contains("Enable hands-off automation?"));
+    assert!(!stdout.contains("Room keys?"));
+    assert!(!stderr.contains("Room keys?"));
 
     assert!(!machine_config_path(&env).exists());
     assert!(!env.rimz_home().join("teams/consensus.md").exists());
@@ -1791,8 +1807,8 @@ fn setup_config_only_writes_default_config_without_hook_or_trust_side_effects() 
     assert!(!stderr.contains("Use Nerd Font icons?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
-    assert!(!stdout.contains("Enable hands-off automation?"));
-    assert!(!stderr.contains("Enable hands-off automation?"));
+    assert!(!stdout.contains("Room keys?"));
+    assert!(!stderr.contains("Room keys?"));
 
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read setup config");
     assert!(text.contains("[resume]"));
@@ -1917,92 +1933,193 @@ fn setup_retires_idle_compaction_keys_and_reruns_on() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "100k");
 }
 
+fn machine_file_bytes(env: &Env) -> Vec<Option<Vec<u8>>> {
+    [
+        machine_config_path(env),
+        theme_config_path(env),
+        loop_config_path(env),
+    ]
+    .iter()
+    .map(|path| std::fs::read(path).ok())
+    .collect()
+}
+
+fn config_get(env: &Env, key: &str) -> String {
+    let output = env.rimz().args(["config", "get", key]).output().unwrap();
+    assert!(output.status.success(), "config get {key}");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
 #[test]
-fn setup_pty_writes_and_reruns_first_run_answers() {
+fn setup_pty_fresh_walk_writes_at_the_review_and_a_rerun_keeps_every_answer() {
     let env = Env::new();
 
-    let output = run_setup_pty(&env, "y\ny\ny\ny\n", None, &[]);
+    let output = run_setup_pty(&env, "3\ny\ny\ny\n1 2\n\n", None, &[]);
 
+    assert!(output.contains("rimz setup · this machine"), "{output}");
+    assert!(output.contains("(new)"), "{output}");
     assert!(output.contains(&format!("Wrote {}", loop_config_path(&env).display())));
-    assert!(output.contains("Use truecolor?"));
-    assert!(output.contains("Use Nerd Font icons?"));
-    assert!(output.contains("Want a pet?"));
-    assert!(output.contains("Enable hands-off automation?"));
-    assert!(output.contains("✓ truecolor"));
-    assert!(output.contains("✓ Nerd Font icons"));
-    assert!(output.contains("rocky joins the room"));
-    assert!(output.contains("✓ auto-continue on"), "{output}");
+    assert!(
+        output.contains("5 questions. Enter keeps the answer in [brackets]."),
+        "{output}"
+    );
+    for heading in [
+        "1 of 5 · Room keys",
+        "2 of 5 · Color",
+        "3 of 5 · Icons",
+        "4 of 5 · Pet",
+        "5 of 5 · While you're away",
+    ] {
+        assert_eq!(output.matches(heading).count(), 1, "{heading}:\n{output}");
+    }
+    assert!(
+        !output.contains("Reporting hooks"),
+        "no agent needs hooks:\n{output}"
+    );
     assert!(
         !output.contains("auto-redeem"),
         "no Codex on PATH:\n{output}"
     );
-    let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(output.contains("Enter writes 7 changes to "), "{output}");
+    assert!(output.contains("✓ wrote 7 settings"), "{output}");
     assert!(
-        text.contains("mode = \"truecolor\""),
-        "truecolor set:\n{text}"
+        output.contains("Next:  cd into a project and run `rimz`"),
+        "{output}"
     );
+    let answers = [
+        ("room.style", "rimz"),
+        ("keys.keymap", "tmux"),
+        ("theme.mode", "truecolor"),
+        ("theme.glyphs.set", "nerd_font"),
+        ("theme.pets.enabled", "true"),
+        ("resume.auto_continue", "true"),
+        ("harness.idle_compact", "off"),
+    ];
+    for (key, value) in answers {
+        assert_eq!(config_get(&env, key), value, "{key}");
+    }
+    let theme = std::fs::read_to_string(theme_config_path(&env)).unwrap();
     assert!(
-        text.contains("set = \"nerd_font\""),
-        "Nerd Font glyphs set:\n{text}"
-    );
-    assert!(
-        !text.lines().any(|line| line.trim().starts_with("style =")),
-        "style stays unset:\n{text}"
-    );
-    assert!(
-        text.contains("[theme.pets]") && text.contains("enabled = true"),
-        "pet enabled:\n{text}"
-    );
-    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
-    assert!(
-        text.contains("auto_continue = true") && !text.contains("auto_redeem = true"),
-        "automation enabled without Codex's row:\n{text}"
-    );
-    let idle_compact = env
-        .rimz()
-        .args(["config", "get", "harness.idle_compact"])
-        .output()
-        .expect("config get idle_compact");
-    assert_eq!(String::from_utf8_lossy(&idle_compact.stdout).trim(), "100k");
-
-    let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
-
-    assert!(output.contains("Keep your current config? [Y/n]"));
-    assert!(output.contains("Use truecolor?"));
-    assert!(output.contains("Use Nerd Font icons?"));
-    assert!(output.contains("Want a pet? It lives in the sidebar and reacts to your fleet."));
-    assert!(output.contains("Enable hands-off automation?"));
-    assert!(output.matches("[Y/n]").count() >= 4);
-    assert!(output.contains("256-color palette"));
-    assert!(output.contains("Unicode glyphs"));
-    assert!(output.contains("pet disabled"), "setup output:\n{output}");
-    assert!(
-        output.contains("✓ auto-continue + idle compaction off"),
-        "setup output:\n{output}"
-    );
-    let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
-    assert!(
-        text.contains("mode = 256") || text.contains("mode = \"256\""),
-        "indexed color set:\n{text}"
-    );
-    assert!(
-        text.contains("set = \"unicode\""),
-        "Unicode glyphs set:\n{text}"
-    );
-    assert!(
-        !text.lines().any(|line| line.trim().starts_with("style =")),
-        "style stays unset:\n{text}"
-    );
-    assert!(
-        text.contains("[theme.pets]") && text.contains("enabled = false"),
-        "pet disabled:\n{text}"
-    );
-    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
-    assert!(
-        text.contains("auto_continue = false") && text.contains("idle_compact = \"off\""),
-        "automation disabled:\n{text}"
+        !theme.lines().any(|line| line.trim().starts_with("style =")),
+        "style stays unset:\n{theme}"
     );
 
+    let before = machine_file_bytes(&env);
+    let output = run_setup_pty(&env, "\n", None, &[]);
+    assert!(output.contains("(present)"), "{output}");
+    assert!(
+        output.contains("This machine is set up. Enter keeps every setting; a number changes one."),
+        "{output}"
+    );
+    assert!(
+        !output.contains("of 5 ·"),
+        "a rerun opens on the review:\n{output}"
+    );
+    assert!(
+        !output.contains("Merged"),
+        "the merge receipt is --config-only's:\n{output}"
+    );
+    assert!(
+        output.contains("  1  room keys    RimZ + tmux, prefix Ctrl+b"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Nothing to write: Enter leaves every setting as it is."),
+        "{output}"
+    );
+    assert!(
+        output.contains("✓ nothing to write; your settings are unchanged"),
+        "{output}"
+    );
+    assert_eq!(
+        machine_file_bytes(&env),
+        before,
+        "a rerun's Enter writes nothing"
+    );
+    for (key, value) in answers {
+        assert_eq!(config_get(&env, key), value, "the rerun merge keeps {key}");
+    }
+
+    let output = run_setup_pty(&env, "a\n\n\n\n\n\n\n", None, &[]);
+    assert!(output.contains("1 of 5 · Room keys"), "{output}");
+    assert_eq!(
+        machine_file_bytes(&env),
+        before,
+        "Enter through a full walk writes nothing"
+    );
+
+    let output = run_setup_pty(&env, "3\nn\n\n", None, &[]);
+    assert!(
+        output.contains("  3  icons        plain   was: Nerd Font"),
+        "{output}"
+    );
+    assert!(output.contains("✓ wrote 1 setting"), "{output}");
+    assert_eq!(config_get(&env, "theme.glyphs.set"), "unicode");
+}
+
+#[test]
+fn setup_pty_quit_and_end_of_input_leave_every_file_byte_identical() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[resume]\nauto_continue = true\n",
+    );
+    write_machine_file(
+        &loop_config_path(&env),
+        "[tasks.keep]\nagent = \"codex\"\nprompt = \"keep this task\"\nroot = \"/r\"\nevery = \"15m\"\n",
+    );
+    run_setup_pty(&env, "\n", None, &[]);
+    let before = machine_file_bytes(&env);
+    assert!(
+        String::from_utf8_lossy(before[2].as_deref().unwrap()).contains("keep this task"),
+        "the rerun merge keeps a hand-written loop task"
+    );
+
+    // The pty writer ends every input with a newline and an EOF on drop, so an
+    // explicit `\x04` at the start of a line is what reads as end of input.
+    for input in [
+        "q\n",
+        "\x04",
+        "2\ny\nq\n",
+        "2\ny\n\x04",
+        "a\n\nq\n",
+        "a\n\x04",
+    ] {
+        let output = run_setup_pty(&env, input, None, &[]);
+        assert!(
+            output.contains("Quit: your settings are unchanged; hooks you installed stay."),
+            "input {input:?}:\n{output}"
+        );
+        assert_eq!(
+            machine_file_bytes(&env),
+            before,
+            "input {input:?}:\n{output}"
+        );
+    }
+
+    let fresh = Env::new();
+    let output = run_setup_pty(&fresh, "\n\nq\n", None, &[]);
+    assert!(
+        output.contains("Quit: your settings are unchanged"),
+        "{output}"
+    );
+    let templates = machine_file_bytes(&fresh);
+    assert!(
+        templates.iter().all(Option::is_some),
+        "a fresh machine gets its templates before the first question"
+    );
+    let enter = Env::new();
+    run_setup_pty(&enter, &"\n".repeat(8), None, &[]);
+    assert_eq!(
+        machine_file_bytes(&enter),
+        templates,
+        "Enter at every question on a fresh machine leaves the templates as written"
+    );
+}
+
+#[test]
+fn setup_pty_offers_auto_redeem_only_with_codex() {
+    let env = Env::new();
     let codex_bin = env.home_root.join("codex-bin");
     std::fs::create_dir_all(&codex_bin).expect("mkdir codex PATH");
     let codex = codex_bin.join("codex");
@@ -2010,38 +2127,113 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755))
         .expect("chmod codex stub");
 
-    let output = run_setup_pty(&env, "\nn\n\n\n\ny\n", Some(&codex_bin), &[]);
+    let output = run_setup_pty(&env, "n\n\n\n\n\n2\n\n\n", Some(&codex_bin), &[]);
 
+    assert!(output.contains("1 of 6 · Reporting hooks"), "{output}");
+    assert!(output.contains("6 of 6 · While you're away"), "{output}");
     assert!(output.contains("auto-redeem"), "Codex on PATH:\n{output}");
     assert!(
-        output.contains("✓ auto-continue + auto-redeem + idle compaction on"),
-        "setup output:\n{output}"
+        output.contains("  1  hooks        codex needs an install or refresh"),
+        "{output}"
     );
-    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
-    assert!(
-        text.contains("auto_continue = true")
-            && text.contains("auto_redeem = true")
-            && text.contains("idle_compact = \"100k\""),
-        "every offered row enabled:\n{text}"
-    );
+    assert_eq!(config_get(&env, "resume.auto_redeem"), "true");
+    assert_eq!(config_get(&env, "harness.idle_compact"), "100k");
 }
 
 #[test]
-fn setup_pty_preserves_a_lone_loop_file_when_config_is_kept() {
+fn setup_reset_refuses_without_a_terminal_and_conflicts_with_config_only() {
     let env = Env::new();
-    let path = loop_config_path(&env);
     write_machine_file(
-        &path,
+        &machine_config_path(&env),
+        "[resume]\nauto_continue = true\n",
+    );
+    let before = machine_file_bytes(&env);
+
+    let output = env.rimz().args(["setup", "--reset"]).output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim_end(),
+        "error: rimz setup --reset asks before it overwrites your config, and there is no terminal to ask from; nothing changed"
+    );
+    assert_eq!(machine_file_bytes(&env), before);
+
+    let output = env
+        .rimz()
+        .args(["setup", "--reset", "--config-only"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+    assert_eq!(machine_file_bytes(&env), before);
+}
+
+#[test]
+fn setup_pty_reset_no_changes_nothing_and_yes_rewrites_all_three_files() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[resume]\nauto_continue = true\n",
+    );
+    write_machine_file(&theme_config_path(&env), "[theme]\nmode = \"truecolor\"\n");
+    write_machine_file(
+        &loop_config_path(&env),
         "[tasks.keep]\nagent = \"codex\"\nprompt = \"keep this task\"\nroot = \"/r\"\nevery = \"15m\"\n",
     );
+    let before = machine_file_bytes(&env);
 
-    let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
+    for input in ["\n", "n\n", "\x04"] {
+        let output = run_setup_pty_args(&env, &["--reset"], input, None, &[]);
+        assert!(
+            output.contains("--reset overwrites config.toml, theme.toml, loop.toml in "),
+            "{output}"
+        );
+        let reset_lines: Vec<&str> = output
+            .lines()
+            .skip_while(|line| !line.starts_with("--reset overwrites"))
+            .take(2)
+            .collect();
+        assert_eq!(
+            reset_lines.get(1).map(|line| line.trim_end()),
+            Some("with the shipped templates and keeps no backup."),
+            "{output}"
+        );
+        for line in reset_lines {
+            assert!(
+                line.trim_end().chars().count() <= 80,
+                "{line:?} passes 80 columns"
+            );
+        }
+        assert!(output.contains("Reset them? Your settings and loop tasks there are lost. [y/N]"));
+        assert!(
+            output.contains("Nothing changed."),
+            "input {input:?}:\n{output}"
+        );
+        assert!(!output.contains("Room keys"), "input {input:?}:\n{output}");
+        assert_eq!(machine_file_bytes(&env), before, "input {input:?}");
+    }
 
-    assert!(output.contains("Keep your current config? [Y/n]"));
+    let output = run_setup_pty_args(
+        &env,
+        &["--reset"],
+        &format!("y\n{}", "\n".repeat(7)),
+        None,
+        &[],
+    );
     assert!(
-        std::fs::read_to_string(path)
-            .expect("read loop config")
-            .contains("prompt = \"keep this task\"")
+        output.contains("5 questions."),
+        "a reset continues as a fresh run:\n{output}"
+    );
+    assert!(output.contains("1 of 5 · Room keys"), "{output}");
+    let after = machine_file_bytes(&env);
+    for (index, (old, new)) in before.iter().zip(&after).enumerate() {
+        assert_ne!(old, new, "file {index} is rewritten");
+    }
+    let fresh = Env::new();
+    run_setup_pty(&fresh, &"\n".repeat(8), None, &[]);
+    assert_eq!(
+        after,
+        machine_file_bytes(&fresh),
+        "all three files hold the templates"
     );
 }
 
@@ -2058,21 +2250,11 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
         serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
     root["hooks"]["Stop"][0]["hooks"][0]["timeout"] = serde_json::json!(999);
     std::fs::write(&settings, root.to_string()).unwrap();
-    let output = run_setup_agents_pty(&env, "y\nn\nn\nn\nn\n", &files);
+    let output = run_setup_agents_pty(&env, &format!("y\n{}", "\n".repeat(7)), &files);
 
-    assert!(
-        output
-            .lines()
-            .any(|line| line.contains("not installed:") && line.contains("antigravity")),
-        "{output}"
-    );
-    for name in ["pi", "opencode", "claude"] {
-        assert!(
-            output.lines().any(|line| line.contains("installed:")
-                && line.contains(&format!("{name} (upgrade available)"))),
-            "{output}"
-        );
-    }
+    assert!(output.contains("1 of 6 · Reporting hooks"), "{output}");
+    assert!(output.contains("2 of 6 · Room keys"), "{output}");
+    assert!(!output.contains("first-run setup"), "{output}");
     assert_eq!(
         output
             .matches("Install or refresh reporting hooks?")
@@ -2080,13 +2262,29 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
         1,
         "{output}"
     );
-    for name in ["antigravity", "pi", "opencode"] {
-        assert!(output.contains(name), "missing {name}:\n{output}");
+    for name in ["antigravity", "pi", "opencode", "claude"] {
+        let result = output
+            .lines()
+            .find(|line| line.starts_with("✓ ") && line.split_whitespace().nth(1) == Some(name))
+            .unwrap_or_else(|| panic!("no result line for {name}:\n{output}"));
+        assert!(result.chars().count() <= 80, "{result:?} passes 80 columns");
+        assert!(
+            result.contains("installed") || result.contains("refreshed"),
+            "{result}"
+        );
     }
     assert!(output.contains("hooks.json"), "{output}");
     assert!(output.contains("settings.json"), "{output}");
     assert!(output.contains("updates existing config"), "{output}");
     assert!(output.contains("new file"), "{output}");
+    assert!(
+        output.contains("All set — your agents appear in the sidebar as they run."),
+        "{output}"
+    );
+    assert!(
+        output.contains("  1  hooks        antigravity, claude, opencode, pi installed"),
+        "{output}"
+    );
 
     let hooks = std::fs::read_to_string(&files.antigravity_hooks).expect("read hooks config");
     let settings =
@@ -2111,11 +2309,111 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
     );
 }
 
+fn agent_stub_dir(env: &Env, names: &[&str]) -> std::path::PathBuf {
+    let bin_dir = env.home_root.join("agent-stubs");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir agent stubs");
+    for name in names {
+        let path = bin_dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write agent stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod agent stub");
+    }
+    bin_dir
+}
+
+#[test]
+fn setup_pty_withholds_all_set_for_a_current_agent_still_untrusted() {
+    let env = Env::new();
+    let bin_dir = agent_stub_dir(&env, &["claude", "codex"]);
+    env.install_agent_hooks("codex");
+    let output = run_setup_pty(&env, &format!("y\n{}", "\n".repeat(7)), Some(&bin_dir), &[]);
+
+    assert!(output.contains("1 of 6 · Reporting hooks"), "{output}");
+    assert!(
+        output.contains("RimZ found 1 coding agent: claude."),
+        "{output}"
+    );
+    assert!(output.contains("! codex ignores"), "{output}");
+    assert!(output.contains("✓ claude  installed"), "{output}");
+    assert!(
+        !output.contains("All set"),
+        "codex's trust is still pending:\n{output}"
+    );
+}
+
+#[test]
+fn setup_pty_marks_a_removed_codex_rules_file() {
+    let env = Env::new();
+    let bin_dir = agent_stub_dir(&env, &["codex"]);
+    env.install_agent_hooks("codex");
+    let rules = env.home_root.join(".codex/rules/rimz.rules");
+    assert!(rules.exists());
+    write_machine_file(
+        &machine_config_path(&env),
+        "[agents]\nallow-routine-rimz = false\n",
+    );
+    let output = run_setup_pty(&env, "1\ny\n\n", Some(&bin_dir), &[]);
+
+    assert!(!rules.exists(), "{output}");
+    assert!(
+        output.contains("\n         removed → ~/.codex/rules/rimz.rules"),
+        "{output}"
+    );
+    let result: Vec<&str> = output
+        .lines()
+        .skip_while(|line| !line.starts_with("✓ codex"))
+        .take(2)
+        .collect();
+    assert_eq!(result.len(), 2, "{output}");
+    for line in result {
+        assert!(
+            line.trim_end().chars().count() <= 80,
+            "{line:?} passes 80 columns"
+        );
+    }
+}
+
+#[test]
+fn setup_pty_reports_a_refused_preview_and_still_offers_the_rest() {
+    let env = Env::new();
+    let bin_dir = agent_stub_dir(&env, &["claude", "pi"]);
+    let pi_extension = env.home_root.join("agent-config/pi/rimz.ts");
+    write_machine_file(&pi_extension, "// my own extension\n");
+    let output = run_setup_pty(
+        &env,
+        &format!("y\n{}", "\n".repeat(7)),
+        Some(&bin_dir),
+        &[("RIMZ_PI_EXTENSION", pi_extension.as_path())],
+    );
+
+    assert!(output.contains("1 of 6 · Reporting hooks"), "{output}");
+    assert!(
+        output.contains("RimZ found 1 coding agent: claude."),
+        "{output}"
+    );
+    assert!(
+        output.contains("! pi hooks not installed: refusing to overwrite an")
+            && output.contains("unmarked user"),
+        "{output}"
+    );
+    assert!(output.contains("✓ claude  installed"), "{output}");
+    assert!(
+        !output.contains("All set"),
+        "pi is still pending:\n{output}"
+    );
+    assert!(output.contains("2 of 6 · Room keys"), "{output}");
+    assert!(output.contains("✓ nothing to write"), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(&pi_extension).unwrap(),
+        "// my own extension\n"
+    );
+}
+
 #[test]
 fn setup_pty_decline_preserves_every_hook_candidate() {
     let env = Env::new();
     let files = seed_setup_agents(&env);
-    let output = run_setup_agents_pty(&env, "n\nn\nn\nn\nn\n", &files);
+    let output = run_setup_agents_pty(&env, &format!("n\n{}", "\n".repeat(7)), &files);
 
     assert!(
         output.contains(
@@ -2231,8 +2529,8 @@ fn interactive_setup_stops_cleanly_before_partial_setup_for_unparseable_config()
     );
     assert!(!output.contains("Error:"), "no raw error:\n{output}");
     assert!(
-        !output.contains("Want a pet?"),
-        "first-run prompts do not start:\n{output}",
+        !output.contains("Room keys?"),
+        "setting questions do not start:\n{output}",
     );
     assert!(
         !env.rimz_home().join("remote.toml").exists(),
