@@ -145,7 +145,9 @@ pub(super) fn run_budget(
                         text,
                         sender: MessageSender::System,
                         gate: DeliveryGate::Done,
-                        premises: rimz::store::message::Premise::NONE,
+                        premises: vec![rimz::store::message::Premise::NotPromptedSince {
+                            last_prompt_at: agent.last_prompt_at,
+                        }],
                     }
                     .record(workspace),
                     &workspace.session_name,

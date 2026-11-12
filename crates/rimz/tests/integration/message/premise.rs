@@ -220,3 +220,170 @@ fn a_prompt_applied_while_the_write_check_withdraws_withdraws_the_survivor_too()
         ],
     );
 }
+
+#[test]
+fn a_still_queued_warning_whose_original_the_write_check_withdraws_is_never_typed() {
+    let env = Env::new();
+    let ids = queue_for_write_check(&env, "sess-raced", |agent| {
+        vec![(
+            "only if unprompted",
+            vec![rimz::store::message::Premise::NotPromptedSince {
+                last_prompt_at: agent.last_prompt_at,
+            }],
+        )]
+    });
+    let original = ids[0].clone();
+    let store = env.store();
+    let warning = MessageRecord {
+        premises: vec![rimz::store::message::Premise::StillQueued {
+            message_id: original.clone(),
+        }],
+        ..MessageRecord::new(
+            env.workspace_id.clone(),
+            &store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap()
+                .agents
+                .into_iter()
+                .find(|agent| agent.agent_id.as_str() == "sess-raced")
+                .unwrap(),
+            "your message is still queued".to_owned(),
+            DeliveryGate::Done,
+        )
+    };
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
+    store.queue_message(&warning, &session_name).unwrap();
+
+    let trace = env.project_root.join("raced.log");
+    let before = DeliveryRendezvous::new(&env, "raced-before-write");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_MESSAGE_BEFORE_WRITE", &before.path)
+        .args(["message", "sweep"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = before.arrive();
+    prompt_and_rest(&env, "sess-raced");
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    assert_withdrawn_untyped(
+        &env,
+        &trace,
+        &[
+            (&original, "only if unprompted"),
+            (&warning.message_id, "your message is still queued"),
+        ],
+    );
+}
+
+#[test]
+fn the_user_premise_flags_withdraw_silently_and_show_names_them() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-flags", "flags", pane_env);
+    run_success(
+        env.rimz()
+            .args(["config", "set", "harness.smart_compact", "off"]),
+        "send without a seat line",
+    );
+    for (flags, text) in [
+        (vec!["--unless-prompted"], "only if unprompted"),
+        (vec!["--ttl", "1s"], "only for a second"),
+        (vec!["--ttl", "1h"], "only for an hour"),
+    ] {
+        run_success(
+            env.rimz()
+                .args(["message", "@claude"])
+                .args(flags)
+                .args(["--", text]),
+            "send a premised message to a running agent",
+        );
+    }
+    let store = env.store();
+    let id_of = |text: &str| {
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .find(|record| record.text == text)
+            .unwrap_or_else(|| panic!("{text} queued"))
+            .message_id
+    };
+    let (prompted, timed) = (id_of("only if unprompted"), id_of("only for a second"));
+    let show = |id: &rimz::ids::MessageId| {
+        let output = run_success(
+            env.rimz().args(["message", "show", id.as_str()]),
+            "show a premised message",
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let queued = show(&prompted);
+    assert!(
+        queued.contains("premises") && queued.contains("not prompted since"),
+        "{queued}"
+    );
+    let queued = show(&timed);
+    assert!(
+        queued.contains("premises") && queued.contains("until"),
+        "{queued}"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    run_hook(
+        &env,
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "sess-flags", "prompt": "more"}),
+        pane_env,
+    );
+    run_success(env.rimz().args(["message", "sweep"]), "sweep the queue");
+
+    let history = store.list_message_history().unwrap();
+    for (id, reason) in [
+        (
+            &prompted,
+            "agent was prompted after this message was queued",
+        ),
+        (&timed, "lifespan ended before delivery"),
+    ] {
+        let record = history
+            .iter()
+            .find(|record| &record.message_id == id)
+            .unwrap_or_else(|| panic!("{id} withdrawn into history: {history:?}"));
+        assert_eq!(
+            (record.status, record.last_error.as_deref()),
+            (MessageStatus::Canceled, Some(reason))
+        );
+        let shown = show(id);
+        assert!(
+            shown.contains("withdrawn") && shown.contains(reason),
+            "{shown}"
+        );
+    }
+    // A user's own cancel of a premised message is no withdrawal.
+    let canceled = id_of("only for an hour");
+    run_success(
+        env.rimz().args(["message", "cancel", canceled.as_str()]),
+        "cancel a premised message",
+    );
+    let shown = show(&canceled);
+    assert!(
+        shown.contains("canceled") && !shown.contains("withdrawn") && !shown.contains("last_error"),
+        "{shown}"
+    );
+    let output = run_success(
+        env.rimz()
+            .args(["message", "show", "--json", canceled.as_str()]),
+        "show a canceled premised message as JSON",
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(json["message"]["last_error"].is_null(), "{json:#}");
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "a withdrawal queues no undelivered notice: {:?}",
+        store.list_messages().unwrap()
+    );
+}

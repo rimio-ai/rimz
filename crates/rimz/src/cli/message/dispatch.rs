@@ -11,6 +11,7 @@ use rimz::message::dispatch::{
     ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest, DispatchResult,
     WhenRequest,
 };
+use rimz::store::message::Premise;
 
 pub(super) enum SendKind {
     Steer,
@@ -20,6 +21,8 @@ pub(super) enum SendKind {
         schedule: Option<String>,
         after: Vec<String>,
         when: Vec<WhenRequest>,
+        ttl: Option<std::time::Duration>,
+        unless_prompted: bool,
     },
 }
 
@@ -51,6 +54,7 @@ pub(super) fn send_message(
     let ctx = Ctx::open(globals)?;
     let caller = send::resolve_caller(&ctx.store)?;
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
+    let premises = user_premises(&mode)?;
     let mode = dispatch_mode(mode, create)?;
     rimz::address::require_mention(&target)?;
     let target = if target == "@me" {
@@ -78,7 +82,7 @@ pub(super) fn send_message(
     let request = || DispatchRequest {
         about_run: None,
         reply_wanted,
-        premises: rimz::store::message::Premise::NONE,
+        premises: premises.clone(),
         resuming_recipient: None,
         target: target.clone(),
         text: text.clone(),
@@ -146,6 +150,33 @@ fn refuse_unmarkable(no_from: bool, create: bool) -> Result<()> {
     Ok(())
 }
 
+/// The premises `--ttl` and `--unless-prompted` put on a boundary send, both measured from the
+/// send: a prompt the receiver takes after it, whoever typed it, withdraws the message.
+fn user_premises(mode: &SendKind) -> Result<Vec<Premise>> {
+    let SendKind::Boundary {
+        ttl,
+        unless_prompted,
+        ..
+    } = mode
+    else {
+        return Ok(Premise::NONE);
+    };
+    let now = Timestamp::now();
+    let lifespan = ttl
+        .map(|ttl| {
+            jiff::SignedDuration::try_from(ttl)
+                .ok()
+                .and_then(|ttl| now.checked_add(ttl).ok())
+                .map(|until| Premise::Lifespan { until })
+                .ok_or_else(|| anyhow::anyhow!("--ttl is too long"))
+        })
+        .transpose()?;
+    let unprompted = unless_prompted.then_some(Premise::NotPromptedSince {
+        last_prompt_at: Some(now),
+    });
+    Ok(lifespan.into_iter().chain(unprompted).collect())
+}
+
 /// Validate the flag combinations a send mode forbids, then resolve it into the
 /// domain dispatch mode.
 fn dispatch_mode(mode: SendKind, create: bool) -> Result<DispatchMode> {
@@ -165,6 +196,7 @@ fn dispatch_mode(mode: SendKind, create: bool) -> Result<DispatchMode> {
             schedule,
             after,
             when,
+            ..
         } => (gate, schedule, after, when),
     };
     if create {

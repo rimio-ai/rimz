@@ -8,7 +8,7 @@ use crate::harness::board::{BoardErr, LockedBoard};
 use crate::harness::schedule::pending::SessionWaits;
 use crate::ids::PaneId;
 use crate::message::synthetic::SyntheticMessage;
-use crate::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use crate::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender, Premise};
 use crate::store::snapshot::find_agent;
 use crate::utils::time::format_duration_coarse;
 use crate::workspace::ResolvedWorkspace;
@@ -105,7 +105,16 @@ pub fn queue(
             notice: HarnessNotice::TeamStalled,
         },
         gate: DeliveryGate::Done,
-        premises: crate::store::message::Premise::NONE,
+        premises: vec![
+            Premise::NotPromptedSince {
+                last_prompt_at: target.last_prompt_at,
+            },
+            Premise::StageVisit {
+                checkout: locked.worktree.clone(),
+                stage: request.stage.clone(),
+                started_at: Some(request.visit_started_at),
+            },
+        ],
     }
     .record(workspace);
     store.queue_message(&message, &workspace.session_name)?;

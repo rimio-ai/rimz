@@ -96,15 +96,14 @@ pub struct DispatchRequest {
     pub auto_compact: Option<AutoCompact>,
     pub mode: DispatchMode,
     pub resuming_recipient: Option<AgentState>,
-    /// The run each recipient's record is about, for delivery to withdraw it
-    /// once that run ends; only the deadline stop sets it.
-    pub about_run: Option<crate::ids::RunId>,
     /// Stamped on every recipient's record for its header to say the sender
     /// wants a message back; nothing else reads it.
     pub reply_wanted: bool,
     /// What must still hold for the text to be worth delivering; [`Premise::NONE`] when it
     /// stays true until delivered.
     pub premises: Vec<Premise>,
+    /// The run the text is about; delivery withdraws it once that run ends.
+    pub about_run: Option<crate::ids::RunId>,
 }
 
 pub struct DispatchResult {

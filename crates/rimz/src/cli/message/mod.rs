@@ -76,8 +76,20 @@ pub struct MessageArgs {
     #[arg(long, value_name = "'ADDR STATUS DUR'", conflicts_with = "steer")]
     #[arg(value_parser = parse_when_request)]
     when: Vec<WhenRequest>,
+    /// Withdraw the message, unsent and without a notice, if it is still queued this long after
+    /// sending (`30s`, `10m`, `2h`, `1d`).
+    #[arg(long, value_name = "DUR", value_parser = parse_ttl, conflicts_with_all = ["steer", "interrupt"])]
+    ttl: Option<std::time::Duration>,
+    /// Withdraw the message, unsent and without a notice, if the agent takes any other prompt
+    /// before it is delivered.
+    #[arg(long, conflicts_with_all = ["steer", "interrupt"])]
+    unless_prompted: bool,
     #[command(flatten)]
     send: SendFlags,
+}
+
+fn parse_ttl(raw: &str) -> std::result::Result<std::time::Duration, String> {
+    rimz::utils::time::parse_compact_duration(raw).map_err(|err| err.to_string())
 }
 
 #[derive(Debug, Subcommand)]
@@ -323,6 +335,8 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                         schedule: args.schedule,
                         after: args.after,
                         when: args.when,
+                        ttl: args.ttl,
+                        unless_prompted: args.unless_prompted,
                     },
                     args.send,
                     text,
@@ -347,6 +361,8 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
         schedule,
         after,
         when,
+        ttl,
+        unless_prompted,
         send:
             SendFlags {
                 worktree,
@@ -369,6 +385,8 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
         (schedule.is_some(), "--schedule <DUR|HH:MM>"),
         (!after.is_empty(), "--after <ADDR>"),
         (!when.is_empty(), "--when <'ADDR STATUS DUR'>"),
+        (ttl.is_some(), "--ttl <DUR>"),
+        (*unless_prompted, "--unless-prompted"),
         (worktree.is_some(), "--worktree <WORKTREE>"),
         (*no_enter, "--no-enter"),
         (*force, "--force"),

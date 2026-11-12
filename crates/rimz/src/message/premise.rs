@@ -1,6 +1,7 @@
 //! Whether a queued message's premises still hold: the record's row premises, then the
-//! subjects only the harness can read (a linked run, a fleet digest's joins, a team stage
-//! visit). The write check calls it on every batch member under the pane lock; a delivery
+//! subjects only the harness or the queue can read (a linked run, a fleet digest's or team
+//! result's joins, a team stage visit, a provider-limit park, the original of a "still queued"
+//! warning). The write check calls it on every batch member under the pane lock; a delivery
 //! attempt calls it once on its head before candidacy, since the write path wakes a hibernated
 //! receiver before it reaches the write check. The turn-start clear and each subject's owner
 //! withdraw through `Store::withdraw_messages` with the row-only half.
@@ -9,7 +10,7 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::AgentState;
-use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, Premise};
+use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, MessageStatus, Premise};
 use crate::store::run::RunStoreErr;
 use crate::workspace::ResolvedWorkspace;
 
@@ -47,10 +48,32 @@ pub(super) fn broken(
     if let Some(reason) = message.broken_row_premise(row, now) {
         return Ok(Some(reason));
     }
-    if matches!(&message.sender, MessageSender::Harness { notice } if notice.is_fleet_digest())
+    if matches!(&message.sender, MessageSender::Harness { notice } if notice.awaits_join())
         && crate::harness::run::report::digest_fully_joined(store.paths(), &message.message_id)?
     {
         return Ok(Some("joined before delivery".to_owned()));
+    }
+    if message
+        .premises
+        .iter()
+        .any(|premise| matches!(premise, Premise::StillQueued { .. }))
+    {
+        let live = store.list_messages()?;
+        let waiting = |original: &crate::ids::MessageId| {
+            live.iter().any(|record| {
+                record.message_id == *original
+                    && matches!(
+                        record.status,
+                        MessageStatus::Queued | MessageStatus::Claimed
+                    )
+            })
+        };
+        if let Some(reason) = message.outlived_original(waiting) {
+            return Ok(Some(reason));
+        }
+    }
+    if let Some(reason) = ended_park(store, message, row) {
+        return Ok(Some(reason));
     }
     if let Some(reason) = ended_run(store, message) {
         return Ok(Some(reason));
@@ -63,6 +86,22 @@ pub(super) fn broken(
         let run = crate::harness::scratch::board_run(checkout, &zone)?;
         message.ended_stage_visit(checkout, &run.stage.name, run.stage_started_at)
     }))
+}
+
+/// The withdrawal reason of a continue whose provider-limit park closed or was replaced.
+fn ended_park(store: &Store, message: &MessageRecord, row: Option<&AgentState>) -> Option<String> {
+    let parked_since = message.premises.iter().find_map(|premise| match premise {
+        Premise::ProviderPark { parked_since } => Some(*parked_since),
+        _ => None,
+    })?;
+    let agent_id = row.map_or(&message.agent_id, |row| &row.agent_id);
+    let open = crate::harness::auto_continue::park_episode_open(
+        store.runtime_paths(),
+        &message.kind,
+        agent_id,
+        parked_since,
+    );
+    (!open).then(|| "provider-limit park closed before delivery".to_owned())
 }
 
 /// The withdrawal reason of a notice about a run that ended or is gone, or of a deadline stop

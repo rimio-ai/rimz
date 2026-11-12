@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::{CacheKeepaliveRequest, SeatPolicy, final_ping, prompt};
 use rimz::message::synthetic::{self, SyntheticMessage};
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender, Premise};
 use rimz::store::writer::DeliveryFailureDisposition;
 
 use super::Ctx;
@@ -33,7 +33,7 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             notice: HarnessNotice::CacheKeepalive,
         },
         gate: DeliveryGate::Done,
-        premises: rimz::store::message::Premise::NONE,
+        premises: keepalive_premises(agent, &config.harness),
     }
     .record(&ctx.workspace);
     let message = rimz::store::message::MessageRecord {
@@ -75,6 +75,21 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
     });
     outcome.context("delivering cache keepalive")?;
     Ok(())
+}
+
+/// A ping is worth typing only while the cache it keeps is still warm and nothing has prompted
+/// the agent since: a real prompt warms the cache itself.
+fn keepalive_premises(
+    agent: &rimz::agents::AgentState,
+    harness: &rimz::config::HarnessConfig,
+) -> Vec<Premise> {
+    let lifespan = harness
+        .cache_cold_at(agent)
+        .map(|until| Premise::Lifespan { until });
+    let unprompted = Premise::NotPromptedSince {
+        last_prompt_at: agent.last_prompt_at,
+    };
+    lifespan.into_iter().chain([unprompted]).collect()
 }
 
 /// The reason the miss recorded on the ping, so a hold or a cold cache says so in the assist.

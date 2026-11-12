@@ -1137,6 +1137,11 @@ fn compact_flipper(
             request.workspace,
             request.store,
             CompactRequest {
+                // The flipper's own turn end follows this decision, so a turn edge cannot
+                // judge it; a new prompt means it went back to work.
+                premises: vec![Premise::NotPromptedSince {
+                    last_prompt_at: agent.last_prompt_at,
+                }],
                 idle: false,
                 message_id: message_id.clone(),
                 agent,

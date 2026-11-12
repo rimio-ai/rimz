@@ -4392,3 +4392,74 @@ fn a_terminal_write_reads_spend_again_when_the_binding_moves() {
     assert!(wrote, "an empty read never blocks the terminal write");
     assert_eq!(ended.status, RunStatus::Canceled);
 }
+
+#[test]
+fn a_run_reaching_a_terminal_status_withdraws_the_messages_about_it() {
+    let (dir, paths, record) = setup();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let room = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
+    crate::workspace::record::write(&paths, &room).unwrap();
+    let session_name = room.session_name;
+    let agent = AgentState::stub("claude", "sess-parent", crate::agents::AgentStatus::Running);
+    let queue = |about_run: Option<RunId>| {
+        let message = crate::store::message::MessageRecord::new(
+            record.workspace_id.clone(),
+            &agent,
+            "about the child".to_owned(),
+            crate::store::message::DeliveryGate::Done,
+        )
+        .with_about_run(about_run);
+        store.queue_message(&message, &session_name).unwrap();
+        message.message_id
+    };
+    let about = queue(Some(record.run_id.clone()));
+    let other = queue(Some(RunId::new()));
+
+    let (canceled, changed) = cancel(&paths, store.runtime_paths(), &record.run_id).unwrap();
+
+    assert!(changed && canceled.status.is_terminal());
+    let history = store.list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|message| message.message_id == about)
+        .expect("withdrawn into history");
+    assert_eq!(
+        (withdrawn.status, withdrawn.last_error.as_deref()),
+        (
+            crate::store::message::MessageStatus::Canceled,
+            Some("child run canceled before delivery")
+        )
+    );
+    assert_eq!(
+        store
+            .list_messages()
+            .unwrap()
+            .iter()
+            .map(|message| &message.message_id)
+            .collect::<Vec<_>>(),
+        [&other]
+    );
+
+    let reopened = RunRecord::new(
+        record.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    create(&paths, &reopened).unwrap();
+    let fresh = queue(Some(reopened.run_id.clone()));
+    let mut stale = reopened;
+    stale.status = RunStatus::Canceled;
+    withdraw_about_run(&paths, &stale);
+    assert!(
+        store
+            .list_messages()
+            .unwrap()
+            .iter()
+            .any(|message| message.message_id == fresh),
+        "a run that reads open again keeps the messages about it"
+    );
+}

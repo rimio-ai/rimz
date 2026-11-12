@@ -4312,7 +4312,7 @@ fn stalled_team_gets_one_notice_and_one_assist_per_visit() {
         visit_started_at: visit,
         stalled_since: started,
         target: (kind.clone(), agent_id.clone()),
-        members: vec![(kind, agent_id)],
+        members: vec![(kind, agent_id.clone())],
     };
     let mut counts = Vec::new();
     for _ in 0..2 {
@@ -4356,6 +4356,88 @@ fn stalled_team_gets_one_notice_and_one_assist_per_visit() {
         [(1, 1), (1, 1)],
         "one TEAM_STALLED notice and assist per visit"
     );
+
+    // Each premise withdraws its notice at the next attempt, untyped: a later visit to the same
+    // stage ends the first notice's visit, and a prompt to the lead withdraws the second.
+    let minute = |at: jiff::Timestamp| {
+        let stamp = at
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%Y-%m-%d %H:%M")
+            .to_string();
+        let parsed = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M", &stamp)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::system())
+            .unwrap()
+            .timestamp();
+        (stamp, parsed)
+    };
+    let (reentered, revisit) = minute(jiff::Timestamp::now() + std::time::Duration::from_secs(120));
+    std::fs::write(
+        env.project_root.join(".rimz/team/blackboard.md"),
+        format!(
+            "Stage: Build (@lead)\n## Progress\n- {stamp} @user: opened Build\n\
+             - {reentered} @user: opened Build\n"
+        ),
+    )
+    .unwrap();
+    let first = store.list_messages().unwrap().remove(0).message_id;
+    env.rimz().args(["message", "sweep"]).assert().success();
+    let request = StallNudgeRequest {
+        visit_started_at: revisit,
+        ..request
+    };
+    env.rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "stall-nudge",
+            &request,
+        ))
+        .assert()
+        .success();
+    let second = store.list_messages().unwrap().remove(0).message_id;
+    let prompt = rimz::agents::AgentLifecycleObservation::new(
+        Some(agent_id.clone()),
+        rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &prompt,
+        ))
+        .unwrap();
+    env.rimz().args(["message", "sweep"]).assert().success();
+    let history = store.list_message_history().unwrap();
+    let ending = |id: &rimz::ids::MessageId| {
+        history
+            .iter()
+            .find(|record| &record.message_id == id)
+            .map(|record| {
+                (
+                    record.status,
+                    record.last_error.clone(),
+                    record.last_sent_at.is_none(),
+                )
+            })
+    };
+    assert_eq!(
+        [ending(&first), ending(&second)],
+        [
+            Some((
+                rimz::store::message::MessageStatus::Canceled,
+                Some("stage Build ended before delivery".to_owned()),
+                true
+            )),
+            Some((
+                rimz::store::message::MessageStatus::Canceled,
+                Some("agent was prompted after this message was queued".to_owned()),
+                true
+            )),
+        ],
+        "{history:?}"
+    );
+    assert!(store.list_messages().unwrap().is_empty());
 }
 
 #[cfg(unix)]

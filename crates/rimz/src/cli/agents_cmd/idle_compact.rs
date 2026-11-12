@@ -99,6 +99,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         workspace,
         store,
         CompactRequest {
+            premises: rimz::store::message::Premise::NONE,
             idle: true,
             message_id: message_id.clone(),
             agent,

@@ -227,6 +227,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
         resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
+            about_run: None,
             premises: crate::store::message::Premise::NONE,
             body: MessageBody::Prompt,
             enter: true,
@@ -238,7 +239,6 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
             not_before: None,
             after: Vec::new(),
             when: Vec::new(),
-            about_run: None,
             reply_wanted: false,
         },
     };
@@ -381,6 +381,7 @@ fn resumed_provider_parks_until_registration_or_the_window() {
         resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
+            about_run: None,
             premises: crate::store::message::Premise::NONE,
             body: MessageBody::Prompt,
             enter: true,
@@ -392,7 +393,6 @@ fn resumed_provider_parks_until_registration_or_the_window() {
             not_before: None,
             after: Vec::new(),
             when: Vec::new(),
-            about_run: None,
             reply_wanted: false,
         },
     };
@@ -506,6 +506,7 @@ fn provisional_pane_skips_readiness_gate() {
         resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
+            about_run: None,
             premises: crate::store::message::Premise::NONE,
             body: MessageBody::Prompt,
             enter: true,
@@ -517,7 +518,6 @@ fn provisional_pane_skips_readiness_gate() {
             not_before: None,
             after: Vec::new(),
             when: Vec::new(),
-            about_run: None,
             reply_wanted: false,
         },
     };

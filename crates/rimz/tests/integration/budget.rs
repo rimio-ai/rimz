@@ -875,3 +875,91 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
     second.kill().unwrap();
     second.wait().unwrap();
 }
+
+#[test]
+fn budget_lift_continue_is_withdrawn_once_the_agent_is_prompted() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::ids::AgentSessionId;
+    use rimz::store::event::EventEnvelope;
+    use rimz::store::message::{MessageStatus, Premise};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let lifecycle = |hook: &str, signal: LifecycleSignal| {
+        let observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from("budget-session")), signal);
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                hook,
+                &observation,
+            ))
+            .unwrap();
+    };
+    lifecycle("SessionStart", LifecycleSignal::Registered);
+    let panes = env.write_pane_fixture(&[]);
+    env.rimz()
+        .args(["budget", "0/day", "--no-continue"])
+        .assert()
+        .success();
+    env.rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--json",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--session-name",
+            &workspace.session_name,
+        ])
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .assert()
+        .success();
+    // The producer's interrupt of this agent for the fleet park, which earns it a continue.
+    std::fs::write(
+        env.runtime_paths().lane_path("budget.scopes.json"),
+        serde_json::json!({"last_interrupt_at": {"claude:budget-session": jiff::Timestamp::now()}})
+            .to_string(),
+    )
+    .unwrap();
+
+    env.rimz().args(["budget", "off"]).assert().success();
+    let queued = store.list_messages().unwrap();
+    let [continued] = queued.as_slice() else {
+        panic!("one budget continue queued: {queued:?}");
+    };
+    assert!(
+        matches!(
+            continued.premises.as_slice(),
+            [Premise::NotPromptedSince { .. }]
+        ),
+        "{continued:?}"
+    );
+
+    lifecycle(
+        "UserPromptSubmit",
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    env.rimz().args(["message", "sweep"]).assert().success();
+
+    let history = store.list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|record| record.message_id == continued.message_id)
+        .unwrap_or_else(|| panic!("continue withdrawn into history: {history:?}"));
+    assert_eq!(
+        (withdrawn.status, withdrawn.last_error.as_deref()),
+        (
+            MessageStatus::Canceled,
+            Some("agent was prompted after this message was queued")
+        )
+    );
+    assert!(
+        withdrawn.last_sent_at.is_none(),
+        "never typed: {withdrawn:?}"
+    );
+}

@@ -2368,6 +2368,8 @@ rimz message (aliases: msg)
     --stdin  [action=set-true takes=0..=0]
     --steer  [action=set-true takes=0..=0]
     --tmux  [action=set-true takes=0..=0 global]
+    --ttl <DUR>  [action=set takes=1..=1]
+    --unless-prompted  [action=set-true takes=0..=0]
     --when <'ADDR STATUS DUR'>  [action=append takes=1..=1]
     --worktree <WORKTREE>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]

@@ -867,7 +867,14 @@ fn a_ping_whose_cache_went_cold_under_the_pane_lock_is_never_pasted() {
     assert!(output.status.success(), "{output:?}");
     let pings = fixture.pings();
     assert_eq!(pings.len(), 1, "{pings:?}");
-    assert_eq!(pings[0].status, MessageStatus::Errored, "{pings:?}");
+    assert_eq!(
+        (pings[0].status, pings[0].last_error.as_deref()),
+        (
+            MessageStatus::Canceled,
+            Some("lifespan ended before delivery")
+        ),
+        "{pings:?}"
+    );
     assert_eq!(fixture.writes(), 0);
     assert!(
         !fixture
@@ -1080,10 +1087,15 @@ fn the_cold_check_under_the_pane_lock_reads_the_recorded_request() {
                 "the ping the record calls warm reached the pane"
             );
         } else {
-            assert_eq!(pings[0].status, MessageStatus::Errored, "{pings:?}");
+            // The ping's lifespan ends where the record calls the cache cold, so the write
+            // check withdraws it before the cold check under the pane lock can error it.
             assert_eq!(
-                pings[0].last_error.as_deref(),
-                Some("the receiver's prompt cache went cold before the ping was written"),
+                (pings[0].status, pings[0].last_error.as_deref()),
+                (
+                    MessageStatus::Canceled,
+                    Some("lifespan ended before delivery")
+                ),
+                "{pings:?}"
             );
             assert_eq!(
                 fixture.writes(),
@@ -1443,7 +1455,9 @@ fn a_held_deadline_stop_is_withdrawn_once_its_run_reopens() {
         let (fixture, run, stop) = held_deadline_stop(kind);
         let store = fixture.env.store();
         let paths = store.paths().clone();
-        rimz::harness::run::cancel(&paths, store.runtime_paths(), &run.run_id).unwrap();
+        // A raw cancel skips the terminal write's withdrawal, standing in for a run that
+        // reopened before that withdrawal read it.
+        cancel_run_past_its_owner(&fixture.env, &run.run_id);
         let observation = AgentLifecycleObservation::new(
             Some("typing-session".into()),
             LifecycleSignal::TurnStarted { turn_id: None },
