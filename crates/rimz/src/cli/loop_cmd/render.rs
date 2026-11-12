@@ -520,6 +520,7 @@ impl WorktreeRow<'_> {
             CheckoutState::Holding { .. } => "holding",
             CheckoutState::Ready { .. } => "ready",
             CheckoutState::Waiting { .. } => "waiting",
+            CheckoutState::Unknown { .. } => "unknown",
         }
     }
 
@@ -552,7 +553,7 @@ impl WorktreeRow<'_> {
             {
                 3
             }
-            CheckoutState::Waiting { .. } => 4,
+            CheckoutState::Waiting { .. } | CheckoutState::Unknown { .. } => 4,
             CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => 6,
         }
     }
@@ -589,7 +590,8 @@ fn worktree_verdict(state: &CheckoutState) -> Option<&Verdict> {
         CheckoutState::Launched { .. } | CheckoutState::Workflow { .. } => None,
         CheckoutState::Holding { verdict, .. }
         | CheckoutState::Ready { verdict, .. }
-        | CheckoutState::Waiting { verdict } => Some(verdict),
+        | CheckoutState::Waiting { verdict }
+        | CheckoutState::Unknown { verdict } => Some(verdict),
     }
 }
 
@@ -612,9 +614,8 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
                         .readings
                         .get(&term.key)
                         .and_then(|value| value.as_deref());
-                    let unmet =
-                        verdict.unread.contains_key(&term.key) || term.matches(reading) == negated;
-                    if unmet && !short.contains(&term.key.as_str()) {
+                    let met = term.truth(reading).map(|truth| truth != negated);
+                    if met != Some(true) && !short.contains(&term.key.as_str()) {
                         short.push(term.key.as_str());
                     }
                 }
@@ -664,7 +665,7 @@ fn write_worktrees(
     }
     let mut counts = vec![format!("{} owned", rows.len())];
     for state in [
-        "blocked", "ready", "holding", "capacity", "waiting", "launched",
+        "blocked", "ready", "holding", "capacity", "waiting", "unknown", "launched",
     ] {
         let count = rows.iter().filter(|row| row.state_name() == state).count();
         if count > 0 {
@@ -755,6 +756,7 @@ fn write_worktrees(
                 .unwrap_or_default(),
                 CheckoutState::Ready { .. } => "ready".into(),
                 CheckoutState::Waiting { .. } => "waiting".into(),
+                CheckoutState::Unknown { .. } => "unknown".into(),
             }
         };
         let mut cells = vec![ui::cell(&row.condition.name), ui::cell(state)];
@@ -789,7 +791,7 @@ fn write_worktrees(
                 cells.push(ui::cell(value));
                 continue;
             }
-            let role = if term.matches(Some(value)) != *negated {
+            let role = if term.matches(value) != *negated {
                 ui::status::StateRole::Success
             } else {
                 ui::status::StateRole::Failed
@@ -1016,7 +1018,7 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 }
                 CheckoutState::Ready { since, .. } => json.since = Some(*since),
                 CheckoutState::Workflow { at, .. } => json.since = Some(*at),
-                CheckoutState::Waiting { .. } => {}
+                CheckoutState::Waiting { .. } | CheckoutState::Unknown { .. } => {}
             }
             if let Some((since, refusal)) = row.blocked {
                 json.since = Some(since);
@@ -2765,6 +2767,7 @@ fn write_show_headline(
         schedule::TaskTimingState::Listening { .. } => write!(out, " · listening")?,
         schedule::TaskTimingState::Watching { .. } => write!(out, " · watching")?,
         schedule::TaskTimingState::Waiting { .. } if !each_worktree => write!(out, " · waiting")?,
+        schedule::TaskTimingState::Unknown { .. } if !each_worktree => write!(out, " · unknown")?,
         state @ (schedule::TaskTimingState::Holding { .. } | schedule::TaskTimingState::Fired)
             if !each_worktree =>
         {
@@ -2777,6 +2780,7 @@ fn write_show_headline(
         }
         schedule::TaskTimingState::Unarmed | schedule::TaskTimingState::NoOccurrence => {}
         schedule::TaskTimingState::Waiting { .. }
+        | schedule::TaskTimingState::Unknown { .. }
         | schedule::TaskTimingState::Holding { .. }
         | schedule::TaskTimingState::Fired => {}
     }

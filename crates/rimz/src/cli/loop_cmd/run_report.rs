@@ -587,7 +587,7 @@ pub(super) fn write_record_forensics(
             rimz::harness::when::WhenExpr::parse(std::slice::from_ref(&condition.when))
         {
             let verdict = rimz::harness::when::Verdict {
-                ok: false,
+                truth: None,
                 readings: condition.readings.clone(),
                 unread: Default::default(),
             };

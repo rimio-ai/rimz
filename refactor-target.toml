@@ -5653,7 +5653,8 @@ allowed-dependencies = [
     "utils::suggest",
     "worktree",
 ]
-surface-budget = 48
+# `WhenTerm::truth` gives the CLI's leaf rows the term's three-valued truth (+1).
+surface-budget = 49
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"
@@ -11763,7 +11764,7 @@ reason = "Workflow condition cases share ordered predicates and hold durations w
 [[verdict]]
 kind = "item"
 key = "harness::when::WhenExpr::truth"
-reason = "Workflow conditions project three-valued truth without changing loop evaluation."
+reason = "Every condition reader, loop and workflow alike, decides on this one three-valued (Kleene) truth."
 
 [[verdict]]
 kind = "item"

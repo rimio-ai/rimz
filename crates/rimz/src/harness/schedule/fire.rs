@@ -633,18 +633,17 @@ fn plan(
             }
             Some(last_fire) if matches!(parsed.trigger, Trigger::Condition { .. }) => {
                 next_state.insert(name.clone(), last_fire);
-                // An unread forge key holds: no fire, and the clock is neither started nor dropped.
-                if verdicts
-                    .get(name)
-                    .is_some_and(|verdict| !verdict.unread.is_empty())
-                {
-                    if let Some(state) = when_states.get(name) {
-                        next_when.insert(name.clone(), state.clone());
+                match verdicts.get(name).map(|verdict| verdict.truth) {
+                    Some(Some(true)) => {}
+                    // Unknown holds: no fire, and the clock and latch are neither started nor
+                    // dropped, whatever key is unread.
+                    Some(None) => {
+                        if let Some(state) = when_states.get(name) {
+                            next_when.insert(name.clone(), state.clone());
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                if !verdicts.get(name).is_some_and(|verdict| verdict.ok) {
-                    continue;
+                    Some(Some(false)) | None => continue,
                 }
                 let Trigger::Condition { expr, hold } = &parsed.trigger else {
                     // The match guard admits only condition triggers.

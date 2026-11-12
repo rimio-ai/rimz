@@ -141,8 +141,7 @@ pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
                 "key": term.key,
                 "negated": negated,
                 "reading": value,
-                "met": !reading.verdict.unread.contains_key(&term.key)
-                    && term.matches(value) != negated,
+                "met": term.truth(value).map(|truth| truth != negated),
                 "unread": unread,
             })
         })
@@ -151,11 +150,11 @@ pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
         "when": expr.to_string(),
         "scope": scope,
         "room_open": reading.room_open,
-        "now": reading.verdict.ok,
+        "now": reading.verdict.truth,
         "checked_at": checked_at,
         "terms": terms,
     }))?;
-    Ok(reading.verdict.ok)
+    Ok(reading.verdict.truth == Some(true))
 }
 
 pub(super) fn observe(
@@ -191,23 +190,13 @@ pub(super) fn write_receipt(
         return Ok(());
     };
     let verdict = reading(entry, expr);
-    let state = if verdict.ok {
-        match hold {
-            Some(hold) => schedule::TaskTimingState::Holding {
-                elapsed: Duration::ZERO,
-                hold: *hold,
-            },
-            None => schedule::TaskTimingState::Due(Timestamp::now()),
-        }
-    } else {
-        schedule::TaskTimingState::Waiting {
-            readings: expr
-                .readings(&verdict)
-                .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
-                .collect(),
-            unread: verdict.unread.keys().cloned().collect(),
-        }
-    };
+    let state = schedule::TaskTimingState::unmet(expr, &verdict).unwrap_or_else(|| match hold {
+        Some(hold) => schedule::TaskTimingState::Holding {
+            elapsed: Duration::ZERO,
+            hold: *hold,
+        },
+        None => schedule::TaskTimingState::Due(Timestamp::now()),
+    });
     writeln!(out, "scope: {}", entry.run_dir().display())?;
     writeln!(out, "now: {}", state.condition_label().unwrap_or_default())?;
     Ok(())
@@ -275,14 +264,10 @@ pub(super) fn write_terms(
             .readings
             .get(&term.key)
             .and_then(|value| value.as_deref());
-        let role = if verdict.unread.contains_key(&term.key) {
-            ui::status::StateRole::Unknown
-        } else if term.matches(value) != negated {
-            ui::status::StateRole::Success
-        } else if value.is_none() {
-            ui::status::StateRole::Unknown
-        } else {
-            ui::status::StateRole::Failed
+        let role = match term.truth(value).map(|truth| truth != negated) {
+            Some(true) => ui::status::StateRole::Success,
+            Some(false) => ui::status::StateRole::Failed,
+            None => ui::status::StateRole::Unknown,
         };
         let (glyph, style) = ui::verdict(role);
         let reason = if value.is_none() {
@@ -322,4 +307,13 @@ fn term_unread_reason(
 
 pub(super) fn unread_reason(reason: Option<when::UnreadReason>) -> String {
     rimz::harness::when::condition::unread_reason(reason, Some(Timestamp::now()))
+}
+
+/// A condition's three-valued truth as `rimz loop explain` prints it.
+pub(super) fn truth_label(truth: Option<bool>) -> &'static str {
+    match truth {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
+    }
 }

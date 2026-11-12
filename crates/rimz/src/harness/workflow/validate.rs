@@ -689,22 +689,7 @@ impl Validation {
         let mut expressions = Vec::new();
         for (index, case) in cases.iter().enumerate() {
             match WhenExpr::parse(&case.when) {
-                Ok(expression) => {
-                    if expression
-                        .terms()
-                        .any(|term| term.values.iter().any(|value| value == "unknown"))
-                    {
-                        self.error(
-                            &when_path(index),
-                            if check.is_sleep() {
-                                "unread terms answer the unknown outcome; do not match unknown"
-                            } else {
-                                "unread terms answer the unknown outcome; route on.unknown instead of matching unknown"
-                            },
-                        );
-                    }
-                    expressions.push((index, expression));
-                }
+                Ok(expression) => expressions.push((index, expression)),
                 Err(error) => self.error(&when_path(index), error),
             }
         }

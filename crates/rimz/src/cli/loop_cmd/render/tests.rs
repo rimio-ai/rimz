@@ -434,7 +434,7 @@ fn show_header_names_kind_checkout_and_condition_progress_once() {
     )
     .with_condition(
         &Verdict {
-            ok: false,
+            truth: Some(false),
             readings: BTreeMap::from([("pr".into(), Some("open".into())), ("ci".into(), None)]),
             unread: Default::default(),
         },
@@ -733,7 +733,12 @@ fn worktree_view() -> ShowView {
         .unwrap()
         .to_zoned(jiff::tz::TimeZone::UTC);
     let verdict = |pr: Option<&str>, ci: Option<&str>| rimz::harness::when::Verdict {
-        ok: pr == Some("open") && ci == Some("passed"),
+        truth: match (pr, ci) {
+            (_, Some(ci)) if ci != "passed" => Some(false),
+            (Some(pr), _) if pr != "open" => Some(false),
+            (Some(_), Some(_)) => Some(true),
+            _ => None,
+        },
         readings: BTreeMap::from([
             ("pr".into(), pr.map(str::to_owned)),
             ("ci".into(), ci.map(str::to_owned)),
@@ -861,7 +866,7 @@ fn worktree_rows_sharing_a_rank_sort_by_name_from_every_input_order() {
             state: CheckoutState::Ready {
                 since: Timestamp::from_second(5).unwrap(),
                 verdict: Verdict {
-                    ok: true,
+                    truth: Some(true),
                     readings: BTreeMap::new(),
                     unread: BTreeMap::new(),
                 },
@@ -1028,7 +1033,7 @@ fn negated_leaf_glyphs_and_short_read_through_the_negation() {
     assert!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
             .to_string()
-            .contains("!ci=pending,failed   ✓ readings paused (room closed)")
+            .contains("!ci=pending,failed   ? readings paused (room closed)")
     );
     unread.readings.insert("pr".into(), None);
     let mut out = Vec::new();
@@ -1315,7 +1320,7 @@ fn worktrees_json_preserves_the_full_accepted_hold_duration() {
             since: view.now_zoned.timestamp(),
             hold,
             verdict: rimz::harness::when::Verdict {
-                ok: true,
+                truth: Some(true),
                 readings: BTreeMap::new(),
                 unread: Default::default(),
             },
@@ -1651,7 +1656,7 @@ fn show_attention_warns_at_30m_only_for_current_unledgered_blocks() {
             state: CheckoutState::Ready {
                 since: Timestamp::from_second(2100).unwrap(),
                 verdict: Verdict {
-                    ok: true,
+                    truth: Some(true),
                     readings: BTreeMap::from([
                         ("pr".into(), Some("open".into())),
                         ("ci".into(), Some("passed".into())),
@@ -1683,7 +1688,7 @@ fn show_fanout_refusals_do_not_override_waiting_conditions() {
     view.worktrees.retain(|row| row.name == "blocked");
     view.worktrees[0].state = CheckoutState::Waiting {
         verdict: Verdict {
-            ok: false,
+            truth: Some(false),
             readings: BTreeMap::from([
                 ("pr".into(), Some("open".into())),
                 ("ci".into(), Some("failed".into())),
@@ -1705,6 +1710,33 @@ fn show_fanout_refusals_do_not_override_waiting_conditions() {
     let json = serde_json::to_value(worktrees_json(&view)).unwrap();
     assert_eq!(json[0]["state"], "waiting");
     assert!(json[0].get("blocked").is_none(), "{json}");
+}
+
+#[test]
+fn show_fanout_unknown_is_a_state_of_its_own() {
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "blocked");
+    view.worktrees[0].state = CheckoutState::Unknown {
+        verdict: Verdict {
+            truth: None,
+            readings: BTreeMap::from([("pr".into(), Some("open".into())), ("ci".into(), None)]),
+            unread: BTreeMap::from([("ci".into(), "forge lookup failing".into())]),
+        },
+    };
+    let text = show_text(&view);
+    assert!(text.contains("WORKTREES (1 owned · 1 unknown)"), "{text}");
+    assert!(!text.contains("ready but blocked over 30m"), "{text}");
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("  blocked "))
+        .unwrap();
+    assert!(
+        row.contains("unknown") && row.contains("forge lookup failing"),
+        "{text}"
+    );
+    let json = serde_json::to_value(worktrees_json(&view)).unwrap();
+    assert_eq!(json[0]["state"], "unknown");
+    assert_eq!(json[0]["short"], serde_json::json!(["ci"]), "{json}");
 }
 
 #[test]
@@ -1765,7 +1797,7 @@ fn show_attention_names_failed_live_leaders_but_not_ended_leaders() {
         state: CheckoutState::Ready {
             since: view.now_zoned.timestamp(),
             verdict: Verdict {
-                ok: true,
+                truth: Some(true),
                 readings: BTreeMap::new(),
                 unread: Default::default(),
             },
@@ -1847,7 +1879,7 @@ fn true_condition_without_hold_renders_due() {
 }
 
 #[test]
-fn closed_room_forge_condition_shows_waiting_on_unread_keys() {
+fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
     let root = tempfile::tempdir().unwrap();
     let entry = TaskEntry {
         root: root.path().to_owned(),
@@ -1867,7 +1899,7 @@ fn closed_room_forge_condition_shows_waiting_on_unread_keys() {
     let timing = super::super::condition::observe("forge", &entry, timing, now);
     assert_eq!(
         timing.state().condition_label().as_deref(),
-        Some("waiting · ci: unknown")
+        Some("unknown · ci: unknown")
     );
     let mut out = Vec::new();
     super::super::condition::write_show(&mut out, "forge", &entry, &timing).unwrap();

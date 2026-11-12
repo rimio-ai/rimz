@@ -39,15 +39,17 @@ fn write_condition_notice(
     out: &mut impl Write,
     timing: &schedule::TaskTiming,
 ) -> std::io::Result<()> {
-    if !matches!(timing.state(), schedule::TaskTimingState::Waiting { .. }) {
-        return Ok(());
-    }
+    let state = match timing.state() {
+        schedule::TaskTimingState::Waiting { .. } => "not met",
+        schedule::TaskTimingState::Unknown { .. } => "unknown",
+        _ => return Ok(()),
+    };
     let count = timing.condition_count().map_or_else(String::new, |count| {
         format!(" ({} of {})", count.met, count.total)
     });
     writeln!(
         out,
-        "condition not met{count}; running anyway, task stays armed"
+        "condition {state}{count}; running anyway, task stays armed"
     )
 }
 

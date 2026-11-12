@@ -253,6 +253,7 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
         "pr.queue=queued",
         "window.5h.left>10",
         "team.stage=Missing",
+        "team.stage=unknown",
         "team.stage!=",
         "team.stage[feat]=Plan",
     ] {
@@ -286,7 +287,7 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
         assert!(result.is_err(), "an unstaged team has no board");
         assert!(result.err().unwrap().to_string().contains("no board"));
     }
-    for clause in ["team.stage=Plan", "team.stage!=Done", "team.stage=unknown"] {
+    for clause in ["team.stage=Plan", "team.stage!=Done"] {
         let team: Team = toml::from_str(&format!("leader = 'lead'\nstages = ['Plan']\nkeep-warm = {{while = '{clause}'}}\nroles = [{{role = 'lead', profile = 'claude', owns = ['Plan']}}]")).unwrap();
         assert!(prepare_team("mill", &team, &ProfilesConfig::default(), None).is_ok());
     }

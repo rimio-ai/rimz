@@ -193,6 +193,7 @@ fn next_style(row: &TaskRow) -> anstyle::Style {
             schedule::TaskTimingState::Listening { .. }
             | schedule::TaskTimingState::Watching { .. }
             | schedule::TaskTimingState::Waiting { .. }
+            | schedule::TaskTimingState::Unknown { .. }
             | schedule::TaskTimingState::Holding { .. }
             | schedule::TaskTimingState::Fired,
         ) => ui::palette::cool(),

@@ -385,7 +385,7 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
             TaskEntry {
                 dir: Some(root.path().to_owned()),
                 when: Some(vec![
-                    "pr[feat/x]=merged && pr.queue[feat/x]=queued && ci[other]!=unknown".to_owned(),
+                    "pr[feat/x]=merged && pr.queue[feat/x]=queued && ci[other]!=failed".to_owned(),
                 ]),
                 ..entry.clone()
             },
