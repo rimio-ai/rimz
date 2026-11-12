@@ -81,7 +81,7 @@ The first addition to an empty batch starts the coalesce window, and the batch f
 
 #### Raised asks and card alerts
 
-An overlay is attention RimZ raises on a card from its own records: a raised ask projects the row to `waiting`, and a card alert projects it to `failed` (`store/snapshot/view/aggregate/status.rs`). The card alert applies over any provider status. The raised ask applies only when the provider status would display `idle` or `success` and the turn is not parked, so native waiting takes precedence over it. Each sets the card's `overlay_raised_at`, and [sidebar.md → Unread and read receipts](./sidebar.md#unread-and-read-receipts) owns how that stamp is chosen.
+An overlay is attention RimZ raises on a card from its own records: a raised ask projects the row to `waiting`, and a card alert projects it to `failed` (`crates/rimz/src/agents/state.rs::project_display`). The card alert applies over any provider status. The raised ask applies only when the provider status would display `idle` or `success` and the turn is not parked, so native waiting takes precedence over it. Each sets the card's `overlay_raised_at`, and [sidebar.md → Unread and read receipts](./sidebar.md#unread-and-read-receipts) owns how that stamp is chosen.
 
 Reconcile opens an overlay row only when its stamp is newer than the row's episode, if it has one, so an overlay that reaches push policy is new. It bypasses debounce and replaces the agent's pending entry, as steps 5 and 6 say. Its title is `RimZ: <label> needs you` for both kinds. Its body is the alert text, or else the ask's detail line. A raised ask supplies its own ask id for `RIMZ_NOTIFY_ASK`, and a card alert supplies none. Triggers, focus suppression, and templates apply as for any other open.
 
