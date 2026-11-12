@@ -1553,7 +1553,8 @@ allowed-dependencies = [
 # RuntimePaths::unread_lock_path classes the unread-episode lock (+1).
 # RuntimePaths::palette_last_launch_path owns the palette's last-launch record (+1).
 # notes_dir roots the home-wide note store, and write_bytes_new_mode publishes a note without taking a taken name (+2).
-surface-budget = 334
+# lock::probe opens a lock file for write without locking it, for the workflow start probe (+1).
+surface-budget = 335
 
 [[verdict]]
 kind = "item"
@@ -2343,7 +2344,8 @@ path = "crates/rimz/src/harness"
 # deadline::stop_interrupts tells the timeout helper to send a Claude or Codex stop rung as an interrupt (+1).
 # run::release_rung gives back a stop rung the helper's interrupt could not deliver (+1).
 # harness::notes and its NotesErr, AddRequest, Added, ListFilter, Note, Listing, add and list own the home-wide note store behind `rimz notes` (+9).
-surface-budget = 1173
+# throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
+surface-budget = 1174
 
 [[verdict]]
 kind = "item"
@@ -5629,7 +5631,8 @@ allowed-dependencies = [
     "workspace",
     "worktree",
 ]
-surface-budget = 41
+# probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/harness/when"
@@ -8325,6 +8328,16 @@ reason = "Birth, reset, supervisors and integration fixtures must resolve the sa
 kind = "item"
 key = "disk::lock::try_acquire"
 reason = "CLI supervised tests and message integration tests pin immediate lock contention through this public method. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::probe"
+reason = "The throttle's start-lock probe opens its queue lock the way every lock here is opened, without taking it."
+
+[[verdict]]
+kind = "item"
+key = "harness::throttle::probe_queue_lock"
+reason = "Workflow run, resume, and restart refuse before changing anything when the detached engine could not open the home-wide start lock."
 
 [[verdict]]
 kind = "item"

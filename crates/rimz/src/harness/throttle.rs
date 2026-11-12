@@ -31,6 +31,12 @@ use crate::utils::time::format_duration_compact;
 mod limits;
 pub(in crate::harness) use limits::WorkflowStart;
 
+/// Opens the home-wide queue lock for write without taking it, so a command can refuse
+/// before it starts a detached launch that would fail on the same open.
+pub fn probe_queue_lock() -> Result<(), LockErr> {
+    crate::disk::lock::probe(&paths::loop_throttle_queue_lock())
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 #[schemars(deny_unknown_fields)]

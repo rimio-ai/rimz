@@ -138,8 +138,9 @@ fn caller_agent<'a>(
             anyhow!(
                 "{unchanged}RimZ could not find the calling agent's live session from this \
                  process (looked for kind `{}`, {identity}). If this ran inside a provider's \
-                 command sandbox: {SANDBOX_REMEDY}",
-                caller.kind
+                 command sandbox: {}",
+                caller.kind,
+                super::home_write::sandbox_remedy("rimz wait")
             )
         })?;
     if agent.ended_at.is_some() {
@@ -157,69 +158,6 @@ fn parse_on(raw: Option<&str>) -> CheckOn {
     }
 }
 
-const SANDBOX_REMEDY: &str = "Run `rimz wait …` as its own command, without a chain, \
-    pipe, redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
-    `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine rules \
-    predate this RimZ, refresh them with `rimz hooks install codex` from a user shell and \
-    restart the agent";
-
 fn home_write_hint(error: anyhow::Error, action: Option<&str>) -> anyhow::Error {
-    if !error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|error| error.kind() == std::io::ErrorKind::ReadOnlyFilesystem)
-    }) {
-        return error;
-    }
-    let unchanged = action
-        .map(|action| format!("nothing was {action}: "))
-        .unwrap_or_default();
-    error.context(format!(
-        "{unchanged}this command cannot write the RimZ home, for example inside a \
-         provider's command sandbox. {SANDBOX_REMEDY}"
-    ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn home_write_hint_only_for_read_only_filesystem() {
-        for action in ["armed", "canceled"] {
-            for kind in [
-                std::io::ErrorKind::ReadOnlyFilesystem,
-                std::io::ErrorKind::PermissionDenied,
-            ] {
-                let error = anyhow::Error::from(rimz::harness::schedule::arm::ArmFailure::State(
-                    Box::new(rimz::disk::lock::LockErr::Open {
-                        path: "rimz-home/loops/loop-arming.lock".into(),
-                        source: std::io::Error::from(kind),
-                    }),
-                ))
-                .context("updating wait");
-                let original = format!("{error:#}");
-                let report = format!("{:#}", home_write_hint(error, Some(action)));
-                if kind != std::io::ErrorKind::ReadOnlyFilesystem {
-                    assert_eq!(report, original);
-                    continue;
-                }
-                assert!(
-                    report.contains(&format!("nothing was {action}")),
-                    "{report}"
-                );
-                assert!(report.contains(&original), "{report}");
-                for text in [
-                    "provider's command sandbox",
-                    "own command",
-                    "chain, pipe, redirect, or `VAR=` prefix",
-                    "allow-routine-rimz",
-                    "escalation",
-                    "`rimz hooks install codex`",
-                ] {
-                    assert!(report.contains(text), "{report}");
-                }
-            }
-        }
-    }
+    super::home_write::hint(error, "rimz wait", action)
 }

@@ -1334,6 +1334,55 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
 }
 
 #[test]
+fn starting_commands_refuse_when_the_engine_cannot_open_the_start_lock() {
+    fn block_start_lock(env: &Env) {
+        let lock = env.rimz_home().join("loops/throttle.lock");
+        if lock.is_file() {
+            fs::remove_file(&lock).unwrap();
+        }
+        fs::create_dir_all(lock).unwrap();
+    }
+    fn refused(output: std::process::Output, action: &str) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(&format!("nothing was {action}")) && stderr.contains("throttle.lock"),
+            "{stderr}"
+        );
+    }
+
+    let (fresh, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    block_start_lock(&fresh);
+    refused(command(&fresh, &["workflow", "run", "review"]), "started");
+    let state = fresh.state_path_for(&fresh.project_root);
+    assert!(state.workflow_runs().unwrap().is_empty());
+
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let id = start(&env);
+    until(&env, &id, |v| v["record"]["wait"].is_object());
+    let mut record = show(&env, &id)["record"].clone();
+    record["state"] = json!("parked");
+    record["park"] = json!({"reason":"user", "text":"Review", "at":record["created_at"]});
+    let paths = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap());
+    fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    block_start_lock(&env);
+    let before = (
+        fs::read(&paths.record).unwrap(),
+        fs::read(&paths.journal).unwrap(),
+    );
+    for (verb, action) in [("resume", "resumed"), ("restart", "restarted")] {
+        refused(command(&env, &["workflow", verb, &id]), action);
+        let after = (
+            fs::read(&paths.record).unwrap(),
+            fs::read(&paths.journal).unwrap(),
+        );
+        assert!(after == before, "{verb} changed the run");
+    }
+}
+
+#[test]
 fn human_show_wait_and_journal_are_readable() {
     let pending = format!(
         "printf '%s\\n' '{}'\n",

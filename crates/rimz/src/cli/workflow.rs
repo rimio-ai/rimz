@@ -274,6 +274,22 @@ fn write_history_copy(state: &rimz::StatePaths, record: &records::RunRecord) -> 
     Ok(())
 }
 
+/// Refuses before `action` changes anything when the detached engine could not open the
+/// home-wide start lock its first launch takes. It checks RimZ's own needs only.
+fn refuse_unwritable_home(action: &str) -> Result<()> {
+    rimz::harness::throttle::probe_queue_lock().map_err(|error| unwritable_home(error, action))
+}
+
+fn unwritable_home(error: rimz::disk::lock::LockErr, action: &str) -> anyhow::Error {
+    let error = anyhow::Error::from(error);
+    if super::home_write::is_read_only(&error) {
+        return super::home_write::hint(error, "rimz workflow", Some(action));
+    }
+    error.context(format!(
+        "nothing was {action}: the detached workflow engine needs this lock"
+    ))
+}
+
 fn start(
     name: PathBuf,
     worktree: Option<String>,
@@ -292,6 +308,7 @@ fn start(
     } else {
         ctx.workspace.worktree_root.clone()
     };
+    refuse_unwritable_home("started")?;
     let record = workflow::create(
         ctx.store.paths(),
         workflow::DefinitionSource::Deployed {
@@ -525,4 +542,42 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
         bail!("{} workflow error(s)", report.errors.len());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unwritable_home_adds_the_sandbox_remedy_only_for_a_read_only_filesystem() {
+        for action in ["started", "resumed", "restarted"] {
+            for kind in [
+                std::io::ErrorKind::ReadOnlyFilesystem,
+                std::io::ErrorKind::PermissionDenied,
+            ] {
+                let error = rimz::disk::lock::LockErr::Open {
+                    path: "rimz-home/loops/throttle.lock".into(),
+                    source: std::io::Error::from(kind),
+                };
+                let report = format!("{:#}", unwritable_home(error, action));
+                assert!(
+                    report.contains(&format!("nothing was {action}: ")),
+                    "{report}"
+                );
+                assert!(report.contains("throttle.lock"), "{report}");
+                let read_only = kind == std::io::ErrorKind::ReadOnlyFilesystem;
+                for text in [
+                    "this command cannot write the RimZ home",
+                    "Run `rimz workflow …` as its own command",
+                ] {
+                    assert_eq!(report.contains(text), read_only, "{report}");
+                }
+                assert_eq!(
+                    report.contains("the detached workflow engine needs this lock"),
+                    !read_only,
+                    "{report}"
+                );
+            }
+        }
+    }
 }
