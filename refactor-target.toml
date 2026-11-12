@@ -250,7 +250,7 @@ upward-dependencies = ["address"]
 # AgentState::silent_child_for shares one stall predicate between projection and notice detection (+1).
 # AgentState::root_lane, lane_name and in_trunk share fold-derived root identity with consumers.
 # Spent-child CLI parity shares ParkDemotion and its constructor, predicate, and window query (+4).
-# Manual redemption exposes the provider hold code and reason through its offer and prepared preview (+2).
+# Manual redemption exposes the provider hold code and reason through its offer.
 # Per-kind room account outcomes, sources, pin accessors and the healthy-kind catalogue replace snapshot readers (+18 net).
 # RoomAccounts::project shares the resolver's trust metadata with account standing (+1).
 # Headless schema, request, verdict, result, form operations, adapter forms and shared Codex billing (+10).
@@ -271,7 +271,7 @@ upward-dependencies = ["address"]
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
 # AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
 # RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
-# Shared credits-cache reads, model sub-cap veto, and prepared fresh offer (+8).
+# Shared credits-cache reads, model sub-cap veto, and the fresh offer the harness consumes.
 # AgentState::identity_ids shares those identity keys with fleet joins and runtime projection (+1).
 # Empty-dir preparation and lane-path routing share the agent library surface (+5).
 # LaunchDirRefusal carries the HOME refusal alongside folder-trust failures (+1).
@@ -10064,17 +10064,12 @@ reason = "The binary crate calls it on the publicly re-exported HookOutput (cli/
 [[verdict]]
 kind = "item"
 key = "agents::account::AccountProbe"
-reason = "Named by public capability methods on AgentDefinition; the reset-credit and capacity contract types (AccountUsageIdentity, ProviderCapacity, RedemptionCode, ResetCreditResult, ResetCreditOffer, ResetCreditAction, PreparedRedemption) are floored the same way (pass 24b)."
+reason = "Named by public capability methods on AgentDefinition; the reset-credit and capacity contract types (AccountUsageIdentity, ProviderCapacity, RedemptionCode, ResetCreditResult, ResetCreditOffer, ResetCreditAction) are floored the same way (pass 24b)."
 
 [[verdict]]
 kind = "item"
 key = "agents::account::RedeemHold"
 reason = "Public ResetCreditOffer.hold and ManualRedeem::hold carry the provider's code and reason to the binary's preview and exit decision."
-
-[[verdict]]
-kind = "item"
-key = "agents::account::PreparedRedemption::hold"
-reason = "The manual harness reads the provider-owned hold without copying a second verdict into its preview."
 
 [[verdict]]
 kind = "item"
@@ -10125,11 +10120,6 @@ reason = "The helper and manual preview share the provider's fresh capacity and 
 kind = "item"
 key = "harness::spend_ladder::SpendFacts::redemption"
 reason = "Producer, helper, and forecast share expiry rescue and the next reset step."
-
-[[verdict]]
-kind = "item"
-key = "agents::account::PreparedRedemption::offer"
-reason = "Manual previews evaluate the same fresh-offer spend facts as the helper."
 
 [[verdict]]
 kind = "item"

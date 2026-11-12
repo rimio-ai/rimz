@@ -922,39 +922,6 @@ impl RedemptionCode {
     }
 }
 
-pub struct PreparedRedemption<T> {
-    pub decision: T,
-    pub capacity: Option<ProviderCapacity>,
-    pub credits: super::ResetCredits,
-    offer: ResetCreditOffer,
-}
-
-impl<T> PreparedRedemption<T> {
-    #[cfg(test)]
-    pub(crate) fn from_offer(decision: T, offer: ResetCreditOffer) -> Self {
-        Self {
-            decision,
-            capacity: offer.capacity.clone(),
-            credits: offer.credits.clone(),
-            offer,
-        }
-    }
-
-    pub(crate) fn offer(&self) -> &ResetCreditOffer {
-        &self.offer
-    }
-
-    pub(crate) fn hold(&self) -> Option<&RedeemHold> {
-        self.offer.hold.as_ref()
-    }
-
-    /// Spend the prepared provider-owned credit only after the caller has
-    /// durably recorded its attempt.
-    pub fn consume(self, request_id: &str) -> Result<ResetCreditResult, String> {
-        self.offer.consume(request_id)
-    }
-}
-
 pub struct ResetCreditOffer {
     pub capacity: Option<ProviderCapacity>,
     pub credits: super::ResetCredits,
@@ -985,7 +952,9 @@ impl ResetCreditOffer {
         }
     }
 
-    fn consume(self, request_id: &str) -> Result<ResetCreditResult, String> {
+    /// Spend the provider-owned credit only after the caller has durably
+    /// recorded its attempt.
+    pub(crate) fn consume(self, request_id: &str) -> Result<ResetCreditResult, String> {
         self.action.consume(request_id)
     }
 }
@@ -1001,26 +970,13 @@ pub struct ResetCreditResult {
     pub refresh_error: Option<String>,
 }
 
-/// Prepare one provider-owned reset-credit action after a caller-supplied,
-/// provider-neutral policy verdict. The caller owns the durable reservation
-/// that must precede [`PreparedRedemption::consume`].
-pub fn prepare_reset_credit_redemption<T>(
+/// Read `kind`'s provider-owned reset-credit offer. The caller judges it and
+/// owns the durable reservation that must precede its `consume`.
+pub(crate) fn prepare_reset_credit_redemption(
     kind: &str,
-    decide: impl FnOnce(&ResetCreditOffer) -> Option<T>,
     login_env: &std::collections::BTreeMap<String, String>,
-) -> Result<Option<PreparedRedemption<T>>, String> {
-    let offer = super::find_definition(kind)
+) -> Result<ResetCreditOffer, String> {
+    super::find_definition(kind)
         .ok_or_else(|| format!("{kind} does not support reset-credit redemption"))?
-        .prepare_reset_credit(login_env)?;
-    let capacity = offer.capacity.clone();
-    let credits = offer.credits.clone();
-    let Some(decision) = decide(&offer) else {
-        return Ok(None);
-    };
-    Ok(Some(PreparedRedemption {
-        decision,
-        capacity,
-        credits,
-        offer,
-    }))
+        .prepare_reset_credit(login_env)
 }
