@@ -21,7 +21,6 @@ pub(super) fn reconcile_snapshot(runtime: &RuntimePaths, snapshot: &mut SidebarS
         debug!(error = %err, "sidebar attention stamps persist failed");
     }
     stamps.derive(snapshot);
-    snapshot.sort_groups_for_presentation();
 }
 
 #[derive(Default)]
