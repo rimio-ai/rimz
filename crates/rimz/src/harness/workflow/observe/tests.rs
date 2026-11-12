@@ -661,3 +661,53 @@ fn an_excluded_handle_leaves_with_its_live_launched_tree() {
     let kept = without_excluded(room, &["@leader".into(), "@missing".into()]);
     assert_eq!(ids(&kept), ["peer", "other"]);
 }
+
+#[test]
+fn a_leader_turn_observation_rests_past_only_the_waking_frame() {
+    use crate::disk::lock::{SharedAppendLock, WorkspaceLock};
+    use crate::store::ingress::{self, HookIngress};
+
+    let (dir, store) = store();
+    let mut leader = row("leader", 120);
+    leader.status = AgentStatus::Idle;
+    leader.turn_started_at = Some(ago(50));
+    leader.turn_ended_at = Some(ago(40));
+    let pin = pin();
+    let mut run = leader_run(&leader);
+    run.workflow = Some(pin.clone());
+    let frame = HookIngress {
+        boot_id: None,
+        schema_version: "1".into(),
+        event_id: EventId::new(),
+        ts: Timestamp::now(),
+        source: leader.kind.clone(),
+        event: Some("Stop".into()),
+        payload: "{}".into(),
+        cwd: dir.path().into(),
+        hook_pid: std::process::id(),
+        env: [
+            ("RIMZ_WORKFLOW_RUN".into(), pin.run.to_string()),
+            ("RIMZ_RUN_ID".into(), run.run_id.to_string()),
+        ]
+        .into(),
+    };
+    let guard = SharedAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+    ingress::append(store.paths(), &frame, &guard).unwrap();
+    drop(guard);
+    let snapshot = snapshot(vec![leader]);
+    let _guard = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
+    let at_rest = |woken_by: Option<&EventId>| {
+        let observed: Result<Observed, StoreErr> = observe(
+            &store,
+            &run,
+            &snapshot,
+            Observation::LeaderTurn,
+            woken_by,
+            |_| Ok(None),
+            |_| None,
+        );
+        observed.unwrap().turn.map(|turn| turn.at_rest)
+    };
+    assert_eq!(at_rest(Some(&frame.event_id)), Some(true));
+    assert_eq!(at_rest(None), Some(false));
+}
