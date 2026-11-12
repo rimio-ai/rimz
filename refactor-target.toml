@@ -86,7 +86,8 @@ path = "crates/rimz/src/address.rs"
 # agent_in_lane, lane_label and trunk_lane_name share it with CLI and harness readers (+8).
 # LaneSelector::holds_record matches a durable record's lane, and TeamCohort::team and channel
 # read the cohort's typed instance (+3).
-surface-budget = 57
+# `selector` gives agents list one flat row, field table, and --filter match (+1).
+surface-budget = 58
 allowed-dependencies = ["agents", "ids", "store"]
 
 [[verdict]]
@@ -103,6 +104,11 @@ reason = "One display label for a row's lane, `main` for trunk's own lane, read 
 kind = "item"
 key = "address::trunk_lane_name"
 reason = "The routing name trunk's records carry, shared by the selector's alias list and the transcript scope."
+
+[[verdict]]
+kind = "item"
+key = "address::selector"
+reason = "The flat agent row, its field table, and the --filter grammar are one library vocabulary that list, and later the action commands, read without importing each other's internals."
 
 [[verdict]]
 kind = "item"
