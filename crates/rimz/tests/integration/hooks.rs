@@ -2062,6 +2062,73 @@ fn kimi_parent_hook_derives_failed_children_once() {
 }
 
 #[test]
+fn kimi_parent_hook_from_a_replaced_process_derives_no_children() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let session = env.home_root.join(".kimi-code/sessions/bucket/kimi-parent");
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    std::fs::write(
+        session.join("state.json"),
+        json!({"cwd":"/different/cwd"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        session.join("agents/main/wire.jsonl"),
+        "{\"type\":\"subagent.spawned\",\"subagentId\":\"child\",\"subagentName\":\"coder\",\"description\":\"inspect parser\"}\n",
+    )
+    .unwrap();
+    // A resumed swap moved the session's agent to epoch 1.
+    env.store()
+        .attach_agent_pane(
+            &rimz::ids::AgentKind::new_unchecked("kimi"),
+            &"kimi-parent".into(),
+            Some(&"launch_kimi".into()),
+            &rimz::ids::LoginName::default(),
+            "session",
+            &rimz::ids::PaneId::parse("tmux:%2").unwrap(),
+            rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "kimi-parent",
+                env.agent_owner_pid(),
+                None,
+            ),
+            None,
+            None,
+            Some(&rimz::agents::LaunchParams {
+                epoch: Some(1),
+                ..rimz::agents::LaunchParams::default()
+            }),
+        )
+        .unwrap();
+    let payload =
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"kimi-parent","prompt":"work"})
+            .to_string();
+    let mut command = env.hook_command("kimi");
+    command
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch_kimi")
+        .env(rimz::harness::launch::ENV_AGENT_EPOCH, "0");
+    let output = env
+        .spawn_payload(command, &payload)
+        .wait_with_output()
+        .unwrap();
+    env.drain_hooks();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = env.snapshot_json();
+    assert!(
+        snapshot["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|agent| agent["agent_id"] != "kimi-parent:child"),
+        "the replaced process's frame ingests no child: {snapshot:#}"
+    );
+}
+
+#[test]
 fn cursor_user_hook_uses_project_dir_for_pinned_worktree_attribution() {
     let env = Env::new();
     env.record(&env.project_root);

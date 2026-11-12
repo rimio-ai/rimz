@@ -3384,7 +3384,7 @@ upward-dependencies = [
 # Typed delivery timing and its dispatch accessor are shared with CLI reporting.
 # Attributed boundary nudges share queue-and-deliver with system nudges and retain their id on failure.
 # The synthetic request type and public submodule join the surface; two entry functions replace three.
-# The ended-receiver archive reason is one formatter for the sweep and the lifecycle reactor.
+# The ended-receiver archive reason is one formatter; archive_for_ended_agent gives the lifecycle reactor and the wrapper exit one agent-ended archive.
 # ExpiryCheck carries the first ordered delivery check into the CLI (+1).
 # TurnWaitReason and TurnWaitView::reason expose wake-aware blockers to wait presentation (+2).
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
@@ -7167,6 +7167,11 @@ reason = "Pass 12: loop config entry stays public; pub(crate) would not reduce e
 kind = "item"
 key = "message::InterruptConfirmation"
 reason = "Transient stop evidence shared by live dispatch, queued delivery and CLI receipts; never persisted."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::archive_for_ended_agent"
+reason = "The lifecycle reactor and the exec wrapper archive an ended agent's queue debt through one agent-ended gate."
 
 [[verdict]]
 kind = "item"

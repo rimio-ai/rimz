@@ -610,7 +610,9 @@ fn react_lifecycle(
     {
         warn!(error = %err, "lifecycle: failed to retire ended session deliveries");
     }
-    if receipt.side_conversation.is_some() {
+    // A replaced session's events arm, signal, and re-wake nothing for its
+    // agent; the reconcile above already took its session-level cleanup.
+    if receipt.side_conversation.is_some() || receipt.replaced {
         return;
     }
     let audit = if receipt.events.iter().any(|event| {
@@ -637,16 +639,6 @@ fn react_lifecycle(
     };
     let signal_snapshot = std::cell::OnceCell::new();
     for event in &receipt.events {
-        if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
-            && let Err(err) = arm::retire_session(
-                &workspace.project_root,
-                &event.kind,
-                &event.agent_id,
-                arm::RetireScope::Session,
-            )
-        {
-            warn!(error = %err, "lifecycle: failed to retire session deliveries");
-        }
         let member = rows
             .as_ref()
             .and_then(|rows| rows.find(&event.kind, &event.agent_id));

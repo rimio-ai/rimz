@@ -38,6 +38,13 @@ pub struct AgentLifecycleReceipt {
     /// Set when the observation belongs to an ephemeral side conversation,
     /// which is never an agent session.
     pub side_conversation: Option<SideConversation>,
+    /// The event came from a process a later swap of its row's launch moved
+    /// past: the log keeps it, the fold ignores it, and it triggers and
+    /// derives nothing. It carries no events.
+    pub stale: bool,
+    /// The event's row is a session another session of its agent replaced:
+    /// it may still trigger session-level effects, never agent-level ones.
+    pub replaced: bool,
 }
 
 /// A side conversation's receipt: the card owner hosting it, resolved at this
@@ -169,6 +176,8 @@ impl Store {
                         host: host.map(|host| host.agent_id.clone()),
                         host_running: host.is_some_and(|host| host.status == AgentStatus::Running),
                     }),
+                    stale: false,
+                    replaced: false,
                 };
                 if known_side {
                     return Ok(receipt);
@@ -184,12 +193,32 @@ impl Store {
                 ));
                 receipt
             } else {
-                let prior_status = intent
+                let row = intent
                     .observation
                     .agent_id
                     .as_ref()
-                    .and_then(|agent_id| agents.find(&intent.agent_kind, agent_id))
-                    .map(|agent| agent.status);
+                    .and_then(|agent_id| agents.find(&intent.agent_kind, agent_id));
+                let prior_status = row.map(|agent| agent.status);
+                let stale = row.is_some_and(|row| {
+                    crate::store::snapshot::observation_stale_on(intent.observation, row)
+                });
+                // Read before the fold: an event stamped with the holder's
+                // epoch is that holder continuing in this row, not a late one.
+                let replaced = row.is_some_and(|row| {
+                    let members = crate::agents::state::launch_members(
+                        agents.iter(),
+                        &row.kind,
+                        row.launch_key(),
+                    );
+                    let held_at = members
+                        .iter()
+                        .filter(|member| member.stands())
+                        .map(|member| member.epoch)
+                        .max();
+                    let continues = intent.observation.launch_id.as_ref() == Some(row.launch_key())
+                        && held_at <= Some(intent.observation.launch.epoch.unwrap_or(0));
+                    crate::agents::state::LaunchHolders::new(members).replaced(row) && !continues
+                });
                 let transition =
                     lifecycle_transition(agents, &intent.agent_kind, intent.observation);
                 // Only hook-first roots take the room default; launched rows and children keep their account.
@@ -255,14 +284,17 @@ impl Store {
                 } else {
                     None
                 };
-                derive_lifecycle_events(
-                    &self.inner.paths.workspace_id,
-                    &intent,
-                    agents,
-                    transition,
-                    login.as_ref(),
-                    &mut staged,
-                );
+                // A stale event keeps its own record and derives nothing.
+                if !stale {
+                    derive_lifecycle_events(
+                        &self.inner.paths.workspace_id,
+                        &intent,
+                        agents,
+                        transition,
+                        login.as_ref(),
+                        &mut staged,
+                    );
+                }
                 AgentLifecycleReceipt {
                     prior_status,
                     transition,
@@ -272,6 +304,8 @@ impl Store {
                     events: Vec::new(),
                     rotation_due: false,
                     side_conversation: None,
+                    stale,
+                    replaced,
                 }
             };
             if let Some((_, at)) = txn.ingress {
@@ -302,10 +336,12 @@ impl Store {
                 .iter()
                 .map(|staged| staged.envelope.clone())
                 .collect::<Vec<_>>();
-            if matches!(
-                intent.observation.signal,
-                LifecycleSignal::CompactionEnded { failed: false, .. }
-            ) && let Some((predecessor, successor)) = intent
+            if !receipt.stale
+                && matches!(
+                    intent.observation.signal,
+                    LifecycleSignal::CompactionEnded { failed: false, .. }
+                )
+                && let Some((predecessor, successor)) = intent
                 .observation
                 .compacted_from
                 .as_ref()
@@ -323,12 +359,18 @@ impl Store {
             } else {
                 0
             };
-            receipt.rotation_due =
-                !staged.is_empty() && claim_rotation(txn.paths, rotation_threshold, pending_bytes);
-            receipt.events = staged
-                .into_iter()
-                .filter_map(|staged| staged.event)
-                .collect();
+            receipt.rotation_due = !receipt.stale
+                && !staged.is_empty()
+                && claim_rotation(txn.paths, rotation_threshold, pending_bytes);
+            if receipt.stale {
+                receipt.transition = None;
+                receipt.waiting_cleared = false;
+            } else {
+                receipt.events = staged
+                    .into_iter()
+                    .filter_map(|staged| staged.event)
+                    .collect();
+            }
 
             Ok(receipt)
         })

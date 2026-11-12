@@ -696,7 +696,7 @@ pub(super) fn execute_attempt(
 /// Archive reason for the open messages of an ended receiver: a launched
 /// child's names the `rimz message` that resumes it, addressed as `address`
 /// when the sender gave one.
-pub fn ended_receiver_reason(
+fn ended_receiver_reason(
     receiver: &AgentState,
     address: Option<&str>,
     peers: &[&AgentState],
@@ -709,6 +709,38 @@ pub fn ended_receiver_reason(
         str::to_owned,
     );
     format!("receiver ended; rimz message {target} resumes it")
+}
+
+/// Archive the queue's debt to the agent whose session `(kind, agent_id)` is,
+/// once that agent has ended: the conditions watching it and the messages
+/// parked for it, archived with the ended-receiver reason. An agent still live
+/// in another session archives nothing. Returns whether it archived.
+pub fn archive_for_ended_agent(
+    store: &Store,
+    session_name: &str,
+    kind: &crate::ids::AgentKind,
+    agent_id: &crate::ids::AgentSessionId,
+    agent_name: Option<&str>,
+) -> crate::store::Result<bool> {
+    let rows = store.audit_rows()?;
+    if crate::agents::state::agent_end(rows.iter(), kind, agent_id)
+        == crate::agents::state::AgentEnd::Live
+    {
+        return Ok(false);
+    }
+    store.archive_messages_watching_card(kind, agent_id, agent_name, None, session_name)?;
+    let reason = rows.find(kind, agent_id).map_or_else(
+        || "receiver ended".to_owned(),
+        |receiver| {
+            let peers: Vec<_> = rows
+                .iter()
+                .filter(|agent| !agent.is_provider_subagent())
+                .collect();
+            ended_receiver_reason(receiver, None, &peers)
+        },
+    );
+    store.archive_messages_for_card(kind, agent_id, agent_name, None, &reason, session_name)?;
+    Ok(true)
 }
 
 /// Tells each agent sender, once per message, that its condition-met record on `head`'s card has

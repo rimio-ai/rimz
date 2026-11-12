@@ -830,6 +830,13 @@ fn plan_settlement(
         .agents
         .iter()
         .filter(|agent| scope.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        .filter(|agent| {
+            // Its agent recovers through the session that replaced it.
+            if agent.replaced {
+                tracing::debug!(kind = %agent.kind, session = %agent.agent_id, "rebirth: not a candidate: replaced");
+            }
+            !agent.replaced
+        })
         .filter(|agent| match agent_liveness(agent) {
             AgentLiveness::Live { pid } => {
                 tracing::debug!(kind = %agent.kind, session = %agent.agent_id, pid, ended = agent.ended_at.is_some(), "rebirth: not a candidate: owner live");
