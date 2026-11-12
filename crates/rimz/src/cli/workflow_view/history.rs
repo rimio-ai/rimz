@@ -289,7 +289,7 @@ impl History<'_> {
             .record
             .wait
             .as_ref()
-            .filter(|wait| wait.outcome == "hold")
+            .filter(|wait| wait.outcome == "hold" && wait.unknown.is_none())
         else {
             return Ok(false);
         };

@@ -672,6 +672,12 @@ impl Validation {
                 );
             }
         }
+        if !check.on.contains_key("unknown") {
+            self.error(
+                &format!("{path}.on.unknown"),
+                "a condition check requires on.unknown; route it to @wait to keep waiting while a term is unknown",
+            );
+        }
         self.condition_terms(path, check, project_root);
     }
 

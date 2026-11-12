@@ -68,7 +68,7 @@ fn inspection_timeout_uses_the_node_entry_time() {
 #[test]
 fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
     let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.deadline='@user'\n\
-        [checks.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',timeout='@failed'}\n\
+        [checks.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',unknown='@wait',timeout='@failed'}\n\
         [[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='10m'\n").unwrap();
     let mut record = record();
     record.attempt = None;

@@ -1,6 +1,6 @@
 use super::*;
 
-const CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n";
+const CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n";
 
 pub(super) fn board(env: &Env, stage: &str) {
     fs::create_dir_all(env.project_root.join(".rimz/team")).unwrap();
@@ -107,7 +107,7 @@ pub(super) fn forge(env: &Env, at: jiff::Timestamp, ok: bool) {
     .unwrap();
 }
 
-const CI_CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['ci=passed']\noutcome='ready'\n";
+const CI_CONDITION: &str = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[checks.pr.cases]]\nwhen=['ci=passed']\noutcome='ready'\n";
 
 fn open_forge(env: &Env, scope: &Path, pr_head: &str, ci_sha: &str) {
     let path = env.runtime_paths().lane_path("pr-state.json");
@@ -130,7 +130,7 @@ fn open_forge(env: &Env, scope: &Path, pr_head: &str, ci_sha: &str) {
 #[test]
 fn condition_mergeability_waits_for_a_current_head_answer() {
     let spec = format!(
-        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ conflict='@done', pending='@wait' }}\n[[checks.pr.cases]]\nwhen=['pr.mergeable=conflicting']\noutcome='conflict'\n"
+        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ conflict='@done', pending='@wait', unknown='@wait' }}\n[[checks.pr.cases]]\nwhen=['pr.mergeable=conflicting']\noutcome='conflict'\n"
     );
     let (env, _) = fixture(&spec, "");
     let id = start(&env);
@@ -238,7 +238,7 @@ fn condition_ci_accepts_a_pr_head_absent_from_the_checkout() {
 #[test]
 fn condition_unknown_waits_for_a_successful_post_entry_forge_probe() {
     let spec = format!(
-        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ merged='@done', pending='@wait' }}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='merged'\n"
+        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ merged='@done', pending='@wait', unknown='@wait' }}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='merged'\n"
     );
     let (env, _) = fixture(&spec, "");
     forge(
@@ -291,7 +291,7 @@ fn condition_unknown_waits_for_a_successful_post_entry_forge_probe() {
 #[test]
 fn condition_stage_admission_uses_the_run_project_and_validation_warns_without_one() {
     let spec = format!(
-        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait' }}\n[[checks.pr.cases]]\nwhen=['team.stage=Imaginary']\noutcome='ready'\n"
+        "{HEADER}[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait', unknown='@wait' }}\n[[checks.pr.cases]]\nwhen=['team.stage=Imaginary']\noutcome='ready'\n"
     );
     let (env, _) = fixture(&spec, "");
     let output = command(&env, &["workflow", "run", "review"]);

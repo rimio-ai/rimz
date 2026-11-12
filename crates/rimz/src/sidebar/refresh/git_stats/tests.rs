@@ -527,7 +527,7 @@ then = "probe"
 timeout = "1h"
 else = "pending"
 {provider}
-on = {{ ready = "@done", pending = "@wait" }}
+on = {{ ready = "@done", pending = "@wait", unknown = "@wait" }}
 [[checks.probe.cases]]
 when = ["team.stage=Done"]
 outcome = "ready"

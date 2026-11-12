@@ -63,7 +63,7 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
     assert_eq!(load(&paths).unwrap(), record);
     let id = record.id.as_str();
     let fix = format!("`rimz workflow cancel {id}`, then start the workflow again");
-    for version in [1, 2, 3, VERSION + 1] {
+    for version in [1, 2, 3, 4, VERSION + 1] {
         let mut value = serde_json::to_value(&record).unwrap();
         value["version"] = json!(version);
         // A version-2 body this binary no longer decodes still meets the refusal first.

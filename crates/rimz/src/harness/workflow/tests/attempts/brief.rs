@@ -364,7 +364,7 @@ fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
 
 #[test]
 fn arrival_details_are_bounded_escaped_and_tied_to_the_matched_condition_case() {
-    let text = OUTCOME_STEP.replacen("run='cat answer.json'", "cases=[{when=['pr=merged && pr.review=approved'],outcome='blue'},{when=['pr=open || ci=failed'],outcome='red'}]\nelse='queued'", 1);
+    let text = OUTCOME_STEP.replacen("run='cat answer.json'", "cases=[{when=['pr=merged && pr.review=approved'],outcome='blue'},{when=['pr=open || ci=failed'],outcome='red'}]\nelse='queued'", 1).replacen("queued='@wait'}", "queued='@wait',unknown='@wait'}", 1);
     let (_dir, state, record) = setup(&text);
     let runtime = crate::RuntimePaths::for_state(&state).unwrap();
     let cache = runtime.lane_path("pr-state.json");

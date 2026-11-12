@@ -139,6 +139,10 @@ pub(super) fn wait(
         ));
     }
     let detail = match wait.outcome.as_str() {
+        "hold" if wait.unknown.is_some() => match wait.unknown.as_deref().unwrap_or_default() {
+            "" => "unknown".into(),
+            reason => format!("unknown: {}", render::one_line(reason)),
+        },
         "hold" => {
             let hold = spec
                 .and_then(|spec| spec.checks.get(&wait.node))

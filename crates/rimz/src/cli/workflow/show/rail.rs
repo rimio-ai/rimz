@@ -241,7 +241,9 @@ impl View<'_> {
             .as_ref()
             .filter(|wait| wait.node == row.name);
         let object = self.evaluation().map(|(_, object)| object);
-        if object.is_none() && !wait.is_some_and(|wait| wait.outcome == "hold") {
+        if object.is_none()
+            && !wait.is_some_and(|wait| wait.outcome == "hold" && wait.unknown.is_none())
+        {
             return Ok(());
         }
         let object = object.unwrap_or(&Value::Null);

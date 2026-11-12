@@ -11,7 +11,7 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, MessageId, RunId, WorkflowRunId};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -501,6 +501,11 @@ pub struct Wait {
     pub case: Option<u32>,
     #[serde(default)]
     pub detail: Option<String>,
+    /// A hold's last answer while it was unknown: the answer's reason, or empty when it gave
+    /// none. The hold keeps its start; readers describe the node as unknown until a true
+    /// answer of the held case clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

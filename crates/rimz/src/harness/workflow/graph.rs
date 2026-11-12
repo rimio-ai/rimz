@@ -482,11 +482,6 @@ impl Check {
                 .entry(outcome.into())
                 .or_insert_with(|| "@user".into());
         }
-        if matches!(self.kind(), Some(CheckKind::Condition)) {
-            edges
-                .entry("unknown".into())
-                .or_insert_with(|| "@wait".into());
-        }
         edges
     }
 }
