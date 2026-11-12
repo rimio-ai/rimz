@@ -8284,6 +8284,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
         let report = wait_for_loop_report_after(&env, "watchdog", before);
         assert_eq!(report.result, LoopRunResult::Failed);
     }
+    wait_for_loop_reports_sent(&env, "watchdog", 3);
     assert_eq!(
         read_loop_arming(&env)
             .get(&machine_task_key("watchdog"))
@@ -8295,6 +8296,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
     assert!(fire.contains("task is disabled; firing anyway"), "{fire}");
     wait_for_loop_report_after(&env, "watchdog", before);
+    wait_for_loop_reports_sent(&env, "watchdog", 4);
     assert_eq!(
         read_loop_strikes(&env).get(&machine_task_key("watchdog")),
         Some(&4)
@@ -8307,7 +8309,8 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
         "manual fire must not replace an existing disable"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // The strike-out report spawned the handler detached, so its write trails the report.
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     let notification = loop {
         let text = std::fs::read_to_string(&notify_log).unwrap_or_default();
         if text.contains("loop_disabled|RimZ: loop watchdog disabled") {
@@ -12720,6 +12723,37 @@ fn wait_for_loop_report_after(env: &Env, task: &str, before: usize) -> LoopRunRe
         .skip(before)
         .rfind(report)
         .expect("run report")
+}
+
+/// Wait until `task`'s workflow runs number `runs` and every report has landed: a reporter marks
+/// its run `Sent` only after the history row, the strike, any auto-disable, and the strike-out
+/// notice, so the row alone can be read before the state that follows it.
+fn wait_for_loop_reports_sent(env: &Env, task: &str, runs: usize) {
+    use rimz::store::workflow::LoopReport;
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    loop {
+        let reports: Vec<_> = rimz::store::workflow::list(env.store().paths())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|run| run.ran_for(task))
+            .map(|run| (run.state, run.loop_report))
+            .collect();
+        if reports.len() == runs
+            && reports
+                .iter()
+                .all(|(_, report)| *report == LoopReport::Sent)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {runs} sent reports of {task}: {reports:?}; strikes: {:?}; \
+             arming: {:?}",
+            read_loop_strikes(env),
+            read_loop_arming(env)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// Wait for the detached `rimz worktree` helpers a fire tree's report spawned to exit.
