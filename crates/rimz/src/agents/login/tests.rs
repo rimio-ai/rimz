@@ -783,6 +783,118 @@ fn deciding_machine_selection_refuses_unknown_names_and_unsupported_kinds() {
 }
 
 #[test]
+fn room_accounts_take_pin_then_project_then_machine_then_provider() {
+    fn logins(pairs: &[(&str, &str)]) -> RoomLogins {
+        pairs.iter().map(|(k, n)| (kind(k), name(n))).collect()
+    }
+    let resolve = |pins: &[(&str, &str)], project: &[(&str, &str)], machine: &[(&str, &str)]| {
+        let mut config = crate::config::MachineConfig {
+            accounts: accounts(
+                "[claude.work]\nhome = \"/srv/claude-work\"\n[claude.personal]\nhome = \"/srv/claude-personal\"\n[codex.work]\nhome = \"/srv/codex-work\"\n",
+            ),
+            ..Default::default()
+        };
+        config.accounts.use_accounts = logins(machine);
+        RoomAccounts::from_layers(
+            &logins(pins),
+            crate::trust::ProjectLogins::Apply(logins(project)),
+            &config,
+        )
+    };
+    let account = |accounts: &RoomAccounts, provider: &str| {
+        let account = accounts.account(&kind(provider)).unwrap();
+        (account.name, account.source)
+    };
+    let expect = |login: &str, source: LoginSource| (name(login), source);
+
+    let layered = resolve(
+        &[("claude", "work")],
+        &[("claude", "personal"), ("codex", "work")],
+        &[],
+    );
+    assert_eq!(
+        account(&layered, "claude"),
+        expect("work", LoginSource::Pinned)
+    );
+    assert_eq!(
+        account(&layered, "codex"),
+        expect("work", LoginSource::Project)
+    );
+    assert_eq!(
+        account(&layered, "pi"),
+        expect("default", LoginSource::Provider)
+    );
+
+    let bare = resolve(&[], &[], &[]);
+    for provider in ["claude", "codex", "pi"] {
+        assert_eq!(
+            account(&bare, provider),
+            expect("default", LoginSource::Provider)
+        );
+    }
+
+    let unknown = resolve(&[], &[("claude", "travel")], &[]);
+    let Err(RoomLoginErr::Resolution(inner)) = unknown.account(&kind("claude")) else {
+        panic!("an undeclared project account must refuse");
+    };
+    assert!(
+        matches!(
+            inner.as_ref(),
+            RoomLoginErr::Login(LoginErr::Unknown { .. })
+        ),
+        "{inner:?}"
+    );
+    assert_eq!(
+        account(&unknown, "codex"),
+        expect("default", LoginSource::Provider)
+    );
+
+    let escape = resolve(&[("claude", "default")], &[("claude", "travel")], &[]);
+    assert_eq!(
+        account(&escape, "claude"),
+        expect("default", LoginSource::Pinned)
+    );
+
+    let machine = resolve(&[], &[], &[("claude", "work"), ("codex", "work")]);
+    for provider in ["claude", "codex"] {
+        assert_eq!(
+            account(&machine, provider),
+            expect("work", LoginSource::Machine)
+        );
+    }
+
+    let overridden = resolve(
+        &[("claude", "default")],
+        &[("codex", "default")],
+        &[("claude", "work"), ("codex", "work")],
+    );
+    assert_eq!(
+        account(&overridden, "claude"),
+        expect("default", LoginSource::Pinned)
+    );
+    assert_eq!(
+        account(&overridden, "codex"),
+        expect("default", LoginSource::Project)
+    );
+
+    let pinned = resolve(&[("codex", "default")], &[], &[("codex", "missing")]);
+    assert_eq!(
+        account(&pinned, "codex"),
+        expect("default", LoginSource::Pinned)
+    );
+    let project = resolve(&[], &[("codex", "default")], &[("codex", "missing")]);
+    assert_eq!(
+        account(&project, "codex"),
+        expect("default", LoginSource::Project)
+    );
+    let dangling = resolve(&[], &[], &[("codex", "missing")])
+        .account(&kind("codex"))
+        .unwrap_err()
+        .to_string();
+    assert!(dangling.contains("[accounts.use]"), "{dangling}");
+}
+
+#[test]
 fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
     let catalog = LoginCatalog::from_config_under(
         &accounts("[claude.work]\nhome = \"/srv/work\"\n"),

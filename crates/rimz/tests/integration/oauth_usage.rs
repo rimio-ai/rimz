@@ -1043,6 +1043,97 @@ fn auto_redeem_rescues_an_idle_codex_account_and_records_its_login() {
     assert_eq!(body["credit_id"], "credit-1");
 }
 
+#[test]
+fn auto_redeem_declined_by_the_fresh_read_spends_and_records_nothing() {
+    let env = Env::new();
+    let now = jiff::Timestamp::now();
+    let reset_at = |secs| (now + jiff::SignedDuration::from_secs(secs)).as_second();
+    let usage = serde_json::json!({
+        "plan_type": "pro",
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 42,
+                "reset_at": reset_at(3600),
+                "limit_window_seconds": 18000
+            }
+        }
+    });
+    let reset_credits = serde_json::json!({
+        "available_count": 1,
+        "credits": [{
+            "id": "credit-1",
+            "status": "available",
+            "expires_at": now + jiff::SignedDuration::from_secs(10 * 86400)
+        }]
+    });
+    let (origin, server) = serve_routes(
+        vec![
+            ("GET /backend-api/wham/usage ", usage.to_string()),
+            (
+                "GET /backend-api/wham/rate-limit-reset-credits ",
+                reset_credits.to_string(),
+            ),
+            (
+                "POST /backend-api/wham/rate-limit-reset-credits/consume ",
+                r#"{"code":"reset","windows_reset":1}"#.to_owned(),
+            ),
+        ],
+        2,
+    );
+    let spare_home = env.home_root.join("spare");
+    std::fs::create_dir_all(&spare_home).expect("mkdir spare codex home");
+    std::fs::write(
+        spare_home.join("auth.json"),
+        r#"{"tokens": {"access_token": "spare-token", "account_id": "acc_spare"}}"#,
+    )
+    .expect("write codex auth");
+    std::fs::write(
+        spare_home.join("config.toml"),
+        format!("chatgpt_base_url = \"{origin}/backend-api\"\n"),
+    )
+    .expect("write codex config");
+    std::fs::create_dir_all(env.rimz_home()).expect("mkdir rimz home");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.codex.spare]\nhome = {:?}\n",
+            spare_home.to_str().expect("utf-8 home")
+        ),
+    )
+    .expect("write machine config");
+
+    let request = rimz::harness::auto_redeem::AutoRedeemRequest {
+        workspace_id: env.workspace_id.clone(),
+        login: "codex@spare".parse().expect("login key"),
+        reason: rimz::harness::auto_redeem::RedeemReason::ExpiryRescue,
+        request_id: uuid::Uuid::now_v7(),
+    };
+    let output = env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "auto-redeem",
+            &request,
+        ))
+        .bounded_output()
+        .expect("rimz agents auto-redeem");
+    let requests = server.join().expect("server requests");
+    assert!(
+        requests.iter().all(|request| !request.starts_with("POST ")),
+        "a declined verdict must not consume: {requests:?}"
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+    let stamp = env
+        .runtime_paths()
+        .shared_credits_path()
+        .with_file_name("auto_redeem.codex@spare.json");
+    assert!(!stamp.exists(), "{}", stamp.display());
+}
+
 fn manual_redeem_fixture(env: &Env, count: usize, code: &str) -> thread::JoinHandle<Vec<String>> {
     env.install_agent_hooks("codex");
     crate::common::trust_codex_hooks(env);
