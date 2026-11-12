@@ -447,7 +447,12 @@ mod agent_ref {
                         agent_name_explicit: true,
                         launch: LaunchParams {
                             profile: Some("worker".into()),
-                            channel: launch.channel.clone().or_else(|| Some("saved".into())),
+                            lane: Some(crate::common::wait::stamped_lane(
+                                &env,
+                                &cwd,
+                                launch.channel.as_deref().unwrap_or("saved"),
+                            )),
+                            channel: None,
                             mode: Some(PermissionMode::Auto),
                             isolation: Some(rimz::config::Isolation::Host),
                             record: Some(rimz::agents::LaunchRecord::replay_or_new(
@@ -1233,7 +1238,15 @@ mod agent_ref {
                 matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == UUID)
             );
             assert_eq!(request.identity.name.as_deref(), Some("uuid-fox"));
-            assert_eq!(request.identity.params.channel.as_deref(), Some("saved"));
+            assert_eq!(
+                request
+                    .identity
+                    .params
+                    .lane
+                    .as_ref()
+                    .and_then(rimz::ids::Lane::stored_name),
+                Some("saved")
+            );
             assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));
             assert_eq!(request.identity.params.mode, Some(PermissionMode::Auto));
             assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
@@ -1611,7 +1624,15 @@ mod agent_ref {
                 matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == SESSION)
             );
             assert_eq!(request.identity.name.as_deref(), Some(NAME));
-            assert_eq!(request.identity.params.channel.as_deref(), Some("saved"));
+            assert_eq!(
+                request
+                    .identity
+                    .params
+                    .lane
+                    .as_ref()
+                    .and_then(rimz::ids::Lane::stored_name),
+                Some("saved")
+            );
             assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));
             assert_eq!(request.identity.params.mode, Some(PermissionMode::Auto));
             assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
@@ -1633,7 +1654,11 @@ mod agent_ref {
             "main",
         );
         child.launch.checkout = Some(fixture.cwd.display().to_string());
-        child.launch.channel = Some("saved".into());
+        child.launch.lane = Some(crate::common::wait::stamped_lane(
+            &fixture.env,
+            &fixture.cwd,
+            "saved",
+        ));
         child.launch.login = Some("removed".parse().unwrap());
         child.launch.parent_agent_id = Some(SESSION.into());
         child.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));

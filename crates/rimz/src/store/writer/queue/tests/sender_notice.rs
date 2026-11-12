@@ -157,7 +157,10 @@ fn register_sender(q: &Queue, ended: bool) -> AgentState {
     let mut observation =
         AgentLifecycleObservation::new(Some("sender-session".into()), LifecycleSignal::Registered);
     observation.agent_name = Some("sender".into());
-    observation.launch.channel = Some("sender-lane".into());
+    observation.launch.lane = Some(
+        crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+            .named("sender-lane".parse().unwrap()),
+    );
     q.append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
         session_name: "session",
         agent_kind: kind.clone(),

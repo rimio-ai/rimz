@@ -505,9 +505,13 @@ fn build_label_prefers_channel_over_worktree_dir() {
     assert_eq!(build_label("codex", Some("design"), cwd), "codex:design");
 }
 
+fn design_lane(home: crate::ids::LaneHome, checkout: &str) -> crate::ids::Lane {
+    crate::ids::Lane::own(home, checkout).named("design".parse().expect("lane name"))
+}
+
 #[test]
 fn resume_tab_labels_and_replayed_channel() {
-    for (label, agent, project_root, tab_label, channel, lane, team) in [
+    for (label, agent, project_root, tab_label, lane, team) in [
         (
             "no channel falls back to the worktree directory",
             agent("codex", "c1", "/code/query-engine", 1),
@@ -515,18 +519,20 @@ fn resume_tab_labels_and_replayed_channel() {
             "#query-engine",
             None,
             None,
-            None,
         ),
         (
             "an explicit channel names the tab and is replayed",
             AgentState {
                 channel: Some("design".to_owned()),
+                lane: Some(design_lane(
+                    crate::ids::LaneHome::Trunk,
+                    "/code/query-engine",
+                )),
                 ..agent("codex", "c1", "/code/query-engine", 1)
             },
             None,
             "#design",
             Some("design"),
-            None,
             None,
         ),
         (
@@ -534,7 +540,6 @@ fn resume_tab_labels_and_replayed_channel() {
             team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1),
             Some(Path::new("/code/project")),
             "#auth",
-            None,
             Some("auth"),
             Some("forge"),
         ),
@@ -549,11 +554,6 @@ fn resume_tab_labels_and_replayed_channel() {
 
         assert_eq!(plan.tabs[0].label, tab_label, "{label}");
         let request = decode_exec_request(&first_argv(&plan.tabs[0]));
-        assert_eq!(
-            request.identity.params.channel.as_deref(),
-            channel,
-            "{label}"
-        );
         assert_eq!(
             request
                 .identity
@@ -576,6 +576,10 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
             "an explicit channel is pinned and replayed",
             AgentState {
                 channel: Some("design".to_owned()),
+                lane: Some(design_lane(
+                    crate::ids::LaneHome::Worktree,
+                    "/code/project-wt/auth",
+                )),
                 ..agent("codex", "c1", "/code/project-wt/auth", 1)
             },
             "#design",
@@ -600,7 +604,12 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
         assert_eq!(tab.label, tab_label, "{label}");
         let request = decode_exec_request(&first_argv(tab));
         assert_eq!(
-            request.identity.params.channel.as_deref(),
+            request
+                .identity
+                .params
+                .lane
+                .as_ref()
+                .and_then(crate::ids::Lane::stored_name),
             channel,
             "{label}"
         );
@@ -638,6 +647,7 @@ fn flat_resume_replays_every_durable_identity_field() {
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
         channel: Some("design".to_owned()),
+        lane: Some(design_lane(crate::ids::LaneHome::Trunk, "/code/qe")),
         launch_depth: Some(1),
         ..agent("claude", "a1", "/code/qe", 1)
     };
@@ -653,7 +663,10 @@ fn flat_resume_replays_every_durable_identity_field() {
     assert_eq!(params.team.as_deref(), Some("forge"));
     assert_eq!(params.launch_group.as_deref(), Some("launch_group_1"));
     assert_eq!(params.launch_ordinal, Some(2));
-    assert_eq!(params.channel.as_deref(), Some("design"));
+    assert_eq!(
+        params.lane,
+        Some(design_lane(crate::ids::LaneHome::Trunk, "/code/qe"))
+    );
     assert_eq!(params.launch_depth, Some(1));
 }
 
@@ -675,7 +688,6 @@ fn resume_command_replays_launch_identity() {
         Path::new(RIMZ_BIN),
         &RUNTIME,
         &crate::harness::plan::ResumeLaunchIdentity::from(&agent),
-        agent.channel.as_deref(),
         &crate::harness::plan::ResumeLaunchPosture::default(),
         true,
         None,

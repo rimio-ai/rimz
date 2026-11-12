@@ -2189,6 +2189,13 @@ fn crash_redo_arms_the_registered_teams_subscription() {
         "# Work\nStage: Build (@coder)\n",
     )
     .unwrap();
+    crate::common::wait::seed_launch_lane(
+        &env,
+        "subscription-replay",
+        "worker",
+        crate::common::wait::stamped_lane(&env, &env.project_root, "alpha"),
+        Some("forge"),
+    );
     let mut frame = stop_frame(&env);
     frame.event = Some("SessionStart".into());
     frame.payload = json!({"session_id": "subscription-replay"}).to_string();
@@ -2196,7 +2203,6 @@ fn crash_redo_arms_the_registered_teams_subscription() {
         ("RIMZ_TEAM".into(), "forge".into()),
         ("RIMZ_AGENT_ROLE".into(), "coder".into()),
         ("RIMZ_AGENT_NAME".into(), "worker".into()),
-        ("RIMZ_CHANNEL".into(), "alpha".into()),
     ]);
     append_frame(&env, frame);
     kill_apply_after_locked_phase(&env);
@@ -2567,6 +2573,13 @@ fn redo_after_crash_applies_each_frame_once() {
         "# Work\nStage: Build (@coder)\n",
     )
     .unwrap();
+    crate::common::wait::seed_launch_lane(
+        &stage,
+        "stage-session",
+        "worker",
+        crate::common::wait::stamped_lane(&stage, &stage.project_root, "alpha"),
+        Some("forge"),
+    );
     let mut frame = stop_frame(&stage);
     frame.event = Some("SessionStart".into());
     frame.payload = json!({"session_id": "stage-session"}).to_string();
@@ -2574,7 +2587,6 @@ fn redo_after_crash_applies_each_frame_once() {
         ("RIMZ_TEAM".into(), "forge".into()),
         ("RIMZ_AGENT_ROLE".into(), "coder".into()),
         ("RIMZ_AGENT_NAME".into(), "worker".into()),
-        ("RIMZ_CHANNEL".into(), "alpha".into()),
     ]);
     let (frame, _) = append_frame(&stage, frame);
     let (mut first, blocked) = paused_drainer(&stage, "RIMZ_TEST_HOOK_DRAIN_AFTER_LOCKED_APPLY");
@@ -2613,11 +2625,17 @@ fn drained_log_is_truncated_and_cursor_reset() {
         ("first-session", "first", "alpha", "TMUX_PANE", "%45"),
         ("second-session", "second", "beta", "ZELLIJ_PANE_ID", "53"),
     ] {
+        crate::common::wait::seed_launch_lane(
+            &env,
+            session,
+            name,
+            crate::common::wait::stamped_lane(&env, &env.project_root, channel),
+            None,
+        );
         let mut frame = stop_frame(&env);
         frame.event = Some("SessionStart".into());
         frame.payload = json!({"session_id": session}).to_string();
         frame.env.insert("RIMZ_AGENT_NAME".into(), name.into());
-        frame.env.insert("RIMZ_CHANNEL".into(), channel.into());
         frame.env.insert(pane_key.into(), pane.into());
         let home = env.project_root.join(format!("home-{name}"));
         let project = home.join("projects").join("room");

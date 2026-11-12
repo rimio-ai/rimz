@@ -4795,9 +4795,13 @@ fn seed_agent_launch(
     env: &Env,
     cwd: &Path,
     session: &str,
-    launch: rimz::agents::LaunchParams,
+    mut launch: rimz::agents::LaunchParams,
     runtime_owner: Option<rimz::pane::RuntimeOwner>,
 ) {
+    // A launch event carries the lane its stamp means at `cwd`.
+    if let Some(stamp) = launch.channel.take() {
+        launch.lane = Some(crate::common::wait::stamped_lane(env, cwd, &stamp));
+    }
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
@@ -12845,9 +12849,6 @@ fn run_agent_hook(env: &Env, source: &str, payload: serde_json::Value, cwd: &Pat
     let mut cmd = env.hook_command(source);
     cmd.current_dir(cwd)
         .env("RIMZ_AGENT_PID", owner_pid.to_string());
-    if let Some(channel) = rimz::harness::lanes::directory_channel(&env.project_root, cwd) {
-        cmd.env(rimz::workspace::ENV_CHANNEL, channel);
-    }
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()

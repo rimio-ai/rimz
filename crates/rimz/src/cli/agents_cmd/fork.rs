@@ -424,7 +424,6 @@ fn validate_fork_source(
             tier: agent.tier.clone(),
             mode: agent.mode,
             isolation: agent.isolation,
-            channel: agent.channel.clone(),
             automation: caller.and_then(|caller| caller.automation.clone()),
             // The fork continues the source's place in an agent-launch
             // chain: it copies the source's generation, whoever runs the
@@ -844,7 +843,6 @@ mod tests {
         assert_eq!(seed.launch.profile.as_deref(), Some("planner"));
         assert_eq!(seed.launch.mode, Some(rimz::agents::PermissionMode::Yolo));
         assert_eq!(seed.launch.tier, agent.tier);
-        assert_eq!(seed.launch.channel.as_deref(), Some("auth"));
         assert_eq!(seed.launch.team, None);
         assert_eq!(seed.launch.role, None);
         assert_eq!(seed.launch.model, None);

@@ -1,6 +1,7 @@
 //! Integration coverage for channel-scoped addressing: `#name` message routing
 //! and bare-role spawn inside a team lane.
 
+use assert_cmd::prelude::*;
 use rimz::store::message::MessageStatus;
 use serde_json::json;
 
@@ -270,9 +271,15 @@ pub(crate) fn register_idle_lane_agent(
         "worktree_path": env.project_root.display().to_string(),
     })
     .to_string();
+    crate::common::wait::seed_launch_lane(
+        env,
+        session_id,
+        session_id,
+        crate::common::wait::stamped_lane(env, &env.project_root, channel),
+        team,
+    );
     let mut cmd = env.hook_command("claude");
-    cmd.env(rimz::workspace::ENV_CHANNEL, channel)
-        .env("ZELLIJ_PANE_ID", "3");
+    cmd.env("ZELLIJ_PANE_ID", "3");
     if let Some(team) = team {
         cmd.env(rimz::harness::launch::ENV_TEAM, team);
     }
@@ -316,5 +323,117 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,
+    }
+}
+
+/// Fires one Claude hook for `session` in pane `pane`, under a stale lane name
+/// in the hook environment, as a pane opened by an older launch would carry.
+fn stale_env_hook(env: &Env, pane: &str, payload: serde_json::Value) {
+    let mut cmd = env.hook_command("claude");
+    cmd.env("ZELLIJ_PANE_ID", pane)
+        .env(rimz::workspace::ENV_CHANNEL, "stale");
+    let output = env
+        .spawn_payload(cmd, &payload.to_string())
+        .wait_with_output()
+        .expect("wait hook");
+    env.drain_hooks();
+    assert!(
+        output.status.success(),
+        "hook failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn row_lane(env: &Env, session: &str) -> Option<rimz::ids::Lane> {
+    env.store()
+        .snapshot()
+        .expect("snapshot")
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == session)
+        .and_then(|agent| agent.lane.clone())
+}
+
+#[test]
+fn hook_only_registration_takes_and_keeps_its_checkouts_own_lane() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = rimz::utils::path::normalize_path_lexical(
+        &rimz::worktree::worktree_path(&env.project_root, &Default::default(), "demo").unwrap(),
+    );
+    let foreign = env.home_root.join("elsewhere");
+    std::fs::create_dir_all(&foreign).unwrap();
+    crate::common::git::init_repo(&foreign);
+    let own = |dir: &std::path::Path| rimz::harness::lanes::own_lane(&env.project_root, dir);
+
+    for (pane, session, dir) in [
+        ("3", "trunk-hook", &env.project_root),
+        ("4", "worktree-hook", &worktree),
+        ("5", "foreign-hook", &foreign),
+    ] {
+        stale_env_hook(
+            &env,
+            pane,
+            json!({"hook_event_name": "SessionStart", "session_id": session, "cwd": dir}),
+        );
+        assert_eq!(row_lane(&env, session), Some(own(dir)), "{session}");
+    }
+    assert!(own(&env.project_root).is_trunk());
+    assert_eq!(own(&worktree).path(), worktree.to_str().unwrap());
+    assert_eq!(own(&foreign).path(), foreign.to_str().unwrap());
+
+    stale_env_hook(
+        &env,
+        "3",
+        json!({"hook_event_name": "SessionStart", "session_id": "trunk-hook", "cwd": &worktree}),
+    );
+    assert_eq!(
+        row_lane(&env, "trunk-hook"),
+        Some(own(&env.project_root)),
+        "a registration from another directory keeps the first lane"
+    );
+}
+
+#[test]
+fn a_named_lane_agents_transcript_entries_carry_its_lane_name() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let design = crate::common::wait::stamped_lane(&env, &env.project_root, "design");
+    crate::common::wait::seed_launch_lane(&env, "named-hook", "named-hook", design.clone(), None);
+    for payload in [
+        json!({"hook_event_name": "SessionStart", "session_id": "named-hook"}),
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "named-hook",
+            "prompt": "plan the change",
+        }),
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "named-hook",
+            "last_assistant_message": "planned",
+        }),
+    ] {
+        stale_env_hook(&env, "3", payload);
+    }
+
+    assert_eq!(row_lane(&env, "named-hook"), Some(design));
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("transcript");
+    let ours = entries
+        .iter()
+        .filter(|entry| entry.agent_id.as_str() == "named-hook")
+        .collect::<Vec<_>>();
+    assert!(ours.len() >= 2, "{entries:#?}");
+    for entry in ours {
+        assert_eq!(entry.channel.as_deref(), Some("design"), "{entry:#?}");
     }
 }

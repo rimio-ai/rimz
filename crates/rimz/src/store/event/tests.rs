@@ -109,7 +109,7 @@ fn rich_lifecycle_observation() -> (AgentLifecycleObservation, Value) {
         "profile": "claude-reviewer", "mode": "ask", "role": "reviewer",
         "model": "claude-opus", "effort": "high", "budget": "$5.00/day",
         "team": "forge", "launch_group": "launch_group_1", "launch_ordinal": 2,
-        "channel": "docs", "kind_ordinal": 2,
+        "lane": {"home": "trunk", "path": "/tmp/project", "name": "docs"}, "kind_ordinal": 2,
         "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": false},
         "agent_pid": 42, "agent_process_start": "12345",
         "runtime_owner": {
@@ -216,7 +216,10 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
     full.launch = LaunchParams {
         role: Some("coder".to_owned()),
         team: Some("forge".to_owned()),
-        channel: Some("event-log".to_owned()),
+        lane: Some(
+            crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/tmp/project")
+                .named("event-log".parse().unwrap()),
+        ),
         profile: Some("claude-coder".to_owned()),
         ..serde_json::from_value(json!({"automation": {"by": "loop"}})).unwrap()
     };
@@ -246,7 +249,7 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
             .collect::<Vec<_>>(),
         [
             "automation",
-            "channel",
+            "lane",
             "profile",
             "role",
             "team",
@@ -414,7 +417,8 @@ fn launch_event_uses_flat_compact_wire_shape() {
         "profile": "codex-coder", "mode": "yolo", "role": "coder",
         "model": "gpt-5.5-codex", "effort": "xhigh", "budget": "$10.00/day",
         "team": "forge", "launch_group": "launch_group_1", "launch_ordinal": 2,
-        "channel": "design", "kind_ordinal": 1, "state": "bound",
+        "lane": {"home": "trunk", "path": "/tmp/project", "name": "design"},
+        "kind_ordinal": 1, "state": "bound",
         "run_id": "run_0123456789abcdef0123456789abcdef",
         "pane_id": "tmux:%2",
         "runtime_owner": {

@@ -16,6 +16,7 @@ use rimz::store::message::{
     MessageStatus, WhenCondition,
 };
 
+use crate::common::wait::stamped_lane;
 use crate::common::{
     DeliveryRendezvous, Env, TRACE_PANE, is_enter_key, is_paste, trace_lines,
     trust_codex_preflight_hooks, wait_for_text_then_enter, zellij_trace_shim,
@@ -1212,7 +1213,7 @@ fn message_list_target_follows_stamped_and_worktree_record_channels() {
                 observation.launch.role = Some("reader".to_owned());
                 observation.agent_pid = Some(env.agent_owner_pid());
                 if stamped {
-                    observation.launch.channel = Some("docs".to_owned());
+                    observation.launch.lane = Some(stamped_lane(&env, &env.project_root, "docs"));
                 } else {
                     observation.worktree_path =
                         Some(env.home_root.join("docs").display().to_string());
@@ -2609,7 +2610,7 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
                     observation.launch.team = Some("forge".into());
                     observation.launch.role = Some(role.into());
                     observation.launch.profile = Some("worker".into());
-                    observation.launch.channel = Some("topic".into());
+                    observation.launch.lane = Some(stamped_lane(&env, &worktree, "topic"));
                     observation.worktree_path = Some(worktree.display().to_string());
                     observation.pane_id = Some(PaneId::from_parts(
                         MuxName::Zellij,
@@ -3869,7 +3870,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
             observation.agent_name = Some("team-pet".to_owned());
             observation.launch.team = Some("forge".to_owned());
             observation.launch.role = Some("coder".to_owned());
-            observation.launch.channel = Some("feat-a".to_owned());
+            observation.launch.lane = Some(stamped_lane(&env, &env.project_root, "feat-a"));
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
         },
     );
@@ -3901,7 +3902,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
             observation.agent_name = Some("worktree-pet".to_owned());
             observation.launch.team = Some("forge".to_owned());
             observation.launch.role = Some("reviewer".to_owned());
-            observation.launch.channel = Some("lane-b".to_owned());
+            observation.launch.lane = Some(stamped_lane(&env, &worktree, "lane-b"));
             observation.worktree_path = Some(worktree.display().to_string());
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
         },
@@ -4746,7 +4747,7 @@ fn parent_message_to_ended_child_home_cwd_refusal_names_the_child_fix() {
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
                     launch_depth: Some(1),
                     isolation: Some(rimz::config::Isolation::Host),
-                    channel: Some("home".into()),
+                    lane: Some(stamped_lane(&env, &env.home_root, "home")),
                     ..LaunchParams::default()
                 },
                 state: AgentLaunchState::Starting,
@@ -4773,7 +4774,7 @@ fn parent_message_to_ended_child_home_cwd_refusal_names_the_child_fix() {
             observation.launch.launch_depth = Some(1);
             observation.launch.isolation = Some(rimz::config::Isolation::Host);
             observation.worktree_path = Some(env.home_root.display().to_string());
-            observation.launch.channel = Some("home".into());
+            observation.launch.lane = Some(stamped_lane(&env, &env.home_root, "home"));
             observation.transcript_path = Some(transcript.display().to_string());
         },
     );
@@ -10931,7 +10932,7 @@ fn queued_delivery_labels_an_ended_root_sender_main() {
             parked_on_background: false,
             turn_id: None,
         },
-        |observation| observation.launch.channel = Some("docs".to_owned()),
+        |_| {},
     );
     append_lifecycle(
         &env,
@@ -10953,7 +10954,7 @@ fn queued_delivery_labels_an_ended_root_sender_main() {
         .iter()
         .find(|agent| agent.agent_id == "receiver")
         .unwrap();
-    assert_eq!(receiver.channel.as_deref(), Some("docs"));
+    assert_eq!(receiver.channel().as_deref(), Some("docs"));
     let message = MessageRecord::new(
         env.workspace_id.clone(),
         receiver,

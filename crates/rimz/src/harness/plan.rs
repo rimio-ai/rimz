@@ -2043,16 +2043,10 @@ pub(super) fn resume_command(
     rimz_bin: &Path,
     runtime: &RuntimePaths,
     identity: &ResumeLaunchIdentity,
-    fallback_channel: Option<&str>,
     posture: &ResumeLaunchPosture,
     close_pane_on_exit: bool,
     cwd: Option<&Path>,
 ) -> Result<Vec<String>, crate::harness::launch::ExecWireErr> {
-    let channel = identity
-        .channel
-        .as_deref()
-        .filter(|channel| !channel.is_empty())
-        .or_else(|| fallback_channel.filter(|channel| !channel.is_empty()));
     let params = crate::agents::LaunchParams {
         checkout: identity.checkout.clone(),
         add_dirs: identity.add_dirs.clone(),
@@ -2066,7 +2060,6 @@ pub(super) fn resume_command(
         team: identity.team.clone(),
         launch_group: identity.launch_group.clone(),
         launch_ordinal: identity.launch_ordinal,
-        channel: channel.map(ToOwned::to_owned),
         lane: identity.lane.clone(),
         mode: posture.mode,
         isolation: effective_resume_isolation(posture.isolation, identity.isolation),
@@ -2129,7 +2122,6 @@ pub struct LayoutPaneParams<'a> {
     pub launch_identities: &'a [AgentLaunchIdentity],
     /// Parent rows used to compose agent pane display titles.
     pub agents: &'a [crate::agents::AgentState],
-    pub fallback_channel: Option<&'a str>,
     /// The reminder section for the cell that receives the prompt.
     pub reminder_section: Option<&'a crate::harness::launch::ReminderSection>,
     pub leader_run: Option<LayoutRunParams<'a>>,
@@ -2226,7 +2218,6 @@ pub fn compile_layout_panes(
                                         &rimz_bin,
                                         params.runtime,
                                         &ResumeLaunchIdentity::from(agent.as_ref()),
-                                        params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
                                         !params.in_place,
                                         checkout,

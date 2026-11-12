@@ -113,7 +113,11 @@ done
                 launch: LaunchParams {
                     team: Some("forge".to_owned()),
                     role: Some("reviewer".to_owned()),
-                    channel: Some("stage-test".to_owned()),
+                    lane: Some(crate::common::wait::stamped_lane(
+                        &env,
+                        &env.project_root,
+                        "stage-test",
+                    )),
                     ..Default::default()
                 },
                 state: AgentLaunchState::Bound,

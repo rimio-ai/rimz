@@ -4,6 +4,7 @@ use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::transcript::{TranscriptEntry, TranscriptKind};
 
 use crate::common::Env;
+use crate::common::wait::stamped_lane;
 
 #[test]
 fn agent_history_folds_keepalives_without_changing_json_turns() {
@@ -351,7 +352,7 @@ fn agents_show_ambiguity_excludes_ended_matches() {
             rimz::agents::LifecycleSignal::Registered,
         );
         observation.launch.role = Some("peer".to_owned());
-        observation.launch.channel = Some(format!("lane-{n}"));
+        observation.launch.lane = Some(stamped_lane(&env, &env.project_root, &format!("lane-{n}")));
         observation.agent_pid = Some(env.agent_owner_pid());
         observation.pane_id = Some(rimz::ids::PaneId::from_parts(
             rimz::ids::MuxName::Zellij,
@@ -477,7 +478,7 @@ fn agents_show_from_main_checkout_uses_callers_channel() {
             rimz::agents::LifecycleSignal::Registered,
         );
         observation.launch.role = Some(role.to_owned());
-        observation.launch.channel = Some(channel.to_owned());
+        observation.launch.lane = Some(stamped_lane(&env, &env.project_root, channel));
         observation.agent_pid = Some(env.agent_owner_pid());
         observation.pane_id = Some(rimz::ids::PaneId::from_parts(
             rimz::ids::MuxName::Zellij,
@@ -599,7 +600,7 @@ fn agents_show_stopped_petname_from_another_lane() {
         rimz::agents::LifecycleSignal::Registered,
     );
     observation.agent_name = Some("calm-otter".into());
-    observation.launch.channel = Some("b".into());
+    observation.launch.lane = Some(stamped_lane(&env, &env.project_root, "b"));
     observation.agent_pid = Some(env.agent_owner_pid());
     observation.pane_id = Some(rimz::ids::PaneId::from_parts(
         rimz::ids::MuxName::Zellij,
@@ -810,7 +811,7 @@ fn register_address_peer(env: &Env, kind: &str, id: &str, role: &str, channel: &
         rimz::agents::LifecycleSignal::Registered,
     );
     observation.launch.role = Some(role.to_owned());
-    observation.launch.channel = Some(channel.to_owned());
+    observation.launch.lane = Some(stamped_lane(env, &env.project_root, channel));
     observation.agent_pid = Some(env.agent_owner_pid());
     observation.pane_id = Some(rimz::ids::PaneId::from_parts(
         rimz::ids::MuxName::Zellij,
@@ -1514,7 +1515,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
                 agent_name_explicit: true,
                 launch: rimz::agents::LaunchParams {
                     role: Some("planner".to_owned()),
-                    channel: Some(branch.to_owned()),
+                    lane: Some(stamped_lane(&env, &env.home_root.join(branch), branch)),
                     ..Default::default()
                 },
                 state: rimz::store::event::AgentLaunchState::Bound,
@@ -1567,7 +1568,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
                     parent_agent_id: Some(parent_id.clone()),
                     parent_agent_kind: Some(parent_kind),
                     launch_depth: Some(1),
-                    channel: Some(branch.to_owned()),
+                    lane: Some(stamped_lane(&env, &env.home_root.join(branch), branch)),
                     ..Default::default()
                 },
                 state: rimz::store::event::AgentLaunchState::Bound,

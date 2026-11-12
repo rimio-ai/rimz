@@ -452,7 +452,11 @@ fn stop_records_recursive_children_and_leaves_peers_and_cohorts_live() {
         LaunchParams {
             team: Some("forge".into()),
             role: Some("coder".into()),
-            channel: Some("feature".into()),
+            lane: Some(crate::common::wait::stamped_lane(
+                &room.env,
+                &room.env.project_root,
+                "feature",
+            )),
             ..peer
         },
         LifecycleSignal::Registered,
@@ -677,7 +681,11 @@ fn stop_skips_an_ended_child_and_its_subtree_and_reads_a_seat_board_stage() {
             })),
             team: Some("forge".into()),
             role: Some("coder".into()),
-            channel: Some("feature".into()),
+            lane: Some(crate::common::wait::stamped_lane(
+                &room.env,
+                &room.env.project_root,
+                "feature",
+            )),
             ..Default::default()
         },
         LifecycleSignal::Registered,

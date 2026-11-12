@@ -1466,7 +1466,9 @@ fn launch_resume_layout(
     let projection = store.runtime_projection(crate::RuntimeScope::Audit)?;
     let agents = match &scope {
         ResumeScope::Worktree(target) => {
-            let target = crate::utils::path::normalize_path_lexical(target);
+            // A directory inside a checkout resumes that checkout's lane.
+            let lane = crate::harness::lanes::own_lane(&workspace.project_root, target);
+            let target = PathBuf::from(lane.path());
             projection
                 .agents
                 .iter()
@@ -1735,7 +1737,6 @@ fn launch_resume_layout(
             pick_session: false,
             launch_identities: launch_batch.identities(),
             agents: &[],
-            fallback_channel: channel.as_deref(),
             reminder_section: None,
             leader_run: None,
         },

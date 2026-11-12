@@ -1149,7 +1149,11 @@ impl Fixture {
             launch: rimz::agents::LaunchParams {
                 team: Some("forge".into()),
                 role: Some("coder".into()),
-                channel: Some("feature-team".into()),
+                lane: Some(crate::common::wait::stamped_lane(
+                    &self.env,
+                    &self.env.project_root,
+                    "feature-team",
+                )),
                 ..Default::default()
             },
             run_id: None,
@@ -1208,38 +1212,47 @@ impl Fixture {
     ) {
         self.register(worktree);
         let workspace = self.env.resolve_workspace(&self.env.project_root);
-        self.env
-            .store()
-            .append_event(&EventEnvelope::agent_launched(
-                workspace.workspace_id,
-                &workspace.session_name,
-                &AgentKind::new_unchecked(kind),
-                AgentLaunchPayload {
-                    system_prompt_digest: None,
-                    agent_id: AgentSessionId::from(format!("launch_{name}")),
-                    launch_id: Some(AgentSessionId::from(format!("launch_{name}"))),
-                    agent_name: name.to_owned(),
-                    agent_name_explicit: true,
-                    launch: rimz::agents::LaunchParams {
-                        team: Some("forge".to_owned()),
-                        role: Some(role.to_owned()),
-                        channel: Some(channel.to_owned()),
-                        parent_agent_id: parent.map(AgentSessionId::from),
-                        parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
-                        launch_depth: parent.map(|_| 1),
-                        ..Default::default()
-                    },
-                    state: AgentLaunchState::Bound,
-                    run_id: None,
-                    pane_id: None,
-                    runtime_owner: None,
-                    worktree_path: Some(worktree.display().to_string()),
-                    worktree_branch: Some(channel.to_owned()),
-                    prompt: None,
-                    description: None,
+        let mut launched = EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked(kind),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from(format!("launch_{name}")),
+                launch_id: Some(AgentSessionId::from(format!("launch_{name}"))),
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams {
+                    team: Some("forge".to_owned()),
+                    role: Some(role.to_owned()),
+                    lane: Some(crate::common::wait::stamped_lane(
+                        &self.env, worktree, channel,
+                    )),
+                    parent_agent_id: parent.map(AgentSessionId::from),
+                    parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
+                    launch_depth: parent.map(|_| 1),
+                    ..Default::default()
                 },
-            ))
-            .unwrap();
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(worktree.display().to_string()),
+                worktree_branch: Some(channel.to_owned()),
+                prompt: None,
+                description: None,
+            },
+        );
+        if channel.parse::<rimz::ids::LaneName>().is_err() {
+            // No lane holds this name (a directory with a space), so only an
+            // older binary's `channel` stamp can carry it: seed that wire form.
+            let mut params: serde_json::Value =
+                serde_json::from_str(launched.params.get()).unwrap();
+            params["channel"] = channel.into();
+            params.as_object_mut().unwrap().remove("lane");
+            launched.params = serde_json::value::to_raw_value(&params).unwrap();
+        }
+        self.env.store().append_event(&launched).unwrap();
     }
 
     /// Seed a live row launched by the agent `launched_by`: a team seat when
@@ -1261,7 +1274,11 @@ impl Fixture {
                     launch: rimz::agents::LaunchParams {
                         team: role.map(|_| "forge".to_owned()),
                         role: role.map(ToOwned::to_owned),
-                        channel: Some("feature-team".to_owned()),
+                        lane: Some(crate::common::wait::stamped_lane(
+                            &self.env,
+                            &self.env.project_root,
+                            "feature-team",
+                        )),
                         launch_depth: launched_by.map(|_| 1),
                         launched_by: launched_by.map(|launcher| {
                             Box::new(rimz::agents::LaunchedBy {
@@ -1375,7 +1392,9 @@ impl Fixture {
             observation.launch = rimz::agents::LaunchParams {
                 team: Some("forge".to_owned()),
                 role: Some(role.to_owned()),
-                channel: Some(channel.to_owned()),
+                lane: Some(crate::common::wait::stamped_lane(
+                    &self.env, checkout, channel,
+                )),
                 ..Default::default()
             };
             observation.worktree_path = Some(checkout.display().to_string());
@@ -1461,7 +1480,11 @@ impl Fixture {
         request.identity.params = rimz::agents::LaunchParams {
             team: Some("forge".to_owned()),
             role: Some(role.to_owned()),
-            channel: Some("feature-team".to_owned()),
+            lane: Some(crate::common::wait::stamped_lane(
+                &self.env,
+                &self.env.project_root,
+                "feature-team",
+            )),
             isolation: Some(rimz::config::Isolation::Host),
             ..Default::default()
         };

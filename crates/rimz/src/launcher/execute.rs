@@ -388,7 +388,6 @@ fn open_fresh(
             resume_seeds: None,
             launch_identities: batch.identities(),
             agents: &title_parents,
-            fallback_channel: None,
             reminder_section: fresh.reminder_section.as_ref(),
             leader_run: leader
                 .as_ref()

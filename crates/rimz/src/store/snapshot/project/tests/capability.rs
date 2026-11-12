@@ -99,7 +99,10 @@ fn projected_lifecycle_events_preserve_schema_owned_lifetime_fields() {
     identity.launch = LaunchParams {
         role: Some("coder".to_owned()),
         team: Some("forge".to_owned()),
-        channel: Some("store".to_owned()),
+        lane: Some(
+            crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+                .named("store".parse().unwrap()),
+        ),
         profile: Some("codex-coder".to_owned()),
         ..LaunchParams::default()
     };

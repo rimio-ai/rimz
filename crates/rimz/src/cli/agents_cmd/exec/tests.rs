@@ -7,6 +7,11 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::run::{RunRecord, RunStatus};
 use std::path::{Path, PathBuf};
 
+fn design_lane() -> rimz::ids::Lane {
+    serde_json::from_value(serde_json::json!({"home": "trunk", "path": "/repo", "name": "design"}))
+        .expect("lane decodes")
+}
+
 /// A restart that asked for a continue gets one after spawn, unless the stage re-wake stands
 /// in for it or the configured text is blank; a restart that did not ask gets none.
 #[test]
@@ -592,7 +597,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         team: Some("forge".to_owned()),
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
-        channel: Some("design".to_owned()),
+        lane: Some(design_lane()),
         kind_ordinal: None,
         ..LaunchParams::default()
     };
@@ -683,7 +688,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
             team: Some("forge".to_owned()),
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(2),
-            channel: Some("design".to_owned()),
+            lane: Some(design_lane()),
             kind_ordinal: None,
             ..LaunchParams::default()
         }

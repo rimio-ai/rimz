@@ -290,7 +290,8 @@ impl<'a> RoomHarness<'a> {
         self.agent_hook_with_identity(source, payload, identity, None);
     }
 
-    /// Run an installed hook with one role's full team identity.
+    /// Run an installed hook with one role's full team identity, after the
+    /// launch that names its in-place team lane.
     pub fn agent_hook_as_team(&self, role: &str, team: &str, source: &str, payload: &Value) {
         let channel = format!(
             "{}/{}",
@@ -301,10 +302,20 @@ impl<'a> RoomHarness<'a> {
                 .unwrap_or("project"),
             team
         );
+        if let Some(session) = payload["session_id"].as_str() {
+            crate::common::wait::seed_launch_lane_as(
+                self.env,
+                source,
+                session,
+                role,
+                crate::common::wait::stamped_lane(self.env, &self.env.project_root, &channel),
+                Some(team),
+            );
+        }
         self.agent_hook_with_identity(
             source,
             payload,
-            launch_team_identity(role, team, &channel, &format!("{source}-{role}")),
+            launch_team_identity(role, team, &format!("{source}-{role}")),
             None,
         );
     }
@@ -564,15 +575,9 @@ fn launch_identity(role: &str, profile: &str) -> Vec<(String, String)> {
     ]
 }
 
-fn launch_team_identity(
-    role: &str,
-    team: &str,
-    channel: &str,
-    profile: &str,
-) -> Vec<(String, String)> {
+fn launch_team_identity(role: &str, team: &str, profile: &str) -> Vec<(String, String)> {
     let mut identity = launch_identity(role, profile);
     identity.push((rimz::harness::launch::ENV_TEAM.to_owned(), team.to_owned()));
-    identity.push((rimz::workspace::ENV_CHANNEL.to_owned(), channel.to_owned()));
     identity
 }
 

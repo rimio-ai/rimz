@@ -4,6 +4,7 @@ use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use serde_json::Value;
 
 use crate::common::Env;
+use crate::common::wait::stamped_lane;
 
 fn attribution_output(env: &Env, args: &[&str]) -> std::process::Output {
     let output = env
@@ -223,7 +224,7 @@ fn attribution_scopes_to_the_checkout_branch() {
         observation.worktree_path = Some(other.display().to_string());
         observation.worktree_branch = Some("feat/other".to_owned());
         observation.launch.role = Some("other".to_owned());
-        observation.launch.channel = Some("other".to_owned());
+        observation.launch.lane = Some(stamped_lane(&env, &other, "other"));
         store
             .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
                 session_name: &workspace.session_name,
@@ -272,7 +273,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         observation.launch.role = Some(role.to_owned());
         observation.launch.team = Some("forge".to_owned());
         observation.launch.launch_ordinal = Some(launch_ordinal);
-        observation.launch.channel = Some("feature".to_owned());
+        observation.launch.lane = Some(stamped_lane(&env, &env.project_root, "feature"));
         observation.launch.model = Some("gpt-5.5".to_owned());
         observation.launch.effort = Some("high".to_owned());
         observation.worktree_path = Some(env.project_root.display().to_string());
@@ -531,7 +532,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
         AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
     observation.launch.team = Some("forge".to_owned());
     observation.launch.role = Some("planner".to_owned());
-    observation.launch.channel = Some("feature".to_owned());
+    observation.launch.lane = Some(stamped_lane(&env, &env.project_root, "feature"));
     observation.worktree_path = Some(env.project_root.display().to_string());
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -655,7 +656,7 @@ fn attribution_markdown_drops_opened_turns_without_recorded_contributions() {
         AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
     registered.launch.team = Some("forge".to_owned());
     registered.launch.role = Some("reviewer".to_owned());
-    registered.launch.channel = Some("feature".to_owned());
+    registered.launch.lane = Some(stamped_lane(&env, &env.project_root, "feature"));
     registered.worktree_path = Some(env.project_root.display().to_string());
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -734,7 +735,7 @@ fn attribution_default_stays_in_the_callers_checkout() {
             AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
         observation.launch.team = Some("forge".to_owned());
         observation.launch.role = Some("coder".to_owned());
-        observation.launch.channel = Some(channel.to_owned());
+        observation.launch.lane = Some(stamped_lane(&env, worktree, channel));
         observation.worktree_path = Some(worktree.display().to_string());
         env.store()
             .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -871,7 +872,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
             AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
         observation.launch.team = Some("forge".to_owned());
         observation.launch.role = Some("planner".to_owned());
-        observation.launch.channel = Some("demo".to_owned());
+        observation.launch.lane = Some(stamped_lane(&env, &marker.worktree_path, "demo"));
         observation.worktree_path = Some(marker.worktree_path.display().to_string());
         observation.worktree_branch = Some(marker.branch.clone());
         observation.transcript_path = Some(transcript.display().to_string());
@@ -929,7 +930,9 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
         assert_eq!(report["scope"]["since"], marker.created_at.to_string());
         assert_eq!(
             report["scope"]["worktree"],
-            marker.worktree_path.display().to_string()
+            rimz::utils::path::normalize_path_lexical(&marker.worktree_path)
+                .display()
+                .to_string()
         );
     }
     let boundary = format!(
@@ -1003,7 +1006,7 @@ fn attribution_warns_only_for_unreadable_checkouts_in_its_fold() {
             LifecycleSignal::TurnStarted { turn_id: None },
         ] {
             let mut observation = AgentLifecycleObservation::new(Some(session.into()), signal);
-            observation.launch.channel = Some(channel.to_owned());
+            observation.launch.lane = Some(stamped_lane(&env, path, channel));
             observation.worktree_path = Some(path.display().to_string());
             env.store()
                 .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -1072,7 +1075,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
     );
     parent.launch.team = Some("forge".to_owned());
     parent.launch.role = Some("planner".to_owned());
-    parent.launch.channel = Some("project/forge".to_owned());
+    parent.launch.lane = Some(stamped_lane(&env, &env.project_root, "project/forge"));
     parent.worktree_path = Some(env.project_root.display().to_string());
     parent.transcript_path = Some(parent_transcript.display().to_string());
     env.store()
@@ -1093,7 +1096,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
     child.launch.parent_agent_kind = Some(rimz::ids::AgentKind::new_unchecked("claude"));
     child.launch.launch_depth = Some(1);
     child.launch.profile = Some("explorer".to_owned());
-    child.launch.channel = Some("sibling-worktree".to_owned());
+    child.launch.lane = Some(stamped_lane(&env, &sibling, "sibling-worktree"));
     child.worktree_path = Some(sibling.display().to_string());
     child.transcript_path = Some(child_transcript.display().to_string());
     env.store()

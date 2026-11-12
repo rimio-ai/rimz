@@ -88,7 +88,6 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             resume_seeds: None,
             launch_identities: &identities,
             agents: &[parent],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: Some(crate::harness::plan::LayoutRunParams {
                 run_id: &run_id,

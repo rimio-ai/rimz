@@ -112,7 +112,9 @@ impl Fixture {
                     launch: rimz::agents::LaunchParams {
                         team: team.map(str::to_owned),
                         role: Some(role.to_owned()),
-                        channel: Some(channel.to_owned()),
+                        lane: Some(crate::common::wait::stamped_lane(
+                            &self.env, worktree, channel,
+                        )),
                         ..Default::default()
                     },
                     state: AgentLaunchState::Bound,

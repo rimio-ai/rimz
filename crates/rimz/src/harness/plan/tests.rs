@@ -1472,7 +1472,12 @@ fn assert_request_field(argv: &[String], field: RequestField, value: &str) {
         RequestField::Role => request.identity.params.role.as_deref(),
         RequestField::Team => request.identity.params.team.as_deref(),
         RequestField::LaunchGroup => request.identity.params.launch_group.as_deref(),
-        RequestField::Channel => request.identity.params.channel.as_deref(),
+        RequestField::Channel => request
+            .identity
+            .params
+            .lane
+            .as_ref()
+            .and_then(crate::ids::Lane::routing_name),
         RequestField::Model => request.identity.params.model.as_deref(),
         RequestField::Effort => request.identity.params.effort.as_deref(),
         RequestField::LaunchOrdinal => {
@@ -1484,6 +1489,11 @@ fn assert_request_field(argv: &[String], field: RequestField, value: &str) {
         actual == Some(value),
         "missing `{field:?}={value}` in {argv:?}"
     );
+}
+
+fn named_lane(checkout: &str, name: &str) -> crate::ids::Lane {
+    crate::ids::Lane::own(crate::ids::LaneHome::Trunk, checkout)
+        .named(name.parse().expect("lane name"))
 }
 
 fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
@@ -2520,7 +2530,6 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
             resume_seeds: None,
             launch_identities: &[],
             agents: &[],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: None,
         },
@@ -4024,7 +4033,6 @@ fn run_bound_command_cells_wrap_raw_argv_and_the_users_shell() {
                 resume_seeds: None,
                 launch_identities: &[],
                 agents: &[],
-                fallback_channel: None,
                 reminder_section: None,
                 leader_run: bound.then_some(LayoutRunParams {
                     run_id: &run_id,
@@ -4117,7 +4125,6 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
             resume_seeds: None,
             launch_identities: &identities,
             agents: &[],
-            fallback_channel: None,
             reminder_section: Some(&crate::harness::launch::ReminderSection::Loop(
                 "fired".into(),
             )),
@@ -4224,7 +4231,6 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
                 resume_seeds: Some(&plan.seeds),
                 launch_identities: &[],
                 agents: &[],
-                fallback_channel: None,
                 reminder_section: None,
                 leader_run: None,
             },
@@ -4272,7 +4278,6 @@ fn resume_command_can_return_to_the_existing_shell() {
         Path::new("/bin/rimz"),
         &runtime,
         &ResumeLaunchIdentity::from(&agent),
-        None,
         &posture,
         false,
         None,
@@ -4307,7 +4312,6 @@ fn in_place_resume_layout_returns_to_the_existing_shell() {
             resume_seeds: Some(&seeds),
             launch_identities: &[],
             agents: &[],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: None,
         },
@@ -4351,7 +4355,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
         name: "bright-river".to_owned(),
         name_explicit: false,
         launch: crate::agents::LaunchParams {
-            channel: Some("fallback".to_owned()),
+            lane: Some(named_lane("/repo", "fallback")),
             isolation: Some(crate::config::Isolation::Scoped),
             ..Default::default()
         },
@@ -4371,7 +4375,6 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&seeds),
             launch_identities: &fresh,
             agents: &[],
-            fallback_channel: Some("fallback"),
             reminder_section: None,
             leader_run: None,
         },
@@ -4381,7 +4384,11 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let panes = &panes.columns[0].panes;
     assert_request_field(&panes[0].argv, RequestField::Resume, "sess-resume");
     assert_eq!(panes[0].name.as_deref(), Some("claude (@steady-beacon)"));
-    assert_request_field(&panes[0].argv, RequestField::Channel, "fallback");
+    assert_eq!(
+        exec_request(&panes[0].argv).identity.params.lane,
+        None,
+        "a relaunch copies the row's lane and decides none"
+    );
     assert_eq!(panes[1].argv, vec!["/usr/bin/watch"]);
     assert_eq!(panes[1].name.as_deref(), Some("watch"));
     assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
@@ -4404,7 +4411,6 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
             launch_identities: &[],
             agents: &[],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: None,
         },
@@ -4426,7 +4432,6 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&[CohortSeed::Fresh]),
             launch_identities: &fresh,
             agents: &[],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: None,
         },
@@ -4446,7 +4451,6 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             resume_seeds: Some(&seeds),
             launch_identities: &surplus,
             agents: &[],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: None,
         },
@@ -4493,7 +4497,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             team: Some("forge".to_owned()),
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(2),
-            channel: Some("design".to_owned()),
+            lane: Some(named_lane("/tmp/project", "design")),
             model: Some("claude-sonnet".to_owned()),
             effort: Some("high".to_owned()),
             ..Default::default()
@@ -4514,7 +4518,6 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             resume_seeds: None,
             launch_identities: &launches,
             agents: &[],
-            fallback_channel: None,
             reminder_section: None,
             leader_run: None,
         },
@@ -4557,7 +4560,6 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
                 resume_seeds: None,
                 launch_identities: &launches,
                 agents: &[],
-                fallback_channel: None,
                 reminder_section: None,
                 leader_run: None,
             },
@@ -4614,6 +4616,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     agent.launch_group = Some("launch_group_1".to_owned());
     agent.launch_ordinal = Some(1);
     agent.channel = Some("design".to_owned());
+    agent.lane = Some(named_lane("/tmp/project", "design"));
     agent.model = Some("old-model".to_owned());
     agent.effort = Some("old-effort".to_owned());
     let seeds = [CohortSeed::Resume(Box::new(agent))];
@@ -4629,7 +4632,6 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
             resume_seeds: Some(&seeds),
             launch_identities: &[],
             agents: &[],
-            fallback_channel: Some("new-channel"),
             reminder_section: None,
             leader_run: None,
         },

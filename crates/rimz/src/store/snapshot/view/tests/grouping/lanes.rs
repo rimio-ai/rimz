@@ -249,3 +249,37 @@ fn an_in_place_team_names_its_lane_at_trunk_and_takes_a_worktrees_own() {
         ])
     );
 }
+
+#[test]
+fn a_stamped_main_row_from_before_lanes_merges_into_trunk_at_its_registration() {
+    let room = room();
+    let plain = decided(&request(&room, &room.root));
+    let (mut old, old_pane) = seat("old", plain.clone(), &room.root);
+    old.lane = None;
+    old.channel = Some("main".to_owned());
+    old.root_lane = false;
+
+    assert_eq!(
+        groups(
+            &room,
+            vec![
+                (old.clone(), old_pane.clone()),
+                seat("desk", plain.clone(), &room.root)
+            ]
+        ),
+        BTreeSet::from([
+            group("channel:main", &["old"]),
+            group(key(&room.root), &["desk"]),
+        ])
+    );
+
+    old.lane = Some(crate::harness::lanes::own_lane(&room.root, &room.root).adopt(Some("main")));
+    old.project_lane();
+    assert_eq!(
+        groups(
+            &room,
+            vec![(old, old_pane), seat("desk", plain, &room.root)]
+        ),
+        BTreeSet::from([group(key(&room.root), &["desk", "old"])])
+    );
+}

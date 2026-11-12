@@ -137,7 +137,8 @@ fn root_lane_is_stamped_through_every_fold_reader() {
             format!("%{index}"),
         ));
         observation.agent_pid = Some(std::process::id());
-        observation.launch.channel = channel.map(str::to_owned);
+        observation.launch.lane = channel
+            .map(|name| crate::common::wait::lane("trunk", std::path::Path::new(path), Some(name)));
         h.store
             .append_event(&rimz::EventEnvelope::agent_lifecycle(
                 h.workspace_id.clone(),

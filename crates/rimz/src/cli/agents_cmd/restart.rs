@@ -639,7 +639,7 @@ pub(in crate::cli) fn relaunch_request(
         workflow: None,
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
-        channel: agent.channel.clone(),
+        channel: None,
         lane: rimz::harness::lanes::row_lane(agent, project_root),
         mode: posture.launch.mode,
         isolation: agent.isolation,
@@ -881,7 +881,6 @@ pub(super) fn fresh_launch_request(
     request.launch.launch_group = agent.launch_group.clone();
     request.launch.launch_ordinal = agent.launch_ordinal;
     request.launch.molted_from = agent.molted_from.clone();
-    request.launch.channel = agent.channel.clone();
     Ok(request.clone())
 }
 
