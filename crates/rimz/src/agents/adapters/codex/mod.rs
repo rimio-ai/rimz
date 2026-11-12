@@ -2153,26 +2153,26 @@ fn build_codex_observation(
     let usage = transcript.usage;
     let usage_effort = usage.effort.clone();
     let is_subagent = parent_agent_id.is_some();
-    let agent_type = is_subagent
-        .then(|| hook.child()?.identity.agent_type.clone())
-        .flatten();
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
-    observation.agent_name = is_subagent
-        .then(|| {
-            header
-                .and_then(|header| header.agent_nickname.clone())
-                .or_else(|| agent_type.clone())
-        })
-        .flatten();
-    observation.task = if is_subagent {
-        header
+    if is_subagent {
+        let agent_type = hook
+            .child()
+            .and_then(|child| child.identity.agent_type.clone());
+        observation.agent_name = header
+            .and_then(|header| header.agent_nickname.clone())
+            .or_else(|| agent_type.clone());
+        observation.task = header
             .and_then(|header| header.agent_path.clone())
-            .or_else(|| agent_type.clone())
+            .or_else(|| agent_type.clone());
+        observation.launch.role = header
+            .and_then(|header| header.agent_role.clone())
+            .or(agent_type);
     } else {
-        sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
-    };
+        observation.task =
+            sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref());
+    }
     let user_prompt = match hook {
         CodexHook::UserPromptSubmit(prompt) => Some(prompt),
         _ => None,
@@ -2203,13 +2203,6 @@ fn build_codex_observation(
     observation.transcript_path = transcript
         .path
         .map(|path| path.to_string_lossy().into_owned());
-    observation.launch.role = is_subagent
-        .then(|| {
-            header
-                .and_then(|header| header.agent_role.clone())
-                .or_else(|| agent_type.clone())
-        })
-        .flatten();
     let login_env = crate::agents::ambient_env();
     observation.launch.model = hook
         .hook_model()
