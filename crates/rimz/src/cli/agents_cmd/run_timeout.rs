@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
-use rimz::harness::deadline::{Rung, kill_due, stop_due_by_pane};
+use rimz::harness::deadline::{Rung, interrupt_expired, kill_due, stop_due_by_pane};
 use rimz::harness::run_timeout::RunTimeoutRequest;
 use rimz::store::run::RunRecord;
 
@@ -16,6 +16,19 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     let mux_hint = initial.pane_id.as_ref().map(|pane| pane.mux());
     let ctx = Ctx::for_workspace(request.workspace_id, mux_hint)?;
     let now = Timestamp::now();
+    // One decision per pass: the kill, then an expired interrupt hold, then a
+    // marker to open one, then the stop rung.
+    if !kill_due(&initial, now) {
+        if interrupt_expired(&initial, now) {
+            let harvest = harvest_last_message(&initial);
+            rimz::harness::run::expire_interrupt(&ctx.store, &request.run_id, harvest)?;
+            return Ok(());
+        }
+        if let Some(at) = request.interrupted_at {
+            rimz::harness::run::hold_interrupted_turn(ctx.store.paths(), &request.run_id, at)?;
+            return Ok(());
+        }
+    }
     if stop_due_by_pane(&initial, now) {
         if let Some(rung) =
             rimz::harness::run::claim_rung(ctx.store.paths(), &request.run_id, now, |_, rung| {

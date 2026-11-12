@@ -3567,3 +3567,331 @@ fn a_rollback_or_a_rebind_of_the_stamped_pane_gives_the_run_back_to_it() {
     assert_eq!(load(&paths, id).unwrap().handed_over_from, None);
     assert!(fail_if_owned(&paths, id, Some(&old), "").unwrap().is_some());
 }
+
+/// A running `rimz subagents` turn run bound to `child`, with a claimed warn rung and an earlier
+/// answer, so a fold that must leave them alone can be checked.
+fn interruptible() -> (tempfile::TempDir, StatePaths, RunRecord) {
+    let (dir, paths, mut record) = setup();
+    record.subagent = true;
+    record.status = RunStatus::Running;
+    record.agent_id = Some("child".into());
+    record.deadline_at = Some(Timestamp::now() + Duration::from_secs(1800));
+    record.grace = Some(Duration::from_secs(180));
+    record.deadline_notice_at = Some(record.deadline_at.unwrap() - Duration::from_secs(360));
+    record.follow_ups = 1;
+    record.earlier_answers.push(EarlierAnswer {
+        ordinal: 1,
+        status: RunStatus::Completed,
+        started_at: record.started_at,
+        completed_at: Some(record.started_at),
+        prompt: None,
+        failure_tail: None,
+        limit_failure: None,
+        opened_by: Vec::new(),
+        report_message_id: None,
+        joined_at: None,
+    });
+    create(&paths, &record).unwrap();
+    (dir, paths, record)
+}
+
+fn interrupted() -> LifecycleSignal {
+    LifecycleSignal::TurnInterrupted { turn_id: None }
+}
+
+fn fold_at(record: &mut RunRecord, signal: LifecycleSignal, at: Timestamp) -> LifecycleFold {
+    let observation = AgentLifecycleObservation::new(Some("child".into()), signal);
+    fold_lifecycle(record, "claude", &observation, None, at, at, None)
+}
+
+#[test]
+fn an_interrupt_holds_a_subagent_turn_run_open_without_settling_it() {
+    let (_dir, paths, record) = interruptible();
+    let observation = AgentLifecycleObservation::new(Some("child".into()), interrupted());
+    let settled = record_lifecycle(
+        &paths,
+        &record.run_id,
+        "claude",
+        &observation,
+        Some("half an answer".into()),
+        || None,
+    )
+    .unwrap();
+    assert_eq!(settled, None, "an interrupt wakes nobody");
+    let held = load(&paths, &record.run_id).unwrap();
+    assert_eq!(held.status, RunStatus::Running);
+    assert_eq!(held.completed_at, None);
+    assert_eq!(held.interrupted_at, Some(held.updated_at));
+    assert_eq!(held.last_message.as_deref(), Some("half an answer"));
+
+    let mut again = held.clone();
+    let later = held.interrupted_at.unwrap() + Duration::from_secs(5);
+    assert_eq!(
+        fold_at(&mut again, interrupted(), later),
+        LifecycleFold::Ignored,
+        "a hold already open stays as it is"
+    );
+    assert_eq!(again, held);
+}
+
+#[test]
+fn a_new_turn_inside_the_window_clears_the_hold_and_nothing_else() {
+    let (_dir, paths, record) = interruptible();
+    let at = Timestamp::now();
+    let mut held = record.clone();
+    assert_eq!(
+        fold_at(&mut held, interrupted(), at),
+        LifecycleFold::Updated
+    );
+    assert_eq!(held.interrupted_at, Some(at));
+    let started = at + Duration::from_secs(20);
+    let mut resumed = held.clone();
+    assert_eq!(
+        fold_at(&mut resumed, turn_started(), started),
+        LifecycleFold::Updated
+    );
+    assert_eq!(resumed.status, RunStatus::Running);
+    assert_eq!(resumed.interrupted_at, None);
+    assert_eq!(resumed.turn_opened_at, Some(started));
+    assert_eq!(resumed.deadline_at, record.deadline_at);
+    assert_eq!(resumed.deadline_notice_at, record.deadline_notice_at);
+    assert_eq!(resumed.follow_ups, record.follow_ups);
+    assert_eq!(resumed.earlier_answers, record.earlier_answers);
+    assert_eq!(resumed.follow_up, record.follow_up);
+
+    // Through the production entry, the cleared hold is written.
+    create(&paths, &held).unwrap();
+    fold_turn(&paths, &record.run_id, turn_started(), None, false);
+    let stored = load(&paths, &record.run_id).unwrap();
+    assert_eq!(stored.interrupted_at, None);
+    assert_eq!(stored.follow_ups, record.follow_ups);
+    assert!(stored.turn_opened_at.is_some());
+}
+
+#[test]
+fn an_interrupt_from_before_the_newest_turn_start_is_ignored() {
+    let (_dir, _paths, mut record) = interruptible();
+    let opened = Timestamp::now();
+    assert_eq!(
+        fold_at(&mut record, turn_started(), opened),
+        LifecycleFold::Updated
+    );
+    assert_eq!(record.turn_opened_at, Some(opened));
+    for at in [opened - Duration::from_secs(1), opened] {
+        let mut stale = record.clone();
+        assert_eq!(
+            fold_at(&mut stale, interrupted(), at),
+            LifecycleFold::Ignored
+        );
+        assert_eq!(stale, record, "an interrupt at {at} is an earlier turn's");
+    }
+    let mut late = record.clone();
+    assert_eq!(
+        fold_at(&mut late, interrupted(), opened + Duration::from_secs(1)),
+        LifecycleFold::Updated
+    );
+    assert_eq!(late.status, RunStatus::Running);
+}
+
+#[test]
+fn a_turn_end_settles_a_held_run_at_once() {
+    for (signal, status) in [
+        (turn_ended(), RunStatus::Completed),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            RunStatus::Failed,
+        ),
+    ] {
+        let (_dir, paths, record) = interruptible();
+        fold_turn(&paths, &record.run_id, interrupted(), None, false);
+        let observation = AgentLifecycleObservation::new(Some("child".into()), signal);
+        let settled = record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &observation,
+            Some("done".into()),
+            || None,
+        )
+        .unwrap()
+        .expect("a turn end settles a held run");
+        assert_eq!(settled.status, status);
+    }
+}
+
+#[test]
+fn runs_outside_the_window_fold_an_interrupt_as_before() {
+    type Shape = fn(&mut RunRecord);
+    let shapes: [(&str, Shape); 5] = [
+        ("print", |record| record.subagent = false),
+        ("peer", |record| {
+            record.peer = Some(crate::store::run::PeerRun {
+                launch_id: "peer-launch".into(),
+                opened_by: Vec::new(),
+            });
+        }),
+        ("session", |record| {
+            record.lifecycle = RunLifecycle::Session;
+        }),
+        ("workflow", |record| {
+            record.workflow = Some(crate::agents::WorkflowAttemptRef {
+                run: crate::ids::WorkflowRunId::new(),
+                seq: 1,
+                role: crate::agents::WorkflowAttemptRole::Step,
+            });
+        }),
+        ("team", |record| {
+            record.team = Some(crate::store::run::TeamRun {
+                launch_id: "lead-launch".into(),
+                instance: "forge#x".into(),
+            });
+        }),
+    ];
+    for (shape, apply) in shapes {
+        let (_dir, _paths, mut record) = interruptible();
+        apply(&mut record);
+        let mut folded = record.clone();
+        fold_at(&mut folded, interrupted(), Timestamp::now());
+        assert_eq!(folded.interrupted_at, None, "{shape}");
+        let expected = match shape {
+            "print" | "peer" => RunStatus::Canceled,
+            _ => RunStatus::Running,
+        };
+        assert_eq!(folded.status, expected, "{shape}");
+    }
+}
+
+#[test]
+fn a_provider_exit_inside_the_window_reads_canceled() {
+    let (_dir, paths, record) = interruptible();
+    fold_turn(&paths, &record.run_id, interrupted(), None, false);
+    let settled = fail_if_owned(&paths, &record.run_id, None, "provider exited")
+        .unwrap()
+        .expect("newly settled");
+    assert_eq!(settled.status, RunStatus::Canceled);
+    assert_eq!(settled.failure_tail.as_deref(), Some("provider exited"));
+
+    let (_dir, paths, record) = interruptible();
+    fold_turn(&paths, &record.run_id, interrupted(), None, false);
+    let ended = fold_turn(&paths, &record.run_id, LifecycleSignal::Ended, None, false);
+    assert_eq!(ended.status, RunStatus::Canceled, "a session end hook too");
+
+    let (_dir, paths, record) = interruptible();
+    let settled = fail_if_owned(&paths, &record.run_id, None, "provider exited")
+        .unwrap()
+        .expect("newly settled");
+    assert_eq!(settled.status, RunStatus::Failed);
+}
+
+/// A store over `interruptible`'s run, whose hold opened `ago` before now, and the run's wake
+/// socket.
+fn held_store(
+    ago: Duration,
+) -> (
+    tempfile::TempDir,
+    Store,
+    RunRecord,
+    std::os::unix::net::UnixDatagram,
+) {
+    let (dir, paths, mut record) = interruptible();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    record.interrupted_at = Some(Timestamp::now() - ago);
+    create(store.paths(), &record).unwrap();
+    let socket = std::os::unix::net::UnixDatagram::bind(crate::store::run::run_socket_path(
+        store.runtime_paths(),
+        &record.run_id,
+    ))
+    .unwrap();
+    socket.set_nonblocking(true).unwrap();
+    (dir, store, record, socket)
+}
+
+#[test]
+fn an_expired_hold_settles_canceled_once_with_spend_and_a_wake() {
+    let (_dir, store, record, socket) = held_store(Duration::from_secs(30));
+    assert_eq!(
+        expire_interrupt(&store, &record.run_id, None).unwrap(),
+        None
+    );
+    assert_eq!(load(store.paths(), &record.run_id).unwrap(), record);
+
+    let (_dir, store, record, socket_due) = held_store(Duration::from_secs(61));
+    drop(socket);
+    let mut context = crate::agents::AgentContext::new("claude", Timestamp::now());
+    context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.5),
+        ..Default::default()
+    });
+    crate::store::agent_context::write(store.runtime_paths(), "claude", "child", &context, None)
+        .unwrap();
+    let settled = expire_interrupt(&store, &record.run_id, Some("partial".to_owned()))
+        .unwrap()
+        .expect("an expired hold settles");
+    assert_eq!(settled.status, RunStatus::Canceled);
+    assert_eq!(settled.cost_usd, Some(0.5));
+    assert_eq!(settled.last_message.as_deref(), Some("partial"));
+    let mut frame = [0; 1024];
+    assert!(socket_due.recv(&mut frame).is_ok(), "the waiter is woken");
+    assert_eq!(
+        expire_interrupt(&store, &record.run_id, None).unwrap(),
+        None
+    );
+    assert!(socket_due.recv(&mut frame).is_err(), "and woken once");
+}
+
+#[test]
+fn a_claimed_stop_or_a_due_kill_leaves_a_held_run_to_the_kill() {
+    let (_dir, store, mut record, _socket) = held_store(Duration::from_secs(61));
+    record.deadline_at = Some(Timestamp::now() - Duration::from_secs(10));
+    record.deadline_notice_at = record.deadline_at;
+    create(store.paths(), &record).unwrap();
+    assert_eq!(
+        expire_interrupt(&store, &record.run_id, None).unwrap(),
+        None
+    );
+    let kill = crate::harness::deadline::kill_at(&record).unwrap();
+    let (timed, wrote) = timeout_if_due(store.paths(), &record.run_id, kill, None).unwrap();
+    assert!(wrote);
+    assert_eq!(timed.status, RunStatus::TimedOut);
+
+    let (_dir, store, mut record, _socket) = held_store(Duration::from_secs(61));
+    record.deadline_at = Some(Timestamp::now() - Duration::from_secs(200));
+    create(store.paths(), &record).unwrap();
+    assert_eq!(
+        expire_interrupt(&store, &record.run_id, None).unwrap(),
+        None,
+        "past the kill time the hold never writes canceled"
+    );
+    assert_eq!(
+        load(store.paths(), &record.run_id).unwrap().status,
+        RunStatus::Running
+    );
+}
+
+#[test]
+fn a_marker_opens_a_hold_only_while_it_is_newer_than_the_turn_start() {
+    let (_dir, paths, record) = interruptible();
+    let marker = Timestamp::now();
+    assert!(hold_interrupted_turn(&paths, &record.run_id, marker).unwrap());
+    assert_eq!(
+        load(&paths, &record.run_id).unwrap().interrupted_at,
+        Some(marker)
+    );
+    assert!(
+        !hold_interrupted_turn(&paths, &record.run_id, marker + Duration::from_secs(1)).unwrap(),
+        "a stamped run is not stamped again"
+    );
+
+    let (_dir, paths, record) = interruptible();
+    fold_turn(&paths, &record.run_id, turn_started(), None, false);
+    assert!(
+        !hold_interrupted_turn(&paths, &record.run_id, marker).unwrap(),
+        "a turn start folded after the host's read refuses its marker"
+    );
+    assert_eq!(load(&paths, &record.run_id).unwrap().interrupted_at, None);
+}

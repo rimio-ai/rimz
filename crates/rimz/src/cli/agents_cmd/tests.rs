@@ -855,6 +855,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
     let run_timeout = RunTimeoutRequest {
         workspace_id: workspace_id.clone(),
         run_id: RunId::parse("run_0123456789abcdef0123456789abcdef").unwrap(),
+        interrupted_at: None,
     };
     let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
         "run-timeout",

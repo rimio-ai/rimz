@@ -247,6 +247,7 @@ fn hidden_timeout_helper_settles_only_an_overdue_run() {
         let request = rimz::harness::run_timeout::RunTimeoutRequest {
             workspace_id: env.workspace_id.clone(),
             run_id: run.run_id.clone(),
+            interrupted_at: None,
         };
         let output = env
             .rimz()
@@ -279,6 +280,74 @@ fn hidden_timeout_helper_settles_only_an_overdue_run() {
     );
 }
 
+/// Runs the hidden timeout helper once for `request` and asserts it exits cleanly.
+fn run_timeout_helper(env: &Env, request: &rimz::harness::run_timeout::RunTimeoutRequest) {
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .args(rimz::child_process::agent_helper_argv(
+            "run-timeout",
+            request,
+        ))
+        .output()
+        .expect("run timeout helper");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn hidden_timeout_helper_opens_an_interrupt_hold_and_cancels_it_once_expired() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let transcript = env.project_root.join("held.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"half a report\"}]}}\n",
+    )
+    .unwrap();
+    let mut record = create_running_named_run(&env, &store, "held-child");
+    record.kind = AgentKind::new_unchecked("claude");
+    record.subagent = true;
+    record.agent_id = Some(AgentSessionId::from("held-child"));
+    record.deadline_at = Some(Timestamp::now() + Duration::from_secs(1800));
+    record.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let marker = Timestamp::now() - Duration::from_secs(61);
+    let mut request = rimz::harness::run_timeout::RunTimeoutRequest {
+        workspace_id: env.workspace_id.clone(),
+        run_id: record.run_id.clone(),
+        interrupted_at: Some(marker),
+    };
+    run_timeout_helper(&env, &request);
+    let held = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(held.status, RunStatus::Running, "the stamp settles nothing");
+    assert_eq!(held.interrupted_at, Some(marker));
+
+    request.interrupted_at = None;
+    run_timeout_helper(&env, &request);
+    let settled = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(settled.status, RunStatus::Canceled);
+    assert_eq!(settled.last_message.as_deref(), Some("half a report"));
+    assert_eq!(
+        std::fs::read_to_string(
+            rimz::harness::run::response_path(store.paths(), &settled).unwrap()
+        )
+        .unwrap(),
+        "half a report\n",
+        "the expiry publishes the harvested response"
+    );
+    run_timeout_helper(&env, &request);
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &record.run_id).unwrap(),
+        settled,
+        "a second pass writes nothing"
+    );
+}
+
 #[test]
 fn hidden_deadline_helper_claims_pane_stop_once_without_timing_out() {
     let env = Env::new();
@@ -293,6 +362,7 @@ fn hidden_deadline_helper_claims_pane_stop_once_without_timing_out() {
     let request = rimz::harness::run_timeout::RunTimeoutRequest {
         workspace_id: env.workspace_id.clone(),
         run_id: record.run_id.clone(),
+        interrupted_at: None,
     };
     for _ in 0..2 {
         let output = env
@@ -343,6 +413,7 @@ fn hidden_timeout_helper_harvests_last_assistant_and_preserves_existing_response
         let request = rimz::harness::run_timeout::RunTimeoutRequest {
             workspace_id: env.workspace_id.clone(),
             run_id: record.run_id.clone(),
+            interrupted_at: None,
         };
         for _ in 0..2 {
             let output = env
@@ -449,6 +520,7 @@ fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
     let request = rimz::harness::run_timeout::RunTimeoutRequest {
         workspace_id: env.workspace_id.clone(),
         run_id: run.run_id.clone(),
+        interrupted_at: None,
     };
     let output = env
         .rimz()
