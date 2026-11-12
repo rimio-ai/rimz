@@ -3,16 +3,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use rimz::agents::{AgentState, AskDelivery, AskKind, ProviderCapacity, TurnErrorClass};
+use rimz::agents::{AgentState, ProviderCapacity};
 use rimz::harness::takeover::{self, Takeover};
 use rimz::harness::workflow::{self, WorkflowErr};
 use rimz::ids::EventId;
 use rimz::launcher::{self, LaunchOutcome, Preparation};
-use rimz::store::run::{ReportTo, RunLifecycle, RunRecord, StoppedTurnDisposition};
+use rimz::store::run::{ReportTo, RunLifecycle, RunRecord};
 use rimz::store::snapshot::SidebarSnapshot;
-use rimz::store::workflow::{
-    Asked, Asking, AttemptOutcome, AttemptRun, ChildRef, Children, Limited, TeamRef,
-};
+use rimz::store::workflow::{AttemptOutcome, AttemptRun, ChildRef, Children, TeamRef};
 
 use crate::cli::{GlobalFlags, agents_cmd, ctx::Ctx, supervised};
 
@@ -408,108 +406,22 @@ impl workflow::AttemptHost for Host<'_> {
                 Some(ctx.store.paths()),
                 &rimz::config::MachineConfig::load_lenient(),
             );
-            let mut observed = workflow::Observed {
-                status: run.status,
-                ask: None,
-                limited: None,
-                stopped: run.stopped_turn.as_ref().map(|stopped| workflow::Stopped {
-                    since: stopped.at,
-                    kind: match stopped.disposition {
-                        StoppedTurnDisposition::Failed => workflow::StopKind::Error,
-                        StoppedTurnDisposition::Canceled => workflow::StopKind::Interrupt,
-                    },
-                }),
-                children: Children::default(),
-                cost_usd: run.cost_usd,
-                turn: None,
-            };
-            let Some(root) = agent(&snapshot, &run) else {
-                return Ok(observed);
-            };
-            let stopped = descendants(&snapshot.agents, root);
-            observed.children = children(&snapshot, root, &stopped);
-            let peers = rimz::address::addressable_agents(&snapshot);
-            for current in std::iter::once(root).chain(stopped) {
-                if observed.ask.is_none()
-                    && !current.is_reviewing_permission(snapshot.now)
-                    && let Some(ask) = rimz::agents::read_open_ask(self.state, current, None)?
-                    && ask.delivery == AskDelivery::Blocking
-                {
-                    let text = ask
-                        .context
-                        .into_iter()
-                        .chain(ask.questions.into_iter().map(|question| question.question))
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    observed.ask = Some(Asking {
-                        since: current.permission_review_until().unwrap_or(ask.open.since),
-                        ask: Asked {
-                            text,
-                            kind: match ask.open.kind {
-                                AskKind::Question => "question",
-                                AskKind::Permission => "permission",
-                                AskKind::PlanApproval => "plan_approval",
-                            }
-                            .into(),
-                            handle: rimz::address::agent_handle(current, &peers, true),
-                        },
-                    });
-                }
-                let error = current
-                    .displayed_turn_error(snapshot.now)
-                    .map(|(class, error)| {
-                        let limited = matches!(
-                            class,
-                            TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-                        );
-                        if limited && observed.limited.is_none() {
-                            observed.limited = Some(Limited {
-                                reset_at: ProviderCapacity::read(
-                                    ctx.runtime(),
-                                    &current.login_key(),
-                                )
-                                .and_then(|capacity| {
-                                    capacity.latest_spent_window_reset_for_model(
-                                        Timestamp::now(),
-                                        current.model.as_deref(),
-                                    )
-                                }),
-                            });
-                        }
-                        workflow::Stopped {
-                            since: error.at,
-                            kind: if limited {
-                                workflow::StopKind::Limit
-                            } else {
-                                workflow::StopKind::Error
-                            },
-                        }
-                    });
-                let budget = current.budget_park.as_ref().map(|park| workflow::Stopped {
-                    since: park.at,
-                    kind: workflow::StopKind::Budget,
-                });
-                for stopped in error.into_iter().chain(budget) {
-                    if observed.stopped.as_ref().is_none_or(|previous| {
-                        previous.kind == workflow::StopKind::Interrupt
-                            || stopped.since < previous.since
-                    }) {
-                        observed.stopped = Some(stopped);
-                    }
-                }
-            }
-            if matches!(observation, workflow::Observation::LeaderTurn)
-                && let Some(workflow) = &run.workflow
-            {
-                observed.turn = workflow::leader_turn(
-                    &ctx.store,
-                    root,
-                    &workflow.run,
-                    &run.run_id,
-                    self.woken_by.as_ref(),
-                )?;
-            }
-            Ok(observed)
+            workflow::observe(
+                &ctx.store,
+                &run,
+                &snapshot,
+                observation,
+                self.woken_by.as_ref(),
+                |agent| Ok(rimz::agents::read_open_ask(self.state, agent, None)?),
+                |agent| {
+                    ProviderCapacity::read(ctx.runtime(), &agent.login_key()).and_then(|capacity| {
+                        capacity.latest_spent_window_reset_for_model(
+                            Timestamp::now(),
+                            agent.model.as_deref(),
+                        )
+                    })
+                },
+            )
         })()
         .map_err(host_error)
     }
