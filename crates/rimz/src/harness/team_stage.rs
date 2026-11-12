@@ -849,6 +849,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
         opening.workspace,
         opening.store,
         DispatchRequest {
+            about_run: None,
             resuming_recipient: None,
             target: format!("@{}", member.agent_id),
             text: stage_open_body(

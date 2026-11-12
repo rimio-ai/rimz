@@ -8715,7 +8715,15 @@ fn delivery_filters_ended_run_notices_from_a_batch() {
     head.sender = MessageSender::Human;
     head.channel = None;
     head.text = "human head".to_owned();
-    queue_messages(&env, &[&head, &moot, &live]);
+    // A deadline stop linked to an open run that holds no stop rung (one
+    // reopened since the stop was claimed) is superseded and drops alone.
+    let mut stale_stop = live.clone();
+    stale_stop.message_id = fixed_message_id(4);
+    stale_stop.sender = MessageSender::Harness {
+        notice: HarnessNotice::Deadline,
+    };
+    stale_stop.text = "Time is up.".to_owned();
+    queue_messages(&env, &[&head, &moot, &stale_stop, &live]);
     rimz::harness::run::cancel(store.paths(), moot.about_run.as_ref().unwrap()).unwrap();
     let trace_log = env.project_root.join("run-notice-batch-trace.log");
     run_success(
@@ -8741,6 +8749,12 @@ fn delivery_filters_ended_run_notices_from_a_batch() {
         assert_eq!(sent.batch_id, Some(head.message_id.clone()));
     }
     assert_run_notice_canceled(&env, &moot, 1, "child run canceled before delivery");
+    assert_run_notice_canceled(
+        &env,
+        &stale_stop,
+        1,
+        "deadline stop superseded before delivery",
+    );
 }
 
 #[test]

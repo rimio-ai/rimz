@@ -527,6 +527,16 @@ fn cancel_moot_message(
             Ok(run) if run.status.is_terminal() => {
                 format!("child run {} before delivery", run.status.as_str())
             }
+            Ok(run)
+                if matches!(
+                    message.sender,
+                    MessageSender::Harness {
+                        notice: HarnessNotice::Deadline
+                    }
+                ) && !crate::harness::deadline::stop_claimed(&run) =>
+            {
+                "deadline stop superseded before delivery".to_owned()
+            }
             Err(RunStoreErr::NotFound(_)) => "child run gone before delivery".to_owned(),
             Ok(_) => return Ok(false),
             Err(error) => {

@@ -146,18 +146,24 @@ pub(super) fn holds_interrupts(record: &RunRecord) -> bool {
         && record.peer.is_none()
 }
 
+/// Whether the run holds a claimed Stop rung for its current deadline. A
+/// limit hold moves both stamps together and keeps the claim; a reopen rearms
+/// the deadline and clears the claim, so a stop queued before it is stale.
+pub(crate) fn stop_claimed(record: &RunRecord) -> bool {
+    record
+        .deadline_at
+        .is_some_and(|deadline| record.deadline_notice_at >= Some(deadline))
+}
+
 /// Whether an interrupt hold has outlived its window with no new turn, and so
 /// settles the run canceled. A claimed Stop rung leaves the run to the kill,
 /// and so does a due kill.
 pub fn interrupt_expired(record: &RunRecord, now: Timestamp) -> bool {
-    let stop_claimed = record
-        .deadline_at
-        .is_some_and(|deadline| record.deadline_notice_at >= Some(deadline));
     record.status == RunStatus::Running
         && record
             .interrupted_at
             .is_some_and(|at| now >= at + INTERRUPT_WINDOW)
-        && !stop_claimed
+        && !stop_claimed(record)
         && !kill_due(record, now)
 }
 
@@ -266,6 +272,22 @@ mod tests {
         record.status = RunStatus::Running;
         record.interrupted_at = Some(at);
         record
+    }
+
+    #[test]
+    fn a_stop_stays_claimed_through_a_limit_hold_and_not_through_a_rearm() {
+        let mut record = record();
+        assert!(!stop_claimed(&record));
+        record.deadline_notice_at = record.deadline_at;
+        assert!(stop_claimed(&record));
+        let held = Duration::from_secs(300);
+        record.deadline_at = record.deadline_at.map(|at| at + held);
+        record.deadline_notice_at = record.deadline_notice_at.map(|at| at + held);
+        assert!(stop_claimed(&record), "a limit hold moves both stamps");
+        record.deadline_notice_at = None;
+        assert!(!stop_claimed(&record), "a reopen clears the claim");
+        record.deadline_notice_at = record.deadline_at.map(|at| at - held);
+        assert!(!stop_claimed(&record), "a warn claim is not the stop");
     }
 
     #[test]

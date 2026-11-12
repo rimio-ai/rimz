@@ -57,7 +57,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
             let outcome = rimz::message::dispatch::dispatch(
                 &ctx.workspace,
                 &ctx.store,
-                deadline_stop_request(target, rung.text(), globals.mux, mode),
+                deadline_stop_request(&request.run_id, target, rung.text(), globals.mux, mode),
             );
             // A child that raised a prompt since the host's read refuses an
             // unforced interrupt: the rung goes back, for the hook to carry
@@ -127,13 +127,17 @@ fn claims_stop(record: &RunRecord, rung: &Rung, now: Timestamp) -> bool {
     matches!(rung, Rung::Stop { .. }) && stop_due_by_pane(record, now)
 }
 
+/// The stop's dispatch, linked to its run so that delivery withdraws a stop
+/// left queued once the run ends or no longer holds the stop rung.
 fn deadline_stop_request(
+    run_id: &rimz::ids::RunId,
     target: String,
     text: String,
     mux: Option<rimz::ids::MuxName>,
     mode: DispatchMode,
 ) -> rimz::message::dispatch::DispatchRequest {
     rimz::message::dispatch::DispatchRequest {
+        about_run: Some(run_id.clone()),
         resuming_recipient: None,
         target,
         text,

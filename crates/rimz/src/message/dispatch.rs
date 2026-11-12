@@ -98,6 +98,9 @@ pub struct DispatchRequest {
     pub auto_compact: Option<AutoCompact>,
     pub mode: DispatchMode,
     pub resuming_recipient: Option<AgentState>,
+    /// The run each recipient's record is about, for delivery to withdraw it
+    /// once that run ends; only the deadline stop sets it.
+    pub about_run: Option<crate::ids::RunId>,
 }
 
 pub struct DispatchResult {
@@ -757,6 +760,7 @@ fn prepare_mode(
             not_before,
             after: resolve_after(resolution, recipients, after, gate, pending)?,
             when: resolve_when(resolution, when)?,
+            about_run: request.about_run.clone(),
         },
     })
 }

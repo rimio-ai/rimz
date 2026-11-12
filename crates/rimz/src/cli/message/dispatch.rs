@@ -87,6 +87,7 @@ pub(super) fn send_message(
     let kind = mode.kind();
     let wait_started = std::time::Instant::now();
     let request = || DispatchRequest {
+        about_run: None,
         resuming_recipient: None,
         target: target.clone(),
         text: text.clone(),
