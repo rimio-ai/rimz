@@ -79,7 +79,8 @@ impl NotificationsPrefs {
         self.command().is_some() || !self.handler.is_empty()
     }
 
-    pub(crate) fn triggers_status(&self, status: AgentStatus) -> bool {
+    /// Whether an agent entering `status` raises an alert.
+    pub fn triggers_status(&self, status: AgentStatus) -> bool {
         NotificationTrigger::from_status(status)
             .is_some_and(|trigger| self.triggers.contains(&trigger))
     }

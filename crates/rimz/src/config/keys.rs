@@ -33,6 +33,18 @@ impl Default for KeysConfig {
     }
 }
 
+impl KeysConfig {
+    /// The stored `keys.keymap` value as written, which need not name a bundled keymap.
+    pub fn keymap(&self) -> &Value {
+        &self.keymap
+    }
+
+    /// Select a keymap by name, as `keys.keymap = "<name>"` would.
+    pub fn set_keymap(&mut self, name: &str) {
+        self.keymap = Value::String(name.to_owned());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum KeyChord {
     Character(char),

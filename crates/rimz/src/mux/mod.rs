@@ -41,7 +41,7 @@ pub use reconcile::{
     SidebarViewRepair,
 };
 pub(crate) use selection::LiveSessions;
-pub use selection::auto_detect_backend;
+pub use selection::{auto_detect_backend, enclosing_mux, is_installed};
 pub use tmux::TmuxBackend;
 pub use width::{
     CLIENT_SIZE_ENV, SidebarTarget, SidebarWidth, WidthAdjust, WidthPercent, WidthPermille,
