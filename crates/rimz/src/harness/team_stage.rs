@@ -16,7 +16,7 @@ use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequ
 use crate::store::event::{EventKind, SignalSource};
 use crate::store::message::{
     AutoCompact, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
-    MessageStatus,
+    MessageStatus, Premise,
 };
 use crate::store::snapshot::find_agent;
 use crate::store::writer::AgentLifecycleReceipt;
@@ -26,7 +26,7 @@ use super::assist_log::{self, Assist, AssistRecord};
 use super::board::{BoardErr, LockedBoard, rewrite_board, stamp};
 use super::schedule::signal::{fire_signal, lifecycle_signal, team_lifecycle_signals};
 use super::schedule::{arm, catalog::TaskCatalog, pending::pending_waits_by_session, team};
-use super::scratch::parse_board_stage;
+use super::scratch::{parse_board_run, parse_board_stage};
 use super::signal::Signal;
 
 const STAGE_SIGNAL: &str = "team.stage";
@@ -249,6 +249,12 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     );
     let rewritten = rewrite_board(text, request.to, owner, &ledger);
     locked.write(&rewritten)?;
+    let visit = stage_visit(&worktree, &rewritten);
+    withdraw_ended_visits(
+        request.store,
+        &request.workspace.session_name,
+        visit.as_ref(),
+    );
     let opening = StageOpening {
         workspace: request.workspace,
         store: request.store,
@@ -266,6 +272,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         mux: request.mux,
         now: request.now,
         rewake: false,
+        premises: visit.into_iter().collect(),
     };
     let (signal_event, delivery) = open_stage(&opening, "board")?;
     let compaction = compact_flipper(&request, from.as_deref(), owner);
@@ -285,7 +292,12 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
 enum RewakeCause {
     /// The exec wrapper resumed the member's session; `since` is captured before the
     /// provider could start, so a notice delivered from then on belongs to this attempt.
-    Resume { since: Timestamp },
+    /// `last_prompt_at` is the card's prompt stamp read at the same moment, `None` when that
+    /// read failed: a member prompted after it needs no re-wake.
+    Resume {
+        since: Timestamp,
+        last_prompt_at: Option<Option<Timestamp>>,
+    },
     /// The member's root session registered, a resume or a fresh start alike.
     Registration,
 }
@@ -294,8 +306,10 @@ impl RewakeCause {
     /// Whether a Stage notice already wakes `member`: one still in the live queue, or one
     /// delivered to it since the resume attempt began (a provider can register and take its
     /// notice before the wrapper's own check) or, for a registration, within a delivery window
-    /// of `now` (Codex registers in the same turn a typed notice starts). A resume ignores a
-    /// notice from an earlier attempt, so a member that dies again right after it is re-woken.
+    /// of `now` (Codex registers in the same turn a typed notice starts). A notice withdrawn in
+    /// that window because the member was prompted counts too, since that prompt woke it. A
+    /// resume ignores a notice from an earlier attempt, so a member that dies again right after
+    /// it is re-woken.
     fn already_woken(
         self,
         live: &[MessageRecord],
@@ -313,16 +327,55 @@ impl RewakeCause {
         if live.iter().any(|record| stage_notice(&record)) {
             return true;
         }
-        let cutoff = match self {
-            Self::Resume { since } => since,
-            Self::Registration => now - MessageBody::Prompt.delivery_window(),
-        };
-        history.iter().filter(stage_notice).any(|record| {
-            record.status == MessageStatus::Delivered
-                && record
+        let cutoff = self.cutoff(now);
+        history
+            .iter()
+            .filter(stage_notice)
+            .any(|record| match record.status {
+                MessageStatus::Delivered => record
                     .delivered_at
-                    .is_some_and(|delivered| delivered >= cutoff)
-        })
+                    .is_some_and(|delivered| delivered >= cutoff),
+                MessageStatus::Canceled => {
+                    record.updated_at >= cutoff
+                        && record
+                            .premises
+                            .iter()
+                            .any(|premise| matches!(premise, Premise::NotPromptedSince { .. }))
+                }
+                _ => false,
+            })
+    }
+
+    /// Since when a notice or a prompt counts as this re-wake's own.
+    fn cutoff(self, now: Timestamp) -> Timestamp {
+        match self {
+            Self::Resume { since, .. } => since,
+            Self::Registration => now - MessageBody::Prompt.delivery_window(),
+        }
+    }
+
+    /// Whether `member` was prompted since this re-wake's cause, so the prompt stands in for a
+    /// recovery notice: after the wrapper's pre-spawn copy of its stamp, or for a registration
+    /// within the window `cutoff` reads.
+    fn prompted(self, member: &AgentState, now: Timestamp) -> bool {
+        match self {
+            Self::Resume {
+                last_prompt_at: Some(copy),
+                ..
+            } => member.last_prompt_at > copy,
+            Self::Resume { .. } => false,
+            Self::Registration => member
+                .last_prompt_at
+                .is_some_and(|at| at >= self.cutoff(now)),
+        }
+    }
+
+    /// The prompt stamp the recovery notice is not to outlive.
+    fn prompt_copy(self, member: &AgentState) -> Option<Option<Timestamp>> {
+        match self {
+            Self::Resume { last_prompt_at, .. } => last_prompt_at,
+            Self::Registration => Some(member.last_prompt_at),
+        }
     }
 }
 
@@ -363,6 +416,9 @@ fn with_rewake<T>(
     {
         return Ok(None);
     }
+    if cause.prompted(member, now) {
+        return Ok(None);
+    }
     let (live, history) = store.list_messages_and_history()?;
     if cause.already_woken(&live, &history, member, now) {
         return Ok(None);
@@ -371,6 +427,14 @@ fn with_rewake<T>(
     let Ok(instance) = TeamInstanceId::new(team_name, member.lane_name()) else {
         return Ok(None);
     };
+    let premises = stage_visit(&locked.worktree, text)
+        .into_iter()
+        .chain(
+            cause
+                .prompt_copy(member)
+                .map(|last_prompt_at| Premise::NotPromptedSince { last_prompt_at }),
+        )
+        .collect();
     apply(
         &StageOpening {
             workspace,
@@ -389,6 +453,7 @@ fn with_rewake<T>(
             mux,
             now,
             rewake: true,
+            premises,
         },
         match cause {
             RewakeCause::Resume { .. } => "resume",
@@ -400,9 +465,12 @@ fn with_rewake<T>(
 
 /// Re-wake a resumed root team member whose role owns the board's open stage, unless a Stage
 /// notice for its card is still queued or was delivered at or after `since`, which the exec
-/// wrapper captures before its provider could start. The wrapper calls it on every resume,
-/// after the resume stamp has revived the card; a team that no longer loads is logged and
-/// re-wakes nobody.
+/// wrapper captures before its provider could start, or the member was prompted after
+/// `last_prompt_at`, its prompt stamp read at the same moment (`None` when that read failed).
+/// The notice is withdrawn once the member is prompted or the stage visit ends. The wrapper
+/// calls it on every resume, after the resume stamp has revived the card; a team that no
+/// longer loads is logged and re-wakes nobody.
+#[allow(clippy::too_many_arguments)]
 pub fn rewake_resumed(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -411,6 +479,7 @@ pub fn rewake_resumed(
     mux: Option<MuxName>,
     now: Timestamp,
     since: Timestamp,
+    last_prompt_at: Option<Option<Timestamp>>,
 ) -> Result<Option<FlipReceipt>, FlipErr> {
     let audit = store.runtime_projection(crate::store::runtime::RuntimeScope::Audit)?;
     let Some(member) =
@@ -443,7 +512,10 @@ pub fn rewake_resumed(
         Path::new(worktree),
         mux,
         now,
-        RewakeCause::Resume { since },
+        RewakeCause::Resume {
+            since,
+            last_prompt_at,
+        },
         |opening, completed| {
             let (signal_event, delivery) = open_stage(opening, completed)?;
             Ok(FlipReceipt {
@@ -774,6 +846,9 @@ struct StageOpening<'a> {
     mux: Option<MuxName>,
     now: Timestamp,
     rewake: bool,
+    /// What the Stage notice is delivered under: the stage visit, and for a re-wake the
+    /// member's prompt stamp.
+    premises: Vec<Premise>,
 }
 
 fn open_stage(
@@ -882,6 +957,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
                 after: Vec::new(),
                 when: Vec::new(),
             },
+            premises: opening.premises.clone(),
         },
     )
     .map_err(|err| FlipErr::from(err).after(completed, opening))?;
@@ -898,6 +974,34 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
         | DispatchOutcome::SkippedWaiting { label, .. } => Delivery::Queued { label },
     };
     Ok(delivery)
+}
+
+/// The stage visit `board` (the text of `checkout`'s board) is open on, as a premise.
+fn stage_visit(checkout: &Path, board: &str) -> Option<Premise> {
+    let run = parse_board_run(board, &MachineConfig::load_time_zone_lenient())?;
+    Some(Premise::StageVisit {
+        checkout: checkout.to_path_buf(),
+        stage: run.stage.name,
+        started_at: run.stage_started_at,
+    })
+}
+
+/// Withdraw every message sent for a visit to `visit`'s board other than `visit`, the one a
+/// flip just opened. A failure only warns: the write check withdraws them at their write.
+fn withdraw_ended_visits(store: &Store, session_name: &str, visit: Option<&Premise>) {
+    let Some(Premise::StageVisit {
+        checkout,
+        stage,
+        started_at,
+    }) = visit
+    else {
+        return;
+    };
+    if let Err(error) = store.withdraw_messages(session_name, |message| {
+        message.ended_stage_visit(checkout, stage, *started_at)
+    }) {
+        warn!(%error, "flip: failed to withdraw the ended stage visit's messages");
+    }
 }
 
 /// `leader` is set only for an owner who is not the leader: the seat's channel rule rides on
@@ -1354,6 +1458,7 @@ mod tests {
         let long_delivered = record(&member, stage.clone(), Some(now - window * 2));
         let resume = RewakeCause::Resume {
             since: now - Duration::from_secs(2),
+            last_prompt_at: None,
         };
         let before_attempt = record(&member, stage.clone(), Some(now - Duration::from_secs(3)));
         let not_stage = [
@@ -1404,6 +1509,137 @@ mod tests {
                 history.len()
             );
         }
+    }
+
+    #[test]
+    fn a_member_prompted_since_its_resume_or_registration_is_not_rewoken() {
+        let now = Timestamp::from_second(1_000_000).unwrap();
+        let window = MessageBody::Prompt.delivery_window();
+        let copy = now - Duration::from_secs(60);
+        let mut member = crate::testkit::agent_state("codex", "sess-coder", now);
+        let resume = |last_prompt_at| RewakeCause::Resume {
+            since: copy,
+            last_prompt_at,
+        };
+        let cases = [
+            (resume(Some(Some(copy))), Some(copy), false),
+            (resume(Some(Some(copy))), Some(now), true),
+            (resume(Some(None)), Some(copy), true),
+            (resume(Some(None)), None, false),
+            (resume(None), Some(now), false),
+            (RewakeCause::Registration, Some(now - window / 2), true),
+            (RewakeCause::Registration, Some(now - window * 2), false),
+            (RewakeCause::Registration, None, false),
+        ];
+        let actual = cases.map(|(cause, last_prompt_at, _)| {
+            member.last_prompt_at = last_prompt_at;
+            cause.prompted(&member, now)
+        });
+        assert_eq!(actual, cases.map(|(_, _, expected)| expected));
+
+        let mut withdrawn = MessageRecord::new(
+            crate::ids::WorkspaceId::from_project_root(Path::new("/tmp/rimz-rewake")),
+            &member,
+            "stage".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_premises(vec![Premise::NotPromptedSince {
+            last_prompt_at: None,
+        }]);
+        withdrawn.sender = MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        };
+        withdrawn.status = MessageStatus::Canceled;
+        withdrawn.updated_at = now - window / 2;
+        let mut stale = withdrawn.clone();
+        stale.updated_at = now - window * 2;
+        let mut unpremised = withdrawn.clone();
+        unpremised.premises.clear();
+        assert_eq!(
+            [&withdrawn, &stale, &unpremised].map(|record| {
+                RewakeCause::Registration.already_woken(
+                    &[],
+                    std::slice::from_ref(record),
+                    &member,
+                    now,
+                )
+            }),
+            [true, false, false]
+        );
+    }
+
+    #[test]
+    fn a_flip_withdraws_the_ended_visits_messages_and_a_return_does_not_revive_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = crate::WorkspaceId::from_project_root(temp.path());
+        let state = crate::StatePaths::under(id.clone(), &temp.path().join("home")).unwrap();
+        let runtime = crate::RuntimePaths::for_state_under(&state, temp.path());
+        let store = Store::open(state, runtime).unwrap();
+        let checkout = temp.path().join("checkout");
+        let first = Timestamp::from_second(1_000_000).unwrap();
+        let visit = |stage: &str, started_at: Timestamp| Premise::StageVisit {
+            checkout: checkout.clone(),
+            stage: stage.to_owned(),
+            started_at: Some(started_at),
+        };
+        let queue = |premise: Premise| {
+            let member = crate::testkit::agent_state("codex", "sess-coder", first);
+            let record =
+                MessageRecord::new(id.clone(), &member, "stage".to_owned(), DeliveryGate::Done)
+                    .with_premises(vec![premise]);
+            store.queue_message(&record, "test").unwrap();
+            record.message_id
+        };
+        let build = queue(visit("Build", first));
+        let elsewhere = queue(Premise::StageVisit {
+            checkout: temp.path().join("other"),
+            stage: "Build".to_owned(),
+            started_at: Some(first),
+        });
+        let live = || {
+            store
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .map(|record| record.message_id)
+                .collect::<Vec<_>>()
+        };
+        withdraw_ended_visits(&store, "test", Some(&visit("Build", first)));
+        assert_eq!(live(), [build.clone(), elsewhere.clone()]);
+        withdraw_ended_visits(
+            &store,
+            "test",
+            Some(&visit("Review", first + Duration::from_secs(5))),
+        );
+        assert_eq!(live(), std::slice::from_ref(&elsewhere));
+        let review = queue(visit("Review", first + Duration::from_secs(5)));
+        withdraw_ended_visits(
+            &store,
+            "test",
+            Some(&visit("Build", first + Duration::from_secs(9))),
+        );
+        assert_eq!(live(), [elsewhere]);
+        let ended = store
+            .list_message_history()
+            .unwrap()
+            .into_iter()
+            .map(|record| (record.message_id, record.status, record.last_error))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ended,
+            [
+                (
+                    build,
+                    MessageStatus::Canceled,
+                    Some("stage Build ended before delivery".to_owned())
+                ),
+                (
+                    review,
+                    MessageStatus::Canceled,
+                    Some("stage Review ended before delivery".to_owned())
+                ),
+            ]
+        );
     }
 
     #[test]

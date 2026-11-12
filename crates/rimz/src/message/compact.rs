@@ -107,6 +107,7 @@ pub fn send_compact(
         text: request.command,
         sender: request.sender,
         gate: DeliveryGate::Done,
+        premises: crate::store::message::Premise::NONE,
     }
     .record(workspace)
     .with_automated(request.automated)

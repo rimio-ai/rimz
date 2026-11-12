@@ -33,6 +33,7 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             notice: HarnessNotice::CacheKeepalive,
         },
         gate: DeliveryGate::Done,
+        premises: rimz::store::message::Premise::NONE,
     }
     .record(&ctx.workspace);
     let message = rimz::store::message::MessageRecord {

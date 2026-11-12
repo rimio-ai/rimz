@@ -53,6 +53,7 @@ pub(super) fn run(request: SoftCompactRequest) -> Result<()> {
             SoftCompactStep::WrapUp => DeliveryGate::Any,
             SoftCompactStep::Continue => DeliveryGate::Done,
         },
+        premises: rimz::store::message::Premise::NONE,
     }
     .record(&ctx.workspace)
     .with_automated(request.step == SoftCompactStep::WrapUp);

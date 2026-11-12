@@ -236,6 +236,7 @@ impl SingularQueueTestExt for Store {
 mod claim;
 mod deliver;
 mod lifecycle;
+mod premise;
 mod sender_notice;
 mod soft_compact;
 mod wake;

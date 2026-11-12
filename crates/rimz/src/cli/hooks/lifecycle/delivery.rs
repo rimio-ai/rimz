@@ -67,6 +67,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
             recorded.observation.agent_name.as_deref(),
         ),
         ack,
+        peer.as_ref(),
         &workspace.session_name,
         |records, selection| {
             if let Some(peer) = peer.as_ref()

@@ -55,6 +55,7 @@ fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
     let mut request = DispatchRequest {
         about_run: None,
         reply_wanted: false,
+        premises: crate::store::message::Premise::NONE,
         target: "@session".into(),
         text: "continue".into(),
         target_scope: None,
@@ -128,6 +129,7 @@ fn dispatch_copies_only_live_rows_and_the_resuming_child() {
         DispatchRequest {
             about_run: None,
             reply_wanted: false,
+            premises: crate::store::message::Premise::NONE,
             target: "@ended".into(),
             text: "resume".into(),
             target_scope: None,
@@ -225,6 +227,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
         resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
+            premises: crate::store::message::Premise::NONE,
             body: MessageBody::Prompt,
             enter: true,
             gate: DeliveryGate::Done,
@@ -378,6 +381,7 @@ fn resumed_provider_parks_until_registration_or_the_window() {
         resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
+            premises: crate::store::message::Premise::NONE,
             body: MessageBody::Prompt,
             enter: true,
             gate: DeliveryGate::Done,
@@ -502,6 +506,7 @@ fn provisional_pane_skips_readiness_gate() {
         resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
+            premises: crate::store::message::Premise::NONE,
             body: MessageBody::Prompt,
             enter: true,
             gate: DeliveryGate::Done,

@@ -141,6 +141,7 @@ fn sender_notice_prose_carries_evidence_without_a_blind_resend() {
         &agent(),
         HarnessNotice::MessageQueued,
         queued,
+        crate::store::message::Premise::NONE,
     );
     assert_eq!(
         notice.sender,
@@ -414,6 +415,7 @@ fn queued_notice_stamp_and_record_commit_once() {
         &card,
         HarnessNotice::MessageQueued,
         "still queued".into(),
+        crate::store::message::Premise::NONE,
     );
     assert_eq!(q.by_id(&original.message_id).queued_notice_at, None);
     assert!(
@@ -430,6 +432,7 @@ fn queued_notice_stamp_and_record_commit_once() {
         &card,
         HarnessNotice::MessageQueued,
         "duplicate".into(),
+        crate::store::message::Premise::NONE,
     );
     assert!(
         !q.queue_still_queued_notice(&original.message_id, &duplicate, "session")
@@ -463,6 +466,7 @@ fn queued_notice_refuses_a_claimed_sent_or_terminal_record() {
             &card,
             HarnessNotice::MessageQueued,
             "not queued".into(),
+            crate::store::message::Premise::NONE,
         );
         let live = q.live();
         let events = serde_json::to_value(q.events()).unwrap();

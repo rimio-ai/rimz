@@ -3,7 +3,7 @@
 use crate::Store;
 use crate::agents::AgentState;
 use crate::ids::{MessageId, PaneId};
-use crate::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
+use crate::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus, Premise};
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
 
@@ -16,6 +16,9 @@ pub struct SyntheticMessage<'a> {
     pub text: String,
     pub sender: MessageSender,
     pub gate: DeliveryGate,
+    /// What must still hold for the text to be worth delivering; [`Premise::NONE`] when it
+    /// stays true until delivered.
+    pub premises: Vec<Premise>,
 }
 
 impl SyntheticMessage<'_> {
@@ -29,6 +32,7 @@ impl SyntheticMessage<'_> {
         )
         .with_channel(self.agent.lane_name())
         .with_sender(self.sender)
+        .with_premises(self.premises)
     }
 }
 
@@ -132,6 +136,7 @@ mod tests {
             text: "continue".to_owned(),
             sender: MessageSender::System,
             gate: DeliveryGate::Resume,
+            premises: Premise::NONE,
         }
         .record(&workspace);
 
@@ -164,6 +169,7 @@ mod tests {
             text: "team finished".to_owned(),
             sender: sender.clone(),
             gate: DeliveryGate::Done,
+            premises: Premise::NONE,
         }
         .record(&workspace);
 

@@ -417,6 +417,10 @@ fn launch_and_supervise(
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
     let resume_since = jiff::Timestamp::now();
+    // Read before the provider can start, so a prompt typed during startup counts as after it.
+    let resume_prompt = attach_target
+        .as_ref()
+        .and_then(|target| card_last_prompt_at(invocation, target));
     // Stamp the resumed card started, reviving an ended one so delivery reaches it, before its
     // provider starts: a provider that forks on resume then registers its new session after the
     // stamp, and that registration on the card's pane and process ends the stamped card.
@@ -480,13 +484,13 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
-        let rewoken = rewake_resumed(invocation, target, globals.mux, resume_since);
+        let rewoken = rewake_resumed(invocation, target, globals.mux, resume_since, resume_prompt);
         let machine_config = crate::cli::machine_config();
         if let Some(text) = resume_continue_text(
             request.continue_session,
             rewoken,
             &machine_config.resume.auto_continue_text,
-        ) && let Err(error) = queue_resume_continue(invocation, target, text)
+        ) && let Err(error) = queue_resume_continue(invocation, target, text, resume_prompt)
         {
             tracing::warn!(%error, "could not queue the restarted session's continue");
         }
@@ -1834,24 +1838,52 @@ pub(super) fn continue_text(text: &str) -> Option<&str> {
     Some(text.trim()).filter(|text| !text.is_empty())
 }
 
+/// The card's `last_prompt_at` as the store holds it now; `None` when the card cannot be read.
+fn card_last_prompt_at(
+    invocation: &ExecInvocationContext<'_>,
+    target: &(AgentKind, AgentSessionId),
+) -> Option<Option<jiff::Timestamp>> {
+    let store = invocation.store().ok()?;
+    let projection = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .inspect_err(|error| tracing::debug!(%error, "resume: cannot read the card's prompt stamp"))
+        .ok()?;
+    find_agent(&projection.agents, target.0.as_str(), &target.1).map(|agent| agent.last_prompt_at)
+}
+
 /// Queue one system continue for the resumed card at its next turn boundary; the queued-head
-/// delivery spawned after this sends it.
+/// delivery spawned after this sends it. `last_prompt_at` is the card's prompt stamp read
+/// before spawn: a card prompted since takes no continue, and the continue is withdrawn once
+/// it is.
 fn queue_resume_continue(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     text: &str,
+    last_prompt_at: Option<Option<jiff::Timestamp>>,
 ) -> Result<()> {
     let workspace = invocation.workspace;
     let store = invocation.store()?;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let agent = find_agent(&projection.agents, target.0.as_str(), &target.1)
         .context("resumed card is not in the store")?;
+    if last_prompt_at.is_some_and(|copy| agent.last_prompt_at > copy) {
+        tracing::debug!("resume: the card was prompted since its resume; no continue");
+        return Ok(());
+    }
     store.queue_message(
         &rimz::message::synthetic::SyntheticMessage {
             agent,
             text: text.to_owned(),
             sender: rimz::store::message::MessageSender::System,
             gate: rimz::store::message::DeliveryGate::Done,
+            premises: last_prompt_at
+                .map(
+                    |last_prompt_at| rimz::store::message::Premise::NotPromptedSince {
+                        last_prompt_at,
+                    },
+                )
+                .into_iter()
+                .collect(),
         }
         .record(workspace),
         &workspace.session_name,
@@ -1861,12 +1893,13 @@ fn queue_resume_continue(
 
 /// Re-wake a stamped resumed card when it owns its team's open stage, and say whether a
 /// Stage notice now stands for it. `since` precedes the provider's start, so a Stage notice
-/// it already took counts.
+/// it already took counts, and so does `last_prompt_at`, the card's prompt stamp read then.
 fn rewake_resumed(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     mux: Option<rimz::ids::MuxName>,
     since: jiff::Timestamp,
+    last_prompt_at: Option<Option<jiff::Timestamp>>,
 ) -> bool {
     let rewoken = invocation.store().and_then(|store| {
         Ok(rimz::harness::team_stage::rewake_resumed(
@@ -1877,6 +1910,7 @@ fn rewake_resumed(
             mux,
             jiff::Timestamp::now(),
             since,
+            last_prompt_at,
         )?)
     });
     match rewoken {

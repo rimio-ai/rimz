@@ -22,7 +22,7 @@ use crate::ids::LaneName;
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, Premise,
     WhenCondition, env_ms, fresh_boundary_blocker, queue_head, sender_notice,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, count_rows_materialized};
@@ -102,6 +102,9 @@ pub struct DispatchRequest {
     /// Stamped on every recipient's record for its header to say the sender
     /// wants a message back; nothing else reads it.
     pub reply_wanted: bool,
+    /// What must still hold for the text to be worth delivering; [`Premise::NONE`] when it
+    /// stays true until delivered.
+    pub premises: Vec<Premise>,
 }
 
 pub struct DispatchResult {
@@ -737,6 +740,7 @@ fn prepare_mode(
             when: resolve_when(resolution, when)?,
             about_run: request.about_run.clone(),
             reply_wanted: request.reply_wanted,
+            premises: request.premises.clone(),
         },
     })
 }

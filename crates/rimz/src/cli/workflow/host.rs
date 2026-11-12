@@ -122,6 +122,7 @@ fn queue_notice(
         text: text.into(),
         sender: rimz::store::message::MessageSender::Harness { notice },
         gate: rimz::store::message::DeliveryGate::Done,
+        premises: rimz::store::message::Premise::NONE,
     }
     .record(&ctx.workspace)
     .with_automated(true)
@@ -368,6 +369,7 @@ impl workflow::AttemptHost for Host<'_> {
                 text: text.into(),
                 sender: rimz::store::message::MessageSender::System,
                 gate: rimz::store::message::DeliveryGate::Done,
+                premises: rimz::store::message::Premise::NONE,
             }
             .record(&ctx.workspace);
             message.message_id = push.message.clone();

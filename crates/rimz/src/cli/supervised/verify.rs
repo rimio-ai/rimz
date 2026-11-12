@@ -46,6 +46,7 @@ pub(super) fn deliver_reprompt(
         text,
         sender: MessageSender::System,
         gate: DeliveryGate::Any,
+        premises: rimz::store::message::Premise::NONE,
     }
     .record(workspace);
     let delivered = synthetic::deliver_now(

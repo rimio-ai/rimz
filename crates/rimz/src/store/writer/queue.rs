@@ -424,7 +424,7 @@ fn normalize_terminal(
     message.status = status;
     message.updated_at = now;
     if (matches!(status, MessageStatus::Archived | MessageStatus::Expired)
-        || (status == MessageStatus::Canceled && message.idle_since.is_some()))
+        || (status == MessageStatus::Canceled && message.carries_premise()))
         && let Some(reason) = reason
     {
         message.last_error = Some(reason.to_owned());
@@ -434,6 +434,23 @@ fn normalize_terminal(
         message.last_error = None;
     }
     message
+}
+
+/// Withdraw `message` when `eligible` and a premise broke, as `Canceled` with the broken premise
+/// kept as its reason.
+fn withdraw_if(
+    message: &mut MessageRecord,
+    eligible: bool,
+    broken: Option<String>,
+) -> MessageUpdate {
+    let Some(reason) = broken.filter(|_| eligible) else {
+        return MessageUpdate::Keep;
+    };
+    message.last_error = Some(reason.clone());
+    MessageUpdate::Finalize {
+        status: MessageStatus::Canceled,
+        reason: Some(reason),
+    }
 }
 
 /// The record a sender was handed holds the live record when the ids match, the live record is
@@ -597,6 +614,7 @@ impl Store {
                         sender,
                         HarnessNotice::MessageUndelivered,
                         sender_notice::undelivered(&record, reason.as_deref()),
+                        crate::store::message::Premise::NONE,
                     );
                     queue.stage_event(EventEnvelope::message_event(
                         &notice,
@@ -1161,15 +1179,20 @@ impl Store {
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
-        self.confirm_delivered_for_card_with(card, ack, session_name, |_, _| {})
+        self.confirm_delivered_for_card_with(card, ack, None, session_name, |_, _| {})
     }
 
     /// Observe the exact selection under the workspace lock, before the queue write. The callback must not acquire that lock again; enrichment errors belong to the caller and must not fail acknowledgment.
+    ///
+    /// `row` is the card's row as folded after the observation this acknowledges. In the same
+    /// transaction, after acknowledgement selection, every queued record of the card that
+    /// selection left whose row premise `row` shows broken is withdrawn.
     #[must_use = "durability barrier; check the result"]
     pub fn confirm_delivered_for_card_with(
         &self,
         card: AgentCardRef<'_>,
         ack: DeliveryAck<'_>,
+        row: Option<&AgentState>,
         session_name: &str,
         before_commit: impl FnOnce(&[MessageRecord], DeliveryAckMatch),
     ) -> Result<Vec<MessageRecord>> {
@@ -1260,6 +1283,15 @@ impl Store {
                     DeliveryAckMatch::OldestSentBatch,
                 ),
             };
+            if let Some(row) = row {
+                queue.apply_all(session_name, now, |message| {
+                    let eligible = message.status == MessageStatus::Queued
+                        && message.same_card(card)
+                        && !selected.0.contains(message.message_id.as_str());
+                    let reason = message.broken_row_premise(Some(row), now);
+                    withdraw_if(message, eligible, reason)
+                });
+            }
             if selected.0.is_empty() {
                 return Ok(Vec::new());
             }
@@ -1385,6 +1417,12 @@ impl Store {
                             "expired: automatic command not delivered within {} of queueing",
                             message::format_dwell(message::command_validity().as_secs())
                         )),
+                    };
+                }
+                if message.status == MessageStatus::Queued && message.lifespan_over(now) {
+                    return MessageUpdate::Finalize {
+                        status: MessageStatus::Canceled,
+                        reason: message.broken_row_premise(None, now),
                     };
                 }
                 if message.awaiting_registration(&agents)
@@ -1624,6 +1662,23 @@ impl Store {
                 now,
             );
             Ok(true)
+        })
+    }
+
+    /// Withdraw every open record `broken` names a reason for, as `Canceled` with that reason
+    /// kept on the record: the entry a premise's subject owner calls where the subject closes,
+    /// and the write check calls for a batch member. A withdrawal never notifies its sender.
+    #[must_use = "durability barrier; check the result"]
+    pub fn withdraw_messages(
+        &self,
+        session_name: &str,
+        mut broken: impl FnMut(&MessageRecord) -> Option<String>,
+    ) -> Result<Vec<MessageRecord>> {
+        self.commit_queue(|queue| {
+            Ok(queue.apply_all(session_name, Timestamp::now(), |message| {
+                let reason = broken(message);
+                withdraw_if(message, message.status.is_open(), reason)
+            }))
         })
     }
 
