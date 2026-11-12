@@ -306,6 +306,8 @@ struct ShowView {
     strike_count: u32,
     leader_statuses: BTreeMap<String, rimz::agents::AgentStatus>,
     you: bool,
+    /// The agent that booked the task: its handle while the room's rows resolve it, else its id.
+    booker: Option<String>,
     config: std::sync::Arc<MachineConfig>,
     throttle: ShowThrottle,
     show_agent_runs: bool,
@@ -1610,12 +1612,12 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         Ok(rows) => (rows, None),
         Err(error) => (Vec::new(), Some(error)),
     };
-    let workspace =
-        if (!args.json || entry.each_worktree) && (!launches.is_empty() || entry.wait.is_some()) {
-            WorkspaceResolver::resolve(&root, Some(root.clone())).ok()
-        } else {
-            None
-        };
+    let reads_rows = !launches.is_empty() || entry.wait.is_some() || !entry.booked_by.is_empty();
+    let workspace = if (!args.json || entry.each_worktree) && reads_rows {
+        WorkspaceResolver::resolve(&root, Some(root.clone())).ok()
+    } else {
+        None
+    };
     let store = workspace
         .as_ref()
         .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten());
@@ -1641,6 +1643,11 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         })
         .zip(entry.wait.as_ref())
         .is_some_and(|((kind, session), target)| kind == target.kind && session == target.session);
+    let booker = entry
+        .booked_by
+        .first()
+        .filter(|_| !args.json)
+        .map(|link| booker_label(store.as_ref(), link));
     let config = MachineConfig::load_lenient();
     let throttle = if args.json || entry.agent.is_none() {
         ShowThrottle::Off
@@ -1713,6 +1720,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         subscriptions,
         leader_statuses,
         you,
+        booker,
         config,
         throttle,
         worktrees,
@@ -1761,6 +1769,8 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             kept_worktrees: Vec<KeptWorktreeJson<'a>>,
             worktrees: Vec<WorktreeJson<'a>>,
             capacity_wait: Option<list::CapacityWaitView>,
+            #[serde(skip_serializing_if = "<[_]>::is_empty")]
+            booked_by: &'a [rimz::agents::LaunchedBy],
         }
         let json = ShowJson {
             facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
@@ -1784,6 +1794,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                         .cloned()
                 })
                 .flatten(),
+            booked_by: &view.entry.booked_by,
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
     } else {
@@ -2812,6 +2823,21 @@ fn write_watch_command(out: &mut impl Write, command: &str) -> std::io::Result<(
     writeln!(out)
 }
 
+fn booker_label(store: Option<&rimz::Store>, link: &rimz::agents::LaunchedBy) -> String {
+    store
+        .and_then(|store| store.runtime_projection(rimz::RuntimeScope::Audit).ok())
+        .and_then(|rows| {
+            let peers = rows
+                .agents
+                .iter()
+                .filter(|agent| agent.ended_at.is_none())
+                .collect::<Vec<_>>();
+            rimz::address::launch_row(&rows.agents, &link.kind, &link.agent_id)
+                .map(|agent| rimz::address::agent_handle(agent, &peers, true))
+        })
+        .unwrap_or_else(|| link.agent_id.to_string())
+}
+
 fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()> {
     let entry = &view.entry;
     let source = view.source;
@@ -2901,6 +2927,9 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
         kv.push("dir", ui::cell(display_path(dir)));
     }
     kv.push("source", ui::cell(source_detail(source, entry)));
+    if let Some(booker) = view.booker.as_deref() {
+        kv.push("booked by", ui::cell(booker));
+    }
     if !entry.stay
         && let Some(timeout) = timeout
     {

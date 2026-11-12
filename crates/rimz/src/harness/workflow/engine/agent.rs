@@ -393,6 +393,11 @@ pub(super) fn launch(
                 overrides,
                 takeover: step.takeover().unwrap_or_default(),
                 task: record.task.clone(),
+                booked_by: record
+                    .fire
+                    .as_ref()
+                    .map(|fire| fire.booked_by().to_vec())
+                    .unwrap_or_default(),
                 evict,
             })
             .unwrap_or_else(|error| {

@@ -68,7 +68,10 @@ fn task(record: &mut RunRecord, manual: bool) {
     record.manual = manual;
     let task = "land".to_owned();
     record.fire = Some(if manual {
-        records::RunFire::Manual { task }
+        records::RunFire::Manual {
+            task,
+            booked_by: Vec::new(),
+        }
     } else {
         records::RunFire::Scheduled {
             task,
@@ -77,6 +80,7 @@ fn task(record: &mut RunRecord, manual: bool) {
                  for 3m"
                     .into(),
             ),
+            booked_by: Vec::new(),
         }
     });
 }
@@ -428,6 +432,7 @@ fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
     record.fire = Some(records::RunFire::Scheduled {
         task: "missing-task".into(),
         trigger: None,
+        booked_by: Vec::new(),
     });
     update(&state, &record);
     let host = FakeHost::new();

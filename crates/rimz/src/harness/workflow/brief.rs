@@ -194,11 +194,11 @@ fn rail(spec: &Definition, current: &str) -> String {
 fn origin(record: &RunRecord) -> String {
     match &record.fire {
         None => "The user started this run by hand with `rimz workflow run`.".into(),
-        Some(RunFire::Manual { task }) => format!(
+        Some(RunFire::Manual { task, .. }) => format!(
             "The user started this run by hand with {}.",
             span(&format!("rimz loop fire {task}"))
         ),
-        Some(RunFire::Scheduled { task, trigger }) => {
+        Some(RunFire::Scheduled { task, trigger, .. }) => {
             let clause = trigger
                 .as_ref()
                 .map_or_else(String::new, |clause| format!(", {clause}"));

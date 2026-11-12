@@ -21,10 +21,19 @@ on={pass='@done',fail='@failed'}
     let (dir, state, mut record) = super::attempts::setup(text);
     record.spec_dir = dir.path().join("workflow definitions");
     record.task = Some("nightly".into());
+    let booker = crate::agents::LaunchedBy {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        agent_id: "booker".into(),
+    };
+    record.fire = Some(records::RunFire::Scheduled {
+        task: "nightly".into(),
+        trigger: None,
+        booked_by: vec![booker],
+    });
     fs::create_dir_all(record.spec_dir.join("checks")).unwrap();
     fs::write(
         record.spec_dir.join("checks/env.sh"),
-        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\",\"task\":\"%s\"}' \"$RIMZ_WORKFLOW_DEFINITION\" \"$RIMZ_LOOP_TASK\"\n",
+        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\",\"task\":\"%s\",\"booked_by\":%s}' \"$RIMZ_WORKFLOW_DEFINITION\" \"$RIMZ_LOOP_TASK\" \"${RIMZ_LOOP_BOOKED_BY:-null}\"\n",
     )
     .unwrap();
     let paths = state.workflow(&record.id);
@@ -44,6 +53,17 @@ on={pass='@done',fail='@failed'}
         journal.iter().any(|row| matches!(&row.event,
         records::JournalEvent::Evaluation { object, .. }
         if row.node == "run" && object["definition"] == definition && object["task"] == "nightly"))
+    );
+    let booked_by = journal.iter().find_map(|row| match &row.event {
+        records::JournalEvent::Evaluation { object, .. } if row.node == "run" => {
+            Some(object["booked_by"].clone())
+        }
+        _ => None,
+    });
+    assert_eq!(
+        booked_by,
+        Some(serde_json::json!([{"kind": "claude", "agent_id": "booker"}])),
+        "a check names the chain of the booking that fired it"
     );
 }
 

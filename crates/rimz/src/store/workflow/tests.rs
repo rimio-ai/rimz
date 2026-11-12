@@ -527,6 +527,11 @@ fn durable_record_round_trip_and_json_shape() {
         json!({"kind":"manual", "task":"land"}),
         json!({"kind":"scheduled", "task":"land"}),
         json!({"kind":"scheduled", "task":"land", "trigger":"on the signal `deploy.done`"}),
+        json!({"kind":"manual", "task":"land",
+            "booked_by":[{"kind":"claude", "agent_id":"booker"}]}),
+        json!({"kind":"scheduled", "task":"land",
+            "booked_by":[{"kind":"claude", "agent_id":"booker"},
+                {"kind":"codex", "agent_id":"its-launcher"}]}),
     ] {
         let mut fired = value.clone();
         fired["fire"] = fire.clone();

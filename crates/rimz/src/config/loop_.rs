@@ -407,6 +407,10 @@ pub struct TaskEntry {
     pub overlap: Option<OverlapPolicy>,
     #[serde(rename = "overlap-limit", skip_serializing_if = "Option::is_none")]
     pub overlap_limit: Option<usize>,
+    /// The agents behind the booking, nearest first: the agent that ran `rimz loop add`, then
+    /// each agent that started the one before it. Empty for a booking from a shell.
+    #[serde(rename = "booked-by", skip_serializing_if = "Vec::is_empty")]
+    pub booked_by: Vec<crate::agents::LaunchedBy>,
 }
 
 /// Where a task's worktree comes from: one named tree, or a fresh one per fire.

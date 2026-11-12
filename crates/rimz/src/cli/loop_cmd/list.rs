@@ -360,6 +360,8 @@ pub(super) struct TaskRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<Owner>,
     you: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    booked_by: Vec<rimz::agents::LaunchedBy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -812,6 +814,7 @@ impl TaskRow {
             fresh_worktree: entry.fresh_worktree.clone(),
             owner,
             you: false,
+            booked_by: entry.booked_by.clone(),
             next_at: timing.next_timestamp(),
             running_since: running.flatten().map(|holder| holder.started_at),
             last: None,
@@ -938,6 +941,7 @@ impl TaskRow {
             fresh_worktree: None,
             owner: None,
             you: false,
+            booked_by: Vec::new(),
             next_at: None,
             running_since: holder.map(|holder| holder.started_at),
             last: None,

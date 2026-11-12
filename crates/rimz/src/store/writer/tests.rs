@@ -140,6 +140,10 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             budget: Some("$2.00/day".to_owned()),
             team: Some("forge".to_owned()),
             loop_task: None,
+            loop_booked_by: vec![crate::agents::LaunchedBy {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: AgentSessionId::from("booker"),
+            }],
             workflow: None,
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(1),
@@ -203,6 +207,10 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         let launch = serde_json::to_value(&payload.launch).unwrap();
         assert_eq!(launch["add_dirs"], serde_json::json!(["/added checkout"]));
         assert_eq!(launch["untrusted_checkout"], true);
+        assert_eq!(
+            launch["loop_booked_by"],
+            serde_json::json!([{"kind": "claude", "agent_id": "booker"}])
+        );
     }
     assert_eq!(
         payloads

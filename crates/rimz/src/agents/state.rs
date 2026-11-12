@@ -1250,6 +1250,10 @@ pub struct AgentState {
     /// Loop task whose workflow run launched this agent, carried from its launch record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    /// The booking chain of the loop task whose fire launched this agent, nearest booker
+    /// first, carried from its launch record; empty for an agent no loop fire started.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
     /// Workflow attempt this agent launched for. The launcher copies the pin onto
     /// every cell of a step's layout, so it alone does not name the leader: the
     /// leader is the pinned cell whose `name` matches the attempt's recorded
@@ -1943,6 +1947,7 @@ impl AgentState {
             role: None,
             team: None,
             loop_task: None,
+            loop_booked_by: Vec::new(),
             workflow: None,
             automation: None,
             launch_group: None,

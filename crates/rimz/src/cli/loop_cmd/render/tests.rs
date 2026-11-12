@@ -187,6 +187,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         strike_count: 0,
         leader_statuses: BTreeMap::new(),
         you: false,
+        booker: None,
         config: MachineConfig::default().into(),
         throttle: ShowThrottle::Off,
         show_agent_runs,

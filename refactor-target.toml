@@ -2376,7 +2376,9 @@ path = "crates/rimz/src/harness"
 # deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
 # schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_ticket and of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it (+28).
 # WhenExpr::closed_pr_term names the closed pull request that raises the loop verdict's pr_closed cause (+1).
-surface-budget = 1204
+# ancestry::booking_chain records who booked a loop task, walked once at `rimz loop add` (+1).
+# loop_task::LOOP_BOOKED_BY_ENV hands a fire's booking chain from its checks to the agents they launch (+1).
+surface-budget = 1206
 
 [[verdict]]
 kind = "item"
@@ -5223,7 +5225,8 @@ allowed-dependencies = [
 # `check_launch_room` shares the pure pinned-room decision with the CLI launch entries.
 # `LaunchFocus` shares caller-aware focus policy across interactive launch doors.
 # LaunchLogin shares account inheritance and preflight resolution (+2).
-surface-budget = 15
+# booking_chain walks a loop booker's launch chain for `rimz loop add` (+1).
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"
@@ -5678,8 +5681,9 @@ surface-budget = 1
 [[module]]
 path = "crates/rimz/src/harness/loop_task.rs"
 # Neutral leaf in the sidebar import graph holding the loop-task environment key.
+# LOOP_BOOKED_BY_ENV carries the firing task's booking chain beside it (+1).
 allowed-dependencies = []
-surface-budget = 1
+surface-budget = 2
 
 [[module]]
 path = "crates/rimz/src/harness/name.rs"

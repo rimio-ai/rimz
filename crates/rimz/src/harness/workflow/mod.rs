@@ -171,6 +171,9 @@ pub struct StepLaunch {
     pub takeover: bool,
     /// The loop task that started the run, whose agents launch as that task's.
     pub task: Option<String>,
+    /// The booking chain of the loop fire that started the run, which every agent the step
+    /// launches carries.
+    pub booked_by: Vec<crate::agents::LaunchedBy>,
     /// The checkout to read again once the launch is prepared: a takeover stops its occupants
     /// then, so a refused launch stops no one, and any other step refuses one that arrived.
     pub evict: Option<Eviction>,
