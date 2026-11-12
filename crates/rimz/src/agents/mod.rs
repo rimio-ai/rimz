@@ -1242,37 +1242,31 @@ pub fn preflight_hooks(
     Ok(())
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("{kind} {reason} for `{}`: {fix}", dir.display())]
-pub struct LaunchDirUntrusted {
-    pub kind: &'static str,
-    pub dir: PathBuf,
-    pub fix: String,
-    reason: LaunchDirTrustReason,
-}
-
-#[derive(Clone, Copy, Debug, thiserror::Error)]
-enum LaunchDirTrustReason {
-    #[error("has no trust decision and would stop at its trust prompt")]
-    Undecided,
-    #[error("is saved untrusted and will stop at its Folder access prompt on every launch")]
-    Restricted,
-}
-
-impl LaunchDirUntrusted {
-    pub fn is_undecided(&self) -> bool {
-        matches!(self.reason, LaunchDirTrustReason::Undecided)
-    }
-}
-
 /// Why an unattended run may not start in its working directory. The home
 /// case carries no fix: only the entry knows how its user moves the run.
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchDirRefusal {
     #[error("`{}` is the home directory, where an unattended agent cannot be started", dir.display())]
     Home { dir: PathBuf },
-    #[error(transparent)]
-    Untrusted(#[from] LaunchDirUntrusted),
+    #[error(
+        "{kind} has no trust decision and would stop at its trust prompt for `{}`: {fix}",
+        dir.display()
+    )]
+    Undecided {
+        kind: &'static str,
+        dir: PathBuf,
+        fix: String,
+    },
+    #[error(
+        "{kind} is saved untrusted and will stop at its Folder access prompt on every launch \
+         for `{}`: {fix}",
+        dir.display()
+    )]
+    Restricted {
+        kind: &'static str,
+        dir: PathBuf,
+        fix: String,
+    },
 }
 
 /// Check the working directory for supervised panes or headless execution.
@@ -1302,7 +1296,7 @@ pub fn preflight_launch_dir(
         Some(FolderTrust::Undecided(gap))
             if matches!(mode, LaunchDirMode::Supervised | LaunchDirMode::Headless) =>
         {
-            Err(LaunchDirUntrusted {
+            Err(LaunchDirRefusal::Undecided {
                 kind: adapter.spec().kind,
                 dir: cwd.to_path_buf(),
                 fix: if crate::disk::paths::is_under_root(
@@ -1313,21 +1307,17 @@ pub fn preflight_launch_dir(
                 } else {
                     gap.fix(adapter.spec().kind, "rimz trust grant")
                 },
-                reason: LaunchDirTrustReason::Undecided,
-            }
-            .into())
+            })
         }
         Some(FolderTrust::Restricted { key }) if mode != LaunchDirMode::Headless => {
-            Err(LaunchDirUntrusted {
+            Err(LaunchDirRefusal::Restricted {
                 kind: adapter.spec().kind,
                 dir: key,
                 fix: format!(
                     "{}; RimZ leaves the saved decision alone",
                     FolderTrust::RESTRICTED_FIX
                 ),
-                reason: LaunchDirTrustReason::Restricted,
-            }
-            .into())
+            })
         }
         _ => Ok(()),
     }

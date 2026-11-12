@@ -250,18 +250,18 @@ fn codex_config_path_honors_codex_home_and_override() {
             LaunchDirMode::Supervised,
         )
         .unwrap_err();
-        let crate::agents::LaunchDirRefusal::Untrusted(error) = error else {
+        let crate::agents::LaunchDirRefusal::Undecided { kind, dir, fix } = &error else {
             panic!("expected a folder-trust refusal");
         };
-        assert_eq!(error.kind, "codex");
-        assert_eq!(error.dir, cwd);
-        assert!(error.fix.contains("rimz trust grant --agents codex"));
+        assert_eq!(*kind, "codex");
+        assert_eq!(dir, cwd);
+        assert!(fix.contains("rimz trust grant --agents codex"));
         assert_eq!(
             error.to_string(),
             format!(
                 "codex has no trust decision and would stop at its trust prompt for `{}`: {}",
                 cwd.display(),
-                error.fix
+                fix
             )
         );
         write_trust(&path, &[(cwd, "untrusted")], None);
@@ -292,18 +292,18 @@ fn codex_config_path_honors_codex_home_and_override() {
             LaunchDirMode::Supervised,
         )
         .unwrap_err();
-        let crate::agents::LaunchDirRefusal::Untrusted(error) = error else {
+        let crate::agents::LaunchDirRefusal::Restricted { dir, fix, .. } = &error else {
             panic!("expected a folder-trust refusal");
         };
         assert!(error.to_string().contains("saved untrusted"));
-        assert!(error.fix.contains("Open restricted"));
+        assert!(fix.contains("Open restricted"));
         assert_eq!(
             error.to_string(),
             format!(
                 "codex is saved untrusted and will stop at its Folder access prompt on every \
                  launch for `{}`: {}",
-                error.dir.display(),
-                error.fix
+                dir.display(),
+                fix
             )
         );
     }

@@ -3474,7 +3474,7 @@ fn supervised_claude_without_folder_trust_refuses_but_headless_passes() {
     .expect_err("supervised Claude must not stop at an unwatched trust prompt");
     assert!(matches!(
         error,
-        rimz::agents::LaunchDirRefusal::Untrusted(_)
+        rimz::agents::LaunchDirRefusal::Undecided { .. }
     ));
     assert!(
         error
