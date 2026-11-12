@@ -400,7 +400,7 @@ upward-dependencies = ["address"]
 # AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
 # PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
 # over from the fold to the cache clock's read (+2).
-surface-budget = 1285
+surface-budget = 1257
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -7921,6 +7921,31 @@ reason = "Public AskQueueEdit fields expose this private observation type; the r
 kind = "item"
 key = "agents::QueuedQuestion"
 reason = "Public AskQueueEdit fields expose this private observation type; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::RefreshSpawn"
+reason = "Named type in a public capability signature that crosses agents, harness, message, sidebar and the binary; a bare Vec<String> would trade the name for nothing a caller stops doing (pass 33h)."
+
+[[verdict]]
+kind = "item"
+key = "agents::HeadlessForm"
+reason = "The public AgentDefinition::headless field exposes this private headless trait; the root re-export is its only public path (pass 33h)."
+
+[[verdict]]
+kind = "item"
+key = "agents::HeadlessResult"
+reason = "HeadlessForm::read_result returns this private headless type; the root re-export is its only public path (pass 33h)."
+
+[[verdict]]
+kind = "item"
+key = "agents::TierPass"
+reason = "TierStamp::passes returns this private observation type; the root re-export is its only public path (pass 33h)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::prepare_reset_credit_redemption"
+reason = "The agents-side kind lookup for a reset credit, carrying the one unsupported-kind text; the harness applies its own verdict to the offer it returns (pass 33h)."
 
 [[verdict]]
 kind = "item"
