@@ -1823,7 +1823,7 @@ fn assert_subagent_checkout_case(
             } else {
                 format!(
                     "description: Research\nagent: {profile_kind}\ntools: [Read]\n\
-                     allowed-tools: [Read]\nempty-dir: {}",
+                     allowed-tools: [Read]\ntimeout: 10m\nempty-dir: {}",
                     !fallback
                         && !matches!(
                             empty,
@@ -2388,6 +2388,33 @@ fn assert_subagent_checkout_case(
     };
     let records = rimz::harness::run::list(store.paths()).expect("list child runs");
     assert_eq!(records.len(), expected_count);
+    // `researcher` sets `timeout: 10m`, which drops the default 10m warning; a bare kind takes
+    // the `[agents.subagents]` defaults.
+    let (timeout, warn) = if empty.is_some() {
+        (Duration::from_secs(600), vec![Duration::from_secs(300)])
+    } else {
+        (
+            Duration::from_secs(1800),
+            vec![Duration::from_secs(600), Duration::from_secs(300)],
+        )
+    };
+    for record in &records {
+        assert_eq!(
+            (
+                record.timeout,
+                &record.warn,
+                record.grace,
+                record.deadline_at
+            ),
+            (
+                Some(timeout),
+                &warn,
+                Some(Duration::from_secs(300)),
+                record.started_at.checked_add(timeout).ok(),
+            ),
+            "{record:?}"
+        );
+    }
     let agents = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("child launch history")
