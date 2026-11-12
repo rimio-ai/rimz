@@ -627,12 +627,30 @@ pub(super) fn execute_attempt(
         }),
         Ok(send::Receipt::ClaimLost { .. }) => Ok(AttemptOutcome::Queued),
         Ok(send::Receipt::CacheCold) => {
+            // The cold check reads the ping at the head; whatever was batched behind it waits for
+            // the next attempt rather than failing with the ping.
+            let (pings, batched): (Vec<_>, Vec<_>) = records.iter().cloned().partition(|record| {
+                matches!(
+                    record.sender,
+                    MessageSender::Harness {
+                        notice: HarnessNotice::CacheKeepalive
+                    }
+                )
+            });
             store.record_message_delivery_failures(
-                records,
+                &pings,
                 crate::store::writer::DeliveryFailureDisposition::Terminal,
                 "the receiver's prompt cache went cold before the ping was written",
                 &workspace.session_name,
             )?;
+            if !batched.is_empty() {
+                store.release_message_claims(
+                    &batched,
+                    "deferred: the cache keepalive ahead of it went cold before the paste",
+                    false,
+                    &workspace.session_name,
+                )?;
+            }
             Ok(AttemptOutcome::Queued)
         }
         Ok(send::Receipt::TypingHeld { until, compacted }) => {

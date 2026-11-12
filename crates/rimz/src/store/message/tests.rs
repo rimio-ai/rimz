@@ -2093,8 +2093,8 @@ fn delivery_batch_selector_pins_fifo_lanes_and_compatible_prefix() {
         met_at: None,
     });
     let after_blocked = delivery_message(7, &receiver, DeliveryGate::Done, Some("same"));
-    let barrier = delivery_message(8, &receiver, DeliveryGate::Done, Some("other"));
-    let after_barrier = delivery_message(9, &receiver, DeliveryGate::Done, Some("same"));
+    let other_channel = delivery_message(8, &receiver, DeliveryGate::Done, Some("other"));
+    let back_in_channel = delivery_message(9, &receiver, DeliveryGate::Done, Some("same"));
     let live = vec![
         unrelated_card,
         unrelated_lane,
@@ -2103,11 +2103,11 @@ fn delivery_batch_selector_pins_fifo_lanes_and_compatible_prefix() {
         compatible,
         blocked,
         after_blocked,
-        barrier,
-        after_barrier,
+        other_channel,
+        back_in_channel,
     ];
     let selected = delivery_batch_indices(&live, &head.message_id, AgentStatus::Idle, now).unwrap();
-    assert_eq!(selected, vec![3, 4, 6]);
+    assert_eq!(selected, vec![3, 4, 6, 7, 8]);
 
     let head = delivery_message(1, &receiver, DeliveryGate::Done, None);
     let mut expired = delivery_message(2, &receiver, DeliveryGate::Done, None);
@@ -2300,11 +2300,11 @@ fn align_submitted_prompt_consumes_harness_report_header() {
 }
 
 #[test]
-fn fleet_reports_keep_durable_names_and_never_batch() {
-    for (notice, name, batchable) in [
-        (HarnessNotice::SubagentReport, "subagent_report", false),
-        (HarnessNotice::AgentReport, "agent_report", false),
-        (HarnessNotice::TeamReport, "team_report", true),
+fn fleet_reports_keep_durable_names_and_batch() {
+    for (notice, name) in [
+        (HarnessNotice::SubagentReport, "subagent_report"),
+        (HarnessNotice::AgentReport, "agent_report"),
+        (HarnessNotice::TeamReport, "team_report"),
     ] {
         let stored = serde_json::json!(name);
         assert_eq!(
@@ -2319,7 +2319,7 @@ fn fleet_reports_keep_durable_names_and_never_batch() {
             DeliveryGate::Done,
         )
         .with_sender(MessageSender::Harness { notice });
-        assert_eq!(record.batchable(), batchable, "{name}");
+        assert!(record.batchable(), "{name}");
     }
 }
 

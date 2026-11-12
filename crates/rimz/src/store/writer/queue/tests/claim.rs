@@ -241,9 +241,9 @@ fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
     let q = Queue::new();
     let first = q.record(1).with_channel(Some("same".to_owned()));
     let second = q.record(2).with_channel(Some("same".to_owned()));
-    let barrier = q.record(3).with_channel(Some("other".to_owned()));
-    let after_barrier = q.record(4).with_channel(Some("same".to_owned()));
-    for message in [&first, &second, &barrier, &after_barrier] {
+    let other_channel = q.record(3).with_channel(Some("other".to_owned()));
+    let back_in_channel = q.record(4).with_channel(Some("same".to_owned()));
+    for message in [&first, &second, &other_channel, &back_in_channel] {
         q.queue_message(message, "session").unwrap();
     }
 
@@ -257,7 +257,12 @@ fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
             .iter()
             .map(|message| message.message_id.clone())
             .collect::<Vec<_>>(),
-        vec![first.message_id.clone(), second.message_id.clone()]
+        vec![
+            first.message_id.clone(),
+            second.message_id.clone(),
+            other_channel.message_id.clone(),
+            back_in_channel.message_id.clone(),
+        ]
     );
     assert!(claimed.iter().all(|message| message.attempts == 1));
     assert!(
@@ -266,12 +271,11 @@ fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
             .all(|message| message.batch_id.as_ref() == Some(&first.message_id))
     );
     let live = q.live();
-    assert_eq!(live[0].status, MessageStatus::Claimed);
-    assert_eq!(live[1].status, MessageStatus::Claimed);
-    assert_eq!(live[0].batch_id, None);
-    assert_eq!(live[1].batch_id, None);
-    assert_eq!(live[2].status, MessageStatus::Queued);
-    assert_eq!(live[3].status, MessageStatus::Queued);
+    assert!(
+        live.iter()
+            .all(|message| message.status == MessageStatus::Claimed)
+    );
+    assert!(live.iter().all(|message| message.batch_id.is_none()));
 }
 
 #[test]
