@@ -381,8 +381,8 @@ fn sleep_derives_the_same_subscriptions_and_forge_demand_as_a_condition() {
         "window.5h.left>=40",
     ]
     .map(|term| {
-        let sleep: WorkflowSpec = toml::from_str(&format!("{SLEEP}when=['{term}']\n")).unwrap();
-        let condition: WorkflowSpec = toml::from_str(&format!(
+        let sleep: Definition = toml::from_str(&format!("{SLEEP}when=['{term}']\n")).unwrap();
+        let condition: Definition = toml::from_str(&format!(
             "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n\
              [checks.cooldown]\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
         ))

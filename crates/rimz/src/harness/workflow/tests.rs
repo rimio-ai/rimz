@@ -48,8 +48,8 @@ pub(in crate::harness) struct FakeHost {
 
 /// Engine internals the loop scheduler's compiled-task tests drive on the graphs it compiles;
 /// those tests live beside the compiler, since workflow imports nothing from the scheduler.
-pub(in crate::harness) fn resolved_edges(spec: &WorkflowSpec, node: &str) -> Option<Vec<Edge>> {
-    spec.resolved_edges(node)
+pub(in crate::harness) fn resolved_edges(spec: &Definition, node: &str) -> Option<Vec<Edge>> {
+    spec.resolved_edges(node).map(<[Edge]>::to_vec)
 }
 
 /// The prompt each of `step`'s subscriptions hands the step.
@@ -65,7 +65,7 @@ pub(in crate::harness) fn subscription_prompts(step: &Step) -> Vec<Option<&str>>
 /// same attempt, returning the record with the outcome a terminal write of the last answer's
 /// journal entries gives it.
 pub(in crate::harness) fn finish_judge(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     paths: &crate::disk::paths::WorkflowPaths,
     record: crate::store::workflow::RunRecord,
     results: &[(Result<serde_json::Value, String>, &'static str)],
@@ -100,14 +100,14 @@ pub(in crate::harness) fn finish_judge(
 }
 
 /// Whether `outcome` out of judge `node` declines the act.
-pub(in crate::harness) fn declines(spec: &WorkflowSpec, node: &str, outcome: &str) -> bool {
+pub(in crate::harness) fn declines(spec: &Definition, node: &str, outcome: &str) -> bool {
     script::declines(spec, node, outcome)
 }
 
 /// Evaluate the judge `record` holds: its failure kind and its answer.
 pub(in crate::harness) fn evaluate(
     state: &crate::disk::paths::StatePaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &crate::store::workflow::RunRecord,
 ) -> (&'static str, Result<serde_json::Value, String>) {
     let judged = script::evaluate(state, &state.workflow(&record.id), spec, record);
@@ -368,6 +368,7 @@ impl AttemptHost for FakeHost {
 mod attempts;
 mod commands;
 mod conditions;
+mod definition;
 mod graph;
 mod inspection;
 mod judges;
@@ -884,7 +885,7 @@ fn until_warns_about_unreported_background_work_and_auto_continue() {
 #[test]
 fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() {
     let results = ["@done", "pick"].map(|target| {
-        let spec: WorkflowSpec = toml::from_str(&format!(
+        let spec: Definition = toml::from_str(&format!(
             "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\non.deadline='@wait'\n\
              [checks.pick]\nrun='true'\non.ready='{target}'\n"
         ))
@@ -1447,7 +1448,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
                 .edges
                 .iter()
                 .filter(|edge| edge.outcome == "asked")
-                .map(|edge| (edge.target.clone(), edge.source))
+                .map(|edge| (edge.target.to_string(), edge.source))
                 .collect::<Vec<_>>()
         })
         .collect();

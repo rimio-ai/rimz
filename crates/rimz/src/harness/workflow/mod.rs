@@ -12,6 +12,7 @@ use crate::store::run::RunStatus;
 use crate::store::workflow::{Asking, AttemptOutcome, AttemptRun, Children, Limited, TurnEnd};
 
 mod brief;
+mod definition;
 mod engine;
 mod graph;
 mod inspect;
@@ -21,6 +22,8 @@ mod spec;
 mod state;
 mod validate;
 
+pub use definition::{Definition, Target};
+use definition::{Kind, Node};
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
     DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, launch_groups,

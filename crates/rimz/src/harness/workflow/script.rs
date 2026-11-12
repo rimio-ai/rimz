@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{WorkflowSpec, spec, state::Transition};
+use super::{Definition, Kind, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
 use crate::harness::headless::exit_failure;
@@ -75,28 +75,30 @@ fn command_words(
 pub(super) fn evaluate(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
 ) -> Evaluation {
-    let run = match spec.checks[&record.node].kind() {
-        Some(spec::CheckKind::Agent(_)) => return judge::evaluate(state, paths, spec, record),
-        Some(spec::CheckKind::Shell(shell)) => {
+    let run = match spec.check_kind(&record.node) {
+        Some(Kind::Judge(_)) => return judge::evaluate(state, paths, spec, record),
+        Some(Kind::Shell(shell)) => {
             return evaluate_shell(state, paths, spec, record, shell);
         }
-        Some(spec::CheckKind::Condition) => {
+        Some(Kind::Condition(_)) => {
             let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
             result.object = condition::evaluate(state, &spec.checks[&record.node], record);
             return result;
         }
-        Some(spec::CheckKind::Sleep) => {
+        Some(Kind::Sleep(_)) => {
             let mut result = Evaluation::failed("invalid", "sleep evaluation interrupted");
             result.object =
                 condition_now(state, &spec.checks[&record.node], record, record.entered_at)
                     .map(|(object, _)| object);
             return result;
         }
-        Some(spec::CheckKind::Run(run)) => run,
-        None => return Evaluation::failed("invalid", "check needs exactly one runner"),
+        Some(Kind::Run(run)) => run.text(),
+        Some(Kind::Agent(_) | Kind::Message(_)) | None => {
+            return Evaluation::failed("invalid", "check needs exactly one runner");
+        }
     };
     let mut result = Evaluation::failed("invalid", "evaluation interrupted");
     // Evaluation follows a recorded live attempt.
@@ -206,7 +208,7 @@ pub fn condition_now(
 fn evaluate_shell(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     shell: &str,
 ) -> Evaluation {
@@ -266,24 +268,19 @@ fn evaluate_shell(
 pub(super) fn execute_step(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     on_spawn: impl Fn(),
 ) -> Result<check_run::CheckOutcome, ChildError> {
     let mut digests = BTreeMap::new();
     // Only validated command steps enter this hosting path.
-    let (command, argv) = match spec.steps[&record.node]
-        .kind()
-        .expect("command step runner")
-    {
-        spec::StepKind::Run(run) => (
-            run,
-            Some(command_words(record, run, &mut digests).map_err(ChildError::Failed)?),
+    let (command, argv) = match spec.step_kind(&record.node).expect("command step runner") {
+        Kind::Run(run) => (
+            run.text(),
+            Some(command_words(record, run.text(), &mut digests).map_err(ChildError::Failed)?),
         ),
-        spec::StepKind::Shell(shell) => (shell, None),
-        spec::StepKind::Agent(_) | spec::StepKind::Message(_) => {
-            unreachable!("advance sends agent and message steps to the attempt host")
-        }
+        Kind::Shell(shell) => (shell.as_str(), None),
+        _ => unreachable!("advance sends agent and message steps to the attempt host"),
     };
     // prepare publishes the live attempt before dispatching the command.
     let seq = record.attempt.as_ref().expect("prepared command step").seq;
@@ -324,7 +321,7 @@ pub(super) fn execute_step(
 fn with_child<T>(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     digests: BTreeMap<String, String>,
     execute: impl FnOnce(

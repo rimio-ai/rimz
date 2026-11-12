@@ -180,7 +180,7 @@ fn judge(limited: bool) {
     pending.next_seq += 1;
     pending.attempt = Some(check.clone());
     let paths = state.workflow(&record.id);
-    let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+    let spec: Definition = toml::from_str(&text).unwrap();
     let mut t = Transition {
         record: pending,
         spec: &spec,

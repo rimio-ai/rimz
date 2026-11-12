@@ -65,7 +65,8 @@ fn listed_checks_keep_the_session_and_input_then_push_and_restart_at_the_first()
     assert!(
         hops(&spec, &journal, None)
             .iter()
-            .any(|hop| hop.node == "pr" && hop.target.as_deref() == Some("review"))
+            .any(|hop| hop.node == "pr"
+                && hop.target.as_ref().map(|target| target.as_str()) == Some("review"))
     );
     let assists = assist_log::recent(&crate::disk::paths::logs_dir(), None);
     assert_eq!(

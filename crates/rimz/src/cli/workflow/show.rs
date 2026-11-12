@@ -1,6 +1,6 @@
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
-use rimz::harness::workflow::{HopKind, WorkflowSpec};
+use rimz::harness::workflow::{Definition, HopKind};
 use rimz::store::workflow::{JournalEntry, JournalEvent, RunState};
 
 use super::*;
@@ -12,7 +12,7 @@ mod rail;
 struct View<'a> {
     record: &'a RunRecord,
     paths: &'a paths::WorkflowPaths,
-    spec: &'a WorkflowSpec,
+    spec: &'a Definition,
     journal: &'a [JournalEntry],
     now: Timestamp,
     commands: resolve::RunCommands<'a>,
@@ -555,7 +555,7 @@ impl View<'_> {
                     } else {
                         String::new()
                     },
-                    hop.target.as_deref().unwrap_or_default()
+                    hop.target.as_ref().map_or("", |target| target.as_str())
                 ),
             };
             trail.push(format!("{} {fact}", self.clock(hop.at)));

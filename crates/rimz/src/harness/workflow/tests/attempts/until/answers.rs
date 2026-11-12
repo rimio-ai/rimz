@@ -70,10 +70,12 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
     );
     assert!(!text.contains("private-shell-evidence"), "{text}");
     let mut spec = load(&paths.home).unwrap();
-    let check = spec.checks.get_mut("review").unwrap();
-    check.shell = None;
-    check.agent = Some("claude".into());
-    check.prompt_file = Some("prompt.md".into());
+    spec.edit(|spec| {
+        let check = spec.checks.get_mut("review").unwrap();
+        check.shell = None;
+        check.agent = Some("claude".into());
+        check.prompt_file = Some("prompt.md".into());
+    });
     fs::write(
         paths.check_output(seq),
         r#"{"outcome":"fail","reason":"exited 1"}"#,

@@ -55,7 +55,7 @@ fn a_delay_keeps_the_verdict_without_rechecking_then_closes_once() {
     assert_eq!(
         hops(&spec, &journal, ended.held.as_ref())
             .iter()
-            .filter(|hop| hop.target.as_deref() == Some("@done"))
+            .filter(|hop| hop.target.as_ref().map(|target| target.as_str()) == Some("@done"))
             .count(),
         1
     );
@@ -162,7 +162,7 @@ fn cancel_deadline_and_provider_exit_interrupt_a_delayed_close() {
             assert!(
                 hops(&spec, &journal, ended.held.as_ref())
                     .iter()
-                    .all(|hop| hop.target.as_deref() != Some("@done"))
+                    .all(|hop| hop.target.as_ref().map(|target| target.as_str()) != Some("@done"))
             );
         }
     }

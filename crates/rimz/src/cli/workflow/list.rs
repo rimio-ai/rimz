@@ -9,7 +9,7 @@ use super::*;
 
 struct Row<'a> {
     record: &'a RunRecord,
-    spec: Option<&'a workflow::WorkflowSpec>,
+    spec: Option<&'a workflow::Definition>,
     journal: Vec<records::JournalEntry>,
     ignored: &'a [workflow::Issue],
     address: String,
@@ -587,7 +587,7 @@ mod tests {
             "deadline_fired":false, "next_seq":1,
         }))
         .unwrap();
-        let spec: workflow::WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='decision'\n[checks.decision]\nshell='true'\non.pass='work'\non.fail='@user'\n[steps.work]\nshell='true'\ntimeout='1h'\nthen='decision'\n").unwrap();
+        let spec: workflow::Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='decision'\n[checks.decision]\nshell='true'\non.pass='work'\non.fail='@user'\n[steps.work]\nshell='true'\ntimeout='1h'\nthen='decision'\n").unwrap();
         let mut rows = [Row {
             record: &record,
             spec: Some(&spec),

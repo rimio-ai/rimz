@@ -2,7 +2,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use jiff::Timestamp;
-use rimz::harness::workflow::{self, WorkflowSpec};
+use rimz::harness::workflow::{self, Definition};
 use rimz::store::workflow::{
     self as records, Children, JournalEntry, JournalEvent, RunRecord, TurnEndAction,
 };
@@ -39,7 +39,7 @@ impl HistoryRow<'_> {
 
     fn target(
         &self,
-        spec: &WorkflowSpec,
+        spec: &Definition,
         journal: &[JournalEntry],
         record: &RunRecord,
     ) -> Option<String> {
@@ -51,6 +51,7 @@ impl HistoryRow<'_> {
                     &journal[self.index + 1..],
                     record.held.as_ref(),
                 )
+                .map(|target| target.to_string())
             }
             _ => None,
         }
@@ -173,7 +174,7 @@ pub(in crate::cli) fn wait_row_counts<'a>(
 
 struct History<'a> {
     record: &'a RunRecord,
-    spec: &'a WorkflowSpec,
+    spec: &'a Definition,
     journal: &'a [JournalEntry],
     now: Timestamp,
     prose: render::prose::Prose,
@@ -181,7 +182,7 @@ struct History<'a> {
 
 pub(in crate::cli) fn render(
     record: &RunRecord,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     journal: &[JournalEntry],
     now: Timestamp,
     prose: render::prose::Prose,
@@ -199,7 +200,7 @@ pub(in crate::cli) fn render(
 
 pub(in crate::cli) fn terminal(
     record: &RunRecord,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     journal: &[JournalEntry],
     prose: render::prose::Prose,
     out: &mut impl Write,

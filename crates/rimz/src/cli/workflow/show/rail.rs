@@ -306,9 +306,7 @@ impl View<'_> {
                 );
                 if workflow::next_bound(self.spec, self.record, Some(index as u32), self.now)?
                     .is_some_and(|(next, target)| {
-                        next == at
-                            && self.spec.target(&row.name, &case.outcome).as_deref()
-                                == Some(target.as_str())
+                        next == at && self.spec.target(&row.name, &case.outcome) == Some(target)
                     })
                 {
                     case.target.push_str(&format!(" at {}", self.clock(at)));

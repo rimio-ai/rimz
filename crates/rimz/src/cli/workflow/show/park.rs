@@ -106,7 +106,7 @@ impl View<'_> {
                         .edges(&self.record.node)
                         .into_iter()
                         .filter(|edge| edge.outcome != "deadline")
-                        .map(|edge| edge.target)
+                        .map(|edge| edge.target.to_string())
                         .filter(|target| !target.starts_with('@'))
                         .collect::<std::collections::BTreeSet<_>>();
                     for node in nodes {

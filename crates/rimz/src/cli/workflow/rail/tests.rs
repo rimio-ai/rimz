@@ -51,7 +51,7 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
         ("agent='claude'\nlifecycle='turn'", true),
         ("agent='claude'", false),
     ] {
-        let spec: WorkflowSpec = toml::from_str(&format!(
+        let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
              [checks.gate]\nshell='true'\non.pass='work'\n\
              [steps.work]\nthen='gate'\n{runner}\n"
@@ -98,7 +98,7 @@ fn land_hops() -> Vec<Hop> {
 }
 
 fn horizontal_text(record: &RunRecord, hops: &[Hop], width: Option<usize>) -> String {
-    let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+    let spec: Definition = toml::from_str(LAND).unwrap();
     let mut out = anstream::StripStream::new(Vec::new());
     horizontal(&mut out, &spec, record, hops, &[], width, 6).unwrap();
     String::from_utf8(out.into_inner()).unwrap()
@@ -178,7 +178,7 @@ fn live_current_node_roles_differ_from_every_node_mark_in_each_set() {
 
 #[test]
 fn parks_and_needs_fix_holds_use_the_held_mark_and_warning_color() {
-    let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+    let spec: Definition = toml::from_str(LAND).unwrap();
     let machine = super::super::super::machine_config();
     let glyph = rimz::theme::theme_glyphs(&machine.theme)(GlyphRole::WorkflowHeld);
     for hold in [None, Some("check_failed"), Some("disk"), Some("store")] {
@@ -263,7 +263,7 @@ fn horizontal_detours_hang_under_their_parent_and_follow_width_elision() {
 
 #[test]
 fn horizontal_elides_unreached_left_and_reached_right_branches() {
-    let spec: WorkflowSpec = toml::from_str(
+    let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='choose'\n\
          [checks.choose]\nshell='true'\non.a='unit_tests'\n\
          on.b='integration_tests'\non.c='used'\n\
@@ -298,7 +298,7 @@ fn horizontal_elides_unreached_left_and_reached_right_branches() {
 
 #[test]
 fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
-    let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+    let spec: Definition = toml::from_str(LAND).unwrap();
     let mut record = record("fix");
     record.state = RunState::Failed;
     let mut hops = land_hops()[..2].to_vec();
@@ -345,7 +345,7 @@ fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
 
 #[test]
 fn horizontal_appends_resumed_and_reached_unreachable_nodes() {
-    let spec: WorkflowSpec = toml::from_str(&format!(
+    let spec: Definition = toml::from_str(&format!(
         "{LAND}\n[steps.resumed]\nshell='true'\nthen='watch'\n\
          [steps.never_used]\nshell='true'\nthen='watch'\n"
     ))
@@ -392,7 +392,7 @@ fn horizontal_appends_resumed_and_reached_unreachable_nodes() {
 
 #[test]
 fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
-    let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
+    let spec: Definition = toml::from_str(LAND).unwrap();
     let actual = [RunState::Done, RunState::Failed].map(|state| {
         let mut record = record("watch");
         record.state = state;
@@ -425,7 +425,7 @@ fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
 }
 
 fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
-    let spec: WorkflowSpec = toml::from_str(&format!(
+    let spec: Definition = toml::from_str(&format!(
         "[workflow]\nscope='worktree'\nstart='begin'\n\
          [checks.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
          {runner}[checks.after]\nshell='touch \"$RIMZ_WORKFLOW_DIR/ready\"; sleep 30'\n\
@@ -1049,7 +1049,7 @@ on.fail='@failed'
 
 #[test]
 fn limit_routes_use_the_same_direction_marks_as_other_edges() {
-    let spec: WorkflowSpec = toml::from_str(
+    let spec: Definition = toml::from_str(
         &LAND
             .replace("timeout = '3d'", "timeout = '3d'\non.timeout = 'fix'")
             .replace("max-visits = 4", "max-visits = 4\non.cap = 'notes'"),
@@ -1099,7 +1099,7 @@ fn wrapped_rows_budget_by_the_wider_prefix() {
 #[test]
 fn multiline_commands_stay_on_one_rail_line() {
     let headings = ["run", "shell"].map(|runner| {
-        let spec: WorkflowSpec = toml::from_str(&format!(
+        let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
              [checks.gate]\n{runner}=\"\"\"echo first\necho second\"\"\"\non.pass='work'\n\
              [steps.work]\n{runner}=\"\"\"echo first\necho second\"\"\"\nthen='gate'\n"
@@ -1179,11 +1179,14 @@ fn land_rail_agrees(text: &str) {
                     assert!(!text.contains(&format!("{} → {}", edge.outcome, edge.target)));
                 }
                 _ => {
-                    let position = walk.nodes.iter().position(|node| node.node == edge.target);
+                    let position = walk
+                        .nodes
+                        .iter()
+                        .position(|node| edge.target == node.node.as_str());
                     let target = match position {
                         Some(position) if position <= index => format!("↑ {}", edge.target),
                         Some(_) => format!("→ {}", edge.target),
-                        None => edge.target.clone(),
+                        None => edge.target.to_string(),
                     };
                     assert!(text.contains(&target), "missing {target}:\n{text}");
                 }
@@ -1273,7 +1276,7 @@ mod horizontal_sweep {
         ]
     }
 
-    fn shape(name: &str) -> WorkflowSpec {
+    fn shape(name: &str) -> Definition {
         let (_, definition) = shapes()
             .into_iter()
             .find(|(shape, _)| *shape == name)
@@ -1281,7 +1284,7 @@ mod horizontal_sweep {
         toml::from_str(&definition).unwrap()
     }
 
-    fn path_to(spec: &WorkflowSpec, goal: &str) -> Vec<Hop> {
+    fn path_to(spec: &Definition, goal: &str) -> Vec<Hop> {
         let mut previous = BTreeMap::new();
         let mut queue = VecDeque::from([spec.workflow.start.clone()]);
         let mut seen = BTreeSet::from([spec.workflow.start.clone()]);
@@ -1290,12 +1293,13 @@ mod horizontal_sweep {
                 break;
             }
             for edge in spec.edges(&node) {
-                if edge.fires == Fireability::Never || edge.target.starts_with('@') {
+                let target = edge.target.to_string();
+                if edge.fires == Fireability::Never || target.starts_with('@') {
                     continue;
                 }
-                if seen.insert(edge.target.clone()) {
-                    previous.insert(edge.target.clone(), (node.clone(), edge.outcome));
-                    queue.push_back(edge.target);
+                if seen.insert(target.clone()) {
+                    previous.insert(target.clone(), (node.clone(), edge.outcome));
+                    queue.push_back(target);
                 }
             }
         }
@@ -1316,16 +1320,16 @@ mod horizontal_sweep {
     }
 
     fn runs(
-        spec: &WorkflowSpec,
+        spec: &Definition,
         node: &str,
         repeated_detours: bool,
     ) -> Vec<(&'static str, RunRecord, Vec<Hop>)> {
         let hops = path_to(spec, node);
         let mut base = record(node);
-        for name in std::iter::once(node).chain(
-            hops.iter()
-                .flat_map(|hop| std::iter::once(hop.node.as_str()).chain(hop.target.as_deref())),
-        ) {
+        for name in std::iter::once(node).chain(hops.iter().flat_map(|hop| {
+            std::iter::once(hop.node.as_str())
+                .chain(hop.target.as_ref().map(|target| target.as_str()))
+        })) {
             if spec.steps.contains_key(name) {
                 base.visits.entry(name.into()).or_default().total = 1;
             }
@@ -1381,7 +1385,7 @@ mod horizontal_sweep {
         runs
     }
 
-    fn position_marks(spec: &WorkflowSpec, record: &RunRecord) -> Vec<(String, String)> {
+    fn position_marks(spec: &Definition, record: &RunRecord) -> Vec<(String, String)> {
         let machine = super::super::super::super::machine_config();
         let glyph = rimz::theme::theme_glyphs(&machine.theme);
         std::iter::once(record.node.as_str())
@@ -1402,7 +1406,7 @@ mod horizontal_sweep {
     }
 
     fn position_floor(
-        spec: &WorkflowSpec,
+        spec: &Definition,
         record: &RunRecord,
         hops: &[Hop],
         marks: &[(String, String)],
@@ -1480,14 +1484,14 @@ mod horizontal_sweep {
         floor
     }
 
-    fn rendered(spec: &WorkflowSpec, record: &RunRecord, hops: &[Hop], width: usize) -> String {
+    fn rendered(spec: &Definition, record: &RunRecord, hops: &[Hop], width: usize) -> String {
         let mut out = Vec::new();
         horizontal(&mut out, spec, record, hops, &[], Some(width), 6).unwrap();
         String::from_utf8(out).unwrap()
     }
 
     fn check_case(
-        spec: &WorkflowSpec,
+        spec: &Definition,
         record: &RunRecord,
         hops: &[Hop],
         width: usize,
@@ -1574,7 +1578,7 @@ mod horizontal_sweep {
         let mut cases = 0;
         let mut long_floor_cases = 0;
         for (shape, definition) in shapes() {
-            let spec: WorkflowSpec = toml::from_str(&definition).unwrap();
+            let spec: Definition = toml::from_str(&definition).unwrap();
             for node in spec.checks.keys().chain(spec.steps.keys()) {
                 for repeated_detours in [false, true] {
                     for (state, record, hops) in runs(&spec, node, repeated_detours) {
@@ -1609,7 +1613,7 @@ mod horizontal_sweep {
 
 #[test]
 fn a_sleep_rail_prints_its_spelling_and_points_then_along_the_walk() {
-    let spec: WorkflowSpec = toml::from_str(
+    let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='poll'\n\
          [checks.poll]\nshell='true'\non={pass='@done',fail='cooldown'}\n\
          [checks.cooldown]\nsleep='30m'\nwhen=['ci=passed']\nfor='2m'\nthen='poll'\n",

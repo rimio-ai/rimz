@@ -52,7 +52,7 @@ fn record() -> RunRecord {
     })).unwrap()
 }
 
-fn spec() -> WorkflowSpec {
+fn spec() -> Definition {
     toml::from_str("[workflow]\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\ntimeout = '1h'\n").unwrap()
 }
 
@@ -67,7 +67,7 @@ fn inspection_timeout_uses_the_node_entry_time() {
 
 #[test]
 fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.deadline='@user'\n\
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.deadline='@user'\n\
         [checks.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',unknown='@wait',timeout='@failed'}\n\
         [[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='10m'\n").unwrap();
     let mut record = record();
@@ -95,7 +95,7 @@ fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
         ]
     );
     let mut spec = spec;
-    spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("5m".into());
+    spec.edit(|spec| spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("5m".into()));
     assert_eq!(
         super::super::next_bound(&spec, &record, Some(0), record.entered_at).unwrap(),
         Some((
@@ -103,7 +103,7 @@ fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
             "@failed".into()
         ))
     );
-    spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("1m".into());
+    spec.edit(|spec| spec.checks.get_mut("pr").unwrap().cases[0].hold = Some("1m".into()));
     assert_eq!(
         super::super::next_bound(&spec, &record, Some(0), record.entered_at).unwrap(),
         Some((
@@ -142,11 +142,13 @@ fn recheck_limit_takes_the_first_bound_without_routing_it() {
 #[test]
 fn wait_backoff_cannot_hide_an_unfired_deadline() {
     let mut spec = spec();
-    spec.checks
-        .get_mut("pr")
-        .unwrap()
-        .on
-        .insert("pending".into(), "@wait".into());
+    spec.edit(|spec| {
+        spec.checks
+            .get_mut("pr")
+            .unwrap()
+            .on
+            .insert("pending".into(), "@wait".into());
+    });
     let paths = paths();
     let mut record = record();
     let deadline = record.entered_at + jiff::SignedDuration::from_secs(30);
@@ -228,7 +230,7 @@ fn first_terminal_wins_for_every_terminal_state() {
             paths: &paths,
             entries: vec![],
         };
-        t.route(target, json!({"outcome":"ok"}), ParkReason::User)
+        t.route(&target.into(), json!({"outcome":"ok"}), ParkReason::User)
             .unwrap();
         assert_eq!(
             t.record.state, state,
@@ -236,9 +238,13 @@ fn first_terminal_wins_for_every_terminal_state() {
         );
         let record = t.record.clone();
         let entries = t.entries.clone();
-        t.route("@user", json!({"outcome":"bad"}), ParkReason::Invalid)
-            .unwrap();
-        t.route("@done", json!({"outcome":"ok"}), ParkReason::User)
+        t.route(
+            &"@user".into(),
+            json!({"outcome":"bad"}),
+            ParkReason::Invalid,
+        )
+        .unwrap();
+        t.route(&"@done".into(), json!({"outcome":"ok"}), ParkReason::User)
             .unwrap();
         assert_eq!(t.record, record);
         assert_eq!(t.entries, entries);

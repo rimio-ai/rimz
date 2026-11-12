@@ -236,7 +236,7 @@ fn a_condition_without_on_unknown_refuses_and_gets_no_implicit_wait() {
             "example: checks.pr.on.unknown: a condition check requires on.unknown; route it to @wait to keep waiting while a term is unknown"
         )]
     );
-    let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+    let spec: Definition = toml::from_str(&text).unwrap();
     assert!(
         !spec
             .edges("pr")
@@ -472,11 +472,11 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             let text = format!(
                 "[workflow]\non-break='@failed'\nscope='worktree'\nstart='now'\n[checks.now]\nrun='true'\non.ok='@done'\n[checks.later]\n{runner}\n{wake}\n"
             );
-            let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+            let spec: Definition = toml::from_str(&text).unwrap();
             let expected = demanded.then(std::collections::BTreeSet::new);
             assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
 
-            let spec: WorkflowSpec = toml::from_str(&format!(
+            let spec: Definition = toml::from_str(&format!(
                 "{text}[checks.condition]\nelse='pending'\non={{ready='@done',pending='@wait',unknown='@wait'}}\n[[checks.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
             ))
             .unwrap();
@@ -498,7 +498,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
         let text = format!(
             "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nlifecycle='stay'\nprompt-file='prompts/build.md'\nthen=['done']\n{subscribe}\n[checks.done]\nrun='true'\non.ok='@done'\n"
         );
-        let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+        let spec: Definition = toml::from_str(&text).unwrap();
         let expected = demanded.then(std::collections::BTreeSet::new);
         assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
     }

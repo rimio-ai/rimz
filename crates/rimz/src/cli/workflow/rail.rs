@@ -4,8 +4,8 @@ use unicode_width::UnicodeWidthStr;
 use rimz::config::GlyphRole;
 use rimz::harness::when::WhenExpr;
 use rimz::harness::workflow::{
-    Check, CheckKind, Edge, EdgeSource, Fireability, Hop, Route, StepKind, WalkNode, WorkflowSpec,
-    reached,
+    Check, CheckKind, Definition, Edge, EdgeSource, Fireability, Hop, Route, StepKind, Target,
+    WalkNode, reached,
 };
 use rimz::store::workflow::{JournalEntry, RunRecord, RunState, StepLifecycle};
 
@@ -99,7 +99,7 @@ fn track_width(positions: &[(usize, &TrackNode, &str)], hangs: &[&TrackNode]) ->
 
 pub(super) fn horizontal(
     out: &mut impl Write,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     hops: &[Hop],
     journal: &[JournalEntry],
@@ -318,7 +318,7 @@ pub(super) struct CaseRow {
 }
 
 impl Rail {
-    pub(super) fn definition(spec: &WorkflowSpec) -> Self {
+    pub(super) fn definition(spec: &Definition) -> Self {
         let walk = spec.walk();
         let order = walk
             .nodes
@@ -359,7 +359,7 @@ impl Rail {
 
 impl Row {
     fn definition(
-        spec: &WorkflowSpec,
+        spec: &Definition,
         name: &str,
         hangs_under: Option<String>,
         order: &[&str],
@@ -548,7 +548,7 @@ impl Row {
                         if let Some(max) = step.max_visits {
                             row.details.push(format!(
                                 "{max} visits, then {}",
-                                target(name, &edge.target, order)
+                                target(name, edge.target.as_str(), order)
                             ));
                         }
                         if let Some(max) = &step.max_visits_per_outcome {
@@ -559,11 +559,11 @@ impl Row {
                             row.details.push(format!(
                                 "max-visits-per-outcome {}{reset_on}, then {}",
                                 max.limit(),
-                                target(name, &edge.target, order)
+                                target(name, edge.target.as_str(), order)
                             ));
                         }
                     }
-                    "then" => row.details.push(target(name, &edge.target, order)),
+                    "then" => row.details.push(target(name, edge.target.as_str(), order)),
                     _ => row.details.push(edge_text(name, edge, order)),
                 }
             }
@@ -628,7 +628,7 @@ impl Row {
 
 pub(super) fn case_note(node: &str, edges: &[Edge], order: &[&str]) -> Option<String> {
     let edge = edges.iter().find(|edge| edge.outcome == "unknown")?;
-    let action = if edge.target == "@wait" {
+    let action = if edge.target == Target::Wait {
         "waits".into()
     } else {
         format!("goes {}", edge_target(node, edge, order))
@@ -649,11 +649,15 @@ fn edge_text(node: &str, edge: &Edge, order: &[&str]) -> String {
 pub(super) fn after(edge: &Edge) -> String {
     edge.delay
         .as_ref()
-        .map_or_else(String::new, |delay| format!(" after {delay}"))
+        .map_or_else(String::new, |delay| format!(" after {}", delay.text()))
 }
 
 fn edge_target(node: &str, edge: &Edge, order: &[&str]) -> String {
-    format!("{}{}", target(node, &edge.target, order), after(edge))
+    format!(
+        "{}{}",
+        target(node, edge.target.as_str(), order),
+        after(edge)
+    )
 }
 
 fn target(node: &str, target: &str, order: &[&str]) -> String {
@@ -724,7 +728,7 @@ fn declared_mark(check: &Check, outcome: &str) -> &'static str {
     }
 }
 
-pub(super) fn defaults(spec: &WorkflowSpec) -> Vec<&'static str> {
+pub(super) fn defaults(spec: &Definition) -> Vec<&'static str> {
     let mut sentences = Vec::new();
     let edges = spec
         .checks

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::compile::{CompiledAction, TaskWorkflow};
-use rimz::harness::workflow::{EdgeSource, ScopeKind, WorkflowSpec};
+use rimz::harness::workflow::{EdgeSource, ScopeKind};
 
 use super::*;
 
@@ -150,7 +150,7 @@ pub(super) fn render(definition: &Definition, globals: &super::super::GlobalFlag
     Ok(())
 }
 
-pub(super) fn load(definition: &Definition) -> Result<WorkflowSpec> {
+pub(super) fn load(definition: &Definition) -> Result<workflow::Definition> {
     workflow::load(&definition.dir).map_err(|error| {
         anyhow::anyhow!(
             "{}: definition unavailable: {}; check with {}",
@@ -164,7 +164,7 @@ pub(super) fn load(definition: &Definition) -> Result<WorkflowSpec> {
 fn header(
     out: &mut impl Write,
     definition: &Definition,
-    spec: &WorkflowSpec,
+    spec: &workflow::Definition,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let name = definition.name.as_str();

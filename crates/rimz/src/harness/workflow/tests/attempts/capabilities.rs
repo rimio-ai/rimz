@@ -8,7 +8,12 @@ fn report(text: &str) -> (Vec<(String, String)>, Vec<String>) {
     fs::write(dir.join("workflow.toml"), text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     let ignored = load(&dir)
-        .map(|spec| spec.ignored.into_iter().map(|issue| issue.path).collect())
+        .map(|spec| {
+            spec.ignored
+                .iter()
+                .map(|issue| issue.path.clone())
+                .collect()
+        })
         .unwrap_or_default();
     let errors = report
         .errors
@@ -182,7 +187,9 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
         };
         let shown = if failed { "@failed" } else { "@done" };
         assert_eq!(
-            spec.target("build", word).as_deref(),
+            spec.target("build", word)
+                .as_ref()
+                .map(|target| target.as_str()),
             Some(shown),
             "{ending}: inspection names the route settlement takes"
         );
@@ -197,7 +204,11 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
             1,
             "{ending}: one hop out of the step: {trail:?}"
         );
-        assert_eq!(trail[0].1.as_deref(), Some(shown), "{ending}: {trail:?}");
+        assert_eq!(
+            trail[0].1.as_ref().map(|target| target.as_str()),
+            Some(shown),
+            "{ending}: {trail:?}"
+        );
         assert_eq!(
             routed.iter().any(|outcome| outcome == "failed"),
             failed,

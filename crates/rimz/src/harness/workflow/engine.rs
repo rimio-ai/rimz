@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
-use super::{WorkflowSpec, script, spec, state::Transition};
+use super::{Definition, Kind, Target, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::signal::{
@@ -523,14 +523,12 @@ fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
     }
 }
 
-pub(super) fn entered_act(spec: &WorkflowSpec, record: &RunRecord) -> bool {
+pub(super) fn entered_act(spec: &Definition, record: &RunRecord) -> bool {
     record.visits.keys().any(|step| {
-        spec.steps
-            .get(step)
-            .and_then(spec::Step::kind)
-            .is_some_and(|kind| {
-                matches!(kind, spec::StepKind::Agent(_) | spec::StepKind::Message(_))
-            })
+        matches!(
+            spec.step_kind(step),
+            Some(Kind::Agent(_) | Kind::Message(_))
+        )
     })
 }
 
@@ -814,7 +812,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
 fn command_step(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
 ) -> Result<bool> {
     let result = script::execute_step(state, paths, spec, record, || {
@@ -898,12 +896,12 @@ impl Notice {
     /// The send for the record's live message attempt, or `None` when it is not one.
     fn of(
         record: RunRecord,
-        spec: &WorkflowSpec,
+        spec: &Definition,
         text: std::result::Result<String, String>,
     ) -> Option<Self> {
         let attempt = record.attempt.as_ref()?;
         let step = spec.steps.get(&attempt.node)?;
-        let Some(spec::StepKind::Message(target)) = step.kind() else {
+        let Some(Kind::Message(target)) = spec.step_kind(&attempt.node) else {
             return None;
         };
         Some(Self {
@@ -929,8 +927,8 @@ impl Notice {
             record.node,
             id = record.id,
         );
-        let prompt =
-            agent::compose(record, paths, step, digests).map_err(|error| error.to_string())?;
+        let prompt = agent::compose(record, paths, step, true, digests)
+            .map_err(|error| error.to_string())?;
         Ok(if prompt.is_empty() {
             header
         } else {
@@ -953,7 +951,7 @@ fn orphaned_notice(record: &RunRecord) -> Option<crate::ids::MessageId> {
 fn message_step(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     notice: Notice,
     host: &dyn AttemptHost,
 ) -> Result<bool> {
@@ -1008,7 +1006,7 @@ fn message_step(
 fn prepare(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     seen: &mut BTreeSet<String>,
     host: &dyn AttemptHost,
     windows: &WindowReadings<'_>,
@@ -1117,12 +1115,12 @@ fn prepare(
                 return Ok(Decision::Stop);
             }
             let route = t.cap_route(bound, visits, max);
-            t.route(&route.target, route.object, route.reason)?;
+            t.route(&Target::parse(&route.target), route.object, route.reason)?;
             admission.capacity = None;
             persist(&mut t, &guard)?;
             return Ok(Decision::Again);
         }
-        if let Some(spec::StepKind::Agent(agent)) = step.kind() {
+        if let Some(Kind::Agent(agent)) = spec.step_kind(&t.record.node) {
             let admits = spec.workflow.limit.is_some()
                 || step.limit.is_some()
                 || t.record.restart.is_some()
@@ -1176,7 +1174,8 @@ fn prepare(
         }
     } else if spec.checks.contains_key(&t.record.node) {
         let check = &spec.checks[&t.record.node];
-        if let (Some(raw), Some(spec::CheckKind::Agent(profile))) = (&check.window, check.kind())
+        if let (Some(raw), Some(Kind::Judge(profile))) =
+            (&check.window, spec.check_kind(&t.record.node))
             && let Some(detail) = window_wait_for_launch(&t.record, profile, raw, windows, host)?
         {
             t.step_wait("window", Some(detail));
@@ -1201,24 +1200,26 @@ fn prepare(
         )));
     }
     let step = spec.steps.get(&t.record.node);
-    let agent_step = step.filter(|step| matches!(step.kind(), Some(spec::StepKind::Agent(_))));
+    let step_kind = spec.step_kind(&t.record.node);
+    let agent_step = step.filter(|_| matches!(step_kind, Some(Kind::Agent(_))));
     let kind = if agent_step.is_some() {
         AttemptKind::Agent
     } else if step.is_some() {
         AttemptKind::Script
     } else {
-        match spec.checks[&t.record.node].kind() {
-            Some(spec::CheckKind::Agent(_)) => AttemptKind::Judge,
-            Some(spec::CheckKind::Sleep) => AttemptKind::Script,
+        match spec.check_kind(&t.record.node) {
+            Some(Kind::Judge(_)) => AttemptKind::Judge,
+            Some(Kind::Sleep(_)) => AttemptKind::Script,
             _ => AttemptKind::Script,
         }
     };
     let mut digests = BTreeMap::new();
     let prompt = agent_step.map(|step| {
-        agent::compose(&t.record, paths, step, &mut digests).map_err(|error| error.to_string())
+        agent::compose(&t.record, paths, step, false, &mut digests)
+            .map_err(|error| error.to_string())
     });
     let notice = step
-        .filter(|step| matches!(step.kind(), Some(spec::StepKind::Message(_))))
+        .filter(|_| matches!(step_kind, Some(Kind::Message(_))))
         .map(|step| Notice::text(&t.record, paths, step, &mut digests));
     let head_start = if step.is_none() && kind == AttemptKind::Script {
         None
@@ -1288,7 +1289,7 @@ fn prepare(
                     node: t.record.node.clone(),
                     entered_at: t.record.entered_at,
                     at: t.now,
-                    target: "@failed".into(),
+                    target: Target::Failed.to_string(),
                     object: json!({"outcome":"died", "reason":error.to_string()}),
                     reason: ParkReason::User,
                 }),
@@ -1475,7 +1476,7 @@ fn destination(record: &RunRecord, step: &super::Step) -> Result<std::path::Path
     .map_err(|error| WorkflowErr::Refused(format!("{error:#}")))
 }
 
-fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec) -> Result<()> {
+fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -> Result<()> {
     // Context belongs to the published attempt, including a restored until session.
     let attempt = record
         .attempt
@@ -1667,18 +1668,10 @@ pub fn restart(
         .session_attempt()
         .map_or(&t.record.node, |attempt| &attempt.node)
         .clone();
-    if !spec
-        .steps
-        .get(&step)
-        .is_some_and(|step| matches!(step.kind(), Some(spec::StepKind::Agent(_))))
-    {
+    if !matches!(spec.step_kind(&step), Some(Kind::Agent(_))) {
         let kind = if spec.checks.contains_key(&step) {
             "a check"
-        } else if spec
-            .steps
-            .get(&step)
-            .is_some_and(|step| matches!(step.kind(), Some(spec::StepKind::Message(_))))
-        {
+        } else if matches!(spec.step_kind(&step), Some(Kind::Message(_))) {
             "a message step"
         } else {
             "a command step"
@@ -1742,7 +1735,7 @@ pub fn restart(
         t.record.restart.as_mut().expect("staged restart").settled = Some(previous.seq);
         t.record.attempt = Some(LiveAttempt {
             kind: AttemptKind::Agent,
-            lifecycle: spec.steps[&step].lifecycle(),
+            lifecycle: spec.step(&step).expect("restarted step").lifecycle(),
             seq: previous.seq,
             node: step.clone(),
             visit: Some(previous.visit),
@@ -2101,7 +2094,7 @@ impl Forward {
 /// Defaults resolve against the checkout the leader launched in; bindings with the same
 /// selector and filter coalesce into the first. The leader never hears its own lifecycle.
 fn subscribers(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     signal: &Signal,
     host: &dyn AttemptHost,

@@ -124,9 +124,10 @@ pub(super) fn prepare(
     }
     let held = t.record.held.as_ref().expect("observed held session");
     let verdict = held.verdict.clone();
-    let waiting = verdict
+    let target = verdict
         .as_ref()
-        .is_none_or(|verdict| verdict.target == "@wait");
+        .map(|verdict| Target::parse(&verdict.target));
+    let waiting = target.as_ref().is_none_or(|target| *target == Target::Wait);
     if observed.turn.as_ref().map(|turn| &turn.end) != held.attempt.judged.as_ref()
         || (waiting && eligible(&observed).is_none())
     {
@@ -142,13 +143,13 @@ pub(super) fn prepare(
         )
         .map(Some);
     }
-    let Some(verdict) = verdict else {
+    let (Some(verdict), Some(target)) = (verdict, target) else {
         if hold_changed {
             persist(t, guard)?;
         }
         return Ok(None);
     };
-    if verdict.target == "@wait" {
+    if target == Target::Wait {
         t.merge_wait(&verdict.object, verdict.at, true)?;
         let held = t.record.held.as_mut().expect("waiting session");
         held.verdict = None;
@@ -168,7 +169,7 @@ pub(super) fn prepare(
             Decision::Stop
         }));
     }
-    if verdict.target == t.record.held.as_ref().expect("held verdict").attempt.node {
+    if target.node() == Some(&*t.record.held.as_ref().expect("held verdict").attempt.node) {
         if eligible(&observed).is_none() {
             if hold_changed {
                 persist(t, guard)?;
@@ -226,9 +227,11 @@ pub(super) fn prepare(
         return Ok(Some(Decision::Push(Box::new(t.record.clone()))));
     }
     let held = t.record.held.as_ref().expect("held verdict");
-    if t.spec.steps[&held.attempt.node]
-        .then
-        .contains(&verdict.target)
+    if t.spec
+        .step(&held.attempt.node)
+        .expect("held step")
+        .then()
+        .contains(&target)
     {
         if eligible(&observed).is_none() {
             if hold_changed {
@@ -299,7 +302,7 @@ fn restore(
 pub(super) fn push(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     host: &dyn AttemptHost,
 ) -> Result<bool> {

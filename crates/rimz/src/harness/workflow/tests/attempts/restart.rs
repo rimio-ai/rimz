@@ -78,7 +78,7 @@ fn restart_history_is_a_manual_reentry_not_a_resumed_conversation() {
     assert!(
         trail
             .iter()
-            .all(|hop| hop.target.as_deref() != Some("verify")),
+            .all(|hop| hop.target.as_ref().map(|target| target.as_str()) != Some("verify")),
         "{trail:#?}"
     );
     assert!(!reached(&trail, &entries).contains_key("verify"));

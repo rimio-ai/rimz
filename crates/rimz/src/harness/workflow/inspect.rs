@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use super::WorkflowSpec;
+use super::Definition;
+use super::definition::Target;
 use crate::store::workflow::{
     AttemptOutcome, EvaluationOrigin, HeldSession, JournalEntry, JournalEvent, ParkReason,
     RunRecord, RunState, TurnEndAction,
@@ -16,7 +17,7 @@ pub struct Hop {
     pub at: Timestamp,
     pub node: String,
     pub outcome: Option<String>,
-    pub target: Option<String>,
+    pub target: Option<Target>,
     pub count: u64,
     pub kind: HopKind,
 }
@@ -49,7 +50,7 @@ impl Hop {
 
 /// Fold consecutive matching evaluations, retaining the first decision's timestamp.
 /// Wait summaries and the engine's duplicate route evidence add no routing decisions.
-pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry], held: Option<&HeldSession>) -> Vec<Hop> {
+pub fn hops(spec: &Definition, journal: &[JournalEntry], held: Option<&HeldSession>) -> Vec<Hop> {
     let mut hops: Vec<Hop> = Vec::new();
     let mut previous_evaluation = false;
     for (index, entry) in journal.iter().enumerate() {
@@ -92,7 +93,7 @@ pub fn hops(spec: &WorkflowSpec, journal: &[JournalEntry], held: Option<&HeldSes
 /// shared by arrival and park views.
 /// Active-run extensions do not replace the sender.
 pub fn routing_hop(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     journal: &[JournalEntry],
     node: &str,
     held: Option<&HeldSession>,
@@ -108,7 +109,11 @@ pub fn routing_hop(
                     .rev()
                     .find(|prior| prior.kind != HopKind::VisitsReset)
                     .is_some_and(|prior| {
-                        prior.target.as_deref().is_some_and(|to| spec.is_break(to))
+                        prior
+                            .target
+                            .as_ref()
+                            .and_then(Target::node)
+                            .is_some_and(|to| spec.is_break(to))
                     })
                 {
                     return Some(hop);
@@ -118,7 +123,9 @@ pub fn routing_hop(
                 }
             }
             HopKind::Park { .. } if resumed.is_some() => return resumed,
-            HopKind::Route if hop.target.as_deref() == Some(node) => return Some(hop),
+            HopKind::Route if hop.target.as_ref().and_then(Target::node) == Some(node) => {
+                return Some(hop);
+            }
             _ => {}
         }
     }
@@ -139,10 +146,7 @@ pub fn reached<'a>(hops: &'a [Hop], journal: &'a [JournalEntry]) -> BTreeMap<&'a
         }
         position = Some(node);
         if hop.kind == HopKind::Route
-            && let Some(target) = hop
-                .target
-                .as_deref()
-                .filter(|target| !target.starts_with('@'))
+            && let Some(target) = hop.target.as_ref().and_then(Target::authored_node)
         {
             *counts.entry(target).or_default() += hop.count;
             position = Some(target);
@@ -213,11 +217,11 @@ pub fn repeats_evaluation(entry: &JournalEntry, previous: Option<&JournalEntry>)
 }
 
 fn hop_kind(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     entry: &JournalEntry,
     following: &[JournalEntry],
     held: Option<&HeldSession>,
-) -> Option<(HopKind, Option<String>, Option<String>)> {
+) -> Option<(HopKind, Option<String>, Option<Target>)> {
     if matches!(entry.event, JournalEvent::Route { .. }) && held_verdict(entry, following, held) {
         return None;
     }
@@ -239,7 +243,11 @@ fn hop_kind(
             target: Some(target),
             ..
         } => {
-            return Some((HopKind::Route, Some(outcome.clone()), Some(target.clone())));
+            return Some((
+                HopKind::Route,
+                Some(outcome.clone()),
+                Some(Target::parse(target)),
+            ));
         }
         JournalEvent::Restart { .. } => return Some((HopKind::Restart, None, None)),
         JournalEvent::Resume { .. } => return Some((HopKind::Resume, None, None)),
@@ -263,11 +271,11 @@ fn hop_kind(
 
 /// The routed target of a check or engine decision, shared by trail and full history.
 pub fn evaluation_target(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     entry: &JournalEntry,
     following: &[JournalEntry],
     held: Option<&HeldSession>,
-) -> Option<String> {
+) -> Option<Target> {
     if held_verdict(entry, following, held) {
         return None;
     }
@@ -389,14 +397,15 @@ fn attempt_superseded(
 }
 
 /// A held closing verdict's delayed instant and saved target, read from its sealed route.
-pub fn close_after<'a>(spec: &WorkflowSpec, record: &'a RunRecord) -> Option<(Timestamp, &'a str)> {
+pub fn close_after<'a>(spec: &Definition, record: &'a RunRecord) -> Option<(Timestamp, &'a str)> {
     let held = record.held.as_ref()?;
     let verdict = held.verdict.as_ref()?;
-    if verdict.target == "@wait"
-        || verdict.target == held.attempt.node
-        || spec.steps[&held.attempt.node]
-            .then
-            .contains(&verdict.target)
+    let target = Target::parse(&verdict.target);
+    if target == Target::Wait
+        || target.node() == Some(held.attempt.node.as_str())
+        || spec
+            .step(&held.attempt.node)
+            .is_some_and(|step| step.then().contains(&target))
     {
         return None;
     }
@@ -415,11 +424,11 @@ pub fn close_after<'a>(spec: &WorkflowSpec, record: &'a RunRecord) -> Option<(Ti
 
 /// The first bound's instant and target, for inspection: `first_bound` routed by the spec.
 pub fn next_bound(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     hold: Option<u32>,
     now: Timestamp,
-) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
+) -> Result<Option<(Timestamp, Target)>, TimeInputErr> {
     Ok(
         first_bound(spec, record, hold, now)?.and_then(|(at, outcome)| {
             spec.target(&record.node, &outcome)
@@ -431,7 +440,7 @@ pub fn next_bound(
 /// Earliest unfired deadline, timeout or supplied hold case, in that order on ties, with the
 /// outcome it settles. Engine rechecks take the instant alone, so timing never waits on routing.
 pub(super) fn first_bound(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     hold: Option<u32>,
     now: Timestamp,
@@ -442,14 +451,14 @@ pub(super) fn first_bound(
         .map(|at| (at, "deadline".into()));
     let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout".into()));
     let hold = match hold {
-        Some(index) => hold_until(spec, record, index, now)?.zip(
-            spec.checks.get(&record.node).and_then(|check| {
+        Some(index) => {
+            hold_until(spec, record, index, now)?.zip(spec.check(&record.node).and_then(|check| {
                 check
-                    .condition_cases()
+                    .cases()
                     .get(index as usize)
                     .map(|case| case.outcome.clone())
-            }),
-        ),
+            }))
+        }
         None => None,
     };
     Ok([deadline, timeout, hold]
@@ -460,7 +469,7 @@ pub(super) fn first_bound(
 
 /// The check's entry-based timeout or a turn or until step's timeout, excluding held time.
 pub fn timeout_at(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
     let (timeout, start) = if let Some(check) = spec.checks.get(&record.node) {
@@ -496,16 +505,16 @@ pub fn timeout_at(
 
 /// The case's hold instant, measured from its first matching settlement or `now`.
 pub fn hold_until(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     case: u32,
     now: Timestamp,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
-    let Some(hold) = spec.checks.get(&record.node).and_then(|check| {
+    let Some(hold) = spec.check(&record.node).and_then(|check| {
         check
-            .condition_cases()
+            .cases()
             .get(case as usize)
-            .and_then(|case| case.hold.clone())
+            .and_then(|case| Some(case.hold()?.text().to_owned()))
     }) else {
         return Ok(None);
     };

@@ -1,14 +1,14 @@
 use super::*;
 use serde_json::{Value, json};
 
-fn spec(check: &str, step: &str) -> WorkflowSpec {
+fn spec(check: &str, step: &str) -> Definition {
     toml::from_str(&format!(
         "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\n{check}\n[steps.work]\n{step}\n"
     ))
     .unwrap()
 }
 
-fn edge(spec: &WorkflowSpec, node: &str, outcome: &str) -> (Value, Option<&'static str>) {
+fn edge(spec: &Definition, node: &str, outcome: &str) -> (Value, Option<&'static str>) {
     let edge = spec
         .edges(node)
         .into_iter()
@@ -45,10 +45,20 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
                 let (edge, _) = edge(&spec, node, outcome);
                 assert_eq!(edge["target"], target, "{text}: {node}.{outcome}");
                 assert_eq!(edge["source"], source);
-                assert_ne!(spec.target(node, outcome).as_deref(), Some("@user"));
+                assert_ne!(
+                    spec.target(node, outcome)
+                        .as_ref()
+                        .map(|target| target.as_str()),
+                    Some("@user")
+                );
             }
             if !check.starts_with("sleep") {
-                assert_eq!(spec.target("gate", "timeout").as_deref(), Some(target));
+                assert_eq!(
+                    spec.target("gate", "timeout")
+                        .as_ref()
+                        .map(|target| target.as_str()),
+                    Some(target)
+                );
             }
             assert_eq!(spec.target("work", "asked"), None);
             if target == "@break" {
@@ -56,7 +66,12 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
                     spec.steps["@break"].lifecycle(),
                     crate::store::workflow::StepLifecycle::Stay
                 );
-                assert_eq!(spec.target("@break", "invalid").as_deref(), Some("@failed"));
+                assert_eq!(
+                    spec.target("@break", "invalid")
+                        .as_ref()
+                        .map(|target| target.as_str()),
+                    Some("@failed")
+                );
                 assert!(
                     spec.edges("@break")
                         .iter()
@@ -67,11 +82,20 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
                 super::super::spec::parse(&(text + "on.invalid='@failed'\non.cap='@done'\n"))
                     .unwrap();
             assert_eq!(
-                explicit.target("work", "invalid").as_deref(),
+                explicit
+                    .target("work", "invalid")
+                    .as_ref()
+                    .map(|target| target.as_str()),
                 Some("@failed")
             );
             assert_eq!(edge(&explicit, "work", "invalid").0["source"], "explicit");
-            assert_eq!(explicit.target("work", "cap").as_deref(), Some("@done"));
+            assert_eq!(
+                explicit
+                    .target("work", "cap")
+                    .as_ref()
+                    .map(|target| target.as_str()),
+                Some("@done")
+            );
         }
     }
 }
@@ -79,7 +103,12 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
 #[test]
 fn sleep_on_invalid_is_live_but_other_routes_still_warn() {
     let spec = super::super::spec::parse("[workflow]\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='1m'\nthen='@done'\non.invalid='@failed'\non.timeout='@done'\n").unwrap();
-    assert_eq!(spec.target("nap", "invalid").as_deref(), Some("@failed"));
+    assert_eq!(
+        spec.target("nap", "invalid")
+            .as_ref()
+            .map(|target| target.as_str()),
+        Some("@failed")
+    );
     assert!(
         !spec
             .ignored
@@ -145,11 +174,13 @@ fn limited_off_capacity_edges_keep_the_give_up_routes() {
                 format!("agent='claude'\nthen='gate'\nthrottle='off'\ncapacity-wait='{wait}'");
             let mut spec = spec("run='true'\non.ready='work'", &step);
             let limit = Some(toml::from_str("max-parallel=1").unwrap());
-            if workflow_limit {
-                spec.workflow.limit = limit;
-            } else {
-                spec.steps.get_mut("work").unwrap().limit = limit;
-            }
+            spec.edit(|spec| {
+                if workflow_limit {
+                    spec.workflow.limit = limit;
+                } else {
+                    spec.steps.get_mut("work").unwrap().limit = limit;
+                }
+            });
             let (edge, _) = edge(&spec, "work", "capacity");
             actual.push((edge["fires"].clone(), edge["because"].clone()));
         }
@@ -244,8 +275,10 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
         (Some("2030-01-01"), Some("work"), "yes"),
     ] {
         let mut spec = spec("run='true'\non.ready='work'", "agent='claude'\nthen='gate'");
-        spec.workflow.deadline = deadline.map(str::to_owned);
-        spec.workflow.on.deadline = target.map(str::to_owned);
+        spec.edit(|spec| {
+            spec.workflow.deadline = deadline.map(str::to_owned);
+            spec.workflow.on.deadline = target.map(str::to_owned);
+        });
         for node in ["gate", "work"] {
             let (edge, mark) = edge(&spec, node, "deadline");
             assert_eq!(edge["fires"], fires);
@@ -392,7 +425,7 @@ fn walks_match_land_ralph_and_fix_tests_without_hanging_forward_returns() {
             vec![("tests", None), ("fix", Some("tests"))],
         ),
     ] {
-        let spec: WorkflowSpec = toml::from_str(text).unwrap();
+        let spec: Definition = toml::from_str(text).unwrap();
         let walk = spec.walk();
         assert_eq!(
             walk.nodes
@@ -407,7 +440,7 @@ fn walks_match_land_ralph_and_fix_tests_without_hanging_forward_returns() {
 
 #[test]
 fn walk_reaches_header_deadline_but_not_impossible_edges_and_sorts_unreachable() {
-    let spec: WorkflowSpec = toml::from_str(
+    let spec: Definition = toml::from_str(
         r#"
 [workflow]
 scope='worktree'
@@ -445,7 +478,7 @@ on.cap='capped'
 
 #[test]
 fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
-    let spec: WorkflowSpec = toml::from_str(
+    let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='c'\n\
          [checks.c]\nshell='true'\non.pass='a'\n\
          [steps.a]\nshell='true'\nthen='c'\nmax-visits=1\non.cap='b'\n\
@@ -482,7 +515,7 @@ fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
 
 #[test]
 fn a_deadline_only_step_does_not_hang_under_its_return_check() {
-    let spec: WorkflowSpec = toml::from_str(
+    let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='gate'\non.deadline='rescue'\n\
          [checks.gate]\nshell='true'\non.pass='@done'\n\
          [steps.rescue]\nshell='true'\nthen='gate'\n",
@@ -528,7 +561,7 @@ fn walk_positions_distinguish_downward_routes_from_returns_and_cross_routes() {
             ],
         ),
     ] {
-        let spec: WorkflowSpec = toml::from_str(text).unwrap();
+        let spec: Definition = toml::from_str(text).unwrap();
         let walk = spec.walk();
         let positions = walk
             .nodes
@@ -553,7 +586,7 @@ fn walk_positions_distinguish_downward_routes_from_returns_and_cross_routes() {
 
 #[test]
 fn validation_rows_follow_the_walk_then_alphabetical_unreachable_nodes() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[checks.z]\nshell='true'\non={pass='work',fail='@done',invalid='@failed'}\n[checks.a]\nshell='true'\non={pass='@done',fail='@failed',invalid='@failed'}\n[steps.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={cap='@failed'}").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[checks.z]\nshell='true'\non={pass='work',fail='@done',invalid='@failed'}\n[checks.a]\nshell='true'\non={pass='@done',fail='@failed',invalid='@failed'}\n[steps.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={cap='@failed'}").unwrap();
     let report = super::super::validate::validate_spec(
         std::path::Path::new("."),
         "example",

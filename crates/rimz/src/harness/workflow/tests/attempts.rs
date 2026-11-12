@@ -37,7 +37,7 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
     fs::write(dir.path().join("prompt.md"), "Build it").unwrap();
-    let spec: WorkflowSpec = toml::from_str(text).unwrap();
+    let spec: Definition = toml::from_str(text).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
         "version":crate::store::workflow::VERSION,
         "id":WorkflowRunId::new(),
@@ -187,9 +187,8 @@ fn on_break_resume_detaches_and_reenters_the_source_or_selected_node() {
         assert_eq!(resume.node, target);
         assert!(resume.target.is_none());
         assert!(
-            !hops
-                .iter()
-                .any(|hop| hop.node == "@break" && hop.target.as_deref() == Some("@failed")),
+            !hops.iter().any(|hop| hop.node == "@break"
+                && hop.target.as_ref().map(|target| target.as_str()) == Some("@failed")),
             "resuming must not invent a failed debugger hop: {hops:?}"
         );
         assert_eq!(
@@ -469,7 +468,8 @@ fn on_break_held_judge_failure_uses_invalid_for_delay_and_one_departure() {
         assert_eq!(
             hops.iter()
                 .filter(|hop| hop.node == "pr"
-                    && hop.target.as_deref() == Some(if delayed { "repair" } else { "@break" }))
+                    && hop.target.as_ref().map(|target| target.as_str())
+                        == Some(if delayed { "repair" } else { "@break" }))
                 .count(),
             1,
             "{hops:?}"
@@ -660,7 +660,10 @@ fn on_break_judge_second_failure_routes_invalid_and_history_records_the_hop() {
                 1,
                 "{routes:?}"
             );
-            assert_eq!(routes[0].target.as_deref(), Some(expected));
+            assert_eq!(
+                routes[0].target.as_ref().map(|target| target.as_str()),
+                Some(expected)
+            );
             assert_ne!(t.record.state, RunState::Parked);
         }
     }
@@ -2399,7 +2402,7 @@ fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
     assert_eq!(host.launched.borrow().len(), 1);
 }
 
-fn judge_fixture() -> (WorkflowSpec, crate::disk::paths::WorkflowPaths, RunRecord) {
+fn judge_fixture() -> (Definition, crate::disk::paths::WorkflowPaths, RunRecord) {
     let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[checks.judge]\nagent='claude'\nsummary='Review the work'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
     let state = StatePaths::for_project_root_under(
         std::path::Path::new("/scratch"),
@@ -2499,12 +2502,11 @@ fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_routes_inval
         }
     }
     let (mut spec, paths, mut record) = judge_fixture();
-    spec.checks
-        .get_mut("judge")
-        .unwrap()
-        .on
-        .insert("again".into(), "@wait".into());
-    spec.checks.get_mut("judge").unwrap().timeout = Some("1d".into());
+    spec.edit(|spec| {
+        let judge = spec.checks.get_mut("judge").unwrap();
+        judge.on.insert("again".into(), "@wait".into());
+        judge.timeout = Some("1d".into());
+    });
     record.check_retry = 1;
     record.check_retry_context = Some(json!({"outcome":"died", "reason":"no object"}));
     let mut t = super::super::state::Transition {

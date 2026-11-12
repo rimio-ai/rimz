@@ -29,7 +29,7 @@ fn reached_counts_entries_not_repeated_wait_answers() {
     );
 }
 
-fn spec() -> WorkflowSpec {
+fn spec() -> Definition {
     toml::from_str(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
          [checks.pr]\nrun='true'\non.pass='build'\non.fail='@wait'\n\
@@ -80,7 +80,7 @@ fn detail(hop: &Hop) -> (HopKind, Option<&str>, Option<&str>, u64) {
     (
         hop.kind,
         hop.outcome.as_deref(),
-        hop.target.as_deref(),
+        hop.target.as_ref().map(|target| target.as_str()),
         hop.count,
     )
 }
@@ -88,10 +88,13 @@ fn detail(hop: &Hop) -> (HopKind, Option<&str>, Option<&str>, u64) {
 #[test]
 fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
     let mut spec = spec();
-    spec.checks.insert(
-        "condition".into(),
-        toml::from_str("cases=[{when=['pr.merged'],outcome='ready'}]\non.ready='@done'").unwrap(),
-    );
+    spec.edit(|spec| {
+        spec.checks.insert(
+            "condition".into(),
+            toml::from_str("cases=[{when=['pr.merged'],outcome='ready'}]\non.ready='@done'")
+                .unwrap(),
+        );
+    });
     for (node, outcome, target) in [
         ("pr", "pass", "build"),
         ("pr", "timeout", "@failed"),
@@ -108,7 +111,9 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
         ("build", "deadline", "@failed"),
     ] {
         assert_eq!(
-            spec.target(node, outcome).as_deref(),
+            spec.target(node, outcome)
+                .as_ref()
+                .map(|target| target.as_str()),
             Some(target),
             "{node}/{outcome}"
         );
@@ -127,26 +132,40 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
 #[test]
 fn edge_lookup_keeps_explicit_overrides() {
     let mut spec = spec();
-    spec.workflow.on.deadline = Some("@failed".into());
+    spec.edit(|spec| spec.workflow.on.deadline = Some("@failed".into()));
     for outcome in ["timeout", "invalid", "unknown"] {
-        spec.checks
-            .get_mut("pr")
-            .unwrap()
-            .on
-            .insert(outcome.into(), "build".into());
-        assert_eq!(spec.target("pr", outcome).as_deref(), Some("build"));
+        spec.edit(|spec| {
+            spec.checks
+                .get_mut("pr")
+                .unwrap()
+                .on
+                .insert(outcome.into(), "build".into());
+        });
+        assert_eq!(
+            spec.target("pr", outcome)
+                .as_ref()
+                .map(|target| target.as_str()),
+            Some("build")
+        );
     }
-    let step = spec.steps.get_mut("build").unwrap();
-    step.on.asked = Some("pr".into());
-    step.on.cap = Some("@done".into());
-    step.on.capacity = Some("@user".into());
+    spec.edit(|spec| {
+        let step = spec.steps.get_mut("build").unwrap();
+        step.on.asked = Some("pr".into());
+        step.on.cap = Some("@done".into());
+        step.on.capacity = Some("@user".into());
+    });
     for (outcome, target) in [
         ("asked", "pr"),
         ("cap", "@done"),
         ("capacity", "@user"),
         ("deadline", "@failed"),
     ] {
-        assert_eq!(spec.target("build", outcome).as_deref(), Some(target));
+        assert_eq!(
+            spec.target("build", outcome)
+                .as_ref()
+                .map(|target| target.as_str()),
+            Some(target)
+        );
     }
 }
 
@@ -253,10 +272,12 @@ fn hops_do_not_count_an_abandoned_check_as_a_routing_decision() {
 fn hops_do_not_route_a_judges_failed_evaluations_before_its_check_park() {
     use crate::store::workflow::ParkReason;
     let mut spec = spec();
-    let check = spec.checks.get_mut("pr").unwrap();
-    check.run = None;
-    check.agent = Some("claude".into());
-    check.prompt_file = Some("prompt.md".into());
+    spec.edit(|spec| {
+        let check = spec.checks.get_mut("pr").unwrap();
+        check.run = None;
+        check.agent = Some("claude".into());
+        check.prompt_file = Some("prompt.md".into());
+    });
     let mut failed = evaluation("invalid");
     if let JournalEvent::Evaluation { origin, .. } = &mut failed.event {
         *origin = EvaluationOrigin::Engine;
@@ -340,7 +361,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
     advance(&state, &record.id, &host).unwrap();
     let paths = state.workflow(&record.id);
     let live = crate::store::workflow::load(&paths).unwrap();
-    let spec: WorkflowSpec = toml::from_str(text).unwrap();
+    let spec: Definition = toml::from_str(text).unwrap();
     let mut actual = Vec::new();
     for action in [
         TurnEndAction::Kept,

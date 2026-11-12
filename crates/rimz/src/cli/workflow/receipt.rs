@@ -132,7 +132,7 @@ pub(super) fn resume(
             render::err(),
             "warning: deadline {} has already passed; {} — {}",
             render::workflow_clock(deadline, now),
-            immediate(&target),
+            immediate(target.as_str()),
             resolve::run_command(
                 &record,
                 "resume",

@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, CheckKind, Issue, RESERVED_OUTCOMES, StepKind, WorkflowSpec, issue};
+use super::spec::{self, CheckKind, Issue, RESERVED_OUTCOMES, StepKind, issue};
+use super::{Definition, Target};
 use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
 use crate::store::workflow::StepLifecycle;
@@ -68,7 +69,7 @@ pub fn validate(
 pub(super) fn validate_spec(
     dir: &Path,
     name: &str,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     definitions: &LoadedDefinitions,
     project_root: Option<&Path>,
 ) -> Validation {
@@ -182,10 +183,10 @@ pub(super) fn validate_spec(
         let unknown_waits = condition
             && edges
                 .iter()
-                .any(|edge| edge.outcome == "unknown" && edge.target == "@wait");
+                .any(|edge| edge.outcome == "unknown" && edge.target == Target::Wait);
         if edges
             .iter()
-            .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
+            .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait)
             && check.timeout.is_none()
             && !sleep
         {
@@ -267,7 +268,7 @@ pub(super) fn validate_spec(
                     .keys()
                     .chain(spec.steps.keys())
                     .flat_map(|source| spec.edges(source))
-                    .filter(|edge| edge.target == *node)
+                    .filter(|edge| edge.target.node() == Some(node.as_str()))
                     .map(|edge| edge.outcome)
                     .collect::<BTreeSet<_>>();
                 if inbound.len() == 1 && !inbound.contains("then") {
@@ -407,7 +408,7 @@ pub(super) fn validate_spec(
         for pair in step.then.windows(2).filter(|_| !message) {
             if !spec.edges(&pair[0]).iter().any(|edge| {
                 edge.outcome != "deadline"
-                    && edge.target == pair[1]
+                    && edge.target.as_str() == pair[1]
                     && edge.fires != super::Fireability::Never
             }) {
                 report.error(
@@ -567,7 +568,7 @@ pub(super) fn validate_spec(
                         && !spec
                             .edges(name)
                             .iter()
-                            .any(|edge| edge.outcome != "deadline" && edge.target == "@wait"))
+                            .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait))
             })
         {
             report.warnings.push(issue(
@@ -605,13 +606,13 @@ pub(super) fn validate_spec(
         if !spec
             .edges(node)
             .iter()
-            .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
+            .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait)
             && cycles_to(spec, node, |name| {
                 spec.checks.contains_key(name)
                     && !spec
                         .edges(name)
                         .iter()
-                        .any(|edge| edge.outcome != "deadline" && edge.target == "@wait")
+                        .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait)
             })
         {
             report.error(&format!("checks.{node}"), "check-only cycle has no @wait");
@@ -734,7 +735,7 @@ impl Validation {
         }
     }
 
-    fn target(&mut self, spec: &WorkflowSpec, path: &str, target: &str) {
+    fn target(&mut self, spec: &Definition, path: &str, target: &str) {
         if !matches!(target, "@wait" | "@done" | "@failed")
             && !spec.checks.contains_key(target)
             && !spec.steps.contains_key(target)
@@ -801,7 +802,7 @@ fn message_target(target: &str) -> Result<(), String> {
 }
 
 /// A message step's `then` names exactly one target: any node, `@done`, or `@failed`.
-fn message_then(report: &mut Validation, spec: &WorkflowSpec, path: &str, then: &[String]) {
+fn message_then(report: &mut Validation, spec: &Definition, path: &str, then: &[String]) {
     let path = format!("{path}.then");
     let [target] = then else {
         report.error(
@@ -871,7 +872,7 @@ fn do_background(agent: Option<&str>, definitions: &LoadedDefinitions) -> Option
     )
 }
 
-fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -> bool {
+fn cycles_to(spec: &Definition, start: &str, allowed: impl Fn(&str) -> bool) -> bool {
     let mut pending = vec![start.to_owned()];
     let mut seen = BTreeSet::new();
     while let Some(node) = pending.pop() {
@@ -884,7 +885,7 @@ fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -
             {
                 continue;
             }
-            let target = edge.target;
+            let target = edge.target.as_str().to_owned();
             if !allowed(&target) {
                 continue;
             }
