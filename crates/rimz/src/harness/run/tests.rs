@@ -976,6 +976,38 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
 }
 
 #[test]
+fn a_released_stop_is_due_again_unless_the_claim_moved_on() {
+    let (_dir, paths, mut record) = setup();
+    let now: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+    record.subagent = true;
+    record.grace = Some(std::time::Duration::from_secs(180));
+    record.deadline_at = Some(now - std::time::Duration::from_secs(11));
+    record.deadline_notice_at = Some(now - std::time::Duration::from_secs(600));
+    create(&paths, &record).unwrap();
+    let claim = || claim_rung(&paths, &record.run_id, now, |_, _| true).unwrap();
+    let Some(crate::harness::deadline::Rung::Stop { at }) = claim() else {
+        panic!("the stop is due");
+    };
+    assert!(release_rung(&paths, &record.run_id, at, record.deadline_notice_at).unwrap());
+    assert_eq!(
+        load(&paths, &record.run_id).unwrap().deadline_notice_at,
+        record.deadline_notice_at,
+        "the release restores the stamp the claim replaced"
+    );
+
+    assert!(claim().is_some(), "a released stop is due again");
+    let mut moved = load(&paths, &record.run_id).unwrap();
+    moved.deadline_notice_at = Some(at + std::time::Duration::from_secs(60));
+    create(&paths, &moved).unwrap();
+    assert!(!release_rung(&paths, &record.run_id, at, record.deadline_notice_at).unwrap());
+    assert_eq!(
+        load(&paths, &record.run_id).unwrap().deadline_notice_at,
+        moved.deadline_notice_at,
+        "a claim that moved on is left alone"
+    );
+}
+
+#[test]
 fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
     let (_dir, paths, mut record) = setup();
     let now: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();

@@ -3,8 +3,11 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
-use rimz::harness::deadline::{Rung, interrupt_expired, kill_due, stop_due_by_pane};
+use rimz::harness::deadline::{
+    Rung, interrupt_expired, kill_due, stop_due_by_pane, stop_interrupts,
+};
 use rimz::harness::run_timeout::RunTimeoutRequest;
+use rimz::message::dispatch::{DispatchErr, DispatchMode};
 use rimz::store::run::RunRecord;
 
 use super::Ctx;
@@ -30,41 +33,39 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
         }
     }
     if stop_due_by_pane(&initial, now) {
-        if let Some(rung) =
-            rimz::harness::run::claim_rung(ctx.store.paths(), &request.run_id, now, |_, rung| {
-                matches!(rung, Rung::Stop { .. })
-            })?
-        {
+        let mut previous = None;
+        let claim = rimz::harness::run::claim_rung(
+            ctx.store.paths(),
+            &request.run_id,
+            now,
+            |record, rung| {
+                previous = record.deadline_notice_at;
+                claims_stop(record, rung, now)
+            },
+        )?;
+        if let Some(rung @ Rung::Stop { at }) = claim {
             let Some(target) = deadline_stop_target(&initial) else {
                 tracing::debug!(run_id = %request.run_id, "deadline stop has no agent session id");
                 return Ok(());
             };
+            let interrupt = stop_interrupts(&initial);
+            let mode = if interrupt {
+                DispatchMode::Interrupt
+            } else {
+                DispatchMode::Steer
+            };
             let outcome = rimz::message::dispatch::dispatch(
                 &ctx.workspace,
                 &ctx.store,
-                rimz::message::dispatch::DispatchRequest {
-                    resuming_recipient: None,
-                    target,
-                    text: rung.text(),
-                    target_scope: None,
-                    current_channel: rimz::address::AddressContext {
-                        channel: None,
-                        origin: rimz::address::ChannelOrigin::Stamped,
-                    },
-                    caller: None,
-                    sender: rimz::store::message::MessageSender::Harness {
-                        notice: rimz::store::message::HarnessNotice::Deadline,
-                    },
-                    automated: true,
-                    allow_fanout: false,
-                    reply: None,
-                    mux: globals.mux,
-                    enter: true,
-                    force: false,
-                    auto_compact: None,
-                    mode: rimz::message::dispatch::DispatchMode::Steer,
-                },
+                deadline_stop_request(target, rung.text(), globals.mux, mode),
             );
+            // A child that raised a prompt since the host's read refuses an
+            // unforced interrupt: the rung goes back, for the hook to carry
+            // once the child is answered.
+            if interrupt && matches!(outcome, Err(DispatchErr::WaitingOnInput { .. })) {
+                rimz::harness::run::release_rung(ctx.store.paths(), &request.run_id, at, previous)?;
+                return Ok(());
+            }
             match outcome {
                 Ok(outcome) => {
                     tracing::debug!(run_id = %request.run_id, outcomes = ?outcome.outcomes, "dispatched deadline stop")
@@ -118,6 +119,42 @@ fn reclaim_pane(ctx: &Ctx, globals: &super::GlobalFlags, record: &RunRecord) -> 
     }
     super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, record)?;
     Ok(())
+}
+
+/// Whether the locked claim takes `rung`: the stop, still past the hook's lead
+/// on the locked record at the helper's `now`.
+fn claims_stop(record: &RunRecord, rung: &Rung, now: Timestamp) -> bool {
+    matches!(rung, Rung::Stop { .. }) && stop_due_by_pane(record, now)
+}
+
+fn deadline_stop_request(
+    target: String,
+    text: String,
+    mux: Option<rimz::ids::MuxName>,
+    mode: DispatchMode,
+) -> rimz::message::dispatch::DispatchRequest {
+    rimz::message::dispatch::DispatchRequest {
+        resuming_recipient: None,
+        target,
+        text,
+        target_scope: None,
+        current_channel: rimz::address::AddressContext {
+            channel: None,
+            origin: rimz::address::ChannelOrigin::Stamped,
+        },
+        caller: None,
+        sender: rimz::store::message::MessageSender::Harness {
+            notice: rimz::store::message::HarnessNotice::Deadline,
+        },
+        automated: true,
+        allow_fanout: false,
+        reply: None,
+        mux,
+        enter: true,
+        force: false,
+        auto_compact: None,
+        mode,
+    }
 }
 
 fn deadline_stop_target(record: &RunRecord) -> Option<String> {
@@ -197,6 +234,30 @@ mod tests {
         assert_eq!(deadline_stop_target(&record), Some(target));
         record.agent_id = None;
         assert_eq!(deadline_stop_target(&record), None);
+    }
+
+    #[test]
+    fn the_claim_rechecks_the_hook_lead_on_the_locked_record() {
+        let now = Timestamp::now();
+        let mut record = RunRecord::new(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            rimz::agents::PermissionMode::Auto,
+            "test".to_owned(),
+            std::path::PathBuf::from("/tmp/rimz-run"),
+        );
+        record.status = rimz::store::run::RunStatus::Running;
+        record.grace = Some(std::time::Duration::from_secs(180));
+        record.deadline_at = Some(now - std::time::Duration::from_secs(11));
+        let stop = Rung::Stop {
+            at: record.deadline_at.unwrap(),
+        };
+        assert!(claims_stop(&record, &stop, now));
+        record.deadline_at = Some(now - std::time::Duration::from_secs(5));
+        assert!(
+            !claims_stop(&record, &stop, now),
+            "a deadline moved inside the hook's lead is left to the hook"
+        );
     }
 
     #[test]

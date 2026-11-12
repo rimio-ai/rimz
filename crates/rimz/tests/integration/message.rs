@@ -345,6 +345,110 @@ fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) 
     assert_eq!(records[0].status, MessageStatus::Sent);
 }
 
+/// Runs the hidden timeout helper on `kind`'s overdue subagent run in the
+/// interrupt fixture, asserts it claimed the stop and recorded one stop
+/// message, and returns its pane trace. A child waiting on input refuses the
+/// interrupt, so the helper gives the rung back for the hook to carry after
+/// the answer and records no message.
+fn deadline_stop_trace(kind: &str, waiting: bool) -> (Env, Vec<String>) {
+    let (env, panes) = interrupt_fixture(kind);
+    if waiting {
+        append_lifecycle(
+            &env,
+            kind,
+            "PermissionRequest",
+            "sess-interrupt",
+            LifecycleSignal::AwaitingInput {
+                extra_questions: 0,
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            |_| {},
+        );
+    }
+    let mut record = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked(kind),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    record.status = rimz::store::run::RunStatus::Running;
+    record.subagent = true;
+    record.agent_id = Some(AgentSessionId::from("sess-interrupt"));
+    record.deadline_at = Some(jiff::Timestamp::now() - Duration::from_secs(11));
+    record.grace = Some(Duration::from_secs(180));
+    let store = env.store();
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let request = rimz::harness::run_timeout::RunTimeoutRequest {
+        workspace_id: env.workspace_id.clone(),
+        run_id: record.run_id.clone(),
+        interrupted_at: None,
+    };
+    let trace = env.project_root.join("deadline-stop-trace.log");
+    let output = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "50")
+        .args(rimz::child_process::agent_helper_argv(
+            "run-timeout",
+            &request,
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let loaded = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    let mut messages = store.list_messages().unwrap();
+    messages.extend(store.list_message_history().unwrap());
+    if waiting {
+        assert_eq!(
+            loaded.deadline_notice_at, None,
+            "a waiting child's stop is left to the hook"
+        );
+        assert!(messages.is_empty(), "{kind}: {messages:?}");
+        return (env, trace_lines(&trace));
+    }
+    assert_eq!(
+        loaded.deadline_notice_at, record.deadline_at,
+        "the stop is claimed"
+    );
+    assert_eq!(messages.len(), 1, "{kind}: {messages:?}");
+    assert!(messages[0].text.starts_with("Time is up."), "{messages:?}");
+    (env, trace_lines(&trace))
+}
+
+fn is_paste_start(line: &str) -> bool {
+    line.contains(&format!(
+        "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126\t"
+    ))
+}
+
+#[test]
+fn deadline_stop_interrupts_a_key_kind_steers_a_pane_kind_and_spares_a_waiting_child() {
+    let (_env, lines) = deadline_stop_trace("claude", false);
+    let paste = lines.iter().position(|line| is_paste_start(line));
+    let enter = lines.iter().position(|line| is_enter_key(line));
+    let escape = lines.iter().position(|line| is_escape_key(line));
+    assert!(
+        matches!((paste, enter, escape), (Some(p), Some(n), Some(e)) if p < n && n < e),
+        "{lines:?}"
+    );
+    assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
+
+    let (_env, lines) = deadline_stop_trace("kimi", false);
+    let paste = lines.iter().position(|line| is_paste_start(line));
+    let enter = lines.iter().position(|line| is_enter_key(line));
+    assert!(
+        matches!((paste, enter), (Some(p), Some(n)) if p < n),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+
+    let (_env, lines) = deadline_stop_trace("claude", true);
+    assert!(!lines.iter().any(|line| is_escape_key(line)), "{lines:?}");
+}
+
 #[test]
 fn interrupt_codex_without_signal_warns_after_window() {
     interrupt_without_signal(false);
