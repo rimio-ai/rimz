@@ -287,7 +287,8 @@ impl ClaudePaneDiscovery {
                 .flat_map(|pane| pane.own.iter().chain(&pane.named))
                 .map(|session| &session.id)
                 .collect::<HashSet<_>>();
-            let mut sessions: HashMap<AgentSessionId, Vec<CatalogEntry>> = HashMap::new();
+            let mut sessions: HashMap<AgentSessionId, (Timestamp, Vec<CatalogEntry>)> =
+                HashMap::new();
             for entry in self
                 .catalog
                 .entries()
@@ -302,32 +303,19 @@ impl ClaudePaneDiscovery {
                     continue;
                 };
                 if row.created_at >= since && !named.contains(&row.session_id) {
-                    sessions
+                    let group = sessions
                         .entry(row.session_id.clone())
-                        .or_default()
-                        .push(entry.clone());
+                        .or_insert((row.created_at, Vec::new()));
+                    group.0 = group.0.max(row.created_at);
+                    group.1.push(entry.clone());
                 }
             }
             let mut candidates = sessions.into_iter().collect::<Vec<_>>();
-            candidates.sort_by_cached_key(|(id, paths)| {
-                (
-                    std::cmp::Reverse(
-                        paths
-                            .iter()
-                            .filter_map(|entry| {
-                                self.candidates
-                                    .get(entry)
-                                    .and_then(PaneCandidate::observation)
-                            })
-                            .map(|row| row.created_at)
-                            .max(),
-                    ),
-                    id.clone(),
-                )
-            });
-            let mut window = candidates
+            candidates
+                .sort_by_cached_key(|(id, (created, _))| (std::cmp::Reverse(*created), id.clone()));
+            let window = candidates
                 .into_iter()
-                .filter_map(|(_, paths)| {
+                .filter_map(|(_, (_, paths))| {
                     paths
                         .iter()
                         .filter_map(|entry| self.check_candidate(entry, &mut checked))
@@ -336,12 +324,6 @@ impl ClaudePaneDiscovery {
                 })
                 .take(MAX_DISCOVERED_SESSIONS)
                 .collect::<Vec<_>>();
-            window.sort_by(|left, right| {
-                right
-                    .created_at
-                    .cmp(&left.created_at)
-                    .then_with(|| observation_cmp(left, right))
-            });
             observations.extend(window);
         }
         observations.sort_by(observation_cmp);
