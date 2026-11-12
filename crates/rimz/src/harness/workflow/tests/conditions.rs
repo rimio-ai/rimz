@@ -1,11 +1,13 @@
 use super::*;
+use crate::disk::paths::StatePaths;
+use crate::store::workflow::{RunRecord, RunState};
 
-const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait' }\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
+const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
 
 #[test]
 fn inline_cases_match_table_blocks_in_order() {
     let (_home, dir) = fixture();
-    let header = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait'}\n";
+    let header = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait',unknown='@wait'}\n";
     let actual: Vec<_> = [
         r#"cases = [
     { when = ["pr=merged"], outcome = "merged" },
@@ -72,9 +74,10 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         (CONDITION.to_owned(), true, ""),
         (CONDITION.replace("timeout='1h'\n", ""), false, "timeout"),
         (
-            CONDITION
-                .replace("timeout='1h'\n", "")
-                .replace("pending='@wait'", "pending='@done', unknown='@failed'"),
+            CONDITION.replace("timeout='1h'\n", "").replace(
+                "pending='@wait', unknown='@wait'",
+                "pending='@done', unknown='@failed'",
+            ),
             true,
             "",
         ),
@@ -85,7 +88,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         ),
         (
             CONDITION.replace(
-                "ready='@done', pending='@wait'",
+                "ready='@done', pending='@wait', unknown='@wait'",
                 "ready='pr', pending='pr', unknown='@failed'",
             ),
             false,
@@ -216,6 +219,178 @@ fn condition_validation_refuses_malformed_cases_and_missing_required_fields() {
 }
 
 #[test]
+fn a_condition_without_on_unknown_refuses_and_gets_no_implicit_wait() {
+    let (_home, dir) = fixture();
+    let text = CONDITION.replace(", unknown='@wait'", "");
+    fs::write(dir.join("workflow.toml"), &text).unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), None);
+    let errors = report
+        .errors
+        .iter()
+        .map(|error| (error.path.as_str(), error.message.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        errors,
+        [(
+            "checks.pr.on.unknown",
+            "example: checks.pr.on.unknown: a condition check requires on.unknown; route it to @wait to keep waiting while a term is unknown"
+        )]
+    );
+    let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+    assert!(
+        !spec
+            .edges("pr")
+            .iter()
+            .any(|edge| edge.outcome == "unknown"),
+        "{:?}",
+        spec.edges("pr")
+    );
+}
+
+/// Advance a condition run once, due now, and return the record it leaves.
+fn advance_condition(state: &StatePaths, record: &RunRecord) -> RunRecord {
+    let path = state.workflow(&record.id);
+    let mut due = crate::store::workflow::load(&path).unwrap();
+    due.recheck_at = None;
+    attempts::update(state, &due);
+    let result = advance(state, &record.id, &FakeHost::new());
+    assert!(
+        result.is_ok(),
+        "a condition evaluates in-process: {result:?}"
+    );
+    crate::store::workflow::load(&path).unwrap()
+}
+
+/// Publish a forge probe for the run's checkout: `fresh` after the check's entry, else before.
+fn publish_pr(dir: &Path, state: &StatePaths, record: &RunRecord, fresh: bool, pr: &str) {
+    let at = if fresh {
+        jiff::Timestamp::now()
+    } else {
+        record.entered_at - std::time::Duration::from_secs(1)
+    };
+    let path = crate::RuntimePaths::for_state(state)
+        .unwrap()
+        .lane_path("pr-state.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let checkout = dir.to_string_lossy();
+    fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "branch_ci":{}, "path_repos":{(checkout.as_ref()):"repo"},
+            "repos":{"repo":{"refreshed_at_ms":at.as_millisecond(),"ok":true}},
+            "states":{(checkout.as_ref()):{"state":pr}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn held_condition(unknown: &str) -> String {
+    format!(
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait', unknown='{unknown}' }}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n"
+    )
+}
+
+fn closed_waits(state: &StatePaths, record: &RunRecord) -> Vec<String> {
+    crate::store::workflow::journal(&state.workflow(&record.id))
+        .unwrap()
+        .into_iter()
+        .filter_map(|row| match row.event {
+            crate::store::workflow::JournalEvent::Wait { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_hold_survives_unknown_and_completes_on_true_without_restarting() {
+    let (dir, state, record) = attempts::setup(&held_condition("@wait"));
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let held = advance_condition(&state, &record);
+    let wait = held.wait.clone().unwrap();
+    assert!(wait.is_hold(), "{wait:?}");
+    let first = wait.first;
+    publish_pr(dir.path(), &state, &record, false, "merged");
+    let unknown = advance_condition(&state, &record);
+    let wait = unknown.wait.clone().unwrap();
+    assert_eq!(
+        (wait.outcome.as_str(), wait.case, wait.first, wait.count),
+        ("hold", Some(0), first, 2),
+        "an unknown answer keeps the hold's start"
+    );
+    assert!(closed_waits(&state, &record).is_empty());
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let mut again = advance_condition(&state, &record);
+    let wait = again.wait.as_mut().unwrap();
+    assert_eq!((wait.case, wait.first, wait.count), (Some(0), first, 3));
+    wait.first = jiff::Timestamp::now() - std::time::Duration::from_secs(121);
+    attempts::update(&state, &again);
+    let done = advance_condition(&state, &record);
+    assert_eq!(done.state, RunState::Done);
+    assert_eq!(done.input.as_ref().unwrap()["outcome"], "ready");
+    assert_eq!(closed_waits(&state, &record), ["hold"]);
+}
+
+#[test]
+fn a_hold_under_unknown_records_the_answer_and_a_true_answer_clears_it() {
+    let (dir, state, record) = attempts::setup(&held_condition("@wait"));
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let first = advance_condition(&state, &record).wait.unwrap().first;
+    publish_pr(dir.path(), &state, &record, false, "merged");
+    let unknown = advance_condition(&state, &record).wait.unwrap();
+    assert!(
+        unknown.is_hold()
+            && unknown.first == first
+            && unknown
+                .unknown
+                .as_deref()
+                .is_some_and(|reason| reason.contains("pr")),
+        "{unknown:?}"
+    );
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let held = advance_condition(&state, &record).wait.unwrap();
+    assert_eq!(
+        (
+            held.is_hold(),
+            held.first,
+            held.unknown,
+            held.detail.as_deref()
+        ),
+        (true, first, None, Some("ready")),
+    );
+}
+
+#[test]
+fn a_hold_ends_when_its_case_reads_false() {
+    let (dir, state, record) = attempts::setup(&held_condition("@wait"));
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let first = advance_condition(&state, &record).wait.unwrap().first;
+    publish_pr(dir.path(), &state, &record, true, "open");
+    let pending = advance_condition(&state, &record).wait.unwrap();
+    assert_eq!(pending.outcome, "pending");
+    assert_eq!(closed_waits(&state, &record), ["hold"]);
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    let restarted = advance_condition(&state, &record).wait.unwrap();
+    assert!(
+        restarted.is_hold() && restarted.first > first,
+        "{restarted:?}"
+    );
+}
+
+#[test]
+fn an_unknown_routed_away_from_wait_leaves_the_node_and_ends_the_hold() {
+    let (dir, state, record) = attempts::setup(&held_condition("@done"));
+    publish_pr(dir.path(), &state, &record, true, "merged");
+    assert!(advance_condition(&state, &record).wait.unwrap().is_hold());
+    publish_pr(dir.path(), &state, &record, false, "merged");
+    let left = advance_condition(&state, &record);
+    assert_eq!(left.state, RunState::Done);
+    assert_eq!(left.input.as_ref().unwrap()["outcome"], "unknown");
+    assert!(left.wait.is_none());
+    assert_eq!(closed_waits(&state, &record), ["hold"]);
+}
+
+#[test]
 fn wake_validation_accepts_selectors_and_strict_match_tables() {
     let (_home, dir) = fixture();
     for runner in [
@@ -302,7 +477,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
 
             let spec: WorkflowSpec = toml::from_str(&format!(
-                "{text}[checks.condition]\nelse='pending'\non={{ready='@done',pending='@wait'}}\n[[checks.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
+                "{text}[checks.condition]\nelse='pending'\non={{ready='@done',pending='@wait',unknown='@wait'}}\n[[checks.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
             ))
             .unwrap();
             assert_eq!(

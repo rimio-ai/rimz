@@ -133,7 +133,7 @@ fn project(
     let hold_limit = record
         .wait
         .as_ref()
-        .filter(|wait| wait.outcome == "hold")
+        .filter(|wait| wait.outcome == "hold" && wait.unknown.is_none())
         .map(|wait| {
             spec.and_then(|spec| spec.checks.get(&wait.node))
                 .and_then(|check| {
@@ -150,6 +150,7 @@ fn project(
     } else if let Some(wait) = &record.wait {
         match wait.outcome.as_str() {
             "capacity" => "held".into(),
+            "hold" if wait.unknown.is_some() => "unknown".into(),
             "hold" => wait
                 .detail
                 .as_ref()
@@ -236,6 +237,7 @@ mod tests {
             queued = "@wait"
             fix = "fix"
             merged = "clean"
+            unknown = "@wait"
             [[checks.watch.cases]]
             when = ["pr.open"]
             for = "30m"

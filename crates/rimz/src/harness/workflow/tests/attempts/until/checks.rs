@@ -76,7 +76,7 @@ fn forge_check(
 ) -> (tempfile::TempDir, StatePaths, FakeHost, RunRecord) {
     let text = UNTIL.split("[checks.pr]").next().unwrap().to_owned()
         + &format!(
-            "[checks.pr]\nelse='pending'\ntimeout='1h'\non={{done='@done',pending='@wait'}}\n[[checks.pr.cases]]\nwhen=['{when}']\noutcome='done'\n"
+            "[checks.pr]\nelse='pending'\ntimeout='1h'\non={{done='@done',pending='@wait',unknown='@wait'}}\n[[checks.pr.cases]]\nwhen=['{when}']\noutcome='done'\n"
         );
     let (dir, state, record) = setup(&text);
     let host = FakeHost::new();

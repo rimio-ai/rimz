@@ -306,7 +306,7 @@ impl View<'_> {
             .record
             .wait
             .as_ref()
-            .filter(|wait| wait.outcome == "hold")
+            .filter(|wait| wait.outcome == "hold" && wait.unknown.is_none())
         else {
             return Ok(None);
         };
@@ -638,7 +638,7 @@ mod tests {
                 "first":now-jiff::SignedDuration::from_mins(1),"last":now,"count":1},
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\non={ready='@done',pending='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
         std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
         std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
         let paths = state.workflow(&record.id);
@@ -666,6 +666,59 @@ mod tests {
                 && output.contains("1m remaining")
                 && output.contains("team.stage=Done"),
             "{output}"
+        );
+    }
+
+    #[test]
+    fn a_hold_under_unknown_reads_unknown_without_a_forecast_until_true_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Timestamp::now();
+        let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
+        let first = now - jiff::SignedDuration::from_mins(3);
+        let mut record: RunRecord = serde_json::from_value(serde_json::json!({
+            "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
+            "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
+            "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"gate",
+            "created_at":first,"entered_at":first,"visits":{},"visit_grant":0,
+            "deadline_fired":false,"next_seq":1,
+            "wait":{"node":"gate","outcome":"hold","case":0,"detail":"ready",
+                "unknown":"team.stage (no board)","first":first,"last":now,"count":2},
+        }))
+        .unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        let paths = state.workflow(&record.id);
+        let globals = crate::cli::GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let present = |record: &RunRecord| {
+            let view = View {
+                record,
+                paths: &paths,
+                spec: &spec,
+                journal: &[],
+                now,
+                commands: resolve::RunCommands::new(record, &globals),
+            };
+            let phrase = view.presentation(None).unwrap();
+            (phrase.state, phrase.forecast)
+        };
+        let (state_line, forecast) = present(&record);
+        assert!(
+            state_line.contains("unknown: team.stage (no board)")
+                && !state_line.contains("holding")
+                && !forecast.contains("then"),
+            "{state_line}{forecast}"
+        );
+        record.wait.as_mut().unwrap().unknown = None;
+        let (state_line, forecast) = present(&record);
+        assert!(
+            state_line.starts_with("holding ready at gate 2m of 2m")
+                && forecast.starts_with(", then @done at "),
+            "{state_line}{forecast}"
         );
     }
 

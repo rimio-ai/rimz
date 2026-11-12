@@ -198,6 +198,51 @@ fn sleep_conditions_share_freshness_unread_and_hold_semantics_with_expiry_first(
 }
 
 #[test]
+fn a_sleep_hold_survives_unknown_and_ends_on_false() {
+    let text = format!("{SLEEP}when=['pr=merged']\nfor='2m'\n");
+    let (dir, state, record) = attempts::setup(&text);
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let path = runtime.lane_path("pr-state.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let forge = |fresh: bool, pr: &str| {
+        let at = if fresh {
+            Timestamp::now()
+        } else {
+            record.entered_at - std::time::Duration::from_secs(1)
+        };
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "branch_ci":{}, "path_repos":{(dir.path().to_string_lossy().as_ref()):"repo"},
+                "repos":{"repo":{"refreshed_at_ms":at.as_millisecond(),"ok":true}},
+                "states":{(dir.path().to_string_lossy().as_ref()):{"state":pr}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let advance_due = || {
+        let mut due = records::load(&state.workflow(&record.id)).unwrap();
+        due.recheck_at = None;
+        update(&state, &due);
+        advance_sleep(&state, &record).wait.unwrap()
+    };
+    forge(true, "merged");
+    let first = advance_due().first;
+    forge(false, "merged");
+    let wait = advance_due();
+    assert_eq!(
+        (wait.outcome.as_str(), wait.first, wait.count),
+        ("hold", first, 2)
+    );
+    forge(true, "merged");
+    let wait = advance_due();
+    assert_eq!((wait.outcome.as_str(), wait.first), ("hold", first));
+    forge(true, "open");
+    assert_eq!(advance_due().outcome, "sleeping");
+}
+
+#[test]
 fn invalid_sleep_fails_without_replacing_the_incoming_input_or_key() {
     let (_dir, state, mut record) = attempts::setup(SLEEP);
     record.input = Some(json!({"outcome":"repair", "key":"kept"}));

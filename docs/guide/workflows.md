@@ -288,7 +288,7 @@ Exit 0 records `ended`; another exit or a signal records `died`. A spawn or log-
 
 Make the action safe to repeat on a later visit, just like an agent step. A cycle still needs `max-visits`, and it should go through a waiting check: a command returns at once, so an immediate route back can consume the whole visit cap in one advance.
 
-`workflow validate` and `workflow run` warn for each command or message step bounded by `max-visits` on a cycle that never waits, naming that step's cap. An agent step or a check with a non-deadline `@wait` route breaks this warning, including a sleep or a condition's implicit wait. A case's `for` hold is not a wait edge. The warning does not refuse the run; loop-started runs do not print it.
+`workflow validate` and `workflow run` warn for each command or message step bounded by `max-visits` on a cycle that never waits, naming that step's cap. An agent step or a check with a non-deadline `@wait` route breaks this warning, including a sleep's implicit wait or a condition's `unknown = "@wait"`. A case's `for` hold is not a wait edge. The warning does not refuse the run; loop-started runs do not print it.
 
 ### Hand work to an agent that is already running
 
@@ -319,7 +319,7 @@ start = "pr"
 [checks.pr]
 summary = "Wait for merge or sustained CI trouble"
 else = "pending"
-on = { merged = "@done", queued = "@wait", red = "sweep", pending = "@wait" }
+on = { merged = "@done", queued = "@wait", red = "sweep", pending = "@wait", unknown = "@wait" }
 timeout = "2d"
 cases = [
   { when = ["pr=merged"], outcome = "merged" },
@@ -339,13 +339,13 @@ max-visits-per-outcome = { limit = 2, reset-on = "queued" }
 timeout = "6h"
 ```
 
-`cases` is an ordered list, one case per line. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome and `else` needs an `on` edge. Here a merged PR ends the run; a queued PR waits and resets `sweep`'s outcome counts; a failing CI or dequeued PR held for two minutes launches `sweep`. Two sweeps for `red` without a queued answer use up that outcome's tries, while five sweeps in total use up the step's total bound. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
+`cases` is an ordered list, one case per line. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome, `else`, and `unknown` needs an `on` edge. Here a merged PR ends the run; a queued PR waits and resets `sweep`'s outcome counts; a failing CI or dequeued PR held for two minutes launches `sweep`. Two sweeps for `red` without a queued answer use up that outcome's tries, while five sweeps in total use up the step's total bound. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
 
 A sweep that repairs a queue removal must also re-arm the PR (enable auto-merge or add it to the queue); a push alone does not clear `pr.queue=dequeued`.
 
 A landing check can route conflicts and review state with `pr.mergeable` and `pr.review` instead of a script; the [condition keys](../reference/cli/loop.md#conditions) list their readings.
 
-Unread is not false: an unread case before the first true case answers `unknown`, even for `!pr=open`. A fresh probe that finds nothing is a reading, not unread: with no PR, `pr` reads `none` and `!pr=open` is true. The default `unknown → @wait` waits for evidence; for `until`, it holds the session and re-samples on subscribed signals and the minute tick while the leader remains at rest. Override `on.unknown` to route elsewhere. A case that writes `pr=unknown` refuses: unread terms answer the `unknown` outcome by themselves. An ordinary check needs a successful forge probe at or after entry to that check (including after resume). An `until` session's check instead accepts a successful probe at or after the session's start, including a probe from an earlier turn. Until a probe meets that floor, `show` names the unread keys. Stage and usage-window readings have no freshness floor. Keep the room open for fresh forge data: an idle repository's next probe can take up to five minutes. Two consecutive ordinary forge checks each need a post-entry probe, so put related decisions in cases of one check. Closing the room leaves its last facts that pass the relevant floor in force. An `until` check samples the latest probe at each eligible leader turn end, and while held at `@wait` also on subscribed signals and the minute tick.
+Unread is not false: an unread case before the first true case answers `unknown`, even for `!pr=open`. A fresh probe that finds nothing is a reading, not unread: with no PR, `pr` reads `none` and `!pr=open` is true. Every condition routes `unknown` in `on`: `unknown = "@wait"` waits for evidence, and for `until` it holds the session and re-samples on subscribed signals and the minute tick while the leader remains at rest; another target leaves the check. A `for` hold survives `unknown` answers routed to `@wait`, so the same case reading true again continues the hold from its first true answer; while the answer stays unknown, `rimz workflow show` reads the check as unknown and forecasts no route. The hold ends when its case reads false, when another case answers, or when a route leaves the check. A case that writes `pr=unknown` refuses: unread terms answer the `unknown` outcome by themselves. An ordinary check needs a successful forge probe at or after entry to that check (including after resume). An `until` session's check instead accepts a successful probe at or after the session's start, including a probe from an earlier turn. Until a probe meets that floor, `show` names the unread keys. Stage and usage-window readings have no freshness floor. Keep the room open for fresh forge data: an idle repository's next probe can take up to five minutes. Two consecutive ordinary forge checks each need a post-entry probe, so put related decisions in cases of one check. Closing the room leaves its last facts that pass the relevant floor in force. An `until` check samples the latest probe at each eligible leader turn end, and while held at `@wait` also on subscribed signals and the minute tick.
 
 On an open GitHub PR, when the commits are known, bare `ci` also requires CI for the PR's head and the checkout's current HEAD to be on that PR. A local commit not yet on the PR, or a verdict for another PR head, makes `ci` unread. The check waits by default, and `show` says which commits differ. Someone else's push can count even when the checkout has not fetched it. Missing commit data skips only the comparison it prevents. Without a known PR head, the time floor alone applies, as it does for `pr`, `pr.queue`, `pr.mergeable`, `pr.review`, branch selectors such as `ci[main]`, merged or closed PRs, Gitea, and PR-less checkouts. Forge propagation lag can still affect those readings. Loop conditions use the same commit fence, and hold instead of answering `unknown` ([forge freshness](../reference/cli/loop.md#forge-freshness)).
 
@@ -460,7 +460,7 @@ Put the cheap case in a script and the unclear case in a judge. A script that an
 
 A run sends failures to explicit routes or `[workflow] on-break`. With an agent handler, the run waits at `@break` in that agent's pane: ask there, or fix the cause and resume to the source node. Closing the pane ends the run as failed; resume and cancel leave the pane open.
 
-A condition's unread data normally waits rather than breaking. An explicit `on.unknown` can choose another node or end the run.
+A condition's unread data goes where its `on.unknown` says: `@wait` waits for evidence rather than breaking, and another target chooses another node or ends the run.
 
 A blocking question or permission prompt from a turn step's leader or its subagent keeps the attempt live: answer in the agent's pane. `workflow list` reads `asking you: <handle> (<kind>): <text>`, and the step's `timeout` pauses from when the ask opened until RimZ sees it answered. A subagent's ask or answer is noticed within about a minute. Set `on.asked` to end the attempt on a question instead: RimZ stops the layout and follows that edge, with the question in `prev_attempt.asked` in `context.json`.
 
@@ -618,7 +618,7 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 
 Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, or `@failed`; `@user` is refused. Set `[workflow] on-break` or explicitly route every fireable failure edge (check timeout/invalid, agent launch invalid, message undelivered, visit cap, and workflow deadline). An agent or command step's `then` must name a check or a nonempty list of checks; a message step's `then` names exactly one node, `@done`, or `@failed`. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
-A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
+A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `capacity`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` is a required edge, but `on.hold` is never an edge.
 
 ### The context file
 

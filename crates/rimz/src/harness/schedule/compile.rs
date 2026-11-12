@@ -398,6 +398,7 @@ impl<'a> Graph<'a> {
                     routes([
                         ("holds", first),
                         ("ended", "@wait"),
+                        ("unknown", "@wait"),
                         ("invalid", "@failed"),
                         ("timeout", "@done"),
                     ])

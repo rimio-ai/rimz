@@ -82,8 +82,8 @@ fn sleep_when_wakes_from_its_derived_subscription_without_the_minute_tick() {
 fn checks_without_subscriptions_keep_their_backoff_and_wait_count() {
     for check in [
         WAIT.to_owned(),
-        "[checks.pr]\nprovider='claude'\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait'}\n[[checks.pr.cases]]\nwhen=['window.5h.left>=40']\noutcome='ready'\n".into(),
-        "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait'}\n[[checks.pr.cases]]\nwhen=['pr[main]=merged || ci[main]=passed || pr.queue[main]=queued']\noutcome='ready'\n".into(),
+        "[checks.pr]\nprovider='claude'\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['window.5h.left>=40']\noutcome='ready'\n".into(),
+        "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['pr[main]=merged || ci[main]=passed || pr.queue[main]=queued']\noutcome='ready'\n".into(),
     ] {
         let (env, _) = fixture(&format!("{HEADER}{check}"), PENDING);
         let id = start(&env);
@@ -174,7 +174,7 @@ fn explicit_wake_filters_override_checkout_defaults_and_require_present_keys() {
 
 #[test]
 fn condition_forge_wakes_follow_only_the_current_checks_checkout_terms() {
-    let check = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait'}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
+    let check = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
     let (env, _) = fixture(&format!("{HEADER}{check}"), "");
     let id = start(&env);
     until(&env, &id, |value| value["record"]["wait"].is_object());
@@ -186,7 +186,7 @@ fn condition_forge_wakes_follow_only_the_current_checks_checkout_terms() {
 #[test]
 fn stage_wakes_follow_the_current_archive_link_for_declared_and_derived_subscriptions() {
     use std::os::unix::fs::symlink;
-    let condition = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait'}\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\n";
+    let condition = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\n";
     for check in [format!("{WAIT}wake=['team.stage']\n"), condition.into()] {
         let (env, _) = fixture(&format!("{HEADER}{check}"), PENDING);
         let archive = env.state_path_for(&env.project_root).team_notes_dir;

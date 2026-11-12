@@ -267,7 +267,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
 #[test]
 fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     let spec = spec(
-        "cases=[{when=['pr=merged'],outcome='zeta'},{when=['ci=passed'],outcome='alpha'},{when=['ci=failed'],outcome='zeta'}]\nelse='pending'\non={alpha='@done',zeta='work',pending='@wait'}\ntimeout='1d'",
+        "cases=[{when=['pr=merged'],outcome='zeta'},{when=['ci=passed'],outcome='alpha'},{when=['ci=failed'],outcome='zeta'}]\nelse='pending'\non={alpha='@done',zeta='work',pending='@wait',unknown='@wait'}\ntimeout='1d'",
         "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',cap='@failed',capacity='@failed'}",
     );
     let outcomes = |node| {
@@ -309,7 +309,7 @@ on={pass='sweep',fail='@failed'}
 [checks.watch]
 cases=[{when=['pr=merged'],outcome='merged'},{when=['ci=failed'],outcome='red'}]
 else='waiting'
-on={merged='notes',red='fix',waiting='@wait'}
+on={merged='notes',red='fix',waiting='@wait',unknown='@wait'}
 timeout='3d'
 [checks.notes]
 run='true'

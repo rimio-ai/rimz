@@ -97,7 +97,6 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
         ("pr", "timeout", "@failed"),
         ("pr", "invalid", "@failed"),
         ("pr", "hold", "@wait"),
-        ("condition", "unknown", "@wait"),
         ("build", "ended", "pr"),
         ("build", "died", "pr"),
         ("build", "timeout", "pr"),
@@ -118,6 +117,11 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
     assert_eq!(spec.target("pr", "missing"), None);
     assert_eq!(spec.target("build", "missing"), None);
     assert_eq!(spec.target("build", "asked"), None);
+    assert_eq!(
+        spec.target("condition", "unknown"),
+        None,
+        "a condition routes unknown only through its own on.unknown"
+    );
 }
 
 #[test]

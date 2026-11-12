@@ -25,7 +25,7 @@ fn launch_notes_describe_each_check_kind_and_the_until_pushback() {
         ),
     ] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[checks.watch]\non={{done='@done',pending='build',pass='@done',fail='build'}}\n{definition}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[checks.watch]\non={{done='@done',pending='build',unknown='build',pass='@done',fail='build'}}\n{definition}\n"
         );
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();

@@ -1227,7 +1227,7 @@ fn validation_warns_only_for_bounded_command_cycles_that_never_wait() {
         + "[steps.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[checks.back]\nrun='true'\non.fail='build'\n";
     let route = "run='true'\non.fail='build'";
     let condition = "cases=[{when=['pr=merged'],outcome='yes'}]\nelse='no'\n\
-                     on={yes='@done',no='build'}\ntimeout='1m'";
+                     on={yes='@done',no='build',unknown='@wait'}\ntimeout='1m'";
     let held_condition = "cases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
                           on={yes='build',no='@done',unknown='@failed'}";
     let helper = "[steps.helper]\nagent='claude'\nprompt-file='prompts/build.md'\n\

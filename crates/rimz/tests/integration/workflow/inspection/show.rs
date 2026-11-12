@@ -2,7 +2,7 @@ use super::*;
 
 const AT: &str = "2000-01-01T12:00:00Z";
 
-const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[checks.gate]\nelse='pending'\non={ready='later',pending='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[checks.later]\nshell='true'\non={pass='@done',fail='build'}\n";
+const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[checks.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[checks.later]\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
 fn active_break_resume_receipt_counts_the_destination_step_visits() {
@@ -1046,7 +1046,7 @@ fn holding_check_names_the_case_target_and_completion_clock() {
         &paths.spec,
         concat!(
             "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\n",
-            "on={ready='build',pending='@wait'}\n[[checks.gate.cases]]\nwhen=['ci=passed']\n",
+            "on={ready='build',pending='@wait',unknown='@wait'}\n[[checks.gate.cases]]\nwhen=['ci=passed']\n",
             "outcome='ready'\nfor='10m'\n[steps.build]\nshell='true'\nthen='gate'\n",
         ),
     )
@@ -1066,7 +1066,7 @@ fn holding_check_names_the_case_target_and_completion_clock() {
         &paths.spec,
         text.replace("[checks.gate]", "[checks.gate]\ntimeout='5m'")
             .replace(
-                "on={ready='build',pending='@wait'}",
+                "on={ready='build',pending='@wait',unknown='@wait'}",
                 "on={ready='build',pending='@wait',timeout='@failed'}",
             ),
     )
@@ -1111,7 +1111,7 @@ scope = 'worktree'
 start = 'gate'
 [checks.gate]
 else = 'pending'
-on = { merged = '@done', red = 'build', ready = 'build', pending = '@wait', queued = '@wait' }
+on = { merged = '@done', red = 'build', ready = 'build', pending = '@wait', queued = '@wait', unknown = '@wait' }
 [[checks.gate.cases]]
 when = ['pr=merged']
 outcome = 'merged'

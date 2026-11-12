@@ -20,6 +20,7 @@ cases = [{ when = ['ci=passed'], outcome = 'green' }]
 else = 'red'
 on.green = 'notes'
 on.red = 'fix'
+on.unknown = '@wait'
 timeout = '3d'
 [steps.fix]
 shell = 'echo fix'

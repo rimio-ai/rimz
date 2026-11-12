@@ -20,6 +20,7 @@ cases = [{ when = ['ci=passed'], outcome = 'green', for = '3m' }]
 else = 'red'
 on.green = '@done'
 on.red = 'fix'
+on.unknown = '@wait'
 timeout = '3d'
 [steps.fix]
 agent = 'claude'
@@ -284,6 +285,7 @@ account = 'default'
 else = 'waiting'
 on.green = '@done'
 on.waiting = '@wait'
+on.unknown = '@wait'
 [checks.script]
 run = 'sh checks/pr.sh'
 wake = ['pr.*']
@@ -393,7 +395,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "none true",
                 "waiting → @wait",
                 "timeout → @failed (on-break, never: no timeout)",
-                "unknown → @wait (default)",
+                "unknown → @wait (explicit)",
             ],
         ),
         (
@@ -429,8 +431,8 @@ fn condition_case_note_agrees_in_definition_and_node_views() {
             || GRAPH.to_owned(),
             |target| {
                 GRAPH.replace(
-                    "on.green = '@done'",
-                    &format!("on.green = '@done'\non.unknown = '{target}'"),
+                    "on.unknown = '@wait'\ntimeout = '3d'",
+                    &format!("on.unknown = '{target}'\ntimeout = '3d'"),
                 )
             },
         );

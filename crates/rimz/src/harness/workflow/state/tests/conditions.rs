@@ -7,7 +7,7 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
         "cases=[{when=['ci=passed'],outcome='ready',for='2m'},",
         "{when=['pr.merged'],outcome='ready',for='2m'},",
         "{when=['team.stage=Done'],outcome='done'}]\n",
-        "on={ready='@done',done='@done'}\n",
+        "on={ready='@done',done='@done',unknown='@wait'}\n",
     ))
     .unwrap();
     let mut record = record();
@@ -21,6 +21,7 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
         outcome: "hold".into(),
         case: Some(0),
         detail: Some("ready".into()),
+        unknown: None,
         hold: None,
         kinds: vec![],
         gives_up_at: None,
@@ -52,7 +53,7 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
 
 #[test]
 fn a_hold_preserves_routed_context_and_counts_until_the_reset_case_fires() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[checks.next]\nrun='true'\non.ok='@done'\n[steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\nmax-visits-per-outcome={limit=2,reset-on='ready'}\n").unwrap();
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next', unknown='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[checks.next]\nrun='true'\non.ok='@done'\n[steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\nmax-visits-per-outcome={limit=2,reset-on='ready'}\n").unwrap();
     let paths = paths();
     for completes in [false, true] {
         let mut record = record();
@@ -112,7 +113,7 @@ fn a_hold_preserves_routed_context_and_counts_until_the_reset_case_fires() {
 
 #[test]
 fn a_different_case_with_the_same_outcome_restarts_the_hold() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[[checks.pr.cases]]\nwhen=['team.stage!=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[[checks.pr.cases]]\nwhen=['team.stage!=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
     let paths = paths();
     let record = record();
     let attempt = record.attempt.clone();
@@ -139,7 +140,7 @@ fn a_different_case_with_the_same_outcome_restarts_the_hold() {
 
 #[test]
 fn condition_hold_settles_at_the_inclusive_boundary_and_clamps_to_bounds() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
     let paths = paths();
     for bound in [None, Some(30)] {
         let mut record = record();
@@ -191,5 +192,51 @@ fn condition_hold_settles_at_the_inclusive_boundary_and_clamps_to_bounds() {
             "the hold completes at equality"
         );
         assert_eq!(t.record.input.as_ref().unwrap()["outcome"], "ready");
+    }
+}
+
+#[test]
+fn an_unknown_answer_ends_a_hold_whose_own_case_reads_false() {
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={staged='@done', ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='staged'\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n").unwrap();
+    let paths = paths();
+    for (pr, kept) in [("merged", true), ("open", false)] {
+        let record = record();
+        let attempt = record.attempt.clone();
+        let first = record.entered_at;
+        let mut t = Transition {
+            now: first,
+            record,
+            spec: &spec,
+            paths: &paths,
+            entries: vec![],
+        };
+        let readings = json!({"team.stage":"Review", "pr":"merged"});
+        t.finish_check(
+            1,
+            Ok(json!({"outcome":"ready", "case":1, "readings":readings})),
+            None,
+        )
+        .unwrap();
+        t.now += jiff::SignedDuration::from_secs(10);
+        t.record.attempt = attempt;
+        let readings = json!({"team.stage":null, "pr":pr});
+        t.finish_check(
+            1,
+            Ok(json!({"outcome":"unknown", "readings":readings})),
+            None,
+        )
+        .unwrap();
+        let wait = t.record.wait.as_ref().unwrap();
+        if kept {
+            assert_eq!(
+                (wait.outcome.as_str(), wait.case, wait.first),
+                ("hold", Some(1), first)
+            );
+        } else {
+            assert_eq!(
+                (wait.outcome.as_str(), wait.case, wait.first),
+                ("unknown", None, t.now)
+            );
+        }
     }
 }

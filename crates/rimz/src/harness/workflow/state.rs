@@ -272,6 +272,22 @@ impl Transition<'_> {
         super::hold_until(self.spec, &self.record, case, self.now)
     }
 
+    /// Whether the held `case` reads true or unknown on the readings an unknown answer carries.
+    fn hold_survives(&self, case: u32, object: &Value) -> bool {
+        let readings = object
+            .get("readings")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .map(|(key, value)| (key.clone(), value.as_str().map(str::to_owned)))
+            .collect();
+        self.spec.checks[&self.record.node]
+            .condition_cases()
+            .get(case as usize)
+            .and_then(|case| crate::harness::when::WhenExpr::parse(&case.when).ok())
+            .is_some_and(|expression| expression.truth(&readings) != Some(false))
+    }
+
     pub(super) fn close_wait(&mut self) {
         if let Some(wait) = self.record.wait.take() {
             self.entries.push(JournalEntry {
@@ -371,6 +387,24 @@ impl Transition<'_> {
         } else {
             None
         };
+        let held = self
+            .record
+            .wait
+            .as_ref()
+            .filter(|wait| wait.is_hold())
+            .and_then(|wait| wait.case);
+        // A hold keeps its start through unknown; only its own case reading false ends it.
+        if outcome == "unknown"
+            && held.is_some_and(|case| self.hold_survives(case, object))
+            && let Some(wait) = self.record.wait.as_mut()
+        {
+            wait.last = at;
+            wait.count += 1;
+            wait.unknown = Some(detail.unwrap_or_default());
+            wait.recheck_at = recheck_at;
+            self.record.recheck_at = recheck_at;
+            return Ok(());
+        }
         if self
             .record
             .wait
@@ -384,6 +418,7 @@ impl Transition<'_> {
             outcome,
             case,
             detail: None,
+            unknown: None,
             hold: None,
             kinds: Vec::new(),
             gives_up_at: None,
@@ -395,6 +430,7 @@ impl Transition<'_> {
         wait.last = at;
         wait.count += 1;
         wait.detail = detail;
+        wait.unknown = None;
         wait.recheck_at = recheck_at;
         self.record.recheck_at = recheck_at;
         Ok(())
@@ -579,6 +615,7 @@ impl Transition<'_> {
             outcome: outcome.into(),
             case: None,
             detail: None,
+            unknown: None,
             hold: None,
             kinds: Vec::new(),
             gives_up_at: None,

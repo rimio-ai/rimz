@@ -164,8 +164,15 @@ pub fn case_marks(
     wait: Option<&Wait>,
 ) -> Result<CaseMarks, SpecErr> {
     let condition_cases = check.condition_cases();
+    // A hold that survives an unknown answer is drawn from that answer's readings; without an
+    // answer, the wait says whether the last one was unknown.
     let selected = wait
-        .filter(|wait| wait.is_hold())
+        .filter(|wait| {
+            wait.is_hold()
+                && object
+                    .get("outcome")
+                    .map_or(wait.unknown.is_none(), |outcome| outcome == "hold")
+        })
         .and_then(|wait| wait.case)
         .map(|case| (u64::from(case), CaseMark::Holding))
         .or_else(|| {
@@ -325,6 +332,20 @@ mod tests {
             case_marks(&check, &object, Some(&wait)).unwrap(),
             CaseMarks {
                 cases: vec![CaseMark::False, CaseMark::Holding],
+                else_mark: CaseMark::NotReached
+            }
+        );
+    }
+
+    #[test]
+    fn case_marks_read_an_unknown_answer_under_a_surviving_hold() {
+        let check: Check = toml::from_str("else='pending'\ncases=[{when=['team.stage=Done'],outcome='done'},{when=['pr=merged'],outcome='merged',for='2m'}]").unwrap();
+        let object = json!({"outcome":"unknown","readings":{"team.stage":null,"pr":"merged"}});
+        let wait: Wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":1,"unknown":"team.stage (no board)","first":"2026-01-01T00:00:00Z","last":"2026-01-01T00:00:01Z","count":2})).unwrap();
+        assert_eq!(
+            case_marks(&check, &object, Some(&wait)).unwrap(),
+            CaseMarks {
+                cases: vec![CaseMark::Unread, CaseMark::NotReached],
                 else_mark: CaseMark::NotReached
             }
         );
