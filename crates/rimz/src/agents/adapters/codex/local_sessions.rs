@@ -600,33 +600,26 @@ impl CodexDiscoverySnapshot {
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
         let mut candidates = self.catalog.entries().to_vec();
-        candidates.sort_by(|left, right| {
-            rollout_filename(&right.path)
-                .cmp(&rollout_filename(&left.path))
-                .then_with(|| right.active.cmp(&left.active))
-        });
+        candidates.sort_by(|left, right| revision_order(right).cmp(&revision_order(left)));
         let workspace_lookup = key
             .workspaces
             .iter()
             .map(PathBuf::as_path)
             .collect::<HashSet<_>>();
-        let mut examined = 0;
         let mut session_ids_seen = HashSet::new();
         let mut observations = Vec::new();
-        for candidate in candidates {
+        for candidate in candidates
+            .into_iter()
+            .filter(|candidate| {
+                candidate.active
+                    || !candidate
+                        .path
+                        .file_name()
+                        .is_some_and(|name| active_filenames.contains(name))
+            })
+            .take(MAX_EXAMINED_FILES)
+        {
             let filename_session = session_id_from_filename(&candidate.path).map(str::to_owned);
-            if !candidate.active
-                && candidate
-                    .path
-                    .file_name()
-                    .is_some_and(|name| active_filenames.contains(name))
-            {
-                continue;
-            }
-            if examined >= MAX_EXAMINED_FILES {
-                break;
-            }
-            examined += 1;
             if filename_session
                 .as_ref()
                 .is_some_and(|session_id| session_ids_seen.contains(session_id))
