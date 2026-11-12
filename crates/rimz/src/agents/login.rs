@@ -193,7 +193,7 @@ impl ProviderLogin {
     }
 
     /// Sessions live panes can bind in this login's home, each carrying this account.
-    pub fn pane_sessions(
+    pub(crate) fn pane_sessions(
         &self,
         adapter: &super::AgentDefinition,
         demand: &[super::session::PaneSessionDemand],
@@ -1187,7 +1187,7 @@ impl RoomLoginSet {
     }
 
     /// Resolvable defaults and live stamps for one kind, without duplicates.
-    pub fn in_use(&self, kind: &str) -> Vec<ProviderLogin> {
+    pub(crate) fn in_use(&self, kind: &str) -> Vec<ProviderLogin> {
         let mut logins = BTreeMap::new();
         if let Some(login) = self.default_login(kind) {
             logins.insert(login.key(), login);
@@ -1229,7 +1229,7 @@ impl RoomLoginSet {
     }
 
     /// The resolvable logins this room currently uses across all kinds.
-    pub fn keys_in_use(&self) -> BTreeSet<LoginKey> {
+    pub(crate) fn keys_in_use(&self) -> BTreeSet<LoginKey> {
         self.kinds()
             .flat_map(|kind| self.in_use(kind.as_str()))
             .map(|login| login.key())
@@ -1238,7 +1238,7 @@ impl RoomLoginSet {
 
     /// The login each kind launches under in this room; a kind whose account
     /// does not resolve contributes none.
-    pub fn current_keys(&self) -> BTreeSet<LoginKey> {
+    pub(crate) fn current_keys(&self) -> BTreeSet<LoginKey> {
         self.kinds()
             .filter_map(|kind| self.default_key(kind.as_str()))
             .collect()
@@ -1320,7 +1320,7 @@ impl RoomLoginSet {
 
     /// The history pool of `login`; its own key when the account config does
     /// not load.
-    pub fn pool(&self, login: &LoginKey) -> LoginKey {
+    pub(crate) fn pool(&self, login: &LoginKey) -> LoginKey {
         self.catalog
             .as_ref()
             .map_or_else(|| login.clone(), |catalog| catalog.pool(login))
