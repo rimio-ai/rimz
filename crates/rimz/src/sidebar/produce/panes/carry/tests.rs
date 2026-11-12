@@ -494,6 +494,8 @@ fn omitted_tab_is_recreated_from_prior_metadata() {
             kind: ViewKind::Tab,
             name: Some("work".to_owned()),
             naming: Default::default(),
+            work_pane: Some(pane_id("terminal_9")),
+            work_pane_at_ms: 5,
             panes: vec![PaneState {
                 pane_id: pane_id("terminal_9"),
                 title: None,
@@ -551,4 +553,43 @@ fn omitted_tab_is_recreated_from_prior_metadata() {
             .iter()
             .any(|pane| pane.pane_id == pane_id("terminal_9"))
     );
+    assert_eq!(
+        (carried_tab.work_pane.as_ref(), carried_tab.work_pane_at_ms),
+        (Some(&pane_id("terminal_9")), 5),
+        "the recreated tab keeps its remembered pane"
+    );
+}
+
+#[test]
+fn a_carried_work_pane_stays_the_work_pane_of_its_existing_tab() {
+    let mut prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
+    prior.tabs[0].work_pane = Some(pane_id("terminal_2"));
+    prior.tabs[0].work_pane_at_ms = 5;
+    for (own, expected) in [
+        (None, ("terminal_2", 5)),
+        (Some(3), ("terminal_2", 5)),
+        (Some(9), ("terminal_1", 9)),
+    ] {
+        let mut fresh = pidded_frame(&[("terminal_1", 101)], 2);
+        if let Some(at_ms) = own {
+            fresh.tabs[0].work_pane = Some(pane_id("terminal_1"));
+            fresh.tabs[0].work_pane_at_ms = at_ms;
+        }
+        let outcome = apply_carry_forward(
+            fresh,
+            false,
+            Some(&prior),
+            None,
+            &HashMap::new(),
+            &|pid| (pid == 202).then_some(9),
+            2,
+        );
+        let tab = &outcome.frame.tabs[0];
+        assert_eq!(tab.panes.len(), 2, "only the remembered pane was omitted");
+        assert_eq!(
+            (tab.work_pane.as_ref(), tab.work_pane_at_ms),
+            (Some(&pane_id(expected.0)), expected.1),
+            "the tab's own memory at {own:?}"
+        );
+    }
 }

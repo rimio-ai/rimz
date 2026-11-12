@@ -460,22 +460,32 @@ pub fn select_sidebar_pane<'a>(
     panes.iter().find(|pane| pane.is_rimz_sidebar())
 }
 
-/// The pane a sidebar toggle returns to: the first pane in listing order that
-/// shares the sidebar's view, other than the sidebar and any RimZ sidebar. Each
-/// pane is `(id, view, is_sidebar)`; a sidebar with no view returns to any pane.
-pub fn toggle_back_pane<'a>(
+/// The work pane behind `sidebar`, where split, zoom, and return from the
+/// sidebar go. The candidates are the panes sharing the sidebar's view (any
+/// view when the sidebar has none) that are neither it nor any RimZ sidebar,
+/// in listing order: the first that is a `remembered` pane wins, else the
+/// first candidate. Each pane is `(id, view, is_sidebar)`; `remembered` is the
+/// published frame's per-tab memory, validated against this listing, so a
+/// stale or missing frame degrades to the first candidate.
+pub fn work_pane_behind<'a>(
     panes: &[(&'a PaneId, Option<&str>, bool)],
     sidebar: &PaneId,
+    remembered: &[&PaneId],
 ) -> Option<&'a PaneId> {
     let sidebar_view = panes
         .iter()
         .find(|(pane, ..)| *pane == sidebar)
         .and_then(|(_, view, _)| *view);
-    panes
+    let mut candidates = panes
         .iter()
         .filter(|(pane, _, is_sidebar)| *pane != sidebar && !is_sidebar)
-        .find(|(_, view, _)| sidebar_view.is_none() || *view == sidebar_view)
-        .map(|(pane, ..)| *pane)
+        .filter(|(_, view, _)| sidebar_view.is_none() || *view == sidebar_view)
+        .map(|(pane, ..)| *pane);
+    let first = candidates.next()?;
+    std::iter::once(first)
+        .chain(candidates)
+        .find(|pane| remembered.contains(pane))
+        .or(Some(first))
 }
 
 fn is_false(value: &bool) -> bool {
@@ -615,5 +625,65 @@ mod tests {
 
         assert!(select_sidebar_pane(&panes, &[Some("tab_1".to_owned())]).is_none());
         assert!(select_sidebar_pane(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn work_pane_behind_prefers_a_live_remembered_pane_in_the_sidebar_view() {
+        let id = |raw: &str| PaneId::from_parts(crate::ids::MuxName::Zellij, raw);
+        let (s, a, b, c, t) = (id("s"), id("a"), id("b"), id("c"), id("t"));
+        let listing = |b_view: &'static str, b_sidebar: bool| {
+            vec![
+                (&s, Some("tab_1"), true),
+                (&a, Some("tab_1"), false),
+                (&t, Some("tab_1"), true),
+                (&b, Some(b_view), b_sidebar),
+                (&c, Some("tab_2"), false),
+            ]
+        };
+        let panes = listing("tab_1", false);
+        assert_eq!(
+            work_pane_behind(&panes, &s, &[&b]),
+            Some(&b),
+            "remembered and live"
+        );
+        assert_eq!(
+            work_pane_behind(&panes, &s, &[&c, &b]),
+            Some(&b),
+            "another tab's memory"
+        );
+        assert_eq!(
+            work_pane_behind(&panes, &s, &[]),
+            Some(&a),
+            "nothing remembered"
+        );
+        assert_eq!(
+            work_pane_behind(&panes, &s, &[&t]),
+            Some(&a),
+            "a second sidebar"
+        );
+        let closed = id("gone");
+        assert_eq!(work_pane_behind(&panes, &s, &[&closed]), Some(&a), "closed");
+        assert_eq!(
+            work_pane_behind(&listing("tab_2", false), &s, &[&b]),
+            Some(&a),
+            "moved"
+        );
+        assert_eq!(
+            work_pane_behind(&listing("tab_1", true), &s, &[&b]),
+            Some(&a),
+            "now a sidebar"
+        );
+        let alone = [
+            (&s, Some("tab_1"), true),
+            (&t, Some("tab_1"), true),
+            (&c, Some("tab_2"), false),
+        ];
+        assert_eq!(
+            work_pane_behind(&alone, &s, &[&t, &c]),
+            None,
+            "no candidate"
+        );
+        let viewless = [(&s, None, true), (&c, Some("tab_2"), false)];
+        assert_eq!(work_pane_behind(&viewless, &s, &[]), Some(&c), "any view");
     }
 }

@@ -88,6 +88,9 @@ pub(crate) struct PaneProducer {
     held_checks: HashMap<PaneId, Instant>,
     metrics: MetricsSampleCache,
     presence_probed_at_ms: Option<u64>,
+    /// Focus events since one named a pane the retained frame did not hold,
+    /// replayed in order onto the next produced frame.
+    pending_focus: Vec<(u64, Vec<PaneId>)>,
 }
 
 impl PaneProducer {
@@ -105,6 +108,7 @@ impl PaneProducer {
                 read_metrics_sample_cache(&runtime.lane_path("metrics-sample.json"))
             },
             presence_probed_at_ms: None,
+            pending_focus: Vec::new(),
             hibernated_panes: HashSet::new(),
             agent_panes: HashSet::new(),
             native_tenants: HashMap::new(),
@@ -136,6 +140,50 @@ impl PaneProducer {
         )
     }
 
+    /// Fold recorded focus events into the retained frame's work-pane memory,
+    /// each as `(sent_at_ms, panes)` with the panes in the order they apply,
+    /// and publish the frame when a remembered pane moved. Returns the frame
+    /// the host inputs should carry then. Events naming a pane the frame does
+    /// not hold yet, and every event after them, wait for the next produced
+    /// frame.
+    pub(crate) fn remember_focus(
+        &mut self,
+        runtime: &crate::RuntimePaths,
+        events: &[(u64, Vec<PaneId>)],
+        own_pane: Option<&PaneId>,
+        diag: &crate::diag::DiagSink,
+    ) -> Option<Arc<PaneFrame>> {
+        let Some(prior) = self.prior.as_mut() else {
+            self.pending_focus.extend_from_slice(events);
+            return None;
+        };
+        let frame = Arc::make_mut(prior);
+        let mut changed = false;
+        for (sent_at_ms, panes) in events {
+            for pane in panes {
+                changed |= frame.remember_work_pane(pane, *sent_at_ms);
+            }
+        }
+        let unheld = events
+            .iter()
+            .flat_map(|(_, panes)| panes)
+            .any(|pane| !frame.pane_states().any(|state| state.pane_id == *pane));
+        if unheld || !self.pending_focus.is_empty() {
+            self.pending_focus.extend_from_slice(events);
+        }
+        if !changed {
+            return None;
+        }
+        publish_frame(
+            &runtime.pane_frame_path(),
+            frame,
+            PaneFramePublicationKind::Presence,
+            own_pane,
+            diag,
+        );
+        self.prior.clone()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn tick_with(
         &mut self,
@@ -150,11 +198,13 @@ impl PaneProducer {
         tty_path: &dyn Fn(&PaneState) -> Option<PathBuf>,
     ) -> Result<Arc<PaneFrame>> {
         if let Some(panes) = super::pane_list_fixture()? {
-            let frame = Arc::new(crate::sidebar::frame::assemble_frame(
-                panes,
-                unix_now_ms(),
-                session.to_owned(),
-            ));
+            let frame = Arc::new(
+                self.replay_pending_focus(crate::sidebar::frame::assemble_frame(
+                    panes,
+                    unix_now_ms(),
+                    session.to_owned(),
+                )),
+            );
             self.prior = Some(Arc::clone(&frame));
             return Ok(frame);
         }
@@ -264,7 +314,8 @@ impl PaneProducer {
                 write_metrics_sample_cache(runtime, ctx.metrics);
             }
             match accepted? {
-                Accepted::Fresh(mut frame) => {
+                Accepted::Fresh(frame) => {
+                    let mut frame = self.replay_pending_focus(frame);
                     self.native_tenants = native_tenants;
                     self.tty_paths = tty_paths;
                     self.settled_resumes = settled_resumes;
@@ -306,6 +357,17 @@ impl PaneProducer {
         }
         self.prior = Some(Arc::clone(&frame));
         Ok(frame)
+    }
+
+    /// Apply the focus events held for a produced frame, which settles each:
+    /// a pane the frame still lacks is dropped.
+    fn replay_pending_focus(&mut self, mut frame: PaneFrame) -> PaneFrame {
+        for (sent_at_ms, panes) in std::mem::take(&mut self.pending_focus) {
+            for pane in &panes {
+                frame.remember_work_pane(pane, sent_at_ms);
+            }
+        }
+        frame
     }
 }
 
@@ -482,14 +544,17 @@ fn client_view(mux: MuxName, session: &str) -> Result<crate::mux::ClientView> {
     Ok(view)
 }
 
-fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> ClientSample {
+fn presence_sample_from_client_view(
+    view: &crate::mux::ClientView,
+    sampled_at_ms: u64,
+) -> ClientSample {
     (
         PresenceSample {
             human_clients: view.presence.human_clients,
             last_input_ms: view.presence.last_input_ms(),
             client_input_ms: view.presence.client_input_ms.clone(),
             client_views: view.typing_clients(),
-            sampled_at_ms: unix_now_ms(),
+            sampled_at_ms,
         },
         view.presence
             .client_modes
@@ -503,9 +568,10 @@ fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> ClientSamp
 }
 
 fn sample_client_presence(mux: MuxName, session: &str) -> Option<ClientSample> {
+    let sampled_at_ms = unix_now_ms();
     client_view(mux, session)
         .ok()
-        .map(|view| presence_sample_from_client_view(&view))
+        .map(|view| presence_sample_from_client_view(&view, sampled_at_ms))
 }
 
 fn frame_client_view(
@@ -520,8 +586,9 @@ fn frame_client_view(
     Option<PresenceSample>,
     bool,
 ) {
+    let sampled_at_ms = unix_now_ms();
     if let Ok(view) = pushed.map_or_else(read, Ok) {
-        let (presence, modes) = presence_sample_from_client_view(&view);
+        let (presence, modes) = presence_sample_from_client_view(&view, sampled_at_ms);
         return (view.viewed_panes, view.clients, modes, Some(presence), true);
     }
     let Some(prior) = prior.filter(|_| mux == MuxName::Zellij) else {
@@ -930,6 +997,7 @@ pub fn repaired_pane_frame_for_binding(
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: listing.observed_at_ms,
         client_view_fresh: false,
         client_sample_withheld: listing.client_sample_withheld,
         prior: prior.as_deref(),
@@ -1205,6 +1273,7 @@ impl FrameContext<'_> {
             client_sample_withheld,
         } = listing;
         let panes = filter_foreign_session_panes(panes, self.session, self.diag);
+        let pushed = pushed_client_view.is_some();
         // Renderer paint gating depends on fresh client focus. Zellij's
         // topology push carries it; backends without pushed presence fall back
         // to a direct client sample.
@@ -1223,6 +1292,10 @@ impl FrameContext<'_> {
                 session_focus,
                 client_viewed: &viewed_panes,
                 client_views: &client_views,
+                client_view_at_ms: presence
+                    .as_ref()
+                    .filter(|_| !pushed)
+                    .map_or(observed_at_ms, |sample| sample.sampled_at_ms),
                 client_view_fresh: client_view_resolved,
                 client_sample_withheld,
                 prior,
@@ -1718,8 +1791,13 @@ fn presence_meaningfully_changed(prior: Option<&PresenceSample>, sample: &Presen
 }
 
 fn apply_presence_sample(frame: &mut PaneFrame, (sample, modes): ClientSample) -> bool {
-    let changed = presence_meaningfully_changed(frame.presence.as_ref(), &sample)
+    let mut changed = presence_meaningfully_changed(frame.presence.as_ref(), &sample)
         || frame.client_modes != modes;
+    if !frame.client_sample_withheld {
+        for client in &sample.client_views {
+            changed |= frame.remember_work_pane(&client.pane_id, sample.sampled_at_ms);
+        }
+    }
     frame.client_modes = modes;
     frame.presence = Some(sample);
     changed

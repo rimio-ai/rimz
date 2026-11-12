@@ -1338,12 +1338,13 @@ fn broadcast_wake_event(
 }
 
 /// Focus the session's sidebar pane, the global focus-key target. `--toggle`
-/// returns to a working pane in the sidebar's tab when already on the sidebar,
-/// so one key reaches the sidebar and goes back. The session is the keypress's
-/// `--session-name` (the tmux binding resolves it per room); a bare invocation
-/// resolves the room from the cwd. Focus takes only the session; the Zellij
-/// roster resolves the workspace from RimZ's known-session registry when the
-/// off-server `run-shell` child has no room cwd.
+/// returns to the work pane behind the sidebar when already on it (the one the
+/// room last saw focused in that tab, else the first), so one key reaches the
+/// sidebar and goes back. The session is the keypress's `--session-name` (the
+/// tmux binding resolves it per room); a bare invocation resolves the room from
+/// the cwd. Focus takes only the session; the Zellij roster resolves the
+/// workspace from RimZ's known-session registry when the off-server
+/// `run-shell` child has no room cwd.
 fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> Result<()> {
     let session_name = match session_name {
         Some(name) => name,
@@ -1395,27 +1396,16 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         bail!("session {session_name} has no sidebar pane to focus");
     };
     let on_sidebar = focused_pane.as_ref() == Some(&sidebar);
+    let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
+        .ok_or_else(|| anyhow::anyhow!("session {session_name} is not a managed RimZ room"))?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     let target = if toggle && on_sidebar {
-        // The toggle-back target is a deterministic working sibling on both backends.
-        let panes: Vec<_> = listing
-            .panes
-            .iter()
-            .map(|pane| {
-                (
-                    &pane.pane_id,
-                    pane.view_id.as_deref(),
-                    pane.is_rimz_sidebar(),
-                )
-            })
-            .collect();
-        rimz::pane::toggle_back_pane(&panes, &sidebar).cloned()
+        super::sidebar_work_pane(&listing.panes, &sidebar, &runtime, &session_name)
+            .map(|pane| pane.pane_id.clone())
     } else {
         Some(sidebar)
     };
     if let Some(target) = target {
-        let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
-            .ok_or_else(|| anyhow::anyhow!("session {session_name} is not a managed RimZ room"))?;
-        let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
         rimz::mux::focus_anchor::execute_action(backend.as_ref(), &runtime, &session_name, target)
             .context("focusing pane")?;
     }

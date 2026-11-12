@@ -27,6 +27,8 @@ fn frame(name: &str, panes: &[&str]) -> PaneFrame {
             kind: ViewKind::Window,
             name: Some(name.to_owned()),
             naming: Default::default(),
+            work_pane: None,
+            work_pane_at_ms: 0,
             panes: panes
                 .iter()
                 .map(|id| PaneState {

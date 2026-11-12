@@ -1153,6 +1153,31 @@ pub(crate) fn runtime_paths_for(workspace_id: WorkspaceId) -> Result<RuntimePath
     Ok(runtime)
 }
 
+/// The work pane behind `sidebar` in `listing`, by the room's one rule
+/// ([`rimz::pane::work_pane_behind`]) over the per-tab memory of the room's
+/// published pane frame. An absent or unreadable frame remembers nothing.
+fn sidebar_work_pane<'a>(
+    listing: &'a [rimz::pane::PaneRef],
+    sidebar: &rimz::ids::PaneId,
+    runtime: &RuntimePaths,
+    session_name: &str,
+) -> Option<&'a rimz::pane::PaneRef> {
+    let frame = rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session_name);
+    let remembered: Vec<_> = frame.iter().flat_map(|frame| frame.work_panes()).collect();
+    let panes: Vec<_> = listing
+        .iter()
+        .map(|pane| {
+            (
+                &pane.pane_id,
+                pane.view_id.as_deref(),
+                pane.is_rimz_sidebar(),
+            )
+        })
+        .collect();
+    let work_pane = rimz::pane::work_pane_behind(&panes, sidebar, &remembered)?;
+    listing.iter().find(|pane| pane.pane_id == *work_pane)
+}
+
 /// The agent roster the sidebar shows: the cached rollup with the daemon-mode
 /// reap applied, so paneless Codex ghosts the app-server no longer holds drop
 /// exactly as `rimz agents list` and the sidebar drop them. Best-effort and

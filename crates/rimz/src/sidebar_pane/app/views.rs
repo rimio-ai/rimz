@@ -185,9 +185,9 @@ impl ViewsRecord {
     }
 }
 
-/// The pane `q` returns to from `sidebar`: the CLI's toggle-back rule
-/// ([`crate::pane::toggle_back_pane`]) over the frame's tabs, whose panes keep
-/// the backend's listing order.
+/// The pane `q` returns to from `sidebar`: the CLI's rule
+/// ([`crate::pane::work_pane_behind`]) over the frame's tabs, whose panes keep
+/// the backend's listing order, and the frame's remembered work panes.
 pub(super) fn toggle_back(frame: &PaneFrame, sidebar: &PaneId) -> Option<PaneId> {
     let panes: Vec<_> = frame
         .tabs
@@ -203,7 +203,8 @@ pub(super) fn toggle_back(frame: &PaneFrame, sidebar: &PaneId) -> Option<PaneId>
             })
         })
         .collect();
-    crate::pane::toggle_back_pane(&panes, sidebar).cloned()
+    let remembered: Vec<_> = frame.work_panes().collect();
+    crate::pane::work_pane_behind(&panes, sidebar, &remembered).cloned()
 }
 
 fn observed(fold: Option<&WorkspaceFold>, pane: &PaneId) -> Option<bool> {
@@ -273,6 +274,9 @@ pub(super) struct Views {
     activity: u64,
     sample_activity: u64,
     focus_event: Option<(u64, Vec<PaneId>)>,
+    /// Focus events recorded since the fetch worker last took them, each its
+    /// send stamp and panes in the order the work-pane memory applies them.
+    work_focus: Vec<(u64, Vec<PaneId>)>,
     fold_waiter: Option<FoldWaiter>,
 }
 
@@ -616,6 +620,14 @@ impl Views {
         {
             self.focus_event = Some((sent, focused.iter().chain(unfocused).cloned().collect()));
         }
+        // The pane left behind applies first, so the pane focused now wins its tab.
+        self.work_focus
+            .push((sent, unfocused.iter().chain(focused).cloned().collect()));
+    }
+
+    /// The focus events recorded since the last take, in recorded order.
+    pub(super) fn take_work_focus(&mut self) -> Vec<(u64, Vec<PaneId>)> {
+        std::mem::take(&mut self.work_focus)
     }
 
     pub(super) fn attributed_focus_event(&self, pane: &PaneId) -> Option<u64> {

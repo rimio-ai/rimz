@@ -768,7 +768,8 @@ fn the_palette_client_is_the_sole_viewer_of_the_pressing_sidebar() {
 
 #[test]
 fn toggle_back_matches_the_cli_rule_on_one_listing() {
-    let frame = frame(&[]);
+    let mut frame = frame(&[]);
+    frame.tabs[0].work_pane = Some(pane(12));
     let mut listing: Vec<crate::pane::PaneRef> = Vec::new();
     for tab in &frame.tabs {
         for state in &tab.panes {
@@ -789,8 +790,9 @@ fn toggle_back_matches_the_cli_rule_on_one_listing() {
             )
         })
         .collect();
-    for (sidebar, expected) in [(10, 11), (20, 21)] {
-        let rule = crate::pane::toggle_back_pane(&cli, &pane(sidebar)).cloned();
+    let remembered: Vec<_> = frame.work_panes().collect();
+    for (sidebar, expected) in [(10, 12), (20, 21)] {
+        let rule = crate::pane::work_pane_behind(&cli, &pane(sidebar), &remembered).cloned();
         assert_eq!(rule, Some(pane(expected)), "the CLI rule");
         assert_eq!(toggle_back(&frame, &pane(sidebar)), rule, "the key agrees");
     }

@@ -13,6 +13,7 @@ fn listing_positions_reach_tabs_and_legacy_frames_omit_them() {
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: None,
@@ -81,6 +82,7 @@ fn listing_naming_is_lifted_by_view_and_old_frames_default_to_user() {
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: None,
@@ -189,6 +191,7 @@ fn client_view_sets_session_focus_register() {
         session_focus: None,
         client_viewed: std::slice::from_ref(&viewed),
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -229,6 +232,7 @@ fn session_focus_wins_when_live() {
         session_focus: Some(authoritative.clone()),
         client_viewed: std::slice::from_ref(&stale_client),
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: Some(&prior),
@@ -274,6 +278,7 @@ fn focus_after(
         session_focus: None,
         client_viewed: viewed.as_slice(),
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh,
         client_sample_withheld,
         prior: Some(prior),
@@ -404,6 +409,7 @@ fn dead_session_focus_and_fresh_empty_clients_clear() {
         session_focus: Some(PaneId::from_parts(MuxName::Zellij, "terminal_9")),
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -442,6 +448,7 @@ fn distinct_client_views_abstain_and_one_fresh_view_wins() {
         session_focus: None,
         client_viewed: &[first.clone(), second.clone()],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: Some(&prior),
@@ -461,6 +468,7 @@ fn distinct_client_views_abstain_and_one_fresh_view_wins() {
         session_focus: None,
         client_viewed: std::slice::from_ref(&first),
         client_views: &[],
+        client_view_at_ms: 8,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: Some(&prior),
@@ -499,6 +507,7 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         session_focus: None,
         client_viewed: std::slice::from_ref(&terminal),
         client_views: &agree,
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -522,6 +531,7 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         session_focus: None,
         client_viewed: std::slice::from_ref(&terminal),
         client_views: &distinct,
+        client_view_at_ms: 8,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -553,6 +563,7 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         session_focus: None,
         client_viewed: std::slice::from_ref(&first),
         client_views: std::slice::from_ref(&first_view),
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -576,6 +587,7 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         session_focus: None,
         client_viewed: &[first, second],
         client_views: &distinct_views,
+        client_view_at_ms: 8,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -614,6 +626,7 @@ fn multiple_client_views_ignore_prior_missing_from_live_frame() {
         session_focus: None,
         client_viewed: &[first.clone(), second, stale],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: Some(&prior),
@@ -636,6 +649,7 @@ fn summarized_client_view_ignores_dead_panes_when_one_live_pane_remains() {
         session_focus: None,
         client_viewed: &[dead, live.clone()],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -671,6 +685,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: Some(&prior),
@@ -692,6 +707,7 @@ fn unavailable_client_sample_holds_live_prior_without_raw_fallback() {
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 8,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: None,
@@ -730,6 +746,7 @@ fn unavailable_client_sample_clears_prior_when_the_roster_changes() {
             session_focus: None,
             client_viewed: &[],
             client_views: &[],
+            client_view_at_ms: 7,
             client_view_fresh: false,
             client_sample_withheld: false,
             prior: Some(&prior),
@@ -757,6 +774,7 @@ fn detached_ambiguous_raw_marks_clear_without_live_prior() {
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: None,
@@ -781,6 +799,7 @@ fn sidebar_pane_can_be_the_session_focus_register() {
         session_focus: None,
         client_viewed: std::slice::from_ref(&own),
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: true,
         client_sample_withheld: false,
         prior: None,
@@ -804,6 +823,7 @@ fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
         session_focus: None,
         client_viewed: &[],
         client_views: &[],
+        client_view_at_ms: 7,
         client_view_fresh: false,
         client_sample_withheld: false,
         prior: None,
@@ -1144,4 +1164,235 @@ fn own_view_daemon_detection_matches_host_panes() {
         loop_run.working_pane_ids,
         vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")]
     );
+}
+
+fn work_frame(
+    prior: Option<&PaneFrame>,
+    panes: &[(&str, &str, &str)],
+    focused: Option<&str>,
+    client_view_fresh: bool,
+    client_sample_withheld: bool,
+) -> PaneFrame {
+    work_frame_at(
+        prior,
+        panes,
+        focused,
+        client_view_fresh,
+        client_sample_withheld,
+        7,
+    )
+}
+
+fn work_frame_at(
+    prior: Option<&PaneFrame>,
+    panes: &[(&str, &str, &str)],
+    focused: Option<&str>,
+    client_view_fresh: bool,
+    client_sample_withheld: bool,
+    client_view_at_ms: u64,
+) -> PaneFrame {
+    let client_views: Vec<_> = focused
+        .map(|raw| crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(1),
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+        })
+        .into_iter()
+        .collect();
+    assemble_frame_from_inputs(FrameInputs {
+        panes: panes
+            .iter()
+            .map(|(raw, view, command)| pane(raw, view, Some(command), false))
+            .collect(),
+        views: Vec::new(),
+        positions: Vec::new(),
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        session_focus: None,
+        client_viewed: &[],
+        client_views: &client_views,
+        client_view_at_ms,
+        client_view_fresh,
+        client_sample_withheld,
+        prior,
+    })
+    .0
+}
+
+fn work_panes(frame: &PaneFrame) -> Vec<(&str, Option<&str>)> {
+    frame
+        .tabs
+        .iter()
+        .map(|tab| {
+            (
+                tab.view_id.as_str(),
+                tab.work_pane.as_ref().map(PaneId::raw),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn work_pane_follows_fresh_focus_and_carries_by_pane_id() {
+    let room = [
+        ("terminal_0", "tab_0", "rimz-sidebar"),
+        ("terminal_1", "tab_0", "zsh"),
+        ("terminal_2", "tab_0", "zsh"),
+    ];
+    let focused = work_frame(None, &room, Some("terminal_2"), true, false);
+    assert_eq!(
+        work_panes(&focused),
+        [("tab_0", Some("terminal_2"))],
+        "fresh focus sets it"
+    );
+
+    let on_sidebar = work_frame(Some(&focused), &room, Some("terminal_0"), true, false);
+    assert_eq!(
+        work_panes(&on_sidebar),
+        [("tab_0", Some("terminal_2"))],
+        "focus on the sidebar holds it"
+    );
+
+    let renumbered = room.map(|(raw, _, command)| (raw, "tab_1", command));
+    let moved = work_frame(Some(&on_sidebar), &renumbered, None, false, false);
+    assert_eq!(
+        work_panes(&moved),
+        [("tab_1", Some("terminal_2"))],
+        "the tab's view id changed and the pane carried with it"
+    );
+
+    let closed = work_frame(Some(&moved), &renumbered[..2], None, false, false);
+    assert_eq!(work_panes(&closed), [("tab_1", None)], "the pane closed");
+
+    let mut turned = renumbered;
+    turned[2].2 = "rimz-sidebar";
+    let turned = work_frame(Some(&moved), &turned, None, false, false);
+    assert_eq!(
+        work_panes(&turned),
+        [("tab_1", None)],
+        "the pane turned sidebar"
+    );
+}
+
+#[test]
+fn withheld_or_stale_samples_leave_the_work_pane() {
+    let room = [
+        ("terminal_0", "tab_0", "rimz-sidebar"),
+        ("terminal_1", "tab_0", "zsh"),
+        ("terminal_2", "tab_0", "zsh"),
+    ];
+    let prior = work_frame(None, &room, Some("terminal_1"), true, false);
+    for (fresh, withheld) in [(true, true), (false, false)] {
+        let frame = work_frame(Some(&prior), &room, Some("terminal_2"), fresh, withheld);
+        assert_eq!(
+            work_panes(&frame),
+            [("tab_0", Some("terminal_1"))],
+            "fresh {fresh}, withheld {withheld}"
+        );
+    }
+
+    // A native split withholds the plugin's clients; the host's own sample still
+    // names the new pane, and the focus ladder admits it, so it is remembered too.
+    let split = [room[0], room[1], room[2], ("terminal_3", "tab_0", "zsh")];
+    let frame = work_frame(Some(&prior), &split, Some("terminal_3"), true, true);
+    assert_eq!(frame.focus_origin, FocusOrigin::ClientView);
+    assert_eq!(work_panes(&frame), [("tab_0", Some("terminal_3"))]);
+}
+
+#[test]
+fn work_pane_round_trips_and_older_frames_read_none() {
+    let room = [
+        ("terminal_0", "tab_0", "rimz-sidebar"),
+        ("terminal_1", "tab_0", "zsh"),
+    ];
+    let frame = work_frame(None, &room, Some("terminal_1"), true, false);
+    let json = serde_json::to_value(&frame.tabs[0]).unwrap();
+    assert_eq!(json["work_pane"], serde_json::json!("zellij:terminal_1"));
+    let mut legacy = json.clone();
+    legacy.as_object_mut().unwrap().remove("work_pane");
+    let legacy: TabFrame = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.work_pane, None);
+    assert!(
+        serde_json::to_value(legacy)
+            .unwrap()
+            .get("work_pane")
+            .is_none()
+    );
+}
+
+#[test]
+fn remembering_skips_sidebars_unknown_panes_and_older_observations() {
+    let room = [
+        ("terminal_0", "tab_0", "rimz-sidebar"),
+        ("terminal_1", "tab_0", "zsh"),
+        ("terminal_2", "tab_0", "zsh"),
+    ];
+    let mut frame = work_frame(None, &room, Some("terminal_1"), true, false);
+    let id = |raw| PaneId::from_parts(MuxName::Zellij, raw);
+    assert!(!frame.remember_work_pane(&id("terminal_0"), 9), "a sidebar");
+    assert!(
+        !frame.remember_work_pane(&id("terminal_9"), 9),
+        "no tab holds it"
+    );
+    assert!(
+        !frame.remember_work_pane(&id("terminal_2"), 6),
+        "older than the pull"
+    );
+    assert_eq!(work_panes(&frame), [("tab_0", Some("terminal_1"))]);
+    assert!(
+        frame.remember_work_pane(&id("terminal_2"), 7),
+        "a tie goes to the later report"
+    );
+    assert_eq!(work_panes(&frame), [("tab_0", Some("terminal_2"))]);
+}
+
+#[test]
+fn a_client_view_sampled_after_the_listing_outranks_an_event_sent_between() {
+    let room = [
+        ("terminal_0", "tab_0", "rimz-sidebar"),
+        ("terminal_1", "tab_0", "zsh"),
+        ("terminal_2", "tab_0", "zsh"),
+    ];
+    // The listing is observed at 7 and the client sampled at 9.
+    let mut frame = work_frame_at(None, &room, Some("terminal_2"), true, false, 9);
+    let sent_between = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    assert!(!frame.remember_work_pane(&sent_between, 8));
+    assert_eq!(work_panes(&frame), [("tab_0", Some("terminal_2"))]);
+}
+
+#[test]
+fn a_moved_in_pane_yields_to_the_tabs_own_then_the_newer_memory() {
+    let id = |raw| PaneId::from_parts(MuxName::Zellij, raw);
+    let room = [
+        ("terminal_0", "tab_0", "rimz-sidebar"),
+        ("terminal_1", "tab_0", "zsh"),
+        ("terminal_2", "tab_1", "zsh"),
+    ];
+    for (first_at_ms, into, expected) in [(9, "tab_1", "terminal_2"), (3, "tab_9", "terminal_2")] {
+        let mut prior = work_frame(None, &room, None, false, false);
+        for (tab, (raw, at_ms)) in prior
+            .tabs
+            .iter_mut()
+            .zip([("terminal_1", first_at_ms), ("terminal_2", 5)])
+        {
+            tab.work_pane = Some(id(raw));
+            tab.work_pane_at_ms = at_ms;
+        }
+        let joined = [
+            ("terminal_0", "tab_0", "rimz-sidebar"),
+            ("terminal_1", into, "zsh"),
+            ("terminal_2", into, "zsh"),
+        ];
+        let frame = work_frame(Some(&prior), &joined, None, false, false);
+        let tab = frame
+            .tabs
+            .iter()
+            .find(|tab| tab.view_id.as_str() == into)
+            .unwrap();
+        assert_eq!(
+            tab.work_pane.as_ref().map(PaneId::raw),
+            Some(expected),
+            "joined into {into}, the first prior tab's pane seen at {first_at_ms}"
+        );
+    }
 }
