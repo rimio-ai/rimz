@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-use super::super::{Check, SpecErr};
+use super::super::{Node, SpecErr};
 use crate::disk::paths::StatePaths;
 use crate::harness::when::{self, CiSource, WhenExpr, WindowReadings};
 use crate::store::workflow::{RunRecord, Wait};
@@ -28,7 +28,7 @@ pub struct CaseMarks {
 
 pub(super) fn evaluate(
     state: &StatePaths,
-    check: &Check,
+    check: &Node,
     record: &RunRecord,
 ) -> Result<Value, String> {
     reading(state, check, record).map(|(object, _)| object)
@@ -36,7 +36,7 @@ pub(super) fn evaluate(
 
 pub(super) fn reading(
     state: &StatePaths,
-    check: &Check,
+    check: &Node,
     record: &RunRecord,
 ) -> Result<(Value, Option<Timestamp>), String> {
     let runtime = crate::RuntimePaths::for_state(state).map_err(|error| error.to_string())?;
@@ -44,9 +44,14 @@ pub(super) fn reading(
     let now = Timestamp::now();
     let windows = WindowReadings::new(Some(&runtime), now);
     let expressions = check
-        .condition_cases()
+        .cases()
         .iter()
-        .map(|case| WhenExpr::parse(&case.when).map_err(|error| error.to_string()))
+        .map(|case| {
+            case.when()
+                .expression()
+                .cloned()
+                .map_err(|error| error.to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let mut readings = BTreeMap::new();
     for expression in &expressions {
@@ -55,8 +60,8 @@ pub(super) fn reading(
                 expression,
                 &record.scope.path,
                 Some(&source),
-                check.provider.as_ref(),
-                check.account.as_ref(),
+                check.provider(),
+                check.account(),
                 &windows,
             )
             .readings,
@@ -92,7 +97,7 @@ pub(super) fn reading(
 }
 
 fn answer(
-    check: &Check,
+    check: &Node,
     expressions: &[WhenExpr],
     mut readings: BTreeMap<String, Option<String>>,
     checked_at: Option<Timestamp>,
@@ -120,7 +125,7 @@ fn answer(
     for key in forge_unread.keys() {
         readings.insert(key.clone(), None);
     }
-    let cases = check.condition_cases();
+    let cases = check.cases();
     let mut object = json!({"outcome":check.fallback_outcome(), "readings":readings});
     for (index, expression) in expressions.iter().enumerate() {
         match expression.truth(&readings) {
@@ -158,12 +163,8 @@ fn answer(
 }
 
 /// Project a condition answer; pass only the wait belonging to this check.
-pub fn case_marks(
-    check: &Check,
-    object: &Value,
-    wait: Option<&Wait>,
-) -> Result<CaseMarks, SpecErr> {
-    let condition_cases = check.condition_cases();
+pub fn case_marks(check: &Node, object: &Value, wait: Option<&Wait>) -> Result<CaseMarks, SpecErr> {
+    let condition_cases = check.cases();
     // A hold that survives an unknown answer is drawn from that answer's readings; without an
     // answer, the wait says whether the last one was unknown.
     let selected = wait
@@ -202,8 +203,9 @@ pub fn case_marks(
         .map(|(key, value)| (key.clone(), value.as_str().map(str::to_owned)))
         .collect();
     let mut cases = Vec::new();
-    for case in condition_cases.iter() {
-        let mark = match WhenExpr::parse(&case.when)?.truth(&readings) {
+    for case in condition_cases {
+        let expression = case.when().expression().map_err(|error| error.clone())?;
+        let mark = match expression.truth(&readings) {
             Some(false) => CaseMark::False,
             Some(true) => CaseMark::Winner,
             None => CaseMark::Unread,
@@ -262,6 +264,7 @@ pub fn unread_reasons(object: &Value) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::workflow::Check;
     use serde_json::json;
 
     #[test]
@@ -303,7 +306,7 @@ mod tests {
             ),
         ] {
             let object = answer(
-                &check,
+                &Node::of_check(&check),
                 &expressions,
                 ["pr", "ci", "team.stage"]
                     .into_iter()
@@ -316,7 +319,7 @@ mod tests {
                 |_| "not read".into(),
             );
             assert_eq!(
-                case_marks(&check, &object, None).unwrap(),
+                case_marks(&Node::of_check(&check), &object, None).unwrap(),
                 CaseMarks { cases, else_mark },
                 "{object}"
             );
@@ -329,7 +332,7 @@ mod tests {
         let object = json!({"outcome":"hold","readings":{"pr":"open","ci":"passed"}});
         let wait: Wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":1,"first":"2026-01-01T00:00:00Z","last":"2026-01-01T00:00:01Z","count":2})).unwrap();
         assert_eq!(
-            case_marks(&check, &object, Some(&wait)).unwrap(),
+            case_marks(&Node::of_check(&check), &object, Some(&wait)).unwrap(),
             CaseMarks {
                 cases: vec![CaseMark::False, CaseMark::Holding],
                 else_mark: CaseMark::NotReached
@@ -343,7 +346,7 @@ mod tests {
         let object = json!({"outcome":"unknown","readings":{"team.stage":null,"pr":"merged"}});
         let wait: Wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":1,"unknown":"team.stage (no board)","first":"2026-01-01T00:00:00Z","last":"2026-01-01T00:00:01Z","count":2})).unwrap();
         assert_eq!(
-            case_marks(&check, &object, Some(&wait)).unwrap(),
+            case_marks(&Node::of_check(&check), &object, Some(&wait)).unwrap(),
             CaseMarks {
                 cases: vec![CaseMark::Unread, CaseMark::NotReached],
                 else_mark: CaseMark::NotReached
@@ -381,7 +384,7 @@ mod tests {
                 .map(|(key, _, reason)| (key.to_string(), reason.to_string()))
                 .collect::<BTreeMap<_, _>>();
             let object = answer(
-                &check,
+                &Node::of_check(&check),
                 &expressions,
                 expected.keys().map(|key| (key.clone(), None)).collect(),
                 Some(now),
@@ -447,7 +450,7 @@ mod tests {
                 .collect();
             let now = "2026-01-01T00:00:00Z".parse().unwrap();
             let object = answer(
-                &check,
+                &Node::of_check(&check),
                 &expressions,
                 BTreeMap::from([
                     ("pr".into(), readings[0].map(str::to_owned)),
@@ -500,7 +503,7 @@ mod tests {
                 (Some(entered + jiff::SignedDuration::from_nanos(1)), "ready"),
             ] {
                 let object = answer(
-                    &check,
+                    &Node::of_check(&check),
                     &expressions,
                     BTreeMap::from([
                         (key.into(), Some(value.into())),
@@ -630,7 +633,7 @@ mod tests {
                 ))
                 .unwrap();
                 let object = answer(
-                    &check,
+                    &Node::of_check(&check),
                     &[WhenExpr::parse(&[clause.into()]).unwrap()],
                     BTreeMap::from([("ci".into(), Some("failed".into()))]),
                     Some(if fresh {
@@ -680,7 +683,7 @@ mod tests {
             ))
             .unwrap();
             let object = answer(
-                &check,
+                &Node::of_check(&check),
                 &[WhenExpr::parse(&[clause]).unwrap()],
                 BTreeMap::from([(key.into(), Some(value.into()))]),
                 Some(entered),

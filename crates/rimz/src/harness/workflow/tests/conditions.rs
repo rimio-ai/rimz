@@ -429,7 +429,7 @@ fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
             "else='pending'\n[[cases]]\nwhen=['{terms}']\noutcome='ready'\n"
         ))
         .unwrap();
-        let subscriptions = check.subscriptions().unwrap();
+        let subscriptions = Node::of_check(&check).subscriptions().unwrap();
         assert_eq!(
             subscriptions
                 .iter()

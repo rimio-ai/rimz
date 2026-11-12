@@ -30,7 +30,7 @@ use crate::utils::size::decimal_bytes;
 use crate::utils::time::format_duration_compact;
 
 mod limits;
-pub(in crate::harness) use limits::WorkflowStart;
+pub(in crate::harness) use limits::{StartLimit, WorkflowStart};
 
 /// Opens the home-wide queue lock for write without taking it, so a command can refuse
 /// before it starts a detached launch that would fail on the same open.
@@ -45,17 +45,6 @@ pub struct Limit {
     #[schemars(range(min = 1))]
     pub max_parallel: Option<u32>,
     pub stagger: Option<String>,
-}
-
-impl Limit {
-    pub(in crate::harness) fn stagger(
-        &self,
-    ) -> Result<Option<std::time::Duration>, crate::utils::time::TimeInputErr> {
-        self.stagger
-            .as_deref()
-            .map(crate::harness::duration::duration)
-            .transpose()
-    }
 }
 
 const SAMPLE_EVERY_MS: u64 = 5_000;

@@ -409,15 +409,17 @@ pub fn close_after<'a>(spec: &Definition, record: &'a RunRecord) -> Option<(Time
     {
         return None;
     }
+    let outcome = verdict.object.get("outcome")?.as_str()?;
     let delay = spec
-        .checks
-        .get(&verdict.node)?
-        .on
-        .get(verdict.object.get("outcome")?.as_str()?)?
-        .delay()?;
+        .check(&verdict.node)?
+        .resolved_edges()
+        .iter()
+        .find(|edge| edge.outcome == outcome)?
+        .delay
+        .as_ref()?;
     let at = verdict
         .at
-        .checked_add(crate::harness::duration::duration(delay).ok()?)
+        .checked_add(*delay.value().ok()?)
         .unwrap_or(Timestamp::MAX);
     Some((at, &verdict.target))
 }
@@ -472,8 +474,8 @@ pub fn timeout_at(
     spec: &Definition,
     record: &RunRecord,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
-    let (timeout, start) = if let Some(check) = spec.checks.get(&record.node) {
-        (check.timeout.as_deref(), record.entered_at)
+    let (timeout, start) = if let Some(check) = spec.check(&record.node) {
+        (check.timeout(), record.entered_at)
     } else {
         let Some(attempt) = record.attempt.as_ref() else {
             return Ok(None);
@@ -489,17 +491,15 @@ pub fn timeout_at(
             return Ok(None);
         };
         (
-            spec.steps
-                .get(&record.node)
-                .and_then(|step| step.timeout.as_deref()),
+            spec.step(&record.node).and_then(|step| step.timeout()),
             start,
         )
     };
-    let Some(raw) = timeout else {
+    let Some(timeout) = timeout else {
         return Ok(None);
     };
     Ok(start
-        .checked_add(crate::harness::duration::duration(raw)?)
+        .checked_add(*timeout.value().map_err(Clone::clone)?)
         .ok())
 }
 
@@ -510,12 +510,10 @@ pub fn hold_until(
     case: u32,
     now: Timestamp,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
-    let Some(hold) = spec.check(&record.node).and_then(|check| {
-        check
-            .cases()
-            .get(case as usize)
-            .and_then(|case| Some(case.hold()?.text().to_owned()))
-    }) else {
+    let Some(hold) = spec
+        .check(&record.node)
+        .and_then(|check| check.cases().get(case as usize)?.hold())
+    else {
         return Ok(None);
     };
     let first = record
@@ -523,7 +521,5 @@ pub fn hold_until(
         .as_ref()
         .filter(|wait| wait.is_hold() && wait.case == Some(case))
         .map_or(now, |wait| wait.first);
-    Ok(first
-        .checked_add(crate::harness::duration::duration(&hold)?)
-        .ok())
+    Ok(first.checked_add(*hold.value().map_err(Clone::clone)?).ok())
 }

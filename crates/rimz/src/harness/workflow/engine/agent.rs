@@ -364,8 +364,12 @@ pub(super) fn launch(
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
     let step = &spec.steps[&record.node];
     let prepared = prompt.and_then(|prompt| {
+        // Cleanup drops a budget that does not parse.
+        let budget = spec
+            .step(&record.node)
+            .and_then(|node| node.budget()?.value().ok());
         let overrides = step
-            .launch_overrides(&record.spec_dir)
+            .launch_overrides(&record.spec_dir, budget)
             .map_err(|error| error.to_string())?;
         Ok((prompt, overrides))
     });

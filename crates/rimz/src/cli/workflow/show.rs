@@ -428,7 +428,9 @@ impl View<'_> {
         } else {
             self.now
         };
-        let (object, probed_at) = workflow::condition_now(state, check, &preview, slept_from)
+        // A check table entry always has its compiled node.
+        let node = self.spec.check(name).expect("check node");
+        let (object, probed_at) = workflow::condition_now(state, node, &preview, slept_from)
             .map_err(anyhow::Error::msg)?;
         let hold = object["case"]
             .as_u64()

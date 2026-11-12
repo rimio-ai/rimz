@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
@@ -8,10 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use super::definition::Definition;
 use crate::harness::signal::{
-    SelectorErr, SignalSelector, default_signal_match_key, is_match_wildcard, parse_signal_selector,
+    SelectorErr, SignalSelector, is_match_wildcard, parse_signal_selector,
 };
 use crate::harness::throttle::Limit;
-use crate::harness::when::WhenExpr;
 use crate::store::workflow::{Key, RunRecord, StepLifecycle, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
@@ -49,39 +48,6 @@ pub struct WorkflowSpec {
 impl WorkflowSpec {
     pub(super) fn is_break(&self, node: &str) -> bool {
         node == "@break"
-    }
-
-    /// `Some(empty)` demands checkout facts; `None` means no condition, wake or subscription needs
-    /// them.
-    pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
-        let mut branches = None;
-        for step in self.steps.values() {
-            for (selector, matches) in step.subscriptions()? {
-                if default_signal_match_key(&selector, &matches) == Some("path") {
-                    branches.get_or_insert_with(BTreeSet::new);
-                }
-            }
-        }
-        for check in self.checks.values() {
-            if !matches!(check.kind(), Some(CheckKind::Condition | CheckKind::Sleep)) {
-                for wake in check.wake.iter().flatten() {
-                    let (selector, matches) = wake.subscription()?;
-                    if default_signal_match_key(&selector, &matches) == Some("path") {
-                        branches.get_or_insert_with(BTreeSet::new);
-                    }
-                }
-                continue;
-            }
-            for case in check.condition_cases().iter() {
-                let expression = WhenExpr::parse(&case.when)?;
-                if expression.reads_forge() {
-                    branches
-                        .get_or_insert_with(BTreeSet::new)
-                        .extend(expression.forge_branches().map(str::to_owned));
-                }
-            }
-        }
-        Ok(branches)
     }
 }
 
@@ -397,22 +363,6 @@ pub enum CheckKind<'a> {
 }
 
 impl Check {
-    pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
-        if !matches!(self.kind(), Some(CheckKind::Condition | CheckKind::Sleep)) {
-            return self.wake.iter().flatten().map(Wake::subscription).collect();
-        }
-        let mut subscriptions = Vec::new();
-        for case in self.condition_cases().iter() {
-            let expression = WhenExpr::parse(&case.when)?;
-            subscriptions.extend(
-                expression
-                    .terms()
-                    .filter_map(|term| term.wake_subscription()),
-            );
-        }
-        Ok(subscriptions)
-    }
-
     pub fn kind(&self) -> Option<CheckKind<'_>> {
         match (
             &self.run,
@@ -632,48 +582,6 @@ pub enum StepKind<'a> {
 }
 
 impl Step {
-    pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
-        self.subscribe
-            .iter()
-            .flatten()
-            .map(Wake::step_subscription)
-            .collect()
-    }
-
-    /// Each subscription's selector beside the scope a forward resolves it to, in definition order.
-    pub fn subscription_labels(&self) -> Result<Vec<(String, String)>, SpecErr> {
-        Ok(self
-            .subscriptions()?
-            .into_iter()
-            .map(|(selector, matches)| {
-                let scope = match default_signal_match_key(&selector, &matches) {
-                    Some("path") => Some("for this checkout"),
-                    Some("instance") if selector.to_string() != "team.stage" => {
-                        Some("for this checkout's team")
-                    }
-                    Some("instance") if !matches.contains_key("board") => {
-                        Some("for this checkout's team board")
-                    }
-                    _ => None,
-                };
-                let filter = (!matches.is_empty()).then(|| {
-                    let pairs = matches
-                        .iter()
-                        .map(|(key, value)| format!("{key}={value}"))
-                        .collect::<Vec<_>>();
-                    format!("where {}", pairs.join(", "))
-                });
-                let label = match (scope, filter) {
-                    (Some(scope), Some(filter)) => format!("{scope} {filter}"),
-                    (Some(scope), None) => scope.into(),
-                    (None, Some(filter)) => filter,
-                    (None, None) => "anywhere in the room".into(),
-                };
-                (selector.to_string(), label)
-            })
-            .collect())
-    }
-
     pub fn lifecycle(&self) -> StepLifecycle {
         self.lifecycle.unwrap_or(match self.kind() {
             Some(StepKind::Agent(_)) => StepLifecycle::Until,
@@ -710,15 +618,19 @@ impl Step {
         .find(|(_, used, max)| used >= max)
     }
 
-    /// The step's launch overrides, its system-prompt file resolved inside `dir`.
-    pub fn launch_overrides(&self, dir: &Path) -> Result<LaunchOverrides, SpecErr> {
+    /// The step's launch overrides, its system-prompt file resolved inside `dir`, with the
+    /// budget its definition parsed.
+    pub fn launch_overrides(
+        &self,
+        dir: &Path,
+        budget: Option<&crate::harness::budget::BudgetSpec>,
+    ) -> Result<LaunchOverrides, SpecErr> {
         Ok(LaunchOverrides {
             account: self.account.clone(),
             mode: self.mode,
             effort: self.effort.clone(),
             fast: self.fast,
-            // Cleanup drops a budget that does not parse.
-            budget: self.budget.as_deref().and_then(|raw| raw.parse().ok()),
+            budget: budget.cloned(),
             system_prompt_file: self
                 .system_prompt_file
                 .as_deref()
@@ -947,11 +859,16 @@ pub(super) fn resolve_argv(dir: &Path, run: &str) -> Result<Vec<OsString>, SpecE
     let words = shlex::split(run)
         .filter(|words| !words.is_empty())
         .ok_or(SpecErr::Command)?;
+    resolve_words(dir, &words)
+}
+
+/// A split `run` command's argv, each word with a `/` confined to the definition directory.
+pub(super) fn resolve_words(dir: &Path, words: &[String]) -> Result<Vec<OsString>, SpecErr> {
     words
-        .into_iter()
+        .iter()
         .map(|word| {
             if word.contains('/') {
-                Ok(confined_file(dir, &word)?.into_os_string())
+                Ok(confined_file(dir, word)?.into_os_string())
             } else {
                 Ok(word.into())
             }
@@ -985,4 +902,35 @@ pub(super) fn parse_window(raw: &str) -> Result<crate::harness::when::WhenExpr, 
         return Err(SpecErr::WindowKeys);
     }
     Ok(expr)
+}
+
+impl SpecErr {
+    /// The same failure again, for a parse a definition holds and each of its readers reports.
+    pub(super) fn reissue(&self) -> Self {
+        match self {
+            Self::ReservedTarget { path, target } => Self::ReservedTarget {
+                path: path.clone(),
+                target: target.clone(),
+            },
+            Self::ReservedNode { path } => Self::ReservedNode { path: path.clone() },
+            Self::Io { path, source } => Self::Io {
+                path: path.clone(),
+                source: std::io::Error::new(source.kind(), source.to_string()),
+            },
+            Self::Toml { path, source } => Self::Toml {
+                path: path.clone(),
+                source: source.clone(),
+            },
+            Self::Path { path, reason } => Self::Path {
+                path: path.clone(),
+                reason,
+            },
+            Self::Command => Self::Command,
+            Self::Window(error) => Self::Window(error.clone()),
+            Self::WindowKeys => Self::WindowKeys,
+            Self::Signal(error) => Self::Signal(error.clone()),
+            Self::LifecycleWake => Self::LifecycleWake,
+            Self::SelfSignal => Self::SelfSignal,
+        }
+    }
 }
