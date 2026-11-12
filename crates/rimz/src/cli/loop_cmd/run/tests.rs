@@ -370,13 +370,14 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         };
         let outcome = RunOutcome::check_result(LoopRunResult::CheckSkipped, check, 2_000);
         let mut entry = spawn_entry(true, on);
-        entry.check = Some(TaskCheck::Agent(Judge {
+        entry.check = None;
+        entry.judge = vec![Judge {
             agent: "haiku".into(),
             prompt: Some("Question.".into()),
             prompt_file: None,
             recheck: None,
             timeout: None,
-        }));
+        }];
         assert_eq!(
             summary("watchdog", &entry, 8_000, LoopRunMode::Manual, &outcome),
             expected

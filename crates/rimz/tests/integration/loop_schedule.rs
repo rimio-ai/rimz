@@ -571,7 +571,7 @@ done
     write_loop_config(
         &env,
         &format!(
-            "[tasks.guard]\nagent='codex'\nprompt='repair'\nroot={:?}\nevery='1h'\non='success'\n[tasks.guard.check]\nagent='codex'\nprompt='Any work?'\n",
+            "[tasks.guard]\nagent='codex'\nprompt='repair'\nroot={:?}\nevery='1h'\non='success'\n[tasks.guard.judge]\nagent='codex'\nprompt='Any work?'\n",
             env.project_root
         ),
     );
@@ -635,7 +635,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
     write_loop_config(
         &env,
         &format!(
-            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\non = \"success\"\n[tasks.guard.check]\nagent = \"codex\"\nprompt = \"Any work?\"\n{}",
+            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\non = \"success\"\n[tasks.guard.judge]\nagent = \"codex\"\nprompt = \"Any work?\"\n{}",
             env.project_root,
             recheck
                 .map(|value| format!("recheck = {value:?}\n"))
@@ -733,7 +733,7 @@ printf '%s\n' '{{"type":"turn.completed","usage":{{"input_tokens":10,"output_tok
     write_loop_config(
         &env,
         &format!(
-            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\nevery = \"1h\"\non = \"success\"\n[tasks.guard.check]\nagent = \"codex\"\nprompt = \"Any work?\"\n",
+            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\nevery = \"1h\"\non = \"success\"\n[tasks.guard.judge]\nagent = \"codex\"\nprompt = \"Any work?\"\n",
             env.project_root
         ),
     );
@@ -6465,7 +6465,7 @@ fn loop_judge_home_cwd_refusal_names_the_loop_fix() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.home-judge]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nthrottle = \"off\"\non = \"success\"\n[tasks.home-judge.check]\nagent = \"claude\"\nprompt = \"Any work?\"\n",
+            "[tasks.home-judge]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nthrottle = \"off\"\non = \"success\"\n[tasks.home-judge.judge]\nagent = \"claude\"\nprompt = \"Any work?\"\n",
             env.project_root, env.home_root,
         ),
     );

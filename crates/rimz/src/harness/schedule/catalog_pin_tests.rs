@@ -63,7 +63,7 @@ fn worktree_guards_conditions_and_watches_need_run_directory() {
     };
     for task in [
         TaskEntry {
-            check: Some(crate::config::TaskCheck::Shell("true".into())),
+            check: Some(crate::config::TaskCheck("true".into())),
             ..spawn.clone()
         },
         TaskEntry {

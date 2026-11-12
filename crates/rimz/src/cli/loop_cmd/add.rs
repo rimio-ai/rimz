@@ -735,7 +735,7 @@ fn resolve_add_check(
         });
     }
     Ok(Some(DeliveryCheck {
-        check: args.check.clone().map(TaskCheck::Shell),
+        check: args.check.clone().map(TaskCheck),
         check_timeout: args.check_timeout.clone(),
         judge,
         on: args.on.as_deref().map(parse_check_on).transpose()?,

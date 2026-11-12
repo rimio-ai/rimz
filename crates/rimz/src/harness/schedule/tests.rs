@@ -658,7 +658,6 @@ fn workflow_rejects_action_and_node_owned_fields() {
             "check names what it waits for",
         ),
         ("check = 'true'", "[checks.<name>]"),
-        ("check = {agent='codex', prompt='judge'}", "[checks.<name>]"),
         (
             "judge = [{agent='codex', prompt='judge'}]",
             "[checks.<name>]",
@@ -745,26 +744,20 @@ fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
 
 #[test]
 fn judges_require_explicit_polarity_and_an_action() {
-    for key in ["judge", "check"] {
-        let entry: TaskEntry = toml::from_str(&format!(
-            "agent = 'claude'\n{key} = {{ agent = 'haiku', prompt = 'q' }}"
-        ))
-        .unwrap();
-        let result = TaskAction::from_entry("task", &entry);
-        assert!(result.is_err(), "judge needs an explicit on: {entry:?}");
-        let message = result.unwrap_err().to_string();
-        for word in ["fail", "success", "any"] {
-            assert!(message.contains(word), "{message}");
-        }
-        let entry: TaskEntry = toml::from_str(&format!(
-            "on = 'fail'\n{key} = {{ agent = 'haiku', prompt = 'q' }}"
-        ))
-        .unwrap();
-        assert!(
-            TaskAction::from_entry("task", &entry).is_err(),
-            "judge is not a check-only action"
-        );
+    let entry: TaskEntry =
+        toml::from_str("agent = 'claude'\njudge = { agent = 'haiku', prompt = 'q' }").unwrap();
+    let result = TaskAction::from_entry("task", &entry);
+    assert!(result.is_err(), "judge needs an explicit on: {entry:?}");
+    let message = result.unwrap_err().to_string();
+    for word in ["fail", "success", "any"] {
+        assert!(message.contains(word), "{message}");
     }
+    let entry: TaskEntry =
+        toml::from_str("on = 'fail'\njudge = { agent = 'haiku', prompt = 'q' }").unwrap();
+    assert!(
+        TaskAction::from_entry("task", &entry).is_err(),
+        "judge is not a check-only action"
+    );
 }
 
 #[test]
