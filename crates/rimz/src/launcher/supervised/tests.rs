@@ -142,6 +142,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             reminder_section: None,
             headless: None,
             identity: rimz::harness::launch::ExecIdentity {
+                row_key: None,
                 resume_model_override: false,
                 name: Some("child".to_owned()),
                 name_explicit: true,

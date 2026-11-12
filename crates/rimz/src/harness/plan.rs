@@ -2089,6 +2089,7 @@ pub(super) fn resume_command(
             worktree_path: cwd.map(Path::to_path_buf),
             identity: crate::harness::launch::ExecIdentity {
                 resume_model_override: posture.resume_model_override,
+                row_key: None,
                 name: identity.name.clone(),
                 name_explicit: identity.name_explicit,
                 launch_id: Some(
@@ -2288,6 +2289,7 @@ fn fresh_agent_argv(
         cell,
         crate::harness::launch::ExecIdentity {
             resume_model_override: false,
+            row_key: None,
             name: Some(launch.name.clone()),
             name_explicit: launch.name_explicit,
             launch_id: Some(launch.agent_id.to_string()),

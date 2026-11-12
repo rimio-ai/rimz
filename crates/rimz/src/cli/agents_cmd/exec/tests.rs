@@ -185,6 +185,45 @@ fn each_wrapper_of_a_launch_live_in_two_panes_ends_its_own_row() {
     }
 }
 
+/// A swap's wrapper whose reservation never stood ends its own row, never a
+/// row at another epoch, even the agent's old session with no pane left.
+#[test]
+fn a_swap_wrapper_ends_no_row_of_its_launch_at_another_epoch() {
+    let mut old = pane_row("sess-old", Some("launch_a"), OWN_PANE, 10, false);
+    old.pane = None;
+    let mut reservation = pane_row("launch_swap", Some("launch_a"), OWN_PANE, 20, false);
+    reservation.pane = None;
+    reservation.epoch = 1;
+    let mut request = exit_request(Some("launch_a"), None);
+    request.identity.params.epoch = Some(1);
+    assert_eq!(
+        ends(&[old.clone(), reservation], &request).as_deref(),
+        Some("launch_swap")
+    );
+
+    request.identity.params.epoch = None;
+    assert_eq!(ends(&[old], &request).as_deref(), Some("sess-old"));
+}
+
+/// A swap's wrapper binds, fails and reads card evidence by its own
+/// provisional key, under the agent's launch id (R-wrap-1).
+#[test]
+fn a_swap_wrapper_keys_its_row_by_its_provisional_key_under_the_launch() {
+    let mut request = exit_request(Some("launch_a"), None);
+    request.identity.name = Some("coder".to_owned());
+    request.identity.row_key = Some("launch_swap".to_owned());
+    let identity = exec_launch_identity(&request).unwrap().unwrap();
+    assert_eq!(identity.agent_id.as_str(), "launch_swap");
+    assert_eq!(identity.launch_id().as_str(), "launch_a");
+
+    request.identity.row_key = None;
+    let identity = exec_launch_identity(&request).unwrap().unwrap();
+    assert_eq!(
+        (identity.agent_id.as_str(), identity.launch_id),
+        ("launch_a", None)
+    );
+}
+
 #[test]
 fn a_wrapper_still_ends_its_launch_row_after_the_reaper_ended_it() {
     let agents = [
@@ -631,6 +670,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         reminder_section: None,
         headless: None,
         identity: ExecIdentity {
+            row_key: None,
             resume_model_override: false,
             name: Some("swift-otter".to_owned()),
             name_explicit: true,

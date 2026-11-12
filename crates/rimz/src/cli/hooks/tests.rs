@@ -1680,6 +1680,8 @@ fn launch_identity_env(_agent_pid: Option<u32>, var: &'static str) -> Option<Str
         rimz::harness::launch::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
         rimz::harness::launch::ENV_AGENT_MODEL => Some("env-model".to_owned()),
         rimz::harness::launch::ENV_AGENT_EFFORT => Some("env-effort".to_owned()),
+        rimz::harness::launch::ENV_AGENT_ID => Some("launch_coder".to_owned()),
+        rimz::harness::launch::ENV_AGENT_EPOCH => Some("2".to_owned()),
         _ => None,
     }
 }
@@ -1906,6 +1908,14 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
     assert_eq!(observed.launch.profile.as_deref(), Some("codex-coder"));
     assert_eq!(observed.launch.model.as_deref(), Some("env-model"));
     assert_eq!(observed.launch.effort.as_deref(), Some("env-effort"));
+    assert_eq!(
+        (
+            observed.launch_id.as_ref().map(|id| id.as_str()),
+            observed.launch.epoch
+        ),
+        (Some("launch_coder"), Some(2)),
+        "the hook stamps the launch and epoch it ran under"
+    );
 
     let mut payload = root_observation();
     payload.launch.role = Some("payload-role".to_owned());

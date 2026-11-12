@@ -2403,7 +2403,8 @@ path = "crates/rimz/src/harness"
 # run_log::{QuietFires, with_quiet}, QuietFires::streak_beside and TaskHistory::acting carry a task's quiet-fire summary to the loop CLI and merge it into the streak (+4).
 # run_log::try_collect_run and workflow::reconcile_args let the workflow pass report a run and the tick spawn the pass (+2).
 # schedule::attention::read_catalog, when::forge_branch and CiSource::branch_pr give the sidebar's bookings lane the loop's verdicts and a booking's pull request reading (+3).
-surface-budget = 1227
+# launch::ENV_AGENT_EPOCH names the epoch key the launch writes and the hook and ttyd strip read (+1).
+surface-budget = 1228
 
 [[verdict]]
 kind = "item"
@@ -9231,6 +9232,11 @@ reason = "Field of PaneObservation, floored with PresenceTransition (pass 20b)."
 kind = "item"
 key = "harness::launch::ENV_AGENT_ID"
 reason = "Read by the integration crate (26 sites) and in-crate ancestry and schedule runner; the key is a cross-crate test contract (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_AGENT_EPOCH"
+reason = "The launch writes the agent's epoch under this key; the CLI hook stamps its event from it and the web ttyd launch strips it."
 
 [[verdict]]
 kind = "item"
