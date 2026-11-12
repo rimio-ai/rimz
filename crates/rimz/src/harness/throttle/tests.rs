@@ -25,6 +25,7 @@ pub(in crate::harness) struct FakeHost {
     disk_reads: Mutex<Vec<PathBuf>>,
     rooms: Mutex<BTreeMap<String, Result<Vec<AgentState>, String>>>,
     workflows: Mutex<Vec<crate::store::workflow::RunRecord>>,
+    run_errors: Mutex<BTreeMap<String, String>>,
     agent_reads: AtomicUsize,
     on_sleep: Mutex<Option<SleepHook>>,
     on_check: Mutex<Option<SleepHook>>,
@@ -53,6 +54,7 @@ impl FakeHost {
             disk_reads: Mutex::new(Vec::new()),
             rooms: Mutex::new(BTreeMap::new()),
             workflows: Mutex::new(Vec::new()),
+            run_errors: Mutex::new(BTreeMap::new()),
             agent_reads: AtomicUsize::new(0),
             on_sleep: Mutex::new(None),
             on_check: Mutex::new(None),
@@ -195,13 +197,23 @@ impl Host for FakeHost {
     }
 
     fn workspaces(&self) -> Result<Vec<WorkspaceId>, String> {
-        Ok(self
+        let mut workspaces: Vec<_> = self
             .rooms
             .lock()
             .unwrap()
             .keys()
             .map(|id| WorkspaceId::parse(id).expect("workspace id"))
-            .collect())
+            .chain(
+                self.workflows
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|run| WorkspaceId::from_project_root(&run.project_root)),
+            )
+            .collect();
+        workspaces.sort_by_key(ToString::to_string);
+        workspaces.dedup();
+        Ok(workspaces)
     }
 
     fn agents(&self, workspace: &WorkspaceId) -> Result<Vec<AgentState>, String> {
@@ -218,6 +230,9 @@ impl Host for FakeHost {
         &self,
         workspace: &WorkspaceId,
     ) -> Result<Vec<crate::store::workflow::RunRecord>, String> {
+        if let Some(error) = self.run_errors.lock().unwrap().get(&workspace.to_string()) {
+            return Err(error.clone());
+        }
         Ok(self
             .workflows
             .lock()

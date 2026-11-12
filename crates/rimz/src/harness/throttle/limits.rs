@@ -1,4 +1,4 @@
-//! Stamped open-agent counts and FIFO among workflow/step limit waiters.
+//! Workflow/step start counts from live run records, and FIFO among their limit waiters.
 //! The home-wide launch stamps track machine, workflow, and step stagger.
 
 use std::collections::BTreeMap;
@@ -7,10 +7,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AgentState, Hold, HoldKind, Host, LimitScope, ThrottleError, cap_hold, duration_ms,
-    name_counted, open,
-};
+use super::{Hold, HoldKind, Host, LimitScope, NAMED_AGENTS, ThrottleError, cap_hold, duration_ms};
 use crate::harness::throttle::Limit;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::RunState;
@@ -37,6 +34,8 @@ struct Census {
     earlier_step: usize,
 }
 
+/// One start per non-terminal run of the workflow whose record holds an agent session,
+/// attributed to the session's own step; the starting run is the incoming one.
 fn census(host: &dyn Host, start: &WorkflowStart) -> Result<Census, String> {
     let mut census = Census::default();
     for workspace in host.workspaces()? {
@@ -45,48 +44,41 @@ fn census(host: &dyn Host, start: &WorkflowStart) -> Result<Census, String> {
             .iter()
             .filter(|record| !record.state.is_terminal() && record.workflow == start.workflow)
         {
-            let Some(wait) = record.wait.as_ref().filter(|wait| {
+            if let Some(wait) = record.wait.as_ref().filter(|wait| {
                 record.state == RunState::Active
                     && wait.outcome == "capacity"
                     && (&wait.first, &record.id) < (&start.arrival, &start.run)
-            }) else {
+            }) {
+                match wait.hold {
+                    Some(HoldKind::WorkflowLimit) => census.earlier_workflow += 1,
+                    Some(HoldKind::StepLimit) if record.node == start.step => {
+                        census.earlier_step += 1;
+                    }
+                    _ => {}
+                }
+            }
+            let Some(session) = record.session_attempt().filter(|_| record.id != start.run) else {
                 continue;
             };
-            match wait.hold {
-                Some(HoldKind::WorkflowLimit) => census.earlier_workflow += 1,
-                Some(HoldKind::StepLimit) if record.node == start.step => census.earlier_step += 1,
-                _ => {}
+            let handle = session.run.as_ref().map(|run| run.handle.as_str());
+            census.workflow += 1;
+            name_counted(&mut census.workflow_names, handle);
+            if session.node == start.step {
+                census.step += 1;
+                name_counted(&mut census.step_names, handle);
             }
         }
-        let agents = host.agents(&workspace)?;
-        let workflow: Vec<_> = agents
-            .iter()
-            .filter(|agent| {
-                open(agent)
-                    && agent
-                        .automation
-                        .as_ref()
-                        .and_then(|stamp| stamp.workflow_scope())
-                        .is_some_and(|(workflow, _)| workflow == start.workflow)
-            })
-            .collect();
-        let step: Vec<_> = workflow
-            .iter()
-            .copied()
-            .filter(|agent| {
-                agent
-                    .automation
-                    .as_ref()
-                    .and_then(|stamp| stamp.workflow_scope())
-                    .is_some_and(|(_, step)| step == start.step)
-            })
-            .collect();
-        census.workflow += workflow.len();
-        census.step += step.len();
-        name_counted(&mut census.workflow_names, &agents, &workflow);
-        name_counted(&mut census.step_names, &agents, &step);
     }
     Ok(census)
+}
+
+/// Name a counted start by its recorded leader, up to the few a reason has room for.
+fn name_counted(names: &mut Vec<String>, handle: Option<&str>) {
+    if let Some(handle) = handle
+        && names.len() < NAMED_AGENTS
+    {
+        names.push(handle.to_owned());
+    }
 }
 
 fn hold(kind: HoldKind, text: String) -> Hold {
@@ -118,11 +110,8 @@ pub(super) fn launching(start: &WorkflowStart, count: usize) -> Hold {
     )
 }
 
-pub(super) fn evaluate(
-    host: &dyn Host,
-    start: &WorkflowStart,
-    incoming: usize,
-) -> Result<Option<Hold>, String> {
+/// The workflow and step holds for `start`, which adds one start whatever its width.
+pub(super) fn evaluate(host: &dyn Host, start: &WorkflowStart) -> Result<Option<Hold>, String> {
     let census = census(host, start)?;
     for (kind, name, count) in [
         (
@@ -165,7 +154,7 @@ pub(super) fn evaluate(
                 &format!("{} {name}: ", scope(kind)),
                 cap,
                 count,
-                incoming,
+                1,
                 0,
                 names,
             )
@@ -263,10 +252,4 @@ pub(super) fn stamp(
     }
     crate::disk::atomic::write_temp_then_rename_cache(&host.start_stamps(), &stamps)
         .map_err(ThrottleError::WriteStamps)
-}
-
-pub(super) fn reported(agents: &[AgentState], reference: &crate::ids::AgentSessionId) -> bool {
-    agents
-        .iter()
-        .any(|agent| agent.agent_id == *reference || agent.launch_id.as_ref() == Some(reference))
 }

@@ -1,9 +1,10 @@
 //! Home-wide machine admission and workflow/step start limits.
 //!
 //! Blocking runs keep a ticket; condition fires try once and leave none when held.
-//! Machine turns release on a provider report or ceiling. Workflow-scoped turns
-//! wait for their agent row or their own ceiling, independently of machine
-//! scope. Manual limited starts claim without waiting and stamp stagger at launch.
+//! Machine turns release on a provider report or ceiling. A workflow-scoped turn
+//! releases at its launch report, when the run record already counts the attempt,
+//! independently of machine scope. Manual limited starts claim without waiting and
+//! stamp stagger at launch.
 //! A later scanner releases each scope, so the launching process never lingers.
 //! Admission samples limits under the queue lock; capacity scripts run off-lock.
 //! Inspection reads the same limits without taking a turn.
@@ -719,7 +720,8 @@ impl Turn {
     }
 
     /// Stamp the committed launch and machine/workflow/step stagger under the queue lock.
-    /// Machine and workflow scopes release independently on their report or ceiling.
+    /// The run record counts the attempt from here, so the next sweep ends the workflow
+    /// scope; the machine scope releases on its report or ceiling.
     /// A second report, which a verify retry produces, changes nothing.
     pub fn report_launch(&self, workspace: &WorkspaceId, agent: &AgentSessionId) {
         if self.0.reported.swap(true, Ordering::SeqCst) {
@@ -802,25 +804,10 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Refuse a start wider than a machine cap. A workflow or step limit counts the
+/// start as one whatever its width, so it has nothing to refuse.
 pub(in crate::harness) fn check_group_size(config: &ThrottleConfig, run: &Run) -> Result<()> {
     let agents = run.groups.iter().map(|group| group.agents).sum::<usize>();
-    if let Some(start) = &run.limits {
-        for (scope, name, limit) in [
-            ("workflow", &start.workflow, &start.workflow_limit),
-            ("step", &start.step, &start.step_limit),
-        ] {
-            if let Some(cap) = limit.as_ref().and_then(|limit| limit.max_parallel)
-                && agents > cap as usize
-            {
-                return Err(ThrottleError::Oversized {
-                    agents,
-                    key: "max-parallel",
-                    cap,
-                    fix: format!("raise max-parallel in {scope} {name}'s definition"),
-                });
-            }
-        }
-    }
     for (key, cap) in [
         ("max-parallel-agents", config.max_parallel_agents),
         ("max-parallel-automation", config.max_parallel_automation),
@@ -902,11 +889,7 @@ fn pass(
         .limits
         .as_ref()
         .and_then(|start| match launching(&queue, &ticket, mine) {
-            0 => match limits::evaluate(
-                host,
-                start,
-                run.groups.iter().map(|group| group.agents).sum(),
-            ) {
+            0 => match limits::evaluate(host, start) {
                 Ok(hold) => hold,
                 Err(_) if manual => None,
                 Err(error) => Some(store_hold(error)),
@@ -1090,23 +1073,19 @@ fn sweep(host: &dyn Host, ceiling: Option<Duration>, now: u64) -> Result<Vec<(Pa
                 workspace,
                 agent,
             } => {
-                if let Some(ceiling) = ceiling {
-                    let elapsed = now.saturating_sub(*at_ms);
-                    let mut machine_done = !ticket.machine_gated || elapsed >= duration_ms(ceiling);
-                    let mut limit_done =
-                        ticket.limit.is_none() || elapsed >= duration_ms(CHECK_CEILING);
-                    if (!machine_done || !limit_done)
-                        && let Ok(agents) = host.agents(workspace)
-                    {
-                        machine_done = machine_done || provider_reported(&agents, agent);
-                        limit_done = limit_done || limits::reported(&agents, agent);
-                    }
-                    ticket.machine_gated &= !machine_done;
-                    if limit_done {
-                        ticket.limit = None;
-                    }
+                // The run record published the attempt before the launch reported, so
+                // the census counts it from here.
+                ticket.limit = None;
+                if let Some(ceiling) = ceiling
+                    && ticket.machine_gated
+                {
+                    let done = now.saturating_sub(*at_ms) >= duration_ms(ceiling)
+                        || host
+                            .agents(workspace)
+                            .is_ok_and(|agents| provider_reported(&agents, agent));
+                    ticket.machine_gated = !done;
                 }
-                !ticket.machine_gated && ticket.limit.is_none()
+                !ticket.machine_gated
             }
         };
         if over {
