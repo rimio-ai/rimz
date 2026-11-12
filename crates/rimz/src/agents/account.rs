@@ -191,7 +191,7 @@ impl std::fmt::Debug for ProviderAccountBinding {
 }
 
 impl ProviderAccountBinding {
-    pub(super) fn new(scope: ProviderAccountScope, account_key: String) -> Option<Self> {
+    fn new(scope: ProviderAccountScope, account_key: String) -> Option<Self> {
         (!account_key.trim().is_empty()).then_some(Self { scope, account_key })
     }
 
@@ -302,7 +302,7 @@ impl ProviderCapacity {
     /// Read capacity only when the cache belongs to this exact provider
     /// account. Bound Qwen pacing uses its sliding 5-hour/7-day windows while
     /// all authoritative windows remain available to the exhaustion gate.
-    pub(crate) fn read_bound(
+    fn read_bound(
         runtime: &RuntimePaths,
         key: &LoginKey,
         binding: &ProviderAccountBinding,
@@ -369,7 +369,11 @@ impl ProviderCapacity {
     /// Model sub-caps share their parent's duration and never match; of two
     /// unscoped windows with one span, the last is read, as the longest-window
     /// choice reads it.
-    pub fn window_of_span(&self, span: WindowSpan, now: Timestamp) -> Option<RateLimitWindow> {
+    pub(crate) fn window_of_span(
+        &self,
+        span: WindowSpan,
+        now: Timestamp,
+    ) -> Option<RateLimitWindow> {
         self.windows
             .iter()
             .rfind(|window| window.scope.is_none() && window.duration_mins == Some(span.minutes()))
@@ -471,7 +475,7 @@ impl ProviderCapacity {
     }
 
     /// Whether a known subscription reading currently has capacity.
-    pub(crate) fn subscription_budget_available(&self, now: Timestamp) -> bool {
+    fn subscription_budget_available(&self, now: Timestamp) -> bool {
         let mut has_known_available = false;
         for window in self.projected_duration_windows(now) {
             if window_spent_unreset(&window, now) {
