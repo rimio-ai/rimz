@@ -401,8 +401,12 @@ upward-dependencies = ["address"]
 # PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
 # over from the fold to the cache clock's read (+2).
 # LaunchCapability::disable_native_auto_continue_args leaves the usage-limit resume to RimZ (+1).
-# ProviderCapacity::window_spent is the one spent-window test the cache ping, compaction and compact-first share (+1).
-surface-budget = 1259
+# ProviderCapacity::window_spent is the subscription-only spent-window test the cache ping reads (+1).
+# ProviderCapacity::login_window_spent rereads it from the shared cache for the ping helper (+1).
+# ProviderCapacity::compaction_blocked and login_compaction_blocked let usable paid extra usage carry
+# a spent window for idle and smart compaction and compact-first (+2).
+# CreditsCache::current and paid_usage_carries share the current-entry filter with the spend ladder (+2).
+surface-budget = 1264
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2378,7 +2382,9 @@ path = "crates/rimz/src/harness"
 # WhenExpr::closed_pr_term names the closed pull request that raises the loop verdict's pr_closed cause (+1).
 # ancestry::booking_chain records who booked a loop task, walked once at `rimz loop add` (+1).
 # loop_task::LOOP_BOOKED_BY_ENV hands a fire's booking chain from its checks to the agents they launch (+1).
-surface-budget = 1206
+# cache_keepalive::RoomCapacities and RoomCapacities::{new, window_spent} share one capacity reading per pass across the cache ping and idle and smart compaction (+3).
+# RoomCapacities::compaction_blocked reads the pass's credits cache once for both compactions (+1).
+surface-budget = 1210
 
 [[verdict]]
 kind = "item"

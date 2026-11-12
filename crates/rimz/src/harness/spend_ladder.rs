@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use crate::RuntimePaths;
 use crate::agents::account::ProviderCapacity;
-use crate::agents::credits::{entry_is_displayable, read_credits_cache};
-use crate::agents::{Entitlement, ExtraCredits, ResetCredits};
+use crate::agents::credits::read_credits_cache;
+use crate::agents::{ExtraCredits, ResetCredits};
 use crate::config::{ResumeConfig, SpendOrder};
 use crate::harness::auto_redeem::{self, RedeemReason, RedeemStamp};
 use crate::ids::LoginKey;
@@ -48,11 +48,7 @@ impl SpendFacts {
 
     pub fn read(runtime: &RuntimePaths, key: &LoginKey, now: Timestamp) -> Self {
         let cache = read_credits_cache(&runtime.shared_credits_path());
-        let entry = cache.logins.get(key).filter(|entry| {
-            entry_is_displayable(entry, now.as_millisecond().max(0) as u64)
-                && entry.scope.is_kind_wide()
-                && !matches!(entry.entitlement, Entitlement::Lapsed { .. })
-        });
+        let entry = cache.current(key, now);
         Self {
             capacity: ProviderCapacity::read(runtime, key),
             extra_credits: entry.and_then(|entry| entry.extra_credits.clone()),

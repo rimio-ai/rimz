@@ -1,5 +1,11 @@
 use super::*;
-use crate::agents::{AgentStatus, PendingWait, PendingWaitTrigger};
+use std::collections::BTreeMap;
+
+use crate::agents::credits::CreditsCache;
+use crate::agents::{
+    AgentStatus, Entitlement, ExtraCredits, PendingWait, PendingWaitTrigger, ProviderCapacity,
+    RateLimitWindow,
+};
 use crate::ids::{MuxName, WorkspaceId};
 use crate::store::snapshot::PaneAgent;
 
@@ -287,10 +293,17 @@ fn producer_fires_at_each_seats_own_floor_with_its_brief() {
     let mut fire = |seat: &AgentState| {
         std::sync::Arc::make_mut(&mut snapshot.agents)[0] = seat.clone();
         let mut requests = Vec::new();
-        compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |request| {
-            requests.push(request.clone());
-            true
-        });
+        compact_idle_agents_with(
+            &snapshot,
+            &runtime,
+            &RoomCapacities::default(),
+            &config,
+            &policy,
+            |request| {
+                requests.push(request.clone());
+                true
+            },
+        );
         if !requests.is_empty() {
             assert_eq!(
                 Some(read_fire_record(&path).unwrap().fired_for_request),
@@ -485,14 +498,22 @@ fn keep_warm_holding_defers_compaction_until_the_horizon() {
     policy.teams.0.insert("probe".to_owned(), team);
     let config = crate::config::MachineConfig::default();
     let mut spawned = 0;
-    compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |_| {
-        spawned += 1;
-        false
-    });
+    compact_idle_agents_with(
+        &snapshot,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        &policy,
+        |_| {
+            spawned += 1;
+            false
+        },
+    );
     assert_eq!(spawned, 0, "holding outranks idle compaction");
     compact_idle_agents_with(
         &snapshot,
         &runtime,
+        &RoomCapacities::default(),
         &config,
         &SeatPolicy {
             teams: {
@@ -510,10 +531,17 @@ fn keep_warm_holding_defers_compaction_until_the_horizon() {
     assert_eq!(spawned, 1, "the same seat compacts without keep-warm");
     let mut pings_off = config.clone();
     pings_off.harness.cache_keepalive = false;
-    compact_idle_agents_with(&snapshot, &runtime, &pings_off, &policy, |_| {
-        spawned += 1;
-        false
-    });
+    compact_idle_agents_with(
+        &snapshot,
+        &runtime,
+        &RoomCapacities::default(),
+        &pings_off,
+        &policy,
+        |_| {
+            spawned += 1;
+            false
+        },
+    );
     assert_eq!(
         spawned, 2,
         "a horizon no ping maintains does not defer compaction"
@@ -521,9 +549,282 @@ fn keep_warm_holding_defers_compaction_until_the_horizon() {
     // Past the horizon, the window runs from the last ping's request.
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].pinged_at = Some(ts(7_100));
     snapshot.now = ts(7_100 + 3_540);
-    compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |_| {
-        spawned += 1;
-        false
-    });
+    compact_idle_agents_with(
+        &snapshot,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        &policy,
+        |_| {
+            spawned += 1;
+            false
+        },
+    );
     assert_eq!(spawned, 3, "compaction resumes once the horizon passed");
+}
+
+fn usage_window(used: u8, reset: i64, mins: u32, scope: Option<&str>) -> RateLimitWindow {
+    RateLimitWindow {
+        scope: scope.map(|id| crate::agents::RateLimitWindowScope {
+            id: id.into(),
+            label: id.into(),
+        }),
+        used_percentage: Some(used),
+        resets_at: Some(ts(reset)),
+        duration_mins: Some(mins),
+        ..Default::default()
+    }
+}
+
+/// The idle compactions the producer spawns for `seat` at `now`, and whether it paced one.
+fn idle_fires(
+    seat: &AgentState,
+    now: i64,
+    harness: &HarnessConfig,
+    windows: Option<Vec<RateLimitWindow>>,
+    credits: Option<CreditsCache>,
+) -> (usize, bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(workspace_id, vec![seat.clone()], ts(now));
+    std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
+        checkout: None,
+        root_lane: false,
+        lane: None,
+        kind: seat.kind.clone(),
+        kind_ordinal: None,
+        name: None,
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: None,
+        agent_id: Some(seat.agent_id.clone()),
+        pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+        pane_pid: None,
+        worktree_path: seat.worktree_path.clone(),
+        worktree_branch: seat.worktree_branch.clone(),
+    });
+    let mut policy = SeatPolicy::default();
+    let mut team: crate::config::Team =
+        toml::from_str("[[roles]]\nrole = \"coder\"\nprofile = \"claude\"\nkeep-warm = \"2h\"")
+            .unwrap();
+    team.roles[0].idle_compact = Some(crate::config::IdleCompact::Tokens(50_000));
+    policy.teams.0.insert("probe".to_owned(), team);
+    let config = crate::config::MachineConfig {
+        harness: harness.clone(),
+        ..Default::default()
+    };
+    let capacities: RoomCapacities<'_> = windows
+        .map(|windows| {
+            BTreeMap::from([(seat.login_key(), ProviderCapacity::from_windows(windows))]).into()
+        })
+        .unwrap_or_default();
+    let capacities = match credits {
+        Some(credits) => capacities.with_credits(credits),
+        None => capacities,
+    };
+    let mut fires = 0;
+    compact_idle_agents_with(&snapshot, &runtime, &capacities, &config, &policy, |_| {
+        fires += 1;
+        true
+    });
+    let paced = fire_record_path(&runtime, &seat.kind, &seat.agent_id).exists();
+    (fires, paced)
+}
+
+#[test]
+fn a_spent_window_defers_idle_compaction_after_the_hold_lets_go() {
+    let mut seat = agent(AgentStatus::Idle, 0, 80_000);
+    seat.role = Some("coder".to_owned());
+    seat.model = Some("claude-opus-4-6".to_owned());
+    // Past the 2h horizon, with the last ping's cache still warm.
+    let mut horizon = seat.clone();
+    horizon.pinged_at = Some(ts(7_100));
+    let horizon_now = 7_100 + 3_540;
+    // Inside the horizon, with `cache_keepalive_max` reached.
+    let mut capped = seat.clone();
+    capped.keepalive_since = Some(ts(0));
+    let capped_harness: HarnessConfig = toml::from_str("cache_keepalive_max = \"30m\"").unwrap();
+    // A rejected ping left open on the resting row.
+    let mut rejected = horizon.clone();
+    rejected.ping_turn = true;
+    let mut frozen = horizon.clone();
+    frozen.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: ts(9_000),
+        step: 0,
+        reclaimed_bytes: 200,
+        wake_error: None,
+    });
+    let spent = || {
+        Some(vec![
+            usage_window(40, 90_000, 300, None),
+            usage_window(100, 90_000, 10_080, None),
+        ])
+    };
+    let default = HarnessConfig::default();
+    for (case, seat, now, harness) in [
+        ("horizon passed", &horizon, horizon_now, &default),
+        ("cap reached", &capped, 3_540, &capped_harness),
+        ("rejected ping open", &rejected, horizon_now, &default),
+        ("frozen seat", &frozen, horizon_now, &default),
+    ] {
+        assert_eq!(
+            idle_fires(seat, now, harness, None, None),
+            (1, true),
+            "{case}: due with no reading"
+        );
+        assert_eq!(
+            idle_fires(seat, now, harness, spent(), None),
+            (0, false),
+            "{case}: a spent window spawns nothing and paces nothing, so it fires after the reset"
+        );
+    }
+    for (case, windows) in [
+        ("reset passed", vec![usage_window(100, 9_000, 300, None)]),
+        (
+            "another model's sub-cap",
+            vec![
+                usage_window(40, 90_000, 300, None),
+                usage_window(100, 90_000, 10_080, Some("model:sonnet")),
+            ],
+        ),
+    ] {
+        assert_eq!(
+            idle_fires(&horizon, horizon_now, &default, Some(windows), None),
+            (1, true),
+            "{case}"
+        );
+    }
+    assert_eq!(
+        idle_fires(
+            &horizon,
+            horizon_now,
+            &default,
+            Some(vec![
+                usage_window(40, 90_000, 300, None),
+                usage_window(100, 90_000, 10_080, Some("model:opus")),
+            ]),
+            Some(paid(
+                &horizon,
+                ExtraCredits::Unlimited,
+                Entitlement::Ok,
+                horizon_now
+            )),
+        ),
+        (0, false),
+        "the model's own sub-cap, even with usable paid extra usage"
+    );
+    let disabled = ExtraCredits::Disabled;
+    let exhausted = ExtraCredits::Known {
+        used_usd: Some(50.0),
+        remaining_usd: Some(0.0),
+        limit_usd: Some(50.0),
+    };
+    let lapsed = Entitlement::Lapsed { since_ms: 1 };
+    for (case, credits, fired) in [
+        (
+            "usable paid extra usage carries the window",
+            Some(paid(
+                &horizon,
+                ExtraCredits::Unlimited,
+                Entitlement::Ok,
+                horizon_now,
+            )),
+            (1, true),
+        ),
+        (
+            "paid extra usage disabled",
+            Some(paid(&horizon, disabled, Entitlement::Ok, horizon_now)),
+            (0, false),
+        ),
+        (
+            "paid extra usage exhausted",
+            Some(paid(&horizon, exhausted, Entitlement::Ok, horizon_now)),
+            (0, false),
+        ),
+        (
+            "a lapsed entitlement",
+            Some(paid(&horizon, ExtraCredits::Unlimited, lapsed, horizon_now)),
+            (0, false),
+        ),
+        (
+            "no credits entry",
+            Some(CreditsCache::default()),
+            (0, false),
+        ),
+    ] {
+        assert_eq!(
+            idle_fires(&horizon, horizon_now, &default, spent(), credits),
+            fired,
+            "{case}"
+        );
+    }
+}
+
+/// A credits cache holding `seat`'s login with `extra` paid usage, observed at `now`.
+fn paid(
+    seat: &AgentState,
+    extra: ExtraCredits,
+    entitlement: Entitlement,
+    now: i64,
+) -> CreditsCache {
+    CreditsCache::with_extra_credits(seat.login_key(), extra, entitlement, ts(now))
+}
+
+#[test]
+fn the_helpers_recheck_reads_the_window_spent_since_the_producer() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut seat = agent(AgentStatus::Idle, 6_000, 80_000);
+    seat.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: ts(9_000),
+        step: 0,
+        reclaimed_bytes: 200,
+        wake_error: None,
+    });
+    let mut harness = HarnessConfig::default();
+    harness.idle_compact = crate::config::IdleCompact::Tokens(50_000);
+    let policy = SeatPolicy::default();
+    let due = || {
+        due_compaction(&seat, &policy, &harness, ts(NOW), || {
+            ProviderCapacity::login_compaction_blocked(&runtime, &seat, ts(NOW))
+        })
+        .is_some()
+    };
+    assert!(due(), "no capacity cache compacts as today");
+    let cache = crate::agents::RateLimitsCache {
+        entries: [(
+            seat.login_key().into(),
+            crate::agents::RateLimitCacheEntry {
+                limits: crate::agents::AgentRateLimits {
+                    windows: vec![usage_window(100, 90_000, 300, None)],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &crate::agents::RateLimitsCache::shared_path(&runtime),
+        &cache,
+    )
+    .unwrap();
+    assert!(
+        !due(),
+        "a frozen seat at a spent window is not due, so the helper never wakes it"
+    );
+    let credits_path = runtime.shared_credits_path();
+    std::fs::write(&credits_path, b"{not json").unwrap();
+    assert!(!due(), "an unreadable credits cache carries nothing");
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &credits_path,
+        &paid(&seat, ExtraCredits::Unlimited, Entitlement::Ok, NOW),
+    )
+    .unwrap();
+    assert!(due(), "usable paid extra usage carries the spent window");
 }
