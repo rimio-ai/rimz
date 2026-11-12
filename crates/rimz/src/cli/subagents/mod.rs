@@ -322,8 +322,7 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
     if json && wait.is_none() {
         bail!("--json on a single launch requires --wait");
     }
-    let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let launch = args.into_agent_launch(&config.agents.subagents)?;
+    let launch = args.into_agent_launch()?;
     let child = match agents_cmd::launch_supervised_background(launch, globals)? {
         agents_cmd::BackgroundLaunchOutcome::Launched(child) => child,
         agents_cmd::BackgroundLaunchOutcome::BudgetExceeded { reason } => {
@@ -372,8 +371,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
             (raw, "stdin".to_owned())
         }
     };
-    let config = rimz::config::MachineConfig::load().context("loading machine config")?;
-    let launches = parse_fanout_launches(&raw, &args, &config.agents.subagents)
+    let launches = parse_fanout_launches(&raw, &args)
         .with_context(|| format!("validating fanout tasks from {source}"))?;
     let ctx = Ctx::open(globals)?;
     for launch in &launches {
@@ -460,11 +458,7 @@ fn fanout_launch_error_context(index: usize, launched: &[agents_cmd::BackgroundL
     )
 }
 
-fn parse_fanout_launches(
-    raw: &str,
-    args: &FanoutArgs,
-    defaults: &rimz::config::SubagentsConfig,
-) -> Result<Vec<agents_cmd::AgentLaunchArgs>> {
+fn parse_fanout_launches(raw: &str, args: &FanoutArgs) -> Result<Vec<agents_cmd::AgentLaunchArgs>> {
     let tasks: Vec<FanoutTask> =
         serde_json::from_str(raw).context("fanout input must be a JSON task array")?;
     if tasks.is_empty() {
@@ -474,18 +468,14 @@ fn parse_fanout_launches(
         .into_iter()
         .enumerate()
         .map(|(index, task)| {
-            task.into_agent_launch(args, defaults)
+            task.into_agent_launch(args)
                 .with_context(|| format!("task {}", index + 1))
         })
         .collect()
 }
 
 impl FanoutTask {
-    fn into_agent_launch(
-        self,
-        fanout: &FanoutArgs,
-        defaults: &rimz::config::SubagentsConfig,
-    ) -> Result<agents_cmd::AgentLaunchArgs> {
+    fn into_agent_launch(self, fanout: &FanoutArgs) -> Result<agents_cmd::AgentLaunchArgs> {
         let timeout = self
             .timeout
             .as_deref()
@@ -540,16 +530,13 @@ impl FanoutTask {
             max_turns: self.max_turns,
             passthrough: Vec::new(),
         }
-        .into_agent_launch(defaults)?;
+        .into_agent_launch()?;
         Ok(launch)
     }
 }
 
 impl SubagentLaunchArgs {
-    fn into_agent_launch(
-        self,
-        defaults: &rimz::config::SubagentsConfig,
-    ) -> Result<agents_cmd::AgentLaunchArgs> {
+    fn into_agent_launch(self) -> Result<agents_cmd::AgentLaunchArgs> {
         if self.model.is_some() && self.tier.is_some() {
             bail!("choose one of model and tier");
         }
@@ -574,37 +561,6 @@ impl SubagentLaunchArgs {
                 "a subagent needs its prompt from the parent via `PROMPT`, `--prompt-file`, or `prompt_file`"
             ),
         };
-        let timeout = self
-            .timeout
-            .map(Ok)
-            .unwrap_or_else(|| crate::cli::supervised::parse_timeout(&defaults.timeout))
-            .map_err(anyhow::Error::msg)
-            .context("parsing agents.subagents.timeout")?;
-        let mut warn = self
-            .warn
-            .map(|offsets| Ok(offsets.0))
-            .unwrap_or_else(|| {
-                defaults
-                    .warn
-                    .iter()
-                    .map(|offset| crate::cli::supervised::parse_timeout(offset))
-                    .collect()
-            })
-            .map_err(anyhow::Error::msg)
-            .context("parsing agents.subagents.warn")?;
-        warn.retain(|offset| !offset.is_zero() && *offset < timeout);
-        warn.sort_unstable_by(|a, b| b.cmp(a));
-        warn.dedup();
-        let grace = self
-            .grace
-            .map(Ok)
-            .unwrap_or_else(|| crate::cli::supervised::parse_timeout(&defaults.grace))
-            .map_err(anyhow::Error::msg)
-            .context("parsing agents.subagents.grace")?;
-        jiff::Timestamp::now()
-            .checked_add(timeout)
-            .and_then(|deadline| deadline.checked_add(grace))
-            .context("computing subagent kill deadline")?;
         Ok(agents_cmd::AgentLaunchArgs {
             cwd: self.cwd,
             add_dirs: self.add_dirs,
@@ -631,9 +587,9 @@ impl SubagentLaunchArgs {
             print: true,
             self_cleanup_on_completion: true,
             subagent: true,
-            timeout: Some(timeout),
-            warn,
-            grace: (!grace.is_zero()).then_some(grace),
+            timeout: self.timeout,
+            warn: self.warn.map(|offsets| offsets.0),
+            grace: self.grace,
             keep: self.keep,
             max_turns: self.max_turns,
             ..Default::default()

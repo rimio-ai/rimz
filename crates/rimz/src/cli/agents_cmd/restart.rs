@@ -734,6 +734,7 @@ pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell 
     Cell::Agent(AgentCell {
         notices: posture.launch.notices.clone(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         kind: agent.kind.clone(),
         args: posture.launch.args.clone(),

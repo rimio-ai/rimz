@@ -47,7 +47,7 @@ rimz subagents wait "$first" "$second"
 | `--empty-dir` | off | Require a private empty working directory, whatever the profile says. With `--cwd X`, records X as the checkout and keeps its lane; X is not added unless `--add-dir X` is also passed. |
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
 | `--json` | off | With `--wait`, print a one-entry result map keyed by the child's petname instead of the petname and answer. The full run record is under `run` in `rimz agents show <ref> --json`. Refused without `--wait`. |
-| `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
+| `--timeout <DURATION>` | the profile's [`timeout:`](../definitions.md), then `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
 | `--warn <OFFSETS>` | `[agents.subagents] warn`, `10m,5m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
 | `--grace <DURATION>` | `[agents.subagents] grace`, `5m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
 | `--keep` | off | Disable automatic completion cleanup; hold the pane after provider exit until its parent ends or Ctrl-C is pressed in the pane. Explicit stop and the run timeout still apply. |
@@ -124,7 +124,7 @@ JSON
 | `fast` | no | `true` as `--fast`, `false` as `--no-fast` |
 | `max_turns` | no | Maximum agentic turns |
 
-For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` applies to every child. Tasks have no permission-mode, isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--yolo` or `--isolation` flag. Every child's permission default uses the same child-kind-mapped ceiling as a single launch. Isolation inherits the parent's recorded override, otherwise follows the child's definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
+For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`; for `timeout` alone, the child definition's `timeout:` sits between the flag and `[agents.subagents]`. `--keep` applies to every child. Tasks have no permission-mode, isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--yolo` or `--isolation` flag. Every child's permission default uses the same child-kind-mapped ceiling as a single launch. Isolation inherits the parent's recorded override, otherwise follows the child's definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
 
 | Mode | stdout |
 | --- | --- |
@@ -377,7 +377,7 @@ warn = ["10m", "5m"]
 grace = "5m"
 ```
 
-`[agents.subagents]` in `config.toml` sets the three defaults above. A duration is one whole number and one unit, `s`, `m`, `h`, or `d` (`90m`, not `1h30m`); bare `0` is invalid. Warning offsets are sorted largest first and deduplicated; zero offsets and offsets at or beyond the timeout are dropped. Use `warn = []` or `--warn none` for no warnings, and `grace = "0s"` or `--grace 0s` to kill at the deadline. The room enforces the kill bound even when no one waits on the child. These settings and flags do not change `rimz agents -p --timeout`.
+`[agents.subagents]` in `config.toml` sets the three defaults above. A subagent definition's [`timeout:`](../definitions.md) replaces the timeout default for its children; warn and grace come only from the launch or this table. A duration is one whole number and one unit, `s`, `m`, `h`, or `d` (`90m`, not `1h30m`); bare `0` is invalid. Warning offsets are sorted largest first and deduplicated; zero offsets and offsets at or beyond the final timeout, whichever level set it, are dropped. Use `warn = []` or `--warn none` for no warnings, and `grace = "0s"` or `--grace 0s` to kill at the deadline. The room enforces the kill bound even when no one waits on the child. These settings and flags do not change `rimz agents -p --timeout`.
 
 Claude, Codex, Copilot, Cursor, Droid, Grok, and Qwen receive warning and stop context through post-tool hooks. Qwen's async hook delivers context on the next turn. Other providers receive only the stop instruction through pane steering. A hook-channel child making no tool calls receives no stop context before the kill bound. A late hook gets only the latest crossed warning, with actual remaining time, rounded down to minutes or to seconds below a minute. The last warning asks the child to wrap up; the deadline asks it to stop and report.
 

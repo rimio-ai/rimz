@@ -10,7 +10,6 @@ use crate::cli::GlobalFlags;
 use rimz::agents::AgentDefinition;
 use rimz::harness::run::RunCancellation;
 use rimz::store::run::RunRecord;
-use rimz::utils::time::{DurationUnit, parse_duration_units};
 
 pub(super) mod output;
 pub(super) mod pane;
@@ -181,16 +180,7 @@ fn install_run_interrupt_handlers(_cancellation: RunCancellation) -> Result<()> 
 }
 
 pub(super) fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> {
-    parse_duration_units(
-        raw,
-        &[
-            DurationUnit::Second,
-            DurationUnit::Minute,
-            DurationUnit::Hour,
-            DurationUnit::Day,
-        ],
-    )
-    .map_err(|err| err.to_string())
+    rimz::utils::time::parse_compact_duration(raw).map_err(|err| err.to_string())
 }
 
 /// Extract the prompt from stream-json user messages on stdin. Each non-empty

@@ -372,6 +372,7 @@ impl ResumeLaunchPosture {
             notices: self.notices,
             kind,
             empty_dir: None,
+            timeout: None,
             auto_compact: self.auto_compact,
             resume_model_override: self.resume_model_override,
             isolation_default: self.isolation_default,

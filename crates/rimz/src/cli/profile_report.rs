@@ -740,6 +740,7 @@ mod tests {
             effort: None,
             fast: None,
             budget: None,
+            timeout: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,

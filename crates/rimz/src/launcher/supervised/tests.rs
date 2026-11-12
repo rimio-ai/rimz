@@ -43,6 +43,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     let cell = rimz::harness::spec::AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: Some(rimz::config::Isolation::Scoped),
         kind: rimz::agents::definition_by_kind("codex")
@@ -148,4 +149,116 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             },
         }
     );
+}
+
+fn ladder_request(
+    timeout: Option<Duration>,
+    warn: Option<Vec<Duration>>,
+    grace: Option<Duration>,
+) -> SupervisedRunRequest {
+    let mut request = SupervisedRunRequest::new(
+        "worker".into(),
+        "Read the brief.".into(),
+        None,
+        crate::agents::ManagedLaunchState::PendingResolution,
+    );
+    request.subagent = true;
+    request.timeout = timeout;
+    request.warn = warn;
+    request.grace = grace;
+    request
+}
+
+fn minutes(values: &[u64]) -> Vec<Duration> {
+    values.iter().map(|m| Duration::from_secs(m * 60)).collect()
+}
+
+fn ladder(
+    request: &SupervisedRunRequest,
+    definition: Option<u64>,
+    defaults: &crate::config::SubagentsConfig,
+) -> Result<DeadlineLadder> {
+    resolve_deadline_ladder(
+        request,
+        definition.map(|m| Duration::from_secs(m * 60)),
+        defaults,
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+}
+
+#[test]
+fn deadline_ladder_takes_the_launch_then_the_definition_then_the_config() {
+    let defaults = crate::config::SubagentsConfig::default();
+    let unset = ladder_request(None, None, None);
+    let explicit = ladder_request(Some(Duration::from_secs(20 * 60)), None, None);
+    let timeouts = [(&unset, Some(90)), (&explicit, Some(90)), (&unset, None)]
+        .map(|(request, definition)| ladder(request, definition, &defaults).unwrap().timeout);
+    assert_eq!(timeouts.to_vec(), minutes(&[90, 20, 30]));
+    assert_eq!(
+        ladder(&unset, Some(90), &defaults).unwrap(),
+        DeadlineLadder {
+            timeout: Duration::from_secs(90 * 60),
+            warn: minutes(&[10, 5]),
+            grace: Duration::from_secs(5 * 60),
+        }
+    );
+}
+
+#[test]
+fn deadline_ladder_filters_warnings_against_the_final_timeout() {
+    let defaults = crate::config::SubagentsConfig::default();
+    let unset = ladder_request(None, None, None);
+    let warn = |request: &SupervisedRunRequest, definition| {
+        ladder(request, definition, &defaults).unwrap().warn
+    };
+    assert_eq!(warn(&unset, Some(10)), minutes(&[5]));
+    assert_eq!(warn(&unset, Some(4)), Vec::<Duration>::new());
+    let given = ladder_request(
+        Some(Duration::from_secs(5 * 60)),
+        Some(
+            [0, 300, 360, 180, 60, 180]
+                .map(Duration::from_secs)
+                .to_vec(),
+        ),
+        None,
+    );
+    assert_eq!(warn(&given, Some(90)), minutes(&[3, 1]));
+    let disabled = ladder_request(None, Some(Vec::new()), Some(Duration::ZERO));
+    assert_eq!(
+        ladder(&disabled, Some(10), &defaults).unwrap(),
+        DeadlineLadder {
+            timeout: Duration::from_secs(10 * 60),
+            warn: Vec::new(),
+            grace: Duration::ZERO,
+        }
+    );
+}
+
+#[test]
+fn deadline_ladder_refuses_a_malformed_config_or_an_overflow() {
+    let unset = ladder_request(None, None, None);
+    let config = |key: &str, value: &str| {
+        let mut defaults = crate::config::SubagentsConfig::default();
+        match key {
+            "timeout" => defaults.timeout = value.into(),
+            "warn" => defaults.warn = vec![value.into()],
+            _ => defaults.grace = value.into(),
+        }
+        defaults
+    };
+    for key in ["timeout", "warn", "grace"] {
+        let error = ladder(&unset, None, &config(key, "0")).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(&format!("parsing agents.subagents.{key}")),
+            "{error:#}"
+        );
+    }
+    let error = resolve_deadline_ladder(
+        &unset,
+        Some(Duration::from_secs(90 * 60)),
+        &crate::config::SubagentsConfig::default(),
+        jiff::Timestamp::MAX,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "computing subagent kill deadline");
 }

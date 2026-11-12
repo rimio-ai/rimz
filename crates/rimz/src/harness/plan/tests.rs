@@ -1321,6 +1321,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
@@ -1343,6 +1344,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     let AgentCell {
         notices,
         empty_dir: _,
+        timeout: _,
         resume_model_override,
         isolation_default,
         kind: _,
@@ -1418,6 +1420,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -1513,6 +1516,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
     Cell::Agent(AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
@@ -1583,6 +1587,7 @@ fn configured_profile(
         effort: effort.map(str::to_owned),
         fast: None,
         budget: None,
+        timeout: None,
         auto_compact: None,
         system_prompt_file: system_prompt_file.map(Into::into),
         append_system_prompt_files: Vec::new(),
@@ -3243,6 +3248,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         Cell::Agent(AgentCell {
             notices: Vec::new(),
             empty_dir: None,
+            timeout: None,
             resume_model_override: false,
             isolation_default: None,
             kind: AgentKind::new_unchecked("codex"),
@@ -3343,6 +3349,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
@@ -3799,6 +3806,7 @@ fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
@@ -4473,6 +4481,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     let cell = Cell::Agent(AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -4588,6 +4597,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     let cell = Cell::Agent(AgentCell {
         notices: Vec::new(),
         empty_dir: None,
+        timeout: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -4933,6 +4943,50 @@ fn tier_override_changes_the_supervised_launch_runtime() {
     assert_eq!(cell.kind.as_str(), "claude");
     assert_eq!(cell.launch.model.as_deref(), Some("fable"));
     assert!(cell.args.iter().any(|arg| arg == "--tools"));
+}
+
+#[test]
+fn definition_timeout_survives_agent_tier_and_model_overrides() {
+    let root = tempfile::tempdir().unwrap();
+    for dir in ["agents", "subagents"] {
+        std::fs::create_dir(root.path().join(dir)).unwrap();
+    }
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("subagents/worker.md"),
+        "---\ndescription: Worker\nagent: codex\ntier: senior\ntools: [Bash]\ntimeout: 90m\n---\nCraft.",
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &root.path().join("config.toml"),
+        &machine.tiers,
+        machine.harness.auto_compact,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.subagents.profiles = definitions.subagent_profiles;
+    let overrides: [fn(&mut crate::harness::run::SupervisedRunRequest); 4] = [
+        |_| {},
+        |request| request.agent = Some("claude".into()),
+        |request| request.tier = Some(crate::config::tiers::ModelTier::Principal),
+        |request| request.model = Some("sol".into()),
+    ];
+    let timeouts = overrides.map(|apply| {
+        let mut request = supervised_request("worker", "Read the brief.");
+        request.subagent = true;
+        apply(&mut request);
+        planned_cell(&plan_one(&request, &machine, root.path())).timeout
+    });
+    assert_eq!(timeouts, [Some(std::time::Duration::from_secs(90 * 60)); 4]);
 }
 
 #[test]

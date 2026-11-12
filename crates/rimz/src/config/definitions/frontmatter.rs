@@ -28,6 +28,8 @@ pub(super) struct AgentFrontmatter {
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
+    #[serde(default, deserialize_with = "number_text")]
+    pub timeout: Option<String>,
     pub keep_warm: Option<crate::config::KeepWarmPolicy>,
     #[serde(default, deserialize_with = "idle_compact")]
     pub idle_compact: Option<IdleCompact>,
@@ -67,6 +69,7 @@ impl AgentFrontmatter {
             fast,
             auto_compact,
             budget,
+            timeout,
             tools,
             allowed_tools,
             skills,
