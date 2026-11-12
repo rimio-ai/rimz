@@ -1108,7 +1108,7 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     )
     .unwrap();
     let layout: kdl::KdlDocument = layout.parse().unwrap();
-    let argv = loop_agent_pane_args(&layout).expect("agent pane args");
+    let (_, argv) = loop_agent_pane(&layout).expect("agent pane args");
     let request = argv
         .windows(2)
         .find(|pair| pair[0] == "--request-file")
@@ -1190,20 +1190,22 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
 }
 
 #[cfg(unix)]
-fn loop_agent_pane_args(document: &kdl::KdlDocument) -> Option<Vec<String>> {
+fn loop_agent_pane(document: &kdl::KdlDocument) -> Option<(&kdl::KdlNode, Vec<String>)> {
     for node in document.nodes() {
-        if node.name().value() == "args" {
-            let args = node
+        if node.name().value() == "pane"
+            && let Some(args) = node.children().and_then(|children| children.get("args"))
+        {
+            let args = args
                 .entries()
                 .iter()
                 .map(|entry| entry.value().as_string().unwrap().to_owned())
                 .collect::<Vec<_>>();
             if args.iter().any(|arg| arg == "--request-file") {
-                return Some(args);
+                return Some((node, args));
             }
         }
-        if let Some(args) = node.children().and_then(loop_agent_pane_args) {
-            return Some(args);
+        if let Some(pane) = node.children().and_then(loop_agent_pane) {
+            return Some(pane);
         }
     }
     None
@@ -2882,6 +2884,9 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
                     format!("{} [Created 1s ago]\n", workspace.session_name)
                 },
             );
+        if team {
+            command.env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1");
+        }
         command
     };
     write_loop_config(
@@ -3021,6 +3026,29 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     );
     if team {
         assert_eq!(agents[0].team.as_deref(), Some("forge"));
+        // The team's tab opens after its run is recorded, so wait for its layout.
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        let (cwd, trace) = loop {
+            let text = std::fs::read_to_string(&trace).unwrap_or_default();
+            let cwd = text
+                .split_inclusive('\n')
+                .filter_map(|line| line.strip_prefix("layout-json\t")?.strip_suffix('\n'))
+                .find_map(|layout| {
+                    let layout: String = serde_json::from_str(layout).unwrap();
+                    let layout: kdl::KdlDocument = layout.parse().unwrap();
+                    let (pane, _) = loop_agent_pane(&layout)?;
+                    Some(pane.get("cwd")?.value().as_string()?.to_owned())
+                });
+            if let Some(cwd) = cwd {
+                break (cwd, text);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the team's layout never reached the mux: {text}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(cwd, canonical(&checkout).to_str().unwrap(), "{trace}");
         return;
     }
     let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
