@@ -1030,7 +1030,7 @@ upward-dependencies = [
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
 # MachineConfig::load_throttle reads core-only start limits without a memo.
-# TaskCheck and Judge share legacy shell-or-agent guards across config, trust, delivery, and CLI (+2).
+# TaskCheck and Judge share the shell check and judge guards across config, trust, delivery, and CLI (+2).
 # Guard, TaskEntry::guard and deserialize_judges share ordered loop guards and their serde projection (+3).
 # Machine hibernation policy and its duration validation serve admission (+1 net).
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
@@ -1373,7 +1373,7 @@ reason = "Renamed headless model guard shared by task files, trust, scheduling a
 [[verdict]]
 kind = "item"
 key = "config::loop_::TaskEntry::guard"
-reason = "Single legacy-aware guard reader for the scheduler and loop presentation."
+reason = "Single guard reader, shell check then judges, for the scheduler and loop presentation."
 
 [[verdict]]
 kind = "item"
@@ -12281,7 +12281,7 @@ reason = "Attempt-specific lifecycle producers can request an advance without cl
 [[verdict]]
 kind = "item"
 key = "harness::workflow::state::Transition::finish_judge"
-reason = "Judge settlement owns normalization, the durable retry budget and invalid routing (legacy check parks) under the workspace lock."
+reason = "Judge settlement owns normalization, the durable retry budget and invalid routing under the workspace lock."
 
 [[verdict]]
 kind = "item"
