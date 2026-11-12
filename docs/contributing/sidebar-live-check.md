@@ -974,6 +974,20 @@ A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set
 
 To show that the provider's model received RimZ's text, ask a question that only that text answers for the launch's shape, with no tools needed. A launch with no profile or role, such as a bare `rimz agents opencode`, gets a reminder that names no handle (`crates/rimz/src/harness/launch_reminders.rs::model_line`), so asking for its handle proves nothing. Ask instead for the subagent profiles that the reminder's Subagents section lists (`crates/rimz/src/harness/subagent_policy.rs::reminder`). To show that a resumed session reads the current system prompt rather than its own earlier turns, change the prompt between `rimz agents stop` and `rimz agents resume`, then ask for the new value. An answer with the old value is the conversation repeating itself.
 
+### Time a Claude child's interrupt marker
+
+A Claude interrupt reaches RimZ only when Claude next runs its statusline, which writes `context.settle` into the child's context sidecar. To time that, run the check from an agent pane in a room the user started, on the binary that room runs, so the child uses a real Claude login. Launch a child that blocks in one foreground command: Claude's own harness refuses a foreground `sleep`, so use `perl`, and give it a unique argument so you can find the process later.
+
+```sh
+rimz subagents claude 'Run exactly this foreground command and nothing else: perl -e "select(undef,undef,undef,347)"' --description 'interrupt marker probe'
+id=$(rimz agents show @<child> --json | jq -r .run.agent_id)
+f=$(rg -l "$id" "$XDG_RUNTIME_DIR/rimz/ws/<room>/live/agent_context/")
+rimz pane send @<child> --key escape
+jq .context.settle "$f"    # poll until it reads {"at": ..., "outcome": "interrupted"}
+```
+
+The marker sits at `.context.settle`, not at the top level of the sidecar. Compare its `at` with the moment you pressed Escape. On Claude 2.1.322 with the account's `statusLine.refreshInterval` set to 10, the marker landed 9 s after Escape: Escape itself does not run the statusline, so an account with no refresh interval waits for Claude's next render trigger instead.
+
 ### Bring an OpenCode login into a held room
 
 An OpenCode turn can run in a held sandbox room once a login is imported into the room's home. OpenCode 2.x keeps its login in a SQLite database under `XDG_DATA_HOME` and reads `auth.json` only as a legacy migration input, so copying that file brings no login. `opencode auth export` prints the login's secrets, and an agent's safety classifier refuses to run it, so the user runs the import from a host shell.
