@@ -1,6 +1,7 @@
 use super::*;
 use crate::sidebar_pane::render::labels::mana_style;
 use crate::sidebar_pane::render::layout::text_width;
+use crate::sidebar_pane::render::theme::Component;
 
 fn amount_window(mins: u32, used: u64, limit: u64) -> RateLimitWindow {
     serde_json::from_value(serde_json::json!({
@@ -1394,7 +1395,12 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
         .to_owned();
     assert_eq!(label, "7d");
     let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
-    assert_eq!(label_fg, glyph_fg, "unknown label mirrors its dim track");
+    assert_eq!(label_fg, theme.muted().fg, "unknown label stays muted");
+    assert_eq!(
+        glyph_fg,
+        Some(theme.component(Component::BudgetSpent)),
+        "the unknown track is a step quieter than its label"
+    );
     assert_ne!(
         glyph_fg,
         theme.alarm(Modifier::empty()).fg,
@@ -1428,8 +1434,14 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
     assert_eq!(label, "", "the no-window placeholder has no fake label");
     let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
     assert_eq!(
-        label_fg, glyph_fg,
-        "placeholder label slot mirrors the track"
+        label_fg,
+        theme.muted().fg,
+        "placeholder label slot stays muted"
+    );
+    assert_eq!(
+        glyph_fg,
+        Some(theme.component(Component::BudgetSpent)),
+        "placeholder track is spent chrome"
     );
     assert!(!has_reset, "placeholder rows have no reset countdown");
     assert!(
@@ -1486,7 +1498,12 @@ fn provider_window_placeholders_preserve_known_shape() {
     assert_eq!(labels, vec!["5h", "7d"]);
     for row in rows {
         let (label_fg, glyph_fg, has_reset) = bar_row_facts(&row);
-        assert_eq!(label_fg, glyph_fg, "placeholder label mirrors its track");
+        assert_eq!(label_fg, theme.muted().fg, "placeholder label stays muted");
+        assert_eq!(
+            glyph_fg,
+            Some(theme.component(Component::BudgetSpent)),
+            "placeholder track is spent chrome"
+        );
         assert!(!has_reset, "placeholder rows have no reset countdown");
         assert!(
             row.spans.iter().any(|span| span.content.contains('▱')),
