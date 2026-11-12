@@ -109,7 +109,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Soft-compaction wrap-up and continue | `crates/rimz/src/cli/agents_cmd/soft_compact.rs::run`, `agents::soft_compact_prompt` or configured resume text, through `crates/rimz/src/message/soft_compact.rs::send_wrap_up` or `send_continue` | `System` / `Prompt`, tagged `wrap_up` (steer-only) or `continue` (boundary FIFO) |
 | Supervised verification reprompt | `crates/rimz/src/harness/prompt_compose.rs::verify_reprompt`, delivered by `crates/rimz/src/cli/supervised/verify.rs::deliver_reprompt` through `deliver_now` | `System` / `Prompt` |
 | Restart continue | `crates/rimz/src/cli/agents_cmd/exec.rs::queue_resume_continue`, run by the replacement wrapper when its exec request sets `continue_session` and no stage re-wake stood in (`resume_continue_text`), configured resume text through `SyntheticMessage` | `System` / `Prompt` |
-| Deadline stop rung | `crates/rimz/src/cli/agents_cmd/run_timeout.rs::run_timeout`, text from `crates/rimz/src/harness/deadline.rs::Rung::text`, dispatched as a steer when `harness::deadline::stop_due_by_pane` holds. Other rungs ride hook context (`crates/rimz/src/cli/hooks.rs::attach_deadline_context`) and queue nothing | `Harness { notice: Deadline }` / `Prompt` |
+| Deadline stop rung | `crates/rimz/src/cli/agents_cmd/run_timeout.rs::run_timeout`, text from `crates/rimz/src/harness/deadline.rs::Rung::text`, dispatched when `harness::deadline::stop_due_by_pane` holds, as an unforced interrupt where `harness::deadline::stop_interrupts` holds (Claude, Codex) and as a steer otherwise; a Claude or Codex child waiting on input gets no stop, and an interrupt refused with `DispatchErr::WaitingOnInput` gives the rung back for the hook. Other rungs ride hook context (`crates/rimz/src/cli/hooks.rs::attach_deadline_context`) and queue nothing | `Harness { notice: Deadline }` / `Prompt` |
 | Fleet or account budget continuation | `crates/rimz/src/cli/budget.rs::run`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Agent budget continuation | `crates/rimz/src/cli/agents_cmd/tune/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
 | Idle compaction | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
@@ -513,7 +513,7 @@ The backends carry a large paste differently:
 
 ### The interrupt key
 
-Interrupt is paste first, key second, inside `send::send_batch_to_live_pane` under one `PaneWriter`.
+Interrupt is paste first, key second, inside `send::send_batch_to_live_pane` under one `PaneWriter`. Two senders use it: `rimz message --interrupt` and `rimz message interrupt`, and the deadline stop rung for a kind with both hook context and an interrupt key ([turn-opening injection sites](#turn-opening-injection-sites)), which sends it unforced.
 
 1. With the lock held, after the write's pacing and typing waits, `send::wait_and_decide` reads the row with current context (`crates/rimz/src/message/send.rs::row_under_lock`). The key decision uses the row the last write decided on: only a live `Running` or `Waiting` row gets the key, because on a resting row the paste itself starts the turn the key would cancel, and a turn that ended while the send waited gets a plain send. With no live row there is no key. The awaiting-input refusal without `--force` comes from dispatch's preflight and from the same row, or the bound row when the live card has no row, so a prompt raised while the send waited for the lock or the pacer still refuses it.
 2. It writes exactly as steer does: any smart-compaction command, the paste, the `Sent` record, Enter.
@@ -566,7 +566,7 @@ Content:
 | `TEAM_STALLED` | An unfinished team quiet for 55m, queued once per stage visit to its last-active member when enabled | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message stays queued past its receiver-class delay, sent once to its live sender | `@rimz` |
-| `DEADLINE` | The deadline ladder's stop rung, steered to a supervised child whose kind takes its stop through the pane | `@rimz` |
+| `DEADLINE` | The deadline ladder's stop rung, typed into a supervised child's pane: a steer for a kind without hook context, an interrupt for Claude and Codex once their hook has left it unclaimed past the delay | `@rimz` |
 | `WAIT` | A timer, command, watch, or clock wait delivery, or a workflow message step's message ([workflow.md](./workflow.md)) | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping ([policy](#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row, and a signal forwarded to a staying workflow step's leader ([workflow.md](./workflow.md#the-signal-helper)) | `@rimz` |

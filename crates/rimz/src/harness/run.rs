@@ -758,6 +758,26 @@ pub fn claim_rung(
     .map(|(_, rung)| rung)
 }
 
+/// Give back a deadline rung claimed at `claimed` whose send was refused,
+/// restoring the `previous` notice stamp the claim replaced, so the rung is
+/// due again. A claim that moved on since (a limit hold shifted it) is left
+/// alone. Returns whether this call released the rung.
+pub fn release_rung(
+    paths: &StatePaths,
+    run_id: &RunId,
+    claimed: Timestamp,
+    previous: Option<Timestamp>,
+) -> Result<bool> {
+    update_record(paths, run_id, |record, _| {
+        if record.deadline_notice_at != Some(claimed) {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.deadline_notice_at = previous;
+        Ok(RecordMutation::Write(true))
+    })
+    .map(|(_, released)| released)
+}
+
 /// Claim one provider-limit park of a child run and hold the run through it.
 /// The park is named by the child's `last_activity`; a settled run and a park
 /// already claimed write nothing. The first claim of a park stores `hold` and

@@ -7,8 +7,10 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::deadline::{interrupt_evidence, interrupt_expired, kill_due, stop_due_by_pane};
-use crate::agents::AgentState;
+use super::deadline::{
+    interrupt_evidence, interrupt_expired, kill_due, stop_due_by_pane, stop_interrupts,
+};
+use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::{RunListing, RunRecord};
 use crate::{RuntimePaths, StatePaths};
@@ -62,12 +64,26 @@ fn due_request(
     (kill_due(record, now)
         || interrupt_expired(record, now)
         || interrupted_at.is_some()
-        || stop_due_by_pane(record, now))
+        || (stop_due_by_pane(record, now)
+            && !(stop_interrupts(record) && child_awaits_input(record, agents, now))))
     .then(|| RunTimeoutRequest {
         workspace_id: workspace_id.clone(),
         run_id: record.run_id.clone(),
         interrupted_at,
     })
+}
+
+/// Whether `record`'s child waits on its user, which refuses an unforced
+/// interrupt: its stop is left to the hook, which carries it once answered.
+fn child_awaits_input(record: &RunRecord, agents: &[AgentState], now: Timestamp) -> bool {
+    record
+        .agent_id
+        .as_ref()
+        .and_then(|id| crate::store::snapshot::find_agent(agents, record.kind.as_str(), id))
+        .is_some_and(|child| {
+            child.effective_status(now) == AgentStatus::Waiting
+                || child.is_reviewing_permission(now)
+        })
 }
 
 fn spawn_timeout_helper(runtime: &RuntimePaths, request: &RunTimeoutRequest) {
@@ -152,5 +168,39 @@ mod tests {
         let request = due_request(&workspace, &run, &[child], now + Duration::from_secs(55))
             .expect("an expired hold asks for its settle");
         assert_eq!(request.interrupted_at, None);
+    }
+
+    #[test]
+    fn an_interrupt_kind_child_waiting_on_input_is_asked_for_no_stop() {
+        let workspace = record().workspace_id;
+        let now = Timestamp::now();
+        let mut run = record();
+        run.subagent = true;
+        run.status = RunStatus::Running;
+        run.agent_id = Some("child".into());
+        run.deadline_at = Some(now - Duration::from_secs(11));
+        run.grace = Some(Duration::from_secs(180));
+        let mut child = AgentState::stub("codex", "child", crate::agents::AgentStatus::Running);
+        assert!(due_request(&workspace, &run, std::slice::from_ref(&child), now).is_some());
+
+        child.status = crate::agents::AgentStatus::Waiting;
+        assert_eq!(
+            due_request(&workspace, &run, std::slice::from_ref(&child), now),
+            None,
+            "the hook carries the stop once the child is answered"
+        );
+        run.deadline_at = Some(now - Duration::from_secs(181));
+        assert!(
+            due_request(&workspace, &run, std::slice::from_ref(&child), now).is_some(),
+            "the kill is still asked for"
+        );
+
+        run.deadline_at = Some(now - Duration::from_secs(11));
+        run.kind = AgentKind::new_unchecked("kimi");
+        child.kind = AgentKind::new_unchecked("kimi");
+        assert!(
+            due_request(&workspace, &run, &[child], now).is_some(),
+            "a pane kind still gets its steer"
+        );
     }
 }
