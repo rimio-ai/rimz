@@ -1042,6 +1042,67 @@ fn idle_compact_refuses_modes_durations_and_subagents() {
 }
 
 #[test]
+fn timeout_rides_subagent_definitions_with_inheritance() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "subagents/base.md",
+        "agent: pi\ntimeout: 90m",
+        "Base.",
+    );
+    definition(root.path(), "subagents/child.md", "agent: base", "Child.");
+    definition(
+        root.path(),
+        "subagents/longer.md",
+        "agent: base\ntimeout: 2h",
+        "Longer.",
+    );
+    definition(root.path(), "subagents/plain.md", "agent: pi", "Plain.");
+    let loaded = clean(root.path());
+    let minutes = |name: &str| {
+        loaded.subagent_profiles.0[name]
+            .timeout
+            .map(|timeout| timeout.as_secs() / 60)
+    };
+    assert_eq!(
+        ["base", "child", "longer", "plain"].map(minutes),
+        [Some(90), Some(90), Some(120), None]
+    );
+}
+
+#[test]
+fn timeout_refuses_other_grammars_and_direct_profiles() {
+    for value in ["90", "1h30m", "soon", "1.5h"] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "subagents/bad.md",
+            &format!("agent: pi\ntimeout: {value}"),
+            "Bad.",
+        );
+        error(
+            root.path(),
+            &format!(
+                "sets `timeout: {value}`, which is not a duration; write one whole number and \
+                 a unit, s, m, h, or d, such as 90m"
+            ),
+        );
+    }
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/direct.md",
+        "agent: pi\ntimeout: 90m",
+        "Direct.",
+    );
+    error(
+        root.path(),
+        "sets `timeout:`, which only a subagent definition takes; remove it, or move the \
+         definition to subagents/",
+    );
+}
+
+#[test]
 fn keep_warm_lands_on_solo_profiles_with_inheritance_and_on_role_bindings() {
     let root = team_fixture();
     definition(

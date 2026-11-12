@@ -1429,6 +1429,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         effort: None,
         fast: None,
         budget: None,
+        timeout: None,
         auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),

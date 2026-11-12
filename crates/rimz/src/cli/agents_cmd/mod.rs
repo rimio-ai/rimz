@@ -561,7 +561,7 @@ pub(crate) struct AgentLaunchArgs {
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout, requires = "print")]
     pub(crate) timeout: Option<Duration>,
     #[arg(skip)]
-    pub(crate) warn: Vec<Duration>,
+    pub(crate) warn: Option<Vec<Duration>>,
     #[arg(skip)]
     pub(crate) grace: Option<Duration>,
     /// Leave the supervised agent pane open after completion.

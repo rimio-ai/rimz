@@ -523,6 +523,10 @@ pub struct Profile {
     pub fast: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
+    /// A subagent definition's run timeout, inherited up the `agent` chain; a launch's
+    /// `--timeout` wins over it and it wins over `[agents.subagents] timeout`. Markdown only.
+    #[serde(skip)]
+    pub timeout: Option<std::time::Duration>,
     /// A solo agent's keep-warm maximum (shorthand or max-only block); unset inherits through
     /// the `agent` base chain, then falls back to the machine default.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]

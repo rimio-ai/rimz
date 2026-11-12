@@ -45,6 +45,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         effort: None,
         fast: None,
         budget: None,
+        timeout: None,
         auto_compact: None,
         auto_compact_default: None,
         system_prompt_file: None,
@@ -612,6 +613,25 @@ impl Resolver<'_> {
             super::super::agents::native_auto_compact(self.scope.native_auto_compact, kind);
         profile.fast = fm.fast;
         profile.budget = fm.budget.clone();
+        if let Some(value) = fm.timeout.as_deref() {
+            if self.namespace != "subagents" {
+                return Err(DefinitionErr::new(
+                    path,
+                    "sets `timeout:`, which only a subagent definition takes; remove it, or move \
+                     the definition to subagents/",
+                ));
+            }
+            let timeout = crate::utils::time::parse_compact_duration(value).map_err(|_| {
+                DefinitionErr::new(
+                    path,
+                    format!(
+                        "sets `timeout: {value}`, which is not a duration; write one whole \
+                         number and a unit, s, m, h, or d, such as 90m"
+                    ),
+                )
+            })?;
+            profile.timeout = Some(timeout);
+        }
         if let Some(crate::config::KeepWarmPolicy::Block(fields)) = &fm.keep_warm
             && let Some(clause) = &fields.while_clause
         {

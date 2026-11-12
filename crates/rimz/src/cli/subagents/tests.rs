@@ -157,10 +157,7 @@ fn launch_implies_supervised_background_defaults() {
         "--isolation",
         "scoped",
     ]);
-    let launch = args
-        .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
-        .expect("launch payload");
+    let launch = args.launch.into_agent_launch().expect("launch payload");
     assert!(launch.self_cleanup_on_completion);
     let agents = AgentsHarness::try_parse_from([
         "rimz",
@@ -173,8 +170,6 @@ fn launch_implies_supervised_background_defaults() {
         "scoped",
         "-p",
         "--bg",
-        "--timeout",
-        "30m",
     ])
     .expect("parse equivalent agents launch")
     .args;
@@ -183,9 +178,6 @@ fn launch_implies_supervised_background_defaults() {
     assert!(launch.subagent);
     assert_eq!(launch.prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
-
-    agents.launch.warn = vec![Duration::from_secs(600), Duration::from_secs(300)];
-    agents.launch.grace = Some(Duration::from_secs(300));
     assert_eq!(launch, agents.launch);
 }
 
@@ -193,29 +185,15 @@ fn launch_implies_supervised_background_defaults() {
 fn waited_launch_still_desugars_to_a_background_run() {
     let args = parse(&["rimz", "claude", "review this", "--wait"]);
     assert_eq!(args.launch.wait, Some(None));
-    let launch = args
-        .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
-        .expect("launch payload");
-    let agents = AgentsHarness::try_parse_from([
-        "rimz",
-        "claude",
-        "review this",
-        "-p",
-        "--bg",
-        "--timeout",
-        "30m",
-    ])
-    .expect("parse equivalent agents launch")
-    .args;
+    let launch = args.launch.into_agent_launch().expect("launch payload");
+    let agents = AgentsHarness::try_parse_from(["rimz", "claude", "review this", "-p", "--bg"])
+        .expect("parse equivalent agents launch")
+        .args;
     let mut agents = agents;
     agents.launch.self_cleanup_on_completion = true;
     assert!(launch.subagent);
     assert_eq!(launch.prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
-
-    agents.launch.warn = vec![Duration::from_secs(600), Duration::from_secs(300)];
-    agents.launch.grace = Some(Duration::from_secs(300));
     assert_eq!(launch, agents.launch);
 }
 
@@ -229,7 +207,7 @@ fn wait_uses_an_optional_equals_duration() {
     assert_eq!(swallowed.launch.prompt.as_deref(), Some("5m"));
     let error = swallowed
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_agent_launch()
         .expect_err("space-form duration must not become the prompt");
     assert!(error.to_string().contains("did you mean `--wait=5m`?"));
 }
@@ -310,7 +288,6 @@ fn fanout_task_matches_the_single_launch_surface() {
             "description": "checks auth"
         }]"#,
         &fanout,
-        &rimz::config::SubagentsConfig::default(),
     )
     .expect("fanout launch");
     let agents = AgentsHarness::try_parse_from([
@@ -345,50 +322,7 @@ fn fanout_task_matches_the_single_launch_surface() {
     assert!(launches[0].subagent);
     assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
-
-    agents.launch.warn = Vec::new();
-    agents.launch.grace = Some(Duration::from_secs(300));
     assert_eq!(launches, vec![agents.launch]);
-}
-
-#[test]
-fn fanout_timeout_precedence_is_task_then_flag_then_config() {
-    let Some(SubagentsSubcmd::Fanout(flagged)) =
-        parse(&["rimz", "fanout", "--timeout", "10m"]).command
-    else {
-        panic!("fanout command");
-    };
-    let defaults = rimz::config::SubagentsConfig {
-        timeout: "20m".to_owned(),
-        ..Default::default()
-    };
-
-    let task = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one","timeout":"5m"}]"#,
-        &flagged,
-        &defaults,
-    )
-    .expect("task timeout");
-    assert_eq!(task[0].timeout, Some(Duration::from_secs(5 * 60)));
-
-    let flag = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one"}]"#,
-        &flagged,
-        &defaults,
-    )
-    .expect("flag timeout");
-    assert_eq!(flag[0].timeout, Some(Duration::from_secs(10 * 60)));
-
-    let Some(SubagentsSubcmd::Fanout(unflagged)) = parse(&["rimz", "fanout"]).command else {
-        panic!("fanout command");
-    };
-    let config = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one"}]"#,
-        &unflagged,
-        &defaults,
-    )
-    .expect("config timeout");
-    assert_eq!(config[0].timeout, Some(Duration::from_secs(20 * 60)));
 }
 
 #[test]
@@ -396,95 +330,85 @@ fn fanout_validates_the_whole_task_list_before_launch() {
     let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout command");
     };
-    let defaults = rimz::config::SubagentsConfig::default();
 
-    let empty = parse_fanout_launches("[]", &fanout, &defaults).expect_err("empty task list");
+    let empty = parse_fanout_launches("[]", &fanout).expect_err("empty task list");
     assert!(empty.to_string().contains("at least one task"));
 
-    let missing_prompt = parse_fanout_launches(r#"[{"profile":"codex"}]"#, &fanout, &defaults)
-        .expect_err("missing prompt");
+    let missing_prompt =
+        parse_fanout_launches(r#"[{"profile":"codex"}]"#, &fanout).expect_err("missing prompt");
     assert!(format!("{missing_prompt:#}").contains("task 1"));
     assert!(format!("{missing_prompt:#}").contains("prompt from the parent"));
 
     let conflicting_prompt = parse_fanout_launches(
         r#"[{"profile":"codex","prompt":"inline","prompt_file":"prompt.md"}]"#,
         &fanout,
-        &defaults,
     )
     .expect_err("conflicting prompt sources");
     assert!(format!("{conflicting_prompt:#}").contains("both `prompt` and `prompt_file`"));
 }
 
 #[test]
-fn deadline_warn_and_grace_precedence_and_disabling() {
-    let defaults = rimz::config::SubagentsConfig {
-        timeout: "20m".into(),
-        warn: vec!["8m".into(), "4m".into()],
-        grace: "4m".into(),
-    };
-    let Some(SubagentsSubcmd::Fanout(flagged)) =
-        parse(&["rimz", "fanout", "--warn", "6m,3m", "--grace", "2m"]).command
+fn deadline_task_values_win_over_fanout_flags_and_unset_stays_unset() {
+    let Some(SubagentsSubcmd::Fanout(flagged)) = parse(&[
+        "rimz",
+        "fanout",
+        "--timeout",
+        "10m",
+        "--warn",
+        "6m,3m",
+        "--grace",
+        "2m",
+    ])
+    .command
     else {
         panic!("fanout")
     };
     let task = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one","warn":["1m"],"grace":"1m"}]"#,
+        r#"[{"profile":"codex","prompt":"one","timeout":"5m","warn":["1m"],"grace":"1m"}]"#,
         &flagged,
-        &defaults,
     )
     .unwrap();
-    assert_eq!(task[0].warn, [Duration::from_secs(60)]);
+    assert_eq!(task[0].timeout, Some(Duration::from_secs(300)));
+    assert_eq!(task[0].warn, Some(vec![Duration::from_secs(60)]));
     assert_eq!(task[0].grace, Some(Duration::from_secs(60)));
-    let flag = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one"}]"#,
-        &flagged,
-        &defaults,
-    )
-    .unwrap();
+    let flag = parse_fanout_launches(r#"[{"profile":"codex","prompt":"one"}]"#, &flagged).unwrap();
+    assert_eq!(flag[0].timeout, Some(Duration::from_secs(600)));
     assert_eq!(
         flag[0].warn,
-        [Duration::from_secs(360), Duration::from_secs(180)]
+        Some(vec![Duration::from_secs(360), Duration::from_secs(180)])
     );
     assert_eq!(flag[0].grace, Some(Duration::from_secs(120)));
     let Some(SubagentsSubcmd::Fanout(unflagged)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout")
     };
-    let config = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one"}]"#,
-        &unflagged,
-        &defaults,
-    )
-    .unwrap();
+    // Unset reaches the launcher as unset, where the definition and
+    // `[agents.subagents]` fill it.
+    let unset =
+        parse_fanout_launches(r#"[{"profile":"codex","prompt":"one"}]"#, &unflagged).unwrap();
     assert_eq!(
-        config[0].warn,
-        [Duration::from_secs(480), Duration::from_secs(240)]
+        (unset[0].timeout, unset[0].warn.clone(), unset[0].grace),
+        (None, None, None)
     );
-    assert_eq!(config[0].grace, Some(Duration::from_secs(240)));
     let disabled = parse_fanout_launches(
         r#"[{"profile":"codex","prompt":"one","warn":[],"grace":"0s"}]"#,
         &flagged,
-        &defaults,
     )
     .unwrap();
-    assert!(disabled[0].warn.is_empty());
-    assert_eq!(disabled[0].grace, None);
+    assert_eq!(disabled[0].warn, Some(Vec::new()));
+    assert_eq!(disabled[0].grace, Some(Duration::ZERO));
     let Some(SubagentsSubcmd::Fanout(disabled)) =
         parse(&["rimz", "fanout", "--warn", "none", "--grace", "0s"]).command
     else {
         panic!("fanout")
     };
-    let disabled = parse_fanout_launches(
-        r#"[{"profile":"codex","prompt":"one"}]"#,
-        &disabled,
-        &defaults,
-    )
-    .unwrap();
-    assert!(disabled[0].warn.is_empty());
-    assert_eq!(disabled[0].grace, None);
+    let disabled =
+        parse_fanout_launches(r#"[{"profile":"codex","prompt":"one"}]"#, &disabled).unwrap();
+    assert_eq!(disabled[0].warn, Some(Vec::new()));
+    assert_eq!(disabled[0].grace, Some(Duration::ZERO));
 }
 
 #[test]
-fn warning_offsets_normalize_before_launch() {
+fn ladder_flags_reach_the_launch_as_given() {
     let launch = parse(&[
         "rimz",
         "claude",
@@ -497,13 +421,18 @@ fn warning_offsets_normalize_before_launch() {
         "0s",
     ])
     .launch
-    .into_agent_launch(&rimz::config::SubagentsConfig::default())
+    .into_agent_launch()
     .unwrap();
+    assert_eq!(launch.timeout, Some(Duration::from_secs(300)));
     assert_eq!(
         launch.warn,
-        [Duration::from_secs(180), Duration::from_secs(60)]
+        Some(
+            [0, 300, 360, 180, 60, 180]
+                .map(Duration::from_secs)
+                .to_vec()
+        )
     );
-    assert_eq!(launch.grace, None);
+    assert_eq!(launch.grace, Some(Duration::ZERO));
     assert!(
         AgentsHarness::try_parse_from(["rimz", "claude", "task", "-p", "--warn", "1m"]).is_err()
     );
@@ -514,24 +443,18 @@ fn warning_offsets_normalize_before_launch() {
 
 #[test]
 fn invalid_deadline_durations_fail_before_any_launch() {
-    let defaults = rimz::config::SubagentsConfig {
-        grace: "0".into(),
-        ..Default::default()
-    };
-    let launch = parse(&["rimz", "claude", "task"])
-        .launch
-        .into_agent_launch(&defaults);
-    assert!(launch.is_err(), "bare zero grace must fail");
-    assert!(format!("{:#}", launch.unwrap_err()).contains("agents.subagents.grace"));
     let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout")
     };
-    for invalid in [r#""grace":"0""#, r#""warn":["bad"]"#] {
+    for invalid in [
+        r#""grace":"0""#,
+        r#""warn":["bad"]"#,
+        r#""timeout":"1h30m""#,
+    ] {
         let tasks = format!(
             r#"[{{"profile":"codex","prompt":"one"}},{{"profile":"codex","prompt":"two",{invalid}}}]"#
         );
-        let result =
-            parse_fanout_launches(&tasks, &fanout, &rimz::config::SubagentsConfig::default());
+        let result = parse_fanout_launches(&tasks, &fanout);
         assert!(result.is_err(), "{invalid}");
         assert!(format!("{:#}", result.unwrap_err()).contains("task 2"));
     }
@@ -547,7 +470,6 @@ fn caller_chosen_subagent_names_are_rejected() {
     let error = parse_fanout_launches(
         r#"[{"profile":"codex","prompt":"one","name":"auth"}]"#,
         &fanout,
-        &rimz::config::SubagentsConfig::default(),
     )
     .expect_err("caller-chosen fanout name");
     assert!(format!("{error:#}").contains("unknown field `name`"));
@@ -558,12 +480,8 @@ fn fanout_rejects_the_retired_spec_key() {
     let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
         panic!("fanout command");
     };
-    let error = parse_fanout_launches(
-        r#"[{"spec":"codex","prompt":"one"}]"#,
-        &fanout,
-        &rimz::config::SubagentsConfig::default(),
-    )
-    .expect_err("retired spec key");
+    let error = parse_fanout_launches(r#"[{"spec":"codex","prompt":"one"}]"#, &fanout)
+        .expect_err("retired spec key");
     let error = format!("{error:#}");
 
     assert!(error.contains("unknown field `spec`"));
@@ -602,7 +520,7 @@ fn yolo_launch_flag_maps_to_the_supervised_permission_override() {
             None => args.launch,
             _ => panic!("launch command"),
         }
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_agent_launch()
         .unwrap();
         assert!(launch.overrides.yolo);
         assert!(!launch.overrides.ask);
@@ -610,7 +528,7 @@ fn yolo_launch_flag_maps_to_the_supervised_permission_override() {
     }
     let launch = parse(&["rimz", "codex", "work", "--", "--yolo"])
         .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .into_agent_launch()
         .unwrap();
     assert!(!launch.overrides.yolo);
     assert_eq!(launch.overrides.passthrough, ["--yolo"]);
@@ -629,10 +547,7 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
     let prompt_path = prompt_path.to_string_lossy();
 
     let args = parse(&["rimz", "codex", "--prompt-file", &prompt_path]);
-    let launch = args
-        .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
-        .expect("file-backed launch");
+    let launch = args.launch.into_agent_launch().expect("file-backed launch");
     assert_eq!(launch.prompt.as_deref(), Some("review the parser"));
 
     let Some(SubagentsSubcmd::Fanout(fanout)) = parse(&["rimz", "fanout"]).command else {
@@ -642,8 +557,7 @@ fn prompt_files_resolve_for_single_launch_and_fanout() {
         r#"[{{"profile":"codex","prompt_file":{}}}]"#,
         serde_json::to_string(prompt_path.as_ref()).expect("json path")
     );
-    let launches = parse_fanout_launches(&raw, &fanout, &rimz::config::SubagentsConfig::default())
-        .expect("file-backed fanout");
+    let launches = parse_fanout_launches(&raw, &fanout).expect("file-backed fanout");
     assert_eq!(launches[0].prompt.as_deref(), Some("review the parser"));
 
     assert!(
@@ -687,6 +601,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
             effort: None,
             fast: None,
             budget: None,
+            timeout: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
@@ -719,6 +634,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
             effort: Some("high".to_owned()),
             fast: None,
             budget: None,
+            timeout: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
@@ -751,6 +667,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
             effort: None,
             fast: None,
             budget: None,
+            timeout: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
@@ -808,10 +725,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
 #[test]
 fn launch_requires_parent_prompt() {
     let args = parse(&["rimz", "claude"]);
-    let error = args
-        .launch
-        .into_agent_launch(&rimz::config::SubagentsConfig::default())
-        .expect_err("missing prompt");
+    let error = args.launch.into_agent_launch().expect_err("missing prompt");
     assert!(error.to_string().contains("prompt from the parent"));
 }
 

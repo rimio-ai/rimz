@@ -103,6 +103,8 @@ pub enum CellNotice {
 pub struct AgentCell {
     pub notices: Vec<CellNotice>,
     pub empty_dir: Option<bool>,
+    /// The subagent definition's run timeout, read by the launcher's deadline ladder.
+    pub timeout: Option<std::time::Duration>,
     pub resume_model_override: bool,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
@@ -137,6 +139,7 @@ impl Cell {
         Self::Agent(AgentCell {
             notices: Vec::new(),
             empty_dir: None,
+            timeout: None,
             resume_model_override: false,
             kind,
             args: Vec::new(),
@@ -182,6 +185,7 @@ pub struct ResolvedProfile {
     kind_defaults: bool,
     filled_effort: bool,
     pub empty_dir: Option<bool>,
+    pub timeout: Option<std::time::Duration>,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
     pub(crate) variant: Option<&'static crate::agents::Variant>,
@@ -216,6 +220,7 @@ impl ResolvedProfile {
             kind: AgentKind::new_unchecked(kind),
             variant: None,
             empty_dir: None,
+            timeout: None,
             layers: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
@@ -235,6 +240,7 @@ impl ResolvedProfile {
         self.variant = self.variant.or(layer.variant);
         self.kind_defaults |= layer.kind_defaults;
         self.empty_dir = self.empty_dir.or(layer.empty_dir);
+        self.timeout = self.timeout.or(layer.timeout);
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
@@ -1694,6 +1700,7 @@ fn agent_cell_from(
         notices,
         resume_model_override: false,
         empty_dir: resolved.empty_dir,
+        timeout: resolved.timeout,
         kind: resolved.kind.clone(),
         isolation_default: resolved.isolation_default,
         args,
@@ -2428,6 +2435,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
     original.isolation_default = original.isolation_default.or(base.isolation_default);
     original.empty_dir = original.empty_dir.or(base.empty_dir);
+    original.timeout = original.timeout.or(base.timeout);
     original.launch.mode = original.launch.mode.or(base.launch.mode);
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);

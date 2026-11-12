@@ -5061,7 +5061,9 @@ allowed-dependencies = []
 # Coarse durations serve pending-wait activity and prompt-cache notices.
 # The accounts preview and provider holds share local wall-clock formatting (+1).
 # format_duration_bound shares exact s/ms bounds between mux errors and room probes (+1).
-surface-budget = 19
+# parse_compact_duration is the one s/m/h/d grammar for the CLI ladder flags, subagent
+# definition timeouts, and the [agents.subagents] defaults (+1).
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
@@ -10684,6 +10686,11 @@ reason = "Variant payload of the pub disk::paths error (disk/paths.rs:41); priva
 kind = "item"
 key = "utils::time::TimeInputErr"
 reason = "Error of the pub parse_duration_units (utils/time.rs:103) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "utils::time::parse_compact_duration"
+reason = "The one s/m/h/d deadline-ladder grammar: the CLI's --timeout/--warn/--grace parser, subagent definition `timeout:`, and the launcher's [agents.subagents] defaults read it."
 
 [[verdict]]
 kind = "item"

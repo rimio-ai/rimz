@@ -413,3 +413,54 @@ fn termination_slot_is_armed_before_the_pending_record_is_written() {
         RunStatus::Pending
     );
 }
+
+#[test]
+fn a_definition_timeout_reaches_the_subagent_run_record() {
+    let fixture = Fixture::new();
+    let mut request = crate::harness::run::SupervisedRunRequest::new(
+        "worker".into(),
+        "Read the brief.".into(),
+        None,
+        crate::agents::ManagedLaunchState::PendingResolution,
+    );
+    request.subagent = true;
+    let ladder = super::super::supervised::resolve_deadline_ladder(
+        &request,
+        Some(std::time::Duration::from_secs(10 * 60)),
+        &crate::config::SubagentsConfig::default(),
+        jiff::Timestamp::now(),
+    )
+    .unwrap();
+    let mut leader = fixture.leader();
+    leader.subagent = true;
+    leader.timeout = Some(ladder.timeout);
+    leader.warn = ladder.warn;
+    leader.grace = Some(ladder.grace);
+    let backend = fake_backend::Backend::default();
+    let LaunchOutcome::Opened(opened) = open_fresh(
+        fixture.fresh.clone(),
+        Some(leader),
+        &mut Unattended,
+        &backend,
+    )
+    .unwrap() else {
+        panic!("launch did not open");
+    };
+    let run = opened.run.unwrap();
+    let record = crate::harness::run::load(run.store.paths(), &run.record.run_id).unwrap();
+    let ten = std::time::Duration::from_secs(10 * 60);
+    assert_eq!(
+        (
+            record.timeout,
+            record.warn,
+            record.grace,
+            record.deadline_at
+        ),
+        (
+            Some(ten),
+            vec![std::time::Duration::from_secs(5 * 60)],
+            Some(std::time::Duration::from_secs(5 * 60)),
+            Some(record.started_at.checked_add(ten).unwrap()),
+        )
+    );
+}

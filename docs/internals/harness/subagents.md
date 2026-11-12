@@ -35,7 +35,7 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 
 ## What a launch desugars to
 
-`rimz subagents <profile> <prompt>` builds an ordinary `AgentLaunchArgs` in `SubagentLaunchArgs::into_agent_launch` and hands it to `launch_supervised_background`, the same background launcher a fanout uses.
+`rimz subagents <profile> <prompt>` builds an ordinary `AgentLaunchArgs` in `SubagentLaunchArgs::into_agent_launch` and hands it to `launch_supervised_background`, the same background launcher a fanout uses. The arguments carry only the ladder values the launch set (`SupervisedRunRequest.warn` is optional so `--warn none` stays distinct from unset). Supervised preparation fills the rest once the profile resolves: `crates/rimz/src/launcher/supervised.rs::resolve_deadline_ladder` takes the launch value, then the definition's `timeout:` (carried on `AgentCell.timeout` through chain flattening and the `--agent` re-base), then `[agents.subagents]`, filters the warn offsets against the final timeout, and refuses a malformed table string (naming its `agents.subagents.<key>`) or an overflowing kill bound before any run record or pane exists. The resolved values reach the run record where they always did.
 
 | Field | Value | Why |
 | --- | --- | --- |
@@ -44,8 +44,8 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `subagent` | always `true` | selects the parent stamp, profile namespace, pane zone, and no-delegation rules below |
 | `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Supervised preparation stores `self_cleanup_on_completion && !keep` as the leader's `cleanup` (`crates/rimz/src/launcher/supervised.rs::prepare`) |
 | `keep` | `--keep`, default false | turns automatic completion cleanup off and holds the pane past provider exit until the parent ends or Ctrl-C, under a live parent watch |
-| `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a terminal run awaiting receipt |
-| `warn` | `--warn`, else `[agents.subagents] warn`, default `["10m", "5m"]` | normalized offsets before the soft bound |
+| `timeout` | `--timeout`, else the profile's `timeout:`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a terminal run awaiting receipt |
+| `warn` | `--warn`, else `[agents.subagents] warn`, default `["10m", "5m"]` | offsets before the soft bound, normalized against the final timeout |
 | `grace` | `--grace`, else `[agents.subagents] grace`, default `5m` | reporting time before the producer kills the run. Zero is stored absent |
 | `report_to` | `launcher` | see [which runs a fleet owes](#which-runs-a-fleet-owes) for `nobody` |
 | join | none unless `--wait[=DURATION]` | the parent normally keeps moving. The duration limits only the caller's join |
@@ -77,9 +77,9 @@ Both caps apply only where the planner sees `subagent` set, and at parent-messag
 
 ## Fanout
 
-`rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. For each of `timeout`, `warn`, and `grace`, a task's value wins over the fanout flag, which wins over the configured default. Fanout-level `--keep` applies to every task. Permission mode, isolation, wait, retention, and passthrough argv are not per-task fields, and the task format rejects unknown fields. Every task still passes the planner's [parent caps](#the-parent-caps-a-childs-posture).
+`rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. For each of `timeout`, `warn`, and `grace`, a task's value wins over the fanout flag; an unset value is left for supervised preparation, where the timeout takes the child definition's `timeout:` before the configured default. Fanout-level `--keep` applies to every task. Permission mode, isolation, wait, retention, and passthrough argv are not per-task fields, and the task format rejects unknown fields. Every task still passes the planner's [parent caps](#the-parent-caps-a-childs-posture).
 
-The whole array is validated before the first side effect: parsing, a nonempty array, required fields, every `prompt_file` read, every deadline duration, and every task's `cwd` and `add_dirs` resolved against the room (`parse_fanout_launches`, then `resolve_launch_cwd` per path in `crates/rimz/src/cli/subagents/mod.rs::fanout_children`). A validation failure launches nothing. Pane opens then run one at a time in the caller process, so two backend splits never race against the same anchor pane. Each child process starts as soon as its pane opens, so the children run in parallel.
+The whole array is validated before the first side effect: parsing, a nonempty array, required fields, every `prompt_file` read, every task and flag deadline duration, and every task's `cwd` and `add_dirs` resolved against the room (`parse_fanout_launches`, then `resolve_launch_cwd` per path in `crates/rimz/src/cli/subagents/mod.rs::fanout_children`). A validation failure launches nothing. Pane opens then run one at a time in the caller process, so two backend splits never race against the same anchor pane. Each child process starts as soon as its pane opens, so the children run in parallel.
 
 The supervised runner returns each child's minted petname and run id to the command. Fanout therefore collects identities directly instead of diffing store snapshots, which another launch in the same family could confuse.
 

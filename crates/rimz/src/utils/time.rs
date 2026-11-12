@@ -154,6 +154,20 @@ pub fn parse_duration_units(raw: &str, allowed: &[DurationUnit]) -> Result<Durat
     Ok(unit.duration(amount))
 }
 
+/// Parse one whole number and one of `s`/`m`/`h`/`d`, the grammar of a supervised run's
+/// deadline ladder and of durable-record durations.
+pub fn parse_compact_duration(raw: &str) -> Result<Duration> {
+    parse_duration_units(
+        raw,
+        &[
+            DurationUnit::Second,
+            DurationUnit::Minute,
+            DurationUnit::Hour,
+            DurationUnit::Day,
+        ],
+    )
+}
+
 /// Render a span in the largest of `d`/`h`/`m`/`s` that divides it exactly,
 /// the inverse of [`parse_duration_units`] for whole seconds.
 pub fn format_duration_compact(duration: Duration) -> String {
@@ -179,7 +193,7 @@ pub fn format_duration_bound(duration: Duration) -> String {
 /// Serde adapters for compact, whole-second durations in durable records.
 pub(crate) mod duration_serde {
     use crate::utils::time::{
-        DurationUnit, Result, TimeInputErr, format_duration_compact, parse_duration_units,
+        Result, TimeInputErr, format_duration_compact, parse_compact_duration,
     };
     use serde::{Deserialize, Serialize};
     use std::time::Duration;
@@ -192,16 +206,7 @@ pub(crate) mod duration_serde {
         type Error = TimeInputErr;
 
         fn try_from(value: String) -> Result<Self> {
-            parse_duration_units(
-                &value,
-                &[
-                    DurationUnit::Second,
-                    DurationUnit::Minute,
-                    DurationUnit::Hour,
-                    DurationUnit::Day,
-                ],
-            )
-            .map(Self)
+            parse_compact_duration(&value).map(Self)
         }
     }
 

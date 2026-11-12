@@ -186,7 +186,9 @@ pub struct SupervisedRunRequest {
     pub budget: Option<crate::harness::budget::BudgetSpec>,
     pub max_turns: Option<u32>,
     pub timeout: Option<std::time::Duration>,
-    pub warn: Vec<std::time::Duration>,
+    /// `None` takes `[agents.subagents] warn` on a subagent launch; an empty list disables
+    /// warnings.
+    pub warn: Option<Vec<std::time::Duration>>,
     pub grace: Option<std::time::Duration>,
     pub keep: bool,
     pub report_to: ReportTo,
@@ -245,7 +247,7 @@ impl SupervisedRunRequest {
             budget: None,
             max_turns: None,
             timeout: None,
-            warn: Vec::new(),
+            warn: None,
             grace: None,
             keep: false,
             report_to: ReportTo::Launcher,

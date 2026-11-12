@@ -2,6 +2,7 @@ use super::resolve::{check_supervised_subagent_allowed, launch_login, supervised
 use super::*;
 use crate::agents::{AgentDefinition, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
 use crate::harness::run::SupervisedRunRequest;
+use std::time::Duration;
 
 pub(super) fn prepare_run_layout(
     request: LayoutRequest,
@@ -274,6 +275,21 @@ fn prepare(
         .agent_cells()
         .nth(leader_index)
         .context("run-bearing layout needs an agent leader")?;
+    let (timeout, warn, grace) = if run_layout.is_none() && request.subagent {
+        let ladder = resolve_deadline_ladder(
+            request,
+            agent_cell.timeout,
+            &machine_config.agents.subagents,
+            jiff::Timestamp::now(),
+        )?;
+        (Some(ladder.timeout), ladder.warn, Some(ladder.grace))
+    } else {
+        (
+            request.timeout,
+            request.warn.clone().unwrap_or_default(),
+            request.grace,
+        )
+    };
     let adapter = crate::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     if !add_dirs.is_empty() && !adapter.supports_added_dirs() {
@@ -633,12 +649,12 @@ fn prepare(
             lifecycle: crate::store::run::RunLifecycle::Turn,
             keep: request.keep,
             report_to: request.report_to,
-            timeout: request.timeout,
+            timeout,
             retry_of: None,
             cleanup: request.self_cleanup_on_completion && !request.keep,
             subagent: request.subagent,
-            warn: request.warn.clone(),
-            grace: request.grace,
+            warn,
+            grace,
             loop_task: request.loop_task.clone(),
             workflow: request.workflow.clone(),
             reminder_section: request.reminder_section.clone(),
@@ -759,6 +775,56 @@ fn preflight_program(
     };
     crate::agents::version::check_launch_version_floor(adapter, &path)?;
     Ok(())
+}
+
+/// A subagent run's resolved deadline ladder, as its run record stores it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct DeadlineLadder {
+    pub(super) timeout: Duration,
+    pub(super) warn: Vec<Duration>,
+    pub(super) grace: Duration,
+}
+
+/// Resolve a subagent launch's ladder: the launch's own values, then the definition's timeout,
+/// then `[agents.subagents]`. Warn offsets are kept only strictly inside the final timeout,
+/// longest first, since the deadline check trusts the stored list.
+pub(super) fn resolve_deadline_ladder(
+    request: &SupervisedRunRequest,
+    definition_timeout: Option<Duration>,
+    defaults: &crate::config::SubagentsConfig,
+    now: jiff::Timestamp,
+) -> Result<DeadlineLadder> {
+    let parse = |raw: &str, key: &str| {
+        crate::utils::time::parse_compact_duration(raw)
+            .with_context(|| format!("parsing agents.subagents.{key}"))
+    };
+    let timeout = match request.timeout.or(definition_timeout) {
+        Some(timeout) => timeout,
+        None => parse(&defaults.timeout, "timeout")?,
+    };
+    let mut warn = match &request.warn {
+        Some(warn) => warn.clone(),
+        None => defaults
+            .warn
+            .iter()
+            .map(|offset| parse(offset, "warn"))
+            .collect::<Result<_>>()?,
+    };
+    warn.retain(|offset| !offset.is_zero() && *offset < timeout);
+    warn.sort_unstable_by(|a, b| b.cmp(a));
+    warn.dedup();
+    let grace = match request.grace {
+        Some(grace) => grace,
+        None => parse(&defaults.grace, "grace")?,
+    };
+    now.checked_add(timeout)
+        .and_then(|deadline| deadline.checked_add(grace))
+        .context("computing subagent kill deadline")?;
+    Ok(DeadlineLadder {
+        timeout,
+        warn,
+        grace,
+    })
 }
 
 #[cfg(test)]
