@@ -297,7 +297,7 @@ def finished_repair_lanes(trees, open_heads):
 
 
 def occupied_repair_lane(report, finished):
-    if report["schema"] != 1:
+    if report["schema"] != 2:
         raise RuntimeError("Unsupported rimz agents JSON schema; update the coordinator")
     return [agent["handle"] for agent in report["agents"]
             if (agent["placement"]["branch"] or "").startswith(PREFIX) and agent["placement"]["pane"]
