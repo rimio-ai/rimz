@@ -493,8 +493,7 @@ fn quiet_unlanded_success() -> SidebarSnapshot {
 fn attention_sorts_on_enrichment_bits_before_unread_writes_its_own() {
     let (_dir, ordered_runtime) = runtime();
     let mut snapshot = quiet_unlanded_success();
-    crate::sidebar::attention::reconcile_snapshot(&ordered_runtime, &mut snapshot);
-    reconcile_snapshot(&ordered_runtime, &mut snapshot);
+    crate::sidebar::engine::reconcile_final_fold(&ordered_runtime, &mut snapshot);
     assert!(snapshot.worktree_groups[0].inactive.is_some());
     assert!(snapshot.worktree_groups[0].rows[0].unread);
 
