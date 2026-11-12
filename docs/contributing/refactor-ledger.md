@@ -4,11 +4,11 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `99e760639`, pass 33d: 7050 scoped commits (pace window 1763), 24 admission intents, 240 holds; no parse failures, ledger problems, ambiguous verdict keys or pending restamps. One stale key remains, `guard:$0Some($1)=&$2.degraded`: its family forms only under `survey --all`, below the finding gate. Left open: one shape family, the `cli` table renderers (`crates/rimz/src/cli/accounts/report.rs::write_comparison`, `crates/rimz/src/cli/agents_cmd/explain.rs::render_explain` and 13 siblings).
+- **Survey:** base `38e854c74`, pass 33f: 7159 scoped commits (pace window 1790), 24 admission intents, 240 holds; no parse failures, ledger problems or ambiguous verdict keys. Stale keys: `guard:$0Some($1)=&$2.degraded` (its family forms only under `survey --all`, below the finding gate), `item:harness::schedule::runner::CheckTrip` and `item:harness::schedule::runner::PreparedSpawn`. Pending restamps on rows this pass left alone: `message`, `sidebar_pane/render/sections`, `sidebar_pane/render/ui_state`, `store/snapshot/view`, `store/snapshot/row`. Left open: four shape families, led by the mux backends' window and split commands (`crates/rimz/src/mux/tmux/backend.rs`, `crates/rimz/src/mux/zellij/backend.rs`) and the `cli/teams/cohort.rs` locked workflow verbs.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Reopened:** 60 rank rows reached their reopen count, led by `mux/zellij`, `agents/adapters/claude`, `sidebar/refresh`, `mux/tmux` and `message`.
-- **Never reviewed:** 150 library rank rows carry no hold, led by `launcher`, `harness/schedule/runner`, `sidebar_pane/app/loop_state` and `lsp/broker`; some ledger rows (`harness/schedule`, `lsp`, `store/snapshot`) sit above the granularity the survey ranks and so hold no rank row. Binary modules and test-only rows carry no hold.
-- **Unreviewed admissions:** the `crates/rimz/src/message` and `crates/rimz/src/message/send.rs` rules' upward edge to `harness::hibernate` (2 sites each); no unadmitted upward sites.
+- **Reopened:** 62 rank rows reached their reopen count, led by `mux/zellij`, `agents/adapters/claude`, `sidebar/refresh`, `mux/tmux` and `store/writer`.
+- **Never reviewed:** 165 library rank rows carry no hold, led by `sidebar_pane/app/loop_state`, `launcher`, `harness/schedule/runner` and `agents/adapters/codex/(root)`; some ledger rows (`harness/schedule`, `lsp`, `store/snapshot`) sit above the granularity the survey ranks and so hold no rank row. Binary modules and test-only rows carry no hold.
+- **Unreviewed admissions:** the `crates/rimz/src/message` and `crates/rimz/src/message/send.rs` rules' upward edge to `harness::hibernate` (2 sites each), and the `crates/rimz/src/config` rule's edges to `harness::surplus` (2), `harness::name` (1) and `harness::signal` (1); no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `agents ↔ trust`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree` and `harness ↔ room`.
 - **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 31, `cli/agents_cmd/mod.rs` 23, `cli/transcript` 18, `cli/room` 12, `cli/agents_cmd/exec.rs` 4); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
@@ -183,7 +183,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
 | `sandbox` | holds; landed pass-28f; pass-31d | `2f84d791a` | 30 | launch preflight admits skills before probing isolation; callers run `plan` then `apply`. |
 | `sidebar` | landed pass-4 | — | — | fusion, host refresh lanes, own cadences; interiors have rows. |
-| `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
+| `sidebar/(root)` | holds; landed pass-23c; pass-33f | `2958a8190` | 30 | one data plane; final folds reconcile runtime records only through `engine::reconcile_final_fold`, and `attention` is private; `pub` items are binary, bench or integration reached, or signature floors. |
 | `sidebar/refresh` | holds; landed pass-29e | `eb03b2204` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
 | `sidebar/consumer` | holds; landed pass-23c | `1830bd0c6` | 30 | published-cache readers; renderer adoption and its bench retired. |
 | `sidebar/frame` | holds; landed pass-23c | `1830bd0c6` | 30 | `PaneFrame` wire public field by field. |
@@ -192,9 +192,9 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/observe` | holds; landed pass-20b | `b96a0f293` | 30 | `observe_into` owns detection, send and drop accounting. |
 | `sidebar/presence` | holds; landed pass-20b | `b96a0f293` | 30 | `ingest_zellij_wake` is one transaction. |
 | `sidebar/notify` | holds; landed pass-20b | `b96a0f293` | 30 | debounce, link-health episodes and delivery are distinct policies. |
-| `sidebar/timing` | holds; landed pass-23c; pass-24c | `e083557ba` | 30 | three cadences narrowed; the rest hold with `sidebar/(root)`. |
+| `sidebar/timing` | holds; landed pass-23c; pass-24c; pass-33f | `2958a8190` | 30 | the cadences and TTLs the lanes and the renderer share; a bound one module owns lives with it. |
 | `sidebar/cache` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
-| `sidebar/unread` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
+| `sidebar/unread` | holds; landed pass-23c; pass-33f | `2958a8190` | 30 | the reconciler and `UnreadEpisodes::reconcile` are `pub(super)`; `ReconcileOutcome` floors the entry. |
 | `sidebar/read_marks` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/fuse` | holds; landed pass-23c; pass-33b | `fa35aa62a` | 30 | command events reach rows only through the snapshot's tenant transition, so fusion keeps no carry list. |
 | `sidebar/meter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
@@ -202,7 +202,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/body_filter` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/agent_projection` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar/workspace_projection` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
-| `sidebar_pane/app` | holds; landed pass-26b; pass-33e | `608d58716` | 30 | loop clock mechanics consume one render animation answer; selection dispatch arms issue every viewport request and its helpers stay private. |
+| `sidebar_pane/app` | holds; landed pass-26b; pass-33e; pass-33f | `2958a8190` | 30 | loop clock mechanics consume one render animation answer; selection dispatch arms issue every viewport request and its helpers stay private; fetch and playback reach final-fold reconciliation through one sidebar entry; work budgets live with their readers. |
 | `sidebar_pane/pets` | holds; landed pass-22a | `1b6ece679` | 30 | preview types `pub` for the CLI. |
 | `sidebar_pane/pixel` | holds; landed pass-22a; pass-28b | `83b184ffb` | 30 | placeholder encoding lives in the leaf `pixel_wire`. |
 | `sidebar_pane/supervise` | holds; landed pass-22a | `1b6ece679` | 30 | supervisor entry points `pub` for the CLI. |
@@ -312,4 +312,7 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `agent_activity` ↔ `store/sidecar`: `agent_activity::read_for_keys_with_holds` and `store::sidecar::read_for_keys_with_holds` are near-duplicate keyed stat-gated readers (per-path stamp, deferred holds, prune to the queried keys); the copy that drifted kept a `(mtime, len)` key and made the held-sidecar enrich test flaky. One keyed stamp cache in `disk::parse_cache` needs a crate-visible type and atlas admissions, and the store keeps its sidecar cache private. Waits for a pass that owns `disk::parse_cache` with both callers.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
+- `sidebar_pane/app/fetch` ↔ `sidebar/engine`: notification evaluation and delivery and the room reminder (`RemindState`) stay in `FetchWorker::publish_fold`; moving them needs the engine to own notification and reminder state, and `remind.rs` is selected by file name in `xtask/src/invariants.rs::ensure_sidebar_loop_runtime_uses_driver_clock`, so a move reworks that gate. Waits for the round-34 room engine.
+- `sidebar_pane/app/fetch` ↔ `sidebar/engine`: the produced-only live-roster derivation and write is a post-publication effect gated on the fold's source and a mux listing; it needs an effect-plan shape, and playback publishes as `Produced` and must not write it. Waits for the round-34 room engine.
+- `sidebar_pane/app/fetch` ↔ `sidebar/engine`: `publish_produced_fold`'s tab names and duplicate-sidebar healing, the cycle stall stamp, and the decision that a fold is final are room policy outside the entry; the last two need the fold phase type inside `sidebar/`. Waits for the round-34 fold types.
 - Reported, not fixed: substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
