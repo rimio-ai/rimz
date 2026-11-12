@@ -670,7 +670,7 @@ fn refresh_resolved_context(
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
-        ..LocalContextRefresh::authoritative_current()
+        ..LocalContextRefresh::default()
     })
 }
 

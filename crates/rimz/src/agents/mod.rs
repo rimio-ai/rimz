@@ -1042,17 +1042,6 @@ pub struct LocalContextRefresh {
     pub spend_fold: FieldPatch<LocalSpendFold>,
 }
 
-impl LocalContextRefresh {
-    /// A current local snapshot owns the latest-turn attention markers and
-    /// reports an absent token reading while preserving an established gauge.
-    fn authoritative_current() -> Self {
-        Self {
-            context: LocalContextPatch::authoritative_current(),
-            ..Self::default()
-        }
-    }
-}
-
 /// Lifecycle fields projected by a provider-owned local session store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalSessionState {

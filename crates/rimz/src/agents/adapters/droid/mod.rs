@@ -564,7 +564,7 @@ impl crate::agents::capabilities::ContextCapability for DroidAdapter {
             },
             transcript_path: Some(refresh.transcript_path.to_string_lossy().into_owned()),
             transcript_stat: Some(refresh.stat),
-            ..LocalContextRefresh::authoritative_current()
+            ..LocalContextRefresh::default()
         })
     }
 }
