@@ -1261,7 +1261,10 @@ fn accounts_redeem_non_terminal_refuses_before_provider_reads() {
 /// starts with, and return every request with its body. One request past
 /// `count` is served and returned too when it arrives within
 /// `STRAY_REQUEST_WINDOW` of the last expected one, so a caller's count
-/// assertion fails on a request the test did not expect.
+/// assertion fails on a request the test did not expect. While fewer than
+/// `count` have arrived, the stub waits up to `EXPECTED_REQUEST_WINDOW` for
+/// the next one: a hang guard for a request that never comes, not a schedule
+/// the client must keep.
 fn serve_routes(
     routes: Vec<(&'static str, String)>,
     count: usize,
@@ -1277,6 +1280,13 @@ fn serve_routes(
 
 const STRAY_REQUEST_WINDOW: Duration = Duration::from_millis(500);
 
+/// Sized above the product's own bound on one account batch, 110 s for the
+/// `accounts.rs` callers (`query_provider_accounts`): `rimz accounts` reads
+/// usage only once every login is probed, so a slow batch on a loaded host
+/// must not outlast the stub.
+const EXPECTED_REQUEST_WINDOW: Duration = Duration::from_secs(120);
+
+/// `serve_routes` with a status per route; see it for both windows.
 pub(super) fn serve_http_routes(
     routes: Vec<(&'static str, u16, String)>,
     count: usize,
@@ -1288,7 +1298,7 @@ pub(super) fn serve_http_routes(
         let mut requests = Vec::new();
         let accept_window = |served: usize| {
             if served < count {
-                Duration::from_secs(15)
+                EXPECTED_REQUEST_WINDOW
             } else {
                 STRAY_REQUEST_WINDOW
             }
