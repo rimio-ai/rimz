@@ -15,6 +15,7 @@ pub(super) fn compose(
     record: &RunRecord,
     paths: &WorkflowPaths,
     step: &super::super::Step,
+    message: bool,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<String> {
     let mut parts = Vec::new();
@@ -25,7 +26,7 @@ pub(super) fn compose(
         let prompt = std::fs::read_to_string(file)?;
         digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
         parts.push(prompt);
-    } else if !matches!(step.kind(), Some(spec::StepKind::Message(_))) {
+    } else if !message {
         return Err(WorkflowErr::Refused(format!(
             "steps.{}.prompt-file: an agent step requires prompt-file",
             record.node
@@ -72,9 +73,9 @@ fn break_prompt(record: &RunRecord, paths: &WorkflowPaths) -> Result<String> {
         .filter_map(|entry| match &entry.event {
             JournalEvent::Evaluation { object, .. } => Some(json!({
                 "answer_or_error": object,
-                "log": entry.seq.and_then(|seq| match spec.checks.get(from)?.kind()? {
-                    spec::CheckKind::Agent(_) => Some(paths.check_output(seq)),
-                    spec::CheckKind::Run(_) | spec::CheckKind::Shell(_) => {
+                "log": entry.seq.and_then(|seq| match spec.check_kind(from)? {
+                    Kind::Judge(_) => Some(paths.check_output(seq)),
+                    Kind::Run(_) | Kind::Shell(_) => {
                         Some(paths.check_log(seq))
                     }
                     _ => None,
@@ -354,7 +355,7 @@ pub(super) type Launch = (
 pub(super) fn launch(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     (record, prompt, throttle_turn, evict): Launch,
     host: &dyn AttemptHost,
 ) -> Result<bool> {
@@ -499,7 +500,7 @@ pub(super) fn launch(
                                 node: record.node.clone(),
                                 entered_at: record.entered_at,
                                 at: t.now,
-                                target: spec.engine_target(&record.node, "invalid"),
+                                target: spec.engine_target(&record.node, "invalid").to_string(),
                                 object: t.engine_object(
                                     json!({"outcome":"died", "reason":failure.reason}),
                                 ),
@@ -521,7 +522,7 @@ pub(super) fn launch(
     finish(state, paths, spec, &record, host, reason)
 }
 
-fn detaches(spec: &WorkflowSpec, attempt: &LiveAttempt) -> bool {
+fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
     if spec.is_break(&attempt.node) {
         return true;
     }
@@ -532,7 +533,7 @@ fn detaches(spec: &WorkflowSpec, attempt: &LiveAttempt) -> bool {
 pub(super) fn finish(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     host: &dyn AttemptHost,
     reason: Option<String>,

@@ -10,8 +10,8 @@ use crate::harness::workflow::tests::{
     FakeHost, declines, evaluate, finish_judge, resolved_edges, subscription_prompts,
 };
 use crate::harness::workflow::{
-    DefinitionSource, EdgeSource, InlineDefinition, LaunchFailure, LeaderTurn, ScopeRoots,
-    Validation, WorkflowSpec, advance, create, validate,
+    Definition, DefinitionSource, EdgeSource, InlineDefinition, LaunchFailure, LeaderTurn,
+    ScopeRoots, Validation, advance, create, validate,
 };
 use crate::store::run::RunStatus;
 use crate::store::workflow::AttemptOutcome;
@@ -39,7 +39,7 @@ fn definition(name: &str, task: &LoadedTask) -> InlineDefinition {
 }
 
 /// The materialized definition's validation, written where `workflow validate` reads one.
-fn report(row: &str) -> (Validation, WorkflowSpec) {
+fn report(row: &str) -> (Validation, Definition) {
     let home = tempfile::tempdir().unwrap();
     let task = loaded("nightly", row, home.path());
     let definition = definition("nightly", &task);
@@ -63,8 +63,9 @@ fn errors(report: &Validation) -> Vec<(String, String)> {
         .collect()
 }
 
-fn route(spec: &WorkflowSpec, node: &str, outcome: &str) -> String {
+fn route(spec: &Definition, node: &str, outcome: &str) -> String {
     spec.target(node, outcome)
+        .map(|target| target.to_string())
         .unwrap_or_else(|| panic!("{node}.{outcome} has no route"))
 }
 
@@ -1031,7 +1032,7 @@ fn judge_at(node: &str) -> (crate::disk::paths::WorkflowPaths, RunRecord) {
 }
 
 fn judged(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     node: &str,
     results: &[(Result<Value, String>, &'static str)],
 ) -> String {
@@ -1411,7 +1412,7 @@ fn eject_nightly(root: &std::path::Path, workflow: &str) -> std::path::PathBuf {
 }
 
 /// Every node with its resolved edges, in a comparable form.
-fn graph(spec: &WorkflowSpec) -> Vec<(String, Value)> {
+fn graph(spec: &Definition) -> Vec<(String, Value)> {
     spec.checks
         .keys()
         .chain(spec.steps.keys())

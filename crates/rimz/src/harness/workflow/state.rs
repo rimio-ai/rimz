@@ -1,7 +1,8 @@
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-use super::WorkflowSpec;
+use super::Definition;
+use super::definition::Target;
 use super::spec::RESERVED_OUTCOMES;
 use crate::disk::paths::WorkflowPaths;
 use crate::harness::headless::judge::FailureKind;
@@ -29,7 +30,7 @@ enum JudgeFailure {
 
 pub(super) struct Transition<'a> {
     pub record: RunRecord,
-    pub spec: &'a WorkflowSpec,
+    pub spec: &'a Definition,
     pub paths: &'a WorkflowPaths,
     pub now: Timestamp,
     pub entries: Vec<JournalEntry>,
@@ -54,7 +55,9 @@ impl Transition<'_> {
             Ok(object) => (
                 normalize_object(
                     object,
-                    &self.spec.checks[&self.record.node],
+                    self.spec
+                        .check(&self.record.node)
+                        .expect("current judge check"),
                     self.record.key.as_ref(),
                     &self.spec.edges(&self.record.node),
                 ),
@@ -172,7 +175,8 @@ impl Transition<'_> {
         if !self.current(seq) {
             return Ok(());
         }
-        let check = &self.spec.checks[&self.record.node];
+        // current verified that this sequence owns the live check attempt.
+        let check = self.spec.check(&self.record.node).expect("current check");
         let edges = self.spec.edges(&self.record.node);
         let object = object
             .and_then(|object| normalize_object(object, check, self.record.key.as_ref(), &edges));
@@ -200,19 +204,19 @@ impl Transition<'_> {
         };
         if matches!(
             check.kind(),
-            Some(super::spec::CheckKind::Condition | super::spec::CheckKind::Sleep)
+            Some(super::Kind::Condition(_) | super::Kind::Sleep(_))
         ) && let Some(case) = case_index(&object)
             && check
-                .condition_cases()
+                .cases()
                 .get(case as usize)
-                .is_some_and(|case| case.hold.is_some())
+                .is_some_and(|case| case.hold().is_some())
             && !self
                 .hold_until(case)?
                 .is_some_and(|until| until <= self.now)
         {
             outcome = "hold".into();
             object["outcome"] = json!(outcome);
-            target = "@wait".into();
+            target = Target::Wait;
         }
         // current verified that this sequence owns the live attempt.
         let attempt = self.record.attempt.take().expect("current check attempt");
@@ -281,10 +285,10 @@ impl Transition<'_> {
             .flatten()
             .map(|(key, value)| (key.clone(), value.as_str().map(str::to_owned)))
             .collect();
-        self.spec.checks[&self.record.node]
-            .condition_cases()
-            .get(case as usize)
-            .and_then(|case| crate::harness::when::WhenExpr::parse(&case.when).ok())
+        self.spec
+            .check(&self.record.node)
+            .and_then(|check| check.cases().get(case as usize))
+            .and_then(|case| case.when().expression().ok())
             .is_some_and(|expression| expression.truth(&readings) != Some(false))
     }
 
@@ -362,7 +366,11 @@ impl Transition<'_> {
         let case = (outcome == "hold").then(|| case_index(object)).flatten();
         let detail = if let Some(case) = case {
             Some(
-                self.spec.checks[&self.record.node].condition_cases()[case as usize]
+                // A hold wait names a case of its own check.
+                self.spec
+                    .check(&self.record.node)
+                    .expect("held check")
+                    .cases()[case as usize]
                     .outcome
                     .clone(),
             )
@@ -438,7 +446,7 @@ impl Transition<'_> {
 
     pub(super) fn route(
         &mut self,
-        target: &str,
+        target: &Target,
         mut object: Value,
         reason: ParkReason,
     ) -> Result<(), TimeInputErr> {
@@ -447,22 +455,22 @@ impl Transition<'_> {
         }
         let sleep = self
             .spec
-            .checks
-            .get(&self.record.node)
-            .is_some_and(|check| check.is_sleep());
+            .check(&self.record.node)
+            .is_some_and(super::Node::is_sleep);
         if let Some(held) = &mut self.record.held {
             held.verdict = Some(Verdict {
                 node: self.record.node.clone(),
                 entered_at: self.record.entered_at,
                 at: self.now,
-                target: target.into(),
+                target: target.to_string(),
                 object,
                 reason,
             });
             self.record.attempt = None;
             return Ok(());
         }
-        if self.spec.is_break(target) {
+        let to_break = target.node().is_some_and(|node| self.spec.is_break(node));
+        if to_break {
             object["edge"] = json!(match reason {
                 ParkReason::Cap => "cap",
                 ParkReason::Deadline => "deadline",
@@ -471,13 +479,13 @@ impl Transition<'_> {
             });
             object["from"] = json!(self.record.node);
         }
-        if target == "@wait" {
+        if *target == Target::Wait {
             self.merge_wait(&object, self.now, true)?;
         } else {
             self.close_wait();
             match target {
-                "@done" | "@failed" => {
-                    self.record.state = if target == "@done" {
+                Target::Done | Target::Failed => {
+                    self.record.state = if *target == Target::Done {
                         RunState::Done
                     } else {
                         RunState::Failed
@@ -490,7 +498,7 @@ impl Transition<'_> {
                         },
                     );
                 }
-                "@user" => {
+                Target::User => {
                     let text = object
                         .get("reason")
                         .and_then(Value::as_str)
@@ -503,19 +511,19 @@ impl Transition<'_> {
                     });
                     self.push(None, JournalEvent::Park { reason, text });
                 }
-                node => {
-                    self.record.node = node.into();
+                Target::Node(node) => {
+                    self.record.node = node.clone();
                     self.record.entered_at = self.now;
                     self.record.check_retry = 0;
                     self.record.check_retry_context = None;
                     self.record.launch_retry = false;
                 }
+                // The outer branch took the wait.
+                Target::Wait => unreachable!("routed wait"),
             }
         }
         self.record.attempt = None;
-        if !self.spec.is_break(target)
-            && (sleep || self.record.wait.as_ref().is_some_and(Wait::is_hold))
-        {
+        if !to_break && (sleep || self.record.wait.as_ref().is_some_and(Wait::is_hold)) {
             return Ok(());
         }
         self.record.key = object
@@ -548,7 +556,10 @@ impl Transition<'_> {
             node: self.record.node.clone(),
             entered_at: self.record.entered_at,
             at: self.now,
-            target: self.spec.engine_target(&self.record.node, "cap"),
+            target: self
+                .spec
+                .engine_target(&self.record.node, "cap")
+                .to_string(),
             object,
             reason: ParkReason::Cap,
         }
@@ -558,7 +569,7 @@ impl Transition<'_> {
         &mut self,
         outcome: &str,
         object: Value,
-        target: &str,
+        target: &Target,
         reason: ParkReason,
     ) -> Result<(), TimeInputErr> {
         let object = self.engine_object(object);
@@ -792,7 +803,11 @@ impl Transition<'_> {
             self.record.node = verdict.node;
             self.record.entered_at = verdict.entered_at;
             if self.spec.is_break(&attempt.node) && verdict.reason == ParkReason::User {
-                self.route(&verdict.target, verdict.object, verdict.reason)?;
+                self.route(
+                    &Target::parse(&verdict.target),
+                    verdict.object,
+                    verdict.reason,
+                )?;
                 self.push(
                     None,
                     JournalEvent::Resume {
@@ -811,7 +826,11 @@ impl Transition<'_> {
                     },
                 );
             }
-            return self.route(&verdict.target, verdict.object, verdict.reason);
+            return self.route(
+                &Target::parse(&verdict.target),
+                verdict.object,
+                verdict.reason,
+            );
         }
         if let EndCause::Restart { continued } = ending.cause {
             self.restart_step(&attempt.node, continued);
@@ -846,11 +865,10 @@ impl Transition<'_> {
             );
         }
         if ending.outcome == AttemptOutcome::Died
-            && self
-                .spec
-                .steps
-                .get(&attempt.node)
-                .is_some_and(|step| matches!(step.kind(), Some(super::StepKind::Message(_))))
+            && matches!(
+                self.spec.step_kind(&attempt.node),
+                Some(super::Kind::Message(_))
+            )
         {
             return self.engine_route(
                 "undelivered",
@@ -1132,7 +1150,7 @@ fn case_index(object: &Value) -> Option<u32> {
 
 fn normalize_object(
     object: Value,
-    check: &super::Check,
+    check: &super::Node,
     key: Option<&Key>,
     edges: &[super::Edge],
 ) -> Result<Value, String> {
@@ -1147,7 +1165,7 @@ fn normalize_object(
         && !(outcome == "unknown"
             && matches!(
                 check.kind(),
-                Some(super::spec::CheckKind::Condition | super::spec::CheckKind::Sleep)
+                Some(super::Kind::Condition(_) | super::Kind::Sleep(_))
             )))
         || !edges.iter().any(|edge| edge.outcome == outcome)
     {

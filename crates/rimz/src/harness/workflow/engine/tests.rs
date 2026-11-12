@@ -255,7 +255,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
     );
 }
 
-fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, WorkflowSpec) {
+fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, Definition) {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
@@ -1055,7 +1055,14 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
     fs::write(&asset, "fix the build, sealed copy").unwrap();
     let spec = spec::load(&paths.home).unwrap();
     assert_eq!(
-        agent::compose(&record, &paths, &spec.steps["fix"], &mut BTreeMap::new()).unwrap(),
+        agent::compose(
+            &record,
+            &paths,
+            &spec.steps["fix"],
+            false,
+            &mut BTreeMap::new()
+        )
+        .unwrap(),
         "fix the build, sealed copy",
         "each attempt reads the prompt from the run's own definition root"
     );

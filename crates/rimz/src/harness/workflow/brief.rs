@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{Check, CheckKind, Fireability, HopKind, Step, WorkflowSpec, routing_hop};
+use super::{Definition, Fireability, HopKind, Kind, Node, Step, Target, routing_hop};
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
@@ -14,7 +14,7 @@ use crate::store::workflow::{
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
 const MORE: &str = "`rimz workflow show` draws the graph with this run's position and trail, and `rimz workflow show --history` lists every step and check so far; a subagent of yours runs the same commands to find this run.";
 
-pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecord) -> String {
+pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord) -> String {
     let step = &spec.steps[&record.node];
     let mut origin = origin(record);
     origin.push_str(" Your prompt is the step's fixed text, not a message someone just typed.");
@@ -38,7 +38,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
             Some(hop) => {
                 // A routing hop always names its outcome.
                 let outcome = hop.outcome.as_deref().expect("routing hop outcome");
-                match spec.checks.get(&hop.node) {
+                match spec.check(&hop.node) {
                     Some(check) if check.is_sleep() && outcome == "then" => {
                         format!(
                             "The run slept at {} before reaching this step.",
@@ -75,7 +75,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
         let messaged = spec
             .steps
             .get(&previous.step)
-            .is_some_and(|step| matches!(step.kind(), Some(super::StepKind::Message(_))));
+            .is_some_and(|_| matches!(spec.step_kind(&previous.step), Some(Kind::Message(_))));
         let who = match &previous.handle {
             None => format!("the step {}", span(&previous.step)),
             Some(handle) if messaged => {
@@ -124,7 +124,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &WorkflowSpec, record: &RunRecor
     .join("\n\n")
 }
 
-pub(super) fn judge(spec: &WorkflowSpec, record: &RunRecord) -> String {
+pub(super) fn judge(spec: &Definition, record: &RunRecord) -> String {
     [
         position(spec, record, "a check in", "check"),
         origin(record),
@@ -135,7 +135,7 @@ pub(super) fn judge(spec: &WorkflowSpec, record: &RunRecord) -> String {
     .join("\n\n")
 }
 
-fn position(spec: &WorkflowSpec, record: &RunRecord, what: &str, node_kind: &str) -> String {
+fn position(spec: &Definition, record: &RunRecord, what: &str, node_kind: &str) -> String {
     format!(
         "You are {what} a RimZ workflow: {DEFINITION} You are the {node_kind} {} of the workflow {} (→ a route, ⇄ a step that returns to its check, [ ] you):\n\n{}",
         span(&record.node),
@@ -144,7 +144,7 @@ fn position(spec: &WorkflowSpec, record: &RunRecord, what: &str, node_kind: &str
     )
 }
 
-fn rail(spec: &WorkflowSpec, current: &str) -> String {
+fn rail(spec: &Definition, current: &str) -> String {
     let walk = spec.walk();
     let mut groups: Vec<Vec<&str>> = Vec::new();
     for node in &walk.nodes {
@@ -171,7 +171,7 @@ fn rail(spec: &WorkflowSpec, current: &str) -> String {
         if index > 0 {
             let routed = groups[index - 1].iter().any(|node| {
                 spec.edges(node).iter().any(|edge| {
-                    edge.target == group[0]
+                    edge.target.node() == Some(&*group[0])
                         && edge.fires != Fireability::Never
                         && edge.outcome != "deadline"
                 })
@@ -212,11 +212,11 @@ fn origin(record: &RunRecord) -> String {
     }
 }
 
-fn detail(check: &Check, input: &Value) -> Option<String> {
+fn detail(check: &Node, input: &Value) -> Option<String> {
     let text = if let Some(reason) = input["reason"].as_str() {
         reason.to_owned()
     } else {
-        if check.condition_cases().is_empty() {
+        if check.cases().is_empty() {
             return None;
         }
         let readings = input["readings"].as_object()?;
@@ -225,9 +225,9 @@ fn detail(check: &Check, input: &Value) -> Option<String> {
             .and_then(|case| usize::try_from(case).ok())
             .and_then(|case| {
                 check
-                    .condition_cases()
+                    .cases()
                     .get(case)
-                    .and_then(|case| WhenExpr::parse(&case.when).ok())
+                    .and_then(|case| WhenExpr::parse(case.when().clauses()).ok())
             })
             .map(|expression| {
                 expression
@@ -252,19 +252,20 @@ fn detail(check: &Check, input: &Value) -> Option<String> {
     Some(verbatim(&bounded))
 }
 
-fn check_note(spec: &WorkflowSpec, name: &str) -> Option<String> {
+fn check_note(spec: &Definition, name: &str) -> Option<String> {
     let check = spec.checks.get(name)?;
-    if !check.condition_cases().is_empty() {
-        let cases = check
-            .condition_cases()
+    let node = spec.check(name)?;
+    if !node.cases().is_empty() {
+        let cases = node
+            .cases()
             .iter()
             .map(|case| {
-                let expression = WhenExpr::parse(&case.when).ok()?;
+                let expression = WhenExpr::parse(case.when().clauses()).ok()?;
                 Some(format!(
                     "{}: {} → {}",
                     span(&case.outcome),
                     span(&expression.to_string()),
-                    span(&spec.engine_target(name, &case.outcome)),
+                    span(spec.engine_target(name, &case.outcome).as_str()),
                 ))
             })
             .collect::<Option<Vec<_>>>()?
@@ -279,30 +280,31 @@ fn check_note(spec: &WorkflowSpec, name: &str) -> Option<String> {
     let clause = summary
         .as_ref()
         .map_or_else(String::new, |summary| format!(" ({summary})"));
-    Some(match check.kind()? {
-        CheckKind::Run(command) => format!(
+    Some(match node.kind()? {
+        Kind::Run(command) => format!(
             "The check {name} runs {}{clause}. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.",
-            span(command)
+            span(command.text())
         ),
-        CheckKind::Shell(command) => format!(
+        Kind::Shell(command) => format!(
             "The check {name} runs {}{clause} through `sh -c`; it runs from the checkout. `$RIMZ_WORKFLOW_DEFINITION` names the definition folder for a script there. You may run this command yourself.",
             span(command)
         ),
-        CheckKind::Agent(_) => summary.map_or_else(
+        Kind::Judge(_) => summary.map_or_else(
             || format!("The check {name} is an agent judge."),
             |summary| format!("The check {name} tests {summary}."),
         ),
-        CheckKind::Sleep => format!(
+        Kind::Sleep(sleep) => format!(
             "The check {name} tests {}.",
-            span(check.summary.as_deref().or(check.sleep.as_deref())?)
+            span(check.summary.as_deref().unwrap_or(sleep.duration().text()))
         ),
-        CheckKind::Condition => unreachable!("condition cases returned their note above"),
+        Kind::Condition(_) => unreachable!("condition cases returned their note above"),
+        Kind::Agent(_) | Kind::Message(_) => unreachable!("a check runs no step kind"),
     })
 }
 
 pub(super) fn push(
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
 ) -> Result<String, super::SpecErr> {
     // A pending push has already applied this check's answer as the step's input.
@@ -331,24 +333,24 @@ pub(super) fn push(
             .first()
             .expect("validated step then")
     });
-    let check = &spec.checks[name];
+    let check = spec.check(name).expect("pushed check");
     let input = record.input.as_ref().expect("published push-back answer");
     let mut text = format!(
         "The workflow check {} answered {}.",
         span(name),
         span(input["outcome"].as_str().unwrap_or_default())
     );
-    if check.condition_cases().is_empty() {
+    if check.cases().is_empty() {
         if let Some(reason) = input["reason"].as_str() {
             text.push_str(&format!("\n\n{reason}"));
         }
     } else {
-        let marks = super::case_marks(check, input, None)?;
-        for (case, mark) in check.condition_cases().iter().zip(marks.cases) {
+        let marks = super::case_marks(&spec.checks[name], input, None)?;
+        for (case, mark) in check.cases().iter().zip(marks.cases) {
             if !matches!(mark, super::CaseMark::False | super::CaseMark::Unread) {
                 break;
             }
-            let expression = WhenExpr::parse(&case.when)?;
+            let expression = WhenExpr::parse(case.when().clauses())?;
             let mut terms = Vec::new();
             for (term, negated) in expression.leaves() {
                 let reading = input["readings"][&term.key].as_str();
@@ -380,12 +382,12 @@ pub(super) fn push(
     if let Some((_, seq)) = &pushed
         && matches!(
             check.kind(),
-            Some(CheckKind::Run(_) | CheckKind::Shell(_) | CheckKind::Agent(_))
+            Some(Kind::Run(_) | Kind::Shell(_) | Kind::Judge(_))
         )
     {
         let output = seq
             .map(|seq| {
-                if check.agent.is_some() {
+                if matches!(check.kind(), Some(Kind::Judge(_))) {
                     paths.check_output(seq)
                 } else {
                     paths.check_log(seq)
@@ -404,7 +406,7 @@ pub(super) fn push(
     Ok(text)
 }
 
-fn visits(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> Option<String> {
+fn visits(spec: &Definition, step: &Step, record: &RunRecord) -> Option<String> {
     let (outcome, key) = record.visit_bucket();
     let mut counts = Vec::new();
     let mut last = Vec::new();
@@ -460,11 +462,11 @@ fn visits(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> Option<String
         if used == max {
             // Every step has a cap destination, including an unfireable cap.
             let target = spec.target(&record.node, "cap").expect("step cap target");
-            let destination = match target.as_str() {
-                "@user" => "parks the run for the user".into(),
-                "@done" => "ends the run as done".into(),
-                "@failed" => "ends the run as failed".into(),
-                _ => format!("sends the run to {}", span(&target)),
+            let destination = match &target {
+                Target::User => "parks the run for the user".into(),
+                Target::Done => "ends the run as done".into(),
+                Target::Failed => "ends the run as failed".into(),
+                target => format!("sends the run to {}", span(target.as_str())),
             };
             last.push(format!("{next} {destination}"));
         }
@@ -509,22 +511,23 @@ fn ordinal(count: u64) -> String {
     }
 }
 
-fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, String) {
+fn lifecycle(spec: &Definition, step: &Step, record: &RunRecord) -> (String, String) {
     if spec.is_break(&record.node) {
         return (
             "You stay open across turns. Fix the cause and resume the run, cancel it, or wait for the user. RimZ detaches rather than stops you on resume or cancel. Closing your pane ends the run @failed.".into(),
             "If the user must act now, ask through your own native question; otherwise end your turn and wait for their instructions.".into(),
         );
     }
+    let node = spec.step(&record.node).expect("current step");
     // Validation requires a nonempty `then`: checks, or one terminal on a turn or stay step.
-    let first = step.then.first().expect("validated step then");
-    let check = span(first);
-    let next = if matches!(first.as_str(), "@done" | "@failed") {
+    let first = node.then().first().expect("validated step then");
+    let check = span(first.as_str());
+    let next = if matches!(first, Target::Done | Target::Failed) {
         format!("ends the run at {check}")
     } else {
         format!("runs the check {check}")
     };
-    match step.lifecycle() {
+    match node.lifecycle() {
         StepLifecycle::Turn => {
             let cleanup = if step.keep.unwrap_or(false) {
                 "leaves your pane open outside this run"
@@ -544,7 +547,7 @@ fn lifecycle(spec: &WorkflowSpec, step: &Step, record: &RunRecord) -> (String, S
                     .expect("step asked target");
                 format!(
                     "A blocking question ends this attempt, and the run goes to {}.",
-                    span(&target)
+                    span(target.as_str())
                 )
             } else {
                 let watching = if matches!(record.fire, Some(RunFire::Scheduled { .. })) {

@@ -436,7 +436,7 @@ fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
     let paths = state.workflow(&record.id);
     fs::remove_file(&paths.journal).unwrap();
     fs::create_dir(&paths.journal).unwrap();
-    let spec: WorkflowSpec = toml::from_str(OUTCOME_STEP).unwrap();
+    let spec: Definition = toml::from_str(OUTCOME_STEP).unwrap();
     let text = crate::harness::workflow::brief::step(&paths, &spec, &live);
     assert!(
         text.contains("RimZ started this run automatically (loop task `missing-task`)."),

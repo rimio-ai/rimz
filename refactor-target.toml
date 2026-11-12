@@ -11678,6 +11678,16 @@ reason = "The workflow CLI and engine share a tolerant spec loader, strict edito
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::Definition"
+reason = "Load compiles the authored spec once into the typed definition the engine, CLI and sidebar read."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Target"
+reason = "Routes carry one typed target, engine outcome or node name, that prints as its authored literal."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::Hop"
 reason = "Inspection reads one timestamped journal projection for the trail and later rail."
 

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn inspection_hold_uses_the_matching_cases_first_settlement() {
-    let spec: WorkflowSpec = toml::from_str(concat!(
+    let spec: Definition = toml::from_str(concat!(
         "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n",
         "cases=[{when=['ci=passed'],outcome='ready',for='2m'},",
         "{when=['pr.merged'],outcome='ready',for='2m'},",
@@ -53,7 +53,7 @@ fn inspection_hold_uses_the_matching_cases_first_settlement() {
 
 #[test]
 fn a_hold_preserves_routed_context_and_counts_until_the_reset_case_fires() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next', unknown='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[checks.next]\nrun='true'\non.ok='@done'\n[steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\nmax-visits-per-outcome={limit=2,reset-on='ready'}\n").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='next', pending='next', unknown='next'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[checks.next]\nrun='true'\non.ok='@done'\n[steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=6\nmax-visits-per-outcome={limit=2,reset-on='ready'}\n").unwrap();
     let paths = paths();
     for completes in [false, true] {
         let mut record = record();
@@ -113,7 +113,7 @@ fn a_hold_preserves_routed_context_and_counts_until_the_reset_case_fires() {
 
 #[test]
 fn a_different_case_with_the_same_outcome_restarts_the_hold() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[[checks.pr.cases]]\nwhen=['team.stage!=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n[[checks.pr.cases]]\nwhen=['team.stage!=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
     let paths = paths();
     let record = record();
     let attempt = record.attempt.clone();
@@ -140,7 +140,7 @@ fn a_different_case_with_the_same_outcome_restarts_the_hold() {
 
 #[test]
 fn condition_hold_settles_at_the_inclusive_boundary_and_clamps_to_bounds() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='2m'\n").unwrap();
     let paths = paths();
     for bound in [None, Some(30)] {
         let mut record = record();
@@ -197,7 +197,7 @@ fn condition_hold_settles_at_the_inclusive_boundary_and_clamps_to_bounds() {
 
 #[test]
 fn an_unknown_answer_ends_a_hold_whose_own_case_reads_false() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={staged='@done', ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='staged'\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\non={staged='@done', ready='@done', pending='@wait', unknown='@wait'}\ntimeout='1h'\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='staged'\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n").unwrap();
     let paths = paths();
     for (pr, kept) in [("merged", true), ("open", false)] {
         let record = record();

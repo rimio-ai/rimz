@@ -7,7 +7,7 @@ use crate::harness::launch::ExecIdentity;
 pub(super) fn evaluate(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
 ) -> Evaluation {
     let mut result = Evaluation::failed("died", "judge interrupted");
@@ -20,7 +20,7 @@ pub(super) fn evaluate(
 fn run(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     result: &mut Evaluation,
 ) -> Result<(), String> {
@@ -226,7 +226,7 @@ pub(in super::super) fn budget_refusal(
 /// A fresh answer from a loop task's judge that holds the task's act back is one assist,
 /// as a loop guard's decline was; a replayed answer never reaches here.
 fn record_decline(
-    spec: &WorkflowSpec,
+    spec: &Definition,
     record: &RunRecord,
     check: &spec::Check,
     kind: crate::ids::AgentKind,
@@ -258,7 +258,7 @@ fn record_decline(
 
 /// Whether a judge's verdict routes away from every step and agent check while its opposite
 /// verdict leads into one: the compiled decline of a loop task's guard.
-pub(in super::super) fn declines(spec: &WorkflowSpec, node: &str, outcome: &str) -> bool {
+pub(in super::super) fn declines(spec: &Definition, node: &str, outcome: &str) -> bool {
     let opposite = match outcome {
         "pass" => "fail",
         "fail" => "pass",
@@ -270,10 +270,10 @@ pub(in super::super) fn declines(spec: &WorkflowSpec, node: &str, outcome: &str)
             .iter()
             .find(|edge| edge.outcome == outcome)
             .map(|edge| {
-                spec.steps.contains_key(&edge.target)
-                    || spec.checks.get(&edge.target).is_some_and(|check| {
-                        matches!(check.kind(), Some(spec::CheckKind::Agent(_)))
-                    })
+                edge.target.node().is_some_and(|node| {
+                    spec.step(node).is_some()
+                        || matches!(spec.check_kind(node), Some(super::super::Kind::Judge(_)))
+                })
             })
     };
     acts(outcome) == Some(false) && acts(opposite) == Some(true)

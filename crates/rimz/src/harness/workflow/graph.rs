@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::spec::{Check, CheckKind, OnBreak, Step, StepKind, WorkflowSpec};
+use super::definition::{BREAK, Definition, Kind, Parsed, Target};
+use super::spec::{Check, OnBreak, Step};
 use crate::config::CapacityWait;
-use crate::harness::budget::BudgetSpec;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
 const STEP_TRIGGERS: [&str; 8] = [
@@ -65,16 +65,16 @@ impl NeverReason {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Edge {
     pub outcome: String,
-    pub target: String,
+    pub target: Target,
     pub source: EdgeSource,
     pub fires: Fireability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub because: Option<NeverReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delay: Option<String>,
+    pub delay: Option<Parsed<std::time::Duration, crate::utils::time::TimeInputErr>>,
 }
 
 impl Edge {
@@ -101,27 +101,34 @@ pub struct WalkNode {
     pub hangs_under: Option<String>,
 }
 
-impl WorkflowSpec {
+impl Definition {
     /// What one run reserves against a daily cap: its agent steps' per-launch budgets, summed.
     pub(in crate::harness) fn reserved_usd(&self) -> f64 {
         self.steps
-            .values()
-            .filter(|step| matches!(step.kind(), Some(StepKind::Agent(_))))
-            .filter_map(|step| step.budget.as_deref()?.parse::<BudgetSpec>().ok())
+            .keys()
+            .filter_map(|name| self.step(name))
+            .filter(|step| matches!(step.kind(), Some(Kind::Agent(_))))
+            .filter_map(|step| step.budget()?.value().ok())
             .fold(0.0, |total, budget| total + budget.cap_usd)
     }
 
     /// The profile of every agent step and agent check, beside the account a step pins; a
     /// judge runs on its profile's own login.
     pub(in crate::harness) fn agent_launches(&self) -> Vec<(&str, Option<&crate::ids::LoginName>)> {
-        let steps = self.steps.values().filter_map(|step| match step.kind() {
-            Some(StepKind::Agent(agent)) => Some((agent, step.account.as_ref())),
-            _ => None,
-        });
-        let checks = self.checks.values().filter_map(|check| match check.kind() {
-            Some(CheckKind::Agent(agent)) => Some((agent, None)),
-            _ => None,
-        });
+        let steps = self
+            .steps
+            .iter()
+            .filter_map(|(name, step)| match self.step_kind(name) {
+                Some(Kind::Agent(agent)) => Some((agent.as_str(), step.account.as_ref())),
+                _ => None,
+            });
+        let checks = self
+            .checks
+            .keys()
+            .filter_map(|name| match self.check_kind(name) {
+                Some(Kind::Judge(agent)) => Some((agent.as_str(), None)),
+                _ => None,
+            });
         steps.chain(checks).collect()
     }
 
@@ -132,7 +139,7 @@ impl WorkflowSpec {
         if self.workflow.deadline.is_some()
             && let Some(target) = self.target(&self.workflow.start, "deadline")
         {
-            order.extend(self.walk_component(&target, &mut seen));
+            order.extend(self.walk_component(target.as_str(), &mut seen));
         } else if let Some(target) = &self.workflow.on.deadline {
             order.extend(self.walk_component(target, &mut seen));
         }
@@ -148,9 +155,12 @@ impl WorkflowSpec {
                 hangs_under: None,
             });
             for edge in self.edges(&node) {
-                if parents.get(&edge.target) == Some(&node) && placed.insert(edge.target.clone()) {
+                let Some(target) = edge.target.node() else {
+                    continue;
+                };
+                if parents.get(target) == Some(&node) && placed.insert(target.to_owned()) {
                     nodes.push(WalkNode {
-                        node: edge.target,
+                        node: target.to_owned(),
                         hangs_under: Some(node.clone()),
                     });
                 }
@@ -176,15 +186,16 @@ impl WorkflowSpec {
                 order.push(node);
                 continue;
             }
-            if !(self.checks.contains_key(&node) || self.steps.contains_key(&node))
-                || !seen.insert(node.clone())
-            {
+            if self.node(&node).is_none() || !seen.insert(node.clone()) {
                 continue;
             }
             pending.push((node.clone(), true));
             for edge in self.edges(&node) {
-                if edge.outcome != "deadline" && edge.fires != Fireability::Never {
-                    pending.push((edge.target, false));
+                if edge.outcome != "deadline"
+                    && edge.fires != Fireability::Never
+                    && let Some(target) = edge.target.node()
+                {
+                    pending.push((target.to_owned(), false));
                 }
             }
         }
@@ -199,62 +210,62 @@ impl WorkflowSpec {
             .map(|(index, node)| (node, index))
             .collect::<BTreeMap<_, _>>();
         self.steps
-            .iter()
-            .filter_map(|(node, step)| {
-                let parent = step.then.iter().find(|parent| {
-                    self.checks.contains_key(*parent)
+            .keys()
+            .filter_map(|node| {
+                let parent = self.step(node)?.then().iter().find_map(|parent| {
+                    let parent = parent.node()?;
+                    (self.check(parent).is_some()
                         && positions
-                            .get(*parent)
+                            .get(&parent.to_owned())
                             .zip(positions.get(node))
                             .is_some_and(|(parent, step)| parent < step)
                         && self.edges(parent).iter().any(|edge| {
                             edge.outcome != "deadline"
-                                && edge.target == *node
+                                && edge.target.node() == Some(node.as_str())
                                 && edge.fires != Fireability::Never
-                        })
+                        }))
+                    .then_some(parent)
                 })?;
-                Some((node.clone(), parent.clone()))
+                Some((node.clone(), parent.to_owned()))
             })
             .collect()
     }
 
     /// Node edges in display order, including conditional and never-firing routes.
     pub fn edges(&self, node: &str) -> Vec<Edge> {
+        let step = self.step(node);
         self.resolved_edges(node)
             .unwrap_or_default()
-            .into_iter()
+            .iter()
             .filter(|edge| {
-                self.steps
-                    .get(node)
-                    .is_none_or(|step| match edge.outcome.as_str() {
-                        "asked" => {
-                            matches!(step.kind(), Some(StepKind::Agent(_)))
-                                && step.lifecycle().is_turn()
-                        }
-                        "capacity" => matches!(step.kind(), Some(StepKind::Agent(_))),
-                        _ => true,
-                    })
+                step.is_none_or(|step| match edge.outcome.as_str() {
+                    "asked" => {
+                        matches!(step.kind(), Some(Kind::Agent(_))) && step.lifecycle().is_turn()
+                    }
+                    "capacity" => matches!(step.kind(), Some(Kind::Agent(_))),
+                    _ => true,
+                })
             })
+            .cloned()
             .collect()
     }
 
-    /// Resolve a routing decision against this spec, including engine-owned outcomes.
-    pub fn target(&self, node: &str, outcome: &str) -> Option<String> {
+    /// Resolve a routing decision against this definition, including engine-owned outcomes.
+    pub fn target(&self, node: &str, outcome: &str) -> Option<Target> {
         let edges = self.resolved_edges(node)?;
-        if self.checks.contains_key(node) {
+        if self.check(node).is_some() {
             return if outcome == "hold" {
-                Some("@wait".into())
+                Some(Target::Wait)
             } else if outcome == "budget" {
-                Some("@failed".into())
+                Some(Target::Failed)
             } else {
                 edges
-                    .into_iter()
+                    .iter()
                     .find(|edge| edge.outcome == outcome)
-                    .map(|edge| edge.target)
+                    .map(|edge| edge.target.clone())
             };
         }
-        let step = self.steps.get(node);
-        let message = step.is_some_and(|step| matches!(step.kind(), Some(StepKind::Message(_))));
+        let message = matches!(self.step_kind(node), Some(Kind::Message(_)));
         let outcome = match outcome {
             "died" if message => "undelivered",
             _ if self.routes_on_failed(node, outcome) => "failed",
@@ -262,10 +273,10 @@ impl WorkflowSpec {
             other => other,
         };
         edges
-            .into_iter()
+            .iter()
             .find(|edge| edge.outcome == outcome)
-            .map(|edge| edge.target)
-            .or_else(|| (outcome == "then").then(|| "@failed".into()))
+            .map(|edge| edge.target.clone())
+            .or_else(|| (outcome == "then").then_some(Target::Failed))
     }
 
     /// Whether a step's attempt ending leaves through its `on.failed`, for settlement and
@@ -278,15 +289,20 @@ impl WorkflowSpec {
                 .is_some_and(|step| step.on.failed.is_some())
     }
 
-    pub(super) fn engine_target(&self, node: &str, outcome: &str) -> String {
+    pub(super) fn engine_target(&self, node: &str, outcome: &str) -> Target {
         // Engine callers have a current node and an engine-owned or normalized outcome.
         self.target(node, outcome).expect("admitted workflow route")
     }
 
-    pub(super) fn resolved_edges(&self, node: &str) -> Option<Vec<Edge>> {
+    /// Every edge out of `node`, resolved at compile; `None` when no node has the name.
+    pub(super) fn resolved_edges(&self, node: &str) -> Option<&[Edge]> {
+        self.node(node).map(super::definition::Node::resolved_edges)
+    }
+
+    pub(super) fn compile_edges(&self, node: &str) -> Option<Vec<Edge>> {
         let mut edges = self.node_edges(node)?;
         let outcomes = if let Some(check) = self.checks.get(node) {
-            if check.is_sleep() {
+            if self.check(node).is_some_and(|check| check.is_sleep()) {
                 ["then", "sleeping", "unknown", "invalid", "deadline"]
                     .map(str::to_owned)
                     .to_vec()
@@ -321,7 +337,7 @@ impl WorkflowSpec {
                             .get(node)
                             .and_then(|check| check.on.get(&outcome))
                             .and_then(|route| route.delay())
-                            .map(str::to_owned),
+                            .map(super::definition::duration),
                         target,
                         source: if explicit && !self.declared_default(node, &outcome) {
                             EdgeSource::Explicit
@@ -390,18 +406,19 @@ impl WorkflowSpec {
         (Fireability::InLoopRuns, None)
     }
 
-    fn node_edges(&self, node: &str) -> Option<BTreeMap<String, (String, bool)>> {
+    fn node_edges(&self, node: &str) -> Option<BTreeMap<String, (Target, bool)>> {
         let mut edges = if let Some(check) = self.checks.get(node) {
+            let sleep = self.check(node).is_some_and(|check| check.is_sleep());
             check
-                .edges()
+                .edges(self.check_kind(node))
                 .into_iter()
                 .map(|(outcome, target)| {
                     let route = check
                         .on
                         .get(&outcome)
-                        .filter(|_| !check.is_sleep() || outcome == "invalid");
-                    let explicit = route.is_some() || (outcome == "then" && check.is_sleep());
-                    let target = route.map_or(target, |route| route.target().to_owned());
+                        .filter(|_| !sleep || outcome == "invalid");
+                    let explicit = route.is_some() || (outcome == "then" && sleep);
+                    let target = route.map_or(target, |route| Target::parse(route.target()));
                     (outcome, (target, explicit))
                 })
                 .collect()
@@ -410,21 +427,22 @@ impl WorkflowSpec {
                 .get(node)?
                 .edges()
                 .into_iter()
-                .map(|(outcome, (target, explicit))| {
-                    (outcome.to_owned(), (target.to_owned(), explicit))
-                })
+                .map(|(outcome, edge)| (outcome.to_owned(), edge))
                 .collect::<BTreeMap<_, _>>()
         };
         if let Some(step) = self.steps.get(node) {
-            let failure = match step.kind() {
-                Some(StepKind::Agent(_)) => Some(("invalid", &step.on.invalid)),
-                Some(StepKind::Message(_)) => Some(("undelivered", &step.on.undelivered)),
+            let failure = match self.step_kind(node) {
+                Some(Kind::Agent(_)) => Some(("invalid", &step.on.invalid)),
+                Some(Kind::Message(_)) => Some(("undelivered", &step.on.undelivered)),
                 _ => None,
             };
             if let Some((outcome, route)) = failure {
                 edges.insert(
                     outcome.into(),
-                    (route.clone().unwrap_or_default(), route.is_some()),
+                    (
+                        Target::parse(route.as_deref().unwrap_or_default()),
+                        route.is_some(),
+                    ),
                 );
             }
         }
@@ -436,21 +454,20 @@ impl WorkflowSpec {
                         .on
                         .deadline
                         .as_deref()
-                        .unwrap_or("@user")
-                        .into(),
+                        .map_or(Target::User, Target::parse),
                     self.workflow.on.deadline.is_some(),
                 ),
             );
         }
         let target = match &self.workflow.on_break {
-            _ if self.is_break(node) => "@failed",
-            Some(OnBreak::Target(target)) => target.as_str(),
-            Some(OnBreak::Agent { .. }) => "@break",
-            None => "@failed",
+            _ if self.is_break(node) => Target::Failed,
+            Some(OnBreak::Target(target)) => Target::parse(target),
+            Some(OnBreak::Agent { .. }) => Target::Node(BREAK.into()),
+            None => Target::Failed,
         };
         for (outcome, (route, explicit)) in &mut edges {
             if !*explicit && FAILURE_EDGES.contains(&outcome.as_str()) {
-                *route = target.into();
+                *route = target.clone();
             }
         }
         Some(edges)
@@ -458,46 +475,51 @@ impl WorkflowSpec {
 }
 
 impl Check {
-    fn edges(&self) -> BTreeMap<String, String> {
-        if self.is_sleep() {
+    fn edges(&self, kind: Option<&Kind>) -> BTreeMap<String, Target> {
+        if matches!(kind, Some(Kind::Sleep(_))) {
             let mut edges = BTreeMap::from([
-                ("sleeping".into(), "@wait".into()),
-                ("invalid".into(), "@user".into()),
+                ("sleeping".into(), Target::Wait),
+                ("invalid".into(), Target::User),
             ]);
             if let Some(target) = &self.then {
-                edges.insert("then".into(), target.clone());
+                edges.insert("then".into(), Target::parse(target));
             }
             if self.when.is_some() {
-                edges.insert("unknown".into(), "@wait".into());
+                edges.insert("unknown".into(), Target::Wait);
             }
             return edges;
         }
         let mut edges = self
             .on
             .iter()
-            .map(|(outcome, route)| (outcome.clone(), route.target().to_owned()))
+            .map(|(outcome, route)| (outcome.clone(), Target::parse(route.target())))
             .collect::<BTreeMap<_, _>>();
         for outcome in ["timeout", "invalid"] {
-            edges
-                .entry(outcome.into())
-                .or_insert_with(|| "@user".into());
+            edges.entry(outcome.into()).or_insert(Target::User);
         }
         edges
     }
 }
 
 impl Step {
-    fn edges(&self) -> BTreeMap<&'static str, (&str, bool)> {
+    fn edges(&self) -> BTreeMap<&'static str, (Target, bool)> {
         [
-            ("then", self.then.first().map(String::as_str), None),
-            ("failed", self.on.failed.as_deref(), None),
-            ("asked", self.on.asked.as_deref(), None),
-            ("cap", self.on.cap.as_deref(), Some("@user")),
-            ("capacity", self.on.capacity.as_deref(), Some("@failed")),
+            ("then", self.then.first(), None),
+            ("failed", self.on.failed.as_ref(), None),
+            ("asked", self.on.asked.as_ref(), None),
+            ("cap", self.on.cap.as_ref(), Some(Target::User)),
+            ("capacity", self.on.capacity.as_ref(), Some(Target::Failed)),
         ]
         .into_iter()
         .filter_map(|(outcome, target, default)| {
-            Some((outcome, (target.or(default)?, target.is_some())))
+            let explicit = target.is_some();
+            Some((
+                outcome,
+                (
+                    target.map(|target| Target::parse(target)).or(default)?,
+                    explicit,
+                ),
+            ))
         })
         .collect()
     }

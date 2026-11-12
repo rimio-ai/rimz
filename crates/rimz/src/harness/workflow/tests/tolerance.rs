@@ -5,7 +5,7 @@ const SIMPLE: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='p
 const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
 const DELAY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok={to='@done',delay='30m'}\non.pending='build'\n";
 
-fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
+fn loaded(text: &str) -> Result<Definition, SpecErr> {
     let (_home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), text).unwrap();
     load(&dir)
@@ -428,7 +428,12 @@ fn invalid_or_misplaced_delays_warn_and_keep_the_route() {
             "an optional delay must not refuse: {result:?}"
         );
         let spec = result.unwrap();
-        assert_eq!(spec.target("pick", "ok").as_deref(), Some(target));
+        assert_eq!(
+            spec.target("pick", "ok")
+                .as_ref()
+                .map(|target| target.as_str()),
+            Some(target)
+        );
         assert_eq!(spec.ignored.len(), 1, "{text}: {:?}", spec.ignored);
         assert_eq!(spec.ignored[0].path, "checks.pick.on.ok.delay");
         let edges = serde_json::to_value(spec.edges("pick")).unwrap();

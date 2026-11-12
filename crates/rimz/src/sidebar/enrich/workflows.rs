@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::StatePaths;
 use crate::disk::parse_cache::KeyedParseCache;
-use crate::harness::workflow::{WorkflowSpec, hops, reached};
+use crate::harness::workflow::{Definition, hops, reached};
 use crate::store::snapshot::{
     SidebarSnapshot, SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind,
 };
@@ -11,7 +11,7 @@ use crate::store::workflow::{JournalEntry, RunOrigin, RunRecord, RunState};
 
 thread_local! {
     // Sealed specs are immutable; the shared cache bounds retained paths to 1,024.
-    static SPECS: KeyedParseCache<WorkflowSpec> = KeyedParseCache::default();
+    static SPECS: KeyedParseCache<Definition> = KeyedParseCache::default();
     // Apply the current held verdict after reading the cached journal.
     static JOURNALS: KeyedParseCache<Vec<JournalEntry>> = KeyedParseCache::default();
 }
@@ -83,7 +83,7 @@ pub(super) fn bind_agents(snapshot: &mut SidebarSnapshot, records: &[RunRecord])
 
 fn project(
     record: &RunRecord,
-    spec: Option<&WorkflowSpec>,
+    spec: Option<&Definition>,
     reached: Option<&BTreeSet<String>>,
 ) -> Option<SidebarWorkflow> {
     if record.state.is_terminal() {
@@ -100,7 +100,7 @@ fn project(
     } else {
         WorkflowNodeKind::Check
     };
-    let walk = spec.map(WorkflowSpec::walk).unwrap_or_default();
+    let walk = spec.map(Definition::walk).unwrap_or_default();
     let current = walk.nodes.iter().find(|node| node.node == name);
     let detour_parent = current.and_then(|node| node.hangs_under.clone());
     let track = if current.is_some() {
@@ -222,7 +222,7 @@ mod tests {
         .unwrap()
     }
 
-    fn spec() -> WorkflowSpec {
+    fn spec() -> Definition {
         toml::from_str(
             r#"
             [workflow]

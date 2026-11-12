@@ -2,7 +2,7 @@
 
 use jiff::Timestamp;
 use rimz::config::GlyphRole;
-use rimz::harness::workflow::WorkflowSpec;
+use rimz::harness::workflow::Definition;
 use rimz::store::workflow::{Asking, ParkReason, RunRecord, RunState};
 
 use super::render;
@@ -75,7 +75,7 @@ pub(super) fn deployed_definition(
 pub(super) fn sealed_specs(
     state: &rimz::StatePaths,
     records: &[RunRecord],
-) -> std::collections::BTreeMap<rimz::ids::WorkflowRunId, WorkflowSpec> {
+) -> std::collections::BTreeMap<rimz::ids::WorkflowRunId, Definition> {
     records
         .iter()
         .filter(|record| !record.state.is_terminal())
@@ -112,7 +112,7 @@ pub(super) fn since(record: &RunRecord) -> Timestamp {
 
 pub(super) fn wait(
     record: &RunRecord,
-    spec: Option<&WorkflowSpec>,
+    spec: Option<&Definition>,
     now: Timestamp,
 ) -> Option<String> {
     let wait = record.wait.as_ref()?;
@@ -182,7 +182,7 @@ pub(super) fn wait(
 
 pub(super) fn park(
     record: &RunRecord,
-    spec: Option<&WorkflowSpec>,
+    spec: Option<&Definition>,
     now: Timestamp,
 ) -> Option<String> {
     if record.state != RunState::Parked {
@@ -215,7 +215,7 @@ pub(super) fn park(
 
 pub(super) fn detail(
     record: &RunRecord,
-    spec: Option<&WorkflowSpec>,
+    spec: Option<&Definition>,
     now: Timestamp,
     agent: Option<&str>,
 ) -> String {
@@ -259,7 +259,7 @@ pub(super) fn detail(
 
 pub(super) fn with_you_suffix(
     record: &RunRecord,
-    spec: Option<&WorkflowSpec>,
+    spec: Option<&Definition>,
     now: Timestamp,
 ) -> String {
     let phrase = spec
@@ -463,7 +463,7 @@ mod tests {
     fn sleeps_replace_every_wait_phrase_with_the_entry_based_clock() {
         let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(12);
         let actual = ["", "when=['ci=passed']\n"].map(|when| {
-            let spec: WorkflowSpec = toml::from_str(&format!(
+            let spec: Definition = toml::from_str(&format!(
                 "[workflow]\nscope='worktree'\nstart='ruled'\n\
                  [checks.ruled]\nsleep='30m'\nthen='fix'\n{when}"
             ))

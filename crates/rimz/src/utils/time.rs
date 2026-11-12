@@ -103,7 +103,7 @@ impl FromStr for ClockTime {
 }
 
 /// Failures while parsing RimZ's compact duration and wall-clock inputs.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum TimeInputErr {
     #[error("duration is empty")]
     EmptyDuration,

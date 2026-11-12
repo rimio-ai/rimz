@@ -63,7 +63,7 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
     }
     for source in spec.checks.keys().chain(spec.steps.keys()) {
         for edge in spec.edges(source) {
-            if edge.target == node && edge.fires != Fireability::Never {
+            if edge.target.as_str() == node && edge.fires != Fireability::Never {
                 from.push(format!(
                     "{source} by {}{}",
                     edge.outcome,

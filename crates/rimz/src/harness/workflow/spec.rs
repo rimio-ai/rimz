@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::definition::Definition;
 use crate::harness::signal::{
     SelectorErr, SignalSelector, default_signal_match_key, is_match_wildcard, parse_signal_selector,
 };
@@ -352,6 +353,12 @@ impl Wake {
         };
         let selector = parse_signal_selector("workflow wake", raw, Some(&matches))?;
         Ok((selector, matches))
+    }
+
+    pub(super) fn selector(&self) -> &str {
+        match self {
+            Self::Selector(signal) | Self::Binding { signal, .. } => signal,
+        }
     }
 
     pub(super) fn prompt(&self) -> Option<&str> {
@@ -775,13 +782,13 @@ pub enum SpecErr {
     SelfSignal,
 }
 
-pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
+pub fn load(dir: &Path) -> Result<Definition, SpecErr> {
     let path = crate::disk::paths::workflow_spec_file(dir);
     let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io { path, source })?;
     parse(&text)
 }
 
-pub(crate) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
+pub(crate) fn parse(text: &str) -> Result<Definition, SpecErr> {
     let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
         source,
@@ -837,7 +844,7 @@ pub(crate) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
             },
         );
     }
-    Ok(spec)
+    Ok(Definition::compile(spec))
 }
 
 fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {

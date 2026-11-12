@@ -1240,7 +1240,7 @@ pub(super) struct WorkflowRunRow {
 
 /// A run's sealed graph and journal, read for the loop views' per-fire forensics.
 pub(super) struct RunEvidence {
-    pub(super) spec: rimz::harness::workflow::WorkflowSpec,
+    pub(super) spec: rimz::harness::workflow::Definition,
     pub(super) journal: Vec<rimz::store::workflow::JournalEntry>,
 }
 
@@ -1250,7 +1250,7 @@ impl WorkflowRunRow {
         task: &str,
         root: &Path,
         launches: &BTreeMap<PathBuf, launch_ledger::WorkflowLaunchRecord>,
-        specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::WorkflowSpec>,
+        specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::Definition>,
         now: Timestamp,
     ) -> Vec<Self> {
         let mut runs = Vec::new();
@@ -1306,7 +1306,7 @@ impl WorkflowRunRow {
         records: &[rimz::store::workflow::RunRecord],
         task: &str,
         root: &Path,
-        specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::WorkflowSpec>,
+        specs: &BTreeMap<rimz::ids::WorkflowRunId, rimz::harness::workflow::Definition>,
         now: Timestamp,
     ) -> Vec<Self> {
         records
@@ -1318,7 +1318,7 @@ impl WorkflowRunRow {
 
     pub(super) fn of_record(
         record: &rimz::store::workflow::RunRecord,
-        spec: Option<&rimz::harness::workflow::WorkflowSpec>,
+        spec: Option<&rimz::harness::workflow::Definition>,
         now: Timestamp,
     ) -> Self {
         let park = record.park.as_ref();
