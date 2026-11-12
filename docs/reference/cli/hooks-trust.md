@@ -19,7 +19,7 @@ Rerunning install is safe. RimZ reclaims its own entries and writes the current 
 
 ```console
 $ rimz hooks install claude
-✓ claude  installed 13 hooks → ~/.claude/settings.json  (updated existing config)
+✓ claude  installed 13 hooks → ~/.claude/settings.json
 
   undo     rimz hooks uninstall
   preview  rimz hooks install --dry-run
@@ -32,15 +32,17 @@ The summary after the agent name says what install found:
 | --- | --- |
 | `installed N hooks` | The agent had no RimZ hooks. |
 | `refreshed N hooks` | A managed integration file or Codex hook definition needed an upgrade, or Codex's routine-command rules needed adding, updating, or removing. |
-| `hooks up to date (N)` | RimZ hooks were already installed. The row carries no file annotation. |
+| `hooks up to date (N)` | RimZ hooks were already installed. |
 
-The annotation is `(new file)` when install created the file, `(updated existing config)` when it edited one, and `(removed)` when it deleted one. An agent with two files prints the second as an indented `config → PATH` line.
+Each agent's result starts with one line within 80 columns, which names the first file install wrote when it fits. Every file that line does not name, such as Codex's `rules/rimz.rules` or a first path too long for the line, follows on its own indented `config →` line, or `removed →` for a file the install deleted, such as Codex's rules file under `[agents] allow-routine-rimz = false`. Hooks the agent will not run until you approve them print as a `!` line under that agent's result, and `All set` prints only when no agent has one.
 
-Codex and Hermes run a new or changed hook only after you approve it in the agent itself. When installed hooks are unapproved, including outdated Codex trust, install and `rimz start` print one line naming the hooks and the fix, and the `HOOKS` row of `rimz doctor` names the same fix:
+Codex and Hermes run a new or changed hook only after you approve it in the agent itself. When installed hooks are unapproved, including outdated Codex trust, install and `rimz start` print a `!` line counting them with the fix under it, and the `HOOKS` row of `rimz doctor` names the same fix:
 
 ```text
-codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks
-hermes hooks are installed but untrusted (…) — hermes silently skips them; launch hermes in a terminal and answer y to each RimZ hook prompt
+! codex ignores 11 hooks until trusted
+  fix: run /hooks inside codex and trust the RimZ hooks
+! hermes ignores 1 hook until trusted
+  fix: launch hermes in a terminal and answer y to each RimZ hook prompt
 ```
 
 An `rimz agents` launch, restart, resume, or fork from your own shell proceeds with one notice per account: choose **Trust all and continue** in Codex's new pane, or RimZ cannot track it. Agent-started launches, teams, loops, and subagent resumes refuse before opening panes, naming the command to ask you to run once. Room recovery skips that agent and names a user-run fix. RimZ never grants hook trust or bypasses Codex's review. [The account check at launch](./agents.md#the-account-check-at-launch) defines which starts are watched; account selection and headless checks are unchanged.

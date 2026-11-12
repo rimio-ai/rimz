@@ -67,7 +67,7 @@ Both paths are compared after lexical normalization (`utils::path::normalize_pat
 
 The installed file names itself on its first line with a `_rimz_managed` key. The code relies on the v3 hook schema accepting that extra top-level key (the comment on `HOOK_SOURCE`). An unmarked file is RimZ's when its `hooks` array is non-empty and every `action.command` contains `hooks feed --source kiro` (`install::legacy_owned`). Install deletes and rewrites such a file, and uninstall removes it. Any other unmarked file is refused and left untouched.
 
-Install and preview refuse when `kiro-cli --version` reports a release older than 2.31.0 (`install::refuse_old_cli`). An unprobeable binary installs. The same check is the integration's `install_blocker`, so the detected-agents install skips Kiro, `rimz setup` marks it blocked, and `rimz doctor` reports the hook status as blocked with the upgrade fix. Uninstall has no version gate.
+Install and preview refuse when `kiro-cli --version` reports a release older than 2.31.0 (`install::refuse_old_cli`). An unprobeable binary installs. The same check is the integration's `install_blocker`, so the detected-agents install skips Kiro, `rimz setup` leaves it out of its hooks question and its `rimz hooks install` hint, and `rimz doctor` reports the hook status as blocked with the upgrade fix. Uninstall has no version gate.
 
 Every hook runs `rimz hooks feed --source kiro || true`, because a `Stop` hook that exits 1 continues the turn ([reference](../../externals/agent-adapter/kiro-reference.md#hooks)). `SessionEnd` has a 5-second timeout, the engine's shared teardown budget, and the other four hooks have 10 seconds. Neutral output is empty stdout and exit 0 on every trigger.
 

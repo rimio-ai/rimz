@@ -309,12 +309,12 @@ Questions written in prose can request the same attention with [`rimz asks raise
 
 ## Configuration
 
-RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. [Packs](./docs/reference/cli/packs.md) supply definitions and skills from Git or linked checkouts below your own home files; linked checkout edits load without a copy or reinstall. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
+RimZ runs with zero configuration, and everything you can tune is a plain file you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), so the files are their own reference; the answers to its questions are written at its closing review. Agent profiles, teams, and skills are Markdown beside them, under `~/.rimz/agents/`, `~/.rimz/teams/`, and `~/.rimz/skills/`. [Packs](./docs/reference/cli/packs.md) supply definitions and skills from Git or linked checkouts below your own home files; linked checkout edits load without a copy or reinstall. After setup, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
 
 For the best experience, we recommend one pass of these:
 
 ```sh
-rimz setup                                    # once: detect the machine, write the commented defaults
+rimz setup                                    # once: write the commented defaults, ask hooks, keys, look
 
 # Appearance: truecolor, sharper glyphs, a companion
 rimz config set theme.style modern            # truecolor + Nerd Font icons
@@ -421,7 +421,7 @@ A ◐ names its own limit: part of the detail, or the whole of it a beat late. T
 
 The [documentation index](./docs/README.md) maps the whole set. Highlights:
 
-- [Set up your machine](./docs/guide/setup.md): one run of `rimz setup`, with the config it writes, the agent hooks, the color and glyph probes, the pet, and hands-off automation
+- [Set up your machine](./docs/guide/setup.md): one run of `rimz setup`, with the config it writes, the agent hooks, the multiplexer and room keys, the color and glyph probes, the pet, hands-off automation, and the review that writes your answers
 - [Working with agents](./docs/README.md#working-with-agents): [agents](./docs/guide/fleet.md) · [the sidebar](./docs/guide/sidebar.md) · [token insight](./docs/guide/insight.md) · [remote](./docs/guide/remote.md) · [web](./docs/guide/web.md)
 - [Harness engineering](./docs/README.md#harness-engineering): [worktrees](./docs/guide/worktrees.md) · [messaging](./docs/guide/messaging.md) · [teams](./docs/guide/teams.md) · [scripting agents](./docs/guide/scripting.md) · [loops & schedules](./docs/guide/loops.md) · [notifications](./docs/guide/notifications.md) · [budgets](./docs/guide/budget.md)
 - [Customization](./docs/README.md#customization): [configuration](./docs/guide/configuration.md) · [provider accounts](./docs/guide/accounts.md) · [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md) · [Zellij and tmux](./docs/guide/multiplexer.md)
