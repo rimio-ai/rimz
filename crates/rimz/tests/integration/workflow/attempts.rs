@@ -337,9 +337,14 @@ fn budget_park_keeps_every_workflow_lifecycle_live() {
         let room = Room::new(&format!("lifecycle='{lifecycle}'\n"));
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
-        let state = room.env.state_path_for(&room.env.project_root);
-        let (parked, wrote) =
-            rimz::harness::run::budget_exceeded(&state, &run.run_id, Some(1.25)).unwrap();
+        let store = room.env.store();
+        let (parked, wrote) = rimz::harness::run::budget_exceeded(
+            store.paths(),
+            store.runtime_paths(),
+            &run.run_id,
+            Some(1.25),
+        )
+        .unwrap();
         assert!(!wrote, "a budget park must not settle a {lifecycle} run");
         assert_eq!(parked.status, RunStatus::Running);
         success(
@@ -1925,6 +1930,7 @@ fn terminal_write_without_a_hook_wakes_the_workflow() {
         .unwrap();
         rimz::harness::run::fail_if_nonterminal(
             &state,
+            &rimz::RuntimePaths::for_state(&state).unwrap(),
             &id.parse().unwrap(),
             "provider exited without a hook",
         )

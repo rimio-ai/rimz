@@ -147,7 +147,7 @@ fn terminal_run_terminates_the_command_group_then_kills_after_grace() {
         .next()
         .expect("command process");
     let descendants = rimz::proc::children(group);
-    rimz::harness::run::cancel(store.paths(), &record.run_id).unwrap();
+    rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !terminated.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));

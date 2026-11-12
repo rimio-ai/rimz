@@ -853,7 +853,8 @@ fn stop_preparation_stamps_entire_selected_fleet_before_cancellation() {
             run.prompt
         );
     }
-    rimz::harness::run::cancel(store.paths(), &runs[0].run_id).expect("cancel first");
+    rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &runs[0].run_id)
+        .expect("cancel first");
     assert!(
         rimz::harness::run::load(store.paths(), &runs[1].run_id)
             .expect("load second")

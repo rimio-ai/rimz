@@ -498,6 +498,7 @@ fn open_fresh(
         if let Some(record) = &record {
             let _ = crate::harness::run::fail_if_nonterminal(
                 store.paths(),
+                store.runtime_paths(),
                 &record.run_id,
                 &failure_message(error),
             );

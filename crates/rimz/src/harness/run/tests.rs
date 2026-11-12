@@ -28,6 +28,11 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     (dir, paths, record)
 }
 
+/// Runtime paths beside a `setup` run's state, for a transition that reads spend.
+fn runtime_for(paths: &StatePaths) -> RuntimePaths {
+    RuntimePaths::for_state_under(paths, &paths.root.join("rt"))
+}
+
 #[test]
 fn workflow_turn_stops_keep_the_run_open_until_a_clean_end() {
     use crate::store::run::StoppedTurnDisposition;
@@ -136,7 +141,8 @@ fn workflow_budget_parks_never_settle_runs() {
             role: crate::agents::WorkflowAttemptRole::Step,
         });
         create(&paths, &record).unwrap();
-        let (parked, wrote) = budget_exceeded(&paths, &record.run_id, Some(1.25)).unwrap();
+        let (parked, wrote) =
+            budget_exceeded(&paths, &runtime_for(&paths), &record.run_id, Some(1.25)).unwrap();
         assert!(!wrote, "workflow budget parks keep {lifecycle:?} runs open");
         assert_eq!(parked, record);
     }
@@ -408,7 +414,7 @@ fn session_exit_rechecks_binding_and_cancellation_after_reading_spend() {
                 reads += 1;
                 if reads == 1 {
                     if cancel_during_read {
-                        cancel(&paths, &record.run_id).unwrap();
+                        cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
                     } else {
                         let observation = AgentLifecycleObservation::new(
                             Some("cleared".into()),
@@ -619,7 +625,7 @@ fn peer_responses_preserve_each_turn() {
     second.last_message = Some("second answer".into());
     for record in [&first, &second] {
         create(&paths, record).unwrap();
-        cancel(&paths, &record.run_id).unwrap();
+        cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
         let path = paths
             .out_reader_dir(Some("launcher"))
             .join(format!("peer.{}.output", record.run_id));
@@ -673,10 +679,10 @@ fn responses_follow_each_terminal_transition() {
             .unwrap();
             match ending {
                 "cancel" => {
-                    cancel(&paths, &record.run_id).unwrap();
+                    cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
                 }
                 "timeout" => {
-                    timeout(&paths, &record.run_id).unwrap();
+                    timeout(&paths, &runtime_for(&paths), &record.run_id).unwrap();
                 }
                 _ => {
                     let observation = AgentLifecycleObservation::new(
@@ -957,6 +963,7 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
 
     let (_, wrote) = timeout_if_due(
         &paths,
+        &runtime_for(&paths),
         &record.run_id,
         deadline - std::time::Duration::from_secs(1),
         None,
@@ -965,13 +972,14 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
     assert!(!wrote);
 
     let (settled, wrote) =
-        timeout_if_due(&paths, &record.run_id, deadline, None).expect("settle due deadline");
+        timeout_if_due(&paths, &runtime_for(&paths), &record.run_id, deadline, None)
+            .expect("settle due deadline");
     assert!(wrote);
     assert_eq!(settled.status, RunStatus::TimedOut);
     assert_eq!(settled.completed_at, Some(deadline));
 
-    let (_, wrote) =
-        timeout_if_due(&paths, &record.run_id, deadline, None).expect("repeat due deadline");
+    let (_, wrote) = timeout_if_due(&paths, &runtime_for(&paths), &record.run_id, deadline, None)
+        .expect("repeat due deadline");
     assert!(!wrote);
 }
 
@@ -1079,6 +1087,7 @@ fn kill_harvest_is_write_once_and_published_only_after_grace() {
         create(&paths, &record).unwrap();
         let (_, wrote) = timeout_if_due(
             &paths,
+            &runtime_for(&paths),
             &record.run_id,
             record.started_at,
             Some("partial answer".into()),
@@ -1088,6 +1097,7 @@ fn kill_harvest_is_write_once_and_published_only_after_grace() {
         assert_eq!(load(&paths, &record.run_id).unwrap(), record);
         let (settled, wrote) = timeout_if_due(
             &paths,
+            &runtime_for(&paths),
             &record.run_id,
             record.started_at + std::time::Duration::from_secs(180),
             Some("partial answer".into()),
@@ -1770,10 +1780,10 @@ fn terminal_writes_clear_parked_runs() {
         assert!(load(&paths, &record.run_id).unwrap().parked_at.is_some());
         match status {
             RunStatus::Canceled => {
-                cancel(&paths, &record.run_id).unwrap();
+                cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
             }
             RunStatus::TimedOut => {
-                timeout(&paths, &record.run_id).unwrap();
+                timeout(&paths, &runtime_for(&paths), &record.run_id).unwrap();
             }
             _ => {
                 observation.signal = LifecycleSignal::Ended;
@@ -1892,13 +1902,13 @@ fn same_kind_child_process_does_not_complete_bound_parent_run() {
 #[test]
 fn terminal_transitions_are_once_only_and_map_exit_codes() {
     let (_dir, paths, record) = setup();
-    let timed_out = timeout(&paths, &record.run_id).unwrap();
+    let timed_out = timeout(&paths, &runtime_for(&paths), &record.run_id).unwrap();
     assert_eq!(timed_out.status, RunStatus::TimedOut);
     assert!(timed_out.completed_at.is_some());
     assert_eq!(timed_out.status.exit_code(), 124);
 
     assert!(
-        fail_if_nonterminal(&paths, &record.run_id, "late")
+        fail_if_nonterminal(&paths, &runtime_for(&paths), &record.run_id, "late")
             .unwrap()
             .is_none()
     );
@@ -1907,18 +1917,19 @@ fn terminal_transitions_are_once_only_and_map_exit_codes() {
     assert_eq!(still_timed_out.failure_tail, None);
 
     let (_dir, paths, record) = setup();
-    let (canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
+    let (canceled, wrote) = cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
     assert!(wrote);
     assert_eq!(canceled.status, RunStatus::Canceled);
     assert!(canceled.completed_at.is_some());
     assert_eq!(canceled.status.exit_code(), 130);
 
-    let (still_canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
+    let (still_canceled, wrote) = cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
     assert!(!wrote);
     assert_eq!(still_canceled.status, RunStatus::Canceled);
 
     let (_dir, paths, record) = setup();
-    let (budgeted, wrote) = budget_exceeded(&paths, &record.run_id, Some(5.25)).unwrap();
+    let (budgeted, wrote) =
+        budget_exceeded(&paths, &runtime_for(&paths), &record.run_id, Some(5.25)).unwrap();
     assert!(wrote);
     assert_eq!(budgeted.status, RunStatus::BudgetExceeded);
     assert_eq!(budgeted.cost_usd, Some(5.25));
@@ -2102,15 +2113,33 @@ fn settle_verify_reopens_a_red_run_under_the_cap() {
 
 #[test]
 fn lifecycle_spend_is_stamped_before_the_workflow_wake() {
-    assert_lifecycle_spend_wake(false);
+    assert_spend_before_workflow_wake(SpendWake::Hook);
 }
 
 #[test]
 fn session_exit_spend_is_stamped_before_the_workflow_wake() {
-    assert_lifecycle_spend_wake(true);
+    assert_spend_before_workflow_wake(SpendWake::SessionExit);
 }
 
-fn assert_lifecycle_spend_wake(session: bool) {
+#[test]
+fn an_expired_hold_wakes_its_workflow_once_with_spend() {
+    assert_spend_before_workflow_wake(SpendWake::ExpiredHold);
+}
+
+#[test]
+fn a_cancel_wakes_its_workflow_once_with_spend() {
+    assert_spend_before_workflow_wake(SpendWake::Cancel);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpendWake {
+    Hook,
+    SessionExit,
+    ExpiredHold,
+    Cancel,
+}
+
+fn assert_spend_before_workflow_wake(end: SpendWake) {
     use std::sync::Mutex;
     use tracing_subscriber::prelude::*;
 
@@ -2145,9 +2174,16 @@ fn assert_lifecycle_spend_wake(session: bool) {
     let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
     let store = Store::open(paths.clone(), runtime).unwrap();
     record.agent_id = Some("priced-session".into());
-    if session {
-        record.lifecycle = crate::store::run::RunLifecycle::Session;
-        record.status = RunStatus::Running;
+    match end {
+        SpendWake::SessionExit => {
+            record.lifecycle = crate::store::run::RunLifecycle::Session;
+            record.status = RunStatus::Running;
+        }
+        SpendWake::ExpiredHold => {
+            record.status = RunStatus::Running;
+            record.interrupted_at = Some(Timestamp::now() - Duration::from_secs(61));
+        }
+        SpendWake::Hook | SpendWake::Cancel => {}
     }
     // A missing workflow makes the wake observable synchronously without spawning a child.
     record.workflow = Some(crate::agents::WorkflowAttemptRef {
@@ -2177,8 +2213,8 @@ fn assert_lifecycle_spend_wake(session: bool) {
     });
     let ended = AgentLifecycleObservation::new(record.agent_id.clone(), LifecycleSignal::Ended);
     let adapter = crate::agents::definition_by_kind("claude").unwrap();
-    let settled = tracing::subscriber::with_default(subscriber, || {
-        if session {
+    let settled = tracing::subscriber::with_default(subscriber, || match end {
+        SpendWake::SessionExit => {
             let settled =
                 settle_session_exit(&store, &record.run_id, || panic!("registered run capture"))
                     .unwrap();
@@ -2186,11 +2222,15 @@ fn assert_lifecycle_spend_wake(session: bool) {
                 settled.is_some(),
                 "provider exit must settle a registered session run"
             );
-            return settled.unwrap();
+            settled.unwrap()
         }
-        settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
+        SpendWake::Hook => settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
             .unwrap()
+            .unwrap(),
+        SpendWake::ExpiredHold => expire_interrupt(&store, &record.run_id, None)
             .unwrap()
+            .expect("an expired hold settles"),
+        SpendWake::Cancel => cancel_and_wake(&store, &record.run_id).unwrap(),
     });
     assert_eq!(settled.cost_usd, Some(1.25));
     assert_eq!(
@@ -2523,7 +2563,7 @@ fn record_provider_process_persists_pid_reuse_guard() {
 fn fail_if_nonterminal_writes_the_reason_with_the_failed_status() {
     let (_dir, paths, record) = setup();
     let reason = format!("{}{}\n", "a".repeat(FAILURE_TAIL_CAP), "b".repeat(20));
-    let failed = fail_if_nonterminal(&paths, &record.run_id, &reason)
+    let failed = fail_if_nonterminal(&paths, &runtime_for(&paths), &record.run_id, &reason)
         .unwrap()
         .expect("newly failed");
     assert_eq!(failed.status, RunStatus::Failed);
@@ -2535,13 +2575,13 @@ fn fail_if_nonterminal_writes_the_reason_with_the_failed_status() {
 
     let (_dir, paths, record) = setup();
     record_failure_tail(&paths, &record.run_id, None, "pane tail").unwrap();
-    let failed = fail_if_nonterminal(&paths, &record.run_id, "launch error")
+    let failed = fail_if_nonterminal(&paths, &runtime_for(&paths), &record.run_id, "launch error")
         .unwrap()
         .expect("newly failed");
     assert_eq!(failed.failure_tail.as_deref(), Some("pane tail"));
 
     let (_dir, paths, record) = setup();
-    let failed = fail_if_nonterminal(&paths, &record.run_id, " \n")
+    let failed = fail_if_nonterminal(&paths, &runtime_for(&paths), &record.run_id, " \n")
         .unwrap()
         .expect("a blank reason still fails the run");
     assert_eq!(failed.status, RunStatus::Failed);
@@ -3092,7 +3132,7 @@ fn a_park_is_claimed_once_until_the_child_acts_again() {
     assert_eq!(stamp(), None);
     assert!(claim_limit_hold(&paths, &record.run_id, hold_at(resumed, hour)).unwrap());
 
-    cancel(&paths, &record.run_id).unwrap();
+    cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
     assert!(
         !claim_limit_hold(
             &paths,
@@ -3145,12 +3185,20 @@ fn a_hold_moves_both_deadline_stamps_once_per_park() {
     assert_eq!(crate::harness::deadline::due_rung(&loaded, deadline), None);
     assert!(!crate::harness::deadline::kill_due(&loaded, kill));
     assert!(crate::harness::deadline::kill_due(&loaded, kill + held));
-    let (_, wrote) = timeout_if_due(&paths, &record.run_id, kill, None).unwrap();
+    let (_, wrote) =
+        timeout_if_due(&paths, &runtime_for(&paths), &record.run_id, kill, None).unwrap();
     assert!(
         !wrote,
         "a held run is not timed out at its old kill instant"
     );
-    let (timed, wrote) = timeout_if_due(&paths, &record.run_id, kill + held, None).unwrap();
+    let (timed, wrote) = timeout_if_due(
+        &paths,
+        &runtime_for(&paths),
+        &record.run_id,
+        kill + held,
+        None,
+    )
+    .unwrap();
     assert!(wrote);
     assert_eq!(timed.status, RunStatus::TimedOut);
     assert_eq!(
@@ -3353,6 +3401,7 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     let (_dir, paths, record) = held_candidate();
     let failed = fail_limit_park(
         &paths,
+        &runtime_for(&paths),
         &record.run_id,
         activity,
         failure(LimitFailureCause::RefillUnknown),
@@ -3369,6 +3418,7 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     assert!(
         fail_limit_park(
             &paths,
+            &runtime_for(&paths),
             &record.run_id,
             activity,
             failure(LimitFailureCause::Refilled)
@@ -3391,6 +3441,7 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     assert!(
         fail_limit_park(
             &paths,
+            &runtime_for(&paths),
             &record.run_id,
             activity,
             failure(LimitFailureCause::RefillUnknown)
@@ -3412,6 +3463,7 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     assert!(
         fail_limit_park(
             &paths,
+            &runtime_for(&paths),
             &record.run_id,
             activity,
             failure(LimitFailureCause::ContinueFailed)
@@ -3428,6 +3480,7 @@ fn a_limit_park_fails_once_and_never_over_a_settled_or_claimed_run() {
     create(&paths, &record).unwrap();
     let failed = fail_limit_park(
         &paths,
+        &runtime_for(&paths),
         &record.run_id,
         activity,
         failure(LimitFailureCause::ContinueFailed),
@@ -3464,7 +3517,7 @@ fn a_stall_is_claimed_once_per_run_and_released_only_by_its_owner() {
     release_stall_notice(&paths, &record.run_id, at).unwrap();
     assert_eq!(stamp(), serde_json::to_value(later).unwrap());
     release_stall_notice(&paths, &record.run_id, later).unwrap();
-    cancel(&paths, &record.run_id).unwrap();
+    cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
     assert!(!claim_stall_notice(&paths, &record.run_id, later).unwrap());
 }
 
@@ -3479,7 +3532,7 @@ fn a_handover_stamps_an_open_run_clears_on_request_and_skips_a_settled_one() {
     assert!(!hand_over(&paths, &record.run_id, None).unwrap());
     assert_eq!(stamped(), None, "a failed split clears the stamp");
 
-    cancel(&paths, &record.run_id).unwrap();
+    cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
     assert!(!hand_over(&paths, &record.run_id, Some(old)).unwrap());
     assert_eq!(stamped(), None, "a settled run is never handed over");
 }
@@ -3540,7 +3593,8 @@ fn a_wrapper_fails_only_a_run_its_pane_still_owns() {
     let (_dir, paths, record, first, second) = handed_over_run();
     let third = PaneId::parse("tmux:%3").unwrap();
     let id = &record.run_id;
-    let fail = |pane: &PaneId| fail_if_owned(&paths, id, Some(pane), "").unwrap();
+    let fail =
+        |pane: &PaneId| fail_if_owned(&paths, &runtime_for(&paths), id, Some(pane), "").unwrap();
 
     assert_eq!(
         fail(&first),
@@ -3600,8 +3654,15 @@ fn a_rollback_or_a_rebind_of_the_stamped_pane_gives_the_run_back_to_it() {
     // The restart's split failed after the run settled some other way.
     let (_dir, paths, record, old, _) = handed_over_run();
     let id = &record.run_id;
-    timeout_if_due(&paths, id, record.started_at + Duration::from_secs(1), None).unwrap();
-    fail_if_nonterminal(&paths, id, "settled meanwhile").unwrap();
+    timeout_if_due(
+        &paths,
+        &runtime_for(&paths),
+        id,
+        record.started_at + Duration::from_secs(1),
+        None,
+    )
+    .unwrap();
+    fail_if_nonterminal(&paths, &runtime_for(&paths), id, "settled meanwhile").unwrap();
     assert!(!hand_over(&paths, id, None).unwrap());
     assert_eq!(load(&paths, id).unwrap().handed_over_from, None);
     let reopened = record_lifecycle(
@@ -3615,7 +3676,7 @@ fn a_rollback_or_a_rebind_of_the_stamped_pane_gives_the_run_back_to_it() {
     .unwrap();
     assert_eq!(reopened, None);
     assert_eq!(load(&paths, id).unwrap().status, RunStatus::Running);
-    let settled = fail_if_owned(&paths, id, Some(&old), "").unwrap();
+    let settled = fail_if_owned(&paths, &runtime_for(&paths), id, Some(&old), "").unwrap();
     assert_eq!(settled.map(|record| record.status), Some(RunStatus::Failed));
 
     // A new wrapper bound in the stamped pane's id (a reused id) owns the run again.
@@ -3624,7 +3685,11 @@ fn a_rollback_or_a_rebind_of_the_stamped_pane_gives_the_run_back_to_it() {
     record_pane(&paths, id, new).unwrap();
     record_pane(&paths, id, old.clone()).unwrap();
     assert_eq!(load(&paths, id).unwrap().handed_over_from, None);
-    assert!(fail_if_owned(&paths, id, Some(&old), "").unwrap().is_some());
+    assert!(
+        fail_if_owned(&paths, &runtime_for(&paths), id, Some(&old), "")
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// A running `rimz subagents` turn run bound to `child`, with a claimed warn rung and an earlier
@@ -3828,9 +3893,15 @@ fn runs_outside_the_window_fold_an_interrupt_as_before() {
 fn a_provider_exit_inside_the_window_reads_canceled() {
     let (_dir, paths, record) = interruptible();
     fold_turn(&paths, &record.run_id, interrupted(), None, false);
-    let settled = fail_if_owned(&paths, &record.run_id, None, "provider exited")
-        .unwrap()
-        .expect("newly settled");
+    let settled = fail_if_owned(
+        &paths,
+        &runtime_for(&paths),
+        &record.run_id,
+        None,
+        "provider exited",
+    )
+    .unwrap()
+    .expect("newly settled");
     assert_eq!(settled.status, RunStatus::Canceled);
     assert_eq!(settled.failure_tail.as_deref(), Some("provider exited"));
 
@@ -3840,9 +3911,15 @@ fn a_provider_exit_inside_the_window_reads_canceled() {
     assert_eq!(ended.status, RunStatus::Canceled, "a session end hook too");
 
     let (_dir, paths, record) = interruptible();
-    let settled = fail_if_owned(&paths, &record.run_id, None, "provider exited")
-        .unwrap()
-        .expect("newly settled");
+    let settled = fail_if_owned(
+        &paths,
+        &runtime_for(&paths),
+        &record.run_id,
+        None,
+        "provider exited",
+    )
+    .unwrap()
+    .expect("newly settled");
     assert_eq!(settled.status, RunStatus::Failed);
 }
 
@@ -3914,7 +3991,14 @@ fn a_claimed_stop_or_a_due_kill_leaves_a_held_run_to_the_kill() {
         None
     );
     let kill = crate::harness::deadline::kill_at(&record).unwrap();
-    let (timed, wrote) = timeout_if_due(store.paths(), &record.run_id, kill, None).unwrap();
+    let (timed, wrote) = timeout_if_due(
+        store.paths(),
+        store.runtime_paths(),
+        &record.run_id,
+        kill,
+        None,
+    )
+    .unwrap();
     assert!(wrote);
     assert_eq!(timed.status, RunStatus::TimedOut);
 
@@ -3953,4 +4037,358 @@ fn a_marker_opens_a_hold_only_while_it_is_newer_than_the_turn_start() {
         "a turn start folded after the host's read refuses its marker"
     );
     assert_eq!(load(&paths, &record.run_id).unwrap().interrupted_at, None);
+}
+
+/// A store over `interruptible`'s run, whose transcript prices `child`'s one turn at $1.00 for
+/// 100 input and 10 output tokens, with a context sidecar pricing it at `sidecar` when given.
+fn priced_store(sidecar: Option<f64>) -> (tempfile::TempDir, Store, RunRecord) {
+    let (dir, paths, mut record) = interruptible();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let transcript = dir.path().join("child.jsonl");
+    let row = serde_json::json!({
+        "timestamp":Timestamp::now().to_string(), "sessionId":"child", "costUSD":1.0,
+        "requestId":"req-child", "message":{"id":"msg-child", "model":"claude-sonnet-4-6",
+            "usage":{"input_tokens":100,"output_tokens":10}}
+    });
+    std::fs::write(&transcript, format!("{row}\n")).unwrap();
+    record.transcript_path = Some(transcript.display().to_string());
+    create(store.paths(), &record).unwrap();
+    if let Some(cost) = sidecar {
+        let mut context = crate::agents::AgentContext::new("claude", Timestamp::now());
+        context.cost = Some(crate::agents::AgentCost {
+            total_cost_usd: Some(cost),
+            ..Default::default()
+        });
+        crate::store::agent_context::write(
+            store.runtime_paths(),
+            "claude",
+            "child",
+            &context,
+            None,
+        )
+        .unwrap();
+    }
+    (dir, store, record)
+}
+
+/// Every transition that ends a supervised run outside the lifecycle fold.
+#[derive(Clone, Copy, Debug)]
+enum End {
+    Cancel,
+    Fail,
+    Kill,
+    WaiterTimeout,
+    ExpiredHold,
+    StrandedPark,
+    LimitPark,
+    UnservedWorkflow,
+    Budget,
+}
+
+impl End {
+    const ALL: [End; 9] = [
+        End::Cancel,
+        End::Fail,
+        End::Kill,
+        End::WaiterTimeout,
+        End::ExpiredHold,
+        End::StrandedPark,
+        End::LimitPark,
+        End::UnservedWorkflow,
+        End::Budget,
+    ];
+
+    /// Shape the stored `record` so this transition ends it, end it, and return the record the
+    /// transition returns for its waiter's wake.
+    fn end(self, store: &Store, mut record: RunRecord) -> RunRecord {
+        let (paths, runtime) = (store.paths(), store.runtime_paths());
+        let id = record.run_id.clone();
+        let now = Timestamp::now();
+        let ended = match self {
+            End::Cancel => cancel(paths, runtime, &id).unwrap().0,
+            End::Fail => fail_if_owned(paths, runtime, &id, None, "provider exited")
+                .unwrap()
+                .expect("an open run fails"),
+            End::Kill => {
+                let kill = crate::harness::deadline::kill_at(&record).unwrap();
+                timeout_if_due(paths, runtime, &id, kill, None).unwrap().0
+            }
+            End::WaiterTimeout => timeout(paths, runtime, &id).unwrap(),
+            End::ExpiredHold => {
+                record.interrupted_at = Some(now - Duration::from_secs(61));
+                create(paths, &record).unwrap();
+                expire_interrupt(store, &id, None)
+                    .unwrap()
+                    .expect("an expired hold settles")
+            }
+            End::StrandedPark => {
+                record.parked_at = Some(now);
+                create(paths, &record).unwrap();
+                let check = settle_stranded_park(store, &record, Some(now)).unwrap();
+                assert_eq!(check, ParkCheck::Settled);
+                load(paths, &id).unwrap()
+            }
+            End::LimitPark => fail_limit_park(
+                paths,
+                runtime,
+                &id,
+                now,
+                crate::store::run::LimitFailure {
+                    cause: crate::store::run::LimitFailureCause::RefillUnknown,
+                    refill_at: None,
+                    label: None,
+                },
+            )
+            .unwrap()
+            .expect("an unclaimed park fails"),
+            End::UnservedWorkflow => {
+                record.workflow = Some(crate::agents::WorkflowAttemptRef {
+                    run: crate::ids::WorkflowRunId::new(),
+                    seq: 1,
+                    role: crate::agents::WorkflowAttemptRole::Step,
+                });
+                create(paths, &record).unwrap();
+                cancel_unserved_workflow_run(store, &id).unwrap();
+                load(paths, &id).unwrap()
+            }
+            End::Budget => budget_exceeded(paths, runtime, &id, None).unwrap().0,
+        };
+        assert!(ended.status.is_terminal(), "{self:?} ends the run");
+        assert_eq!(
+            load(paths, &id).unwrap(),
+            ended,
+            "{self:?} returns what it wrote"
+        );
+        ended
+    }
+}
+
+#[test]
+fn every_terminal_transition_writes_spend_with_its_status() {
+    for end in End::ALL {
+        for held in [false, true] {
+            if held && !matches!(end, End::Cancel | End::Fail | End::Kill) {
+                continue;
+            }
+            let (_dir, store, mut record) = priced_store(None);
+            if held {
+                record.interrupted_at = Some(Timestamp::now() - Duration::from_secs(10));
+                create(store.paths(), &record).unwrap();
+            }
+            let ended = end.end(&store, record);
+            assert_eq!(
+                (ended.cost_usd, ended.input_tokens, ended.output_tokens),
+                (Some(1.0), Some(100), Some(10)),
+                "{end:?} (held: {held}) carries the transcript's spend in its terminal write"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_peer_or_team_run_records_no_spend_on_any_ending() {
+    for (end, team) in End::ALL
+        .into_iter()
+        .flat_map(|end| [(end, false), (end, true)])
+    {
+        let (_dir, store, mut record) = priced_store(Some(0.5));
+        if team {
+            record.team = Some(crate::store::run::TeamRun {
+                launch_id: "leader-launch".into(),
+                instance: "forge#lane".parse().unwrap(),
+            });
+        } else {
+            record.peer = Some(crate::store::run::PeerRun {
+                launch_id: "peer-launch".into(),
+                opened_by: Vec::new(),
+            });
+        }
+        create(store.paths(), &record).unwrap();
+        let ended = end.end(&store, record);
+        assert_eq!(
+            (ended.cost_usd, ended.input_tokens, ended.output_tokens),
+            (None, None, None),
+            "{end:?} (team: {team}) keeps one session's spend off a run it does not measure"
+        );
+    }
+}
+
+#[test]
+fn a_turn_run_prices_from_its_sidecar_then_its_transcript() {
+    let adapter = crate::agents::definition_by_kind("claude").unwrap();
+    for sidecar in [None, Some(0.5)] {
+        let (_dir, store, record) = priced_store(sidecar);
+        let observation = AgentLifecycleObservation::new(Some("child".into()), turn_ended());
+        let settled = settle_lifecycle(&store, &record.run_id, adapter, &observation, None)
+            .unwrap()
+            .expect("a turn end settles");
+        assert_eq!(
+            (
+                settled.cost_usd,
+                settled.input_tokens,
+                settled.output_tokens
+            ),
+            (Some(sidecar.unwrap_or(1.0)), Some(100), Some(10)),
+            "the hook settle with sidecar {sidecar:?}"
+        );
+
+        let (_dir, store, record) = priced_store(sidecar);
+        let (budgeted, _) = budget_exceeded(
+            store.paths(),
+            store.runtime_paths(),
+            &record.run_id,
+            Some(5.25),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                budgeted.cost_usd,
+                budgeted.input_tokens,
+                budgeted.output_tokens
+            ),
+            (Some(5.25), Some(100), Some(10)),
+            "the budget park's own cost wins over a read with sidecar {sidecar:?}"
+        );
+    }
+}
+
+#[test]
+fn a_refused_transition_leaves_a_priced_run_untouched() {
+    let (_dir, store, record) = priced_store(Some(0.5));
+    let (paths, runtime) = (store.paths(), store.runtime_paths());
+    let (_, wrote) =
+        timeout_if_due(paths, runtime, &record.run_id, Timestamp::now(), None).unwrap();
+    assert!(!wrote, "a kill not due");
+    assert_eq!(load(paths, &record.run_id).unwrap(), record);
+
+    let (_dir, store, mut record) = priced_store(Some(0.5));
+    let (paths, runtime) = (store.paths(), store.runtime_paths());
+    let pane = PaneId::parse("tmux:%1").unwrap();
+    record.handed_over_from = Some(pane.clone());
+    create(paths, &record).unwrap();
+    assert_eq!(
+        fail_if_owned(paths, runtime, &record.run_id, Some(&pane), "exited").unwrap(),
+        None,
+        "a superseded pane"
+    );
+    assert_eq!(load(paths, &record.run_id).unwrap(), record);
+
+    let (_dir, store, mut record) = priced_store(Some(0.5));
+    record.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    });
+    record.provider_pid = Some(std::process::id());
+    create(store.paths(), &record).unwrap();
+    cancel_unserved_workflow_run(&store, &record.run_id).unwrap();
+    assert_eq!(
+        load(store.paths(), &record.run_id).unwrap(),
+        record,
+        "a live provider"
+    );
+
+    let (_dir, store, mut record) = priced_store(Some(0.5));
+    let (paths, runtime) = (store.paths(), store.runtime_paths());
+    record.status = RunStatus::Completed;
+    record.cost_usd = Some(2.0);
+    create(paths, &record).unwrap();
+    for end in [End::Cancel, End::Fail, End::WaiterTimeout, End::Budget] {
+        match end {
+            End::Cancel => assert!(!cancel(paths, runtime, &record.run_id).unwrap().1),
+            End::Fail => assert!(
+                fail_if_nonterminal(paths, runtime, &record.run_id, "late")
+                    .unwrap()
+                    .is_none()
+            ),
+            End::WaiterTimeout => {
+                timeout(paths, runtime, &record.run_id).unwrap();
+            }
+            _ => assert!(
+                !budget_exceeded(paths, runtime, &record.run_id, None)
+                    .unwrap()
+                    .1
+            ),
+        }
+        assert_eq!(
+            load(paths, &record.run_id).unwrap(),
+            record,
+            "{end:?} over a terminal run"
+        );
+    }
+}
+
+#[test]
+fn a_verify_cancel_keeps_the_spend_its_completion_recorded() {
+    let (_dir, paths, mut record) = completed_for_verify();
+    record.cost_usd = Some(1.25);
+    record.input_tokens = Some(100);
+    create(&paths, &record).unwrap();
+    let VerifyStep::Settled(canceled) =
+        settle_verify(&paths, &record.run_id, red_verify(1), true, 3).unwrap()
+    else {
+        panic!("a requested cancel settles");
+    };
+    assert_eq!(canceled.status, RunStatus::Canceled);
+    assert_eq!(
+        (canceled.cost_usd, canceled.input_tokens),
+        (Some(1.25), Some(100))
+    );
+}
+
+#[test]
+fn a_terminal_write_reads_spend_again_when_the_binding_moves() {
+    let settle = |paths: &StatePaths, id: &RunId, spend: &mut dyn FnMut(&RunRecord) -> RunSpend| {
+        settle_terminal_with(paths, id, spend, |record, now| {
+            record.mark_terminal(RunStatus::Canceled, now)
+        })
+        .unwrap()
+    };
+
+    let (_dir, paths, record) = interruptible();
+    let mut reads = 0;
+    let (ended, wrote) = settle(&paths, &record.run_id, &mut |_| {
+        reads += 1;
+        if reads == 1 {
+            update_record(&paths, &record.run_id, |record, _| {
+                record.transcript_path = Some("/moved.jsonl".to_owned());
+                Ok(RecordMutation::Write(()))
+            })
+            .unwrap();
+        }
+        RunSpend {
+            cost_usd: Some(f64::from(reads)),
+            ..Default::default()
+        }
+    });
+    assert!(wrote);
+    assert_eq!(reads, 2, "a moved binding is read again");
+    assert_eq!(ended.cost_usd, Some(2.0), "never the stale read");
+    assert_eq!(load(&paths, &record.run_id).unwrap(), ended);
+
+    let (_dir, paths, record) = interruptible();
+    let (ended, wrote) = settle(&paths, &record.run_id, &mut |_| {
+        fail_if_nonterminal(&paths, &runtime_for(&paths), &record.run_id, "exited").unwrap();
+        RunSpend {
+            cost_usd: Some(1.0),
+            ..Default::default()
+        }
+    });
+    assert!(!wrote, "a run ended during the read keeps that ending");
+    assert_eq!(ended.status, RunStatus::Failed);
+    assert_eq!(load(&paths, &record.run_id).unwrap().cost_usd, None);
+
+    let (_dir, paths, record) = interruptible();
+    let (stored, _) = mark_terminal(&paths, &record.run_id, RunStatus::Completed).unwrap();
+    let (ended, wrote) = settle(&paths, &record.run_id, &mut |_| {
+        panic!("a run terminal at the unlocked load costs no read")
+    });
+    assert!(!wrote);
+    assert_eq!(ended, stored);
+
+    let (_dir, paths, record) = interruptible();
+    let (ended, wrote) = settle(&paths, &record.run_id, &mut |_| RunSpend::default());
+    assert!(wrote, "an empty read never blocks the terminal write");
+    assert_eq!(ended.status, RunStatus::Canceled);
 }

@@ -429,12 +429,13 @@ pub(super) fn fail_run(
     };
     let fail = || -> Result<()> {
         let paths = rimz::StatePaths::for_project_root(project_root)?;
+        let runtime = rimz::RuntimePaths::for_state(&paths)?;
         if let Some(record) = rimz::harness::run::fail_if_nonterminal(
             &paths,
+            &runtime,
             run_id,
             &crate::cli::render::error_line(error),
         )? {
-            let runtime = rimz::RuntimePaths::for_state(&paths)?;
             rimz::store::run::wake_run(&runtime, &record);
         }
         Ok(())

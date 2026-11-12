@@ -903,9 +903,12 @@ fn fail_restarted_run(
         },
         |reason| format!("restarted fresh ({reason}); its session did not resume"),
     );
-    if let Some(record) =
-        rimz::harness::run::fail_if_nonterminal(store.paths(), &run.run_id, &reason)?
-    {
+    if let Some(record) = rimz::harness::run::fail_if_nonterminal(
+        store.paths(),
+        store.runtime_paths(),
+        &run.run_id,
+        &reason,
+    )? {
         rimz::store::run::wake_run(store.runtime_paths(), &record);
     }
     Ok(())

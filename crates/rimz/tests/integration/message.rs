@@ -5068,6 +5068,96 @@ fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
     assert_eq!(ends[0].event_name.as_deref(), Some("rimz.subagent-stopped"));
 }
 
+#[test]
+fn a_stopped_subagent_waits_with_the_spend_its_transcript_priced() {
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let transcript = env.project_root.join("otter.jsonl");
+    let row = json!({
+        "timestamp":jiff::Timestamp::now().to_string(), "sessionId":"child", "costUSD":0.75,
+        "requestId":"req-otter", "message":{"id":"msg-otter", "model":"claude-sonnet-4-6",
+            "usage":{"input_tokens":120,"output_tokens":30}}
+    });
+    std::fs::write(&transcript, format!("{row}\n")).unwrap();
+    let transcript = transcript.display().to_string();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "parent",
+        LifecycleSignal::Registered,
+        |observation| observation.agent_name = Some("parent".to_owned()),
+    );
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "child",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+            observation.launch.isolation = Some(rimz::config::Isolation::Host);
+            observation.transcript_path = Some(transcript.clone());
+        },
+    );
+    let store = env.store();
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("child".into());
+    run.agent_name = Some("otter".to_owned());
+    run.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+    run.transcript_path = Some(transcript);
+    run.status = RunStatus::Running;
+    run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let panes = env.write_pane_fixture(&[]);
+    let as_parent = || {
+        let mut command = traced_rimz(&env, "stopped-spend-trace.log");
+        command
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "parent")
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{session} [Created 1s ago]\n"),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]");
+        command
+    };
+    run_success(
+        as_parent().args(["subagents", "stop", "otter"]),
+        "subagents stop",
+    );
+
+    // A canceled child makes the wait exit nonzero, and its report prints the
+    // run's cost and no token figures, so the tokens are read off the record.
+    let waited = as_parent()
+        .args(["subagents", "wait", "otter", "--json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&waited.stdout).unwrap();
+    assert_eq!(json["otter"]["status"], "canceled", "{json}");
+    assert_eq!(json["otter"]["cost"], 0.75, "{json}");
+    let stopped = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(
+        (stopped.input_tokens, stopped.output_tokens),
+        (Some(120), Some(30))
+    );
+}
+
 fn assert_ended_child_resume_refusal(unhooked: bool) {
     let env = Env::new();
     env.record(&env.project_root);
@@ -8539,7 +8629,12 @@ fn assert_ended_run_notice_canceled(command: &str, notice: HarnessNotice, busy: 
     let (env, message, pane_fixture) = run_notice_fixture(notice);
     queue_messages(&env, &[&message]);
     let store = env.store();
-    rimz::harness::run::cancel(store.paths(), message.about_run.as_ref().unwrap()).unwrap();
+    rimz::harness::run::cancel(
+        store.paths(),
+        store.runtime_paths(),
+        message.about_run.as_ref().unwrap(),
+    )
+    .unwrap();
     if busy {
         store
             .append_event(&EventEnvelope::agent_lifecycle(
@@ -8724,7 +8819,12 @@ fn delivery_filters_ended_run_notices_from_a_batch() {
     };
     stale_stop.text = "Time is up.".to_owned();
     queue_messages(&env, &[&head, &moot, &stale_stop, &live]);
-    rimz::harness::run::cancel(store.paths(), moot.about_run.as_ref().unwrap()).unwrap();
+    rimz::harness::run::cancel(
+        store.paths(),
+        store.runtime_paths(),
+        moot.about_run.as_ref().unwrap(),
+    )
+    .unwrap();
     let trace_log = env.project_root.join("run-notice-batch-trace.log");
     run_success(
         &mut run_notice_delivery(&env, &head, &pane_fixture, &trace_log, "deliver"),
@@ -8772,8 +8872,12 @@ fn delivery_rechecks_run_end_between_scan_and_claim() {
             .spawn()
             .unwrap();
         let mut release = before.arrive();
-        rimz::harness::run::cancel(env.store().paths(), message.about_run.as_ref().unwrap())
-            .unwrap();
+        rimz::harness::run::cancel(
+            env.store().paths(),
+            env.store().runtime_paths(),
+            message.about_run.as_ref().unwrap(),
+        )
+        .unwrap();
         release.write_all(&[1]).unwrap();
         let output = child.wait_with_output().unwrap();
         let (live, history) = env.store().list_messages_and_history().unwrap();
@@ -8846,7 +8950,12 @@ fn delivery_rebases_batches_after_retiring_their_head() {
             .spawn()
             .unwrap();
         let mut release = before.arrive();
-        rimz::harness::run::cancel(env.store().paths(), head.about_run.as_ref().unwrap()).unwrap();
+        rimz::harness::run::cancel(
+            env.store().paths(),
+            env.store().runtime_paths(),
+            head.about_run.as_ref().unwrap(),
+        )
+        .unwrap();
         release.write_all(&[1]).unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{output:?}");
