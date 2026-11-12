@@ -42,7 +42,7 @@ rimz config init --print   # print the templates, write nothing
 | `--force` | Overwrites all three files with fresh templates. Every value and comment you added is lost. |
 | `--print` | Prints the three templates to stdout, each under a `# === <file> ===` header, and touches no file. `--force` has no effect alongside it. |
 
-`init --force` is the clean reset. To refresh existing files against newer templates and keep your values, run [`rimz setup`](./getting-started.md#set-up-the-machine), which merges instead.
+`init --force` is the clean reset; [`rimz setup --reset`](./getting-started.md#set-up-the-machine) does the same after a confirmation, then asks the setup questions. To refresh existing files against newer templates and keep your values, run [`rimz setup`](./getting-started.md#set-up-the-machine), which merges instead.
 
 ## Print the config path
 

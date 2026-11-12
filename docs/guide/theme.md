@@ -63,7 +63,7 @@ style = "modern"   # or "default"
 
 Either half can be set on its own instead. `theme.mode = "truecolor"` or `"256"` decides the depth whatever the preset says, and `theme.glyphs.set` decides the glyph set the same way, so you can take the Nerd Font icons at 256-color depth or pin truecolor and keep the Unicode glyphs. The one value that does not override is `mode = "auto"`, which means "let something else decide" and so leaves `modern` on truecolor.
 
-`modern` expects a terminal that renders both halves, 24-bit color and a Nerd Font face. First-run setup probes the two separately and writes an explicit `theme.mode` or `theme.glyphs.set` only where the answer changes what you would otherwise get, so either half can degrade on its own. [Installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) lists the terminals and fonts that qualify.
+`modern` expects a terminal that renders both halves, 24-bit color and a Nerd Font face. `rimz setup` probes the two separately and, at its review, writes an explicit `theme.mode` or `theme.glyphs.set` only where the answer changes what you would otherwise get, so either half can degrade on its own. [Installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) lists the terminals and fonts that qualify.
 
 ## Color depth
 

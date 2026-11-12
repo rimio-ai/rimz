@@ -113,7 +113,7 @@ The exported environment is the whole channel from client to host. The host stri
 
 Room entry reads its posture once, in `StartPosture::detect` ([`cli/room/mod.rs`](../../crates/rimz/src/cli/room/mod.rs)), and the posture decides which prompts and notices a reconnect replays. A non-empty `RIMZ_REMOTE_RECONNECT` selects `Reconnect`. Without it, terminal stdin selects `Attended` and anything else selects `NoTerminal`.
 
-`Reconnect` skips consent questions, the first-run wizard, and the resume prompt. It also skips version warnings and build drift, the non-repository root notice, untrusted-hook warnings, and restricted or undecided folder-trust notices. Version refusals and the resume, reset, web-daemon, and unresumable reports still print. A reborn room that needs hooks keeps the intro and table, but prints `Not asked on a reconnect` with the pointer to `rimz hooks install` in a room pane and to `rimz doctor` for missing hooks. `NoTerminal` keeps its `No terminal input` notice. A reattach to a live room skips hook detection whatever the posture.
+`Reconnect` skips consent questions, the first-run multiplexer question and defaults line, and the resume prompt. It also skips version warnings and build drift, the non-repository root notice, untrusted-hook warnings, and restricted or undecided folder-trust notices. Version refusals and the resume, reset, web-daemon, and unresumable reports still print. A reborn room that needs hooks keeps the intro and table, but prints `Not asked on a reconnect` with the pointer to `rimz hooks install` in a room pane and to `rimz doctor` for missing hooks. `NoTerminal` keeps its `No terminal input` notice. A reattach to a live room skips hook detection whatever the posture.
 
 ### Version skew
 

@@ -97,7 +97,7 @@ brew install --cask font-cascadia-code-nf font-jetbrains-maple-mono-nf
 
 Ghostty and kitty add one thing more. They speak the kitty graphics protocol, which is what draws a [sidebar pet](./pets.md) as crisp pixels rather than cell art. In a tmux room it also takes tmux 3.6 or newer with `allow-passthrough on`. A Zellij room stays on cell art whatever the terminal, because Zellij does not support the placement mode RimZ's pixel painter uses.
 
-Select the font in your terminal before [set up your machine](./setup.md) runs its probes; if you have already been through setup, `rimz setup` reruns them and picks the icons up. The color-depth and glyph settings are in [theming](./theme.md#style-preset).
+Select the font in your terminal before [set up your machine](./setup.md) runs its probes; if you have already been through setup, rerun `rimz setup` and pick the color or icons row on its review to run that probe again. The color-depth and glyph settings are in [theming](./theme.md#style-preset).
 
 ## Other ways to install
 

@@ -105,14 +105,14 @@ You never have to write these files from scratch. RimZ ships a commented templat
 
 ```sh
 rimz                       # first start writes whichever of the three files is missing, then opens the room
-rimz setup                 # detect this machine and write or refresh config
+rimz setup                 # detect this machine, write or refresh config, and ask the setup questions
 rimz config init           # write all three, refusing if any exists unless you pass --force
 rimz config init --print   # print the commented templates without writing anything
 ```
 
-Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. A first start on an interactive terminal writes the per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting. It writes each file independently: delete `config.toml` and keep your `theme.toml`, and the next start writes the one that is missing and leaves the one you kept exactly as it is.
+Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. A first start on an interactive terminal may ask which multiplexer to use, writes the per-machine config, offers hook install, and opens the room on defaults; a non-interactive first start writes the same defaults without prompting. `rimz setup` writes the same files and then asks about keys, appearance, and automation ([set up your machine](./setup.md)). It writes each file independently: delete `config.toml` and keep your `theme.toml`, and the next start writes the one that is missing and leaves the one you kept exactly as it is.
 
-**Rerunning setup keeps your values.** On a machine that already has config, `rimz setup` asks `Keep your current config?`, and saying yes merges. `rimz setup --config-only` merges without asking, installs no hooks, and grants no trust. A non-interactive `rimz setup` without `--config-only` changes nothing at all.
+**Rerunning setup keeps your values.** On a machine that already has config, `rimz setup` merges without asking and opens on its review screen. `rimz setup --config-only` merges the same way, installs no hooks, and grants no trust. A non-interactive `rimz setup` without `--config-only` changes nothing at all.
 
 A file that will not parse is the case to know first: setup leaves it byte-for-byte untouched, names the offending line and key when it can, and asks you to fix it before rerunning. Nothing is lost while the file is broken.
 
@@ -122,7 +122,7 @@ Two things do not survive that rebuild. Comments you wrote yourself are gone, be
 
 Markdown definitions are never touched. The one file setup overwrites outright is `teams/consensus.md`, the [read-only copy of the built-in team consensus](../reference/definitions.md#the-built-in-consensus-copy), which is generated output RimZ never reads back.
 
-Three paths replace a file wholesale with fresh templates: answering no to `Keep your current config?`, `rimz config init --force`, and `rimz config init` on a machine with none of the three files. Plain `rimz config init` where one exists refuses and tells you to pass `--force`.
+Three paths replace a file wholesale with fresh templates: `rimz setup --reset` after you confirm it, `rimz config init --force`, and `rimz config init` on a machine with none of the three files. Plain `rimz config init` where one exists refuses and tells you to pass `--force`.
 
 **The template is close to a field reference.** Every persisted `config.toml` and `theme.toml` section ships as commented TOML, so `rimz config init --print` is the fastest current list of keys and defaults. The `[throttle]` block shows example limits, all unset by default. The loop template shows the common task fields and leaves out `verify`, `max-attempts`, and `max-strikes`, which [loop tasks](#loop-tasks) covers below. A line left commented keeps following the default future RimZ versions ship; uncommenting it makes that value this machine's override.
 
@@ -209,7 +209,7 @@ A running room never asks about parked agents, whether you use Zellij or tmux. U
 
 `auto_redeem_min_gain` is the threshold the main rule uses: RimZ redeems into a spent window when its natural reset is at least this far away, since that is how much blocked time the credit recovers. It takes `s`, `m`, `h`, or `d` and defaults to `12h`. Raise it to redeem only when a window would otherwise block most of a day.
 
-`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` together as one consent question; idle compaction starts at `100k`, and answering no sets it to `off` ([set up your machine](./setup.md)).
+`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` as numbered rows in one question, each flipped by its number; idle compaction starts at `100k`, turning it off writes `off`, and turning it back on writes `100k` ([set up your machine](./setup.md#while-youre-away)).
 
 ### Dollar budgets
 
@@ -421,7 +421,7 @@ The stuck-stage `!` is independent of the optional [55-minute stalled-team nudge
 
 ### Room keymap
 
-`[keys]` applies only with `[room] style = "rimz"`, except [`[keys.sidebar]`](#sidebar-keys), which applies under both styles. A room keymap gives you chords that work from any pane, a prefix layer, and sticky modes. RimZ bundles four: `rimz` is sidebar-first, and `tmux`, `zellij` and `vim` keep that tool's own keys and add RimZ's card actions, so a tmux, Zellij or vim user keeps their habits. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal. The [keymap reference](../reference/keymaps.md) lists every action and every bundled table.
+`[keys]` applies only with `[room] style = "rimz"`, except [`[keys.sidebar]`](#sidebar-keys), which applies under both styles. A room keymap gives you chords that work from any pane, a prefix layer, and sticky modes. RimZ bundles four: `rimz` is sidebar-first, and `tmux`, `zellij` and `vim` are RimZ's own tables shaped like that tool's keys, with RimZ's card actions added, so a tmux, Zellij or vim user keeps their habits. The `tmux` and `zellij` tables take that tool's usual prefix (`Ctrl+b`, `Ctrl+g`) as RimZ's by default, so the prefix bindings in your own tmux or Zellij config do not fire in a room. `rimz keys` lists the resolved keys by mode; `rimz keys --wait` keeps that list open until a keypress in a terminal. The [keymap reference](../reference/keymaps.md) lists every action and every bundled table.
 
 ```toml
 [room]
@@ -1121,7 +1121,7 @@ glyphs = "auto"
 voice = true
 ```
 
-An opt-in animated companion in the provider dashboard. The pet question in `rimz setup` and on first start writes `enabled = true` with the default `rocky`. Picking one and feeding it a sprite sheet is the [pets guide](./pets.md).
+An opt-in animated companion in the provider dashboard. Answering yes to the pet question in `rimz setup` writes `enabled = true` with the default `rocky`. Picking one and feeding it a sprite sheet is the [pets guide](./pets.md).
 
 | Key | What it does |
 | --- | --- |

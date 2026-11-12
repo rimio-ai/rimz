@@ -3,7 +3,7 @@
 These commands open, find, and diagnose a room on this machine: bare `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, and `doctor`. A room is a plain Zellij or tmux session with the RimZ sidebar added, so your keybinds, layout, and scrollback stay yours, and leaving it is a normal multiplexer detach. Which room a directory maps to, and the global flags (`--root`, `--mux`, `--color`), are defined on the [CLI reference](../cli.md#which-room-a-command-reaches). A room on another host is [`rimz remote`](./remote.md); a room in the browser is [`rimz web`](./web.md).
 
 ```sh
-rimz setup                 # once per machine: report, write config, offer hooks and appearance
+rimz setup                 # once per machine: report, write config, ask hooks, keys, appearance, automation
 cd ~/code/query-engine
 rimz                       # open this project's room and attach
 ```
@@ -11,11 +11,11 @@ rimz                       # open this project's room and attach
 | Need | Command |
 | --- | --- |
 | Open the current project's room | `rimz` |
-| Open a directory's room and attach; first run asks setup questions | `rimz start [PATH]` |
+| Open a directory's room and attach; a first run may ask the multiplexer and offers hooks | `rimz start [PATH]` |
 | Enter a room by name; no first-run questions | `rimz attach [SESSION]` |
 | Full-screen picker: live rooms, their agents, and who needs you | `rimz sessions` |
 | List rooms: running, or stopped within 24h | `rimz list`, `rimz ls` |
-| Report the machine and write default config | `rimz setup` |
+| Report the machine, write default config, and ask the setup questions | `rimz setup` |
 | Diagnose backend, hooks, trust, and room health | `rimz doctor` |
 
 Command, flag, and live session-name completion is set up in the [shell completion guide](../../guide/setup.md#shell-completion).
@@ -30,7 +30,7 @@ rimz attach [SESSION] [launch options]
 
 Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` (default `.`), creates its session if none is running, launches the sidebar, and attaches. A room written by an older RimZ is torn down and replaced by a fresh room; its history is not carried over. Replacement happens only when no running room holds the workspace; otherwise start or `rimz attach` without a session argument refuses with the held-room error below, leaving the room unchanged. For other rooms, a running session is reattached as it is, on the backend it runs under, except that a `rimzd` tab you closed is reopened from its layout. A detached Zellij session defers that late add: after attaching, run `rimz sidebar repair` to reopen the tab. A room is held while a sidebar pane or a live supervisor lives: a second birth on the same workspace exits nonzero, regardless of backend or session name. The error names the recorded session as already held by another running room, with `rimz attach` and `rimz reset --no-start` as fixes, and for a leftover or renamed session, closing it from its multiplexer (or renaming it back); the running room and its workspace record are unchanged. Once neither a sidebar pane nor a supervisor lives, the room is unheld. Attaching to that room relaunches its sidebar only if no other room holds the workspace; otherwise the attach exits nonzero without relaunching it. An attach during a sidebar restart can be refused until the sidebar returns. [`rimz reset`](./maintenance.md#reset-a-wedged-room) is the command that rebuilds a room.
 
-`start` prints two notices on stderr. A room rooted at a project marker or a plain directory, with no git repository, prints `rimz: marker-rooted workspace at <root> ...` or `rimz: directory workspace rooted at <root> ...` on every start except a remote reconnect. A start that writes the missing machine config prints `rimz: initialized config under ~/.rimz ...`, except on an attended first run, which asks the first-run questions instead.
+`start` prints two notices on stderr. A room rooted at a project marker or a plain directory, with no git repository, prints `rimz: marker-rooted workspace at <root> ...` or `rimz: directory workspace rooted at <root> ...` on every start except a remote reconnect. A start that writes the missing machine config prints `rimz: initialized config under ~/.rimz ...`, except on an attended first run, which prints one line naming the room keys, color, and glyphs it left on defaults instead.
 
 | Launch option | Effect |
 | --- | --- |
@@ -97,12 +97,12 @@ Without a nearby name, the second line is `  all rooms: rimz list --all`.
 
 ### Prompts at room birth
 
-A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. A start that reattaches a running session asks only the folder-trust question. An attach that reattaches a running session asks none of them.
+A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. The multiplexer question comes first, before the room is admitted, since its answer picks the backend that admits it. A start that reattaches a running session asks only the folder-trust question. An attach that reattaches a running session asks none of them.
 
 | Prompt | When | Default |
 | --- | --- | --- |
-| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle compaction) | This start wrote the machine config for the first time | The current settings; idle compaction defaults to `100k`, the other automation rows off ([setup](../../guide/setup.md)) |
-| Install or refresh hooks for the listed agents | A detected agent has no RimZ hooks, or a stale RimZ-owned integration | Enter installs all; `n` or end of input installs none |
+| Which multiplexer new rooms use (`1` tmux, `2` zellij); the answer is written to `mux.default` when it differs from tmux, and a failed write warns while the room still opens on that backend | `~/.rimz/config.toml` does not exist and no legacy config root does, both tmux and Zellij are installed, no `--mux`, `--tmux`, or `--zellij` flag, the start is not inside a multiplexer, and no session of this name is live on either backend. `q` or end of input exits nonzero before the room opens, changing nothing | tmux |
+| Install or refresh hooks for the listed agents | A detected agent has no RimZ hooks, or a stale RimZ-owned integration. An agent whose file RimZ refuses to overwrite gets a `!` line, and the others are still offered | Enter installs all; `n` or end of input installs none |
 | Trust this project's config | The project ships `.rimz/config.toml` with an ungranted executable surface, and you have not declined this version | No |
 | Trust this folder for the listed agents | Detected Codex, Claude, or Qoder has no folder-trust decision under the room's account; shows the proposed file changes first. A decline is remembered per workspace and agent kind; `rimz trust grant` clears it. When no listed kind can be written (Claude in `$HOME`, say), it prints each fix, asks nothing, and remembers those kinds as declined | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |
@@ -224,18 +224,19 @@ With no rows, human output leaves stdout empty and prints a hint on stderr. If t
 ## Set up the machine
 
 ```sh
-rimz setup [--config-only]
+rimz setup [--config-only | --reset]
 ```
 
-`rimz setup` prints a report (multiplexer and version, project path and its kind, project trust, config path and whether it exists, and hooks grouped into installed, not installed, and not on PATH) and then acts according to how it was run. Paths under your home use `~`. Installed integrations with out-of-date RimZ-owned content carry `(upgrade available)` after the agent name. Empty hook groups are omitted; agents found without hook-install support are omitted too. Agents with blocked hook installation stay under `not installed`, but are excluded from the `rimz hooks install` hint.
+`rimz setup` prints a report in every mode: `multiplexer` (the selected backend and its version), `agents` (the supported agents whose binary RimZ found, then `N more supported: rimz doctor` for the rest), and `config` (the config directory, `new` or `present`). Paths under your home use `~`. It then acts according to how it was run. Agents with blocked hook installation are excluded from the `rimz hooks install` hint.
 
 | Run | What it changes |
 | --- | --- |
-| From a terminal | If config exists, asks `Keep your current config?` (default yes): yes merges it against the current templates, no overwrites it with fresh templates. Then repairs `~/.rimz` fragments, writes a missing `remote.toml` template, offers one hook install or refresh for detected agents, and asks the truecolor, Nerd Font, pet, and hands-off automation questions; the automation question lists one row per behavior and takes `y`, `n`, or `choose`. |
-| `--config-only` | Merges config against the templates, repairs `~/.rimz` fragments, and writes missing files, including the remote template and built-in consensus copy. Installs no hooks, grants no trust, and changes no appearance or automation setting. `--yes` remains an accepted hidden alias. |
+| From a terminal | Writes missing config files from the templates and merges existing ones against them without asking, repairs `~/.rimz` fragments, writes a missing `remote.toml` template, and refreshes the built-in consensus copy. On a fresh machine it then asks, numbered `N of M`: hooks (only when a detected agent needs an install or refresh; installs at its yes), the multiplexer (only when both are installed and no mux flag was given), room keys, truecolor, Nerd Font icons, pet, and while-you're-away rows (row numbers flip a row). When `config.toml` existed before the run it skips the walk. Both end on a review: Enter writes each answer that differs from the config, a row number reopens a question, `a` asks them all, `q` or end of input writes nothing. |
+| `--reset` | From a terminal only. Names `config.toml`, `theme.toml`, and `loop.toml` and asks `Reset them?` (default no); no prints `Nothing changed.` and exits 0, yes overwrites the three with the templates, with no backup, and continues as on a fresh machine. Without a terminal it exits 1 and changes nothing. Conflicts with `--config-only`. |
+| `--config-only` | Merges config against the templates, repairs `~/.rimz` fragments, and writes missing files, including the remote template and built-in consensus copy. Installs no hooks, grants no trust, and changes no keys, appearance, or automation setting. `--yes` remains an accepted hidden alias. |
 | Without a terminal and without `--config-only` | Nothing. Prints the report and `Setup changed nothing: there is no terminal to ask from.` Then names `rimz setup --config-only` for config and, only when agents lack hooks, `rimz hooks install` with their count. |
 
-A merge names every file it wrote, merged, or left untouched. An unparseable file is left as it is, and interactive setup stops at that point until you fix it. What a merge keeps and removes is defined in the [configuration guide](../../guide/configuration.md#generate-and-refresh-the-files). The hook summary points at `rimz hooks install --dry-run` for the exact diffs. [`rimz config init --force`](./config.md#write-the-templates) is the clean reset. The walkthrough is the [setup guide](../../guide/setup.md).
+A merge names every file it wrote or left untouched and every key it skipped; `--config-only` also prints `Merged <file> - kept N setting(s)` for each file it merged. An unparseable file is left as it is, and interactive setup stops at that point until you fix it. What a merge keeps and removes is defined in the [configuration guide](../../guide/configuration.md#generate-and-refresh-the-files). The hook summary points at `rimz hooks install --dry-run` for the exact diffs. `--reset` and [`rimz config init --force`](./config.md#write-the-templates) are the clean resets. The walkthrough is the [setup guide](../../guide/setup.md).
 
 ## Diagnose with doctor
 
