@@ -730,7 +730,8 @@ impl ViewContext {
     /// Remember the rows this fold made new to a view that has painted, forget each past the
     /// birth window or gone, and reveal once the newborn card the view's derived focus sits
     /// on. A card that takes over another card's pane under a new id (a provider registration
-    /// adopting its launch row) is no birth: it takes over the birth hold instead.
+    /// adopting its launch row) is no birth: it takes over the departed card's newborn record,
+    /// unchanged, and its birth hold.
     fn note_births(
         &self,
         ui: &mut ViewState,
@@ -740,9 +741,6 @@ impl ViewContext {
     ) {
         let window = i64::try_from(BIRTH_WINDOW.as_millis()).unwrap_or(i64::MAX);
         let current: BTreeSet<&str> = self.current.rows().map(|row| row.id.as_str()).collect();
-        ui.newborns.retain(|id, born| {
-            now_ms.saturating_sub(born.born_ms) <= window && current.contains(id.as_str())
-        });
         let presented: BTreeSet<&str> = previous.rows().map(|row| row.id.as_str()).collect();
         // A view's first fetch, a fold before its first paint, or one after it painted only the
         // placeholder of a host with no fold yet, has no rows it presented.
@@ -755,6 +753,9 @@ impl ViewContext {
                     if ui.birth_hold.as_deref() == Some(adopted) {
                         ui.birth_hold = Some(row.id.clone());
                     }
+                    if let Some(born) = ui.newborns.remove(adopted) {
+                        ui.newborns.insert(row.id.clone(), born);
+                    }
                     continue;
                 }
                 ui.newborns
@@ -766,6 +767,9 @@ impl ViewContext {
                     });
             }
         }
+        ui.newborns.retain(|id, born| {
+            now_ms.saturating_sub(born.born_ms) <= window && current.contains(id.as_str())
+        });
         let Some(row) = focused
             .and_then(|pane| self.current.row_owning_pane(pane))
             .filter(|row| row.as_agent().is_some())

@@ -260,8 +260,9 @@ pub(in crate::sidebar_pane) struct ViewportRequest {
     pub(super) birth_reveal: Option<String>,
 }
 
-/// A row new to a view: absent from the snapshot the view presented before the fold, and not a
-/// card that took over another card's pane under a new id.
+/// A row new to a view: absent from the snapshot the view presented before the fold. A card
+/// that takes over another card's pane under a new id is no new birth: the departed card's
+/// record, if any, moves to the new id unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct Newborn {
     /// Fold-clock milliseconds of the fold that found the row new.

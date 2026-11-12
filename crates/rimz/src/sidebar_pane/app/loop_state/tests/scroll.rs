@@ -3972,7 +3972,7 @@ fn a_provider_registration_adopting_a_launch_row_is_no_birth() {
             .id = "real-session".into();
         rig.fold(adopted, SnapshotSource::Produced);
         assert_eq!(rig.view().ui().reveals_birth(), None, "wheels {wheels}");
-        assert!(!rig.view().ui().newborns.contains_key("real-session"));
+        assert!(rig.view().ui().newborns["real-session"].revealed);
         paint_at(&mut rig, 200);
         assert_eq!(rig.view().ui().scroll_offset, offset, "wheels {wheels}");
         let hold = (!wheels).then(|| "real-session".to_owned());
@@ -3980,6 +3980,42 @@ fn a_provider_registration_adopting_a_launch_row_is_no_birth() {
             birth_hold(&mut rig),
             hold,
             "the hold carries: wheels {wheels}"
+        );
+    }
+}
+
+#[test]
+fn a_launch_row_adopted_before_the_focus_reveals_inside_its_birth_window() {
+    for (focus_ms, reveals) in [(1_000, true), (2_500, false)] {
+        let (mut rig, _) = scroll_rig();
+        let clock = play_clock(&mut rig);
+        rig.fold(
+            born(&rig, 15, "launch-a", "terminal_20", false),
+            SnapshotSource::Produced,
+        );
+        paint_at(&mut rig, 0);
+        clock.advance(Duration::from_millis(500));
+        let mut adopted = rig.state.views.mirror().clone();
+        adopted
+            .rows_mut()
+            .find(|row| row.id == "launch-a")
+            .unwrap()
+            .id = "real-session".into();
+        rig.fold(adopted, SnapshotSource::Produced);
+        assert_eq!(rig.view().ui().reveals_birth(), None, "focus at {focus_ms}");
+        assert!(
+            rig.view().ui().newborns["real-session"].laid_out,
+            "stay-at-top counts it once: focus at {focus_ms}"
+        );
+        paint_at(&mut rig, 500);
+        clock.advance(Duration::from_millis(focus_ms - 500));
+        let mut focus = rig.state.views.mirror().clone();
+        focus.focused_pane = Some(pane("terminal_20", "tab_0").pane_id);
+        rig.fold(focus, SnapshotSource::Produced);
+        assert_eq!(
+            rig.view().ui().reveals_birth(),
+            reveals.then_some("real-session"),
+            "focus at {focus_ms}"
         );
     }
 }
