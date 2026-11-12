@@ -372,6 +372,16 @@ impl MainRequests {
     fn settle(&mut self) {
         self.ran = self.ran.max(self.pending.take());
     }
+
+    /// An answer settles the pending record only when it is stamped at or after it: Claude
+    /// can append the next request's record before the answer to the one before it. An answer
+    /// without a readable stamp settles it.
+    fn answer(&mut self, at: Option<&str>) {
+        let answered_at = at.and_then(|at| at.parse::<jiff::Timestamp>().ok());
+        if answered_at.is_none_or(|answered_at| self.pending <= Some(answered_at)) {
+            self.settle();
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -526,7 +536,7 @@ pub(super) fn parse_claude_spend_with_retention(
             continue;
         }
         if read_requests && entry.is_sidechain != Some(true) {
-            state.main_requests.settle();
+            state.main_requests.answer(entry.timestamp.as_deref());
         }
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;

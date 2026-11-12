@@ -380,6 +380,61 @@ fn a_request_refused_for_a_usage_limit_is_not_the_recorded_request() {
             "{case} split"
         );
     }
+    // Claude can append the next request's record before the answer to the one before it; the
+    // answer settles only the records stamped at or before it. An answer without a timestamp
+    // settles every record, as before.
+    let mut unstamped: Value = serde_json::from_str(&answer(12)).unwrap();
+    unstamped.as_object_mut().unwrap().remove("timestamp");
+    for (case, text, published) in [
+        (
+            "record before the prior answer",
+            [
+                outright.clone(),
+                request(14),
+                answer(12),
+                tool_result(13),
+                refused(15, "rate_limit", 429),
+            ]
+            .concat(),
+            at(11),
+        ),
+        (
+            "unstamped answer",
+            [
+                outright.clone(),
+                line(unstamped.clone()),
+                refused(12, "rate_limit", 429),
+            ]
+            .concat(),
+            at(11),
+        ),
+    ] {
+        let path = dir.path().join(format!("{case}.jsonl"));
+        std::fs::write(&path, &text).unwrap();
+        let read = refresh(&path, None, None).unwrap();
+        assert_eq!(read.context.recorded_request_at, published, "{case} whole");
+        // One refresh per line carries the requests across every line boundary.
+        std::fs::write(&path, "").unwrap();
+        let mut last = refresh(&path, None, None).unwrap();
+        let mut latest = FieldPatch::Keep;
+        for record in text.split_inclusive('\n') {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            write!(file, "{record}").unwrap();
+            last = refresh(
+                &path,
+                last.transcript_stat.as_ref(),
+                last.spend_fold.as_set(),
+            )
+            .unwrap();
+            if last.context.recorded_request_at != FieldPatch::Keep {
+                latest = last.context.recorded_request_at.clone();
+            }
+        }
+        assert_eq!(latest, published, "{case} line by line");
+    }
 }
 
 fn usage_line(request: &str, input: u64, output: u64, cache_write: u64, cache_read: u64) -> String {
