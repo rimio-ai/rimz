@@ -262,7 +262,7 @@ fn read_only_home_list_shows_hint_and_keeps_wait_pending() {
              redirect, or `VAR=` prefix, so its routine rule runs outside the sandbox; if \
              `allow-routine-rimz` is off, approve the sandbox's escalation. If Codex's routine \
              rules predate this RimZ, refresh them with `rimz hooks install codex` from a user \
-             shell and restart the agent\n  could not open workspace lock {}: Read-only file \
+             shell and restart the agent\n  could not open lock file {}: Read-only file \
              system (os error 30)\n",
             gate.display()
         )

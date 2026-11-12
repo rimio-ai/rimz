@@ -18,7 +18,7 @@ const MAX_LOCK_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LockErr {
-    #[error("could not open workspace lock {path}: {source}")]
+    #[error("could not open lock file {path}: {source}")]
     Open {
         path: PathBuf,
         #[source]
