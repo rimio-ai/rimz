@@ -263,6 +263,125 @@ fn cache_write_retention_and_recorded_request_keep_on_resume_and_clear_on_replac
     );
 }
 
+#[test]
+fn a_request_refused_for_a_usage_limit_is_not_the_recorded_request() {
+    let stamp = |secs: u32| format!("2026-11-09T03:56:{secs:02}.000Z");
+    let line = |value: Value| format!("{value}\n");
+    let user = |secs, content: Value| {
+        line(
+            json!({"type": "user", "isSidechain": false, "timestamp": stamp(secs),
+            "message": {"role": "user", "content": content}}),
+        )
+    };
+    let prompt = |secs| user(secs, json!("keep going"));
+    let tool_result = |secs| {
+        user(
+            secs,
+            json!([{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]),
+        )
+    };
+    let request = |secs| {
+        line(json!({"type": "api-request", "timestamp": stamp(secs),
+            "querySource": "repl_main_thread"}))
+    };
+    let assistant = |secs, model: &str, content: Value, extra: Value| {
+        let mut entry = json!({"type": "assistant", "isSidechain": false,
+            "timestamp": stamp(secs), "requestId": format!("req_{secs}"),
+            "message": {"id": format!("msg_{secs}"), "model": model, "role": "assistant",
+                "content": content, "usage": {"input_tokens": 0, "output_tokens": 0,
+                    "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}});
+        entry
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        line(entry)
+    };
+    let answer = |secs| {
+        let tool = json!([{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}]);
+        assistant(secs, "claude-opus-5-5", tool, json!({}))
+    };
+    // Claude's error entry and the bookkeeping it appends (real-transcripts.md).
+    let refused = |secs, error: &str, status: u64| {
+        let text = json!([{"type": "text", "text": "You've hit your limit"}]);
+        let flags = json!({"error": error, "apiErrorStatus": status, "isApiErrorMessage": true});
+        let close = |subtype: &str| {
+            line(json!({"type": "system", "subtype": subtype, "timestamp": stamp(secs)}))
+        };
+        [
+            assistant(secs, "<synthetic>", text, flags),
+            close("informational"),
+            close("turn_duration"),
+        ]
+        .concat()
+    };
+    let ran = [prompt(1), request(2), answer(3)].concat();
+    let outright = [ran.clone(), prompt(10), request(11)].concat();
+    let mid_turn = [outright.clone(), answer(12), tool_result(13), request(14)].concat();
+    let at = |secs| FieldPatch::Set(stamp(secs).parse().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    for (case, head, tail, whole, split) in [
+        (
+            "outright",
+            &outright,
+            refused(12, "rate_limit", 429),
+            at(2),
+            [at(11), at(2)],
+        ),
+        (
+            "mid-turn",
+            &mid_turn,
+            refused(15, "rate_limit", 429),
+            at(11),
+            [at(14), at(11)],
+        ),
+        (
+            "first prompt",
+            &[prompt(10), request(11)].concat(),
+            refused(12, "rate_limit", 429),
+            FieldPatch::Clear,
+            [at(11), FieldPatch::Clear],
+        ),
+        // An overload strikes after the request read the cache, so it still counts.
+        (
+            "overload",
+            &outright,
+            refused(12, "server_error", 529),
+            at(11),
+            [at(11), FieldPatch::Keep],
+        ),
+    ] {
+        let path = dir.path().join(format!("{case}.jsonl"));
+        std::fs::write(&path, format!("{head}{tail}")).unwrap();
+        let read = refresh(&path, None, None).unwrap();
+        assert_eq!(read.context.recorded_request_at, whole, "{case} whole");
+        // A refresh can land between the request record and its error entry.
+        std::fs::write(&path, head).unwrap();
+        let first = refresh(&path, None, None).unwrap();
+        write!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap(),
+            "{tail}"
+        )
+        .unwrap();
+        let second = refresh(
+            &path,
+            first.transcript_stat.as_ref(),
+            first.spend_fold.as_set(),
+        )
+        .unwrap();
+        assert_eq!(
+            [
+                first.context.recorded_request_at,
+                second.context.recorded_request_at
+            ],
+            split,
+            "{case} split"
+        );
+    }
+}
+
 fn usage_line(request: &str, input: u64, output: u64, cache_write: u64, cache_read: u64) -> String {
     usage_block_line(
         request,

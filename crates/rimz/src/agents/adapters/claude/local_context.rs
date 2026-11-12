@@ -63,7 +63,10 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
                 TranscriptUsageSource::Unknown => FieldPatch::Keep,
             },
             last_cache_write: restartable_patch(tail.last_cache_write, restarted),
-            recorded_request_at: restartable_patch(tail.last_request_at, restarted),
+            recorded_request_at: match tail.last_request_at {
+                Some(latest) => latest.map_or(FieldPatch::Clear, FieldPatch::Set),
+                None => restartable_patch(None, restarted),
+            },
             ..LocalContextPatch::default()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

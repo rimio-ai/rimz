@@ -391,7 +391,7 @@ fn conversation_entry(line: &str) -> Option<Value> {
 /// The error entry's text ("API Error: Overloaded"): the first text block of
 /// `message.content` (or a flat string), trimmed and capped. `None` when the
 /// shape is unfamiliar — the marker still escalates, just unlabeled.
-fn turn_error_label(entry: &Value) -> Option<String> {
+pub(super) fn turn_error_label(entry: &Value) -> Option<String> {
     let content = entry.get("message")?.get("content")?;
     let text = match content {
         Value::String(text) => text.as_str(),

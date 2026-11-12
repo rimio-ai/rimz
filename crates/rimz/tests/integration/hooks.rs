@@ -4757,3 +4757,111 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         "the app-server plan remains available after the session goes idle"
     );
 }
+
+#[test]
+fn claude_limit_refusal_keeps_the_card_cache_clock_on_the_last_request_that_ran() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let transcript = env.project_root.join("refused.jsonl");
+    let append = |records: &[Value]| {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        for record in records {
+            writeln!(file, "{record}").unwrap();
+        }
+    };
+    let hook = |event: &str, extra: Value| {
+        let mut payload = json!({"hook_event_name": event, "session_id": "sess-refused",
+            "cwd": env.project_root, "transcript_path": transcript});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let output =
+            env.run_installed_hook_in_pane("claude", &payload.to_string(), &[("TMUX_PANE", "%0")]);
+        assert!(
+            output.status.success(),
+            "{event}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let prompt = |text: &str| {
+        json!({"type": "user", "isSidechain": false, "timestamp": Timestamp::now(),
+            "message": {"role": "user", "content": text}})
+    };
+    let request = || {
+        let at = Timestamp::now();
+        let record = json!({"type": "api-request", "timestamp": at,
+            "querySource": "repl_main_thread"});
+        (at, record)
+    };
+    let usage = json!({"input_tokens": 0, "output_tokens": 0,
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0});
+    let system = |subtype: &str| {
+        let at = Timestamp::now();
+        json!({"type": "system", "subtype": subtype, "timestamp": at})
+    };
+
+    hook(
+        "SessionStart",
+        json!({"source": "startup", "model": "claude-sonnet-4-6"}),
+    );
+    hook("UserPromptSubmit", json!({"prompt": "A request that runs"}));
+    let (ran, ran_record) = request();
+    append(&[
+        prompt("A request that runs"),
+        ran_record,
+        json!({"type": "assistant", "isSidechain": false, "timestamp": Timestamp::now(),
+            "requestId": "req_ran", "message": {"id": "msg_ran", "model": "claude-sonnet-4-6",
+                "role": "assistant", "content": [{"type": "text", "text": "Done."}],
+                "usage": usage}}),
+        system("turn_duration"),
+    ]);
+    hook("Stop", json!({"last_assistant_message": "Done."}));
+    std::thread::sleep(Duration::from_millis(20));
+    // Claude's real shape for a refusal: the prompt, a request record, the error entry, and
+    // its bookkeeping, then `StopFailure` (real-transcripts.md).
+    hook("UserPromptSubmit", json!({"prompt": "A refused request"}));
+    let (_, refused_record) = request();
+    append(&[
+        prompt("A refused request"),
+        refused_record,
+        json!({"type": "assistant", "isSidechain": false, "timestamp": Timestamp::now(),
+            "requestId": "req_refused", "error": "rate_limit", "apiErrorStatus": 429,
+            "isApiErrorMessage": true, "message": {"id": "msg_refused", "model": "<synthetic>",
+                "role": "assistant", "content": [{"type": "text",
+                    "text": "You've hit your limit"}], "usage": usage}}),
+        system("informational"),
+        system("turn_duration"),
+    ]);
+    hook(
+        "StopFailure",
+        json!({"error": "rate_limit", "last_assistant_message": "You've hit your limit"}),
+    );
+
+    let snapshot = env.snapshot_json_with_panes(&[tmux_pane("%0", "claude", &env.project_root)]);
+    let mut objects = vec![&snapshot];
+    let mut caches = Vec::new();
+    while let Some(value) = objects.pop() {
+        match value {
+            Value::Object(map) => {
+                caches.extend(map.get("cache").filter(|cache| cache.is_object()));
+                objects.extend(map.values());
+            }
+            Value::Array(items) => objects.extend(items),
+            _ => {}
+        }
+    }
+    let ran = ran.to_string();
+    assert_eq!(
+        caches
+            .iter()
+            .map(|cache| cache["last_request_at"].as_str())
+            .collect::<Vec<_>>(),
+        vec![Some(ran.as_str())],
+        "{snapshot:#}"
+    );
+}
