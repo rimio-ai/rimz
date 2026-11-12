@@ -400,7 +400,7 @@ upward-dependencies = ["address"]
 # AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
 # PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
 # over from the fold to the cache clock's read (+2).
-surface-budget = 1294
+surface-budget = 1285
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
