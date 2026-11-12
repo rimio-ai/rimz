@@ -31,6 +31,7 @@ fn bottom(
         ui,
         pane_ui,
         &ui.visible_roster(snapshot),
+        None,
     )
 }
 
@@ -449,6 +450,7 @@ fn search_line_stays_visible_during_active_alert() {
         &ui,
         &pane_ui,
         &ui.visible_roster(&snapshot),
+        None,
     );
     assert_eq!(block.lines.len(), 2);
     assert!(block.lines[0].to_string().contains("/ auth"));

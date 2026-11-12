@@ -2,8 +2,13 @@ use super::*;
 use crate::agents::context::PaceReading;
 use crate::config::ContextMeterConfig;
 use crate::config::GlyphRole;
+use crate::sidebar_pane::pixel::meter::{BudgetRaster, BudgetTick, MeterPixels};
+use crate::sidebar_pane::pixel::{
+    image_id_color, placeholder_cluster, placeholder_columns_supported,
+};
 use crate::sidebar_pane::render::theme::Component;
-use crate::theme::interpolate_heat;
+use crate::theme::{GlyphSet, interpolate_heat};
+use std::sync::LazyLock;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
 /// the cumulative total (input with cache-write folded in, plus output), the
@@ -247,9 +252,10 @@ pub(super) fn filled_half_cells(fill_pct: f64, width: usize) -> (usize, bool) {
 
 /// A two-tone bar: `filled` cells of `filled_glyph` in `filled_style`, then
 /// `track_glyph` in `track_style` out to `width`. The shared shape behind every
-/// meter — the thin `━`/`─` context gauge and the segmented `▰`/`▱` mana bars —
-/// so they read as one family differing only in weight. Styles and fill differ
-/// per meter; the shape does not.
+/// text meter — the thin `━`/`─` context gauge and the segmented `▰`/`▱` mana
+/// bars — so they read as one family differing only in weight. Styles and fill
+/// differ per meter; the shape does not. The pixel tiers draw their own rasters
+/// in the same cells.
 fn two_tone_bar(
     filled: usize,
     width: usize,
@@ -559,6 +565,7 @@ pub(in crate::sidebar_pane::render) struct ManaTick {
 /// independently of the parent fill, but never on a fully spent track. The end
 /// cells belong to exactly 0% and exactly 100%; any partial reading sits inside.
 /// Ceilings win cell collisions; otherwise keep the lowest remaining percentage.
+/// This is the text bar; [`budget_bar_spans`] draws its pixel twin when it can.
 pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
@@ -624,7 +631,8 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
 /// An unknown provider budget: the window identity is known (`5h`, `7d`, …) but
 /// the account reading is older than the longest reset. Paint a plain empty
 /// track in the spent tone, distinct from a full green bar and from the
-/// fully-spent red track.
+/// fully-spent red track. This is the text track; [`budget_bar_spans`] draws
+/// its pixel twin, the whole outline in the same tone, when it can.
 pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
     theme: &Theme,
     width: usize,
@@ -633,6 +641,87 @@ pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
         theme.glyph(GlyphRole::MeterManaTrack).repeat(width.max(1)),
         budget_spent_style(theme),
     )]
+}
+
+/// The mana glyphs the pixel bar is drawn to match. Neither glyph set gives
+/// them another form, so the built-in set stands for both.
+const MANA_GLYPHS: [GlyphRole; 4] = [
+    GlyphRole::MeterManaFilled,
+    GlyphRole::MeterManaTrack,
+    GlyphRole::MeterManaTick,
+    GlyphRole::MeterManaCeiling,
+];
+
+static PRESET_GLYPHS: LazyLock<GlyphSet> = LazyLock::new(GlyphSet::default);
+
+/// A dashboard budget bar: the pixel twin of [`mana_bar_spans`] when the frame
+/// lends `pixels`, else the text bar in the same cells. `None` is an unknown
+/// reading, the twin of [`unknown_mana_bar_spans`].
+pub(in crate::sidebar_pane::render) fn budget_bar_spans(
+    theme: &Theme,
+    remaining_pct: Option<u8>,
+    width: usize,
+    zones: &BudgetBarConfig,
+    ticks: &[ManaTick],
+    pixels: Option<&mut MeterPixels>,
+) -> Vec<Span<'static>> {
+    pixels
+        .and_then(|pixels| {
+            pixel_budget_bar_spans(theme, remaining_pct, width, zones, ticks, pixels)
+        })
+        .unwrap_or_else(|| match remaining_pct {
+            Some(remaining_pct) => mana_bar_spans(theme, remaining_pct, width, zones, ticks),
+            None => unknown_mana_bar_spans(theme, width),
+        })
+}
+
+/// One continuous slanted bar over the text bar's cells, cut at the exact
+/// percent, with each tick at its own percent. `None` keeps the text bar: a
+/// user's own mana glyph (the pixels would swap against it), a tone without a
+/// truecolor value, a width past the placeholder limit, or a full id table.
+fn pixel_budget_bar_spans(
+    theme: &Theme,
+    remaining_pct: Option<u8>,
+    width: usize,
+    zones: &BudgetBarConfig,
+    ticks: &[ManaTick],
+    pixels: &mut MeterPixels,
+) -> Option<Vec<Span<'static>>> {
+    let width = width.max(1);
+    if !placeholder_columns_supported(width)
+        || MANA_GLYPHS
+            .iter()
+            .any(|role| theme.glyph(*role) != PRESET_GLYPHS.glyph(*role))
+    {
+        return None;
+    }
+    let tone = |remaining_pct| theme.pixel_rgb(mana_style(theme, remaining_pct, zones).fg?);
+    let fill = tone(remaining_pct.unwrap_or(0))?;
+    let spent = theme.pixel_rgb(theme.component(Component::BudgetSpent))?;
+    let ticks = ticks
+        .iter()
+        .map(|tick| {
+            Some(BudgetTick {
+                ceiling: tick.role == GlyphRole::MeterManaCeiling,
+                remaining: tick.remaining_pct,
+                color: tone(tick.remaining_pct)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let width_cells = u16::try_from(width).ok()?;
+    let image_id = pixels.intern(BudgetRaster::new(
+        width_cells,
+        remaining_pct,
+        fill,
+        spent,
+        ticks,
+    ))?;
+    let style = Style::default().fg(image_id_color(image_id));
+    Some(
+        (0..width_cells)
+            .map(|col| Span::styled(placeholder_cluster(0, col), style))
+            .collect(),
+    )
 }
 
 /// The spent share of a budget bar: [`Component::BudgetSpent`], a bare `DIM`
@@ -672,12 +761,9 @@ pub(in crate::sidebar_pane::render) fn pace_style(
         .unwrap_or_else(|| theme.body())
 }
 
-/// The unmetered ("infinite") bar: a full-width empty `▱` track aligned with
-/// the metered `5h`/`7d` bars, reading as "no meter to spend." The brand
-/// `color` rides the `∞` icon *and* the track, so the two read as one branded
-/// unmetered bar; the empty `▱` shape keeps it from competing with a real
-/// draining fill, and under `NO_COLOR` the unbroken run still reads as an
-/// empty track by shape.
+/// A test-only branded empty `▱` track over `width` cells in `color`. No
+/// production row draws it: the dashboard's unmetered and lifted rows draw a
+/// full [`mana_bar_spans`] bar with `∞`, through [`budget_bar_spans`].
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) fn infinite_bar_spans(
     theme: &Theme,

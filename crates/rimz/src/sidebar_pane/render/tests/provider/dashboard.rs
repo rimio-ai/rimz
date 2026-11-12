@@ -181,6 +181,7 @@ fn bottom_chrome_text(snapshot: &SidebarSnapshot, view: &ViewState, cells: usize
         view,
         &UiState::default(),
         &roster,
+        None,
     );
     block
         .lines

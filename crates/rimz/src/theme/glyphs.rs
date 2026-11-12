@@ -239,8 +239,8 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
 /// selection layered over it (see `docs/guide/theme.md#glyphs`): the drawn
 /// gauges, spines, caps, hairline, the dotted seal, the compacting wave, and the
 /// status spinner/clock heads (which animate through frame sequences in
-/// `animation.rs`) all return `None` and keep their box-drawing or Unicode shape,
-/// while the mana bar swaps to the `nf-extra` progress segments in `meters.rs`.
+/// `animation.rs`) and the mana bar's `▰▱╱╎` all return `None` and keep their
+/// box-drawing or Unicode shape.
 pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
     catalog_row(role).nerd_font
 }

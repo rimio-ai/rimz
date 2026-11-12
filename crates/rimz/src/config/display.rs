@@ -24,7 +24,7 @@ pub enum ScrollbarMode {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PixelMode {
-    /// Use pixel pets and context meters when the terminal path supports them.
+    /// Use pixel pets, context meters and budget bars when the terminal path supports them.
     #[default]
     Auto,
     /// Keep every surface on its cell-rendered tier.

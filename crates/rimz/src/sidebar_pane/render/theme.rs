@@ -146,10 +146,10 @@ impl Theme {
         self.glyphs.glyph(role)
     }
 
-    /// Which glyph preset is active — Unicode or Nerd Font. The mana bar reads
-    /// this to choose between its box-drawing fill and the `nf-extra` progress
-    /// segments; most render code routes through [`Self::glyph`] and never needs
-    /// the kind.
+    /// Which glyph preset is active — Unicode or Nerd Font. The cache-age clock
+    /// reads this to choose its Nerd Font eighth slices; the mana bar keeps its
+    /// `▰▱` glyphs under both, and most render code routes through
+    /// [`Self::glyph`] and never needs the kind.
     pub(crate) fn glyph_kind(&self) -> GlyphSetKind {
         self.glyphs.kind()
     }
