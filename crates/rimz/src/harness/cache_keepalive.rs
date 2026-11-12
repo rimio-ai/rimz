@@ -1,5 +1,6 @@
 //! Best-effort prompt-cache pings for sleeping agents, and for idle agents a keep-warm horizon holds. Durable delivery belongs to the helper.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -8,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use super::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
-use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
+use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger, ProviderCapacity, RoomLoginSet};
 use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
-use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, LoginKey, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::time::{format_duration_coarse, format_duration_compact};
 
@@ -204,10 +205,13 @@ fn pingable(agent: &AgentState) -> bool {
 
 impl CacheKeepaliveRequest {
     /// The agent still due this exact ping, and the keep-warm horizon holding it, if any. A
-    /// row whose ping turn is open is not: another fire's ping is in flight for this anchor.
+    /// row whose ping turn is open is not: another fire's ping is in flight for this anchor. Nor
+    /// is one whose login's capacity, read from `runtime`'s shared cache, reads a spent window
+    /// since the producer claimed.
     pub fn target<'a>(
         &self,
         snapshot: &'a SidebarSnapshot,
+        runtime: &RuntimePaths,
         config: &HarnessConfig,
         policy: &SeatPolicy,
         now: Timestamp,
@@ -223,7 +227,10 @@ impl CacheKeepaliveRequest {
                     == Some(&self.pane_id)
         })?;
         let holding = policy.holding(agent, config, now);
-        should_keepalive(agent, config, holding, now).then_some((agent, holding))
+        (should_keepalive(agent, config, holding, now)
+            && !ProviderCapacity::read(runtime, &agent.login_key())
+                .is_some_and(|capacity| capacity.window_spent(agent, now)))
+        .then_some((agent, holding))
     }
 }
 
@@ -322,6 +329,7 @@ fn next_reaches_cap(
 fn keepalive_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    capacities: &BTreeMap<LoginKey, ProviderCapacity>,
     config: &HarnessConfig,
     policy: &SeatPolicy,
     mut spawn: impl FnMut(&CacheKeepaliveRequest),
@@ -333,8 +341,14 @@ fn keepalive_agents_with(
     };
     for agent in snapshot.agents.iter() {
         let holding = policy.holding(agent, config, snapshot.now);
-        // A ping in flight already answers for this anchor.
-        if agent.ping_turn || !should_keepalive(agent, config, holding, snapshot.now) {
+        // A ping in flight already answers for this anchor. A spent window leaves no claim, so
+        // the ping still fires once the window resets while the agent is due.
+        if agent.ping_turn
+            || !should_keepalive(agent, config, holding, snapshot.now)
+            || capacities
+                .get(&agent.login_key())
+                .is_some_and(|capacity| capacity.window_spent(agent, snapshot.now))
+        {
             continue;
         }
         let forced = in_forced_window(agent, config, snapshot.now);
@@ -380,16 +394,20 @@ fn keepalive_agents_with(
     }
 }
 
+/// Spawn a ping helper for each agent due one, reading the room's capacities once per pass and
+/// not at all with `harness.cache_keepalive` off.
 pub(crate) fn keepalive_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
     config: &HarnessConfig,
     policy: &SeatPolicy,
 ) {
     if !config.cache_keepalive {
         return;
     }
-    keepalive_agents_with(snapshot, runtime, config, policy, |request| {
+    let capacities = ProviderCapacity::read_all(runtime, logins);
+    keepalive_agents_with(snapshot, runtime, &capacities, config, policy, |request| {
         let args = crate::child_process::agent_helper_argv("cache-keepalive", request);
         if let Err(err) =
             crate::child_process::spawn_detached_rimz(runtime, args, "agent-cache-keepalive")
