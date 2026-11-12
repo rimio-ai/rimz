@@ -54,7 +54,7 @@ pub(super) fn produce_pr_states(
     let now_ms = unix_now_ms();
     let condition_scopes =
         crate::harness::schedule::probe::probe_demand(runtime, snapshot.project_root.as_deref());
-    let needed = needed_worktree_paths(snapshot, condition_scopes.keys().cloned().collect());
+    let needed = pr_demand_paths(snapshot, condition_scopes.keys().cloned().collect());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
     let hot = hot_worktree_paths(snapshot).into_keys().collect();
@@ -135,6 +135,23 @@ pub(super) fn produce_pr_states(
         );
     }
     cache
+}
+
+/// The git demand plus every listed worktree root but the project root's own
+/// checkout, so a worktree that nothing but its open pull request holds keeps
+/// its reading.
+fn pr_demand_paths(snapshot: &SidebarSnapshot, condition_scopes: BTreeSet<String>) -> Vec<String> {
+    let mut needed = needed_worktree_paths(snapshot, condition_scopes);
+    for root in &snapshot.worktree_roots {
+        if snapshot.project_root.as_deref() == Some(root.as_path()) || !root.is_dir() {
+            continue;
+        }
+        let path = root.to_string_lossy().into_owned();
+        if !needed.contains(&path) {
+            needed.push(path);
+        }
+    }
+    needed
 }
 
 fn next_consecutive_failures(prior: Option<&RepoProbe>, ok: bool) -> u32 {

@@ -2195,6 +2195,74 @@ fn condition_scope_without_pane_survives_reconcile() {
 }
 
 #[test]
+fn listed_worktrees_without_a_group_join_pr_demand_but_not_git_demand() {
+    let room = tempfile::tempdir().unwrap();
+    let held = room.path().join("lifecycle-vocab");
+    std::fs::create_dir_all(&held).unwrap();
+    let removed = room.path().join("removed");
+    let snapshot = SidebarSnapshot::build(
+        crate::ids::WorkspaceId::from_project_root(room.path()),
+        vec![],
+        jiff::Timestamp::now(),
+    )
+    .with_project_root(Some(room.path().to_path_buf()))
+    .with_worktree_roots(
+        vec![room.path().to_path_buf(), held.clone(), removed],
+        BTreeMap::new(),
+    );
+    let path = held.display().to_string();
+    assert!(needed_worktree_paths(&snapshot, BTreeSet::new()).is_empty());
+    let needed = pr_demand_paths(&snapshot, BTreeSet::new());
+    assert_eq!(needed, std::slice::from_ref(&path));
+    assert_eq!(
+        pr_demand_paths(&snapshot, BTreeSet::from([path.clone()])),
+        std::slice::from_ref(&path),
+        "a condition scope on the same root is one path"
+    );
+
+    let open = PrLink {
+        open: None,
+        stack: Default::default(),
+        branch: Some("lifecycle-vocab".to_owned()),
+        incarnation: None,
+        state: WorktreePrState::Open,
+        number: Some(1614),
+        url: None,
+        ci: None,
+        ci_sha: None,
+        merge_sha: None,
+    };
+    let mut cache = PrStateCache {
+        states: BTreeMap::from([(path.clone(), open.clone())]),
+        ..PrStateCache::default()
+    };
+    for now_ms in [1_000, 2_000] {
+        cache = reconcile_target_bookkeeping(
+            cache,
+            &needed,
+            &DiffStatsCache::default(),
+            &BTreeSet::from([path.clone()]),
+            &DiscoveryRetry::default(),
+            now_ms,
+        );
+        assert_eq!(cache.states.get(&path), Some(&open), "pass at {now_ms}");
+    }
+    let group = repo_group(vec![target(&path, "lifecycle-vocab")]);
+    let prior = cache.clone();
+    apply_repo_probe(
+        &mut cache,
+        &prior,
+        failed_repo_group_probe("gh:github.com:org/repo", &group),
+        3_000,
+    );
+    assert_eq!(
+        cache.states.get(&path),
+        Some(&open),
+        "a failed probe keeps the open reading"
+    );
+}
+
+#[test]
 fn unsupported_cached_path_does_not_reassemble_on_head_nudge() {
     let mut cache = PrStateCache::default();
     cache
