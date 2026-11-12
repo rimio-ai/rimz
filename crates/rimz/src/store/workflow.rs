@@ -48,8 +48,8 @@ pub type Result<T> = std::result::Result<T, WorkflowStoreErr>;
 
 impl WorkflowStoreErr {
     /// Whether this is `load`'s refusal of another version's record: a run every background
-    /// reader treats as absent, and only `rimz workflow cancel` or GC past the owned grace
-    /// removes.
+    /// reader treats as absent, and only `rimz workflow cancel` removes, or GC past the owned
+    /// grace when the record is an older version's.
     pub fn is_refused(&self) -> bool {
         matches!(self, Self::Version { .. })
     }
@@ -523,7 +523,7 @@ impl Wait {
     }
 }
 
-/// Where a run's definition came from; a record written before origins existed is deployed.
+/// Where a run's definition came from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOrigin {
