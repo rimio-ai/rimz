@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{AgentStatus, PendingWait, PendingWaitTrigger};
+use crate::agents::{AgentStatus, PendingWait, PendingWaitTrigger, RateLimitWindow};
 use crate::config::{IdleCompact, KeepWarm, Profile, RoleBinding, Team};
 
 fn ts(seconds: i64) -> Timestamp {
@@ -406,9 +406,14 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
         SidebarSnapshot::build_with_agents(workspace_id, vec![agent.clone()], ts(3540));
     let config = HarnessConfig::default();
     let policy = SeatPolicy::default();
-    keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
-        panic!("no live pane")
-    });
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &policy,
+        |_| panic!("no live pane"),
+    );
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
@@ -427,71 +432,100 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
         worktree_branch: None,
     });
     let mut count = 0;
-    keepalive_agents_with(&snapshot, &runtime, &config, &policy, |request| {
-        assert_eq!(request.anchor, ts(0));
-        assert!(
-            request
-                .target(&snapshot, &config, &policy, ts(3540))
-                .is_some()
-        );
-        let mut changed = snapshot.clone();
-        std::sync::Arc::make_mut(&mut changed.agents)[0].last_tool_at = Some(ts(1));
-        assert!(
-            request
-                .target(&changed, &config, &policy, ts(3541))
-                .is_none(),
-            "moved anchor"
-        );
-        changed = snapshot.clone();
-        std::sync::Arc::make_mut(&mut changed.agents)[0].context = Some(recorded());
-        assert!(
-            request
-                .target(&changed, &config, &policy, ts(3541))
-                .is_some(),
-            "the provider's record of the claimed request is the same anchor"
-        );
-        changed = snapshot.clone();
-        std::sync::Arc::make_mut(&mut changed.agents)[0]
-            .pending_waits
-            .clear();
-        assert!(
-            request
-                .target(&changed, &config, &policy, ts(3540))
-                .is_none(),
-            "wait completed"
-        );
-        changed = snapshot.clone();
-        std::sync::Arc::make_mut(&mut changed.agent_panes).clear();
-        assert!(
-            request
-                .target(&changed, &config, &policy, ts(3540))
-                .is_none(),
-            "pane vanished"
-        );
-        count += 1;
-        keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
-            panic!("concurrent spawn")
-        });
-    });
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &policy,
+        |request| {
+            assert_eq!(request.anchor, ts(0));
+            assert!(
+                request
+                    .target(&snapshot, &runtime, &config, &policy, ts(3540))
+                    .is_some()
+            );
+            let mut changed = snapshot.clone();
+            std::sync::Arc::make_mut(&mut changed.agents)[0].last_tool_at = Some(ts(1));
+            assert!(
+                request
+                    .target(&changed, &runtime, &config, &policy, ts(3541))
+                    .is_none(),
+                "moved anchor"
+            );
+            changed = snapshot.clone();
+            std::sync::Arc::make_mut(&mut changed.agents)[0].context = Some(recorded());
+            assert!(
+                request
+                    .target(&changed, &runtime, &config, &policy, ts(3541))
+                    .is_some(),
+                "the provider's record of the claimed request is the same anchor"
+            );
+            changed = snapshot.clone();
+            std::sync::Arc::make_mut(&mut changed.agents)[0]
+                .pending_waits
+                .clear();
+            assert!(
+                request
+                    .target(&changed, &runtime, &config, &policy, ts(3540))
+                    .is_none(),
+                "wait completed"
+            );
+            changed = snapshot.clone();
+            std::sync::Arc::make_mut(&mut changed.agent_panes).clear();
+            assert!(
+                request
+                    .target(&changed, &runtime, &config, &policy, ts(3540))
+                    .is_none(),
+                "pane vanished"
+            );
+            count += 1;
+            keepalive_agents_with(
+                &snapshot,
+                &runtime,
+                &BTreeMap::new(),
+                &config,
+                &policy,
+                |_| panic!("concurrent spawn"),
+            );
+        },
+    );
     assert_eq!(count, 1);
-    keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
-        panic!("repeated anchor")
-    });
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &policy,
+        |_| panic!("repeated anchor"),
+    );
     let mut switched = snapshot.clone();
     std::sync::Arc::make_mut(&mut switched.agents)[0].context = Some(recorded());
     switched.now = ts(3541);
-    keepalive_agents_with(&switched, &runtime, &config, &policy, |_| {
-        panic!("a source switch for the claimed request refired")
-    });
+    keepalive_agents_with(
+        &switched,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &policy,
+        |_| panic!("a source switch for the claimed request refired"),
+    );
     let stale = snapshot.clone();
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].turn_started_at = Some(ts(3545));
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].turn_ended_at = Some(ts(3550));
     snapshot.now = ts(7085);
-    keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
-        count += 1;
-    });
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &policy,
+        |_| {
+            count += 1;
+        },
+    );
     assert_eq!(count, 2);
-    keepalive_agents_with(&stale, &runtime, &config, &policy, |_| {
+    keepalive_agents_with(&stale, &runtime, &BTreeMap::new(), &config, &policy, |_| {
         panic!("stale producer respawned an older anchor")
     });
 }
@@ -535,18 +569,30 @@ fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
     let fires = |runtime: &RuntimePaths, agent: &AgentState, now: i64, config: &HarnessConfig| {
         let snapshot = paned(agent, workspace_id.clone(), now);
         let mut fired = Vec::new();
-        keepalive_agents_with(&snapshot, runtime, config, &policy, |request| {
-            assert!(
-                request
-                    .target(&snapshot, config, &policy, ts(now))
-                    .is_some(),
-                "the helper accepts the fire it was given at {now}"
-            );
-            keepalive_agents_with(&snapshot, runtime, config, &policy, |_| {
-                panic!("concurrent producer fired at {now}")
-            });
-            fired.push(request.forced);
-        });
+        keepalive_agents_with(
+            &snapshot,
+            runtime,
+            &BTreeMap::new(),
+            config,
+            &policy,
+            |request| {
+                assert!(
+                    request
+                        .target(&snapshot, runtime, config, &policy, ts(now))
+                        .is_some(),
+                    "the helper accepts the fire it was given at {now}"
+                );
+                keepalive_agents_with(
+                    &snapshot,
+                    runtime,
+                    &BTreeMap::new(),
+                    config,
+                    &policy,
+                    |_| panic!("concurrent producer fired at {now}"),
+                );
+                fired.push(request.forced);
+            },
+        );
         fired
     };
     assert_eq!(
@@ -590,6 +636,7 @@ fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
     keepalive_agents_with(
         &snapshot,
         &fresh_runtime("late-polite"),
+        &BTreeMap::new(),
         &config,
         &policy,
         |request| {
@@ -600,7 +647,9 @@ fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
     assert!(forced.forced);
     let open = paned(&in_flight, workspace_id.clone(), 3572);
     assert!(
-        forced.target(&open, &config, &policy, ts(3572)).is_none(),
+        forced
+            .target(&open, &runtime, &config, &policy, ts(3572))
+            .is_none(),
         "the helper refuses a row whose ping turn is open"
     );
     // With no provider record, a ping that closed 20 s after it opened counts from its open:
@@ -1392,29 +1441,47 @@ fn helper_rechecks_the_horizon_before_pinging() {
     });
     let config = HarnessConfig::default();
     let held = policy(Some(KeepWarm::For(TWO_HOURS)), None);
-    keepalive_agents_with(&snapshot, &runtime, &config, &SeatPolicy::default(), |_| {
-        panic!("no keep-warm, no ping")
-    });
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &SeatPolicy::default(),
+        |_| panic!("no keep-warm, no ping"),
+    );
     let mut requests = Vec::new();
-    keepalive_agents_with(&snapshot, &runtime, &config, &held, |request| {
-        requests.push(request.clone());
-    });
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &held,
+        |request| {
+            requests.push(request.clone());
+        },
+    );
     assert_eq!(requests.len(), 1);
     let (_, holding) = requests[0]
-        .target(&snapshot, &config, &held, ts(3540))
+        .target(&snapshot, &runtime, &config, &held, ts(3540))
         .expect("still due");
     assert_eq!(holding, Some(TWO_HOURS));
     let mut retuned = snapshot.clone();
     std::sync::Arc::make_mut(&mut retuned.agents)[0] = tuned(agent, "off");
     assert!(
         requests[0]
-            .target(&retuned, &config, &held, ts(3540))
+            .target(&retuned, &runtime, &config, &held, ts(3540))
             .is_none(),
         "keep-warm off landed after the producer claimed its ping"
     );
     assert!(
         requests[0]
-            .target(&snapshot, &config, &SeatPolicy::default(), ts(3540))
+            .target(
+                &snapshot,
+                &runtime,
+                &config,
+                &SeatPolicy::default(),
+                ts(3540)
+            )
             .is_none(),
         "keep-warm removed from the definition since the producer fired"
     );
@@ -1422,8 +1489,185 @@ fn helper_rechecks_the_horizon_before_pinging() {
     std::sync::Arc::make_mut(&mut shortened.agents)[0].turn_ended_at = Some(ts(-7200));
     assert!(
         requests[0]
-            .target(&shortened, &config, &held, ts(3540))
+            .target(&shortened, &runtime, &config, &held, ts(3540))
             .is_none(),
         "horizon passed since the producer fired"
+    );
+}
+
+fn usage_window(used: Option<u8>, reset: i64, mins: u32, scope: Option<&str>) -> RateLimitWindow {
+    RateLimitWindow {
+        scope: scope.map(|id| crate::agents::RateLimitWindowScope {
+            id: id.into(),
+            label: id.into(),
+        }),
+        used_percentage: used,
+        resets_at: Some(ts(reset)),
+        duration_mins: Some(mins),
+        ..Default::default()
+    }
+}
+
+/// The login's capacity as the producer's once-per-pass read hands it over.
+fn capacities(
+    agent: &AgentState,
+    windows: Vec<RateLimitWindow>,
+) -> BTreeMap<LoginKey, ProviderCapacity> {
+    [(agent.login_key(), ProviderCapacity::from_windows(windows))].into()
+}
+
+fn write_capacity(runtime: &RuntimePaths, agent: &AgentState, windows: Vec<RateLimitWindow>) {
+    let cache = crate::agents::RateLimitsCache {
+        entries: [(
+            agent.login_key().into(),
+            crate::agents::RateLimitCacheEntry {
+                limits: crate::agents::AgentRateLimits { windows },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &crate::agents::RateLimitsCache::shared_path(runtime),
+        &cache,
+    )
+    .unwrap();
+}
+
+/// The producer's fires for `agent` at 3540 s, and whether it left a claim file behind.
+fn producer_fires(
+    agent: &AgentState,
+    capacities: &BTreeMap<LoginKey, ProviderCapacity>,
+) -> (usize, bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let snapshot = paned(agent, workspace_id, 3540);
+    let config = HarnessConfig::default();
+    let mut fires = 0;
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        capacities,
+        &config,
+        &SeatPolicy::default(),
+        |_| fires += 1,
+    );
+    let claimed = std::fs::read_dir(runtime.live_path("cache-keepalive"))
+        .is_ok_and(|mut entries| entries.next().is_some());
+    (fires, claimed)
+}
+
+#[test]
+fn a_spent_window_blocking_the_model_stops_the_ping_and_leaves_no_claim() {
+    let mut agent = sleeping();
+    agent.model = Some("claude-opus-4-6".into());
+    for (case, windows) in [
+        ("5-hour", vec![usage_window(Some(100), 9_000, 300, None)]),
+        (
+            "weekly",
+            vec![
+                usage_window(Some(40), 9_000, 300, None),
+                usage_window(Some(100), 90_000, 10_080, None),
+            ],
+        ),
+        (
+            "model sub-cap",
+            vec![
+                usage_window(Some(40), 9_000, 300, None),
+                usage_window(Some(100), 90_000, 10_080, Some("model:opus")),
+            ],
+        ),
+    ] {
+        assert_eq!(
+            producer_fires(&agent, &capacities(&agent, windows)),
+            (0, false),
+            "{case}: no ping and no claim, so the ping can fire after the reset"
+        );
+    }
+}
+
+#[test]
+fn a_ping_still_goes_out_without_a_spent_window_for_the_model() {
+    let mut agent = sleeping();
+    agent.model = Some("claude-opus-4-6".into());
+    for (case, capacities) in [
+        ("no reading", BTreeMap::new()),
+        (
+            "no known percentage",
+            capacities(&agent, vec![usage_window(None, 9_000, 300, None)]),
+        ),
+        (
+            "reset passed",
+            capacities(&agent, vec![usage_window(Some(100), 3_000, 300, None)]),
+        ),
+        (
+            "another model's sub-cap",
+            capacities(
+                &agent,
+                vec![
+                    usage_window(Some(40), 9_000, 300, None),
+                    usage_window(Some(100), 90_000, 10_080, Some("model:sonnet")),
+                ],
+            ),
+        ),
+    ] {
+        assert_eq!(producer_fires(&agent, &capacities), (1, true), "{case}");
+    }
+}
+
+#[test]
+fn helper_declines_a_window_spent_after_the_producer_claimed() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut agent = idle();
+    agent.profile = Some("warm".into());
+    let snapshot = paned(&agent, workspace_id, 3540);
+    let config = HarnessConfig::default();
+    let held = policy(Some(KeepWarm::For(TWO_HOURS)), None);
+    let mut requests = Vec::new();
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &BTreeMap::new(),
+        &config,
+        &held,
+        |request| {
+            requests.push(request.clone());
+        },
+    );
+    let [request] = requests.as_slice() else {
+        panic!("one fire, got {requests:?}")
+    };
+    let due = || request.target(&snapshot, &runtime, &config, &held, ts(3540));
+    assert!(due().is_some(), "no cache file pings as today");
+    std::fs::write(
+        crate::agents::RateLimitsCache::shared_path(&runtime),
+        b"{not json",
+    )
+    .unwrap();
+    assert!(due().is_some(), "an unreadable cache pings as today");
+    write_capacity(&runtime, &agent, vec![usage_window(None, 9_000, 300, None)]);
+    assert!(
+        due().is_some(),
+        "a reading with no known percentage pings as today"
+    );
+    write_capacity(
+        &runtime,
+        &agent,
+        vec![usage_window(Some(100), 9_000, 300, None)],
+    );
+    assert!(
+        due().is_none(),
+        "the window filled after the producer claimed"
+    );
+    assert_eq!(
+        held.holding(&agent, &config, ts(3540)),
+        Some(TWO_HOURS),
+        "the hold the card, idle compaction and hibernation read is unchanged"
     );
 }

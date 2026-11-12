@@ -20,7 +20,9 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
         .context("reading cache-keepalive snapshot")?;
     let policy = SeatPolicy::load(&config, Some(&ctx.workspace.project_root));
     let now = Timestamp::now();
-    let Some((agent, holding)) = request.target(&snapshot, &config.harness, &policy, now) else {
+    let Some((agent, holding)) =
+        request.target(&snapshot, ctx.runtime(), &config.harness, &policy, now)
+    else {
         return Ok(());
     };
     let limit = final_ping(agent, &config.harness, now);

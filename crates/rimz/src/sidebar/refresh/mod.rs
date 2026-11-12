@@ -364,7 +364,13 @@ pub(super) fn refresh_heavy_lanes(
         )
     });
     steps.step("cache_keepalive", || {
-        crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness, &policy)
+        crate::harness::cache_keepalive::keepalive_agents(
+            base,
+            runtime,
+            &logins,
+            &config.harness,
+            &policy,
+        )
     });
     steps.step("keep_warm", || {
         keep_warm::publish(base, runtime, &config.harness, &policy)

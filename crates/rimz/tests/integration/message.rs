@@ -4729,6 +4729,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             request
                 .target(
                     &current,
+                    store.runtime_paths(),
                     &toml::from_str(
                         "keep_warm_min_ttl = 'off'\n[prompt_cache_ttl]\nclaude = \"61s\""
                     )

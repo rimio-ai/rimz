@@ -434,6 +434,14 @@ impl ProviderCapacity {
                 .all(|window| !window_spent_unreset(window, now))
     }
 
+    /// Whether this reading of `agent`'s own login has a spent window blocking its model at
+    /// `now`: a 5-hour or weekly window at 100% with its reset ahead or unknown, or a spent sub-cap
+    /// for the agent's model. Paid extra usage is not read, so a window it would carry still
+    /// counts as spent. A window with no known percentage is not spent.
+    pub fn window_spent(&self, agent: &super::AgentState, now: Timestamp) -> bool {
+        self.subscription_exhausted_for_model(now, agent.model.as_deref())
+    }
+
     pub(crate) fn subscription_exhausted_for_model(
         &self,
         now: Timestamp,
