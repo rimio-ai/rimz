@@ -1428,6 +1428,7 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             task,
             timing: row.timing.as_ref(),
             checkout: row.dir.as_deref(),
+            fired: attention::fired(task, row.launch.as_ref()),
             running: row.running.is_some(),
             disabled: matches!(row.state, TaskState::Off | TaskState::NotEnabled),
             last_failed: row.last.as_ref().is_some_and(|last| !last.ok),

@@ -211,7 +211,7 @@ fn needs_you(
     };
     for (attention, names) in hints {
         let command = match attention {
-            Attention::CheckoutGone | Attention::Lost => {
+            Attention::CheckoutGone | Attention::PrClosed | Attention::Lost => {
                 format!("{rimz} loop remove {}", names.join(" "))
             }
             Attention::Strikes | Attention::Failing | Attention::Invalid | Attention::Parked => {
@@ -787,6 +787,7 @@ pub(super) fn reason_style(attention: Option<Attention>) -> anstyle::Style {
             Attention::CheckoutGone
             | Attention::Strikes
             | Attention::Failing
+            | Attention::PrClosed
             | Attention::Invalid
             | Attention::Lost,
         ) => role(StateRole::Failed),

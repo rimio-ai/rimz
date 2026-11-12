@@ -142,14 +142,26 @@ fn held(row: &TaskRow) -> bool {
         })
 }
 
+/// A row whose clock cannot fire. A closed pull request still waits on its condition,
+/// which a reopen or a merge can meet.
 fn blocked(row: &TaskRow) -> bool {
-    matches!(
-        row.attention,
-        Some(Attention::CheckoutGone | Attention::Blocked | Attention::Invalid)
-    ) || row
-        .timing
-        .as_ref()
-        .is_some_and(|timing| matches!(timing.state(), schedule::TaskTimingState::Blocked(_)))
+    let blocked = match row.attention {
+        Some(Attention::CheckoutGone | Attention::Blocked | Attention::Invalid) => true,
+        Some(
+            Attention::Strikes
+            | Attention::Failing
+            | Attention::PrClosed
+            | Attention::Held
+            | Attention::Parked
+            | Attention::Lost,
+        )
+        | None => false,
+    };
+    blocked
+        || row
+            .timing
+            .as_ref()
+            .is_some_and(|timing| matches!(timing.state(), schedule::TaskTimingState::Blocked(_)))
 }
 
 fn rank_key(row: &TaskRow) -> (u8, Option<Timestamp>, &str) {
@@ -395,6 +407,7 @@ fn layout<'a>(tasks: &[&'a TaskRow], now: Timestamp, cols: usize) -> (Columns, V
             Some(
                 Attention::CheckoutGone
                 | Attention::Strikes
+                | Attention::PrClosed
                 | Attention::Blocked
                 | Attention::Invalid
                 | Attention::Parked
