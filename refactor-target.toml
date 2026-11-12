@@ -3825,7 +3825,7 @@ path = "crates/rimz/src/sidebar"
 # engine::reconcile_final_fold reconciles final folds before observation and publication.
 # stall and stall::read share classified host PSI with the host and CLI producers (+2).
 # marks shares target resolution, typed errors, and runtime read/unread operations (+5).
-surface-budget = 256
+surface-budget = 246
 
 [[verdict]]
 kind = "item"
@@ -4084,7 +4084,7 @@ path = "crates/rimz/src/sidebar_pane/app"
 # FocusPeers::with_fit lets the host inject its tmux repair and tests exercise fitting within the shared click budget (+1).
 # RoomConfig separates room-owned settings from pane identity (+1).
 # ForwarderEnd tells the supervisor whether its terminal or its attach stream ended a round (+1).
-surface-budget = 16
+surface-budget = 15
 
 [[verdict]]
 kind = "item"
