@@ -77,8 +77,15 @@ fn select_backend(
     }
 }
 
-fn detect_env_mux() -> Option<MuxName> {
+/// The multiplexer this process runs inside, read from its `ZELLIJ*` and `TMUX*`
+/// environment, Zellij first.
+pub fn enclosing_mux() -> Option<MuxName> {
     detect_env_mux_with(|name| std::env::var_os(name))
+}
+
+/// Whether `mux`'s binary resolves on `PATH`.
+pub fn is_installed(mux: MuxName) -> bool {
+    which::which(mux.as_str()).is_ok()
 }
 
 fn detect_env_mux_with(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<MuxName> {
@@ -92,7 +99,7 @@ fn detect_env_mux_with(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Opti
 }
 
 pub fn auto_detect_backend(explicit: Option<MuxName>) -> Result<MuxName> {
-    let env_mux = detect_env_mux();
+    let env_mux = enclosing_mux();
     if explicit.is_some() || env_mux.is_some() {
         return select_backend(explicit, env_mux, None, false, false);
     }
@@ -100,8 +107,8 @@ pub fn auto_detect_backend(explicit: Option<MuxName>) -> Result<MuxName> {
         None,
         None,
         crate::config::MachineConfig::load_lenient().mux.default,
-        which::which("zellij").is_ok(),
-        which::which("tmux").is_ok(),
+        is_installed(MuxName::Zellij),
+        is_installed(MuxName::Tmux),
     )
 }
 

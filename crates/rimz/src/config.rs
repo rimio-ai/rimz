@@ -112,8 +112,8 @@ pub use loop_::{
     has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
-pub use mux::{MultiplexerConfig, MuxStatusBar};
-pub(crate) use mux::{MuxConfig, RoomConfig, RoomStyle};
+pub use mux::{MultiplexerConfig, MuxStatusBar, RoomStyle};
+pub(crate) use mux::{MuxConfig, RoomConfig};
 pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};
 #[cfg(test)]
 pub(crate) use mux::{TmuxPaneBorderLines, ZellijClipboard, ZellijForceClose};

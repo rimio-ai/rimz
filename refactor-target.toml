@@ -1072,7 +1072,8 @@ upward-dependencies = [
 # Typed key directions, split directions, palette modes, and mode-change classification
 # keep both backend compilers exhaustive (+3).
 # TaskWorktree and TaskEntry::task_worktree are the one reader of a task's worktree placement (+2).
-surface-budget = 293
+# RoomStyle's export lets setup's room-keys question name the stored style (+1).
+surface-budget = 294
 
 [[verdict]]
 kind = "item"
@@ -10277,7 +10278,7 @@ reason = "Pass 24a: `name` and `namespace` are read by the theme::glyphs tests a
 [[verdict]]
 kind = "item"
 key = "config::notifications::NotificationsPrefs"
-reason = "Pass 24a: `command` cannot go private — config/tests.rs:1434 reads it (E0624). `effective_handlers` and `triggers_status` did narrow to crate reach."
+reason = "Pass 24a: `command` cannot go private — config/tests.rs:1434 reads it (E0624). `effective_handlers` did narrow to crate reach; `triggers_status` is pub for setup's also-on review line."
 
 [[verdict]]
 kind = "item"
