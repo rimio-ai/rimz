@@ -177,7 +177,7 @@ impl AgentContextRecord {
         true
     }
 
-    pub fn apply_local_refresh(
+    pub(crate) fn apply_local_refresh(
         &mut self,
         definition: &AgentSpec,
         refresh: LocalContextRefresh,
@@ -197,7 +197,7 @@ impl AgentContextRecord {
         true
     }
 
-    pub fn merge_observed(
+    pub(crate) fn merge_observed(
         &mut self,
         kind: &str,
         context: AgentContext,
@@ -265,7 +265,7 @@ impl AgentContextRecord {
         changed
     }
 
-    pub fn apply_locally_priced_turn(
+    pub(crate) fn apply_locally_priced_turn(
         &mut self,
         kind: &str,
         priced: &LocallyPricedTurnCost,
