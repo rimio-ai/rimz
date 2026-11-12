@@ -782,7 +782,7 @@ fn manual_consume_refuses_held_offers_before_locking_or_reserving() {
             natural_reset: None,
             forecast: None,
             min_gain: Duration::ZERO,
-            prepared: PreparedRedemption::from_offer(RedeemReason::Manual, offer),
+            offer,
             stamp_at_read: None,
         };
         let result = preview.consume(&runtime, &key, uuid::Uuid::now_v7());

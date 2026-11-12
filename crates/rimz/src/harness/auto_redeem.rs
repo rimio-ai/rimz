@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    PreparedRedemption, ProviderCapacity, RedeemHold, RedemptionCode, ResetCreditResult,
-    WindowSpan, prepare_reset_credit_redemption,
+    ProviderCapacity, RedeemHold, RedemptionCode, ResetCreditOffer, ResetCreditResult, WindowSpan,
+    prepare_reset_credit_redemption,
 };
 use crate::agents::{
     AccountUsageIdentity, AccountUsageSnapshot, ProviderLogin, RateLimitWindow, RedeemEffect,
@@ -177,7 +177,7 @@ pub struct ManualRedeem {
     pub natural_reset: Option<Timestamp>,
     pub forecast: Option<RedeemForecast>,
     pub min_gain: Duration,
-    prepared: PreparedRedemption<RedeemReason>,
+    offer: ResetCreditOffer,
     stamp_at_read: Option<RedeemStamp>,
 }
 
@@ -190,19 +190,13 @@ pub fn prepare_manual_redeem(
 ) -> Result<ManualRedeem, AutoRedeemErr> {
     let stamp_at_read = read_stamp(&runtime.shared_auto_redeem_path(key));
     let read_at = Timestamp::now();
-    let prepared = prepare_reset_credit_redemption(
-        key.kind.as_str(),
-        |_| Some(RedeemReason::Manual),
-        login_env,
-    )
-    .map_err(AutoRedeemErr::Provider)?
-    // The unconditional manual verdict cannot decline an offered action.
-    .expect("the manual verdict always returns Some");
-    let capacity = prepared.capacity.as_ref();
-    let credits = prepared.credits.clone();
+    let offer = prepare_reset_credit_redemption(key.kind.as_str(), login_env)
+        .map_err(AutoRedeemErr::Provider)?;
+    let capacity = offer.capacity.as_ref();
+    let credits = offer.credits.clone();
     let min_gain = config.auto_redeem_min_gain();
     let rate = cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
-    let mut facts = SpendFacts::from_offer(key, prepared.offer(), rate);
+    let mut facts = SpendFacts::from_offer(key, &offer, rate);
     facts.last_attempt = stamp_at_read.clone();
     let windows = [WindowSpan::FiveHour, WindowSpan::SevenDay]
         .into_iter()
@@ -216,14 +210,14 @@ pub fn prepare_manual_redeem(
         credits,
         windows,
         min_gain,
-        prepared,
+        offer,
         stamp_at_read,
     })
 }
 
 impl ManualRedeem {
     pub fn hold(&self) -> Option<&RedeemHold> {
-        self.prepared.hold()
+        self.offer.hold.as_ref()
     }
 
     /// Lock, apply the stamp race rule, reserve, consume one credit, stamp the outcome.
@@ -246,7 +240,7 @@ impl ManualRedeem {
             self.stamp_at_read.as_ref(),
             Timestamp::now(),
             &request_id,
-            || self.prepared.consume(&request_id),
+            || self.offer.consume(&request_id),
         )
     }
 }
@@ -795,36 +789,30 @@ pub fn execute_auto_redeem(
 
     let rate_pct_per_day =
         cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
-    let action = prepare_reset_credit_redemption(
-        CODEX_KIND,
-        |offer| {
-            let facts = SpendFacts::from_offer(key, offer, rate_pct_per_day);
-            fresh_verdict(idle, &facts, config, Timestamp::now())
-        },
-        &logins.env(&login),
-    );
-    let action = action.map_err(AutoRedeemErr::Provider)?;
-    let Some(action) = action else {
+    let offer = prepare_reset_credit_redemption(CODEX_KIND, &logins.env(&login))
+        .map_err(AutoRedeemErr::Provider)?;
+    let facts = SpendFacts::from_offer(key, &offer, rate_pct_per_day);
+    let Some(reason) = fresh_verdict(idle, &facts, config, Timestamp::now()) else {
         return Ok(None);
     };
     let now = Timestamp::now();
-    let natural_reset = action
+    let natural_reset = offer
         .capacity
         .as_ref()
         .and_then(|capacity| capacity.latest_spent_window_reset(now));
-    let report = redemption_report(action.decision, &action.credits, natural_reset);
+    let report = redemption_report(reason, &offer.credits, natural_reset);
     let redeemed = finish_redemption(
         key,
         &stamp_path,
         RedeemStamp {
             attempted_at: now,
             request_id: request_id.to_owned(),
-            reason: action.decision,
+            reason,
             outcome: None,
         },
         report,
         requested_reason,
-        || action.consume(&request_id),
+        || offer.consume(&request_id),
     )?;
     if let Some(error) = &redeemed.refresh_error {
         return Err(attempted_error(
