@@ -481,3 +481,47 @@ fn host_reconcile_under_a_held_lock_only_derives_and_opens_next_pass() {
         .collect::<Vec<_>>();
     assert_eq!(opened, ["ask"]);
 }
+
+/// An unlanded group quiet past the archive window whose only needs-a-look row
+/// has no episode yet: the final-fold order decides its `inactive`.
+fn quiet_unlanded_success() -> SidebarSnapshot {
+    let quiet_ms = jiff::Timestamp::now().as_millisecond() - 2 * 86_400_000;
+    snapshot(vec![row("done", AgentStatus::Success, quiet_ms)])
+}
+
+#[test]
+fn attention_sorts_on_enrichment_bits_before_unread_writes_its_own() {
+    let (_dir, ordered_runtime) = runtime();
+    let mut snapshot = quiet_unlanded_success();
+    crate::sidebar::attention::reconcile_snapshot(&ordered_runtime, &mut snapshot);
+    reconcile_snapshot(&ordered_runtime, &mut snapshot);
+    assert!(snapshot.worktree_groups[0].inactive.is_some());
+    assert!(snapshot.worktree_groups[0].rows[0].unread);
+
+    let (_swapped_dir, swapped_runtime) = runtime();
+    let mut swapped = quiet_unlanded_success();
+    reconcile_snapshot(&swapped_runtime, &mut swapped);
+    crate::sidebar::attention::reconcile_snapshot(&swapped_runtime, &mut swapped);
+    assert!(swapped.worktree_groups[0].inactive.is_none());
+}
+
+#[test]
+fn the_room_signature_reads_nothing_unread_reconcile_writes() {
+    let (_dir, runtime) = runtime();
+    let mut snapshot = snapshot(vec![
+        row("done", AgentStatus::Success, 1_000),
+        row("ask", AgentStatus::Waiting, 2_000),
+    ]);
+    crate::sidebar::attention::reconcile_snapshot(&runtime, &mut snapshot);
+    let events = crate::sidebar::event_store::EventStore::default();
+    let sig = |snapshot: &SidebarSnapshot| {
+        let pulled = crate::sidebar::observe::PulledFrameSig::from_snapshot(snapshot);
+        crate::sidebar::observe::extract_sig(snapshot, &pulled, &events, 0, 0, 7_000)
+    };
+    let before = sig(&snapshot);
+    let unread_before = snapshot.rows().map(|row| row.unread).collect::<Vec<_>>();
+    reconcile_snapshot(&runtime, &mut snapshot);
+    let unread_after = snapshot.rows().map(|row| row.unread).collect::<Vec<_>>();
+    assert_ne!(unread_before, unread_after);
+    assert_eq!(sig(&snapshot), before);
+}
