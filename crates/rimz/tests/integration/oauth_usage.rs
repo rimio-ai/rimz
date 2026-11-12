@@ -1117,6 +1117,15 @@ fn auto_redeem_declined_by_the_fresh_read_spends_and_records_nothing() {
         .bounded_output()
         .expect("rimz agents auto-redeem");
     let requests = server.join().expect("server requests");
+    for read in [
+        "GET /backend-api/wham/usage ",
+        "GET /backend-api/wham/rate-limit-reset-credits ",
+    ] {
+        assert!(
+            requests.iter().any(|request| request.starts_with(read)),
+            "the verdict must be taken on a fresh provider read ({read}): {requests:?}"
+        );
+    }
     assert!(
         requests.iter().all(|request| !request.starts_with("POST ")),
         "a declined verdict must not consume: {requests:?}"

@@ -20,12 +20,12 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | --- | --- | --- | --- | --- |
 | `address` | holds; landed pass-14 | `b269429c2` | 30 | grammar, renderer, pane binding and launch lineage at L4; one channel reconciler. |
 | `agents` | holds; landed pass-18a | `045e858e8` | 30 | root exports only outside-spelled names; hook representation private; install defaults stay trait defaults. |
-| `agents/(root)` | holds; landed pass-31b | `ac8b4038a` | 30 | outside-spelled facade with signature-floor exceptions and private internal helpers. |
+| `agents/(root)` | holds; landed pass-31b; pass-33h | `62bcf1c8c` | 30 | outside-spelled facade with signature-floor exceptions; one launch-dir refusal enum whose variants carry what they print, and refreshes built from `Default`. |
 | `agents/state` | holds; landed pass-31b; pass-33i | `db35ae4ce` | 30 | one displayed-status rung order (`walk_rungs`) for the agent and the sidebar row, reached from the store only through `project_display`; one prompt rule and error-marker projection with direct current-layout decoding. |
-| `agents/folder_trust` | holds; landed pass-31b | `ac8b4038a` | 30 | room-login rows require the known repo root while adapter decisions remain optional-root. |
+| `agents/folder_trust` | holds; landed pass-31b | `62bcf1c8c` | 30 | room-login rows require the known repo root while adapter decisions remain optional-root; grant errors stay strings, since every consumer renders them. |
 | `agents/account_links` | holds; landed pass-31b | `ac8b4038a` | 30 | guarded settings sharing with signature-floored error and report types. |
 | `agents/provider_file` | holds; landed pass-31b | `ac8b4038a` | 30 | symlink-following writer also serves pricing snapshots under the provider-file invariant. |
-| `agents/context` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
+| `agents/context` | holds; landed pass-18a; pass-33h | `62bcf1c8c` | 30 | observation, usage and record helpers visible only as far as their readers. |
 | `agents/definition` | holds; landed pass-18a; pass-32a | `6ea09c504` | 30 | with `agents`; the spec declares the hook-context reply shape (`HookContextReply`) and `AgentDefinition::attach_hook_context` is its one writer. |
 | `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |
 | `agents/adapters/(root)` | holds | `4a82d6b28` | 30 | module declarations and the registry; nothing escapes `agents`. |
@@ -39,7 +39,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/antigravity` | holds; landed pass-20c | `e55c49fd4` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/pi` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/opencode` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant payload decode (now the shared `decode_or_default`) and `sqlite_io` adapter hold. |
-| `agents/adapters/plugin` | holds; landed pass-21c | `dde310cbf` | 30 | `agents::plugins` re-exports stay `pub` for the binary; `PluginAdapter` private. |
+| `agents/adapters/plugin` | holds; landed pass-21c | `62bcf1c8c` | 30 | `agents::plugins` re-exports stay `pub` for the binary; `PluginAdapter` private; manifest and check errors stay strings that consumers render or persist. |
 | `agents/adapters/grok` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/droid` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/kiro` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
@@ -50,8 +50,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/spending` | holds; landed pass-13; pass-33 | `21e72ec88` | 30 | one writer per cache, one engine election, one mode through the walk with one persisted acknowledgement, keyed fold windows; walker, ledger and migration residuals are fix-pinned state machines. |
 | `agents/capabilities` | holds; landed pass-32a | `6ea09c504` | 30 | trait floor unchanged with hook-context attachment moved to the spec: trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
 | `agents/hook_types` | holds; landed pass-24b | `6f49ccef0` | 30 | hook representation at `pub(super)`; `HookRouting` and two binary-called `HookOutput` readers stay `pub`. |
-| `agents/account` | holds; landed pass-24b | `6f49ccef0` | 30 | cache schema and reset-credit types stay `pub` for the integration crate. |
-| `agents/credits` | holds; landed pass-24b | `6f49ccef0` | 30 | OAuth transport `pub(super)`; probe and snapshot types floored by signature. |
+| `agents/account` | holds; landed pass-24b; pass-33h | `62bcf1c8c` | 30 | cache schema and reset-credit types stay `pub` for the integration crate; the harness holds the adapter's `ResetCreditOffer` itself. |
+| `agents/credits` | holds; landed pass-24b; pass-33h | `62bcf1c8c` | 30 | OAuth transport `pub(super)` classifies a transport failure once; probe and snapshot types floored by signature. |
 | `agents/managed_json_hooks` | holds; landed pass-24b | `6f49ccef0` | 30 | JSON hook merge backend reachable only from `agents`. |
 | `agents/managed_statusline` | holds; landed pass-24b | `6f49ccef0` | 30 | escapes nothing. |
 | `agents/settings_json` | holds; landed pass-24b | `6f49ccef0` | 30 | strict JSON primitives `pub(super)`; install path stays strict, tolerant read is `jsonc`. |
@@ -60,7 +60,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/transcript_fs` | holds; landed pass-25 | `4a82d6b28` | 30 | tail readers at `agents` reach; its lossy visitor propagates inner errors, unlike Cursor's. |
 | `agents/registry` | holds; landed pass-24b | `6f49ccef0` | 30 | catalog lookups stay `pub` for the binary. |
 | `agents/runtime_control` | holds; landed pass-24b | `6f49ccef0` | 30 | forwarders are the `agents` boundary; issue and error types floored by signature. |
-| `agents/login` | holds; landed pass-24b | `6f49ccef0` | 30 | everything but `LoginCatalog::names` floored by a public signature or binary test. |
+| `agents/login` | holds; landed pass-24b; pass-33h | `62bcf1c8c` | 30 | one precedence ladder yields a room account's name and source; history pools ask `ProviderLogin::pool`. |
 | `agents/delegated_account` | holds; landed pass-24b | `6f49ccef0` | 30 | delegated OAuth usage is an `agents` interior. |
 | `agents/identity` | holds; landed pass-24b | `6f49ccef0` | 30 | resolvers `pub(super)`. |
 | `agents/locate` | holds; landed pass-24b | `6f49ccef0` | 30 | install-file discovery no longer escapes. |
@@ -69,7 +69,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/session` | holds; landed pass-24b | `6f49ccef0` | 30 | `DaemonSessionEvidence` floored by `SessionCapability`. |
 | `agents/observation` | holds; landed pass-24b | `6f49ccef0` | 30 | observation field and signature types stay `pub`. |
 | `agents/petname` | holds; landed pass-24b | `6f49ccef0` | 30 | reserved words and `valid_agent_name` stay `pub` for the binary. |
-| `agents/local_session_cache` | holds; landed pass-24b | `6f49ccef0` | 30 | refresh types floored at `pub(super)` (caveat 13). |
+| `agents/local_session_cache` | holds; landed pass-24b; pass-33h | `62bcf1c8c` | 30 | `IncrementalCatalog::refresh` answers whether it enumerated; `ValueRefresh` floored at `pub(super)` (caveat 13). |
 | `agents/jsonc` | holds; landed pass-24b | `6f49ccef0` | 30 | the only JSONC entry point. |
 | `agents/version` | holds; landed pass-24b | `6f49ccef0` | 30 | escapes nothing. |
 | `agents/model_display` | holds; landed pass-24b | `6f49ccef0` | 30 | one crate-reach selector. |
@@ -300,6 +300,8 @@ Refactor candidates a pass judged real but could not land, each with its concret
 
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
+- `agents` ↔ `launcher`: launch admission (health, then hook policy, then folder trust under the login env) is assembled above `agents` at six CLI sites, with three functions named `preflight_hooks` at three layers. Waits for the launcher and launch-interaction seam pass.
+- `agents/(root)`: the root re-exports 132 names that `pub` children also export, read through the root at 3,742 sites; one spelling per name rewrites imports in about 600 files. Waits for its own pass.
 - `harness/resume` ↔ `config/tiers`: the resume `--tier` row pick duplicates `TierConfig::walk` bounded to one row, and the stamp-effort rule (definition effort, else model default) has three spellings, two in resume and one in `config/effective`; sharing needs `config::tiers` to export a row-bounded pick (two escaping items, `walk` and `TierPick`, and a row bound in `walk` today). Waits for a pass that owns `config::tiers`.
 - `harness/resume` ↔ `launcher`: `launch_resume_layout` and `resume.rs` both assemble `plan_cohort_resume` then `restore_routed_cells`, and the former's stages I and J mirror `materialize_team_restore_tab`. Waits for a pass owning `harness/resume.rs` with its launcher caller.
 - `cli/supervised` ↔ `launcher`: the supervised run driver (`crates/rimz/src/cli/supervised/run.rs::run_supervised`) retains waits, streaming, verify re-prompts, retry decisions, joins and cleanup. Both launch front ends now prepare in `launcher` and reach its shared identity, compiler and placement tail; retries retain the first preparation and room. The workflow host uses the launcher directly for layouts with turn or session leaders. The separate preflight recipes preserve refusal order and policy.
