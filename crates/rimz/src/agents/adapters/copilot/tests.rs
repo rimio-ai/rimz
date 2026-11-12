@@ -1341,3 +1341,62 @@ fn installed_commands_fail_open_and_preserve_stdout_and_owner() {
         }
     }
 }
+
+#[test]
+fn awaiting_input_channels_stay_event_specific() {
+    let payload = json!({"sessionId":"s","toolName":"ask_user","toolArgs":{"question":"  First?\nSecond?  ","command":"ls"},"notification_type":"elicitation_dialog","message":"  Notice\nLine 2  "});
+    let mut actual = Vec::new();
+    for event in ["preToolUse", "permissionRequest", "notification"] {
+        let output = hook_output(&CopilotAdapter, event, &payload);
+        assert_eq!(output.class(), AgentHookClass::AwaitingUser, "{event}");
+        assert!(output.json_reply().is_none(), "{event}");
+        let LifecycleSignal::AwaitingInput {
+            extra_questions: 0,
+            kind,
+            ask_id: None,
+            detail,
+            native_key,
+        } = output.lifecycle().unwrap().signal.clone()
+        else {
+            panic!("{event} must await input");
+        };
+        let questions = output
+            .questions()
+            .iter()
+            .map(|question| question.question.clone())
+            .collect::<Vec<_>>();
+        actual.push((
+            kind,
+            detail,
+            native_key,
+            questions,
+            output.ask_detail().map(str::to_owned),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            (
+                AskKind::Question,
+                None,
+                None,
+                vec!["First?\nSecond?".to_owned()],
+                Some("First?\nSecond?".to_owned())
+            ),
+            (
+                AskKind::Permission,
+                None,
+                Some("ask_user:f5179f8b3f478bbe".to_owned()),
+                vec![],
+                Some("ask_user".to_owned())
+            ),
+            (
+                AskKind::Question,
+                Some("  Notice\nLine 2  ".to_owned()),
+                None,
+                vec![],
+                Some("  Notice\nLine 2  ".to_owned())
+            ),
+        ]
+    );
+}

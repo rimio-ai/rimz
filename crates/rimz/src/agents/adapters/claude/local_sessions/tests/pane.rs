@@ -563,3 +563,182 @@ fn pane_missing_named_home_never_falls_back_to_the_native_account() {
         "an unavailable account must not read the native account"
     );
 }
+
+#[test]
+fn pane_accounts_alternate_through_discover_panes() {
+    let temp = tempfile::tempdir().unwrap();
+    let roots = [temp.path().join("a"), temp.path().join("b")];
+    let paths = roots
+        .clone()
+        .map(|root| session(&root, OWNER, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z"));
+    let env = |root: &Path| {
+        std::collections::BTreeMap::from([
+            ("HOME".to_owned(), temp.path().display().to_string()),
+            ("CLAUDE_CONFIG_DIR".to_owned(), root.display().to_string()),
+        ])
+    };
+    let demand = demand(&[OWNER], &[], None);
+    let mut actual = Vec::new();
+    for root in [0, 1, 0] {
+        let before = testkit::read_counts();
+        let found = discover_panes(std::slice::from_ref(&demand), &env(&roots[root]));
+        let after = testkit::read_counts();
+        assert_eq!(ids(&found), [OWNER]);
+        actual.push((
+            found[0].transcript_path.clone(),
+            (after.0 - before.0, after.1 - before.1, after.2 - before.2),
+        ));
+    }
+    assert_eq!(
+        actual.iter().map(|(path, _)| path).collect::<Vec<_>>(),
+        [&paths[0], &paths[1], &paths[0]]
+    );
+    assert_eq!(actual[2].1, (1, 0, 0), "the first account stays warm");
+}
+
+#[test]
+fn pane_window_ranks_a_session_by_its_newest_twin_creation() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("a");
+    let second = temp.path().join("b");
+    for index in 0..MAX_DISCOVERED_SESSIONS - 1 {
+        session(
+            &first,
+            &format!("{index:08x}-aaaa-4aaa-8aaa-{index:012x}"),
+            "2025-01-03T00:00:00Z",
+            "2025-01-03T00:00:00Z",
+        );
+    }
+    let owner = session(
+        &first,
+        OWNER,
+        "2025-01-01T00:00:00Z",
+        "2025-01-10T00:00:00Z",
+    );
+    session(
+        &second,
+        OWNER,
+        "2025-01-04T00:00:00Z",
+        "2025-01-04T00:00:00Z",
+    );
+    session(&first, NEXT, "2025-01-02T00:00:00Z", "2025-01-02T00:00:00Z");
+    let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
+    let found =
+        ClaudePaneDiscovery::default().refresh(key(&[first, second]), &[demand], Instant::now());
+    assert_eq!(found.len(), MAX_DISCOVERED_SESSIONS);
+    assert!(found.iter().all(|row| row.session_id != NEXT));
+    let owner_row = found.iter().find(|row| row.session_id == OWNER).unwrap();
+    assert_eq!(owner_row.transcript_path, owner);
+}
+
+#[test]
+fn pane_rows_return_newest_activity_first() {
+    let temp = tempfile::tempdir().unwrap();
+    for (id, created, activity) in [
+        (OWNER, "2025-01-01T00:00:00Z", "2025-01-05T00:00:00Z"),
+        (RECENT, "2025-01-02T00:00:00Z", "2025-01-04T00:00:00Z"),
+        (NEXT, "2025-01-03T00:00:00Z", "2025-01-04T00:00:00Z"),
+    ] {
+        session(temp.path(), id, created, activity);
+    }
+    let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
+    let found = ClaudePaneDiscovery::default().refresh(
+        key(&[temp.path().to_path_buf()]),
+        &[demand],
+        Instant::now(),
+    );
+    assert_eq!(
+        found
+            .iter()
+            .map(|row| row.session_id.as_str())
+            .collect::<Vec<_>>(),
+        [OWNER, RECENT, NEXT]
+    );
+}
+
+#[test]
+fn pane_window_cutoff_tie_keeps_lowest_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let id = |index: usize| format!("{index:08x}-aaaa-4aaa-8aaa-{index:012x}");
+    for index in 0..=MAX_DISCOVERED_SESSIONS {
+        session(
+            temp.path(),
+            &id(index),
+            "2025-01-01T00:00:00Z",
+            "2025-01-01T00:00:00Z",
+        );
+    }
+    let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
+    let found = ClaudePaneDiscovery::default().refresh(
+        key(&[temp.path().to_path_buf()]),
+        &[demand],
+        Instant::now(),
+    );
+    assert_eq!(
+        ids(&found),
+        (0..MAX_DISCOVERED_SESSIONS).map(id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn pane_warm_rewrite_rechecks_creation_after_the_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let owner = session(
+        temp.path(),
+        OWNER,
+        "2025-01-03T00:00:00Z",
+        "2025-01-03T00:00:00Z",
+    );
+    session(
+        temp.path(),
+        NEXT,
+        "2025-01-02T00:00:00Z",
+        "2025-01-02T00:00:00Z",
+    );
+    let key = key(&[temp.path().to_path_buf()]);
+    let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
+    let now = Instant::now();
+    let mut cache = ClaudePaneDiscovery::default();
+    assert_eq!(
+        ids(&cache.refresh(key.clone(), std::slice::from_ref(&demand), now)),
+        [OWNER, NEXT]
+    );
+    fs::write(
+        &owner,
+        r#"{"cwd":"/workspace/project","timestamp":"2024-12-31T00:00:00Z"}
+{"timestamp":"2024-12-31T00:00:00Z","rewritten":true}"#,
+    )
+    .unwrap();
+    assert_eq!(ids(&cache.refresh(key, &[demand], now)), [NEXT]);
+}
+
+#[test]
+fn pane_cold_shared_memo_reads_each_file_once() {
+    let temp = tempfile::tempdir().unwrap();
+    for id in [OWNER, RECENT] {
+        session(
+            temp.path(),
+            id,
+            "2025-01-02T00:00:00Z",
+            "2025-01-03T00:00:00Z",
+        );
+    }
+    let mut demand = demand(&[OWNER], &[], Some("2025-01-01T00:00:00Z"));
+    demand.panes.push(PaneSessionNeed {
+        own: vec![],
+        named: vec![],
+        fresh_since: Some("2025-01-01T00:00:00Z".parse().unwrap()),
+    });
+    let before = testkit::read_counts();
+    let found = ClaudePaneDiscovery::default().refresh(
+        key(&[temp.path().to_path_buf()]),
+        &[demand],
+        Instant::now(),
+    );
+    let after = testkit::read_counts();
+    assert_eq!(ids(&found), [OWNER, RECENT]);
+    assert_eq!(
+        (after.0 - before.0, after.1 - before.1, after.2 - before.2),
+        (11, 1, 4)
+    );
+}

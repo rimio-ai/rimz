@@ -577,3 +577,62 @@ fn is_semver_prefix_accepts_valid_versions() {
     assert!(!is_semver_prefix("v1.0.0"));
     assert!(!is_semver_prefix(""));
 }
+
+#[test]
+fn latest_user_clock_ignores_missing_and_invalid_timestamps() {
+    let dir = TempDir::new().unwrap();
+    let path = write_jsonl(
+        dir.path(),
+        "clock.jsonl",
+        &[
+            r#"{"type":"user","timestamp":"1970-01-01T00:00:01Z","message":{"content":"prompt"}}"#,
+            r#"{"type":"user","message":{"content":"omitted"}}"#,
+            r#"{"type":"user","timestamp":null,"message":{"content":"null"}}"#,
+            r#"{"type":"user","timestamp":"bad","message":{"content":"bad"}}"#,
+            r#"{"timestamp":"1970-01-01T00:00:04Z","costUSD":1,"message":{"id":"m","usage":{"output_tokens":300}}}"#,
+        ],
+    );
+    let parsed = ClaudeAdapter.parse_spend(&path, None, &no_prices());
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(
+        parsed.entries[0].timing,
+        Some(ResponseTiming {
+            ms: 3_000,
+            output: 300
+        })
+    );
+    let state = parsed.cursor.state_as::<serde_json::Value>();
+    assert_eq!(state["latest_user_ms"], serde_json::json!(1000));
+    assert_eq!(
+        state["current_message"],
+        serde_json::json!({"message_id": "m", "start_ms": 1000})
+    );
+}
+
+#[test]
+fn empty_and_unmarked_lines_price_nothing() {
+    const PRICED: &str = r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1,"requestId":"req","message":{"id":"msg","usage":{"output_tokens":300}}}"#;
+    let dir = TempDir::new().unwrap();
+    let spaced = PRICED.replace(r#""usage":{"#, r#""usage": {"#);
+    for (name, content) in [
+        ("empty.jsonl", String::new()),
+        ("blank.jsonl", "\n".to_owned()),
+        ("malformed.jsonl", "{\"usage\":{\n".to_owned()),
+        ("spaced.jsonl", format!("{spaced}\n")),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        let parsed = ClaudeAdapter.parse_spend(&path, None, &no_prices());
+        assert!(parsed.entries.is_empty(), "{name}");
+        assert!(parsed.unknown_models.is_empty(), "{name}");
+        assert_eq!(parsed.read_error, None, "{name}");
+    }
+    let path = write_jsonl(dir.path(), "compact.jsonl", &[PRICED]);
+    assert_eq!(
+        ClaudeAdapter
+            .parse_spend(&path, None, &no_prices())
+            .entries
+            .len(),
+        1
+    );
+}

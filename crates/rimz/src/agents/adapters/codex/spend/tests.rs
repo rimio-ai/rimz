@@ -1372,3 +1372,68 @@ fn a_resumed_spend_cursor_keeps_the_fast_tier() {
     assert!((resumed[0] - (1000.0 * 1e-6 + 100.0 * 2e-6) * 2.5).abs() < 1e-12);
     assert_eq!(resumed[0], cold[1]);
 }
+
+#[test]
+fn blank_lines_leave_entries_and_state_unchanged() {
+    let parse = |content: String| {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("blank.jsonl");
+        std::fs::write(&path, &content).unwrap();
+        let parsed = parse_codex_spend(&path, None, &gpt5_book());
+        assert_eq!(parsed.cursor.offset, content.len() as u64);
+        assert_eq!(parsed.read_error, None);
+        parsed
+    };
+    let blank = parse(format!("\n{TOKEN_COUNT_LINE}\n\n"));
+    let plain = parse(format!("{TOKEN_COUNT_LINE}\n"));
+    assert_eq!(blank.entries.len(), 1);
+    assert_eq!((blank.entries[0].input, blank.entries[0].output), (100, 50));
+    assert_eq!(blank.entries, plain.entries);
+    assert_eq!(
+        blank.cursor.state_as::<serde_json::Value>(),
+        plain.cursor.state_as::<serde_json::Value>()
+    );
+}
+
+#[test]
+fn trailing_and_carried_tools_keep_saturating_counts() {
+    use serde_json::json;
+    const SHELL: &str = r#"{"type":"response_item","timestamp":"2026-01-01T10:00:01.000Z","payload":{"type":"function_call","name":"shell"}}"#;
+    let pending = |parsed: &SpendParse| {
+        parsed.cursor.state_as::<serde_json::Value>()["pending_tool_calls"].clone()
+    };
+    let shell = |count| ToolCounts::from(BTreeMap::from([("shell".to_owned(), count)]));
+
+    let (_dir, path) = write_session("count.jsonl", &[TOKEN_COUNT_LINE]);
+    let alone = parse_codex_spend(&path, None, &gpt5_book());
+    assert_eq!(alone.entries.len(), 1);
+    assert_eq!(pending(&alone), serde_json::Value::Null);
+
+    let (_dir, path) = write_session("trailing.jsonl", &[TOKEN_COUNT_LINE, SHELL]);
+    let trailing = parse_codex_spend(&path, None, &gpt5_book());
+    assert_eq!(trailing.entries.last().unwrap().tool_calls, shell(1));
+    assert_eq!(pending(&trailing), serde_json::Value::Null);
+
+    let (_dir, path) = write_session("carried.jsonl", &[SHELL]);
+    let carried = parse_codex_spend(&path, None, &gpt5_book());
+    assert!(carried.entries.is_empty());
+    assert_eq!(pending(&carried), json!({"shell": 1}));
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{TOKEN_COUNT_LINE}").unwrap();
+    let resumed = parse_codex_spend(&path, Some(&carried.cursor), &gpt5_book());
+    assert_eq!(resumed.entries.len(), 1);
+    assert_eq!(resumed.entries[0].tool_calls, shell(1));
+    assert_eq!(pending(&resumed), serde_json::Value::Null);
+
+    let (_dir, path) = write_session("seeded.jsonl", &[SHELL]);
+    let mut cursor = serde_json::to_value(&carried.cursor).unwrap();
+    cursor["s"]["pending_tool_calls"]["shell"] = json!(u32::MAX);
+    cursor["o"] = json!(0);
+    let cursor: SpendCursor = serde_json::from_value(cursor).unwrap();
+    let saturated = parse_codex_spend(&path, Some(&cursor), &gpt5_book());
+    assert!(saturated.entries.is_empty());
+    assert_eq!(pending(&saturated), json!({"shell": u32::MAX}));
+}
