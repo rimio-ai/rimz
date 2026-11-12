@@ -1239,9 +1239,9 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ping_opened_at: Option<Timestamp>,
     /// The turn stamps the row held when its current turn opened, kept across a run of errored
-    /// turns. The cache clock reads them in place of the current turn's while a usage-limit
-    /// refusal closed that turn, and counts their start among the inputs that stale the
-    /// provider's record ([`Self::last_request_at`]); a context reset clears them.
+    /// or unclosed turns. The cache clock reads them in place of the current turn's while a
+    /// usage-limit refusal closed that turn, and counts their start among the inputs that stale
+    /// the provider's record ([`Self::last_request_at`]); a context reset clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prior_turn: Option<PriorTurn>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
@@ -1570,14 +1570,14 @@ impl AgentState {
     }
 
     /// What a turn opening on this row carries as [`Self::prior_turn`]: the row's turn
-    /// stamps, or the carry it already holds when its latest turn closed errored. The fold
-    /// never sees an error's class, so an errored turn may yet read as a refusal, and a run
-    /// of refused prompts keeps the request before the first.
+    /// stamps, or the carry it already holds when its latest turn closed errored or never
+    /// closed (Claude leaves a refused prompt's turn open). The fold never sees an error's
+    /// class, so such a turn may yet read as a refusal, and a run of refused prompts keeps
+    /// the request before the first. A context reset leaves no carry to keep.
     pub(crate) fn prior_turn_for_next(&self) -> Option<PriorTurn> {
-        let closed_errored = self.status == AgentStatus::Failed
-            && self.turn_started_at.is_some()
-            && self.turn_ended_at >= self.turn_started_at;
-        if closed_errored && self.prior_turn.is_some() {
+        let refusable = self.turn_started_at.is_some()
+            && (self.turn_ended_at < self.turn_started_at || self.status == AgentStatus::Failed);
+        if refusable && self.prior_turn.is_some() {
             return self.prior_turn;
         }
         Some(PriorTurn {
