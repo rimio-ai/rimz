@@ -2679,3 +2679,75 @@ fn terminal_resume_outcomes_exhaust_park_through_store_projection() {
         );
     }
 }
+
+#[test]
+fn a_ping_the_provider_limit_rejected_never_arms_a_resume() {
+    let (_dir, runtime) = temp_runtime();
+    write_rate_limits_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [(
+                crate::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
+                crate::agents::RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![window(100, 9_000)],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    // A clean turn, then a keepalive the spent window rejects: Claude reports it with a
+    // pausing `StopFailure` and no `Stop`, so the ping turn stays open.
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let mut snapshot = folded_hook_frames(
+        &runtime,
+        "claude",
+        &[
+            (
+                "UserPromptSubmit",
+                json!({"session_id": "sess", "prompt": "work"}),
+                1_000,
+            ),
+            ("Stop", json!({"session_id": "sess"}), 1_001),
+            (
+                "UserPromptSubmit",
+                json!({"session_id": "sess", "prompt": ping}),
+                4_000,
+            ),
+            (
+                "StopFailure",
+                json!({"session_id": "sess", "error": "rate_limit"}),
+                4_001,
+            ),
+        ],
+    );
+    let agents = std::sync::Arc::make_mut(&mut snapshot.agents);
+    assert!(agents[0].ping_turn, "the keepalive opened a ping turn");
+    agents[0].context =
+        parked_agent(1_001, 4_001, TurnErrorClass::PausedRateLimit, "rate limit").context;
+    snapshot.agent_panes = vec![live_pane()].into();
+    let config = ResumeConfig {
+        auto_continue: true,
+        ..ResumeConfig::default()
+    };
+    for now in [4_002, 10_000] {
+        snapshot.now = ts(now);
+        resume_parked(
+            |_| false,
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        assert_eq!(
+            read_park(&park_path(&runtime)),
+            None,
+            "a rejected ping armed a resume at {now}"
+        );
+    }
+}
