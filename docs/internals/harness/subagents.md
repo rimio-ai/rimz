@@ -45,8 +45,8 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Supervised preparation stores `self_cleanup_on_completion && !keep` as the leader's `cleanup` (`crates/rimz/src/launcher/supervised.rs::prepare`) |
 | `keep` | `--keep`, default false | turns automatic completion cleanup off and holds the pane past provider exit until the parent ends or Ctrl-C, under a live parent watch |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a terminal run awaiting receipt |
-| `warn` | `--warn`, else `[agents.subagents] warn`, default `["6m", "3m"]` | normalized offsets before the soft bound |
-| `grace` | `--grace`, else `[agents.subagents] grace`, default `3m` | reporting time before the producer kills the run. Zero is stored absent |
+| `warn` | `--warn`, else `[agents.subagents] warn`, default `["10m", "5m"]` | normalized offsets before the soft bound |
+| `grace` | `--grace`, else `[agents.subagents] grace`, default `5m` | reporting time before the producer kills the run. Zero is stored absent |
 | `report_to` | `launcher` | see [which runs a fleet owes](#which-runs-a-fleet-owes) for `nobody` |
 | join | none unless `--wait[=DURATION]` | the parent normally keeps moving. The duration limits only the caller's join |
 

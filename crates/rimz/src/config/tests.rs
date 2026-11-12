@@ -1189,8 +1189,8 @@ fn retired_git_reminder_names_env_reminder() {
 fn subagent_launch_defaults_parse_and_round_trip() {
     let defaulted: AgentsConfig = toml::from_str("").expect("parse defaults");
     assert_eq!(defaulted.subagents.timeout, "30m");
-    assert_eq!(defaulted.subagents.warn, ["6m", "3m"]);
-    assert_eq!(defaulted.subagents.grace, "3m");
+    assert_eq!(defaulted.subagents.warn, ["10m", "5m"]);
+    assert_eq!(defaulted.subagents.grace, "5m");
 
     let parsed: AgentsConfig = toml::from_str(
         "[subagents]\n\

@@ -264,8 +264,8 @@ pane_border_status = "top"           # "top" (default), "bottom", "off", or "inh
 
 # [agents.subagents]
 # timeout = "30m"                      # tell supervised children to stop at this work deadline
-# warn = ["6m", "3m"]                  # warning offsets before the deadline; [] disables warnings
-# grace = "3m"                         # reporting time after the deadline; "0s" kills at it
+# warn = ["10m", "5m"]                 # warning offsets before the deadline; [] disables warnings
+# grace = "5m"                         # reporting time after the deadline; "0s" kills at it
 
 # [agents.hibernate]
 ## enabled = true                      # default on; skips where systemd, Linux controls or swap are unavailable

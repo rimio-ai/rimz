@@ -184,8 +184,8 @@ fn launch_implies_supervised_background_defaults() {
     assert_eq!(launch.prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
 
-    agents.launch.warn = vec![Duration::from_secs(360), Duration::from_secs(180)];
-    agents.launch.grace = Some(Duration::from_secs(180));
+    agents.launch.warn = vec![Duration::from_secs(600), Duration::from_secs(300)];
+    agents.launch.grace = Some(Duration::from_secs(300));
     assert_eq!(launch, agents.launch);
 }
 
@@ -214,8 +214,8 @@ fn waited_launch_still_desugars_to_a_background_run() {
     assert_eq!(launch.prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
 
-    agents.launch.warn = vec![Duration::from_secs(360), Duration::from_secs(180)];
-    agents.launch.grace = Some(Duration::from_secs(180));
+    agents.launch.warn = vec![Duration::from_secs(600), Duration::from_secs(300)];
+    agents.launch.grace = Some(Duration::from_secs(300));
     assert_eq!(launch, agents.launch);
 }
 
@@ -346,8 +346,8 @@ fn fanout_task_matches_the_single_launch_surface() {
     assert_eq!(launches[0].prompt.as_deref(), Some("review this"));
     agents.launch.subagent = true;
 
-    agents.launch.warn = vec![Duration::from_secs(180)];
-    agents.launch.grace = Some(Duration::from_secs(180));
+    agents.launch.warn = Vec::new();
+    agents.launch.grace = Some(Duration::from_secs(300));
     assert_eq!(launches, vec![agents.launch]);
 }
 
