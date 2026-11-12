@@ -6304,7 +6304,7 @@ fn agents_list_tells_an_unknown_lane_from_an_empty_one() {
     };
     let empty_json = |stdout: &str| {
         let json: serde_json::Value = serde_json::from_str(stdout).expect("list json");
-        json["schema"] == 1 && json["agents"].as_array().is_some_and(Vec::is_empty)
+        json["schema"] == 2 && json["agents"].as_array().is_some_and(Vec::is_empty)
     };
 
     for args in [&["#nope"][..], &["-w", "nope"], &["#nope", "--json"]] {
@@ -6674,6 +6674,186 @@ fn agents_list_and_show_share_seat_active_time() {
     assert_eq!(stopped["agent"]["stats"]["active_secs"], 180);
 }
 
+#[test]
+fn agents_list_filter_selects_children_closed_sessions_and_addresses() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    // `kin` names its parent by the parent's launch id, as a launched
+    // subagent records its caller.
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "parent".into(),
+                launch_id: Some("launch-parent".into()),
+                agent_name: "seat-parent".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%1")),
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("launch parent");
+    for (id, name, pane, parent) in [
+        ("parent", "seat-parent", "%1", None),
+        ("child", "seat-child", "%2", Some("parent")),
+        ("gone", "seat-gone", "%3", None),
+        ("kin", "seat-kin", "%4", Some("launch-parent")),
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(name.to_owned());
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane));
+        if let Some(parent) = parent {
+            observation.launch.parent_agent_id = Some(parent.into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+        }
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("register seat record");
+    }
+    let ended = AgentLifecycleObservation::new(Some("gone".into()), LifecycleSignal::Ended);
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionEnd",
+            &ended,
+        ))
+        .expect("end gone");
+    publish_pane_frame(
+        &env,
+        &workspace.session_name,
+        ["%1", "%2", "%4"]
+            .into_iter()
+            .map(|pane| list_pane(&workspace.session_name, pane, "claude", &env.project_root))
+            .collect(),
+    );
+    let session = workspace.session_name.as_str();
+    let list = |filters: &[&str]| {
+        let mut args = vec!["agents", "list", "--all"];
+        args.extend(filters);
+        run_agents_json_command(&env, session, &args)
+    };
+    assert_agent_ids(&list(&[]), &["parent"]);
+    assert_agent_ids(&list(&["--filter", "parent=*"]), &["kin", "child"]);
+    assert_agent_ids(
+        &list(&["--filter", "parent=@seat-parent"]),
+        &["kin", "child"],
+    );
+    let closed = list(&["--filter", "live=no"]);
+    assert_agent_ids(&closed, &["gone"]);
+    assert_eq!(closed["agents"][0]["live"], false);
+    let both = list(&["--filter", "parent=*,none", "--filter", "live=yes"]);
+    let mut ids = both["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .map(|agent| agent["id"].as_str().expect("id"))
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, ["child", "kin", "parent"], "{both:#}");
+    for id in ["child", "kin"] {
+        let child = both["agents"]
+            .as_array()
+            .expect("agents")
+            .iter()
+            .find(|agent| agent["id"] == id)
+            .expect("child row");
+        assert_eq!(child["parent"], "@seat-parent", "{child:#}");
+        assert!(child.get("sub_agents").is_none(), "{child:#}");
+    }
+
+    let quiet = agents_command(
+        &env,
+        session,
+        &[
+            "agents",
+            "list",
+            "--all",
+            "--filter",
+            "parent=*,none live=*",
+            "-q",
+        ],
+    )
+    .output()
+    .expect("quiet list");
+    assert!(quiet.status.success(), "{quiet:?}");
+    let addresses = String::from_utf8(quiet.stdout).expect("utf8");
+    let mut resolved = addresses
+        .lines()
+        .map(|address| {
+            run_agents_json_command(&env, session, &["agents", "show", address])["agent"]["id"]
+                .as_str()
+                .expect("shown id")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    resolved.sort_unstable();
+    assert_eq!(resolved, ["child", "gone", "kin", "parent"], "{addresses}");
+
+    let none = agents_command(
+        &env,
+        session,
+        &[
+            "agents",
+            "list",
+            "--all",
+            "--filter",
+            "status=waiting",
+            "-q",
+        ],
+    )
+    .output()
+    .expect("empty quiet list");
+    assert!(none.status.success() && none.stdout.is_empty(), "{none:?}");
+
+    for filter in [
+        "",
+        "stauts=idle",
+        "status",
+        "name=\"open",
+        "status=idle,",
+        "ctx>soon",
+        "parent=@",
+    ] {
+        let out = env
+            .rimz()
+            .args(["agents", "list", "--filter", filter])
+            .output()
+            .expect("refused filter");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{filter:?}: {stderr}");
+        assert!(stderr.contains(filter), "{filter:?}: {stderr}");
+    }
+    let help = env
+        .rimz()
+        .args(["agents", "list", "--filter", "help"])
+        .output()
+        .expect("filter help");
+    assert!(help.status.success(), "{help:?}");
+    assert!(String::from_utf8_lossy(&help.stdout).starts_with("FIELD"));
+}
+
 fn register_list_agent(
     env: &Env,
     workspace: &rimz::ResolvedWorkspace,
@@ -6750,18 +6930,8 @@ fn run_agents_json_command_in(
     args: &[&str],
     channel: Option<&str>,
 ) -> serde_json::Value {
-    let trace_log = env.project_root.join(format!("{}.log", args.join("-")));
-    let mut command = env.rimz();
-    command
-        .args(["--mux", "zellij"])
-        .args(args)
-        .arg("--json")
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{session_name} [Created 1s ago]\n"),
-        );
+    let mut command = agents_command(env, session_name, args);
+    command.arg("--json");
     if let Some(channel) = channel {
         command.env(rimz::workspace::ENV_CHANNEL, channel);
     }
@@ -6775,8 +6945,24 @@ fn run_agents_json_command_in(
     serde_json::from_slice(&out.stdout).expect("agents json")
 }
 
+/// An agents command against the shimmed live Zellij session.
+fn agents_command(env: &Env, session_name: &str, args: &[&str]) -> std::process::Command {
+    let trace_log = env.project_root.join(format!("{}.log", args.join("-")));
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "zellij"])
+        .args(args)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session_name} [Created 1s ago]\n"),
+        );
+    command
+}
+
 fn assert_agent_ids(json: &serde_json::Value, expected: &[&str]) {
-    assert_eq!(json["schema"], 1);
+    assert_eq!(json["schema"], 2);
     let actual: Vec<&str> = json
         .get("agents")
         .and_then(serde_json::Value::as_array)

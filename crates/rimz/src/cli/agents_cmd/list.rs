@@ -1,11 +1,13 @@
 use super::*;
 
 use super::report::{
-    AgentReportEntry, PrInfo, build_list_report, context_cell, slot_records_for_agent, status_style,
+    AgentListJson, AgentReportEntry, PrInfo, build_list_report, context_cell,
+    slot_records_for_agent, status_style,
 };
 #[cfg(test)]
 use super::report::{ReportOverrides, build_entry};
 use crate::cli::render;
+use rimz::address::selector::{self, AgentRow, Field, Query};
 use rimz::config::{GlyphRole, ThemeConfig};
 #[cfg(test)]
 use rimz::store::snapshot::{AgentCard, PaneAgent, RowCard, SidebarRow};
@@ -17,10 +19,16 @@ use rimz::theme::theme_glyphs;
 
 pub(super) fn list_agents(
     json: bool,
+    quiet: bool,
     all: bool,
     scope: Option<String>,
+    filters: &[String],
     globals: &GlobalFlags,
 ) -> Result<()> {
+    if filters.iter().any(|filter| filter.trim() == "help") {
+        return Ok(render_filter_help(&mut render::out())?);
+    }
+    let query = Query::parse(filters).map_err(|err| UsageError::new(err.to_string()))?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = crate::cli::require_existing_store(&workspace)?;
     let _mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
@@ -36,37 +44,14 @@ pub(super) fn list_agents(
     .read(&state)
     .context("reading the room snapshot")?;
 
-    let channel = list_channel_filter(all, scope.as_deref(), &workspace);
+    // A query that names `lane` replaces the current-lane default; explicit
+    // scope still applies first.
+    let channel = list_channel_filter(
+        all || query.names(Field::Lane),
+        scope.as_deref(),
+        &workspace,
+    );
     let reader = crate::cli::current_channel(&workspace, Some(&store)).address_context();
-    let lane = channel.as_deref().map(|filter| {
-        rimz::address::LaneSelector::parse(Some(filter), Some(&workspace.project_root))
-    });
-    let agents: Vec<&AgentState> = snapshot
-        .pane_bound_roots()
-        .filter(|agent| {
-            lane.as_ref()
-                .is_none_or(|lane| rimz::address::agent_in_lane(agent, lane))
-        })
-        .collect();
-    if agents.is_empty() {
-        if let Some(scope) = scope.as_deref() {
-            refuse_unknown_lane(&store, &workspace, scope)?;
-        }
-        if !json {
-            let line = match channel.as_deref() {
-                Some(lane) => {
-                    let lane = format!("#{lane}");
-                    format!(
-                        "no live agents in '{lane}'; reopen closed ones with {}",
-                        shell_command(["rimz", "agents", "resume", &lane])
-                    )
-                }
-                None => "no live agents in this room".to_owned(),
-            };
-            writeln!(render::out(), "{line}")?;
-            return Ok(());
-        }
-    }
     let now = jiff::Timestamp::now();
     let machine_config = crate::cli::machine_config();
     let demotion = rimz::harness::park_demotion(
@@ -78,11 +63,59 @@ pub(super) fn list_agents(
         snapshot.resume_outcomes.as_deref().unwrap_or_default(),
         now,
     );
-    if json {
-        let audit = store
+    let audit = if json || query.reads_closed() {
+        store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit agent rollup")?
-            .agents;
+            .agents
+    } else {
+        Vec::new()
+    };
+    let audit_snapshot = query.reads_closed().then(|| {
+        SidebarSnapshot::build_with_agents(workspace.workspace_id.clone(), audit.clone(), now)
+            .with_agent_context(rimz::store::agent_context::read_all(&runtime))
+    });
+    let mut rows = selector::live_rows(&snapshot, &demotion, &reader, now);
+    if let Some(audit) = &audit_snapshot {
+        let closed = selector::closed_rows(audit, &snapshot, &rows, &demotion, &reader, now);
+        rows.extend(closed);
+    }
+    let lane = channel.as_deref().map(|filter| {
+        rimz::address::LaneSelector::parse(Some(filter), Some(&workspace.project_root))
+    });
+    rows.retain(|row| {
+        lane.as_ref()
+            .is_none_or(|lane| rimz::address::agent_in_lane(row.agent(), lane))
+            && query.admits(row, &reader)
+    });
+    let agents: Vec<&AgentState> = rows.iter().map(AgentRow::agent).collect();
+    let row_refs: Vec<&AgentRow<'_>> = rows.iter().collect();
+    if agents.is_empty() {
+        if let Some(scope) = scope.as_deref() {
+            refuse_unknown_lane(&store, &workspace, scope)?;
+        }
+        if quiet {
+            return Ok(());
+        }
+        if !json {
+            let line = empty_list_line(channel.as_deref(), filters);
+            writeln!(render::out(), "{line}")?;
+            return Ok(());
+        }
+    }
+    if quiet {
+        let mut out = render::out();
+        for agent in group_live_agents_by_worktree(&agents, &snapshot)
+            .into_iter()
+            .flat_map(|group| group.agents)
+        {
+            if let Some(row) = rows.iter().find(|row| std::ptr::eq(row.agent(), agent)) {
+                writeln!(out, "{}", row.handle())?;
+            }
+        }
+        return Ok(());
+    }
+    if json {
         let refs = audit.iter().collect::<Vec<_>>();
         let lifetimes = rimz::worktree::lane_lifetimes(refs.iter().copied());
         render::warn_unreadable_lanes(&lifetimes);
@@ -100,35 +133,39 @@ pub(super) fn list_agents(
                 .active_grace_secs
                 .get(),
         );
-        return render::json_pretty(&build_list_report(
+        let report = build_list_report(
             &demotion,
             &snapshot,
-            &agents,
+            &row_refs,
             now,
             Some(&runtime),
             &slots,
             &active_secs,
-            &reader,
-        ));
+        );
+        return render::json_pretty(&AgentListJson::new(&report)?);
     }
 
     let mut out = render::out();
     let report = build_list_report(
         &demotion,
         &snapshot,
-        &agents,
+        &row_refs,
         now,
         None,
         &[],
         &Default::default(),
-        &reader,
     );
     let scope = channel
         .as_ref()
         .map_or_else(|| "whole room".to_owned(), |lane| format!("#{lane}"));
+    let live = report
+        .agents
+        .iter()
+        .zip(report.rows.iter().map(|row| row.live()))
+        .collect::<Vec<_>>();
     render_list_summary(
         &mut out,
-        &report.agents,
+        &live,
         group_live_agents_by_worktree(&agents, &snapshot).len(),
         &scope,
         now,
@@ -142,6 +179,52 @@ pub(super) fn list_agents(
         render::terminal_columns(120),
         &machine_config.theme,
     )?;
+    Ok(())
+}
+
+/// The line an empty list prints: a filter's miss, or a lane with no live agent.
+fn empty_list_line(lane: Option<&str>, filters: &[String]) -> String {
+    match lane {
+        // A filter that matches nothing is no sign the lane is closed.
+        Some(lane) if !filters.is_empty() => format!("no agent in '#{lane}' matches the filter"),
+        None if !filters.is_empty() => "no agent in this room matches the filter".to_owned(),
+        Some(lane) => {
+            let lane = format!("#{lane}");
+            format!(
+                "no live agents in '{lane}'; reopen closed ones with {}",
+                shell_command(["rimz", "agents", "resume", &lane])
+            )
+        }
+        None => "no live agents in this room".to_owned(),
+    }
+}
+
+/// `--filter help`: the selector's field table, then the grammar in brief.
+fn render_filter_help(w: &mut impl std::io::Write) -> std::io::Result<()> {
+    let mut table = render::Table::new(["FIELD", "TYPE", "VALUES"]);
+    for field in Field::ALL {
+        let values = field.values();
+        let values = if values.is_empty() {
+            field.kind().hint().to_owned()
+        } else {
+            values.join(", ")
+        };
+        table.row([
+            render::cell(field.name()),
+            render::cell(field.kind().label()),
+            render::cell(values),
+        ]);
+    }
+    table.render(w)?;
+    writeln!(w)?;
+    for line in [
+        "term: <field><op><value>[,<value>...]; ops: = != and, on age, ctx, tokens, cost, > >= < <=",
+        "every term and every --filter must match; under = any value matches, under != none may",
+        "none matches a missing value and * any present one; quote a value holding spaces or commas",
+        "naming lane, live, or parent replaces its default: the current lane, live=yes, parent=none",
+    ] {
+        writeln!(w, "{line}")?;
+    }
     Ok(())
 }
 
@@ -193,15 +276,19 @@ pub(crate) fn render_agents_table(
     theme: &ThemeConfig,
     reader: &rimz::address::AddressContext,
 ) -> std::io::Result<()> {
+    let rows = agents
+        .iter()
+        .map(|agent| AgentRow::of(agent, snapshot, demotion, reader, now))
+        .collect::<Vec<_>>();
+    let rows = rows.iter().collect::<Vec<_>>();
     let report = build_list_report(
         demotion,
         snapshot,
-        agents,
+        &rows,
         now,
         None,
         &[],
         &Default::default(),
-        reader,
     );
     render_projected_agents_table(w, snapshot, agents, &report.agents, now, max_width, theme)
 }
@@ -309,27 +396,23 @@ fn group_header_cells(
 
 fn render_list_summary(
     w: &mut impl std::io::Write,
-    entries: &[AgentReportEntry],
+    entries: &[(&AgentReportEntry, bool)],
     lanes: usize,
     scope: &str,
     now: jiff::Timestamp,
 ) -> std::io::Result<()> {
     let attention = entries
         .iter()
-        .filter(|entry| entry.needs_you.is_some())
+        .filter(|(entry, _)| entry.needs_you.is_some())
         .count();
-    let running = entries
-        .iter()
-        .filter(|entry| {
-            entry.needs_you.is_none() && entry.status == rimz::agents::AgentStatus::Running
-        })
-        .count();
-    let sleeping = entries
-        .iter()
-        .filter(|entry| {
-            entry.needs_you.is_none() && entry.status == rimz::agents::AgentStatus::Sleeping
-        })
-        .count();
+    let awake = |status| {
+        entries
+            .iter()
+            .filter(|(entry, live)| *live && entry.needs_you.is_none() && entry.status == status)
+            .count()
+    };
+    let running = awake(rimz::agents::AgentStatus::Running);
+    let sleeping = awake(rimz::agents::AgentStatus::Sleeping);
     let at_rest = entries.len() - attention - running - sleeping;
     let mut summary = vec![
         format!(
@@ -353,7 +436,7 @@ fn render_list_summary(
     writeln!(w, "{}", summary.join(" · "))?;
     let rows = entries
         .iter()
-        .filter_map(|entry| {
+        .filter_map(|(entry, _)| {
             let attention = entry.needs_you.as_ref()?;
             Some(render::NeedsYouRow {
                 handle: entry.handle.clone(),
@@ -468,477 +551,4 @@ fn agent_row(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::report::model_report;
-    use super::*;
-    use rimz::agents::AgentStatus;
-
-    fn entry(status: AgentStatus) -> AgentReportEntry {
-        let state = test_agent(status.as_str());
-        let mut entry = build_entry(
-            &Default::default(),
-            &state,
-            None,
-            None,
-            format!("@{}", status.as_str()),
-            None,
-            jiff::Timestamp::UNIX_EPOCH,
-            ReportOverrides::default(),
-        );
-        entry.status = status;
-        entry.description = Some("provider overloaded".into());
-        entry.needs_you = match status {
-            AgentStatus::Waiting | AgentStatus::Failed | AgentStatus::Paused => {
-                Some(rimz::store::snapshot::NeedsYou {
-                    status,
-                    reason: entry.description.clone(),
-                    since: jiff::Timestamp::UNIX_EPOCH,
-                })
-            }
-            _ => None,
-        };
-        entry
-    }
-
-    #[test]
-    fn card_projection_list_summary_counts_and_attention() {
-        let entries = [
-            AgentStatus::Running,
-            AgentStatus::Sleeping,
-            AgentStatus::Waiting,
-            AgentStatus::Paused,
-            AgentStatus::Failed,
-            AgentStatus::Success,
-        ]
-        .map(entry);
-        let mut out = anstream::StripStream::new(Vec::new());
-        render_list_summary(
-            &mut out,
-            &entries,
-            2,
-            "whole room",
-            jiff::Timestamp::UNIX_EPOCH,
-        )
-        .unwrap();
-        let text = String::from_utf8(out.into_inner()).unwrap();
-        assert_eq!(
-            text.lines().next(),
-            Some(
-                "6 agents · 2 lanes · 3 needs you · 1 running · 1 sleeping · 1 at rest · whole room"
-            )
-        );
-        assert!(text.contains("\nneeds you\n"), "{text}");
-        for status in ["waiting", "paused", "failed"] {
-            assert!(
-                text.lines().any(|line| line.contains(&format!("@{status}"))
-                    && line.contains("provider overloaded")),
-                "{text}"
-            );
-        }
-        assert!(
-            !text.lines().skip(1).any(|line| line.contains("@running")),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn card_projection_list_summary_omits_zero_counts_and_uses_ask() {
-        let mut waiting = entry(AgentStatus::Waiting);
-        waiting.ask = Some(super::super::report::AskReport {
-            id: "ask_0123456789abcdef".parse().unwrap(),
-            kind: rimz::agents::AskKind::Question,
-            detail: Some("which strategy?".into()),
-            native_key: None,
-            since: jiff::Timestamp::UNIX_EPOCH,
-        });
-        waiting.needs_you.as_mut().unwrap().reason = Some("which strategy?".into());
-        let mut out = anstream::StripStream::new(Vec::new());
-        render_list_summary(
-            &mut out,
-            &[waiting],
-            1,
-            "#auth",
-            jiff::Timestamp::UNIX_EPOCH,
-        )
-        .unwrap();
-        let text = String::from_utf8(out.into_inner()).unwrap();
-        assert_eq!(
-            text.lines().next(),
-            Some("1 agent · 1 lane · 1 needs you · #auth")
-        );
-        assert!(text.contains("which strategy?"), "{text}");
-        assert!(
-            text.lines().any(|line| line.split_whitespace().eq([
-                "@waiting",
-                "waiting",
-                "0s",
-                "which",
-                "strategy?"
-            ])),
-            "{text}"
-        );
-        let mut out = Vec::new();
-        render_list_summary(
-            &mut out,
-            &[entry(AgentStatus::Success)],
-            1,
-            "whole room",
-            jiff::Timestamp::UNIX_EPOCH,
-        )
-        .unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert_eq!(text.trim(), "1 agent · 1 lane · 1 at rest · whole room");
-    }
-
-    #[test]
-    fn card_projection_list_tokens_are_window_occupancy_and_age_is_idle() {
-        let mut report = entry(AgentStatus::Running);
-        report.context.used_tokens = Some(81_234);
-        report.stats.total_tokens = Some(3_000_000);
-        report.timeline.idle_since = jiff::Timestamp::from_second(1880).unwrap();
-        let mut table = render::Table::new([
-            "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
-        ]);
-        table.row(agent_row(
-            &report,
-            jiff::Timestamp::from_second(2000).unwrap(),
-            &theme_glyphs(&ThemeConfig::default()),
-        ));
-        let mut out = anstream::StripStream::new(Vec::new());
-        table.render(&mut out).unwrap();
-        let text = String::from_utf8(out.into_inner()).unwrap();
-        assert!(text.contains("81k"), "{text}");
-        assert!(!text.contains("3M"), "{text}");
-        assert!(text.lines().last().unwrap().ends_with("2m"), "{text}");
-    }
-
-    #[test]
-    fn fast_model_cell_uses_the_resolved_glyph_without_marking_missing_models() {
-        for theme in [
-            ThemeConfig::default(),
-            ThemeConfig {
-                style: Some(rimz::config::ThemeStyle::Modern),
-                ..Default::default()
-            },
-            toml::from_str("[glyphs.unicode.card]\nfast = '++'").unwrap(),
-        ] {
-            let glyph = theme_glyphs(&theme);
-            let bolt = glyph(GlyphRole::CardFast);
-            for fast in [true, false] {
-                for model in [Some("gpt-6.1-sol"), None] {
-                    let mut state = test_agent("fast");
-                    state.model = model.map(str::to_owned);
-                    state.context = Some(rimz::agents::AgentContext {
-                        fast: Some(fast),
-                        ..Default::default()
-                    });
-                    let mut report = entry(AgentStatus::Idle);
-                    report.model = model_report(&state);
-                    let mut table = render::Table::new(["MODEL"]);
-                    table.row([agent_row(&report, jiff::Timestamp::UNIX_EPOCH, &glyph).remove(4)]);
-                    let mut out = anstream::StripStream::new(Vec::new());
-                    table.render(&mut out).unwrap();
-                    let text = String::from_utf8(out.into_inner()).unwrap();
-                    let expected = match (model, fast) {
-                        (Some(_), true) => format!("GPT 6.1 Sol {bolt}"),
-                        (Some(_), false) => "GPT 6.1 Sol".to_owned(),
-                        (None, _) => "-".to_owned(),
-                    };
-                    assert_eq!(text.lines().last().unwrap().trim(), expected);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn list_channel_filter_resolves_explicit_all_and_current_channel() {
-        let mut root = test_agent("root");
-        root.worktree_path = Some("/repo/checkout".into());
-        root.root_lane = true;
-        let filter = list_channel_filter_for_current(false, Some("#main"), None).unwrap();
-        assert!(rimz::address::agent_in_lane(
-            &root,
-            &rimz::address::LaneSelector::parse(Some(&filter), None)
-        ));
-        assert_eq!(
-            list_channel_filter_for_current(true, Some("manual"), Some("feature".to_owned()))
-                .as_deref(),
-            Some("manual")
-        );
-        assert_eq!(
-            list_channel_filter_for_current(false, Some("#manual"), Some("feature".to_owned()))
-                .as_deref(),
-            Some("manual")
-        );
-        assert_eq!(
-            list_channel_filter_for_current(true, None, Some("feature".to_owned())),
-            None
-        );
-        assert_eq!(
-            list_channel_filter_for_current(false, None, Some("feature".to_owned())).as_deref(),
-            Some("feature")
-        );
-        assert_eq!(list_channel_filter_for_current(false, None, None), None);
-    }
-
-    #[test]
-    fn pane_bound_roots_keeps_only_live_roots() {
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
-            vec![
-                test_agent("sess-one"),
-                test_agent("sess-two"),
-                test_agent("sess-paneless"),
-            ],
-            jiff::Timestamp::UNIX_EPOCH,
-        );
-        snapshot.agent_panes = vec![
-            test_pane_agent("sess-one", "terminal_1"),
-            test_pane_agent("sess-two", "terminal_2"),
-            PaneAgent {
-                checkout: None,
-                root_lane: false,
-                lane: None,
-                kind: AgentKind::new_unchecked("codex"),
-                kind_ordinal: None,
-                name: None,
-                name_explicit: false,
-                profile: None,
-                role: None,
-                channel: None,
-                agent_id: None,
-                pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_lazy"),
-                pane_pid: None,
-                worktree_path: None,
-                worktree_branch: None,
-            },
-        ]
-        .into();
-
-        let kept: Vec<&str> = snapshot
-            .pane_bound_roots()
-            .map(|agent| agent.agent_id.as_str())
-            .collect();
-
-        assert_eq!(kept, ["sess-one", "sess-two"]);
-    }
-
-    #[test]
-    fn agent_list_address_accounts_for_unprinted_addressable_roots() {
-        let mut live = test_agent("sess-live");
-        live.role = Some("coder".to_owned());
-        let mut historical = test_agent("sess-historical");
-        historical.role = Some("coder".to_owned());
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
-            vec![live, historical],
-            jiff::Timestamp::UNIX_EPOCH,
-        );
-        snapshot.agent_panes = vec![test_pane_agent("sess-live", "terminal_1")].into();
-
-        let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
-        let report = build_list_report(
-            &rimz::agents::ParkDemotion::default(),
-            &snapshot,
-            &peers,
-            jiff::Timestamp::UNIX_EPOCH,
-            None,
-            &[],
-            &Default::default(),
-            &crate::cli::CurrentChannel::Unscoped.address_context(),
-        );
-        assert_eq!(report.agents[0].handle, "@sess-live");
-    }
-
-    #[test]
-    fn model_label_prefers_live_context_then_durable_launch_fields() {
-        let mut agent = test_agent("model-precedence");
-        agent.model = Some("launch-model".to_owned());
-        agent.effort = Some("launch-effort".to_owned());
-        let mut context = rimz::agents::AgentContext::new("copilot", jiff::Timestamp::UNIX_EPOCH);
-        context.model_id = Some("context-id".to_owned());
-        context.model_display_name = Some("Context Display".to_owned());
-        context.effort = Some("high".to_owned());
-        agent.context = Some(context);
-        assert_eq!(
-            model_report(&agent).label.as_deref(),
-            Some("Context Id@high")
-        );
-
-        agent.context.as_mut().unwrap().model_display_name = None;
-        assert_eq!(
-            model_report(&agent).label.as_deref(),
-            Some("Context Id@high")
-        );
-
-        agent.context.as_mut().unwrap().model_id = None;
-        assert_eq!(
-            model_report(&agent).label.as_deref(),
-            Some("Launch Model@high")
-        );
-
-        agent.context.as_mut().unwrap().effort = None;
-        assert_eq!(
-            model_report(&agent).label.as_deref(),
-            Some("Launch Model@launch-effort")
-        );
-
-        agent.context = None;
-        assert_eq!(
-            model_report(&agent).label.as_deref(),
-            Some("Launch Model@launch-effort")
-        );
-    }
-
-    #[test]
-    fn json_entries_add_pr_only_to_agents_in_the_linked_group() {
-        let now = jiff::Timestamp::UNIX_EPOCH;
-        let mut linked = test_agent("linked");
-        linked.channel = Some("feature".to_owned());
-        linked.worktree_path = Some("/repo/worktrees/feature".to_owned());
-        linked.worktree_branch = Some("feature".to_owned());
-        let mut plain = test_agent("plain");
-        plain.channel = Some("docs".to_owned());
-        plain.worktree_path = Some("/repo/main".to_owned());
-        plain.worktree_branch = Some("main".to_owned());
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
-            vec![linked, plain],
-            now,
-        )
-        .with_project_root(Some(PathBuf::from("/repo/main")));
-        let refs = snapshot.agents.iter().collect::<Vec<_>>();
-        let (linked_key, linked_label, linked_kind) = {
-            let group = group_live_agents_by_worktree(&refs, &snapshot)
-                .into_iter()
-                .find(|group| group.label == "feature")
-                .unwrap();
-            (group.key, group.label, group.kind)
-        };
-        std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(
-            serde_json::from_value(serde_json::json!({
-                "key": linked_key,
-                "label": linked_label,
-                "kind": linked_kind,
-                "status_counts": [],
-                "rows": [],
-                "pr_number": 91,
-                "pr_state": "open",
-                "ci": "passing"
-            }))
-            .unwrap(),
-        );
-
-        let refs = snapshot.agents.iter().collect::<Vec<_>>();
-        let entries = build_list_report(
-            &rimz::agents::ParkDemotion::default(),
-            &snapshot,
-            &refs,
-            now,
-            None,
-            &[],
-            &Default::default(),
-            &crate::cli::CurrentChannel::Unscoped.address_context(),
-        );
-        let linked = entries
-            .agents
-            .iter()
-            .find(|entry| entry.id.as_str() == "linked")
-            .unwrap();
-        let plain = entries
-            .agents
-            .iter()
-            .find(|entry| entry.id.as_str() == "plain")
-            .unwrap();
-
-        assert_eq!(
-            serde_json::to_value(linked).unwrap()["placement"]["pr"],
-            serde_json::json!({"number": 91, "state": "open", "ci": "passing"})
-        );
-        assert_eq!(
-            serde_json::to_value(plain).unwrap()["placement"]["pr"],
-            serde_json::Value::Null
-        );
-    }
-
-    #[test]
-    fn agent_pr_uses_projected_group_membership() {
-        let mut linked = test_agent("linked");
-        linked.worktree_path = Some("/repo/worktree".to_owned());
-        linked.worktree_branch = Some("feature".to_owned());
-        let mut stale = test_agent("stale");
-        stale.worktree_path = Some("/repo/worktree".to_owned());
-        stale.worktree_branch = Some("other".to_owned());
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
-            vec![linked, stale],
-            jiff::Timestamp::UNIX_EPOCH,
-        );
-        let mut group: SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
-            "key": "/repo/worktree",
-            "label": "feature",
-            "kind": "worktree",
-            "status_counts": [],
-            "rows": [],
-            "pr_number": 91,
-            "pr_state": "open",
-            "ci": "passing"
-        }))
-        .unwrap();
-        std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
-            checkout: None,
-            id: "linked".to_owned(),
-            name: "codex".to_owned(),
-            pane: None,
-            worktree_path: Some("/repo/worktree".to_owned()),
-            worktree_branch: Some("feature".to_owned()),
-            channel: None,
-            lane: None,
-            unread: false,
-            inactive: false,
-            archived: false,
-            attention_score: 0,
-            attention_at_ms: None,
-            last_activity: jiff::Timestamp::UNIX_EPOCH,
-            card: RowCard::Agent(std::sync::Arc::new(AgentCard {
-                status: rimz::agents::AgentStatus::Idle,
-                ..AgentCard::default()
-            })),
-        });
-        std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(group);
-
-        assert_eq!(
-            agent_pr(&snapshot, &snapshot.agents[0]),
-            Some(PrInfo {
-                number: Some(91),
-                state: WorktreePrState::Open,
-                ci: Some(WorktreeCi::Passing),
-            })
-        );
-        assert_eq!(agent_pr(&snapshot, &snapshot.agents[1]), None);
-    }
-
-    fn test_agent(id: &str) -> AgentState {
-        rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
-    }
-
-    fn test_pane_agent(agent_id: &str, pane: &str) -> PaneAgent {
-        PaneAgent {
-            checkout: None,
-            root_lane: false,
-            lane: None,
-            kind: AgentKind::new_unchecked("codex"),
-            kind_ordinal: None,
-            name: None,
-            name_explicit: false,
-            profile: None,
-            role: None,
-            channel: None,
-            agent_id: Some(AgentSessionId::from(agent_id)),
-            pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, pane),
-            pane_pid: None,
-            worktree_path: None,
-            worktree_branch: None,
-        }
-    }
-}
+mod tests;

@@ -4,6 +4,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::cli::render;
+use rimz::address::selector::AgentRow;
 use rimz::agents::PermissionMode;
 use rimz::agents::{
     AgentCardRef, AgentState, AgentStatus, ContextSeverity, OpenAsk, TurnErrorClass, TurnPhase,
@@ -16,12 +17,50 @@ use rimz::store::snapshot::{
 #[cfg(test)]
 use rimz::store::snapshot::{PaneAgent, RowCard};
 
-pub(super) const AGENT_LIST_SCHEMA: u8 = 1;
+pub(super) const AGENT_LIST_SCHEMA: u8 = 2;
 
-#[derive(Clone, Debug, Serialize)]
-pub(super) struct AgentListReport {
-    pub schema: u8,
+#[derive(Clone, Debug)]
+pub(super) struct AgentListReport<'r, 'a> {
     pub agents: Vec<AgentReportEntry>,
+    /// The row each entry was built from, in the same order.
+    pub rows: Vec<&'r AgentRow<'a>>,
+}
+
+/// `agents list --json`: one entry per selected row.
+#[derive(Debug, Serialize)]
+pub(super) struct AgentListJson {
+    schema: u8,
+    agents: Vec<serde_json::Value>,
+}
+
+impl AgentListJson {
+    /// Each row's flat fields beside its card detail. The row's keys win, the
+    /// detail's `model` object moves to `model_detail` beside the flat `model`,
+    /// and `sub_agents` leaves, since each launched child is a row of its own.
+    pub(super) fn new(report: &AgentListReport<'_, '_>) -> serde_json::Result<Self> {
+        let mut agents = Vec::with_capacity(report.agents.len());
+        for (entry, row) in report.agents.iter().zip(&report.rows) {
+            let mut fields = serde_json::Map::new();
+            if let serde_json::Value::Object(flat) = serde_json::to_value(row)? {
+                fields = flat;
+            }
+            if let serde_json::Value::Object(detail) = serde_json::to_value(entry)? {
+                for (key, value) in detail {
+                    let key = match key.as_str() {
+                        "sub_agents" => continue,
+                        "model" => "model_detail".to_owned(),
+                        _ => key,
+                    };
+                    fields.entry(key).or_insert(value);
+                }
+            }
+            agents.push(serde_json::Value::Object(fields));
+        }
+        Ok(Self {
+            schema: AGENT_LIST_SCHEMA,
+            agents,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -185,6 +224,8 @@ pub(super) struct ReportOverrides<'a> {
     pub effort: Option<rimz::agents::spending::SlotEffort>,
     pub active_secs: Option<u64>,
     pub budget_cost_usd: Option<f64>,
+    /// The displayed status and phase, when the caller already projected them.
+    pub card: Option<(AgentStatus, TurnPhase)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -236,55 +277,60 @@ impl SelfIdentity {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the reader's address scope is independent of the listed rows"
-)]
-pub(super) fn build_list_report(
+/// One entry per row, in the room's group order. Each entry reads its card
+/// against the row's own snapshot and takes the row's status, phase, and
+/// address, so the table, the summary, and the filter agree. A closed
+/// session's row never needs you: nothing can be answered in a closed pane.
+pub(super) fn build_list_report<'r, 'a>(
     demotion: &rimz::agents::ParkDemotion,
     snapshot: &SidebarSnapshot,
-    agents: &[&AgentState],
+    rows: &[&'r AgentRow<'a>],
     now: Timestamp,
     runtime: Option<&rimz::RuntimePaths>,
     slots: &[Vec<&AgentState>],
     active_secs: &rimz::agents::attribution::ActiveSecs,
-    reader: &rimz::address::AddressContext,
-) -> AgentListReport {
-    let identity = SelfIdentity::from_env();
-    let me = identity.resolve(snapshot);
-    let groups = group_live_agents_by_worktree(agents, snapshot);
-    let agents = groups
-        .into_iter()
-        .flat_map(|group| {
-            let pr = super::list::group_pr(snapshot, &group.key).and_then(super::list::pr_info);
-            let me = me.as_ref();
-            group.agents.into_iter().map(move |agent| {
-                build_entry(
-                    demotion,
-                    agent,
-                    row_for_agent(snapshot, agent),
-                    pr,
-                    rimz::address::paste_address(agent, snapshot, reader),
-                    me,
-                    now,
-                    ReportOverrides {
-                        attention_now: Some(snapshot.now),
-                        child: child_for_agent(snapshot, agent),
-                        runtime,
-                        active_secs: rimz::agents::attribution::seat_active_secs(
-                            slot_records_for_agent(slots, agent),
-                            active_secs,
-                        ),
-                        ..ReportOverrides::default()
-                    },
-                )
-            })
-        })
-        .collect();
-    AgentListReport {
-        schema: AGENT_LIST_SCHEMA,
-        agents,
+) -> AgentListReport<'r, 'a> {
+    let me = SelfIdentity::from_env().resolve(snapshot);
+    let agents = rows.iter().map(|row| row.agent()).collect::<Vec<_>>();
+    let mut report = AgentListReport {
+        agents: Vec::with_capacity(rows.len()),
+        rows: Vec::with_capacity(rows.len()),
+    };
+    for group in group_live_agents_by_worktree(&agents, snapshot) {
+        let pr = super::list::group_pr(snapshot, &group.key).and_then(super::list::pr_info);
+        for agent in group.agents {
+            let Some(row) = rows.iter().find(|row| std::ptr::eq(row.agent(), agent)) else {
+                continue;
+            };
+            let source = row.source();
+            let mut entry = build_entry(
+                demotion,
+                agent,
+                row_for_agent(source, agent),
+                pr,
+                row.handle().to_owned(),
+                me.as_ref(),
+                now,
+                ReportOverrides {
+                    attention_now: Some(source.now),
+                    child: child_for_agent(source, agent),
+                    runtime,
+                    active_secs: rimz::agents::attribution::seat_active_secs(
+                        slot_records_for_agent(slots, agent),
+                        active_secs,
+                    ),
+                    card: Some(row.card()),
+                    ..ReportOverrides::default()
+                },
+            );
+            if !row.live() {
+                entry.needs_you = None;
+            }
+            report.agents.push(entry);
+            report.rows.push(row);
+        }
     }
+    report
 }
 
 pub(super) fn slot_records_for_agent<'a>(
@@ -315,7 +361,9 @@ pub(super) fn build_entry(
     let attention_now = overrides.attention_now.unwrap_or(now);
     let card = row.and_then(SidebarRow::as_agent);
     let child = overrides.child;
-    let (status, phase) = card_status(agent, row, child, demotion, now);
+    let (status, phase) = overrides
+        .card
+        .unwrap_or_else(|| card_status(agent, row, child, demotion, now));
     let displayed_error = agent.displayed_turn_error(now);
     let turn_error = displayed_error.map(|(class, error)| TurnErrorReport {
         class,
@@ -398,7 +446,7 @@ pub(super) fn build_entry(
         me: me == Some(&agent.agent_id),
         status,
         pending_waits: agent.pending_waits.clone(),
-        needs_you: rimz::store::snapshot::needs_you(agent, row, demotion, attention_now),
+        needs_you: rimz::store::snapshot::needs_you(agent, row, child, demotion, attention_now),
         idle_stop: agent.idle_stop.clone(),
         hibernation: agent.hibernation.clone(),
         background_shells: agent.background_shells.clone(),
@@ -526,22 +574,14 @@ pub(super) fn row_for_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     agent: &AgentState,
 ) -> Option<&'a SidebarRow> {
-    snapshot
-        .rows()
-        .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
+    rimz::address::selector::card_row(snapshot, agent)
 }
 
 pub(super) fn child_for_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     agent: &AgentState,
 ) -> Option<&'a SidebarSubAgent> {
-    let parent_id = agent.parent_agent_id.as_ref()?;
-    snapshot
-        .rows()
-        .find(|row| row.is_agent() && row.id == parent_id.as_str())?
-        .sub_agents()
-        .iter()
-        .find(|child| child.id == agent.agent_id.as_str())
+    rimz::address::selector::child_card(snapshot, agent)
 }
 
 pub(super) fn status_style(entry: &AgentReportEntry) -> anstyle::Style {

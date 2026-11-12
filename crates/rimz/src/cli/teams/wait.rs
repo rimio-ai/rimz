@@ -330,7 +330,7 @@ fn poll(
                         )
                     }),
                 };
-                let attention = rimz::store::snapshot::needs_you(agent, row, demotion, now);
+                let attention = rimz::store::snapshot::needs_you(agent, row, None, demotion, now);
                 let status = row
                     .and_then(|row| row.status())
                     .unwrap_or_else(|| agent.rowless_status(demotion, snapshot.now).0);

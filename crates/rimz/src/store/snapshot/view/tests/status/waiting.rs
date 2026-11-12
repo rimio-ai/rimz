@@ -121,6 +121,7 @@ fn codex_auto_permission_card_and_ladder_wait_for_review() {
         let needs = crate::store::snapshot::needs_you(
             source,
             Some(row),
+            None,
             &crate::agents::ParkDemotion::default(),
             epoch(),
         );

@@ -42,9 +42,11 @@ pub struct NeedsYou {
 }
 
 /// Project attention using the sidebar's waiting-child and native-failure lifts and rowless demotion.
+/// A launched child without a card of its own reads its nested `child` card, as its status does.
 pub fn needs_you(
     agent: &crate::agents::AgentState,
     row: Option<&SidebarRow>,
+    child: Option<&SidebarSubAgent>,
     demotion: &crate::agents::ParkDemotion,
     now: jiff::Timestamp,
 ) -> Option<NeedsYou> {
@@ -52,7 +54,7 @@ pub fn needs_you(
 
     let status = row
         .and_then(SidebarRow::attention_status)
-        .unwrap_or_else(|| card_status(agent, row, None, demotion, now).0);
+        .unwrap_or_else(|| card_status(agent, row, child, demotion, now).0);
     if !status.is_attention() {
         return None;
     }
@@ -60,7 +62,7 @@ pub fn needs_you(
     let card = match row.and_then(SidebarRow::as_agent) {
         Some(card) => card,
         None => {
-            let (status, phase) = card_status(agent, row, None, demotion, now);
+            let (status, phase) = card_status(agent, row, child, demotion, now);
             fallback = AgentCard {
                 status,
                 phase,
