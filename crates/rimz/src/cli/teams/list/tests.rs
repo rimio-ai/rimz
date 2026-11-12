@@ -262,7 +262,7 @@ fn team_signal_report_matches_origin_and_session() {
         "binding",
         &entry,
         TaskSource::Instance,
-        "forge#feat-x",
+        &"forge#feat-x".parse::<rimz::ids::TeamInstanceId>().unwrap(),
         &agent,
     )
     .unwrap();
@@ -273,7 +273,8 @@ fn team_signal_report_matches_origin_and_session() {
         })
     );
     for instance in ["forge#feat-y", "peer#feat-x"] {
-        assert!(live_signal("binding", &entry, TaskSource::Instance, instance, &agent).is_none());
+        let instance = instance.parse().unwrap();
+        assert!(live_signal("binding", &entry, TaskSource::Instance, &instance, &agent).is_none());
     }
     for source in [
         TaskSource::Config,
@@ -281,7 +282,16 @@ fn team_signal_report_matches_origin_and_session() {
             state: rimz::trust::TrustState::Trusted,
         },
     ] {
-        assert!(live_signal("binding", &entry, source, "forge#feat-x", &agent).is_none());
+        assert!(
+            live_signal(
+                "binding",
+                &entry,
+                source,
+                &"forge#feat-x".parse::<rimz::ids::TeamInstanceId>().unwrap(),
+                &agent
+            )
+            .is_none()
+        );
     }
     let mut wrong_kind = entry.clone();
     wrong_kind.wait.as_mut().unwrap().kind = rimz::ids::AgentKind::new_unchecked("codex");
@@ -299,7 +309,7 @@ fn team_signal_report_matches_origin_and_session() {
                 "binding",
                 &entry,
                 TaskSource::Instance,
-                "forge#feat-x",
+                &"forge#feat-x".parse::<rimz::ids::TeamInstanceId>().unwrap(),
                 &agent
             )
             .is_none()
@@ -382,7 +392,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
     snapshot.worktree_groups = groups.into();
     let flip = |instance: &str, to: &str, second: i64| StageSignal {
         team: "forge".into(),
-        instance: instance.into(),
+        instance: instance.parse().unwrap(),
         to: to.into(),
         by: "planner".into(),
         board: first.join(".rimz/team/blackboard.md"),
@@ -1007,8 +1017,7 @@ fn invalid_team_stays_visible_with_its_error() {
 #[test]
 fn live_instance_state_follows_team_attention_priority() {
     let cohort = rimz::address::TeamCohort {
-        team: "forge",
-        channel: "feat".into(),
+        instance: "forge#feat".parse().unwrap(),
         members: Vec::new(),
     };
     for (other, expected) in [
@@ -1313,7 +1322,7 @@ fn human_catalog_prioritizes_attention_and_collapses_definitions() {
         agents.push(agent);
         flips.push(StageSignal {
             team: "forge".into(),
-            instance: format!("forge#{lane}"),
+            instance: format!("forge#{lane}").parse().unwrap(),
             to: stage.into(),
             by: "user".into(),
             board: path.join(".rimz/team/blackboard.md"),

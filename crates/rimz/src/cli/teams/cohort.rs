@@ -10,12 +10,12 @@ use rimz::agents::AgentState;
 pub(super) fn select<'a>(
     team: &str,
     worktree: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: Option<&rimz::ids::LaneName>,
     agents: &'a [AgentState],
 ) -> Result<TeamCohort<'a>> {
     let team_cohorts = rimz::address::team_cohorts(agents)
         .into_iter()
-        .filter(|cohort| cohort.team == team)
+        .filter(|cohort| cohort.team() == team)
         .collect::<Vec<_>>();
     let mut cohorts = team_cohorts
         .iter()
@@ -26,7 +26,7 @@ pub(super) fn select<'a>(
         if let Some(worktree) = worktree {
             let lanes = team_cohorts
                 .iter()
-                .map(|cohort| format!("#{}", cohort.channel))
+                .map(|cohort| format!("#{}", cohort.channel()))
                 .collect::<Vec<_>>()
                 .join(", ");
             if !lanes.is_empty() {
@@ -37,8 +37,11 @@ pub(super) fn select<'a>(
         bail!("no live cohort for team `{team}`; resume one with `rimz teams resume {team}`");
     }
     if worktree.is_none()
-        && let Some(index) = current_channel
-            .and_then(|channel| cohorts.iter().position(|cohort| cohort.channel == channel))
+        && let Some(index) = current_channel.and_then(|channel| {
+            cohorts
+                .iter()
+                .position(|cohort| cohort.instance.lane() == Some(channel))
+        })
     {
         return Ok(cohorts.swap_remove(index));
     }
@@ -47,7 +50,7 @@ pub(super) fn select<'a>(
     }
     let lanes = cohorts
         .iter()
-        .map(|cohort| format!("#{}", cohort.channel))
+        .map(|cohort| format!("#{}", cohort.channel()))
         .collect::<Vec<_>>()
         .join(", ");
     if let Some(worktree) = worktree {
@@ -59,13 +62,12 @@ pub(super) fn select<'a>(
 }
 
 pub(super) fn matches_worktree(cohort: &TeamCohort<'_>, worktree: &str) -> bool {
-    cohort.channel == worktree
-        || cohort.members.iter().any(|agent| {
-            rimz::address::agent_in_lane(
-                agent,
-                &rimz::address::LaneSelector::parse(Some(worktree), None),
-            )
-        })
+    let lane = rimz::address::LaneSelector::parse(Some(worktree), None);
+    cohort.instance.lane() == lane.name()
+        || cohort
+            .members
+            .iter()
+            .any(|agent| rimz::address::agent_in_lane(agent, &lane))
 }
 
 pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {
@@ -79,8 +81,8 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     let mut out = render::out();
     writeln!(
         out,
-        "stopped {team}#{} ({} member{})",
-        cohort.channel,
+        "stopped {} ({} member{})",
+        cohort.instance,
         cohort.members.len(),
         if cohort.members.len() == 1 { "" } else { "s" }
     )?;
@@ -102,7 +104,7 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
         && let Some(stage) = rimz::harness::scratch::board_stage(std::path::Path::new(checkout))
         && stage.name != rimz::config::DONE_STAGE
     {
-        let target = format!("{team}#{}", cohort.channel);
+        let target = cohort.instance.to_string();
         let resume = if still_running {
             String::new()
         } else {
@@ -197,8 +199,8 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
     let mut out = render::out();
     writeln!(
         out,
-        "restarted {team}#{} ({} member{})",
-        cohort.channel,
+        "restarted {} ({} member{})",
+        cohort.instance,
         cohort.members.len(),
         if cohort.members.len() == 1 { "" } else { "s" }
     )?;
@@ -245,9 +247,10 @@ mod tests {
             agent("docs", "forge", "docs"),
         ];
 
-        let selected = select("forge", None, Some("docs"), &agents).expect("current cohort");
+        let docs = rimz::ids::LaneName::dashed("docs");
+        let selected = select("forge", None, Some(&docs), &agents).expect("current cohort");
 
-        assert_eq!(selected.channel, "docs");
+        assert_eq!(selected.channel(), "docs");
     }
 
     #[test]

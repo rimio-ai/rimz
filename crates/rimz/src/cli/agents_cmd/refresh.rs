@@ -42,7 +42,9 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
             &ctx.address_context(),
         )?],
         (None, true) => refresh_targets(&snapshot, None),
-        (None, false) => refresh_targets(&snapshot, current_channel),
+        (None, false) => {
+            refresh_targets(&snapshot, current_channel.map(rimz::ids::LaneName::as_str))
+        }
     };
     if targets.is_empty() {
         writeln!(render::err(), "no matching agents to refresh")?;

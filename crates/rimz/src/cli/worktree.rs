@@ -245,8 +245,10 @@ fn new_worktree(
         )?
     };
     if !created.reused {
+        let lane =
+            rimz::harness::lanes::own_lane(&workspace.project_root, &created.marker.worktree_path);
         let archival = store.archive_channel_messages(
-            &created.marker.name,
+            &lane.routing_name(),
             "channel recreated",
             &workspace.session_name,
         );

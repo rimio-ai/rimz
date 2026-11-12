@@ -1539,6 +1539,13 @@ impl AgentState {
         }
     }
 
+    /// The team cohort this seat belongs to: its team in its lane, or the team's
+    /// `external` instance when the row has no lane name. `None` off a team.
+    pub fn team_instance(&self) -> Option<crate::ids::TeamInstanceId> {
+        let team = self.team.as_deref().filter(|team| !team.is_empty())?;
+        crate::ids::TeamInstanceId::new(team, self.lane_name()).ok()
+    }
+
     /// Whether the row is in trunk's own lane: its stored lane's reading, else
     /// the root predicate the fold stamped on a lane-less row.
     pub fn in_trunk(&self) -> bool {

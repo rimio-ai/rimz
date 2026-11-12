@@ -114,14 +114,7 @@ impl Interaction for CliInteraction {
                 lane,
                 identities,
                 leader,
-            } => write_resume_receipt(
-                &mut render::out(),
-                plan,
-                team,
-                Some(&lane.label()),
-                identities,
-                leader,
-            )?,
+            } => write_resume_receipt(&mut render::out(), plan, team, lane, identities, leader)?,
         }
         Ok(())
     }
@@ -396,7 +389,7 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     }
     write_launch_hints(
         w,
-        team,
+        None,
         channel,
         members.first().map(|(_, handle)| *handle),
         leader.map(|(_, handle)| *handle),
@@ -455,27 +448,29 @@ fn resume_hint_handle<'a>(
     }
 }
 
+/// `instance` is the cohort as its `team.idle` signal names it; `channel` is
+/// the lane's label, which the addresses print.
 fn write_launch_hints(
     w: &mut impl Write,
-    team: Option<&str>,
+    instance: Option<&rimz::ids::TeamInstanceId>,
     channel: Option<&str>,
     fallback_handle: Option<&str>,
     leader: Option<&str>,
 ) -> Result<()> {
-    if let (Some(team), Some(channel)) = (team, channel) {
-        writeln!(w, "Check: rimz teams show {team}#{channel}")?;
+    if let (Some(instance), Some(channel)) = (instance, channel) {
+        writeln!(w, "Check: rimz teams show {}#{channel}", instance.team())?;
     }
     if let Some(handle) = leader.or(fallback_handle) {
         let lane = channel.map_or_else(String::new, |channel| format!("#{channel}"));
         writeln!(w, "Reach: rimz message @{handle}{lane} '<text>'")?;
-        if team.is_none() {
+        if instance.is_none() {
             writeln!(w, "Wait:  rimz agents wait @{handle}{lane}")?;
         }
     }
-    if let (Some(team), Some(channel)) = (team, channel) {
+    if let Some(instance) = instance {
         writeln!(
             w,
-            "Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance={team}#{channel} --once"
+            "Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance={instance} --once"
         )?;
     }
     Ok(())
@@ -501,16 +496,18 @@ fn write_resume_receipt(
     w: &mut impl Write,
     plan: &rimz::harness::plan::CohortResumePlan,
     team: Option<&str>,
-    channel: Option<&str>,
+    lane: &rimz::ids::Lane,
     fresh_identities: &[AgentLaunchIdentity],
     leader: Option<&str>,
 ) -> Result<()> {
     report_cohort_resume(w, plan)?;
     writeln!(w)?;
+    let instance =
+        team.and_then(|team| rimz::ids::TeamInstanceId::new(team, Some(lane.routing_name())).ok());
     write_launch_hints(
         w,
-        team,
-        channel,
+        instance.as_ref(),
+        Some(&lane.label()),
         resume_hint_handle(plan, fresh_identities),
         leader,
     )

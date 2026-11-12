@@ -138,7 +138,7 @@ fn write_report(
         return write_cohort_table(w, report, now);
     }
     for instance in &report.instances {
-        write_lane(w, &report.name, &report.roles, instance, now)?;
+        write_lane(w, &report.roles, instance, now)?;
         writeln!(w)?;
     }
     write_spec(w, report)
@@ -338,7 +338,6 @@ const SIGNALS_PREFIX_WIDTH: usize = 11;
 
 fn write_lane(
     w: &mut impl Write,
-    team: &str,
     roles: &[super::list::RoleReport],
     instance: &LiveInstance,
     now: jiff::Timestamp,
@@ -348,7 +347,7 @@ fn write_lane(
         "{}",
         render::paint(
             render::palette::header().bold(),
-            &format!("{team}#{}", instance.channel)
+            &instance.instance.to_string()
         )
     )?;
     writeln!(
@@ -655,6 +654,7 @@ mod tests {
 
     fn live_instance() -> LiveInstance {
         LiveInstance {
+            instance: "forge#feat-x".parse().unwrap(),
             channel: "feat-x".to_owned(),
             state: CohortState::Working,
             status_counts: BTreeMap::from([("running".to_owned(), 1)]),

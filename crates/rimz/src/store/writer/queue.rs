@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use jiff::Timestamp;
 
 use crate::agents::{AgentCardRef, AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, MessageId};
+use crate::ids::{AgentKind, AgentSessionId, LaneName, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::message::{
     AutoCompact, DeliveryGate, HarnessNotice, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord,
@@ -1592,7 +1592,7 @@ impl Store {
             bounce.workspace_id,
             bounce.session_name,
             bounce.address.to_owned(),
-            bounce.channel.map(ToOwned::to_owned),
+            bounce.channel.cloned(),
             bounce.sender.clone(),
             bounce.text_len,
             bounce.reason.to_owned(),
@@ -1671,11 +1671,11 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn clear_channel_messages(
         &self,
-        channel: &str,
+        channel: &LaneName,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         self.clear_messages_matching(
-            |message| message.channel.as_deref() == Some(channel),
+            |message| message.channel.as_ref() == Some(channel),
             session_name,
         )
     }
@@ -1801,14 +1801,14 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn archive_channel_messages(
         &self,
-        channel: &str,
+        channel: &LaneName,
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
         let archived = self.commit_queue(|queue| {
             let archived =
                 queue.finalize_matching(MessageStatus::Archived, session_name, reason, |message| {
-                    message.status.is_open() && message.channel.as_deref() == Some(channel)
+                    message.status.is_open() && message.channel.as_ref() == Some(channel)
                 });
             Ok(archived)
         })?;

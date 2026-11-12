@@ -272,7 +272,7 @@ use crate::harness::plan::{
     LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::{Cell, LayoutSpec};
-use crate::ids::{LaneName, LoginKey, LoginName};
+use crate::ids::{LaneName, LoginKey, LoginName, TeamInstanceId};
 use crate::room::RoomContext;
 use crate::store::writer::AgentLaunchScope;
 use placement::{
@@ -863,7 +863,7 @@ fn settle_layout(
         };
         if let Some((name, path)) = target
             && let Some(hold) = crate::harness::resume::inspect_team_hold(&projection.agents, path)
-            && hold.team != team
+            && hold.instance.team() != team
         {
             let (reason, release, resume) = team_hold_guidance(&hold);
             let place = match name {
@@ -872,7 +872,7 @@ fn settle_layout(
             };
             bail!(
                 "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree{release}",
-                hold.team
+                hold.instance.team()
             );
         }
         // The team-hold guidance outranks the lane's own refusals, which the
@@ -898,7 +898,7 @@ fn settle_layout(
                 let (reason, release, resume) = team_hold_guidance(&hold);
                 bail!(
                     "channel `#{channel}` already carries team `{}` at checkout `{}` ({reason}); one team per channel: resume it with {resume}, or launch on another channel{release}",
-                    hold.team,
+                    hold.instance.team(),
                     hold.checkout.display()
                 );
             }
@@ -1140,7 +1140,7 @@ pub fn validate_resume_inputs(overrides: &LaunchOverrides, entrance: ResumeEntra
 }
 
 fn team_hold_guidance(hold: &crate::harness::resume::TeamHold) -> (String, String, String) {
-    let target = format!("{}#{}", hold.team, hold.channel);
+    let target = hold.instance.to_string();
     let (reason, release) = match &hold.reason {
         crate::harness::resume::TeamHoldReason::LiveMember => {
             ("a member is live".to_owned(), String::new())
@@ -2005,7 +2005,8 @@ fn team_resume_error(
                     .collect::<Vec<_>>();
                 crate::harness::resume::inspect_team_hold(&lane_rows, Path::new(checkout))
                     .is_some_and(|hold| {
-                        hold.team == spec && matches!(hold.reason, TeamHoldReason::BoardStage(_))
+                        hold.instance.team() == spec
+                            && matches!(hold.reason, TeamHoldReason::BoardStage(_))
                     })
             };
             let lanes = room_agents
@@ -2025,7 +2026,8 @@ fn team_resume_error(
                 .filter(|lane| !excluded_lanes.contains(lane))
                 .collect::<BTreeSet<_>>();
             if let Some(first) = lanes.first() {
-                let target = format!("{spec}#{first}");
+                let target = TeamInstanceId::new(spec, Some(first.clone()))
+                    .map_or_else(|_| spec.to_owned(), |instance| instance.to_string());
                 let retry = shell_command(["rimz", "teams", "resume", &target]);
                 let lanes = lanes
                     .iter()

@@ -18,7 +18,7 @@ use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
 use crate::disk::retention::TRANSCRIPT_FILE_DAYS as FILE_DAYS;
 use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId};
-use crate::ids::{AskId, legacy_lane_name};
+use crate::ids::{AskId, LaneName};
 use crate::workspace::{KnownWorkspace, known_workspaces_under};
 
 pub const HARNESS_FROM: &str = "rimz";
@@ -114,8 +114,12 @@ pub struct TranscriptEntry {
     /// Messages whose receiving turn authored this entry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reply_to: Vec<MessageId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::ids::lenient_lane_name",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub channel: Option<LaneName>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,12 +194,6 @@ impl TranscriptEntry {
             answers: Vec::new(),
         }
     }
-}
-
-/// Chat transcript lane: launch-stamped channel when known, else worktree
-/// basename fallback for older agent payloads that carry only a path.
-pub fn entry_channel(stamped: Option<&str>, worktree_path: Option<&str>) -> Option<String> {
-    legacy_lane_name(stamped, worktree_path).map(String::from)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,7 +400,7 @@ pub fn read_since(paths: &StatePaths, since: Timestamp) -> Result<TranscriptRead
 }
 
 /// The distinct channels stamped in the workspace's recent transcript buckets.
-pub fn channels(paths: &StatePaths) -> Result<BTreeSet<String>> {
+pub fn channels(paths: &StatePaths) -> Result<BTreeSet<LaneName>> {
     Ok(read_since(paths, recent_floor())?
         .entries
         .into_iter()
@@ -413,12 +411,12 @@ pub fn channels(paths: &StatePaths) -> Result<BTreeSet<String>> {
 /// Every known workspace whose transcript log has entries stamped with
 /// `channel`. Best-effort inventory for read commands: transcript evidence
 /// only, unreadable workspaces and logs skipped.
-pub fn workspaces_with_channel(channel: &str) -> Vec<KnownWorkspace> {
+pub fn workspaces_with_channel(channel: &LaneName) -> Vec<KnownWorkspace> {
     workspaces_with_channel_under(&rimz_home(), channel)
 }
 
 /// [`workspaces_with_channel`] over an explicit state root, for tests.
-fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownWorkspace> {
+fn workspaces_with_channel_under(state_root: &Path, channel: &LaneName) -> Vec<KnownWorkspace> {
     let known = match known_workspaces_under(&workspaces_dir_under(state_root)) {
         Ok(known) => known,
         Err(err) => {

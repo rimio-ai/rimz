@@ -45,7 +45,7 @@ pub struct UnresolvedMessage<'a> {
     pub workspace_id: WorkspaceId,
     pub session_name: &'a str,
     pub address: &'a str,
-    pub channel: Option<&'a str>,
+    pub channel: Option<&'a crate::ids::LaneName>,
     pub sender: &'a crate::store::message::MessageSender,
     pub text_len: usize,
     pub reason: &'a str,

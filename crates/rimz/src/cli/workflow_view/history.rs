@@ -633,13 +633,11 @@ pub(in crate::cli) fn children_out(out: &mut impl Write, children: &Children) ->
                 child.team.as_ref().map_or_else(
                     || child.handle.clone(),
                     |team| {
-                        format!(
-                            "{} ({}#{}, {})",
-                            child.handle,
-                            team.name,
-                            team.channel,
-                            team.stage.as_deref().unwrap_or("stage unknown")
-                        )
+                        let cohort =
+                            rimz::ids::TeamInstanceId::new(&team.name, team.channel.clone())
+                                .map_or_else(|_| team.name.clone(), |cohort| cohort.to_string());
+                        let stage = team.stage.as_deref().unwrap_or("stage unknown");
+                        format!("{} ({cohort}, {stage})", child.handle)
                     },
                 )
             })

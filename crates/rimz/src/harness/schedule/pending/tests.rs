@@ -354,7 +354,7 @@ fn run_waits_keep_launcher_member_and_turn_order() {
     runs[4].agent_name = children[2].name.clone();
     runs[5].team = Some(TeamRun {
         launch_id: "leader-launch".into(),
-        instance: "forge#work".into(),
+        instance: "forge#work".parse().unwrap(),
     });
     let mut detached = make_run(&children[1], 7);
     detached.peer = runs[2].peer.clone();
@@ -446,7 +446,7 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
     runs[1].status = RunStatus::Completed;
     runs[2].team = Some(TeamRun {
         launch_id: "leader-launch".into(),
-        instance: "forge#feat-x".into(),
+        instance: "forge#feat-x".parse().unwrap(),
     });
     for run in &runs {
         run::write(&paths.runs_dir, run).unwrap();

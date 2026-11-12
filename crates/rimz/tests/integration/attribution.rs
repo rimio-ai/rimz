@@ -396,7 +396,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         ) {
             entry.id = Some(ask_id.clone());
         }
-        entry.channel = Some("feature".to_owned());
+        entry.channel = Some(rimz::ids::LaneName::dashed("feature"));
         entry.from = from.map(ToOwned::to_owned);
         rimz::transcript::append(&paths, &entry).expect("append attribution transcript");
     }

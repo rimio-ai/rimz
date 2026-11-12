@@ -1468,14 +1468,12 @@ fn team_hold_table() {
         ..other.clone()
     };
     let live_hold = Some(TeamHold {
-        team: "forge".into(),
-        channel: "held".into(),
+        instance: "forge#held".parse().unwrap(),
         checkout: root.path().into(),
         reason: TeamHoldReason::LiveMember,
     });
     let board_hold = Some(TeamHold {
-        team: "forge".into(),
-        channel: "held".into(),
+        instance: "forge#held".parse().unwrap(),
         checkout: root.path().into(),
         reason: TeamHoldReason::BoardStage("Plan".into()),
     });
@@ -1507,8 +1505,7 @@ fn team_hold_table() {
             }],
             None,
             Some(TeamHold {
-                team: "forge".into(),
-                channel: "held".into(),
+                instance: "forge#held".parse().unwrap(),
                 checkout: root.path().join("child/.."),
                 reason: TeamHoldReason::LiveMember,
             }),
@@ -1517,8 +1514,7 @@ fn team_hold_table() {
             vec![present, other],
             None,
             Some(TeamHold {
-                team: "other".into(),
-                channel: "held".into(),
+                instance: "other#held".parse().unwrap(),
                 checkout: root.path().into(),
                 reason: TeamHoldReason::LiveMember,
             }),
@@ -1527,8 +1523,7 @@ fn team_hold_table() {
             vec![ended.clone(), ended_other],
             Some("Stage: Plan"),
             Some(TeamHold {
-                team: "other".into(),
-                channel: "held".into(),
+                instance: "other#held".parse().unwrap(),
                 checkout: root.path().into(),
                 reason: TeamHoldReason::BoardStage("Plan".into()),
             }),
@@ -1583,7 +1578,7 @@ fn team_hold_table() {
                 ],
                 Some("Stage: Plan"),
                 Some(TeamHold {
-                    team: "other".into(),
+                    instance: "other#held".parse().unwrap(),
                     ..board_hold.clone().unwrap()
                 }),
             ),
@@ -1619,8 +1614,7 @@ fn channel_hold_table() {
         ..present.clone()
     };
     let live_hold = TeamHold {
-        team: "forge".into(),
-        channel: "X".into(),
+        instance: "forge#X".parse().unwrap(),
         checkout: checkout.clone(),
         reason: TeamHoldReason::LiveMember,
     };
@@ -1694,7 +1688,7 @@ fn channel_hold_table() {
             vec![present, other],
             None,
             Some(TeamHold {
-                team: "other".into(),
+                instance: "other#X".parse().unwrap(),
                 ..live_hold.clone()
             }),
         ),
@@ -1757,7 +1751,7 @@ fn channel_hold_table() {
                 ],
                 Some("Stage: Build"),
                 Some(TeamHold {
-                    team: "other".into(),
+                    instance: "other#X".parse().unwrap(),
                     ..board_hold.clone()
                 }),
             ),
@@ -1780,7 +1774,7 @@ fn channel_hold_table() {
         for team in ["forge", "other"] {
             assert_eq!(
                 inspect_cohort_hold(&agents, team, "X"),
-                expected.clone().filter(|hold| hold.team == team),
+                expected.clone().filter(|hold| hold.instance.team() == team),
                 "named hold case {index}"
             );
         }

@@ -568,7 +568,7 @@ fn write_text(
                     match crate::address::message_header(
                         &message.sender,
                         &peers,
-                        message.channel.as_deref(),
+                        message.channel.as_ref(),
                         Some(&workspace.project_root),
                     ) {
                         Some(header) => format!("{header}{}", message.text),
@@ -666,7 +666,7 @@ fn compact_message_for_target<'a>(
             pane: target,
             bound,
         },
-        prompt.channel.as_deref(),
+        prompt.channel.as_ref(),
         &command,
         prompt.address.as_deref(),
     );

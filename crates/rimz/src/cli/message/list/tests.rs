@@ -439,7 +439,7 @@ fn message_target_uses_stored_address_before_fallbacks() {
         "work".to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some("project".to_owned()))
+    .with_channel(Some(rimz::ids::LaneName::dashed("project")))
     .with_address(Some("@saved#project".to_owned()));
     let message = MessageListRow::from_record(message);
 
@@ -454,7 +454,7 @@ fn message_target_falls_back_to_agent_name_and_channel_when_agent_is_gone() {
         "work".to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some("project".to_owned()));
+    .with_channel(Some(rimz::ids::LaneName::dashed("project")));
     let message = MessageListRow::from_record(message);
 
     assert_eq!(
@@ -481,20 +481,33 @@ fn message_target_falls_back_to_kind_id_for_nameless_records() {
 #[test]
 fn scoped_handle_drops_matching_lane_suffix() {
     assert_eq!(
-        scoped_handle("@coder#project".to_owned(), Some("project")),
+        scoped_handle("@coder#project".to_owned(), Some("project"), None),
         "@coder"
     );
     // Lane membership is exact: a team lane keeps its suffix under the
     // directory filter.
     assert_eq!(
-        scoped_handle("@coder#project/forge".to_owned(), Some("project")),
+        scoped_handle("@coder#project/forge".to_owned(), Some("project"), None),
         "@coder#project/forge"
     );
     assert_eq!(
-        scoped_handle("@coder#ops".to_owned(), Some("project")),
+        scoped_handle("@coder#ops".to_owned(), Some("project"), None),
         "@coder#ops"
     );
-    assert_eq!(scoped_handle("you".to_owned(), Some("project")), "you");
+    assert_eq!(
+        scoped_handle("you".to_owned(), Some("project"), None),
+        "you"
+    );
+    // One lane spelled two ways still drops the suffix.
+    let root = Some(Path::new("/w/project"));
+    assert_eq!(
+        scoped_handle("@coder#main".to_owned(), Some("project"), root),
+        "@coder"
+    );
+    assert_eq!(
+        scoped_handle("@coder#feat-x".to_owned(), Some("feat/x"), root),
+        "@coder"
+    );
 }
 
 #[test]
@@ -534,8 +547,14 @@ fn message_digest_groups_all_lanes_once_by_latest_activity() {
 #[test]
 fn root_scope_includes_legacy_and_basename_records() {
     assert!(LaneScope::Root.contains_channel(None, Some(Path::new("/work/project"))));
-    assert!(LaneScope::Root.contains_channel(Some("project"), Some(Path::new("/work/project"))));
-    assert!(!LaneScope::Root.contains_channel(Some("docs"), Some(Path::new("/work/project"))));
+    assert!(LaneScope::Root.contains_channel(
+        Some(&rimz::ids::LaneName::dashed("project")),
+        Some(Path::new("/work/project"))
+    ));
+    assert!(!LaneScope::Root.contains_channel(
+        Some(&rimz::ids::LaneName::dashed("docs")),
+        Some(Path::new("/work/project"))
+    ));
 }
 
 #[test]
@@ -634,7 +653,7 @@ fn message_digest_empty_state_describes_scope_and_status() {
 
     let named = render_digest(
         Vec::new(),
-        LaneScope::Named("ops".to_owned()),
+        LaneScope::Named(rimz::ids::LaneName::dashed("ops")),
         Some(MessageStatus::Queued),
     );
     assert!(named.contains("no queued messages in #ops"));
@@ -707,7 +726,7 @@ fn other_lanes_line_counts_only_queued_as_undelivered() {
                 message_row("legacy", None, "legacy root"),
                 message_row("current", Some("project"), "current root"),
             ],
-            &LaneScope::Named("ops".to_owned()),
+            &LaneScope::Named(rimz::ids::LaneName::dashed("ops")),
             Some(Path::new("/work/project")),
             false,
         )
@@ -772,7 +791,7 @@ fn message_row_with_sender(
         text.to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(channel.map(ToOwned::to_owned))
+    .with_channel(channel.map(rimz::ids::LaneName::dashed))
     .with_sender(sender);
     MessageListRow::from_record(message)
 }
@@ -784,7 +803,7 @@ fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
         name: None,
         profile: None,
         role: Some(role.to_owned()),
-        channel: channel.map(ToOwned::to_owned),
+        channel: channel.map(rimz::ids::LaneName::dashed),
     }
 }
 

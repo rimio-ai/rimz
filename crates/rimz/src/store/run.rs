@@ -176,8 +176,8 @@ pub struct PeerRun {
 pub struct TeamRun {
     /// The leader's launch id; every conversation row of the leader shares it.
     pub launch_id: AgentSessionId,
-    /// `<team>#<channel>`, the cohort whose board settles this run.
-    pub instance: String,
+    /// The cohort whose board settles this run.
+    pub instance: crate::ids::TeamInstanceId,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -173,7 +173,7 @@ fn assert_strand_duty_repairs_report(team: bool) {
         child_run.status = rimz::store::run::RunStatus::Running;
         child_run.team = Some(rimz::store::run::TeamRun {
             launch_id: "child".into(),
-            instance: "forge#x".into(),
+            instance: "forge#x".parse().unwrap(),
         });
     } else {
         child_run.subagent = true;

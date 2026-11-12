@@ -352,6 +352,49 @@ mod tests {
     }
 
     #[test]
+    fn queue_file_with_an_old_unnamed_lane_still_reads_whole() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path().join("messages");
+        let agent = agent();
+        let record = |text: &str| {
+            MessageRecord::new(
+                WorkspaceId::from_project_root(dir.path()),
+                &agent,
+                text.to_owned(),
+                DeliveryGate::Done,
+            )
+            .with_channel(Some(crate::ids::LaneName::dashed("docs")))
+        };
+        let (old, other) = (record("old"), record("other"));
+        write_queue(&messages_dir, &[old.clone(), other.clone()]).unwrap();
+        let path = queue_path(&messages_dir);
+        let lines = std::fs::read_to_string(&path).unwrap();
+        let lines = lines
+            .lines()
+            .map(|line| {
+                let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
+                if value["text"] == "old" {
+                    value["channel"] = "feat x".into();
+                }
+                format!("{value}\n")
+            })
+            .collect::<String>();
+        std::fs::write(&path, lines).unwrap();
+
+        let messages = read_queue(&messages_dir).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        let lane = |id: &MessageId| {
+            let message = messages.iter().find(|message| &message.message_id == id);
+            message
+                .and_then(|message| message.channel.clone())
+                .map(String::from)
+        };
+        assert_eq!(lane(&old.message_id).as_deref(), Some("feat-x"));
+        assert_eq!(lane(&other.message_id).as_deref(), Some("docs"));
+    }
+
+    #[test]
     fn history_round_trips_terminal_text() {
         let dir = tempdir().unwrap();
         let messages_dir = dir.path().join("messages");

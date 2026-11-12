@@ -275,12 +275,14 @@ fn address_miss_names_live_addresses_and_empty_parts_are_usage_errors() {
         text.contains("no review run in missing\n  live runs: review#project"),
         "{text}"
     );
-    for target in ["review#", "#project"] {
+    for target in ["review#", "#project", "review#project#stale"] {
         let output = command(&env, &["workflow", "show", target]);
         let text = String::from_utf8(output.stderr).unwrap();
         assert_eq!(output.status.code(), Some(2), "{text}");
         assert!(
-            text.contains("workflow and lane must be nonempty"),
+            text.contains(&format!(
+                "run address `{target}` must be <workflow>#<lane>; workflow and lane must be nonempty, and the lane holds no `#`"
+            )),
             "{text}"
         );
     }

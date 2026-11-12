@@ -3655,7 +3655,10 @@ fn a_ping_only_turn_leaves_the_team_leaders_reply_and_activity_alone() {
     );
     record.team = Some(rimz::store::run::TeamRun {
         launch_id: AgentSessionId::from("sess-lead"),
-        instance: "forge#main".to_owned(),
+        instance: "forge#main"
+            .parse::<rimz::ids::TeamInstanceId>()
+            .unwrap()
+            .to_owned(),
     });
     let run_id = record.run_id.clone();
     rimz::harness::run::create(store.paths(), &record).expect("create run");
@@ -3713,7 +3716,10 @@ fn a_duplicate_real_verdict_inside_a_ping_moves_nothing() {
     );
     record.team = Some(rimz::store::run::TeamRun {
         launch_id: AgentSessionId::from("sess-lead"),
-        instance: "forge#main".to_owned(),
+        instance: "forge#main"
+            .parse::<rimz::ids::TeamInstanceId>()
+            .unwrap()
+            .to_owned(),
     });
     let run_id = record.run_id.clone();
     rimz::harness::run::create(store.paths(), &record).expect("create run");
@@ -5852,7 +5858,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
                     DeliveryGate::Done,
                 )
                 .with_sender(sender)
-                .with_channel(Some("docs".to_owned()));
+                .with_channel(Some(rimz::ids::LaneName::dashed("docs")));
                 if is_conversation {
                     visible_ids.push(message.message_id.to_string());
                 } else {

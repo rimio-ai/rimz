@@ -88,7 +88,10 @@ fn draft_record_uses_recipient_identity_and_live_pane_context() {
 
     assert_eq!(live.agent_id, agent.agent_id);
     assert_eq!(live.pane_id.as_ref(), Some(&pane.pane_id));
-    assert_eq!(live.channel.as_deref(), Some("auth"));
+    assert_eq!(
+        live.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("auth")
+    );
     assert_eq!(live.not_before, Some(not_before));
     assert_eq!(parked.pane_id, None);
     assert_eq!(parked.channel, None);
@@ -110,7 +113,10 @@ fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
     let record = pane_record(workspace_id.clone(), &bound_pane, Some(&bound), "scope");
     assert_eq!(record.agent_id, bound.agent_id);
     assert_eq!(record.agent_name, bound.name);
-    assert_eq!(record.channel.as_deref(), Some("bound-channel"));
+    assert_eq!(
+        record.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("bound-channel")
+    );
     assert_eq!(record.pane_id.as_ref(), Some(&bound_pane.pane_id));
 
     let mut provisional = agent("sess-a", Some("lucid-atlas"));
@@ -131,13 +137,19 @@ fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
         "scope",
     );
     assert_eq!(record.agent_id.as_str(), "launch_pending");
-    assert_eq!(record.channel.as_deref(), Some("provisional-channel"));
+    assert_eq!(
+        record.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("provisional-channel")
+    );
     assert_eq!(record.pane_id.as_ref(), Some(&provisional_pane.pane_id));
 
     let lazy = pane("codex", None, None, None, Some("/repo/lazy"), "terminal_3");
     let record = pane_record(workspace_id.clone(), &lazy, None, "scope");
     assert_eq!(record.agent_id, synthetic_session_for_pane(&lazy.pane_id));
-    assert_eq!(record.channel.as_deref(), Some("lazy"));
+    assert_eq!(
+        record.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("lazy")
+    );
 
     let pane_only = pane(
         "codex",
@@ -150,11 +162,17 @@ fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
     let record = pane_record(workspace_id.clone(), &pane_only, None, "scope");
     assert_eq!(record.agent_id.as_str(), "pane-session");
     assert_eq!(record.agent_name.as_deref(), Some("pane-name"));
-    assert_eq!(record.channel.as_deref(), Some("scope"));
+    assert_eq!(
+        record.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("scope")
+    );
 
     let fresh = pane("codex", None, None, None, None, "terminal_5");
     let record = pane_record(workspace_id, &fresh, None, "explicit");
-    assert_eq!(record.channel.as_deref(), Some("explicit"));
+    assert_eq!(
+        record.channel.as_ref().map(crate::ids::LaneName::as_str),
+        Some("explicit")
+    );
 }
 
 #[test]
@@ -662,7 +680,7 @@ fn agent_record(
     draft(None).record(
         workspace_id,
         Recipient::Agent { agent, pane },
-        Some(channel),
+        Some(&crate::ids::LaneName::dashed(channel)),
         "hello",
         Some("@claude"),
     )
@@ -677,7 +695,7 @@ fn pane_record(
     draft(None).record(
         workspace_id,
         Recipient::Pane { pane, bound },
-        Some(channel),
+        Some(&crate::ids::LaneName::dashed(channel)),
         "hello",
         Some("@claude"),
     )

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::ids::{AgentKind, AgentSessionId, HoldKind, MessageId, RunId, WorkflowRunId};
+use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId, WorkflowRunId};
 
 pub const VERSION: u32 = 5;
 
@@ -75,15 +75,15 @@ pub struct Scope {
     pub path: PathBuf,
 }
 
-/// A workflow name and the basename of its recorded scope path.
+/// A workflow name and the name of its recorded scope's own lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunAddress {
     pub workflow: String,
-    pub lane: String,
+    pub lane: LaneName,
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("run address must be <workflow>#<lane> with nonempty parts")]
+#[error("run address must be <workflow>#<lane> with nonempty parts and no `#` in the lane")]
 pub struct RunAddressErr;
 
 impl std::fmt::Display for RunAddress {
@@ -98,20 +98,14 @@ impl std::str::FromStr for RunAddress {
     fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
         let (workflow, lane) = raw
             .split_once('#')
-            .filter(|(workflow, lane)| !workflow.is_empty() && !lane.is_empty())
+            .filter(|(workflow, lane)| {
+                !workflow.is_empty() && !lane.is_empty() && !lane.contains('#')
+            })
             .ok_or(RunAddressErr)?;
         Ok(Self {
             workflow: workflow.into(),
-            lane: lane.into(),
+            lane: LaneName::dashed(lane),
         })
-    }
-}
-
-impl RunAddress {
-    /// Match a requested address against a recorded one, accepting dashed worktree names.
-    pub fn matches(&self, address: &Self) -> bool {
-        self.workflow == address.workflow
-            && (self.lane == address.lane || self.lane.replace('/', "-") == address.lane)
     }
 }
 
@@ -447,7 +441,12 @@ pub struct Asking {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TeamRef {
     pub name: String,
-    pub channel: String,
+    /// The cohort's lane; none is the `external` instance.
+    #[serde(
+        serialize_with = "crate::ids::TeamInstanceId::serialize_lane",
+        deserialize_with = "crate::ids::TeamInstanceId::deserialize_lane"
+    )]
+    pub channel: Option<LaneName>,
     pub stage: Option<String>,
 }
 
@@ -737,15 +736,14 @@ impl RunRecord {
 
     /// Derive the lane without resolving or reading the checkout, which may be gone.
     pub fn address(&self) -> RunAddress {
+        let home = match self.scope.kind {
+            ScopeKind::Worktree => crate::ids::LaneHome::Worktree,
+            ScopeKind::Project => crate::ids::LaneHome::Trunk,
+        };
+        let lane = crate::ids::Lane::own(home, self.scope.path.to_string_lossy());
         RunAddress {
             workflow: self.workflow.clone(),
-            lane: self
-                .scope
-                .path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+            lane: lane.routing_name(),
         }
     }
 

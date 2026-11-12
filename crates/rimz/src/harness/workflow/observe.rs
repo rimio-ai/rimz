@@ -303,11 +303,9 @@ fn child_ref(agent: &AgentState, peers: &[&AgentState]) -> ChildRef {
     ChildRef {
         handle: crate::address::agent_handle(agent, peers, true),
         kind: agent.kind.clone(),
-        team: agent.team.as_ref().map(|name| TeamRef {
-            name: name.clone(),
-            channel: agent
-                .lane_name()
-                .map_or_else(|| "external".into(), String::from),
+        team: agent.team_instance().map(|instance| TeamRef {
+            name: instance.team().to_owned(),
+            channel: instance.lane().cloned(),
             stage: agent
                 .lane_path()
                 .and_then(|path| crate::harness::scratch::board_stage(Path::new(path)))

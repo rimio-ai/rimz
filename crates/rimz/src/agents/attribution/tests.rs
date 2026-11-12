@@ -1659,10 +1659,10 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
         )
     };
     let mut received = entry("codex", "coder-session", TranscriptKind::Message);
-    received.channel = Some("feature".to_owned());
+    received.channel = Some(crate::ids::LaneName::dashed("feature"));
     received.from = Some("@planner".to_owned());
     let mut cross_lane = entry("codex", "docs-coder", TranscriptKind::Message);
-    cross_lane.channel = Some("docs".to_owned());
+    cross_lane.channel = Some(crate::ids::LaneName::dashed("docs"));
     cross_lane.from = Some("@planner#feature".to_owned());
     let mut system_nudge = entry("claude", "planner-session", TranscriptKind::Prompt);
     system_nudge.from = Some("rimz".to_owned());
@@ -1785,13 +1785,35 @@ fn sent_messages_alone_are_a_contribution() {
         TranscriptKind::Message,
         "hello".to_owned(),
     );
-    sent.channel = Some("lane".to_owned());
+    sent.channel = Some(crate::ids::LaneName::dashed("lane"));
     sent.from = Some("@claude".to_owned());
 
     let report = build_with(&[idle], &[], &[sent]);
 
     assert_eq!(report.totals.agents, 1);
     assert_eq!(report.groups[0].members[0].messages.to_teammates, 1);
+}
+
+#[test]
+fn a_message_sent_under_trunks_routing_name_credits_the_trunk_member() {
+    for suffix in ["main", "repo"] {
+        let mut trunk = agent(Path::new("/repo"), "trunk", "claude", 10);
+        trunk.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo"));
+        let mut sent = TranscriptEntry::new(
+            at(50),
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("receiver"),
+            TranscriptKind::Message,
+            "hello".to_owned(),
+        );
+        sent.channel = Some(crate::ids::LaneName::dashed("repo"));
+        sent.from = Some(format!("@claude#{suffix}"));
+        let report = build_with(&[trunk], &[], &[sent]);
+        assert_eq!(
+            report.groups[0].members[0].messages.to_teammates, 1,
+            "{suffix}"
+        );
+    }
 }
 
 #[test]
@@ -1805,7 +1827,7 @@ fn petname_sent_messages_are_credited_despite_short_list_handle() {
         TranscriptKind::Message,
         "hello".to_owned(),
     );
-    sent.channel = Some("lane".to_owned());
+    sent.channel = Some(crate::ids::LaneName::dashed("lane"));
     sent.from = Some("@calm-fox#lane".to_owned());
     let report = build_with(&[idle], &[], &[sent]);
     assert_eq!(report.totals.agents, 1);

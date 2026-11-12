@@ -239,10 +239,18 @@ fn sent_prompt_reconciliation_preserves_fifo_or_releases_timed_out_hold() {
 #[test]
 fn boundary_batch_claims_maximal_compatible_fifo_prefix() {
     let q = Queue::new();
-    let first = q.record(1).with_channel(Some("same".to_owned()));
-    let second = q.record(2).with_channel(Some("same".to_owned()));
-    let other_channel = q.record(3).with_channel(Some("other".to_owned()));
-    let back_in_channel = q.record(4).with_channel(Some("same".to_owned()));
+    let first = q
+        .record(1)
+        .with_channel(Some(crate::ids::LaneName::dashed("same")));
+    let second = q
+        .record(2)
+        .with_channel(Some(crate::ids::LaneName::dashed("same")));
+    let other_channel = q
+        .record(3)
+        .with_channel(Some(crate::ids::LaneName::dashed("other")));
+    let back_in_channel = q
+        .record(4)
+        .with_channel(Some(crate::ids::LaneName::dashed("same")));
     for message in [&first, &second, &other_channel, &back_in_channel] {
         q.queue_message(message, "session").unwrap();
     }

@@ -82,8 +82,8 @@ pub(super) fn send_message(
         target
     };
     let (workspace, store) = (&ctx.workspace, &ctx.store);
-    let current_channel = ctx.channel().map(ToOwned::to_owned);
-    let sender = send::sender_for(caller.as_ref(), current_channel.as_deref(), no_from);
+    let current_channel = ctx.channel().cloned();
+    let sender = send::sender_for(caller.as_ref(), current_channel.as_ref(), no_from);
     let kind = mode.kind();
     let wait_started = std::time::Instant::now();
     let request = || DispatchRequest {
@@ -113,7 +113,7 @@ pub(super) fn send_message(
         sender: &sender,
         worktree: worktree.as_deref(),
         channel_flag: channel_flag.as_deref(),
-        current_channel: current_channel.as_deref(),
+        current_channel: current_channel.as_ref(),
         create,
     };
     let result = match rimz::message::dispatch::dispatch(workspace, store, request()) {
@@ -215,7 +215,7 @@ struct RecipientMiss<'a> {
     sender: &'a MessageSender,
     worktree: Option<&'a str>,
     channel_flag: Option<&'a str>,
-    current_channel: Option<&'a str>,
+    current_channel: Option<&'a LaneName>,
     create: bool,
 }
 
@@ -310,7 +310,7 @@ fn recipient_miss(
     message_miss(
         &demotion,
         &snapshot,
-        miss.current_channel,
+        miss.current_channel.map(LaneName::as_str),
         &ctx.address_context(),
         &mapped,
     )

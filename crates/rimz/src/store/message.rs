@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::state::TransitionMode;
 use crate::agents::{AgentCardRef, AgentLifecycleObservation, AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, RunId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, LaneName, MessageId, PaneId, RunId, WorkspaceId};
 use crate::transcript::SectionOrigin;
 
 mod codec;
@@ -64,8 +64,12 @@ pub enum MessageSender {
         profile: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        channel: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "crate::ids::lenient_lane_name",
+            skip_serializing_if = "Option::is_none"
+        )]
+        channel: Option<LaneName>,
     },
     Harness {
         notice: HarnessNotice,
@@ -183,9 +187,9 @@ impl MessageSender {
             } => {
                 let mut rendered =
                     crate::agents::petname::sender_handle(role.as_deref(), name.as_deref(), kind);
-                if let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
+                if let Some(channel) = channel {
                     rendered.push('#');
-                    rendered.push_str(channel);
+                    rendered.push_str(channel.as_str());
                 }
                 rendered
             }
@@ -498,8 +502,12 @@ pub struct MessageRecord {
     /// Receiver handle as resolved at enqueue, e.g. `@coder#auth`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::ids::lenient_lane_name",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub channel: Option<LaneName>,
     #[serde(default)]
     pub sender: MessageSender,
     /// Background orchestration traffic never earns a dollar-budget waiver.
@@ -867,7 +875,7 @@ impl MessageRecord {
     }
 
     #[must_use]
-    pub fn with_channel(mut self, channel: Option<String>) -> Self {
+    pub fn with_channel(mut self, channel: Option<LaneName>) -> Self {
         self.channel = channel;
         self
     }

@@ -216,7 +216,7 @@ fn resume_selected(
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let snapshot = ctx.alive_snapshot()?;
-    let (kind, cwd, channel) = match source {
+    let (kind, cwd, stored_lane) = match source {
         ResumeSource::Recorded(agent) => {
             let name = agent.name.as_deref().unwrap_or(agent.agent_id.as_str());
             let cwd = agent
@@ -228,7 +228,8 @@ fn resume_selected(
             if agent.checkout.is_some() {
                 rimz::agents::empty_dir::prepare_reentry(store.paths(), cwd)?;
             }
-            (&agent.kind, cwd, agent.channel.as_deref())
+            let lane = rimz::harness::lanes::row_lane(agent, &workspace.project_root);
+            (&agent.kind, cwd, lane)
         }
         ResumeSource::Provider(observation, _) => {
             (&observation.kind, observation.workspace.as_path(), None)
@@ -245,7 +246,7 @@ fn resume_selected(
         ResumeSource::Provider(..) => cwd,
     };
     let outside_launch_dir = placement::resume_outside_launch_dir(
-        channel,
+        stored_lane.as_ref().and_then(rimz::ids::Lane::stored_name),
         cwd,
         lane_path,
         &workspace.project_root,

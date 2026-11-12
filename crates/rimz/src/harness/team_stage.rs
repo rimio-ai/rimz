@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 use crate::Store;
 use crate::agents::{AgentState, LifecycleSignal};
 use crate::config::{DONE_STAGE, MachineConfig, Team};
-use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, TeamInstanceId};
 use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
 use crate::store::event::{EventKind, SignalSource};
@@ -36,8 +36,7 @@ const REWAKE_BY: &str = "rimz";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSignal {
     pub team: String,
-    /// `<team>#<channel>`.
-    pub instance: String,
+    pub instance: TeamInstanceId,
     pub to: String,
     /// The flipping role, `user`, or `rimz` for a registration re-wake.
     pub by: String,
@@ -53,9 +52,7 @@ pub struct StageSignal {
 
 impl StageSignal {
     pub fn channel(&self) -> &str {
-        self.instance
-            .split_once('#')
-            .map_or("", |(_, channel)| channel)
+        self.instance.lane_text()
     }
 
     /// A registration re-wake reopens the current stage without a flip.
@@ -111,9 +108,8 @@ impl Flipper<'_> {
 pub struct FlipRequest<'a> {
     pub workspace: &'a ResolvedWorkspace,
     pub store: &'a Store,
-    pub team_name: &'a str,
+    pub instance: &'a TeamInstanceId,
     pub team: &'a Team,
-    pub channel: &'a str,
     pub worktree: &'a Path,
     pub members: &'a [AgentState],
     pub to: &'a str,
@@ -218,7 +214,7 @@ pub enum FlipErr {
 
 impl FlipErr {
     fn after(self, done: &'static str, opening: &StageOpening<'_>) -> Self {
-        let address = format!("{}#{}", opening.team_name, opening.channel);
+        let address = opening.instance.to_string();
         // Team, lane, and stage names come from config and argv, which carry no NUL byte.
         let rerun = shlex::try_join(["rimz", "teams", "flip", address.as_str(), opening.to])
             .expect("flip words carry no NUL byte");
@@ -231,8 +227,9 @@ impl FlipErr {
 }
 
 pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
-    let owner = resolve_owner(request.team_name, request.team, request.to)?;
-    let locked = LockedBoard::open(request.store, request.worktree, Some(request.team_name))?;
+    let team_name = request.instance.team();
+    let owner = resolve_owner(team_name, request.team, request.to)?;
+    let locked = LockedBoard::open(request.store, request.worktree, Some(team_name))?;
     let worktree = locked.worktree.clone();
     let board = locked.path.clone();
     let text = &locked.text;
@@ -255,8 +252,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     let opening = StageOpening {
         workspace: request.workspace,
         store: request.store,
-        team_name: request.team_name,
-        channel: request.channel,
+        instance: request.instance,
         members: request.members,
         worktree: &worktree,
         board: &board,
@@ -372,15 +368,14 @@ fn with_rewake<T>(
         return Ok(None);
     }
     let owner = resolve_owner(team_name, team, &stage.name)?;
-    let channel = member
-        .lane_name()
-        .map_or_else(|| "external".to_owned(), String::from);
+    let Ok(instance) = TeamInstanceId::new(team_name, member.lane_name()) else {
+        return Ok(None);
+    };
     apply(
         &StageOpening {
             workspace,
             store,
-            team_name,
-            channel: &channel,
+            instance: &instance,
             members,
             worktree: &locked.worktree,
             board: &board,
@@ -469,12 +464,10 @@ fn cohort_members<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     member: &AgentState,
 ) -> Vec<&'a AgentState> {
-    let channel = member
-        .lane_name()
-        .map_or_else(|| "external".to_owned(), String::from);
+    let instance = member.team_instance();
     crate::address::team_cohorts(agents)
         .into_iter()
-        .find(|cohort| Some(cohort.team) == member.team.as_deref() && cohort.channel == channel)
+        .find(|cohort| Some(&cohort.instance) == instance.as_ref())
         .map(|cohort| cohort.members)
         .unwrap_or_default()
 }
@@ -766,8 +759,7 @@ fn resolve_owner<'a>(
 struct StageOpening<'a> {
     workspace: &'a ResolvedWorkspace,
     store: &'a Store,
-    team_name: &'a str,
-    channel: &'a str,
+    instance: &'a TeamInstanceId,
     members: &'a [AgentState],
     worktree: &'a Path,
     board: &'a Path,
@@ -789,8 +781,8 @@ fn open_stage(
     completed: &'static str,
 ) -> Result<(EventId, Delivery), FlipErr> {
     let stage = StageSignal {
-        team: opening.team_name.to_owned(),
-        instance: format!("{}#{}", opening.team_name, opening.channel),
+        team: opening.instance.team().to_owned(),
+        instance: opening.instance.clone(),
         to: opening.to.to_owned(),
         by: opening.by.to_owned(),
         board: opening.board.to_path_buf(),
@@ -841,12 +833,10 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
     if opening.self_owned {
         return Ok(Delivery::SelfOwned);
     }
-    let cohort = opening.members.iter().filter(|member| {
-        member.team.as_deref() == Some(opening.team_name)
-            && member
-                .lane_name()
-                .is_some_and(|lane| lane.as_str() == opening.channel)
-    });
+    let cohort = opening
+        .members
+        .iter()
+        .filter(|member| member.team_instance().as_ref() == Some(opening.instance));
     let Some(member) = crate::address::role_holders(cohort, owner)
         .into_iter()
         .next()
@@ -871,7 +861,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
             ),
             target_scope: None,
             current_channel: crate::address::AddressContext {
-                channel: opening.channel.parse().ok(),
+                channel: opening.instance.lane().cloned(),
                 origin: crate::address::ChannelOrigin::Stamped,
             },
             caller: None,

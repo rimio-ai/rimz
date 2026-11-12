@@ -1743,7 +1743,7 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
         text.to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(Some(channel.to_owned()));
+    .with_channel(Some(rimz::ids::LaneName::dashed(channel)));
     let message_id = message.message_id.clone();
     env.store()
         .queue_message(&message, "rimz-test")

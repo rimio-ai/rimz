@@ -44,6 +44,7 @@ pub(in crate::cli) use hook_install::{
 };
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
+pub(in crate::cli) use lifecycle::entry_lane_name;
 use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =

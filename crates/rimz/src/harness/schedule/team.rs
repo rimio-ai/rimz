@@ -94,10 +94,7 @@ pub(crate) fn arm_member(
     let Some(declared_role) = team.roles.iter().find(|binding| binding.role == role) else {
         return Ok(0);
     };
-    let channel = member
-        .lane_name()
-        .map_or_else(|| "external".to_owned(), String::from);
-    let instance: TeamInstanceId = format!("{name}#{channel}").parse()?;
+    let instance = TeamInstanceId::new(name, member.lane_name())?;
     let peers: Vec<_> = agents.iter().collect();
     let target = TaskTarget {
         kind: member.kind.clone(),
@@ -110,7 +107,7 @@ pub(crate) fn arm_member(
         let result = (|| -> Result<DeliverySpec, TeamBindingFailure> {
             let mut ordinal = 1;
             let task_name = loop {
-                let candidate = member_task_name(name, &channel, role, &binding.signal, ordinal)?;
+                let candidate = member_task_name(&instance, role, &binding.signal, ordinal)?;
                 if names.insert(candidate.to_string()) {
                     break candidate;
                 }
@@ -185,13 +182,13 @@ fn binding_spec(
 }
 
 fn member_task_name(
-    team: &str,
-    channel: &str,
+    instance: &TeamInstanceId,
     role: &str,
     signal: &str,
     ordinal: usize,
 ) -> Result<TaskName, super::ScheduleErr> {
-    let mut name: String = format!("team-{team}-{channel}-{role}-{signal}")
+    let (team, lane) = (instance.team(), instance.lane_text());
+    let mut name: String = format!("team-{team}-{lane}-{role}-{signal}")
         .chars()
         .map(|ch| match ch.to_ascii_lowercase() {
             ch @ ('a'..='z' | '0'..='9' | '_' | '-') => ch,
@@ -211,13 +208,13 @@ mod tests {
     #[test]
     fn team_signal_names_are_deterministic_and_ordinal_on_repeats() {
         assert_eq!(
-            member_task_name("Forge", "feat/x", "Coder", "ci.failed", 1)
+            member_task_name(&"Forge#feat/x".parse().unwrap(), "Coder", "ci.failed", 1)
                 .unwrap()
                 .to_string(),
             "team-forge-feat-x-coder-ci-failed"
         );
         assert_eq!(
-            member_task_name("forge", "feat-x", "coder", "ci.failed", 2)
+            member_task_name(&"forge#feat-x".parse().unwrap(), "coder", "ci.failed", 2)
                 .unwrap()
                 .to_string(),
             "team-forge-feat-x-coder-ci-failed-2"

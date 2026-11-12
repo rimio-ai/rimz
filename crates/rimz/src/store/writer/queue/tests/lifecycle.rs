@@ -275,16 +275,24 @@ fn archive_selects_only_matching_open_messages() {
         (
             "by channel",
             |q| {
-                let docs = q.record(1).with_channel(Some("docs".to_owned()));
-                let ops = q.record(2).with_channel(Some("ops".to_owned()));
+                let docs = q
+                    .record(1)
+                    .with_channel(Some(crate::ids::LaneName::dashed("docs")));
+                let ops = q
+                    .record(2)
+                    .with_channel(Some(crate::ids::LaneName::dashed("ops")));
                 for record in [&docs, &ops] {
                     q.queue_message(record, "session").unwrap();
                 }
                 vec![docs, ops]
             },
             |q, _| {
-                q.archive_channel_messages("docs", "worktree removed", "session")
-                    .unwrap()
+                q.archive_channel_messages(
+                    &crate::ids::LaneName::dashed("docs"),
+                    "worktree removed",
+                    "session",
+                )
+                .unwrap()
             },
             "worktree removed",
             1,

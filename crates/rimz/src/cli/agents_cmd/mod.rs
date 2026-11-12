@@ -1612,10 +1612,13 @@ pub(super) fn create_on_miss(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let channel_filter = worktree_flag.or(channel_flag);
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
     let Some(create) = rimz::address::create_mention(
         target,
         channel_filter,
         current_channel.as_deref().map(rimz::ids::LaneName::as_str),
+        Some(&workspace.project_root),
     )?
     else {
         bail!(
@@ -1623,8 +1626,6 @@ pub(super) fn create_on_miss(
         );
     };
     let machine_config = crate::cli::machine_config();
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving current workspace")?;
     let launch = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     if !is_launchable_type(&create.selector, &launch.profiles) {
         launch.block_untrusted_reference(
@@ -1644,6 +1645,7 @@ pub(super) fn create_on_miss(
             channel_flag,
             current_channel,
             text,
+            Some(&workspace.project_root),
         ),
         globals,
         false,
@@ -1657,28 +1659,27 @@ fn create_launch_args(
     channel_flag: Option<&str>,
     current_channel: &super::CurrentChannel,
     text: &str,
+    project_root: Option<&Path>,
 ) -> AgentsArgs {
     // `--worktree` keeps the historical worktree create-on-miss path. `--channel`
     // and inline `#name` launch into a named lane.
     let inline_named_channel = target
         .split_once('#')
         .is_some_and(|(_, channel)| rimz::ids::LaneName::is_flat(channel));
+    let current_lane = current_channel.address_context().lane();
+    let is_current = |channel: &str| {
+        current_lane.as_ref().is_some_and(|current| {
+            rimz::address::LaneSelector::parse(Some(channel), project_root).same_lane(current)
+        })
+    };
     let named = channel_flag.is_some()
         || (worktree_flag.is_none() && inline_named_channel)
-        || create
-            .channel
-            .as_deref()
-            .is_some_and(|channel| matches!(current_channel, super::CurrentChannel::Named(current) if current.as_str() == channel));
+        || (matches!(current_channel, super::CurrentChannel::Named(_))
+            && create.channel.as_deref().is_some_and(is_current));
     let (worktree, channel) = if named {
         (None, create.channel)
     } else {
-        (
-            create.channel.filter(|channel| {
-                Some(channel.as_str())
-                    != current_channel.as_deref().map(rimz::ids::LaneName::as_str)
-            }),
-            None,
-        )
+        (create.channel.filter(|channel| !is_current(channel)), None)
     };
     let prompt = (!text.trim().is_empty()).then(|| text.to_owned());
     AgentsArgs::for_create(create.selector, prompt, worktree, channel)

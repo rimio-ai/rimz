@@ -95,8 +95,7 @@ fn timeout_line(instance: &str, progress: &Progress, timeout: Duration) -> Strin
 }
 
 struct Target {
-    team: String,
-    channel: String,
+    cohort: rimz::ids::TeamInstanceId,
     worktree: PathBuf,
     stage: Option<String>,
     progress: Option<Progress>,
@@ -105,7 +104,7 @@ struct Target {
 
 impl Target {
     fn instance(&self) -> String {
-        format!("{}#{}", self.team, self.channel)
+        self.cohort.to_string()
     }
 
     fn board(&self) -> PathBuf {
@@ -248,13 +247,12 @@ fn resolve_targets(
                 first.filter(|first| worktrees.all(|path| path.as_ref() == Some(first)))
             else {
                 bail!(
-                    "team cohort `{team}#{}` has no single worktree to read a board from",
-                    cohort.channel
+                    "team cohort `{}` has no single worktree to read a board from",
+                    cohort.instance
                 );
             };
             Ok(Target {
-                team,
-                channel: cohort.channel,
+                cohort: cohort.instance,
                 worktree,
                 stage: None,
                 progress: None,
@@ -288,7 +286,7 @@ fn poll(
                 };
                 Ok(rimz::address::team_cohorts(snapshot.agents.iter())
                     .iter()
-                    .any(|cohort| cohort.team == target.team && cohort.channel == target.channel))
+                    .any(|cohort| cohort.instance == target.cohort))
             },
         )?;
         let now = jiff::Timestamp::now();
@@ -303,7 +301,7 @@ fn poll(
         let cohort = snapshot.as_ref().and_then(|snapshot| {
             rimz::address::team_cohorts(snapshot.agents.iter())
                 .into_iter()
-                .find(|cohort| cohort.team == target.team && cohort.channel == target.channel)
+                .find(|cohort| cohort.instance == target.cohort)
         });
         if let Some(snapshot) = &snapshot
             && let Some(cohort) = &cohort

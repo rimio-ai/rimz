@@ -212,7 +212,7 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                 waits.push((
                     PendingWait {
                         class: PendingWaitClass::Working,
-                        name: team.instance.clone(),
+                        name: team.instance.to_string(),
                         armed_at: Some(run.started_at),
                         trigger: PendingWaitTrigger::Team { stage },
                     },

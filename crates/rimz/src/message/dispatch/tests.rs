@@ -530,7 +530,7 @@ fn agent_sender_inherits_exact_named_sessions_turn_openers() {
         name: Some("coder".to_owned()),
         profile: None,
         role: None,
-        channel: Some("chat".to_owned()),
+        channel: Some(crate::ids::LaneName::dashed("chat")),
     };
     assert_eq!(turn_openers_for_sender(&snapshot, &sender), vec![opener]);
     assert!(turn_openers_for_sender(&snapshot, &MessageSender::Human).is_empty());
@@ -564,7 +564,7 @@ fn agent_sender_turn_openers_follow_the_senders_session_before_its_name() {
         name: Some("coder".to_owned()),
         profile: None,
         role: None,
-        channel,
+        channel: channel.map(|channel| crate::ids::LaneName::dashed(&channel)),
     };
     for rows in [
         vec![docs.clone(), auth.clone()],

@@ -413,8 +413,12 @@ pub struct MessageEventPayload {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::ids::lenient_lane_name",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub channel: Option<crate::ids::LaneName>,
     pub gate: DeliveryGate,
     pub status: MessageStatus,
     #[serde(default)]
@@ -471,7 +475,7 @@ impl MessageEventPayload {
     pub fn unresolved(
         message_id: MessageId,
         address: String,
-        channel: Option<String>,
+        channel: Option<crate::ids::LaneName>,
         sender: MessageSender,
         text_len: usize,
         reason: String,
@@ -859,7 +863,7 @@ impl EventEnvelope {
         workspace_id: WorkspaceId,
         session_name: impl Into<String>,
         address: String,
-        channel: Option<String>,
+        channel: Option<crate::ids::LaneName>,
         sender: MessageSender,
         text_len: usize,
         reason: String,

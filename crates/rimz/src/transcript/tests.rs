@@ -15,12 +15,30 @@ fn paths() -> (tempfile::TempDir, StatePaths) {
 }
 
 #[test]
+fn entry_lane_round_trips_and_an_old_unnamed_lane_reads_dashed() {
+    let mut line = entry(TranscriptKind::Prompt, "hi", "2026-06-01T00:00:00Z");
+    line.channel = Some(crate::ids::LaneName::dashed("docs"));
+    let mut value = serde_json::to_value(&line).unwrap();
+    assert_eq!(value["channel"], "docs");
+    assert_eq!(
+        serde_json::from_value::<TranscriptEntry>(value.clone()).unwrap(),
+        line
+    );
+    value["channel"] = json!("feat x");
+    let old: TranscriptEntry = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(old.channel.map(String::from).as_deref(), Some("feat-x"));
+    value["channel"] = json!("");
+    let empty: TranscriptEntry = serde_json::from_value(value).unwrap();
+    assert_eq!(empty.channel, None);
+}
+
+#[test]
 fn recent_lookups_never_open_expired_buckets() {
     let (_dir, paths) = paths();
     let mut ask = entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
     ask.at = Timestamp::now();
     ask.id = Some(AskId::parse("ask_0123456789abcdef").unwrap());
-    ask.channel = Some("recent".to_owned());
+    ask.channel = Some(crate::ids::LaneName::dashed("recent"));
     append(&paths, &ask).unwrap();
     let mut answer = ask.clone();
     answer.entry = TranscriptKind::Answer;
@@ -47,11 +65,13 @@ fn channels_never_open_expired_buckets() {
     let (_dir, paths) = paths();
     let mut prompt = entry(TranscriptKind::Prompt, "hello", "2026-06-01T00:00:00Z");
     prompt.at = Timestamp::now();
-    prompt.channel = Some("recent".to_owned());
+    prompt.channel = Some(crate::ids::LaneName::dashed("recent"));
     append(&paths, &prompt).unwrap();
     fs::create_dir(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
     assert!(
-        channels(&paths).is_ok_and(|channels| channels == BTreeSet::from(["recent".to_owned()]))
+        channels(&paths).is_ok_and(
+            |channels| channels == BTreeSet::from([crate::ids::LaneName::dashed("recent")])
+        )
     );
 }
 
@@ -140,13 +160,13 @@ fn workspaces_with_channel_finds_transcript_evidence() {
         .expect("write record");
         let mut line = entry(TranscriptKind::Prompt, "hi", "2026-06-01T00:00:00Z");
         line.at = Timestamp::now();
-        line.channel = Some(channel.to_owned());
+        line.channel = Some(crate::ids::LaneName::dashed(channel));
         append(&paths, &line).expect("append");
         ids.push(id);
     }
     fs::remove_dir_all(dir.path().join("gone")).expect("remove gone project");
 
-    let found = workspaces_with_channel_under(&state_root, "x");
+    let found = workspaces_with_channel_under(&state_root, &crate::ids::LaneName::dashed("x"));
 
     assert_eq!(
         found
@@ -155,7 +175,9 @@ fn workspaces_with_channel_finds_transcript_evidence() {
             .collect::<Vec<_>>(),
         [&ids[0]]
     );
-    assert!(workspaces_with_channel_under(&state_root, "z").is_empty());
+    assert!(
+        workspaces_with_channel_under(&state_root, &crate::ids::LaneName::dashed("z")).is_empty()
+    );
 }
 
 fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {

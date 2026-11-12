@@ -84,7 +84,9 @@ path = "crates/rimz/src/address.rs"
 # LaneSelector with parse, trunk, named, is_trunk, name, label and same_lane is the one
 # reading of typed lane text and holds the only trunk alias list; AddressContext::lane,
 # agent_in_lane, lane_label and trunk_lane_name share it with CLI and harness readers (+8).
-surface-budget = 54
+# LaneSelector::holds_record matches a durable record's lane, and TeamCohort::team and channel
+# read the cohort's typed instance (+3).
+surface-budget = 57
 allowed-dependencies = ["agents", "ids", "store"]
 
 [[verdict]]
@@ -389,7 +391,8 @@ upward-dependencies = ["address"]
 # ToolEffect and TransitionMode type the tool flags and the transition mode at the store seam (+1).
 # AgentState::lane_name, in_trunk, own_lane_path and stamp_label replace channel, lane_label and
 # is_root_lane as the one reading of a row's lane, lane-less rows included (+1).
-surface-budget = 1291
+# AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
+surface-budget = 1292
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -2677,7 +2680,10 @@ path = "crates/rimz/src/ids.rs"
 # Lane, LaneHome, LaneName, InvalidLane, and their readings, builders, and adoption type the stored lane (+18).
 # LaneName::dashed makes a directory name a lane name for every reader, and legacy_lane_name
 # is the one reading of a lane-less row's old stamp in place of compose_channel (+2).
-surface-budget = 90
+# TeamInstanceId::new, team, lane and lane_text build and read team#lane as team plus lane name,
+# and serialize_lane, deserialize_lane and lenient_lane_name decode a record's stored lane
+# without failing it (+7).
+surface-budget = 97
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -5120,6 +5126,8 @@ allowed-dependencies = [
     "disk::paths",
     "harness::ancestry",
     "harness::budget",
+    # The resume launch identity copies a row's stored channel through the lane reader.
+    "harness::lanes",
     "harness::launch",
     "harness::prompt_compose",
     "harness::run",

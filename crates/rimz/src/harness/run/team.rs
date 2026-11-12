@@ -9,19 +9,10 @@ use std::path::Path;
 use crate::agents::{AgentDefinition, AgentState, PermissionMode};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
-use crate::ids::MessageId;
+use crate::ids::{MessageId, TeamInstanceId};
 use crate::store::run::{ReportTo, RunStatus, TeamRun};
 
 use super::{RecordMutation, Result, RunRecord};
-
-/// `<team>#<channel>` for a team seat, grouped as `address::team_cohorts` groups it.
-fn team_instance(seat: &AgentState) -> Option<String> {
-    let team = seat.team.as_deref().filter(|team| !team.is_empty())?;
-    let channel = seat
-        .lane_name()
-        .map_or_else(|| "external".to_owned(), String::from);
-    Some(format!("{team}#{channel}"))
-}
 
 /// Open the leader's team run for an agent-launched team's launch prompt.
 pub(super) fn create_team_run(
@@ -37,7 +28,7 @@ pub(super) fn create_team_run(
     {
         return Ok(None);
     }
-    let (Some(launch_id), Some(instance)) = (leader.launch_id.as_ref(), team_instance(leader))
+    let (Some(launch_id), Some(instance)) = (leader.launch_id.as_ref(), leader.team_instance())
     else {
         return Ok(None);
     };
@@ -112,8 +103,11 @@ pub fn rekey_team_run(
     Ok(())
 }
 
-/// The open team run of the cohort `instance` (`<team>#<channel>`).
-pub fn open_team_run_for(paths: &StatePaths, instance: &str) -> Result<Option<RunRecord>> {
+/// The open team run of the cohort `instance`.
+pub fn open_team_run_for(
+    paths: &StatePaths,
+    instance: &TeamInstanceId,
+) -> Result<Option<RunRecord>> {
     Ok(team_runs(paths, instance)?
         .into_iter()
         .find(|record| !record.status.is_terminal()))
@@ -148,7 +142,7 @@ pub fn settle_team_run(
 /// Open a fresh team run for a board that left `Done`, carrying the task,
 /// leader, and report policy of the cohort's newest run. `None` when the cohort never had one
 /// (a user-launched team) or already has one open.
-pub fn reopen_team_run(paths: &StatePaths, instance: &str) -> Result<Option<RunRecord>> {
+pub fn reopen_team_run(paths: &StatePaths, instance: &TeamInstanceId) -> Result<Option<RunRecord>> {
     let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let runs = team_runs(paths, instance)?;
     let Some(newest) = runs.first() else {
@@ -176,14 +170,14 @@ pub fn reopen_team_run(paths: &StatePaths, instance: &str) -> Result<Option<RunR
 }
 
 /// The cohort's team runs, newest first.
-fn team_runs(paths: &StatePaths, instance: &str) -> Result<Vec<RunRecord>> {
+fn team_runs(paths: &StatePaths, instance: &TeamInstanceId) -> Result<Vec<RunRecord>> {
     let mut runs = super::list(paths)?
         .into_iter()
         .filter(|record| {
             record
                 .team
                 .as_ref()
-                .is_some_and(|team| team.instance == instance)
+                .is_some_and(|team| &team.instance == instance)
         })
         .collect::<Vec<_>>();
     runs.sort_by_key(|run| std::cmp::Reverse(run.started_at));

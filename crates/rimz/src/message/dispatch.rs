@@ -398,11 +398,7 @@ pub fn dispatch(
         snapshot: &snapshot,
         card_status: &resolution.card_status,
         pending: &pending,
-        scope_channel: request
-            .current_channel
-            .channel
-            .as_ref()
-            .map(LaneName::as_str),
+        scope_channel: request.current_channel.channel.as_ref(),
         reply: reply_preparation.as_ref(),
         in_reply_to: &in_reply_to,
         compact_defaults: compact_defaults.as_ref(),
@@ -893,7 +889,7 @@ struct DispatchState<'a> {
     snapshot: &'a SidebarSnapshot,
     card_status: &'a CardStatus,
     pending: &'a [MessageRecord],
-    scope_channel: Option<&'a str>,
+    scope_channel: Option<&'a LaneName>,
     reply: Option<&'a ReplyPreparation>,
     in_reply_to: &'a [MessageId],
     compact_defaults: Option<&'a CompactDefaults>,

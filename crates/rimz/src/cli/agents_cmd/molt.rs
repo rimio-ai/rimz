@@ -169,7 +169,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.project_root,
     );
     invocation.identity.params.clone_from(&launch.launch);
-    let (title, pane_name) = molt_tab_names(&agent, &posture, launch);
+    let (title, pane_name) = molt_tab_names(&agent, &workspace.project_root, &posture, launch);
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),
@@ -346,19 +346,24 @@ fn replacement_posture(
 /// same seat would be.
 fn molt_tab_names(
     agent: &AgentState,
+    project_root: &Path,
     posture: &ResumePosture,
     launch: &AgentLaunchIdentity,
 ) -> (String, rimz::pane::PaneTitle) {
-    let title = agent.channel.as_deref().map_or_else(
-        || {
-            rimz::harness::spec::default_tab_title(
-                &LayoutSpec::single(restart::restart_cell(agent, posture)),
-                None,
-                agent.team.as_deref(),
-            )
-        },
-        |channel| format!("#{channel}"),
-    );
+    let lane = rimz::harness::lanes::row_lane(agent, project_root);
+    let title = lane
+        .as_ref()
+        .and_then(rimz::ids::Lane::stored_name)
+        .map_or_else(
+            || {
+                rimz::harness::spec::default_tab_title(
+                    &LayoutSpec::single(restart::restart_cell(agent, posture)),
+                    None,
+                    agent.team.as_deref(),
+                )
+            },
+            |channel| format!("#{channel}"),
+        );
     let pane_name = rimz::agents::pane_title::title(
         rimz::agents::pane_title::Seat::from_launch(
             &launch.kind,
@@ -601,6 +606,7 @@ mod tests {
                 rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
             agent.profile = profile.map(Into::into);
             agent.channel = channel.map(Into::into);
+            agent.worktree_path = Some("/repo".into());
             agent.team = team.map(Into::into);
             let launch = AgentLaunchIdentity {
                 kind: agent.kind.clone(),
@@ -615,7 +621,8 @@ mod tests {
                 run_id: None,
                 prompt: None,
             };
-            let (title, pane) = molt_tab_names(&agent, &posture, &launch);
+            let (title, pane) =
+                molt_tab_names(&agent, std::path::Path::new("/repo"), &posture, &launch);
             (title, pane.to_string())
         };
         let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
