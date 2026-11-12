@@ -4,6 +4,8 @@ A workflow is a durable run through a flat graph of checks and steps, defined in
 
 The [workflows guide](../../guide/workflows.md) teaches the format, and the [workflow CLI reference](../../reference/cli/workflow.md) owns every command, printed line, park reason, and JSON shape. This page owns how the engine decides.
 
+The target language the engine is being rebuilt toward, and the loop command beside it, are specified on [workflow-language.md](./workflow-language.md).
+
 ## Where the code lives
 
 Paths are under `crates/rimz/src/`.
