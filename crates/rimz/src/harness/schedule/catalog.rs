@@ -304,10 +304,18 @@ impl TaskCatalog {
 
     /// Best-effort load for elder, doctor, and maintenance reads.
     pub fn load_lenient(project_root: Option<&Path>) -> Self {
-        let instances = project_root
-            .and_then(|root| instance_root(root).ok())
-            .map(|root| instances::load_from(&root))
-            .unwrap_or_default();
+        let state_root = project_root.and_then(|root| instance_root(root).ok());
+        Self::lenient(project_root, state_root.as_deref())
+    }
+
+    /// Best-effort load of the room at `project_root`, its instance rows read from the
+    /// room's own `state` rather than resolved from the root.
+    pub fn load_room_lenient(project_root: &Path, state: &StatePaths) -> Self {
+        Self::lenient(Some(project_root), Some(&state.root))
+    }
+
+    fn lenient(project_root: Option<&Path>, state_root: Option<&Path>) -> Self {
+        let instances = state_root.map(instances::load_from).unwrap_or_default();
         let machine = LoopConfig::load_lenient();
         let project = project_root.and_then(|root| {
             crate::config::effective::project_tasks(root, &rimz_home())

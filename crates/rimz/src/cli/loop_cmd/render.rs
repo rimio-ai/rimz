@@ -3157,30 +3157,6 @@ impl RunExit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProcessExit {
-    Code(i32),
-    Timeout,
-    Signal,
-}
-
-impl ProcessExit {
-    fn of(record: &LoopRunRecord) -> Option<Self> {
-        if let Some(RunStage::Check(check)) = record.stages().next() {
-            return Some(if check.timed_out {
-                Self::Timeout
-            } else {
-                check.code.map_or(Self::Signal, Self::Code)
-            });
-        }
-        record
-            .run_id
-            .as_ref()
-            .and_then(|_| record.result.spawn_exit_code())
-            .map(Self::Code)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CheckSkipOutcome {
     JudgePassed,
     JudgeDeclined,
@@ -3660,14 +3636,7 @@ pub(super) fn run_cost(cost: f64) -> String {
 }
 
 pub(super) fn record_exit(record: &LoopRunRecord) -> Option<String> {
-    if let Some(verdict) = &record.watch {
-        return Some(verdict.label());
-    }
-    ProcessExit::of(record).map(|exit| match exit {
-        ProcessExit::Code(code) => code.to_string(),
-        ProcessExit::Timeout => "timeout".to_owned(),
-        ProcessExit::Signal => "signal".to_owned(),
-    })
+    record.exit_label()
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {

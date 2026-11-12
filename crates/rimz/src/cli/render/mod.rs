@@ -651,12 +651,7 @@ pub(crate) fn agent_activity_line(
 
 /// Collapse a diagnostic into one terminal-friendly line.
 pub(crate) fn one_line(message: &str) -> String {
-    message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ")
+    rimz::theme::fmt::one_line(message)
 }
 
 /// Render an error's actionable source without repeating its outer context.

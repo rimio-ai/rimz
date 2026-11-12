@@ -24,6 +24,7 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod arm;
 pub mod arming;
+pub mod attention;
 pub mod backlog;
 mod backlog_store;
 pub mod catalog;
@@ -120,6 +121,46 @@ impl TaskActionKind {
 
     pub const fn is_check_only(self) -> bool {
         matches!(self, Self::CheckOnly)
+    }
+
+    /// What a fire of this kind does to `subject`, with the row's guard and account, and
+    /// ` (you)` when the reader is the delivery's target.
+    pub fn text(self, subject: &str, entry: Option<&TaskEntry>, you: bool) -> String {
+        let mut action = match self {
+            Self::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
+            Self::Spawn => format!("start {subject}"),
+            Self::Workflow => format!("start workflow {subject}"),
+            Self::CheckOnly => "run check".into(),
+        };
+        if let Some(entry) = entry {
+            let guard = entry.guard();
+            let stages = guard
+                .shell
+                .map(|_| "check".to_owned())
+                .into_iter()
+                .chain(
+                    guard
+                        .judges
+                        .iter()
+                        .map(|judge| format!("judge `{}`", judge.agent)),
+                )
+                .collect::<Vec<_>>();
+            if !stages.is_empty() && self.has_effect() {
+                let guard = stages.join(", then ");
+                action = if self.is_spawn() {
+                    format!("{guard}, then start {subject}")
+                } else {
+                    format!("{action} · {guard}")
+                };
+            }
+        }
+        if you {
+            action.push_str(" (you)");
+        }
+        if let Some(account) = entry.and_then(|entry| entry.account.as_ref()) {
+            action.push_str(&format!(" · account {account}"));
+        }
+        action
     }
 }
 

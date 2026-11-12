@@ -25,7 +25,7 @@ use super::{
     backlog::{self, StopCause, StopMark, WaitingTrigger},
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
-    run_lock::file_name as run_lock_file_name,
+    run_lock::{file_name as run_lock_file_name, is_run_lock_of},
 };
 use crate::agents::PermissionMode;
 use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
@@ -2848,16 +2848,6 @@ fn run_lock_stem(file: &str) -> Option<&str> {
     file.strip_prefix(prefix)?
         .strip_suffix(suffix)
         .filter(|stem| !stem.is_empty())
-}
-
-/// Whether `file` is task `name`'s run lock, bare or per-checkout.
-fn is_run_lock_of(file: &str, name: &str) -> bool {
-    let checkout = file
-        .strip_suffix(".lock")
-        .and_then(|stem| stem.rsplit_once('-'))
-        .and_then(|(_, id)| WorkspaceId::parse(id).ok());
-    file == run_lock_file_name(name, None)
-        || checkout.is_some_and(|checkout| file == run_lock_file_name(name, Some(&checkout)))
 }
 
 fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
