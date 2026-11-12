@@ -26,11 +26,7 @@ pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWor
             let spec = SPECS.with(|cache| {
                 cache
                     .read_with(&paths.spec, |bytes| {
-                        crate::harness::workflow::parse_run(
-                            std::str::from_utf8(bytes).ok()?,
-                            record,
-                        )
-                        .ok()
+                        crate::harness::workflow::parse(std::str::from_utf8(bytes).ok()?).ok()
                     })
                     .ok()
                     .flatten()

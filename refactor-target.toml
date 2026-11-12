@@ -2303,12 +2303,12 @@ path = "crates/rimz/src/harness"
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
-# workflow::parse_run shares the run-aware sealed-spec parser with cached sidebar projection.
+# workflow::parse shares the sealed-spec parser with cached sidebar projection.
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
 # workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
 # workflow::Route and workflow::close_after share delayed routes and their close instant (+2).
 # Step::lifecycle shares the agent definition's until default with CLI readers (+1).
-# workflow::load_run preserves the run's frozen default for sealed-spec readers (+1).
+# workflow::load serves sealed-spec readers, which carry no frozen default.
 # workflow::{Stopped, StopKind} carry current non-clean turn evidence across the host seam (+2).
 # budget::project_parks shares the existing park projection with the workflow attempt host (+1).
 # workflow::Pushed reports durable enqueue progress across the attempt-host seam (+1).
@@ -4248,7 +4248,7 @@ path = "crates/rimz/src/store"
 # notes::migrate_legacy shares collision-safe archive moves with room-birth policy (+1).
 # MessageRecord::is_open_and_due counts due queued messages for sidebar cards (+1).
 # AgentTunePayload and Store::tune_agent share the locked override/audit boundary (+2).
-# workflow::RouteDefaults freezes routing policy for sealed runs across upgrades (+1).
+# workflow run records carry no frozen routing policy; the record version fences older runs.
 # raised shares its record module, four record/error types, open predicate and seven operations (+13).
 # raised::observe and raised::audit share lifecycle settlement and operator audit writes (+2).
 # raised::CloseCause and its as_str share typed hook-close vocabulary (+2).
@@ -4357,11 +4357,6 @@ reason = "The serialized main rail and current node share named step/check vocab
 kind = "item"
 key = "store::snapshot::view::model::WorkflowNodeKind"
 reason = "Workflow strips distinguish main-rail step and check glyphs without importing harness policy."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::spec::parse_run"
-reason = "The stat-gated sidebar cache parses sealed workflow bytes with the run's frozen lifecycle default."
 
 [[verdict]]
 kind = "item"
@@ -11595,11 +11590,6 @@ reason = "Workflow codecs share lock-free reads and caller-locked durable writes
 
 [[verdict]]
 kind = "item"
-key = "store::workflow::RouteDefaults"
-reason = "A sealed run freezes legacy park defaults or on-break routing independently of the current definition parser."
-
-[[verdict]]
-kind = "item"
 key = "store::workflow::JournalEntry"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
 
@@ -11822,11 +11812,6 @@ reason = "The workflow CLI and engine share a tolerant spec loader, strict edito
 kind = "item"
 key = "harness::workflow::load"
 reason = "The workflow CLI and engine share a tolerant spec loader, strict editor schema, and structured validation report."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::load_run"
-reason = "Sealed workflow readers preserve the run's lifecycle and route defaults before tolerant cleanup."
 
 [[verdict]]
 kind = "item"

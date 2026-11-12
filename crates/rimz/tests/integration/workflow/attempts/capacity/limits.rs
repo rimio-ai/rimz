@@ -352,5 +352,5 @@ fn limited_off_admission_errors_settle_as_died_instead_of_bypassing_admission() 
             .any(|row| row["outcome"] == "died"),
         "{value:#}"
     );
-    assert_eq!(value["record"]["state"], "done");
+    assert_eq!(value["record"]["state"], "failed");
 }

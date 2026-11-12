@@ -196,7 +196,7 @@ fn a_push_over_either_visit_cap_closes_through_the_cap_route() {
     }
     assert_eq!(
         actual,
-        vec![(RunState::Parked, "build".into(), json!("cap"), 1, 0); 2]
+        vec![(RunState::Failed, "build".into(), json!("cap"), 1, 0); 2]
     );
 }
 

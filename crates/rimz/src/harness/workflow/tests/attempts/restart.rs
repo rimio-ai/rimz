@@ -3,18 +3,14 @@ use crate::store::workflow::{Park, ParkReason};
 
 #[test]
 fn continued_restart_failure_uses_the_sealed_failure_policy() {
-    for (legacy, explicit) in [(true, false), (false, false), (false, true)] {
+    for explicit in [false, true] {
         let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
             + if explicit {
                 "on.invalid='@failed'\n"
             } else {
                 ""
             };
-        let (_dir, state, record) = if legacy {
-            setup(&text)
-        } else {
-            on_break_setup(&text)
-        };
+        let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
         let seq = live.attempt.as_ref().unwrap().seq;
@@ -31,10 +27,7 @@ fn continued_restart_failure_uses_the_sealed_failure_policy() {
         });
         let failed = advance_ok(&state, &record.id, &host);
         assert_eq!(failed.visits["build"].total, 1);
-        if legacy {
-            assert_eq!(failed.state, RunState::Parked);
-            assert_eq!(failed.park.unwrap().reason, ParkReason::Invalid);
-        } else if explicit {
+        if explicit {
             assert_eq!(failed.state, RunState::Failed);
         } else {
             assert_eq!(failed.node, "@break");
@@ -101,20 +94,18 @@ fn restart_history_is_a_manual_reentry_not_a_resumed_conversation() {
 }
 
 #[test]
-fn restart_that_parks_on_a_step_bound_can_be_restarted_again() {
-    let (_dir, state, record) = setup(STEP);
+fn restart_that_breaks_on_a_step_bound_can_be_restarted_again() {
+    let (_dir, state, record) = setup(&on_break(STEP));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
     restart(&state, &record.id, None, &host).unwrap();
     let mut pending = records::load(&state.workflow(&record.id)).unwrap();
     pending.deadline = Some(jiff::Timestamp::now() - std::time::Duration::from_secs(2));
     update(&state, &pending);
-    let parked = advance_ok(&state, &record.id, &host);
-    assert_eq!(
-        parked.park.as_ref().map(|park| park.reason),
-        Some(ParkReason::Deadline)
-    );
-    assert!(parked.restart.is_none(), "{parked:#?}");
+    let broken = advance_ok(&state, &record.id, &host);
+    assert_eq!(broken.node, "@break");
+    assert_eq!(broken.input.as_ref().unwrap()["edge"], "deadline");
+    assert!(broken.restart.is_none(), "{broken:#?}");
     restart(&state, &record.id, None, &host).unwrap();
     assert_eq!(
         advance_ok(&state, &record.id, &host).state,
@@ -222,92 +213,6 @@ fn restart_unparks_cap_and_asked_steps_without_extending_bounds() {
         actual,
         vec![(RunState::Active, "build".into(), 1, 0, 1, 0); 2]
     );
-}
-
-#[test]
-fn continued_restart_uses_and_stops_the_parked_steps_previous_attempt() {
-    for asked in [false, true] {
-        let definition = if asked {
-            format!("{STEP}on.asked='@user'\n")
-        } else {
-            until::UNTIL.replace("max-visits=2", "max-visits=1")
-        };
-        let (dir, state, record) = setup(&definition);
-        let host = FakeHost::new();
-        advance_ok(&state, &record.id, &host);
-        if asked {
-            host.observed.borrow_mut().ask = Some(records::Asking {
-                since: jiff::Timestamp::now(),
-                ask: records::Asked {
-                    text: "Approve?".into(),
-                    kind: "permission".into(),
-                    handle: "@builder".into(),
-                },
-            });
-        } else {
-            until::check(dir.path(), json!({"outcome":"pending"}));
-            host.observed.borrow_mut().turn = Some(until::turn());
-        }
-        let parked = advance_ok(&state, &record.id, &host);
-        assert_eq!(parked.state, RunState::Parked);
-        let seq = parked.prev_attempt.as_ref().unwrap().seq;
-        let stops = host.stops.get();
-        let attempts = records::journal(&state.workflow(&record.id))
-            .unwrap()
-            .into_iter()
-            .filter(|entry| matches!(entry.event, JournalEvent::Attempt { .. }))
-            .count();
-        let result = restart(
-            &state,
-            &record.id,
-            Some((seq, "previous-session".into())),
-            &host,
-        );
-        assert!(
-            result.is_ok(),
-            "a parked step must resume its previous session: {result:?}"
-        );
-        host.observed.borrow_mut().ask = None;
-        host.observed.borrow_mut().turn = None;
-        let replacement = advance_ok(&state, &record.id, &host);
-        assert_eq!(replacement.attempt.as_ref().unwrap().visit, Some(1));
-        assert_eq!(
-            host.launched
-                .borrow()
-                .last()
-                .unwrap()
-                .resume
-                .as_ref()
-                .unwrap()
-                .as_str(),
-            "previous-session"
-        );
-        assert_eq!(host.stops.get(), stops + 1);
-        assert_eq!(
-            records::journal(&state.workflow(&record.id))
-                .unwrap()
-                .into_iter()
-                .filter(|entry| matches!(entry.event, JournalEvent::Attempt { .. }))
-                .count(),
-            attempts,
-            "stopping a previous card must not journal its outcome or cost twice"
-        );
-
-        let mut other_step = parked;
-        other_step.prev_attempt.as_mut().unwrap().step = "other".into();
-        update(&state, &other_step);
-        let stops = host.stops.get();
-        assert!(
-            restart(
-                &state,
-                &record.id,
-                Some((seq, "foreign-session".into())),
-                &host
-            )
-            .is_err()
-        );
-        assert_eq!(host.stops.get(), stops);
-    }
 }
 
 #[test]

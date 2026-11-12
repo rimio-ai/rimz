@@ -23,9 +23,7 @@ enum JudgeFailure {
     Budget,
     /// The first failure; the judge runs once more.
     Retry,
-    /// A second failure on a run sealed before on-break, parked at `@user`.
-    Park,
-    /// A second failure on a new run, routed through the check's `invalid` edge.
+    /// A second failure, routed through the check's `invalid` edge.
     Route,
 }
 
@@ -87,9 +85,6 @@ impl Transition<'_> {
             Some(FailureKind::Canceled) => JudgeFailure::Canceled,
             Some(FailureKind::Limited) => JudgeFailure::Limited,
             Some(kind) if kind.retry_owed(self.record.check_retry > 0) => JudgeFailure::Retry,
-            _ if self.spec.route_defaults == crate::store::workflow::RouteDefaults::Park => {
-                JudgeFailure::Park
-            }
             _ => JudgeFailure::Route,
         };
         let routed = disposition == JudgeFailure::Route;
@@ -138,10 +133,6 @@ impl Transition<'_> {
                 self.record.check_retry = 1;
                 self.record.check_retry_context = Some(json!({"outcome":failure,"reason":reason}));
                 Ok(true)
-            }
-            JudgeFailure::Park => {
-                self.route("@user", object, ParkReason::Check)?;
-                Ok(false)
             }
             JudgeFailure::Route => {
                 let target = self.spec.engine_target(&self.record.node, "invalid");
@@ -427,7 +418,7 @@ impl Transition<'_> {
             held.verdict = Some(Verdict {
                 node: self.record.node.clone(),
                 entered_at: self.record.entered_at,
-                at: Some(self.now),
+                at: self.now,
                 target: target.into(),
                 object,
                 reason,
@@ -520,7 +511,7 @@ impl Transition<'_> {
         Verdict {
             node: self.record.node.clone(),
             entered_at: self.record.entered_at,
-            at: Some(self.now),
+            at: self.now,
             target: self.spec.engine_target(&self.record.node, "cap"),
             object,
             reason: ParkReason::Cap,
@@ -774,10 +765,7 @@ impl Transition<'_> {
                 );
                 return Ok(());
             }
-            if self.spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak
-                && verdict.reason == ParkReason::Invalid
-                && attempt.node == self.record.node
-            {
+            if verdict.reason == ParkReason::Invalid && attempt.node == self.record.node {
                 self.push(
                     Some(attempt.seq),
                     JournalEvent::Route {

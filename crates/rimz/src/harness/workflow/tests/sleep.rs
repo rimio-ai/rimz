@@ -111,7 +111,7 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_visit_buc
 }
 
 #[test]
-fn sleep_deadline_clamps_the_wake_and_parks_without_replacing_input() {
+fn sleep_deadline_clamps_the_wake_and_fails_without_replacing_input() {
     let (_dir, state, mut record) = attempts::setup(SLEEP);
     record.input = Some(json!({"outcome":"repair", "key":7}));
     record.key = Some(Key::Integer(7));
@@ -121,9 +121,9 @@ fn sleep_deadline_clamps_the_wake_and_parks_without_replacing_input() {
     assert_eq!(waiting.recheck_at, record.deadline);
     waiting.deadline = Some(Timestamp::now() - std::time::Duration::from_secs(1));
     update(&state, &waiting);
-    let parked = advance_sleep(&state, &record);
-    assert_eq!(parked.state, RunState::Parked);
-    assert_eq!((&parked.input, &parked.key), (&record.input, &record.key));
+    let failed = advance_sleep(&state, &record);
+    assert_eq!(failed.state, RunState::Failed);
+    assert_eq!((&failed.input, &failed.key), (&record.input, &record.key));
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn sleep_conditions_share_freshness_unread_and_hold_semantics_with_expiry_first(
 }
 
 #[test]
-fn invalid_sleep_parks_without_replacing_the_incoming_input_or_key() {
+fn invalid_sleep_fails_without_replacing_the_incoming_input_or_key() {
     let (_dir, state, mut record) = attempts::setup(SLEEP);
     record.input = Some(json!({"outcome":"repair", "key":"kept"}));
     record.key = Some(Key::String("kept".into()));
@@ -209,10 +209,10 @@ fn invalid_sleep_parks_without_replacing_the_incoming_input_or_key() {
     let mut waiting = waiting;
     waiting.recheck_at = None;
     update(&state, &waiting);
-    let parked = advance_sleep(&state, &record);
-    assert_eq!(parked.state, RunState::Parked);
-    assert_eq!(parked.park.unwrap().reason, records::ParkReason::Invalid);
-    assert_eq!((&parked.input, &parked.key), (&record.input, &record.key));
+    let failed = advance_sleep(&state, &record);
+    assert_eq!(failed.state, RunState::Failed);
+    assert!(failed.park.is_none());
+    assert_eq!((&failed.input, &failed.key), (&record.input, &record.key));
 }
 
 #[test]

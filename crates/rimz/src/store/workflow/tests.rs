@@ -326,7 +326,7 @@ fn run_address_uses_the_recorded_scope_without_reading_the_checkout() {
 }
 
 #[test]
-fn manual_origin_round_trips_without_changing_legacy_records() {
+fn manual_origin_round_trips_and_stays_absent_unless_set() {
     let mut value = serde_json::to_value(record()).unwrap();
     assert!(value.get("manual").is_none());
     value["manual"] = json!(true);
@@ -335,7 +335,7 @@ fn manual_origin_round_trips_without_changing_legacy_records() {
 }
 
 #[test]
-fn capacity_wait_round_trips_and_legacy_waits_still_load() {
+fn capacity_wait_round_trips_and_other_waits_omit_its_fields() {
     let wait = json!({
         "node":"build", "outcome":"capacity", "detail":"no capacity for claude",
         "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z",
@@ -344,11 +344,11 @@ fn capacity_wait_round_trips_and_legacy_waits_still_load() {
     });
     let decoded: Wait = serde_json::from_value(wait.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), wait);
-    let mut legacy = wait;
-    legacy.as_object_mut().unwrap().remove("kinds");
-    legacy.as_object_mut().unwrap().remove("gives_up_at");
-    legacy.as_object_mut().unwrap().remove("hold");
-    let decoded: Wait = serde_json::from_value(legacy).unwrap();
+    let mut other = wait;
+    other.as_object_mut().unwrap().remove("kinds");
+    other.as_object_mut().unwrap().remove("gives_up_at");
+    other.as_object_mut().unwrap().remove("hold");
+    let decoded: Wait = serde_json::from_value(other).unwrap();
     let encoded = serde_json::to_value(decoded).unwrap();
     assert!(encoded.get("kinds").is_none());
     assert!(encoded.get("gives_up_at").is_none());
@@ -362,8 +362,8 @@ fn until_session_round_trips_with_its_verdict() {
         "ended_at":"2026-01-01T00:00:01Z"
     });
     let verdict = json!({
-        "node":"pr", "entered_at":"2026-01-01T00:00:01Z", "target":"@done",
-        "object":{"outcome":"merged"}, "reason":"user"
+        "node":"pr", "entered_at":"2026-01-01T00:00:01Z", "at":"2026-01-01T00:00:01Z",
+        "target":"@done", "object":{"outcome":"merged"}, "reason":"user"
     });
     let mut value = serde_json::to_value(record()).unwrap();
     value["held"] = json!({
@@ -436,8 +436,8 @@ fn records_without_a_held_session_omit_until_fields() {
 
 #[test]
 fn provenance_and_window_evidence_survive_record_and_journal_round_trips() {
-    let legacy = serde_json::to_value(record()).unwrap();
-    let mut value = legacy.clone();
+    let untasked = serde_json::to_value(record()).unwrap();
+    let mut value = untasked.clone();
     value["task"] = json!("babysit-pr");
     value["wait"] = json!({
         "node":"pr", "outcome":"window", "detail":"5h.left=12<42",
@@ -458,7 +458,7 @@ fn provenance_and_window_evidence_survive_record_and_journal_round_trips() {
         serde_json::to_value(decoded).unwrap()["detail"],
         event["detail"]
     );
-    let decoded: RunRecord = serde_json::from_value(legacy).unwrap();
+    let decoded: RunRecord = serde_json::from_value(untasked).unwrap();
     assert!(serde_json::to_value(decoded).unwrap()["task"].is_null());
 }
 
@@ -531,17 +531,6 @@ fn durable_record_round_trip_and_json_shape() {
             serde_json::to_value(serde_json::from_value::<RunRecord>(fired).unwrap()).unwrap();
         assert_eq!(kept["fire"], fire);
     }
-    let mut legacy = value["prev_attempt"].clone();
-    legacy.as_object_mut().unwrap().remove("code");
-    legacy.as_object_mut().unwrap().remove("log");
-    legacy.as_object_mut().unwrap().remove("routed_by");
-    let legacy: PreviousAttempt = serde_json::from_value(legacy).unwrap();
-    let legacy = serde_json::to_value(legacy).unwrap();
-    assert_eq!(
-        (legacy.get("code"), legacy.get("log")),
-        (Some(&Value::Null), Some(&Value::Null))
-    );
-    assert_eq!(legacy.get("routed_by"), Some(&Value::Null));
     let event = json!({
         "event":"attempt", "seq":1, "at":"2026-01-01T00:00:01Z", "node":"merge",
         "outcome":"died", "visit":1, "key":null, "routed_by":"red", "digests":{},
@@ -555,17 +544,6 @@ fn durable_record_round_trip_and_json_shape() {
         (&event["code"], &event["log"])
     );
     assert_eq!(encoded["routed_by"], "red");
-    let mut legacy = event;
-    legacy.as_object_mut().unwrap().remove("code");
-    legacy.as_object_mut().unwrap().remove("log");
-    legacy.as_object_mut().unwrap().remove("routed_by");
-    let decoded: JournalEntry = serde_json::from_value(legacy).unwrap();
-    let encoded = serde_json::to_value(decoded).unwrap();
-    assert_eq!(
-        (encoded.get("code"), encoded.get("log")),
-        (Some(&Value::Null), Some(&Value::Null))
-    );
-    assert_eq!(encoded.get("routed_by"), Some(&Value::Null));
     let signal = json!({
         "event":"signal", "seq":1, "at":"2026-01-01T00:00:01Z", "node":"build",
         "signal":"ci.failed", "message":crate::ids::MessageId::new()
@@ -616,17 +594,6 @@ fn durable_record_round_trip_and_json_shape() {
     assert_eq!(load(&paths).unwrap().next_seq, 3);
     let value = serde_json::to_value(record).unwrap();
     insta::assert_json_snapshot!("record", value);
-}
-
-#[test]
-fn legacy_evaluations_default_to_check_origin() {
-    let row = json!({
-        "event":"evaluation", "seq":1, "at":"2026-01-01T00:00:00Z", "node":"pr",
-        "outcome":"ok", "object":{"outcome":"ok"}, "digests":{},
-        "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:00Z"
-    });
-    let entry: JournalEntry = serde_json::from_value(row).unwrap();
-    assert_eq!(serde_json::to_value(entry).unwrap()["origin"], "check");
 }
 
 #[test]

@@ -20,7 +20,7 @@ scope='worktree'
 start='begin'
 [checks.begin]
 shell='true'
-on={pass='sweep',fail='@user'}
+on={pass='sweep',fail='@failed'}
 [checks.watch]
 run='cat answer.json'
 on={merged='clean',red='fix',queued='@wait'}
@@ -99,7 +99,7 @@ fn land_note_matches_the_approved_example_with_reset_aware_visits() {
         );
     }
     let expected = format!(
-        "{INTRO} You are the step `fix` of the workflow `land` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\nbegin → sweep → watch ⇄ [fix] → clean → notes → triage → ruled\n\nRimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`). Your prompt is the step's fixed text, not a message someone just typed.\n\nYou were launched because the check `watch` answered `red` (ci=failed). This is visit 2 of 6 to `fix`, and the second for `red` since the last `queued`: one more `red` before a `queued` parks the run for the user. Launches and push-backs count as visits. The previous attempt, @builder in `fix`, ended normally.\n\n{TURN}, within the step's 3h timeout. No signals reach you. {STOPS} {CHECK}\n\nNobody is watching. A question waits in your pane until the user answers it, and the timeout pauses meanwhile.\n\n{MORE}"
+        "{INTRO} You are the step `fix` of the workflow `land` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\nbegin → sweep → watch ⇄ [fix] → clean → notes → triage → ruled\n\nRimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`). Your prompt is the step's fixed text, not a message someone just typed.\n\nYou were launched because the check `watch` answered `red` (ci=failed). This is visit 2 of 6 to `fix`, and the second for `red` since the last `queued`: one more `red` before a `queued` ends the run as failed. Launches and push-backs count as visits. The previous attempt, @builder in `fix`, ended normally.\n\n{TURN}, within the step's 3h timeout. No signals reach you. {STOPS} {CHECK}\n\nNobody is watching. A question waits in your pane until the user answers it, and the timeout pauses meanwhile.\n\n{MORE}"
     );
     assert_eq!(note(&host), expected);
 }
@@ -130,7 +130,7 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
     ];
     for (settings, after, questions) in cases {
         let text = format!(
-            "{}{settings}\n[checks.help]\nshell='true'\non.pass='@done'\non.fail='@user'\n",
+            "{}{settings}\n[checks.help]\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
             OUTCOME_STEP.replace("lifecycle='turn'\n", ""),
         );
         let (_dir, state, record) = setup(&text);
@@ -206,7 +206,6 @@ fn first_step_has_no_invented_outcome_or_previous_attempt() {
 #[test]
 fn keyed_and_total_caps_name_the_actual_destination_and_optional_reset() {
     for (destination, words) in [
-        ("@user", "parks the run for the user"),
         ("@done", "ends the run as done"),
         ("@failed", "ends the run as failed"),
         ("recover", "sends the run to `recover`"),
@@ -271,10 +270,10 @@ fn per_outcome_only_and_multiple_resets_do_not_invent_a_total_limit() {
 
 #[test]
 fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
-    let notes = [false, true].map(|previously_parked| {
-        let (_dir, state, record) = setup(OUTCOME_STEP);
+    let notes = [false, true].map(|previously_broken| {
+        let (_dir, state, record) = setup(&on_break(OUTCOME_STEP));
         let host = FakeHost::new();
-        if previously_parked {
+        if previously_broken {
             for _ in 0..3 {
                 answer(&state, &record, &host, json!({"outcome":"red"}));
             }
@@ -305,14 +304,14 @@ fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
 
 #[test]
 fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
-    let (_dir, state, record) = setup(OUTCOME_STEP);
+    let (_dir, state, record) = setup(&on_break(OUTCOME_STEP));
     let host = FakeHost::new();
     for _ in 0..3 {
         answer(&state, &record, &host, json!({"outcome":"red"}));
     }
     assert_eq!(
-        records::load(&state.workflow(&record.id)).unwrap().state,
-        RunState::Parked
+        records::load(&state.workflow(&record.id)).unwrap().node,
+        "@break"
     );
     resume(&state, &record.id, Some("build"), &["visits=+1".into()]).unwrap();
     advance_ok(&state, &record.id, &host);
@@ -460,7 +459,7 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
             "evidence ⇄ [build], plan → judge → report → reported",
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='a'\n[checks.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[steps.b]\nagent='claude'\nthen='d'\non.cap='c'\n[steps.c]\nagent='claude'\nthen='d'\n[checks.d]\nshell='true'\non={pass='@done',fail='@user'}",
+            "[workflow]\nscope='worktree'\nstart='a'\n[checks.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[steps.b]\nagent='claude'\nthen='d'\non.cap='c'\n[steps.c]\nagent='claude'\nthen='d'\n[checks.d]\nshell='true'\non={pass='@done',fail='@failed'}",
             &["left"][..],
             "a → [b] · c → d",
         ),

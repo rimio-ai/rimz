@@ -27,13 +27,19 @@ mod stops;
 mod subscribe;
 mod until;
 
+/// The definition with an on-break agent, so a failure edge leaves the run resumable at
+/// `@break`.
+pub(super) fn on_break(text: &str) -> String {
+    text.replacen("[workflow]\n", "[workflow]\non-break={agent='claude'}\n", 1)
+}
+
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
     fs::write(dir.path().join("prompt.md"), "Build it").unwrap();
     let spec: WorkflowSpec = toml::from_str(text).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":crate::store::workflow::VERSION, "default_lifecycle":"until", "spec_version":super::spec::SPEC_VERSION,
+        "version":crate::store::workflow::VERSION,
         "id":WorkflowRunId::new(),
         "workflow":"test", "spec_dir":dir.path(),
         "spec_digest":"test", "prompt":"Run request", "project_root":dir.path(),
@@ -57,59 +63,10 @@ fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRec
     records::load(&state.workflow(id)).unwrap()
 }
 
-pub(super) fn on_break_setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
-    let (dir, state, record) = setup(text);
-    let mut value = serde_json::to_value(record).unwrap();
-    value["route_defaults"] = json!("on_break");
-    let record = serde_json::from_value(value).unwrap();
-    update(&state, &record);
-    (dir, state, record)
-}
-
-#[test]
-fn on_break_upgrade_freezes_the_legacy_route_defaults() {
-    let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
-        + "[checks.judge]\nagent='claude'\nprompt-file='prompt.md'\non.ok='@done'\n[checks.nap]\nsleep='1m'\nthen='@done'\non.invalid='@failed'\n";
-    let (_dir, state, record) = setup(&text);
-    let paths = state.workflow(&record.id);
-    let mut value = serde_json::to_value(&record).unwrap();
-    value.as_object_mut().unwrap().remove("route_defaults");
-    fs::write(&paths.record, serde_json::to_vec(&value).unwrap()).unwrap();
-    let legacy = records::load(&paths).unwrap();
-    assert_eq!(
-        serde_json::to_value(&legacy).unwrap()["route_defaults"],
-        "park"
-    );
-    let spec = super::super::spec::load_run(&paths.home, &legacy).unwrap();
-    assert!(!spec.steps.contains_key("@break"));
-    for (node, outcome) in [
-        ("build", "cap"),
-        ("build", "deadline"),
-        ("judge", "timeout"),
-        ("judge", "invalid"),
-        ("nap", "invalid"),
-    ] {
-        assert_eq!(spec.target(node, outcome).as_deref(), Some("@user"));
-    }
-    assert_eq!(
-        spec.edges("judge")
-            .iter()
-            .find(|edge| edge.outcome == "invalid")
-            .unwrap()
-            .fires,
-        Fireability::Never
-    );
-    update(&state, &legacy);
-    assert_eq!(
-        serde_json::to_value(records::load(&paths).unwrap()).unwrap()["route_defaults"],
-        "park"
-    );
-}
-
 #[test]
 fn on_break_launch_failure_opens_a_trace_and_cancel_detaches() {
     let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, mut record) = on_break_setup(&text);
+    let (_dir, state, mut record) = setup(&text);
     record.key = Some(Key::String("launch-key".into()));
     update(&state, &record);
     let host = FakeHost::new();
@@ -161,7 +118,7 @@ fn on_break_launch_failure_opens_a_trace_and_cancel_detaches() {
 #[test]
 fn on_break_launch_disables_the_leader_wrappers_cleanup() {
     let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[checks.nap]\nsleep='invalid'\nthen='@done'\n";
-    let (_dir, state, record) = on_break_setup(text);
+    let (_dir, state, record) = setup(text);
     let host = FakeHost::new();
     assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
     assert!(
@@ -173,7 +130,7 @@ fn on_break_launch_disables_the_leader_wrappers_cleanup() {
 #[test]
 fn on_break_sleep_keeps_failure_input_and_survives_deadline_until_session_exit() {
     let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[checks.nap]\nsleep='invalid'\nthen='@done'\n";
-    let (_dir, state, mut record) = on_break_setup(text);
+    let (_dir, state, mut record) = setup(text);
     record.input = Some(json!({"outcome":"previous"}));
     update(&state, &record);
     let host = FakeHost::new();
@@ -198,7 +155,7 @@ fn on_break_resume_detaches_and_reenters_the_source_or_selected_node() {
     for at in [None, Some("other")] {
         let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
             + "[checks.other]\nrun='cat answer.json'\non.ok='@done'\n";
-        let (_dir, state, record) = on_break_setup(&text);
+        let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
         *host.failure.borrow_mut() = Some(LaunchFailure {
             outcome: AttemptOutcome::Died,
@@ -224,7 +181,7 @@ fn on_break_resume_detaches_and_reenters_the_source_or_selected_node() {
             .unwrap();
         let target = at.unwrap_or("build");
         assert_eq!(entry.node, target);
-        let spec = spec::load_run(&state.workflow(&record.id).home, &resumed).unwrap();
+        let spec = spec::load(&state.workflow(&record.id).home).unwrap();
         let hops = hops(&spec, &journal, None);
         let resume = hops.iter().find(|hop| hop.kind == HopKind::Resume).unwrap();
         assert_eq!(resume.node, target);
@@ -246,7 +203,7 @@ fn on_break_resume_detaches_and_reenters_the_source_or_selected_node() {
 #[test]
 fn on_break_resume_before_launch_is_the_arrival_sender() {
     let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = on_break_setup(&text);
+    let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     *host.failure.borrow_mut() = Some(LaunchFailure {
         outcome: AttemptOutcome::Died,
@@ -260,7 +217,7 @@ fn on_break_resume_before_launch_is_the_arrival_sender() {
     assert_eq!(broken.node, "@break");
     assert!(broken.attempt.is_none());
     let resumed = resume(&state, &record.id, None, &[]).unwrap();
-    let spec = spec::load_run(&state.workflow(&record.id).home, &broken).unwrap();
+    let spec = spec::load(&state.workflow(&record.id).home).unwrap();
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
     assert_eq!(
         routing_hop(&spec, &journal, "build", None).map(|hop| hop.kind),
@@ -283,7 +240,7 @@ fn on_break_cap_resume_resets_the_source_visits_without_another_debugger() {
         .replace("max-visits=2", "max-visits=1")
         .replace("then='@done'", "then='gate'")
         + "[checks.gate]\nrun='cat answer.json'\non.again='build'\n";
-    let (_dir, state, record) = on_break_setup(&text);
+    let (_dir, state, record) = setup(&text);
     fs::write(
         record.spec_dir.join("answer.json"),
         r#"{"outcome":"again"}"#,
@@ -324,7 +281,7 @@ fn on_break_detached_debuggers_neither_block_nor_get_evicted_on_resume() {
         for working in [false, true] {
             let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
                 + &format!("takeover={takeover}\n");
-            let (_dir, state, record) = on_break_setup(&text);
+            let (_dir, state, record) = setup(&text);
             let host = FakeHost::new();
             *host.failure.borrow_mut() = Some(LaunchFailure {
                 outcome: AttemptOutcome::Died,
@@ -358,7 +315,7 @@ fn on_break_detached_debuggers_neither_block_nor_get_evicted_on_resume() {
 #[test]
 fn on_break_resume_refuses_a_live_settler() {
     let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = on_break_setup(&text);
+    let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     *host.failure.borrow_mut() = Some(LaunchFailure {
         outcome: AttemptOutcome::Died,
@@ -389,7 +346,7 @@ fn on_break_resume_refuses_a_live_settler() {
 #[test]
 fn on_break_resume_refuses_the_reserved_target() {
     let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = on_break_setup(&text);
+    let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     *host.failure.borrow_mut() = Some(LaunchFailure {
         outcome: AttemptOutcome::Died,
@@ -405,11 +362,11 @@ fn on_break_resume_refuses_the_reserved_target() {
 #[test]
 fn on_break_pending_held_failure_is_not_a_taken_hop() {
     let text = until::UNTIL.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = on_break_setup(&text);
+    let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     let paths = state.workflow(&record.id);
-    let spec = spec::load_run(&paths.home, &record).unwrap();
+    let spec = spec::load(&paths.home).unwrap();
     let mut checking = until::held(&live, false);
     checking.attempt = Some(
         serde_json::from_value(json!({
@@ -457,11 +414,11 @@ fn on_break_held_judge_failure_uses_invalid_for_delay_and_one_departure() {
                 "on.invalid={to='repair',delay='30m'}\n[checks.repair]\nsleep='1h'\nthen='@done'\n",
             );
         }
-        let (_dir, state, record) = on_break_setup(&text);
+        let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
         let paths = state.workflow(&record.id);
-        let spec = spec::load_run(&paths.home, &record).unwrap();
+        let spec = spec::load(&paths.home).unwrap();
         let mut t = super::super::state::Transition {
             now: live.entered_at,
             record: until::held(&live, false),
@@ -497,7 +454,7 @@ fn on_break_held_judge_failure_uses_invalid_for_delay_and_one_departure() {
             hops(&spec, &t.entries, t.record.held.as_ref()).is_empty(),
             "pending verdicts must not depart"
         );
-        t.record.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Some(Timestamp::UNIX_EPOCH);
+        t.record.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Timestamp::UNIX_EPOCH;
         {
             let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
             for entry in &t.entries {
@@ -538,7 +495,7 @@ fn on_break_cap_trace_does_not_misname_an_earlier_command_exit() {
         .replace("max-visits=2", "max-visits=1")
         .replace("then='@done'", "then='gate'")
         + "[checks.gate]\nrun='cat answer.json'\non.again='build'\n";
-    let (_dir, state, record) = on_break_setup(&text);
+    let (_dir, state, record) = setup(&text);
     fs::write(
         record.spec_dir.join("answer.json"),
         r#"{"outcome":"again"}"#,
@@ -557,9 +514,9 @@ fn on_break_cap_trace_does_not_misname_an_earlier_command_exit() {
 #[test]
 fn on_break_trace_bounds_a_long_poll_history_below_the_prompt_guard() {
     let text = "[workflow]\nscope='worktree'\nstart='poll'\non-break={agent='claude'}\n[checks.poll]\nrun='true'\non.pending='@wait'\ntimeout='1h'\n";
-    let (_dir, state, record) = on_break_setup(text);
+    let (_dir, state, record) = setup(text);
     let paths = state.workflow(&record.id);
-    let spec = spec::load_run(&paths.home, &record).unwrap();
+    let spec = spec::load(&paths.home).unwrap();
     let mut t = super::super::state::Transition {
         now: record.entered_at,
         record,
@@ -611,7 +568,7 @@ fn on_break_trace_bounds_a_long_poll_history_below_the_prompt_guard() {
 #[test]
 fn on_break_held_invalid_answer_preserves_the_failure_context() {
     let text = until::UNTIL.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (dir, state, record) = on_break_setup(&text);
+    let (dir, state, record) = setup(&text);
     until::check(
         dir.path(),
         json!({"outcome":"not-routed", "reason":"bad answer"}),
@@ -645,7 +602,7 @@ fn on_break_uses_author_prompt_and_its_own_failed_launch_ends_failed() {
             "start='build'",
             &format!("start='build'\non-break={handler}"),
         );
-        let (_dir, state, mut record) = on_break_setup(&text);
+        let (_dir, state, mut record) = setup(&text);
         record.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
         update(&state, &record);
         let host = FakeHost::new();
@@ -727,66 +684,6 @@ fn answer(state: &StatePaths, record: &RunRecord, host: &FakeHost, object: Value
 }
 
 #[test]
-fn legacy_run_keeps_its_omitted_lifecycle_after_record_upgrade() {
-    use crate::store::workflow::StepLifecycle;
-
-    let definition = STEP
-        .replace("lifecycle='turn'\n", "timeout='1h'\non.asked='@user'\n")
-        .replace("start='build'", "start='begin'")
-        .replace("then='@done'", "then='nap'")
-        + "[checks.begin]\nrun='cat answer.json'\ntimeout='1m'\non.next='build'\n[checks.nap]\nsleep='1m'\nthen='@done'\n";
-    let (_dir, state, record) = setup(&definition);
-    let paths = state.workflow(&record.id);
-    let mut legacy = serde_json::to_value(&record).unwrap();
-    legacy["version"] = json!(2);
-    legacy.as_object_mut().unwrap().remove("default_lifecycle");
-    fs::write(&paths.record, serde_json::to_vec(&legacy).unwrap()).unwrap();
-    let record = records::load(&paths).unwrap();
-    let spec = super::spec::load_run(&paths.home, &record).unwrap();
-    assert_eq!(spec.steps["build"].lifecycle(), StepLifecycle::Turn);
-    assert_eq!(spec.steps["build"].timeout.as_deref(), Some("1h"));
-    assert!(matches!(
-        spec.steps["build"].kind(),
-        Some(super::spec::StepKind::Agent(_))
-    ));
-    assert_eq!(
-        spec.edges("build")
-            .iter()
-            .map(|edge| edge.outcome.as_str())
-            .collect::<Vec<_>>(),
-        ["then", "asked", "cap", "capacity", "deadline"],
-        "a definition without the new keys keeps trunk's edges"
-    );
-    let validation = super::super::validate::validate_spec(
-        record.spec_dir.as_path(),
-        "test",
-        &spec,
-        &LoadedDefinitions::default(),
-        None,
-    );
-    assert!(
-        validation.errors.is_empty(),
-        "legacy turn steps may use sleep checks: {validation:?}"
-    );
-    fs::write(record.spec_dir.join("answer.json"), r#"{"outcome":"next"}"#).unwrap();
-    let host = FakeHost::new();
-    let live = advance_ok(&state, &record.id, &host);
-    assert_eq!(live.version, records::VERSION);
-    assert_eq!(
-        live.attempt.as_ref().unwrap().lifecycle,
-        StepLifecycle::Turn
-    );
-    let spec = super::spec::load_run(&paths.home, &live).unwrap();
-    assert_eq!(spec.steps["build"].timeout.as_deref(), Some("1h"));
-    assert!(
-        spec.edges("build")
-            .iter()
-            .any(|edge| edge.outcome == "asked")
-    );
-    assert_eq!(advance_ok(&state, &record.id, &host), live);
-}
-
-#[test]
 fn per_outcome_cap_leaves_other_outcomes_admissible() {
     let (_dir, state, record) = setup(OUTCOME_STEP);
     let host = FakeHost::new();
@@ -815,7 +712,7 @@ fn per_outcome_cap_leaves_other_outcomes_admissible() {
 fn resuming_a_cap_resets_the_capped_steps_total_and_every_bucket() {
     let mut actual = Vec::new();
     for at in [None, Some("build")] {
-        let (_dir, state, record) = setup(OUTCOME_STEP);
+        let (_dir, state, record) = setup(&on_break(OUTCOME_STEP));
         let host = FakeHost::new();
         for _ in 0..3 {
             answer(
@@ -826,7 +723,7 @@ fn resuming_a_cap_resets_the_capped_steps_total_and_every_bucket() {
             );
         }
         let paths = state.workflow(&record.id);
-        assert_eq!(records::load(&paths).unwrap().state, RunState::Parked);
+        assert_eq!(records::load(&paths).unwrap().node, "@break");
         resume(&state, &record.id, at, &[]).unwrap();
         advance_ok(&state, &record.id, &host);
         let context: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
@@ -846,8 +743,8 @@ fn resuming_a_cap_resets_the_capped_steps_total_and_every_bucket() {
     assert_eq!(
         actual,
         [
-            (Some(1), RunState::Active, 2, 4),
-            (Some(1), RunState::Active, 2, 4)
+            (Some(1), RunState::Active, 2, 5),
+            (Some(1), RunState::Active, 2, 5)
         ],
         "both resume forms reset all counts before counting the first new visit"
     );
@@ -962,7 +859,7 @@ fn a_waiting_success_resets_rows_once_and_context_and_previous_attempt_restart()
 
 #[test]
 fn outcome_reset_keeps_total_but_cap_resume_resets_all_counts_and_keeps_grants() {
-    let text = OUTCOME_STEP.replace("max-visits=6", "max-visits=3");
+    let text = on_break(&OUTCOME_STEP.replace("max-visits=6", "max-visits=3"));
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));
@@ -1020,21 +917,18 @@ fn cancel_row(state: &StatePaths, id: &WorkflowRunId) -> Value {
 }
 
 #[test]
-fn cancel_reason_is_recorded_for_waiting_and_parked_runs() {
+fn cancel_reason_is_recorded_for_waiting_and_broken_runs() {
     let mut rows = Vec::new();
-    for parked in [false, true] {
-        let text = if parked {
-            "[workflow]\nscope='worktree'\nstart='check'\n[checks.check]\nshell='true'\non={pass='@user',fail='@failed'}\n"
+    for broken in [false, true] {
+        let text = if broken {
+            "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[checks.nap]\nsleep='invalid'\nthen='@done'\n"
         } else {
             STEP
         };
         let (_dir, state, record) = setup(text);
         let host = FakeHost::new();
-        if parked {
-            assert_eq!(
-                advance_ok(&state, &record.id, &host).state,
-                RunState::Parked
-            );
+        if broken {
+            assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
         } else {
             *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["builder".into()]);
             assert!(advance_ok(&state, &record.id, &host).wait.is_some());
@@ -1285,10 +1179,7 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     ended.state = RunState::Active;
     update(&state, &ended);
     let mut capped = advance_ok(&state, &record.id, &host);
-    assert_eq!(
-        capped.park.as_ref().unwrap().reason,
-        records::ParkReason::Cap
-    );
+    assert_eq!(capped.state, RunState::Failed);
     assert_eq!(
         capped.input,
         Some(json!({
@@ -1299,7 +1190,8 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     assert_eq!(host.launched.borrow().len(), 2);
     capped.visit_grant = 1;
     capped.state = RunState::Active;
-    capped.park = None;
+    capped.terminal_at = None;
+    capped.outcome = None;
     update(&state, &capped);
     host.observed.borrow_mut().status = RunStatus::Running;
     let extended = advance_ok(&state, &record.id, &host);
@@ -1340,12 +1232,8 @@ fn per_outcome_cap_preserves_counts_sequence_and_route_evidence() {
     update(&state, &record);
     let host = FakeHost::new();
     let capped = advance_ok(&state, &record.id, &host);
-    assert_eq!(capped.state, RunState::Parked);
-    assert_eq!(
-        capped.park.as_ref().unwrap().reason,
-        records::ParkReason::Cap
-    );
-    assert_eq!(capped.park.as_ref().unwrap().text, None);
+    assert_eq!(capped.state, RunState::Failed);
+    assert!(capped.park.is_none());
     let input = json!({
         "outcome":"cap", "step":"build", "bound":"max-visits-per-outcome",
         "visits":2, "max":2, "key":7, "routed_by":null
@@ -1384,10 +1272,11 @@ fn per_outcome_cap_leaves_other_keys_admissible() {
     update(&state, &record);
     let host = FakeHost::new();
     let mut capped = advance_ok(&state, &record.id, &host);
-    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(capped.state, RunState::Failed);
     capped.key = Some(Key::Integer(8));
     capped.state = RunState::Active;
-    capped.park = None;
+    capped.terminal_at = None;
+    capped.outcome = None;
     update(&state, &capped);
     let live = advance_ok(&state, &record.id, &host);
     assert_eq!(host.launched.borrow().len(), 1);
@@ -1460,7 +1349,7 @@ fn unkeyed_visits_share_the_per_outcome_cap() {
     update(&state, &record);
     let host = FakeHost::new();
     let capped = advance_ok(&state, &record.id, &host);
-    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(capped.state, RunState::Failed);
     assert_eq!(
         capped.input,
         Some(json!({
@@ -1489,11 +1378,12 @@ fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_outcome() {
     update(&state, &record);
     let host = FakeHost::new();
     let mut capped = advance_ok(&state, &record.id, &host);
-    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(capped.state, RunState::Failed);
     capped.visit_grant = 2;
     for count in 3..=4 {
         capped.state = RunState::Active;
-        capped.park = None;
+        capped.terminal_at = None;
+        capped.outcome = None;
         update(&state, &capped);
         host.observed.borrow_mut().status = RunStatus::Running;
         let live = advance_ok(&state, &record.id, &host);
@@ -1504,7 +1394,7 @@ fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_outcome() {
     capped.state = RunState::Active;
     update(&state, &capped);
     let capped = advance_ok(&state, &record.id, &host);
-    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(capped.state, RunState::Failed);
     assert_eq!(host.launched.borrow().len(), 2);
     assert_eq!(
         capped.input,
@@ -1588,7 +1478,7 @@ fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
 }
 
 #[test]
-fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
+fn stay_lifecycle_is_persisted_and_a_turn_omits_it() {
     for lifecycle in ["turn", "stay", "until"] {
         let (_dir, state, record) =
             setup(&STEP.replace("lifecycle='turn'", &format!("lifecycle='{lifecycle}'")));
@@ -1599,19 +1489,12 @@ fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
             usize::from(lifecycle == "until"),
             "only until observations request the leader turn"
         );
-        let mut value = serde_json::to_value(live.attempt.as_ref().unwrap()).unwrap();
+        let value = serde_json::to_value(live.attempt.as_ref().unwrap()).unwrap();
         assert_eq!(
             value.get("lifecycle").cloned(),
             (lifecycle != "turn").then(|| json!(lifecycle))
         );
         assert_eq!(value["visit"], 1);
-        value.as_object_mut().unwrap().remove("lifecycle");
-        value.as_object_mut().unwrap().remove("visit");
-        let legacy: records::LiveAttempt = serde_json::from_value(value).unwrap();
-        assert!(legacy.lifecycle.is_turn());
-        let mut legacy_record = live;
-        legacy_record.attempt = Some(legacy);
-        update(&state, &legacy_record);
         host.observed.borrow_mut().status = RunStatus::Completed;
         let ended = advance_ok(&state, &record.id, &host);
         assert_eq!(ended.prev_attempt.unwrap().visit, 1);
@@ -1619,17 +1502,17 @@ fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
 }
 
 #[test]
-fn asking_fields_round_trip_and_legacy_records_omit_them() {
+fn asking_fields_round_trip_and_an_unasked_attempt_omits_them() {
     let (_dir, state, record) = setup(STEP);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
-    let legacy = serde_json::to_value(&live).unwrap();
-    assert!(legacy["attempt"].get("asking").is_none());
-    assert!(legacy["attempt"].get("asked_ms").is_none());
-    let decoded: RunRecord = serde_json::from_value(legacy.clone()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+    let unasked = serde_json::to_value(&live).unwrap();
+    assert!(unasked["attempt"].get("asking").is_none());
+    assert!(unasked["attempt"].get("asked_ms").is_none());
+    let decoded: RunRecord = serde_json::from_value(unasked.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), unasked);
 
-    let mut value = legacy;
+    let mut value = unasked;
     value["attempt"]["asking"] = json!({
         "since":live.attempt.as_ref().unwrap().started_at,
         "text":"Approve?", "kind":"permission", "handle":"@builder"
@@ -1937,10 +1820,10 @@ fn asked_edge_routes_and_launch_failures_count_as_attempts() {
         assert_eq!(ended.visits["build"].total, 1);
         assert_eq!(
             ended.state,
-            if outcome == AttemptOutcome::Asked {
-                RunState::Failed
-            } else {
+            if outcome == AttemptOutcome::Limited {
                 RunState::Done
+            } else {
+                RunState::Failed
             }
         );
         if outcome != AttemptOutcome::Asked {
@@ -2042,7 +1925,11 @@ fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
     let ended = advance_ok(&state, &record.id, &host);
     assert_eq!(ended.prev_attempt.unwrap().outcome, AttemptOutcome::Died);
     assert_eq!(ended.visits["build"].total, 1);
-    assert_eq!(ended.state, RunState::Done, "the failure follows `then`");
+    assert_eq!(
+        ended.state,
+        RunState::Failed,
+        "the failure routes through `invalid`"
+    );
     assert_eq!(host.evictions.get(), 2);
     assert!(host.launched.borrow().is_empty());
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
@@ -2178,7 +2065,7 @@ fn limited_and_continued_restart_launch_failures_are_not_retried() {
         reason: "history pool changed".into(),
     });
     let failed = advance_ok(&state, &record.id, &host);
-    assert_eq!(failed.state, RunState::Parked, "{failed:#?}");
+    assert_eq!(failed.state, RunState::Failed, "{failed:#?}");
     assert!(!failed.launch_retry);
 }
 
@@ -2342,7 +2229,7 @@ fn timeout_deadline_and_cancel_stop_before_settlement() {
             ended.state,
             match cause {
                 "timeout" => RunState::Done,
-                "deadline" => RunState::Parked,
+                "deadline" => RunState::Failed,
                 _ => RunState::Canceled,
             }
         );
@@ -2543,7 +2430,7 @@ fn evaluation(
 }
 
 #[test]
-fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_parks() {
+fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_routes_invalid() {
     for failure in ["ok", "died", "invalid", "canceled", "limited"] {
         let (spec, paths, record) = judge_fixture();
         let mut t = super::super::state::Transition {
@@ -2605,22 +2492,8 @@ fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_parks() {
                 );
                 assert!(t.record.check_retry_context.as_ref().unwrap()["reason"].is_string());
             } else {
-                assert_eq!(t.record.state, RunState::Parked);
-                assert_eq!(
-                    t.record.park.as_ref().unwrap().reason,
-                    records::ParkReason::Check
-                );
-                assert!(
-                    t.record
-                        .park
-                        .as_ref()
-                        .unwrap()
-                        .text
-                        .as_ref()
-                        .unwrap()
-                        .contains("judge failed")
-                        || failure == "invalid"
-                );
+                assert_eq!(t.record.state, RunState::Failed);
+                assert!(t.record.park.is_none());
             }
             t.record.attempt = Some(serde_json::from_value(json!({"kind":"judge","seq":1,"node":"judge","started_at":t.now,"host":{"pid":123,"start":null},"retry":{"outcome":failure,"reason":"judge failed"}})).unwrap());
         }
@@ -2681,7 +2554,7 @@ fn abandoned_checks_record_engine_origin() {
 }
 
 #[test]
-fn invalid_checks_record_engine_origin_and_legacy_rows_default_to_check() {
+fn invalid_checks_record_engine_origin() {
     let (spec, paths, record) = judge_fixture();
     let mut t = super::super::state::Transition {
         now: record.entered_at,
@@ -2691,10 +2564,7 @@ fn invalid_checks_record_engine_origin_and_legacy_rows_default_to_check() {
         entries: Vec::new(),
     };
     t.finish_check(1, Err("bad JSON".into()), None).unwrap();
-    let mut entry = serde_json::to_value(&t.entries[0]).unwrap();
+    let entry = serde_json::to_value(&t.entries[0]).unwrap();
     assert_eq!(entry["event"], "evaluation");
     assert_eq!(entry["origin"], "engine");
-    entry.as_object_mut().unwrap().remove("origin");
-    let legacy: records::JournalEntry = serde_json::from_value(entry).unwrap();
-    assert_eq!(serde_json::to_value(legacy).unwrap()["origin"], "check");
 }

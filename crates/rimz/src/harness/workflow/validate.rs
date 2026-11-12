@@ -90,8 +90,7 @@ pub(super) fn validate_spec(
     if let Some(target) = &spec.workflow.on.deadline {
         report.target(spec, "workflow.on.deadline", target);
     }
-    if spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak
-        && let Some(spec::OnBreak::Target(target)) = &spec.workflow.on_break
+    if let Some(spec::OnBreak::Target(target)) = &spec.workflow.on_break
         && !matches!(target.as_str(), "@done" | "@failed")
     {
         report.error(
@@ -480,47 +479,45 @@ pub(super) fn validate_spec(
             edges: spec.edges(node),
         });
     }
-    if spec.route_defaults == crate::store::workflow::RouteDefaults::OnBreak {
-        let missing = report
-            .rows
-            .iter()
-            .flat_map(|row| {
-                row.edges
-                    .iter()
-                    .filter(|edge| {
-                        edge.fires == super::Fireability::Yes
-                            && edge.source == EdgeSource::Default
-                            && !spec.declared_default(&row.node, &edge.outcome)
-                            && matches!(
-                                edge.outcome.as_str(),
-                                "timeout" | "invalid" | "undelivered" | "cap" | "deadline"
-                            )
-                    })
-                    .map(move |edge| {
-                        if edge.outcome == "deadline" {
-                            "workflow.on.deadline".into()
-                        } else {
-                            let kind = if row.kind == "check" {
-                                "checks"
-                            } else {
-                                "steps"
-                            };
-                            format!("{kind}.{}.on.{}", row.node, edge.outcome)
-                        }
-                    })
-            })
-            .collect::<BTreeSet<_>>();
-        if !missing.is_empty()
-            && let Some(issue) = spec
-                .ignored
+    let missing = report
+        .rows
+        .iter()
+        .flat_map(|row| {
+            row.edges
                 .iter()
-                .find(|issue| issue.path.starts_with("workflow.on-break"))
-        {
-            report.error(&issue.path, "invalid on-break is needed by a failure edge; fix it or route every failure explicitly");
-        }
-        for path in missing {
-            report.error(&path, "a fireable failure edge needs a route; route it to a node, @done, or @failed, or set [workflow] on-break");
-        }
+                .filter(|edge| {
+                    edge.fires == super::Fireability::Yes
+                        && edge.source == EdgeSource::Default
+                        && !spec.declared_default(&row.node, &edge.outcome)
+                        && matches!(
+                            edge.outcome.as_str(),
+                            "timeout" | "invalid" | "undelivered" | "cap" | "deadline"
+                        )
+                })
+                .map(move |edge| {
+                    if edge.outcome == "deadline" {
+                        "workflow.on.deadline".into()
+                    } else {
+                        let kind = if row.kind == "check" {
+                            "checks"
+                        } else {
+                            "steps"
+                        };
+                        format!("{kind}.{}.on.{}", row.node, edge.outcome)
+                    }
+                })
+        })
+        .collect::<BTreeSet<_>>();
+    if !missing.is_empty()
+        && let Some(issue) = spec
+            .ignored
+            .iter()
+            .find(|issue| issue.path.starts_with("workflow.on-break"))
+    {
+        report.error(&issue.path, "invalid on-break is needed by a failure edge; fix it or route every failure explicitly");
+    }
+    for path in missing {
+        report.error(&path, "a fireable failure edge needs a route; route it to a node, @done, or @failed, or set [workflow] on-break");
     }
     if !crate::config::MachineConfig::load_lenient()
         .resume
@@ -544,11 +541,7 @@ pub(super) fn validate_spec(
                 {
                     (
                         "checks",
-                        if spec.route_defaults == crate::store::workflow::RouteDefaults::Park {
-                            "auto-continue is off; a failed Codex judge retries once, then parks"
-                        } else {
-                            "auto-continue is off; a failed Codex judge retries once, then follows on.invalid"
-                        },
+                        "auto-continue is off; a failed Codex judge retries once, then follows on.invalid",
                     )
                 } else {
                     (
@@ -752,8 +745,6 @@ impl Validation {
 
     fn target(&mut self, spec: &WorkflowSpec, path: &str, target: &str) {
         if !matches!(target, "@wait" | "@done" | "@failed")
-            && !(target == "@user"
-                && spec.route_defaults == crate::store::workflow::RouteDefaults::Park)
             && !spec.checks.contains_key(target)
             && !spec.steps.contains_key(target)
         {

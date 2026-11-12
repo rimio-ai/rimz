@@ -11,7 +11,6 @@ use crate::harness::throttle::Limit;
 use crate::harness::when::WhenExpr;
 
 pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usize>>) {
-    let legacy = spec.spec_version == 0;
     let ignored = &mut spec.ignored;
     summary(&mut spec.workflow.summary, "workflow.summary", ignored);
     sanitize(
@@ -148,18 +147,6 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 );
             }
         }
-        for (outcome, route) in &mut check.on {
-            if let Route::Delayed { default, .. } = route
-                && *default
-                && legacy
-            {
-                *default = false;
-                ignored.push(ignored_issue(
-                    &format!("{path}.on.{outcome}.default"),
-                    SEALED_BEFORE,
-                ));
-            }
-        }
         let outcomes = check
             .cases
             .iter()
@@ -177,9 +164,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                     && !outcomes.contains(outcome.as_str())
                     && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid")
             };
-            let sleep_dead = sleep
-                && (outcome != "invalid"
-                    || spec.route_defaults == crate::store::workflow::RouteDefaults::Park);
+            let sleep_dead = sleep && outcome != "invalid";
             if sleep_dead || engine || dead {
                 ignored.push(ignored_issue(
                     &format!("{path}.on.{outcome}"),
@@ -412,13 +397,10 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             indices,
             ignored,
         );
-        launch_fields(step, &path, legacy, ignored);
-        let staying = match step.lifecycle() {
-            crate::store::workflow::StepLifecycle::Turn => false,
-            crate::store::workflow::StepLifecycle::Until => legacy,
-            crate::store::workflow::StepLifecycle::Stay => true,
-        };
-        if matches!(step.kind(), Some(StepKind::Agent(_))) && staying {
+        launch_fields(step, &path, ignored);
+        if matches!(step.kind(), Some(StepKind::Agent(_)))
+            && step.lifecycle() == crate::store::workflow::StepLifecycle::Stay
+        {
             ignore(
                 &mut step.timeout,
                 &format!("{path}.timeout"),
@@ -471,18 +453,12 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
     }
 }
 
-const SEALED_BEFORE: &str = "this run was sealed before the field existed";
-
 /// Drop the launch overrides, `on.failed`, and a session pin where the step cannot use them.
-fn launch_fields(step: &mut Step, path: &str, legacy: bool, ignored: &mut Vec<Issue>) {
+fn launch_fields(step: &mut Step, path: &str, ignored: &mut Vec<Issue>) {
     let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
     let message = matches!(step.kind(), Some(StepKind::Message(_)));
-    let launch = if legacy {
-        Some(SEALED_BEFORE)
-    } else {
-        (!agent).then_some("launch settings are for agent steps")
-    };
-    if let Some(reason) = launch {
+    if !agent {
+        let reason = "launch settings are for agent steps";
         ignore(
             &mut step.account,
             &format!("{path}.account"),
@@ -506,9 +482,7 @@ fn launch_fields(step: &mut Step, path: &str, legacy: bool, ignored: &mut Vec<Is
             reason,
         );
     }
-    let failed = if legacy {
-        Some(SEALED_BEFORE)
-    } else if message {
+    let failed = if message {
         Some("a message step that reaches no agent follows on.undelivered")
     } else {
         (!agent).then_some("a command's ending goes to then, with its exit in prev_attempt")
@@ -521,17 +495,12 @@ fn launch_fields(step: &mut Step, path: &str, legacy: bool, ignored: &mut Vec<Is
             reason,
         );
     }
-    let session = if legacy {
-        Some(SEALED_BEFORE)
-    } else {
-        (!message).then_some("only a message step delivers to a pinned session")
-    };
-    if let Some(reason) = session {
+    if !message {
         ignore(
             &mut step.session,
             &format!("{path}.session"),
             ignored,
-            reason,
+            "only a message step delivers to a pinned session",
         );
     }
     if step.mode == Some(crate::agents::PermissionMode::Plan) {

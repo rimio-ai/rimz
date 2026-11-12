@@ -12,7 +12,7 @@ fn loaded(text: &str) -> Result<WorkflowSpec, SpecErr> {
 }
 
 #[test]
-fn legacy_agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
+fn agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
     for value in ["5", "{to=5}"] {
         let text = format!(
             "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen='@done'\non.invalid={value}\n"
@@ -29,7 +29,7 @@ fn legacy_agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
         let state = crate::StatePaths::for_project_root_under(&dir, &dir).unwrap();
         let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
         crate::store::workflow::initialize(&state, &record, text.as_bytes(), &guard).unwrap();
-        let loaded = load_run(&state.workflow(&record.id).home, &record);
+        let loaded = load(&state.workflow(&record.id).home);
         assert!(
             loaded.is_ok(),
             "an optional agent route must not strand a sealed run: {loaded:?}"

@@ -95,38 +95,6 @@ fn overlapping_ask_and_limit_credit_one_hold_from_the_earliest_evidence() {
 }
 
 #[test]
-fn legacy_open_ask_opens_the_shared_hold_without_losing_its_start() {
-    let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
-    let host = FakeHost::new();
-    let mut live = advance_ok(&state, &record.id, &host);
-    let now = Timestamp::now();
-    let since = now - Duration::from_secs(5400);
-    let asking = records::Asking {
-        since,
-        ask: records::Asked {
-            text: "Approve?".into(),
-            kind: "permission".into(),
-            handle: "@child".into(),
-        },
-    };
-    let mut value = serde_json::to_value(live.attempt.take().unwrap()).unwrap();
-    value["started_at"] = json!(now - Duration::from_secs(7200));
-    value["asking"] = json!(asking);
-    value.as_object_mut().unwrap().remove("held_since");
-    live.attempt = Some(serde_json::from_value(value).unwrap());
-    update(&state, &live);
-    let spec = load(&state.workflow(&record.id).home).unwrap();
-    assert!(timeout_at(&spec, &live).unwrap().is_none());
-    host.observed.borrow_mut().ask = Some(asking);
-    let held = advance_ok(&state, &record.id, &host);
-    assert_eq!(held.attempt.unwrap().held_since, Some(since));
-    host.observed.borrow_mut().ask = None;
-    let resumed = advance_ok(&state, &record.id, &host);
-    assert_eq!(resumed.state, RunState::Active);
-    assert!(resumed.attempt.unwrap().asked_ms >= 5_400_000);
-}
-
-#[test]
 fn interrupt_and_silence_do_not_hold_the_step_timeout() {
     for kind in [None, Some(StopKind::Interrupt)] {
         let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));

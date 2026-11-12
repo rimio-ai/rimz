@@ -197,7 +197,6 @@ pub enum Key {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StepVisits {
     pub total: u64,
-    #[serde(alias = "keys")]
     pub outcomes: Vec<OutcomeVisits>,
 }
 
@@ -232,7 +231,6 @@ impl StepVisits {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OutcomeVisits {
-    #[serde(default)]
     pub outcome: Option<String>,
     pub key: Option<Key>,
     pub visits: u64,
@@ -356,8 +354,7 @@ pub struct TurnEnd {
 pub struct Verdict {
     pub node: String,
     pub entered_at: Timestamp,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<Timestamp>,
+    pub at: Timestamp,
     pub target: String,
     pub object: Value,
     pub reason: ParkReason,
@@ -526,14 +523,6 @@ impl Wait {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteDefaults {
-    #[default]
-    Park,
-    OnBreak,
-}
-
 /// Where a run's definition came from; a record written before origins existed is deployed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -617,14 +606,6 @@ pub enum RunFire {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
-    #[serde(default = "turn_lifecycle")]
-    pub default_lifecycle: StepLifecycle,
-    #[serde(default)]
-    pub route_defaults: RouteDefaults,
-    /// The definition rules the run was sealed under; 0, the default, marks a run sealed before
-    /// `harness::workflow`'s first spec version, whose re-parse ignores every later field.
-    #[serde(default)]
-    pub spec_version: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub break_agents: Vec<String>,
     pub id: WorkflowRunId,

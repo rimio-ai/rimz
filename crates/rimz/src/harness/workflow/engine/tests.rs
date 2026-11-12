@@ -734,8 +734,8 @@ fn admission_after_occupancy(expires: bool) {
             "a refused admission is not a visit"
         );
         assert_eq!(current.next_seq, 1);
-        assert_eq!(current.state, RunState::Parked);
-        assert_eq!(current.park.unwrap().reason, ParkReason::Deadline);
+        assert_eq!(current.state, RunState::Failed);
+        assert!(current.park.is_none());
     } else {
         assert!(matches!(decision, Decision::Launch(_)));
         assert!(current.attempt.as_ref().unwrap().started_at >= after_occupancy);
@@ -744,7 +744,7 @@ fn admission_after_occupancy(expires: bool) {
 }
 
 #[test]
-fn invalid_legacy_timeout_is_ignored_without_panicking() {
+fn invalid_optional_timeout_is_ignored_without_panicking() {
     let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nshell='true'\ntimeout='tomorrow'\non={pass='@done',fail='@failed'}\n";
     let (_home, state, record, _) = fixture(text);
     let result = std::panic::catch_unwind(|| {
@@ -1028,7 +1028,7 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
     );
     let asset = paths.definition.join("prompts/fix.md");
     fs::write(&asset, "fix the build, sealed copy").unwrap();
-    let spec = spec::load_run(&paths.home, &record).unwrap();
+    let spec = spec::load(&paths.home).unwrap();
     assert_eq!(
         agent::compose(&record, &paths, &spec.steps["fix"], &mut BTreeMap::new()).unwrap(),
         "fix the build, sealed copy",

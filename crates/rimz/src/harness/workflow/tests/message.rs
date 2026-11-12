@@ -23,7 +23,7 @@ fn attempt_rows(paths: &WorkflowPaths) -> Vec<(AttemptOutcome, Option<String>, O
 
 #[test]
 fn a_message_step_queues_one_notice_and_follows_then_without_agent_host_operations() {
-    let (_dir, state, record) = super::attempts::on_break_setup(TELL);
+    let (_dir, state, record) = super::attempts::setup(TELL);
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Blocked(vec![]);
     let paths = state.workflow(&record.id);
@@ -75,7 +75,7 @@ fn a_message_step_queues_one_notice_and_follows_then_without_agent_host_operatio
 #[test]
 fn a_message_step_without_prompt_text_sends_its_header_line_alone() {
     let text = TELL.replace("prompt-file='prompt.md'\n", "");
-    let (_dir, state, mut record) = super::attempts::on_break_setup(&text);
+    let (_dir, state, mut record) = super::attempts::setup(&text);
     record.prompt = None;
     super::attempts::update(&state, &record);
     let host = FakeHost::new();
@@ -99,9 +99,9 @@ fn an_undelivered_message_follows_on_undelivered_never_then() {
         let text = format!(
             "{TELL}{routes}[checks.retry]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
         );
-        let (_dir, state, record) = super::attempts::on_break_setup(&text);
+        let (_dir, state, record) = super::attempts::setup(&text);
         let paths = state.workflow(&record.id);
-        let spec = spec::load_run(&paths.home, &record).unwrap();
+        let spec = spec::load(&paths.home).unwrap();
         assert_eq!(
             (spec.target("tell", "ended"), spec.target("tell", "died")),
             (
@@ -149,7 +149,7 @@ fn an_undelivered_message_follows_on_undelivered_never_then() {
 
 #[test]
 fn a_lost_message_host_retries_the_same_notice_id() {
-    let (_dir, state, record) = super::attempts::on_break_setup(TELL);
+    let (_dir, state, record) = super::attempts::setup(TELL);
     let paths = state.workflow(&record.id);
     let host = FakeHost::new();
     *host.message_answer.borrow_mut() = Err("store unavailable".into());
@@ -238,7 +238,7 @@ fn a_lost_message_host_retries_the_same_notice_id() {
 
 #[test]
 fn a_cancel_while_the_notice_is_queued_retires_it() {
-    let (_dir, state, record) = super::attempts::on_break_setup(TELL);
+    let (_dir, state, record) = super::attempts::setup(TELL);
     let host = FakeHost::new();
     *host.on_message.borrow_mut() = Some(Box::new({
         let (state, run) = (state.clone(), record.id.clone());
@@ -255,7 +255,7 @@ fn a_cancel_while_the_notice_is_queued_retires_it() {
 #[test]
 fn a_cancel_or_deadline_after_the_host_died_retires_its_queued_notice() {
     for deadline in [false, true] {
-        let (_dir, state, record) = super::attempts::on_break_setup(TELL);
+        let (_dir, state, record) = super::attempts::setup(TELL);
         let paths = state.workflow(&record.id);
         let host = FakeHost::new();
         *host.message_answer.borrow_mut() = Err("store unavailable".into());

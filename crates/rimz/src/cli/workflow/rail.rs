@@ -750,26 +750,15 @@ pub(super) fn defaults(spec: &WorkflowSpec) -> Vec<&'static str> {
             && edge.source == EdgeSource::Default
             && edge.fires != Fireability::Never
     }) {
-        sentences.push(
-            if spec.route_defaults == rimz::store::workflow::RouteDefaults::Park {
-                "A check that cannot run parks at @user."
-            } else {
-                "An unrouted failure ends the run as failed."
-            },
-        );
+        sentences.push("An unrouted failure ends the run as failed.");
     }
     if spec.workflow.deadline.is_none()
         && edges
             .iter()
             .any(|edge| edge.outcome == "deadline" && edge.source == EdgeSource::Default)
     {
-        sentences.push(
-            if spec.route_defaults == rimz::store::workflow::RouteDefaults::Park {
-                "No deadline is set; a deadline granted to a run parks it at @user."
-            } else {
-                "No deadline is set; an unrouted deadline granted to a run ends it as failed."
-            },
-        );
+        sentences
+            .push("No deadline is set; an unrouted deadline granted to a run ends it as failed.");
     }
     sentences
 }

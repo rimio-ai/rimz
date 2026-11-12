@@ -83,11 +83,11 @@ fn decided(value: &Value) -> bool {
 #[test]
 fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     let room = room();
-    let (id, run) = room.launch_legacy();
+    let (id, run) = room.launch();
     opened_turn(&room, &id, &run);
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
     let value = until(&room.env, &id, decided);
-    assert_eq!(value["record"]["version"], 3);
+    assert_eq!(value["record"]["version"], rimz::store::workflow::VERSION);
     assert_eq!(value["record"]["node"], "build");
     assert_eq!(
         value["record"]["attempt"]["run"]["run_id"],
@@ -133,30 +133,12 @@ fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     );
     room.hook(&id, &run, json!({"hook_event_name":"UserPromptSubmit"}));
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
-    let value = settled(&room.env, &id, "parked");
+    let value = settled(&room.env, &id, "failed");
     assert_eq!(value["record"]["visits"]["build"]["total"], 2);
     assert_eq!(events(&value, "turn_end").len(), 2);
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
-    let block: Vec<_> = text
-        .lines()
-        .skip_while(|line| !line.starts_with("max-visits:"))
-        .take_while(|line| *line != "you can")
-        .collect();
-    assert_eq!(block.len(), 4, "{text}");
-    assert_eq!(block[0], "max-visits: 2 of 2 visits used");
     assert!(
-        block[1].ends_with(&format!("after pending · build 1 · push-back {message_id}")),
-        "{text}"
-    );
-    assert!(
-        block[2].contains(&format!(
-            "after pending · build 2 · @{} ended · ",
-            run.agent_name.as_deref().unwrap()
-        )),
-        "{text}"
-    );
-    assert!(
-        block[3].ends_with("build 3 refused: max-visits 2"),
+        text.contains("after pending ×2 → build") && text.contains("build cap → @failed"),
         "{text}"
     );
 }
@@ -408,17 +390,9 @@ fn restart_abandons_an_inflight_until_answer_before_relaunching() {
 }
 
 #[test]
-fn a_park_after_a_turn_end_omits_the_printed_reason() {
+fn a_route_after_a_turn_end_prints_its_reason_once() {
     let room = room();
     let definition = room.env.rimz_home().join("workflows/review");
-    let spec = definition.join("workflow.toml");
-    fs::write(
-        &spec,
-        fs::read_to_string(&spec)
-            .unwrap()
-            .replace("on.done = '@done'", "on.done = '@user'"),
-    )
-    .unwrap();
     fs::write(
         definition.join("checks/pr.sh"),
         concat!(
@@ -430,11 +404,11 @@ fn a_park_after_a_turn_end_omits_the_printed_reason() {
         ),
     )
     .unwrap();
-    let (id, run) = room.launch_legacy();
+    let (id, run) = room.launch();
     opened_turn(&room, &id, &run);
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
-    let value = settled(&room.env, &id, "parked");
-    assert_eq!(events(&value, "turn_end")[0]["target"], "@user");
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(events(&value, "turn_end")[0]["target"], "@done");
     let text = success(
         room.command(&["workflow", "show", &id, "--history"])
             .output()
@@ -445,7 +419,6 @@ fn a_park_after_a_turn_end_omits_the_printed_reason() {
         1,
         "{text}"
     );
-    assert!(text.ends_with("after park user\n"), "{text}");
 }
 
 #[test]

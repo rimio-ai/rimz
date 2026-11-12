@@ -119,7 +119,7 @@ pub(crate) fn probe_demand(
         .filter(|record| record.state == crate::store::workflow::RunState::Active)
     {
         let paths = state.workflow(&record.id);
-        let branches = match crate::harness::workflow::load_run(&paths.home, &record)
+        let branches = match crate::harness::workflow::load(&paths.home)
             .and_then(|spec| spec.forge_branches())
         {
             Ok(Some(branches)) => branches,

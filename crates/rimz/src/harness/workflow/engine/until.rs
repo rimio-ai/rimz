@@ -149,7 +149,7 @@ pub(super) fn prepare(
         return Ok(None);
     };
     if verdict.target == "@wait" {
-        t.merge_wait(&verdict.object, verdict.at.unwrap_or(t.now), true)?;
+        t.merge_wait(&verdict.object, verdict.at, true)?;
         let held = t.record.held.as_mut().expect("waiting session");
         held.verdict = None;
         let woken = std::mem::take(&mut held.attempt.woken);

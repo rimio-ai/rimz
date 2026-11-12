@@ -99,7 +99,7 @@ fn hook_drainer_outages_are_projected_on_producer_and_consumer_folds() {
 }
 
 #[test]
-fn legacy_workflow_parks_do_not_publish_attention_notices() {
+fn workflow_parks_do_not_publish_attention_notices() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
     for (suffix, status, entered) in [

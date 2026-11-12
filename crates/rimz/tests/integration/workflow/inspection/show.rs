@@ -7,7 +7,6 @@ const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.buil
 #[test]
 fn active_break_resume_receipt_counts_the_destination_step_visits() {
     let (env, mut record) = fixture("active", None, vec![]);
-    record.route_defaults = rimz::store::workflow::RouteDefaults::OnBreak;
     record.node = "@break".into();
     record.input = Some(json!({"outcome":"died", "edge":"invalid", "from":"build"}));
     record.visits.insert(
@@ -48,7 +47,6 @@ fn active_break_resume_receipts_its_source_instead_of_an_extension() {
     for live in [true, false] {
         for at in [None, Some("other")] {
             let (env, mut record) = fixture("active", None, vec![]);
-            record.route_defaults = rimz::store::workflow::RouteDefaults::OnBreak;
             record.node = "@break".into();
             record.input = Some(json!({"outcome":"invalid","edge":"invalid","from":"gate"}));
             if live {
@@ -412,7 +410,7 @@ fn copied_park_options_accept_a_hyphen_leading_node() {
 }
 
 #[test]
-fn cap_evidence_names_the_engine_route_that_entered_the_step() {
+fn cap_after_an_engine_route_fails_the_run_and_names_both_hops() {
     let (env, _) = super::super::fixture(
         &format!(
             "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\non.invalid='build'\n\
@@ -420,77 +418,11 @@ fn cap_evidence_names_the_engine_route_that_entered_the_step() {
         ),
         "exit 7\n",
     );
-    let id = start_legacy(&env);
-    let value = settled(&env, &id, "parked");
-    assert_eq!(value["record"]["park"]["reason"], "cap", "{value:#}");
+    let id = start(&env);
+    let value = settled(&env, &id, "failed");
+    assert_eq!(value["record"]["input"]["outcome"], "cap", "{value:#}");
     let text = success(command(&env, &["workflow", "show", &id]));
-    contains(
-        &text,
-        &["pr invalid · build 1", "resume 'review#project' --at pr"],
-    );
-}
-
-#[test]
-fn cap_explains_each_visit_and_the_refused_visit_with_copyable_options() {
-    let (env, _) = super::super::fixture(
-        &SPEC
-            .replace("run='true'", "run='sh checks/pr.sh'")
-            .replace("shell='true'", "shell='true'\ntimeout='1h'")
-            .replace("max-visits=2", "max-visits=1"),
-        "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
-    );
-    let id = start_legacy(&env);
-    let parked = settled(&env, &id, "parked");
-    assert_eq!(parked["record"]["park"]["reason"], "cap", "{parked:#}");
-    success(
-        env.rimz()
-            .env("RIMZ_BIN", "/bin/true")
-            .args(["workflow", "resume", &id, "--extend", "visits=+1"])
-            .output()
-            .unwrap(),
-    );
-    success(command(&env, &["workflow", "advance", &id]));
-    let value = settled(&env, &id, "parked");
-    assert_eq!(value["record"]["park"]["reason"], "cap", "{value:#}");
-    let record: RunRecord = serde_json::from_value(value["record"].clone()).unwrap();
-    let rows = value["journal"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .cloned()
-        .map(|mut row| {
-            if row["event"] == "attempt" {
-                row["started_at"] = json!(AT);
-                row["ended_at"] = json!("2000-01-01T12:01:00Z");
-                row["cost_usd"] = json!(1.25);
-            }
-            row
-        })
-        .collect();
-    journal(&env, &record, rows);
-    let text = human(&env, &record, false);
-    contains(
-        &text,
-        &[
-            "max-visits",
-            "2 of 2",
-            "resumed · build 1",
-            "gate ok · build 2",
-            "build 3 refused",
-            "exit 0",
-            "ended",
-            "1m",
-            "$1.25",
-        ],
-    );
-    commands(
-        &text,
-        &[
-            "resume 'review#project' --extend 'visits=+1'",
-            "resume 'review#project' --at gate",
-            "cancel 'review#project'",
-        ],
-    );
+    contains(&text, &["pr invalid → build", "build cap → @failed"]);
 }
 
 #[test]
@@ -517,7 +449,6 @@ fn per_outcome_cap_filters_post_reset_visits_and_uses_the_granted_limit() {
             .unwrap(),
     );
     let id = receipt.lines().next().unwrap();
-    keep_legacy_routes(&env, id);
     success(command(&env, &["workflow", "advance", id]));
     let value = until(&env, id, |value| {
         value["record"]["wait"]["outcome"] == "queued"
@@ -532,7 +463,6 @@ fn per_outcome_cap_filters_post_reset_visits_and_uses_the_granted_limit() {
     record.recheck_at = None;
     let paths = env.state_path_for(&env.project_root).workflow(&record.id);
     fs::write(paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
-    success(command(&env, &["workflow", "advance", id]));
     success(
         env.rimz()
             .env("RIMZ_BIN", "/bin/true")
@@ -541,29 +471,9 @@ fn per_outcome_cap_filters_post_reset_visits_and_uses_the_granted_limit() {
             .unwrap(),
     );
     success(command(&env, &["workflow", "advance", id]));
-    let value = settled(&env, id, "parked");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
+    let value = settled(&env, id, "failed");
+    assert_eq!(value["record"]["visits"]["build"]["total"], 4);
     assert_eq!(value["record"]["input"]["routed_by"], "red");
-    let text = success(command(&env, &["workflow", "show", id]));
-    contains(
-        &text,
-        &[
-            "max-visits-per-outcome",
-            "for red",
-            "key \"lint\"",
-            "2 of 2",
-            "build 1",
-            "build 2",
-            "build 3 refused",
-        ],
-    );
-    let why = text.split_once("you can\n").unwrap().0;
-    assert_eq!(
-        why.matches(" · build 1 · ").count(),
-        1,
-        "only lint's visit 1: {text}"
-    );
-    assert!(text.contains("build 2 of 2 for red key \"lint\""), "{text}");
     let history = success(command(&env, &["workflow", "show", id, "--history"]));
     assert!(
         history.contains("build visits reset on queued"),
@@ -970,7 +880,7 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
         &[
             "☾ waiting at gate",
             "gives up",
-            "then @user",
+            "then @failed",
             "  ci=pending  pr=unread · read ",
             ": pending",
             "gate pending ×2 → @wait",
@@ -1247,7 +1157,7 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
             step,
         ],
     );
-    record.visits = serde_json::from_value(json!({"build":{"total":2,"keys":[]}})).unwrap();
+    record.visits = serde_json::from_value(json!({"build":{"total":2,"outcomes":[]}})).unwrap();
     save(&env, &record);
     sealed_spec(
         &env,
@@ -1395,7 +1305,7 @@ fn a_hold_forecasts_its_clock_only_when_it_beats_other_bounds() {
             text.contains(if timeout == "40m" {
                 "then build at"
             } else {
-                "then @user at"
+                "then @failed at"
             }),
             "{text}"
         );
@@ -1558,7 +1468,7 @@ fn parked_and_terminal_rails_are_horizontal_and_only_parked_has_a_current_node()
         ],
     );
     record.node = "build".into();
-    record.visits = serde_json::from_value(json!({"build":{"total":1,"keys":[]}})).unwrap();
+    record.visits = serde_json::from_value(json!({"build":{"total":1,"outcomes":[]}})).unwrap();
     save(&env, &record);
     let parked = human(&env, &record, false);
     contains(&parked, &["◆ gate\n╰─ ⊘ build ↑"]);

@@ -272,7 +272,7 @@ fn a_message_step_hands_its_pinned_session_to_the_host() {
         (format!("{tell}session='ses-1'\n"), Some("ses-1")),
         (tell.to_owned(), None),
     ] {
-        let (_dir, state, record) = on_break_setup(&definition);
+        let (_dir, state, record) = setup(&definition);
         let host = FakeHost::new();
         advance(&state, &record.id, &host).unwrap();
         assert_eq!(
@@ -280,63 +280,4 @@ fn a_message_step_hands_its_pinned_session_to_the_host() {
             vec![expected.map(crate::ids::AgentSessionId::from)]
         );
     }
-}
-
-#[test]
-fn a_run_sealed_before_spec_version_one_ignores_every_new_field() {
-    let definition = STEP
-        .replace("lifecycle='turn'", "lifecycle='until'\ntimeout='1h'")
-        .replace("start='build'", "start='begin'")
-        .replace("then='@done'", "then='judge'\non.failed='@failed'")
-        + "account='work'\nmode='yolo'\neffort='high'\nfast=true\nbudget='$5'\nsystem-prompt-file='prompt.md'\nworktree='feat-x'\n"
-        + "[checks.begin]\nrun='cat answer.json'\ntimeout='1m'\non.next={to='build',default=true}\n"
-        + JUDGED;
-    let (_dir, state, record) = setup(&definition);
-    let paths = state.workflow(&record.id);
-    let current = super::super::spec::load_run(&paths.home, &record).unwrap();
-    assert!(current.ignored.is_empty(), "{:?}", current.ignored);
-    let mut legacy = serde_json::to_value(&record).unwrap();
-    legacy.as_object_mut().unwrap().remove("spec_version");
-    fs::write(&paths.record, serde_json::to_vec(&legacy).unwrap()).unwrap();
-    let record = records::load(&paths).unwrap();
-    assert_eq!(record.spec_version, 0);
-    let spec = super::super::spec::load_run(&paths.home, &record).unwrap();
-    let build = &spec.steps["build"];
-    assert_eq!(
-        (
-            build.timeout.as_deref(),
-            build.on.failed.as_deref(),
-            build.account.is_none() && build.mode.is_none() && build.effort.is_none(),
-            build.fast.is_none() && build.budget.is_none(),
-            build.system_prompt_file.is_none() && build.worktree.is_none(),
-            spec.checks["begin"].on["next"].is_default(),
-        ),
-        (None, None, true, true, true, false)
-    );
-    assert!(
-        spec.ignored.iter().all(|issue| {
-            issue.message.contains("sealed before the field existed")
-                || issue.path == "steps.build.timeout"
-                    && issue.message.contains("a staying step has no step timeout")
-        }),
-        "{:?}",
-        spec.ignored
-    );
-    fs::write(record.spec_dir.join("answer.json"), r#"{"outcome":"next"}"#).unwrap();
-    let host = FakeHost::new();
-    let mut live = advance_ok(&state, &record.id, &host);
-    assert_eq!(live.node, "build");
-    assert_eq!(
-        host.launched.borrow()[0].overrides,
-        LaunchOverrides::default()
-    );
-    live.attempt.as_mut().unwrap().started_at =
-        Timestamp::now() - std::time::Duration::from_secs(7200);
-    update(&state, &live);
-    let held = advance_ok(&state, &record.id, &host);
-    assert!(
-        held.attempt.is_some() && held.node == "build",
-        "a sealed until step keeps ignoring its timeout: {held:?}"
-    );
-    assert_eq!(held.spec_version, 0, "the upgrade keeps the sealed rules");
 }

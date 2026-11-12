@@ -1350,7 +1350,7 @@ impl WorkflowRunRow {
         record: &rimz::store::workflow::RunRecord,
     ) {
         let paths = state.workflow(&record.id);
-        let read = rimz::harness::workflow::load_run(&paths.home, record)
+        let read = rimz::harness::workflow::load(&paths.home)
             .map_err(anyhow::Error::from)
             .and_then(|spec| {
                 let journal = rimz::store::workflow::journal(&paths)?;

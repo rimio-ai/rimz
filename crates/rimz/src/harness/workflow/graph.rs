@@ -5,7 +5,6 @@ use serde::Serialize;
 use super::spec::{Check, CheckKind, OnBreak, Step, StepKind, WorkflowSpec};
 use crate::config::CapacityWait;
 use crate::harness::budget::BudgetSpec;
-use crate::store::workflow::RouteDefaults;
 
 const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
 const STEP_TRIGGERS: [&str; 8] = [
@@ -54,7 +53,6 @@ pub enum NeverReason {
     NoTimeout,
     NoMaxVisits,
     CapacityWaitForever,
-    JudgeRetries,
 }
 
 impl NeverReason {
@@ -63,7 +61,6 @@ impl NeverReason {
             Self::NoTimeout => "never: no timeout",
             Self::NoMaxVisits => "never: no max-visits",
             Self::CapacityWaitForever => "never: capacity-wait is forever",
-            Self::JudgeRetries => "never: a judge retries once, then parks at @user",
         }
     }
 }
@@ -268,13 +265,7 @@ impl WorkflowSpec {
             .into_iter()
             .find(|edge| edge.outcome == outcome)
             .map(|edge| edge.target)
-            .or_else(|| {
-                if self.route_defaults == RouteDefaults::Park {
-                    matches!(outcome, "then" | "asked").then(|| "@user".into())
-                } else {
-                    (outcome == "then").then(|| "@failed".into())
-                }
-            })
+            .or_else(|| (outcome == "then").then(|| "@failed".into()))
     }
 
     /// Whether a step's attempt ending leaves through its `on.failed`, for settlement and
@@ -337,7 +328,6 @@ impl WorkflowSpec {
                         } else if explicit {
                             EdgeSource::Default
                         } else if !self.is_break(node)
-                            && self.route_defaults == RouteDefaults::OnBreak
                             && self.workflow.on_break.is_some()
                             && FAILURE_EDGES.contains(&outcome.as_str())
                         {
@@ -374,16 +364,8 @@ impl WorkflowSpec {
             );
         }
         if let Some(check) = self.checks.get(node) {
-            let because = match outcome {
-                "timeout" if check.timeout.is_none() => Some(NeverReason::NoTimeout),
-                "invalid"
-                    if self.route_defaults == RouteDefaults::Park
-                        && matches!(check.kind(), Some(CheckKind::Agent(_))) =>
-                {
-                    Some(NeverReason::JudgeRetries)
-                }
-                _ => None,
-            };
+            let because =
+                (outcome == "timeout" && check.timeout.is_none()).then_some(NeverReason::NoTimeout);
             return (
                 if because.is_some() {
                     Fireability::Never
@@ -414,11 +396,10 @@ impl WorkflowSpec {
                 .edges()
                 .into_iter()
                 .map(|(outcome, target)| {
-                    let route = check.on.get(&outcome).filter(|_| {
-                        !check.is_sleep()
-                            || (outcome == "invalid"
-                                && self.route_defaults == RouteDefaults::OnBreak)
-                    });
+                    let route = check
+                        .on
+                        .get(&outcome)
+                        .filter(|_| !check.is_sleep() || outcome == "invalid");
                     let explicit = route.is_some() || (outcome == "then" && check.is_sleep());
                     let target = route.map_or(target, |route| route.target().to_owned());
                     (outcome, (target, explicit))
@@ -436,20 +417,14 @@ impl WorkflowSpec {
         };
         if let Some(step) = self.steps.get(node) {
             let failure = match step.kind() {
-                Some(StepKind::Agent(_)) if self.route_defaults == RouteDefaults::OnBreak => {
-                    Some(("invalid", &step.on.invalid))
-                }
+                Some(StepKind::Agent(_)) => Some(("invalid", &step.on.invalid)),
                 Some(StepKind::Message(_)) => Some(("undelivered", &step.on.undelivered)),
                 _ => None,
             };
             if let Some((outcome, route)) = failure {
-                let fallback = match self.route_defaults {
-                    RouteDefaults::OnBreak => String::new(),
-                    RouteDefaults::Park => "@user".into(),
-                };
                 edges.insert(
                     outcome.into(),
-                    (route.clone().unwrap_or(fallback), route.is_some()),
+                    (route.clone().unwrap_or_default(), route.is_some()),
                 );
             }
         }
@@ -467,17 +442,15 @@ impl WorkflowSpec {
                 ),
             );
         }
-        if self.route_defaults == RouteDefaults::OnBreak {
-            let target = match &self.workflow.on_break {
-                _ if self.is_break(node) => "@failed",
-                Some(OnBreak::Target(target)) => target.as_str(),
-                Some(OnBreak::Agent { .. }) => "@break",
-                None => "@failed",
-            };
-            for (outcome, (route, explicit)) in &mut edges {
-                if !*explicit && FAILURE_EDGES.contains(&outcome.as_str()) {
-                    *route = target.into();
-                }
+        let target = match &self.workflow.on_break {
+            _ if self.is_break(node) => "@failed",
+            Some(OnBreak::Target(target)) => target.as_str(),
+            Some(OnBreak::Agent { .. }) => "@break",
+            None => "@failed",
+        };
+        for (outcome, (route, explicit)) in &mut edges {
+            if !*explicit && FAILURE_EDGES.contains(&outcome.as_str()) {
+                *route = target.into();
             }
         }
         Some(edges)

@@ -3007,7 +3007,7 @@ fn live_reservation(root: &Path, task: &str) -> Result<f64> {
             continue;
         }
         // The sealed copy is what the run spends by; a deployed source may have changed since.
-        let spec = crate::harness::workflow::load_run(&state.workflow(&record.id).home, &record)
+        let spec = crate::harness::workflow::load(&state.workflow(&record.id).home)
             .with_context(|| format!("reading run {}'s sealed definition", record.id))?;
         reserved += spec.reserved_usd();
     }

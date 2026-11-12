@@ -408,7 +408,6 @@ pub fn close_after<'a>(spec: &WorkflowSpec, record: &'a RunRecord) -> Option<(Ti
         .delay()?;
     let at = verdict
         .at
-        .unwrap_or(verdict.entered_at)
         .checked_add(crate::harness::duration::duration(delay).ok()?)
         .unwrap_or(Timestamp::MAX);
     Some((at, &verdict.target))
@@ -470,9 +469,8 @@ pub fn timeout_at(
         let Some(attempt) = record.attempt.as_ref() else {
             return Ok(None);
         };
-        // Cleanup drops a stay step's timeout, and an until step's in a run sealed before
-        // until steps honoured it; an until step's bound runs from its launch.
-        if attempt.held_since.is_some() || attempt.asking.is_some() {
+        // Cleanup drops a stay step's timeout; an until step's bound runs from its launch.
+        if attempt.held_since.is_some() {
             return Ok(None);
         }
         let Ok(start) = attempt

@@ -133,14 +133,15 @@ fn ready_step(env: &Env, dir: &Path) -> String {
         &path,
         fs::read_to_string(&path)
             .unwrap()
-            .replace("on.go='build'", "on.go='@user'"),
+            .replace("on.go='build'", "on.go='@done'"),
     )
     .unwrap();
-    let id = start_legacy(env);
-    settled(env, &id, "parked");
+    let id = start(env);
+    settled(env, &id, "done");
     edit_record(env, &id, |record| {
         record.state = RunState::Active;
-        record.park = None;
+        record.terminal_at = None;
+        record.outcome = None;
         record.node = "build".into();
         record.entered_at = jiff::Timestamp::now();
     });
@@ -326,11 +327,7 @@ fn command_bound(mode: &str) {
     let (env, _) = command_fixture("shell", LIVE);
     crate::common::git::init_repo(&env.project_root);
     let head = crate::common::git::git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
-    let id = if mode.contains("deadline") {
-        start_legacy(&env)
-    } else {
-        start(&env)
-    };
+    let id = start(&env);
     let (live, child, descendant) = live_group(&env, &id, "build");
     let attempt = &live["record"]["attempt"];
     assert_eq!(attempt["kind"], "script");
@@ -372,7 +369,7 @@ fn command_bound(mode: &str) {
     let state = if mode == "cancel" {
         "canceled"
     } else if mode.contains("deadline") {
-        "parked"
+        "failed"
     } else {
         "done"
     };
@@ -528,7 +525,7 @@ fn exited_command(deadline: bool, contender: bool) {
         accept_gate(&listener).write_all(&[1]).unwrap();
     }
     assert!(advance.wait().unwrap().success());
-    let value = settled(&env, &id, if deadline { "parked" } else { "done" });
+    let value = settled(&env, &id, if deadline { "failed" } else { "done" });
     assert_eq!(
         value["record"]["prev_attempt"]["outcome"], "ended",
         "{value:#}"
