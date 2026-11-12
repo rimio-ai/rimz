@@ -427,6 +427,7 @@ fn launch_and_supervise(
     if let Some(target) = attach_target.as_ref() {
         append_agent_lifecycle_trace(
             invocation,
+            &request.identity,
             target.0.clone(),
             target.1.clone(),
             rimz::agents::LifecycleSignal::Registered,
@@ -1438,10 +1439,11 @@ fn exec_launch_identity(
         (None, Some(_)) => Ok(None),
         (Some(launch_id), Some(name)) => {
             validate_agent_name(name)?;
+            let row_key = request.identity.row_key.as_deref().unwrap_or(launch_id);
             Ok(Some(LaunchIdentity {
                 kind: request.kind.clone(),
-                agent_id: AgentSessionId::from(launch_id),
-                launch_id: None,
+                agent_id: AgentSessionId::from(row_key),
+                launch_id: (row_key != launch_id).then(|| AgentSessionId::from(launch_id)),
                 name: name.to_owned(),
                 name_explicit: request.identity.name_explicit,
                 launch: request.identity.params.clone(),
@@ -1571,13 +1573,17 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
     let workspace = invocation.workspace;
     let attached = invocation.store().and_then(|store| {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        let current =
-            rimz::address::launch_row(&projection.agents, &identity.kind, &identity.agent_id)
-                .context("resolving current agent row by launch id")?;
+        let current = own_epoch_launch_row(
+            projection.agents.iter(),
+            &identity.kind,
+            identity.launch_id(),
+            identity.launch.epoch,
+        )
+        .context("resolving current agent row by launch id")?;
         store.attach_agent_pane(
             &current.kind,
             &current.agent_id,
-            Some(&identity.agent_id),
+            Some(identity.launch_id()),
             &current.login.clone().unwrap_or_default(),
             &workspace.session_name,
             &pane_id,
@@ -1587,14 +1593,17 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
             ),
             None,
             invocation.effective_isolation,
-            None,
+            Some(&rimz::agents::LaunchParams {
+                epoch: identity.launch.epoch,
+                ..rimz::agents::LaunchParams::default()
+            }),
         )?;
         Ok(())
     });
     if let Err(err) = attached {
         tracing::debug!(
             agent_name = %identity.name,
-            launch_id = %identity.agent_id,
+            launch_id = %identity.launch_id(),
             pane = %pane_id,
             error = %err,
             "could not attach launch pane ownership to its wrapper",
@@ -1685,6 +1694,7 @@ fn record_own_agent_end_trace(
         Ok(Some(ended)) => {
             append_agent_lifecycle_trace(
                 invocation,
+                &request.identity,
                 ended.kind.clone(),
                 ended.agent_id.clone(),
                 rimz::agents::LifecycleSignal::Ended,
@@ -1758,6 +1768,7 @@ fn exit_end_target(
 ) -> Option<EndedSession> {
     // One launch can hold two live rows in two panes (an exact-id resume of a
     // cleared conversation), so the launch's live row on this pane wins first.
+    let epoch = request.identity.params.epoch;
     let launch_row = request.identity.launch_id.as_deref().and_then(|launch_id| {
         let launch_id = AgentSessionId::from(launch_id);
         let live_here = agents.iter().filter(|agent| {
@@ -1767,8 +1778,8 @@ fn exit_end_target(
                     .as_ref()
                     .is_some_and(|bound| Some(&bound.pane_id) == own_pane)
         });
-        rimz::address::launch_row(live_here, &request.kind, &launch_id)
-            .or_else(|| rimz::address::launch_row(agents, &request.kind, &launch_id))
+        own_epoch_launch_row(live_here, &request.kind, &launch_id, epoch)
+            .or_else(|| own_epoch_launch_row(agents.iter(), &request.kind, &launch_id, epoch))
     });
     if let Some(row) = launch_row {
         let bound_elsewhere = row
@@ -1806,6 +1817,23 @@ fn exit_end_target(
         name: row.and_then(|agent| agent.name.clone()),
         is_child_session: row.is_some_and(rimz::agents::AgentState::is_child_session),
     })
+}
+
+/// The current row of `launch` among its rows at the wrapper's own epoch: a
+/// wrapper ends, attaches and reads only the sessions of its own swap, never
+/// the agent's session at another epoch (R-wrap-1).
+fn own_epoch_launch_row<'a>(
+    agents: impl Iterator<Item = &'a rimz::agents::AgentState> + Clone,
+    kind: &AgentKind,
+    launch: &AgentSessionId,
+    epoch: Option<u32>,
+) -> Option<&'a rimz::agents::AgentState> {
+    let epoch = epoch.unwrap_or(0);
+    rimz::address::launch_row(
+        agents.filter(move |agent| agent.epoch == epoch),
+        kind,
+        launch,
+    )
 }
 
 /// Whether `agents` binds `(kind, session)` to a pane that is not `own_pane`.
@@ -1935,8 +1963,11 @@ fn rewake_resumed(
     }
 }
 
+/// Append one wrapper-written lifecycle event, stamped with the launch and
+/// epoch the wrapper runs under so a later swap's fold can fence it.
 fn append_agent_lifecycle_trace(
     invocation: &ExecInvocationContext<'_>,
+    identity: &rimz::harness::launch::ExecIdentity,
     kind: AgentKind,
     agent_id: AgentSessionId,
     signal: rimz::agents::LifecycleSignal,
@@ -1948,8 +1979,10 @@ fn append_agent_lifecycle_trace(
         let store = invocation
             .store()
             .context("opening store for agent lifecycle trace")?;
-        let observation =
+        let mut observation =
             rimz::agents::AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
+        observation.launch_id = identity.launch_id.as_deref().map(AgentSessionId::from);
+        observation.launch.epoch = identity.params.epoch;
         let event = rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
             &workspace.session_name,
@@ -1997,10 +2030,13 @@ fn picker_session_bound(
 ) -> Option<bool> {
     match invocation.store().and_then(|store| {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        Ok(
-            rimz::address::launch_row(&projection.agents, &identity.kind, &identity.agent_id)
-                .is_some_and(|agent| agent.agent_id != identity.agent_id),
+        Ok(own_epoch_launch_row(
+            projection.agents.iter(),
+            &identity.kind,
+            identity.launch_id(),
+            identity.launch.epoch,
         )
+        .is_some_and(|agent| agent.agent_id != identity.agent_id))
     }) {
         Ok(bound) => Some(bound),
         Err(err) => {
@@ -2161,7 +2197,7 @@ fn subagent_parent_watchdog(
         Ok(projection) => rimz::harness::parent_watch::seed(
             &projection.agents,
             identity.kind.clone(),
-            identity.agent_id.clone(),
+            identity.launch_id().clone(),
             child_pane.clone(),
             context.session_name.clone(),
             cursor,
@@ -2174,7 +2210,7 @@ fn subagent_parent_watchdog(
     Some(
         seed.unwrap_or_else(|| rimz::harness::parent_watch::WatchdogSeed {
             child_kind: identity.kind.clone(),
-            child_launch_id: identity.agent_id.clone(),
+            child_launch_id: identity.launch_id().clone(),
             parent_kind: identity.kind.clone(),
             parent_refs: Vec::new(),
             members: Default::default(),

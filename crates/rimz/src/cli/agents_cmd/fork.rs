@@ -208,6 +208,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &rimz::harness::launch::ExecRequest {
             close_pane_on_exit: placement != Placement::SamePane,
             identity: rimz::harness::launch::ExecIdentity {
+                row_key: None,
                 resume_model_override: false,
                 name: Some(launch.name.clone()),
                 name_explicit: launch.name_explicit,

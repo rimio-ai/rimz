@@ -204,6 +204,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         let request = ExecRequest::fresh(
             cell,
             ExecIdentity {
+                row_key: None,
                 resume_model_override: false,
                 name: None,
                 name_explicit: false,

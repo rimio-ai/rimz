@@ -78,6 +78,10 @@ pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// The canonical dollar cap selected by launch flags, profiles, or roles.
 /// Set by the launch wrapper and read into lifecycle observations.
 pub(crate) const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
+/// The count of RimZ swaps of this agent the process runs under. Every launch
+/// writes it, `0` when it carries no epoch, so a child never inherits its
+/// caller's; the hook reads it back with [`ENV_AGENT_ID`] as its event stamp.
+pub const ENV_AGENT_EPOCH: &str = "RIMZ_AGENT_EPOCH";
 /// Claude Code's own shell override, stamped beside `SHELL` under a configured
 /// `[agents] shell` so the provider's tool shell is the wrapper's.
 const ENV_CLAUDE_CODE_SHELL: &str = "CLAUDE_CODE_SHELL";
@@ -566,6 +570,11 @@ pub struct ExecIdentity {
     /// Stable RimZ launch id. Fresh launches also carry `name`; resumed
     /// provider sessions may have only their durable session identity.
     pub launch_id: Option<String>,
+    /// The provisional key of the row this launch binds, fails and reads card
+    /// evidence by, when it is not `launch_id`: a swap reserves a fresh key
+    /// under the agent's launch id. Absent means the launch id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_key: Option<String>,
     /// Canonical launch parameters. `kind_ordinal` remains display-only and is
     /// deliberately absent from wrapper argv and environment wiring.
     #[serde(default)]
@@ -585,7 +594,7 @@ struct LaunchField {
     target: fn(&mut crate::agents::LaunchParams) -> LaunchFieldValue<'_>,
 }
 
-const LAUNCH_FIELDS: [LaunchField; 8] = [
+const LAUNCH_FIELDS: [LaunchField; 9] = [
     LaunchField {
         env: crate::harness::launch::ENV_AGENT_ROLE,
         encode: |params| params.role.clone(),
@@ -625,6 +634,11 @@ const LAUNCH_FIELDS: [LaunchField; 8] = [
         env: crate::harness::launch::ENV_AGENT_BUDGET,
         encode: |params| params.budget.clone(),
         target: |params| LaunchFieldValue::Text(&mut params.budget),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_AGENT_EPOCH,
+        encode: |params| Some(params.epoch.unwrap_or(0).to_string()),
+        target: |params| LaunchFieldValue::Ordinal(&mut params.epoch),
     },
 ];
 
@@ -1973,6 +1987,9 @@ pub fn fill_launch_identity_env(
             LaunchFieldValue::Text(_) | LaunchFieldValue::Ordinal(_) => {}
         }
     }
+    // Epoch 0 is how a launch without one writes its key: read it as none, so
+    // the fold never takes it for a swap's reservation.
+    params.epoch = params.epoch.filter(|&epoch| epoch > 0);
 }
 
 /// Process environment after applying RimZ's launch overrides. Non-Unicode

@@ -39,6 +39,7 @@ const TTYD_AMBIENT_CONTEXT_ENV: [&[&str]; 2] = [
         crate::harness::launch::ENV_AGENT_MODEL,
         crate::harness::launch::ENV_AGENT_EFFORT,
         crate::harness::launch::ENV_AGENT_BUDGET,
+        crate::harness::launch::ENV_AGENT_EPOCH,
     ],
     &crate::mux::REMOTE_CLIENT_ENV,
 ];

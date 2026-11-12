@@ -37,10 +37,10 @@ pub(super) fn agent_identity_env(
     validate(raw, "process", var)
 }
 
-/// Fills a root observation's launch identity from the pane env. Model and
-/// effort are seeded (env, else `configured_identity`) only where the flag
-/// says the session's rollup still lacks them, so a provider-observed value
-/// is never replaced by a seed.
+/// Fills a root observation's launch identity, and the launch and epoch that
+/// stamp its event, from the pane env. Model and effort are seeded (env, else
+/// `configured_identity`) only where the flag says the session's rollup still
+/// lacks them, so a provider-observed value is never replaced by a seed.
 pub(in crate::cli::hooks) fn fill_root_launch_identity(
     observation: &mut AgentLifecycleObservation,
     configured_identity: (Option<String>, Option<String>),
@@ -59,6 +59,10 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
         }
         identity_env(agent_pid, var)
     });
+    if observation.launch_id.is_none() {
+        observation.launch_id =
+            identity_env(agent_pid, rimz::harness::launch::ENV_AGENT_ID).map(Into::into);
+    }
     if seed_model {
         observation.launch.model = observation.launch.model.take().or(configured_identity.0);
     }

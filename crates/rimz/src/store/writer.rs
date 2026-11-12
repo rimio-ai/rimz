@@ -1023,7 +1023,8 @@ impl Store {
     /// Persist a resumed session's stable identity and wrapper pane.
     ///
     /// The owner names the agent process the row belongs to, and `login` the
-    /// account that process runs under, which becomes the row's stamp.
+    /// account that process runs under, which becomes the row's stamp. The
+    /// attach carries `launch`'s epoch, which fences it on a later epoch's row.
     ///
     /// Once the attach is durable, a parked session leaves the pending-recovery
     /// record. A seeded session stays pending until its rebirth confirms the
@@ -1070,7 +1071,7 @@ impl Store {
                     isolation,
                     effective_isolation,
                     launch_id: launch_id.cloned(),
-                    epoch: None,
+                    epoch: launch.and_then(|launch| launch.epoch),
                     login: Some(login.clone()),
                     pane_id: pane.pane_id,
                     pane_pid: pane.pane_pid,

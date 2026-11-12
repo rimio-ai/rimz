@@ -116,6 +116,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 )),
                 headless: None,
                 identity: ExecIdentity {
+                    row_key: None,
                     resume_model_override: false,
                     name: Some("otter".to_owned()),
                     name_explicit: true,

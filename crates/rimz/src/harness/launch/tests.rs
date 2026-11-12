@@ -2756,6 +2756,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         reminder_section: None,
         headless: None,
         identity: ExecIdentity {
+            row_key: None,
             resume_model_override: false,
             name: Some("swift-otter".to_owned()),
             name_explicit: true,
@@ -2935,6 +2936,7 @@ fn exec_identity_env_maps_identity_fields() {
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         budget: Some("$12.50/day".to_owned()),
+        epoch: Some(3),
         ..Default::default()
     };
     let mut invocation = request(
@@ -3007,6 +3009,10 @@ fn exec_identity_env_maps_identity_fields() {
                 crate::harness::launch::ENV_AGENT_BUDGET.to_owned(),
                 "$12.50/day".to_owned()
             ),
+            (
+                crate::harness::launch::ENV_AGENT_EPOCH.to_owned(),
+                "3".to_owned()
+            ),
         ])
     );
     assert!(!exec_identity_env(&invocation).contains_key("RIMZ_AGENT_MODE"));
@@ -3032,6 +3038,7 @@ fn exec_identity_env_round_trips_launch_params() {
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         budget: Some("$12.50/day".to_owned()),
+        epoch: Some(3),
         ..Default::default()
     };
     let mut invocation = request(
@@ -3065,9 +3072,29 @@ fn exec_identity_env_round_trips_launch_params() {
         ENV_AGENT_MODEL,
         ENV_AGENT_EFFORT,
         ENV_AGENT_BUDGET,
+        ENV_AGENT_EPOCH,
     ];
     expected.sort_unstable();
     assert_eq!(read, expected);
+}
+
+/// A launch with no epoch, a child of a swapped agent included, overwrites
+/// its caller's epoch with 0, which reads back as no epoch (R-stamp-2, T11).
+#[test]
+fn a_launch_without_an_epoch_writes_epoch_zero_over_its_callers() {
+    let invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let env = exec_identity_env(&invocation);
+    assert_eq!(env.get(ENV_AGENT_EPOCH).map(String::as_str), Some("0"));
+
+    let mut decoded = crate::agents::LaunchParams::default();
+    fill_launch_identity_env(&mut decoded, |var| env.get(var).cloned());
+    assert_eq!(decoded.epoch, None, "epoch 0 is the unstamped epoch");
 }
 
 #[test]

@@ -352,7 +352,10 @@ fn attach_agent_pane_records_process_owned_placement() {
             owner.clone(),
             Some(crate::config::Isolation::Scoped),
             Some(crate::config::Isolation::Scoped),
-            None,
+            Some(&LaunchParams {
+                epoch: Some(2),
+                ..LaunchParams::default()
+            }),
         )
         .expect("attach resumed agent");
 
@@ -374,6 +377,11 @@ fn attach_agent_pane_records_process_owned_placement() {
     };
     assert_eq!(payload.agent_id, agent_id);
     assert_eq!(payload.launch_id, Some(launch_id.clone()));
+    assert_eq!(
+        payload.epoch,
+        Some(2),
+        "the attach carries its wrapper's epoch"
+    );
     assert_eq!(payload.pane_id, pane_id);
     assert_eq!(payload.pane_pid, Some(std::process::id()));
     assert_eq!(payload.runtime_owner, owner);

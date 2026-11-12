@@ -737,6 +737,7 @@ pub(in crate::cli) fn relaunch_request(
         close_pane_on_exit: true,
         subagent: agent.is_launched_child(),
         identity: rimz::harness::launch::ExecIdentity {
+            row_key: None,
             resume_model_override: false,
             name: identity_name.map(ToOwned::to_owned),
             name_explicit: fresh_identity

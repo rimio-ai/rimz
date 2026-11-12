@@ -28,6 +28,7 @@ pub const HOOK_ENV_NAMES: &[&str] = &[
     "RIMZ_CHANNEL",
     "RIMZ_AGENT_KIND",
     "RIMZ_AGENT_ID",
+    "RIMZ_AGENT_EPOCH",
     "RIMZ_AGENT_NAME",
     "RIMZ_AGENT_PROFILE",
     "RIMZ_AGENT_ROLE",
