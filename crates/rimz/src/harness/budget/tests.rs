@@ -813,6 +813,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
     snapshot.agent_panes = vec![crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: state.kind.clone(),
         kind_ordinal: state.kind_ordinal,
         name: state.name.clone(),
@@ -1157,6 +1158,7 @@ fn fleet_enforcement_arms_resume_after_interrupting_a_running_agent() {
     snapshot.agent_panes = vec![crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: running.kind.clone(),
         kind_ordinal: running.kind_ordinal,
         name: running.name.clone(),

@@ -419,6 +419,7 @@ fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
             Some(PaneAgent {
                 checkout: agent.lane_checkout().map(ToOwned::to_owned),
                 root_lane: agent.root_lane,
+                lane: agent.lane.clone(),
                 kind: agent.kind.clone(),
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),

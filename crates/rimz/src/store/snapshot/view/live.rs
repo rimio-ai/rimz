@@ -24,6 +24,7 @@ use super::layout::refresh_overlay_group;
 use super::{SidebarRow, SidebarSnapshot};
 
 mod projection;
+pub(in crate::store::snapshot) use projection::legacy_root_lane;
 
 #[cfg(test)]
 pub(crate) use projection::row_identity_violations;

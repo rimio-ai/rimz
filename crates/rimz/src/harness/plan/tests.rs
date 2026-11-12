@@ -1458,6 +1458,12 @@ enum RequestField {
 
 fn assert_request_field(argv: &[String], field: RequestField, value: &str) {
     let request = exec_request(argv);
+    let channel = request
+        .identity
+        .params
+        .lane
+        .as_ref()
+        .map(|lane| lane.routing_name().to_string());
     let actual = match field {
         RequestField::Resume => match &request.action {
             crate::harness::launch::ExecAction::Resume { session_id, .. } => {
@@ -1475,12 +1481,7 @@ fn assert_request_field(argv: &[String], field: RequestField, value: &str) {
         RequestField::Role => request.identity.params.role.as_deref(),
         RequestField::Team => request.identity.params.team.as_deref(),
         RequestField::LaunchGroup => request.identity.params.launch_group.as_deref(),
-        RequestField::Channel => request
-            .identity
-            .params
-            .lane
-            .as_ref()
-            .and_then(crate::ids::Lane::routing_name),
+        RequestField::Channel => channel.as_deref(),
         RequestField::Model => request.identity.params.model.as_deref(),
         RequestField::Effort => request.identity.params.effort.as_deref(),
         RequestField::LaunchOrdinal => {
@@ -4717,7 +4718,7 @@ fn supervised_request(spec: &str, prompt: &str) -> crate::harness::run::Supervis
 struct SupervisedPlan<'a> {
     request: &'a crate::harness::run::SupervisedRunRequest,
     caller: Option<&'a crate::agents::AgentState>,
-    lane: Option<(&'a str, &'a str)>,
+    lane: Option<(crate::ids::LaneName, &'a str)>,
     parent_isolation: Option<crate::config::Isolation>,
     machine: &'a MachineConfig,
 }
@@ -4730,7 +4731,7 @@ impl SupervisedPlan<'_> {
         let planned = plan_supervised_launch(
             self.request,
             self.caller,
-            self.lane,
+            self.lane.as_ref().map(|(lane, team)| (lane, *team)),
             self.parent_isolation,
             &workspace,
             self.machine,
@@ -5150,13 +5151,16 @@ fn supervised_launch_qualifies_a_bare_role_in_its_team_lane() {
     let (planned, _warnings) = SupervisedPlan {
         request: &request,
         caller: None,
-        lane: Some(("forge", "forge")),
+        lane: Some(("forge".parse().unwrap(), "forge")),
         parent_isolation: None,
         machine: &machine,
     }
     .run(dir.path());
     let launch = planned.expect("lane role launch");
-    assert_eq!(launch.inferred_lane.as_deref(), Some("forge"));
+    assert_eq!(
+        launch.inferred_lane.as_ref().map(|lane| lane.as_str()),
+        Some("forge")
+    );
     assert_eq!(launch.team_name.as_deref(), Some("forge"));
     assert_eq!(
         planned_cell(&launch).launch.role.as_deref(),
@@ -5167,7 +5171,7 @@ fn supervised_launch_qualifies_a_bare_role_in_its_team_lane() {
     let (planned, _warnings) = SupervisedPlan {
         request: &request,
         caller: None,
-        lane: Some(("forge", "forge")),
+        lane: Some(("forge".parse().unwrap(), "forge")),
         parent_isolation: None,
         machine: &machine,
     }

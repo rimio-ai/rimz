@@ -223,7 +223,7 @@ mod tests {
         let target = deadline_stop_target(&record).unwrap();
         for channel in [Some("producer-lane"), Some("child-lane"), None] {
             let context = rimz::address::AddressContext {
-                channel: channel.map(ToOwned::to_owned),
+                channel: channel.map(|channel| channel.parse().unwrap()),
                 origin: rimz::address::ChannelOrigin::Stamped,
             };
             let resolved =

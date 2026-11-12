@@ -29,6 +29,7 @@ fn snapshot(agent: &AgentState) -> SidebarSnapshot {
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: agent.kind.clone(),
         kind_ordinal: None,
         name: None,

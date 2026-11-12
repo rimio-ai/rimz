@@ -39,7 +39,7 @@ pub struct LaunchContext {
     pub machine: Arc<crate::config::MachineConfig>,
     pub mux: Option<crate::ids::MuxName>,
     pub root: Option<PathBuf>,
-    pub channel: Option<String>,
+    pub channel: Option<LaneName>,
 }
 
 pub struct LayoutRequest {
@@ -132,7 +132,7 @@ pub struct OpenedLayout {
     pub identities: Vec<AgentLaunchIdentity>,
     pub leader_index: Option<usize>,
     pub team: Option<(String, crate::config::Team)>,
-    pub channel: Option<String>,
+    pub lane: crate::ids::Lane,
     pub cwd: PathBuf,
     pub in_place: bool,
     pub pick_session: bool,
@@ -156,9 +156,7 @@ pub enum Notice<'a> {
     },
     PickerReceipt {
         kind: &'a str,
-        channel: Option<&'a str>,
-        cwd: &'a std::path::Path,
-        project: &'a std::path::Path,
+        lane: &'a crate::ids::Lane,
     },
     IsolationClamp {
         profile: &'a str,
@@ -184,9 +182,7 @@ pub enum Notice<'a> {
     ResumeReceipt {
         plan: &'a crate::harness::plan::CohortResumePlan,
         team: Option<&'a str>,
-        channel: Option<&'a str>,
-        cwd: &'a Path,
-        project: &'a Path,
+        lane: &'a crate::ids::Lane,
         identities: &'a [AgentLaunchIdentity],
         leader: Option<&'a str>,
     },
@@ -276,7 +272,7 @@ use crate::harness::plan::{
     LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::{Cell, LayoutSpec};
-use crate::ids::{LoginKey, LoginName};
+use crate::ids::{LaneName, LoginKey, LoginName};
 use crate::room::RoomContext;
 use crate::store::writer::AgentLaunchScope;
 use placement::{
@@ -299,8 +295,8 @@ struct PreparedLayout {
     layout: LayoutSpec,
     teams: crate::config::TeamsConfig,
     team_name: Option<String>,
-    inferred_lane: Option<String>,
-    default_lane: Option<String>,
+    inferred_lane: Option<LaneName>,
+    default_lane: Option<LaneName>,
     caller_lane: Option<crate::harness::lanes::CallerLane>,
     matching_overrides: LaunchOverrides,
     explicit_worktree_name: Option<String>,
@@ -382,7 +378,8 @@ pub fn prepare_layout(
         .cohort
         .channel
         .as_deref()
-        .or(default_lane.as_deref());
+        .map(LaneName::dashed)
+        .or_else(|| default_lane.clone());
     let snapshot = if args.launch.spec.is_some() && lane.is_some() {
         Some(ctx.store.snapshot_cached()?)
     } else {
@@ -431,7 +428,7 @@ pub fn prepare_layout(
         },
         args.launch.cohort.budget,
         args.launch.max_turns,
-        lane,
+        lane.as_ref(),
         args.launch.name.is_some(),
         Some((store.runtime_paths(), store.paths())),
     )
@@ -774,7 +771,8 @@ fn settle_layout(
         .cohort
         .channel
         .as_deref()
-        .or(default_lane.as_deref());
+        .map(LaneName::dashed)
+        .or(default_lane);
     let room = match args.entry {
         RoomEntry::Live => RoomContext::live_tab(workspace, machine_config.clone(), ctx.mux)?,
         // A team's leader run opens its tab in the room its fire ensured.
@@ -883,12 +881,12 @@ fn settle_layout(
         // role joining a lane's cohort is checked against that lane.
         let channel = inferred_lane.clone().or_else(|| {
             target.and_then(|(_, path)| match lane_request(path, &[]) {
-                Ok(lane) => lane.routing_name().map(ToOwned::to_owned),
-                Err(_) => args.launch.cohort.channel.clone(),
+                Ok(lane) => Some(lane.routing_name()),
+                Err(_) => args.launch.cohort.channel.as_deref().map(LaneName::dashed),
             })
         });
         if let Some((_, path)) = target
-            && let Some(channel) = channel.as_deref()
+            && let Some(channel) = channel.as_ref()
             && let Some(hold) =
                 crate::harness::resume::inspect_channel_hold(&projection.agents, channel)
         {
@@ -943,7 +941,7 @@ fn settle_layout(
                     &matching_overrides,
                     args.launch.cohort.budget,
                     args.launch.max_turns,
-                    lane,
+                    lane.as_ref(),
                     false,
                     Some((store.runtime_paths(), store.paths())),
                 )?
@@ -1479,7 +1477,11 @@ fn launch_resume_layout(
         ResumeScope::Lane(lane) => projection
             .agents
             .iter()
-            .filter(|agent| crate::address::agent_in_worktree(agent, lane))
+            .filter(|agent| {
+                let lane =
+                    crate::address::LaneSelector::parse(Some(lane), Some(&workspace.project_root));
+                crate::address::agent_in_lane(agent, &lane)
+            })
             .cloned()
             .collect(),
         ResumeScope::Room => projection.agents.clone(),
@@ -1746,9 +1748,7 @@ fn launch_resume_layout(
     let receipt = Notice::ResumeReceipt {
         plan: &plan,
         team: team_name.as_deref(),
-        channel: channel.as_deref(),
-        cwd: lane_path,
-        project: &workspace.project_root,
+        lane: &lane,
         identities: launch_batch.identities(),
         leader,
     };
@@ -1982,7 +1982,7 @@ fn team_resume_error(
             }
             let excluded_lanes = agents
                 .iter()
-                .filter_map(AgentState::channel)
+                .filter_map(AgentState::lane_name)
                 .chain(
                     room_agents
                         .iter()
@@ -1990,16 +1990,17 @@ fn team_resume_error(
                             agent.parent_agent_id.is_none() && agent.team.as_deref() == Some(spec)
                         })
                         .filter(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }))
-                        .filter_map(AgentState::channel),
+                        .filter_map(AgentState::lane_name),
                 )
                 .collect::<HashSet<_>>();
             let board_held = |agent: &AgentState| {
-                let (Some(lane), Some(checkout)) = (agent.channel(), agent.lane_path()) else {
+                let (Some(lane), Some(checkout)) = (agent.lane_name(), agent.lane_path()) else {
                     return false;
                 };
+                let lane = crate::address::LaneSelector::named(lane);
                 let lane_rows = room_agents
                     .iter()
-                    .filter(|row| crate::address::agent_in_worktree(row, &lane))
+                    .filter(|row| crate::address::agent_in_lane(row, &lane))
                     .cloned()
                     .collect::<Vec<_>>();
                 crate::harness::resume::inspect_team_hold(&lane_rows, Path::new(checkout))
@@ -2020,7 +2021,7 @@ fn team_resume_error(
                         .lane_path()
                         .is_some_and(|path| checkout_exists(Path::new(path)))
                 })
-                .filter_map(AgentState::channel)
+                .filter_map(AgentState::lane_name)
                 .filter(|lane| !excluded_lanes.contains(lane))
                 .collect::<BTreeSet<_>>();
             if let Some(first) = lanes.first() {

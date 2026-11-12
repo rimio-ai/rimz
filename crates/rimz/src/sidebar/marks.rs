@@ -171,6 +171,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             channel: None,
+            lane: None,
             unread: true,
             inactive: false,
             archived: false,

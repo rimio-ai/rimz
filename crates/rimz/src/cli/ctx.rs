@@ -71,7 +71,9 @@ impl Ctx {
 
     /// The channel this command runs in, when it is scoped to a named lane.
     pub(crate) fn channel(&self) -> Option<&str> {
-        self.current_channel().as_deref()
+        self.current_channel()
+            .as_deref()
+            .map(rimz::ids::LaneName::as_str)
     }
 
     pub(super) fn current_channel(&self) -> &super::CurrentChannel {

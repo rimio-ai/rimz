@@ -315,7 +315,11 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         .agents
         .iter()
         .filter(|agent| {
-            all || channel.is_none_or(|channel| agent.channel().as_deref() == Some(channel))
+            all || channel.is_none_or(|channel| {
+                agent
+                    .lane_name()
+                    .is_some_and(|name| name.as_str() == channel)
+            })
         })
         .flat_map(|agent| {
             agent
@@ -502,7 +506,7 @@ fn view_for_agent(
             handle: rimz::address::agent_handle(owner, peers, true),
             name,
             kind: agent.kind.clone(),
-            channel: agent.channel(),
+            channel: agent.lane_name().map(String::from),
         },
         detail,
     }))

@@ -691,6 +691,7 @@ fn agent_row(id: &str, status: AgentStatus) -> SidebarRow {
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         channel: None,
+        lane: None,
         unread: false,
         inactive: false,
         archived: false,

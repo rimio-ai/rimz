@@ -1994,15 +1994,19 @@ fn root_sender_keeps_its_cross_lane_suffix_in_a_scoped_transcript() {
         "cross-lane message",
     );
     sent.channel = Some("feature".to_owned());
-    let identities = build_identities(&[focal.clone(), sent.clone()], Some("project"));
-    let chat = chat_entry_for_log_entry(&sent, &identities, false, Some("project"));
+    let identities = build_identities(
+        &[focal.clone(), sent.clone()],
+        Some(Path::new("/work/project")),
+    );
+    let chat =
+        chat_entry_for_log_entry(&sent, &identities, false, Some(Path::new("/work/project")));
     assert_eq!(chat.from, "@planner#main");
     assert!(!sender_matches_focus(
         &chat.from,
         &BTreeSet::from([entry_key(&focal)]),
         &identities,
         Some("feature"),
-        Some("project"),
+        Some(Path::new("/work/project")),
     ));
 }
 
@@ -2019,7 +2023,7 @@ fn focus_keeps_messages_sent_by_the_focal_agent() {
     let local = log_entry("codex", "receiver", TranscriptKind::Prompt, None, "local");
     let identities = build_identities(&[focal.clone(), sent.clone()], None);
     let scope = Scope {
-        root_channel: None,
+        project_root: None,
         channel: Some("chat".to_owned()),
         channel_filter: Some("chat".to_owned()),
         focus: Some("@claude".to_owned()),
@@ -2054,7 +2058,7 @@ fn focus_and_speaker_use_petname_sender_address() {
     );
     let identities = build_identities(&[focal.clone(), sent.clone()], None);
     let scope = Scope {
-        root_channel: None,
+        project_root: None,
         channel: Some("chat".to_owned()),
         channel_filter: Some("chat".to_owned()),
         focus: Some("@calm-fox".to_owned()),
@@ -3127,7 +3131,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     assert_eq!(
         live_boundary(
             &Scope {
-                root_channel: None,
+                project_root: None,
                 channel: Some("chat".to_owned()),
                 channel_filter: Some("chat".to_owned()),
                 focus: Some("@claude".to_owned()),
@@ -3146,7 +3150,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     assert_eq!(
         live_boundary(
             &Scope {
-                root_channel: None,
+                project_root: None,
                 channel: Some("chat".to_owned()),
                 channel_filter: Some("chat".to_owned()),
                 focus: Some("@codex".to_owned()),
@@ -3165,9 +3169,13 @@ fn channel_filter_matches_exact_lanes() {
     assert!(channel_matches(
         Some("project"),
         Some("main"),
-        Some("project")
+        Some(Path::new("/work/project"))
     ));
-    assert!(channel_matches(None, Some("main"), Some("project")));
+    assert!(channel_matches(
+        None,
+        Some("main"),
+        Some(Path::new("/work/project"))
+    ));
     assert!(channel_matches(Some("web-token"), Some("web-token"), None));
     assert!(!channel_matches(
         Some("web-token/forge"),
@@ -3220,7 +3228,7 @@ fn child_entries_require_child_focus() {
     assert!(!entry_in_scope(
         &child,
         &Scope {
-            root_channel: None,
+            project_root: None,
             channel: Some("chat".to_owned()),
             channel_filter: Some("chat".to_owned()),
             focus: Some("@claude".to_owned()),
@@ -3233,7 +3241,7 @@ fn child_entries_require_child_focus() {
     assert!(entry_in_scope(
         &child,
         &Scope {
-            root_channel: None,
+            project_root: None,
             channel: Some("chat".to_owned()),
             channel_filter: Some("chat".to_owned()),
             focus: Some("@codex".to_owned()),

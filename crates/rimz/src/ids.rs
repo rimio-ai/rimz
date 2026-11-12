@@ -359,7 +359,7 @@ impl fmt::Display for TeamInstanceId {
 /// In-place team lanes are `<project dir>/<team>`, and a project directory may
 /// hold `.`, so only a typed `--channel` answers to the narrower
 /// [`LaneName::is_flat`] check.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct LaneName(String);
 
@@ -369,8 +369,32 @@ pub struct LaneName(String);
 pub struct InvalidLane(String);
 
 impl LaneName {
+    /// How trunk's own lane reads to a person.
+    pub const TRUNK_LABEL: &'static str = "main";
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// `raw` made a lane name: each whitespace character and `#` becomes `-`,
+    /// and empty text becomes `-`.
+    pub fn dashed(raw: &str) -> Self {
+        let dashed = raw.replace(|ch: char| ch.is_whitespace() || ch == '#', "-");
+        Self(if dashed.is_empty() {
+            "-".to_owned()
+        } else {
+            dashed
+        })
+    }
+
+    /// How a lane of this routing name reads to a person: `main` for trunk's
+    /// own lane, else the name itself.
+    pub fn label(&self, trunk: bool) -> &str {
+        if trunk {
+            Self::TRUNK_LABEL
+        } else {
+            self.as_str()
+        }
     }
 
     /// Whether `raw` is a flat name, as a typed `--channel` must be: non-empty
@@ -528,17 +552,18 @@ impl Lane {
         }
     }
 
-    /// The routing key: the name, else the home directory's basename.
-    pub fn routing_name(&self) -> Option<&str> {
-        self.name.as_ref().map(LaneName::as_str).or(self.basename())
+    /// The one name of the lane every comparison, key, and record reads: the
+    /// name, else the home directory's basename made a lane name.
+    pub fn routing_name(&self) -> LaneName {
+        match &self.name {
+            Some(name) => name.clone(),
+            None => LaneName::dashed(self.basename().unwrap_or_default()),
+        }
     }
 
     /// The human lane name: `main` for trunk's own lane, else the routing name.
-    pub fn label(&self) -> Option<&str> {
-        if self.is_trunk() {
-            return Some("main");
-        }
-        self.routing_name()
+    pub fn label(&self) -> String {
+        self.routing_name().label(self.is_trunk()).to_owned()
     }
 
     /// The lane an old `channel` stamp means at this lane's checkout.
@@ -1337,19 +1362,15 @@ impl std::fmt::Display for FocusNonce {
     }
 }
 
-/// Compose a routing channel for read-side fallback. A launch-stamped lane
-/// wins; otherwise the lane-path directory basename is the fallback for agents
-/// not launched by this RimZ binary.
-pub(crate) fn compose_channel(
-    explicit: Option<&str>,
-    dir_basename: Option<&str>,
-) -> Option<String> {
-    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        return Some(channel.to_owned());
+/// The lane name of a row an older binary wrote before rows stored their lane:
+/// its `channel` stamp, else its lane path's directory, each made a lane name.
+/// Link 3 deletes it with the lane-less rows.
+pub(crate) fn legacy_lane_name(stamp: Option<&str>, lane_path: Option<&str>) -> Option<LaneName> {
+    if let Some(stamp) = stamp.filter(|stamp| !stamp.is_empty()) {
+        return Some(LaneName::dashed(stamp));
     }
-    dir_basename
-        .filter(|dir| !dir.is_empty())
-        .map(ToOwned::to_owned)
+    let dir = Path::new(lane_path?).file_name()?.to_str()?;
+    Some(LaneName::dashed(dir))
 }
 
 /// The worktree directory name a branch-style request maps to: `/` joins as `-`.
@@ -1473,12 +1494,18 @@ mod tests {
         for (lane, trunk, stored, routing, label) in cases {
             assert_eq!(lane.is_trunk(), trunk, "{lane:?}");
             assert_eq!(lane.stored_name(), stored, "{lane:?}");
-            assert_eq!(lane.routing_name(), Some(routing), "{lane:?}");
-            assert_eq!(lane.label(), Some(label), "{lane:?}");
+            assert_eq!(lane.routing_name().as_str(), routing, "{lane:?}");
+            assert_eq!(lane.label(), label, "{lane:?}");
         }
         assert_eq!(
             named_lane(LaneHome::Worktree, "/w/auth", "x").path(),
             "/w/auth"
+        );
+        let spaced = Lane::own(LaneHome::Foreign, "/tmp/my dir#2");
+        assert_eq!(spaced.routing_name().as_str(), "my-dir-2");
+        assert_eq!(
+            Lane::own(LaneHome::Foreign, "/").routing_name().as_str(),
+            "-"
         );
     }
 
@@ -1535,13 +1562,16 @@ mod tests {
     }
 
     #[test]
-    fn compose_channel_uses_explicit_then_worktree_basename() {
+    fn a_legacy_lane_name_is_the_stamp_then_the_lane_paths_directory() {
+        let name = |stamp, path| legacy_lane_name(stamp, path).map(String::from);
         assert_eq!(
-            compose_channel(Some("design"), Some("auth")).as_deref(),
+            name(Some("design"), Some("/w/auth")).as_deref(),
             Some("design")
         );
-        assert_eq!(compose_channel(None, Some("auth")).as_deref(), Some("auth"));
-        assert_eq!(compose_channel(None, None), None);
+        assert_eq!(name(Some(""), Some("/w/auth")).as_deref(), Some("auth"));
+        assert_eq!(name(None, Some("/w/my dir")).as_deref(), Some("my-dir"));
+        assert_eq!(name(None, Some("/")), None);
+        assert_eq!(name(None, None), None);
     }
 
     #[test]

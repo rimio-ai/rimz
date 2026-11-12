@@ -324,7 +324,7 @@ fn wait_attention_handles_round_trip_beside_teamless_role_rivals() {
         handle,
         None,
         &rimz::address::AddressContext {
-            channel: Some("a".to_owned()),
+            channel: Some("a".parse().unwrap()),
             origin: rimz::address::ChannelOrigin::Explicit,
         },
     );

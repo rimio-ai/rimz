@@ -46,7 +46,7 @@ fn snapshot(agents: Vec<rimz::agents::AgentState>) -> rimz::store::snapshot::Sid
 
 fn context(channel: &str) -> rimz::address::AddressContext {
     rimz::address::AddressContext {
-        channel: Some(channel.to_owned()),
+        channel: Some(channel.parse().unwrap()),
         origin: rimz::address::ChannelOrigin::Stamped,
     }
 }

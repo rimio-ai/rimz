@@ -385,7 +385,7 @@ fn slot(agent: &AgentState) -> SlotKey {
         },
     };
     SlotKey {
-        channel: agent.channel(),
+        channel: agent.lane_name().map(String::from),
         kind: agent.kind.clone(),
         slot,
     }

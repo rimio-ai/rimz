@@ -94,7 +94,9 @@ pub(crate) fn arm_member(
     let Some(declared_role) = team.roles.iter().find(|binding| binding.role == role) else {
         return Ok(0);
     };
-    let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+    let channel = member
+        .lane_name()
+        .map_or_else(|| "external".to_owned(), String::from);
     let instance: TeamInstanceId = format!("{name}#{channel}").parse()?;
     let peers: Vec<_> = agents.iter().collect();
     let target = TaskTarget {

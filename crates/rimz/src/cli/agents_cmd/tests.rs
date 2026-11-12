@@ -339,9 +339,13 @@ fn create_args_for_current_channel(
         };
         Some((caller, vec![agent]))
     });
-    let create = rimz::address::create_mention("@codex", None, current.as_deref())
-        .unwrap()
-        .unwrap();
+    let create = rimz::address::create_mention(
+        "@codex",
+        None,
+        current.as_deref().map(rimz::ids::LaneName::as_str),
+    )
+    .unwrap()
+    .unwrap();
     let args = create_launch_args(create, "@codex", None, None, &current, "hi");
     assert_eq!(args.launch.spec.as_deref(), Some("codex"));
     assert_eq!(args.launch.prompt.as_deref(), Some("hi"));
@@ -1557,6 +1561,7 @@ fn refresh_targets_honor_channel_filter() {
     let owner_pane = rimz::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: owner.kind.clone(),
         kind_ordinal: owner.kind_ordinal,
         name: owner.name.clone(),
@@ -1875,7 +1880,8 @@ mod launch_options {
                 &overrides,
                 Some("5".parse().expect("budget")),
                 None,
-                lane,
+                lane.map(|lane| lane.parse::<rimz::ids::LaneName>().unwrap())
+                    .as_ref(),
                 false,
                 None,
             )
@@ -1886,7 +1892,10 @@ mod launch_options {
             assert_eq!(cell.launch.mode, Some(PermissionMode::Yolo));
             assert_eq!(cell.launch.model.as_deref(), Some("chosen"));
             assert_eq!(cell.launch.budget.as_deref(), Some("$5.00"));
-            assert_eq!(finalized.inferred_lane.as_deref(), inferred);
+            assert_eq!(
+                finalized.inferred_lane.as_ref().map(|lane| lane.as_str()),
+                inferred
+            );
             assert_eq!(
                 finalized.qualified_spec.as_deref(),
                 inferred.map(|_| "forge.planner")

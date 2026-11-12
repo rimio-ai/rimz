@@ -35,6 +35,7 @@ fn row(id: u32, handle: Option<&str>) -> SidebarRow {
         checkout: None,
         worktree_branch: Some("feature/keyboard".to_owned()),
         channel: Some("feature".to_owned()),
+        lane: None,
         unread: false,
         inactive: false,
         archived: false,
@@ -98,7 +99,7 @@ fn snapshot(agents: Vec<AgentState>, rows: Vec<SidebarRow>) -> SidebarSnapshot {
 fn assert_selects(snapshot: &SidebarSnapshot, card: &Candidate) {
     for channel in [None, Some("feature"), Some("other")] {
         let reader = AddressContext {
-            channel: channel.map(str::to_owned),
+            channel: channel.map(|channel| channel.parse().unwrap()),
             origin: ChannelOrigin::Stamped,
         };
         let matches = resolve_many(snapshot, &card.target, None, &reader).unwrap();

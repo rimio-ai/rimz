@@ -108,6 +108,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         checkout: None,
         worktree_branch: None,
         channel: None,
+        lane: None,
         unread: false,
         inactive: false,
         archived: false,

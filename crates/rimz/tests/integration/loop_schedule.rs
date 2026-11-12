@@ -4687,7 +4687,7 @@ fn team_signal_payload_handles_round_trip_beside_teamless_role_rivals() {
             handle,
             None,
             &rimz::address::AddressContext {
-                channel: Some("feature-team".to_owned()),
+                channel: Some("feature-team".parse().unwrap()),
                 origin: rimz::address::ChannelOrigin::Explicit,
             },
         );

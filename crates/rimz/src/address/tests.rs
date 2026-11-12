@@ -12,7 +12,7 @@ use crate::store::message::{
 
 fn context(channel: Option<&str>) -> AddressContext {
     AddressContext {
-        channel: channel.map(ToOwned::to_owned),
+        channel: channel.map(|channel| channel.parse().unwrap()),
         origin: ChannelOrigin::Stamped,
     }
 }
@@ -43,7 +43,7 @@ fn paste_addresses_round_trip_from_every_reader() {
         context(Some("b")),
         context(Some("pair")),
         AddressContext {
-            channel: Some("main".into()),
+            channel: Some("main".parse().unwrap()),
             origin: ChannelOrigin::Root,
         },
     ] {
@@ -527,12 +527,15 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     snapshot.agents = vec![planner, coder, other].into();
 
     assert_eq!(
-        snapshot.agents[0].channel().as_deref(),
+        snapshot.agents[0]
+            .lane_name()
+            .as_ref()
+            .map(LaneName::as_str),
         Some("team-channel/forge")
     );
     assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/forge");
-    assert!((&snapshot.agents[0]).in_worktree("team-channel/forge"));
-    assert!(!(&snapshot.agents[0]).in_worktree("team-channel"));
+    assert!((&snapshot.agents[0]).in_lane(&LaneSelector::parse(Some("team-channel/forge"), None)));
+    assert!(!(&snapshot.agents[0]).in_lane(&LaneSelector::parse(Some("team-channel"), None)));
 
     let ids: Vec<&str> = resolve_many(
         &snapshot,
@@ -565,10 +568,22 @@ fn channel_team_reads_the_stamped_team_of_each_lane_shape() {
     solo.channel = Some("team-channel/docs".to_owned());
     let agents = vec![planner, scout, solo];
 
-    assert_eq!(channel_team(&agents, "team-channel/forge"), Some("forge"));
-    assert_eq!(channel_team(&agents, "feat-x"), Some("forge"));
-    assert_eq!(channel_team(&agents, "team-channel/docs"), None);
-    assert_eq!(channel_team(&agents, "unknown-lane"), None);
+    assert_eq!(
+        channel_team(&agents, &"team-channel/forge".parse().unwrap()),
+        Some("forge")
+    );
+    assert_eq!(
+        channel_team(&agents, &"feat-x".parse().unwrap()),
+        Some("forge")
+    );
+    assert_eq!(
+        channel_team(&agents, &"team-channel/docs".parse().unwrap()),
+        None
+    );
+    assert_eq!(
+        channel_team(&agents, &"unknown-lane".parse().unwrap()),
+        None
+    );
 }
 
 #[test]
@@ -581,7 +596,7 @@ fn channel_team_declines_a_lane_holding_two_teams() {
     docs.team = Some("docs".to_owned());
     let agents = vec![forge, docs];
 
-    assert_eq!(channel_team(&agents, "shared"), None);
+    assert_eq!(channel_team(&agents, &"shared".parse().unwrap()), None);
 }
 
 #[test]
@@ -590,24 +605,30 @@ fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
     team_agent.team = Some("forge".to_owned());
     team_agent.channel = Some("auth".to_owned());
 
-    assert_eq!(team_agent.channel().as_deref(), Some("auth"));
+    assert_eq!(
+        team_agent.lane_name().as_ref().map(LaneName::as_str),
+        Some("auth")
+    );
     assert_eq!((&team_agent).channel_label(), "auth");
-    assert!((&team_agent).in_worktree("auth"));
-    assert!(!(&team_agent).in_worktree("auth/forge"));
+    assert!((&team_agent).in_lane(&LaneSelector::parse(Some("auth"), None)));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("auth/forge"), None)));
 }
 
 #[test]
-fn channel_and_in_worktree_use_directory_not_branch() {
+fn lane_name_and_in_lane_use_directory_not_branch() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("forge".to_owned());
     team_agent.worktree_branch = Some("scratch".to_owned());
 
-    assert_eq!(team_agent.channel().as_deref(), Some("auth"));
+    assert_eq!(
+        team_agent.lane_name().as_ref().map(LaneName::as_str),
+        Some("auth")
+    );
     assert_eq!((&team_agent).channel_label(), "auth");
-    assert!(!(&team_agent).in_worktree("auth/forge"));
-    assert!((&team_agent).in_worktree("auth"));
-    assert!(!(&team_agent).in_worktree("scratch"));
-    assert!(!(&team_agent).in_worktree("feat/auth"));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("auth/forge"), None)));
+    assert!((&team_agent).in_lane(&LaneSelector::parse(Some("auth"), None)));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("scratch"), None)));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("feat/auth"), None)));
 }
 
 #[test]
@@ -615,8 +636,11 @@ fn branch_style_worktree_filter_matches_dashed_channel() {
     let mut agent = agent("claude", "session-feat", Some("feat-great"), "terminal_1");
     agent.worktree_branch = Some("feat/great".to_owned());
 
-    assert_eq!(agent.channel().as_deref(), Some("feat-great"));
-    assert!((&agent).in_worktree("feat/great"));
+    assert_eq!(
+        agent.lane_name().as_ref().map(LaneName::as_str),
+        Some("feat-great")
+    );
+    assert!((&agent).in_lane(&LaneSelector::parse(Some("feat/great"), None)));
 }
 
 #[test]
@@ -626,10 +650,13 @@ fn explicit_named_channel_wins_over_worktree_and_team() {
     agent.team = Some("forge".to_owned());
     agent.channel = Some("design".to_owned());
 
-    assert_eq!(agent.channel().as_deref(), Some("design"));
+    assert_eq!(
+        agent.lane_name().as_ref().map(LaneName::as_str),
+        Some("design")
+    );
     assert_eq!((&agent).channel_label(), "design");
-    assert!((&agent).in_worktree("design"));
-    assert!(!(&agent).in_worktree("feat/auth"));
+    assert!((&agent).in_lane(&LaneSelector::parse(Some("design"), None)));
+    assert!(!(&agent).in_lane(&LaneSelector::parse(Some("feat/auth"), None)));
 }
 
 #[test]
@@ -718,8 +745,14 @@ fn root_lane_handle_round_trips_and_keeps_legacy_aliases() {
             &root
         ));
     }
-    assert!(agent_in_worktree(&root, "main"));
-    assert_eq!(root.channel().as_deref(), Some("checkout"));
+    assert!(agent_in_lane(
+        &root,
+        &LaneSelector::parse(Some("main"), None)
+    ));
+    assert_eq!(
+        root.lane_name().as_ref().map(LaneName::as_str),
+        Some("checkout")
+    );
 }
 
 #[test]
@@ -1571,13 +1604,24 @@ fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
         unreachable!();
     };
     *channel = Some("project".to_owned());
-    let root_channel = root_lane_channel(std::path::Path::new("/repo/project"));
     assert_eq!(
-        message_header(&sender, &peers, Some("docs"), root_channel.as_deref()).unwrap(),
+        message_header(
+            &sender,
+            &peers,
+            Some("docs"),
+            Some(std::path::Path::new("/repo/project"))
+        )
+        .unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#main (reviewer)\nContent:\n"
     );
     assert_eq!(
-        message_header(&sender, &peers, Some("project"), root_channel.as_deref()).unwrap(),
+        message_header(
+            &sender,
+            &peers,
+            Some("project"),
+            Some(std::path::Path::new("/repo/project"))
+        )
+        .unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (reviewer)\nContent:\n"
     );
 }
@@ -1746,6 +1790,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
     PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
@@ -1766,6 +1811,7 @@ fn fresh_pane(kind: &str, raw_pane: &str) -> PaneAgent {
     PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
@@ -1794,6 +1840,7 @@ fn bound_pane(
     PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: Some(ordinal),
         name: Some(name.to_owned()),
@@ -2232,7 +2279,7 @@ fn launched_children_in_channel_spans_parents_and_honours_the_filter() {
     ];
 
     assert_eq!(
-        launched_children_in_channel(&agents, Some("feat-x"))
+        launched_children_in_channel(&agents, Some(&LaneSelector::parse(Some("feat-x"), None)))
             .into_iter()
             .map(|agent| agent.agent_id.as_str())
             .collect::<Vec<_>>(),
@@ -2730,4 +2777,53 @@ fn the_yield_never_crosses_lanes() {
         ["76b7c2b6"],
         "in one lane the claimed holder still wins"
     );
+}
+
+#[test]
+fn the_lane_selector_reads_every_trunk_alias_and_the_dashed_slash_form() {
+    use crate::ids::{Lane, LaneHome};
+    let root = std::path::Path::new("/repo/checkout");
+    for alias in [
+        None,
+        Some(""),
+        Some("main"),
+        Some("checkout"),
+        Some("/repo/checkout"),
+    ] {
+        assert!(
+            LaneSelector::parse(alias, Some(root)).is_trunk(),
+            "{alias:?}"
+        );
+    }
+    for name in ["design", "feat/x", "auth"] {
+        assert!(
+            !LaneSelector::parse(Some(name), Some(root)).is_trunk(),
+            "{name}"
+        );
+    }
+    let row = |lane: Lane| {
+        let mut row = agent("codex", "session", Some("checkout"), "terminal_1");
+        row.worktree_path = Some(lane.path().to_owned());
+        row.lane = Some(lane);
+        row
+    };
+    let trunk = Lane::own(LaneHome::Trunk, "/repo/checkout");
+    let own = row(trunk.clone());
+    let design = row(trunk.clone().named("design".parse().unwrap()));
+    let docs = row(trunk.named("docs".parse().unwrap()));
+    let feat = row(Lane::own(
+        LaneHome::Worktree,
+        "/repo/.rimz/worktrees/feat-x",
+    ));
+    let lane = |raw: &str| LaneSelector::parse(Some(raw), Some(root));
+    for raw in ["main", "checkout", "/repo/checkout"] {
+        assert!(agent_in_lane(&own, &lane(raw)), "{raw}");
+        assert!(!agent_in_lane(&design, &lane(raw)), "{raw}");
+    }
+    assert!(agent_in_lane(&design, &lane("design")));
+    assert!(!agent_in_lane(&own, &lane("design")));
+    assert!(!agent_in_lane(&docs, &lane("design")));
+    assert!(agent_in_lane(&feat, &lane("feat/x")));
+    assert!(agent_in_lane(&feat, &lane("feat-x")));
+    assert!(!agent_in_lane(&feat, &lane("design")));
 }

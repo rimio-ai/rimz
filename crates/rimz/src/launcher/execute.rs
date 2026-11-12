@@ -416,14 +416,7 @@ fn open_fresh(
     if fresh.pick_session && in_place {
         interaction.notice(Notice::PickerReceipt {
             kind: batch.identities()[0].kind.as_str(),
-            channel: fresh.lane.stored_name(),
-            cwd: batch.identities()[0]
-                .launch
-                .checkout
-                .as_deref()
-                .map(Path::new)
-                .unwrap_or(cwd),
-            project: &workspace.project_root,
+            lane: &fresh.lane,
         })?;
     }
     let title = if let Some(leader) = &leader {
@@ -535,7 +528,7 @@ fn open_fresh(
         identities: batch.identities().to_vec(),
         leader_index: fresh.leader_index,
         team: fresh.team,
-        channel: fresh.lane.stored_name().map(ToOwned::to_owned),
+        lane: fresh.lane.clone(),
         cwd: fresh.launch.cwd,
         in_place,
         pick_session: fresh.pick_session,

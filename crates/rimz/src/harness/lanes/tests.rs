@@ -521,11 +521,15 @@ fn a_directory_channel_is_its_own_lanes_routing_name_and_none_for_trunk() {
     assert_eq!(directory_channel(&room.root, &room.root), None);
     assert_eq!(directory_channel(&room.root, &room.root.join("sub")), None);
     assert_eq!(
-        directory_channel(&room.root, &room.auth).as_deref(),
+        directory_channel(&room.root, &room.auth)
+            .as_ref()
+            .map(|lane| lane.as_str()),
         Some("auth")
     );
     assert_eq!(
-        directory_channel(&room.root, &room.auth.join("src")).as_deref(),
+        directory_channel(&room.root, &room.auth.join("src"))
+            .as_ref()
+            .map(|lane| lane.as_str()),
         Some("auth"),
         "a worktree subdirectory routes to its worktree"
     );

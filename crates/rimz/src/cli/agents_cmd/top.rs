@@ -138,6 +138,8 @@ fn sample_snapshot(
     reader: &address::AddressContext,
     demotion: &rimz::agents::ParkDemotion,
 ) -> TopSample {
+    let lane = channel
+        .map(|filter| address::LaneSelector::parse(Some(filter), snapshot.project_root.as_deref()));
     let in_room: HashMap<AgentSessionId, Option<u32>> = snapshot
         .agent_panes
         .iter()
@@ -153,7 +155,10 @@ fn sample_snapshot(
         .iter()
         .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| in_room.contains_key(&agent.agent_id))
-        .filter(|agent| channel.is_none_or(|filter| address::agent_in_worktree(agent, filter)));
+        .filter(|agent| {
+            lane.as_ref()
+                .is_none_or(|lane| address::agent_in_lane(agent, lane))
+        });
     let now = jiff::Timestamp::now();
     let mut rows = BTreeMap::new();
     for agent in agents {

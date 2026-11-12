@@ -259,7 +259,7 @@ fn message_limit_keeps_a_whole_repeat_and_counts_hidden_messages() {
         vec![newest, older, hidden],
         &[],
         &LaneScope::Root,
-        Some("project"),
+        Some(Path::new("/work/project")),
         1,
         0,
         "empty",
@@ -287,7 +287,7 @@ fn message_limit_counts_members_of_hidden_folds() {
         vec![newest.clone(), newest, hidden.clone(), hidden],
         &[],
         &LaneScope::All,
-        Some("project"),
+        Some(Path::new("/work/project")),
         1,
         0,
         "empty",
@@ -533,9 +533,9 @@ fn message_digest_groups_all_lanes_once_by_latest_activity() {
 
 #[test]
 fn root_scope_includes_legacy_and_basename_records() {
-    assert!(LaneScope::Root.contains_channel(None, Some("project")));
-    assert!(LaneScope::Root.contains_channel(Some("project"), Some("project")));
-    assert!(!LaneScope::Root.contains_channel(Some("docs"), Some("project")));
+    assert!(LaneScope::Root.contains_channel(None, Some(Path::new("/work/project"))));
+    assert!(LaneScope::Root.contains_channel(Some("project"), Some(Path::new("/work/project"))));
+    assert!(!LaneScope::Root.contains_channel(Some("docs"), Some(Path::new("/work/project"))));
 }
 
 #[test]
@@ -683,7 +683,7 @@ fn other_lanes_line_counts_only_queued_as_undelivered() {
         other_lanes_line(
             &[claimed.clone(), queued],
             &LaneScope::Root,
-            Some("project"),
+            Some(Path::new("/work/project")),
             false
         )
         .as_deref(),
@@ -692,7 +692,13 @@ fn other_lanes_line_counts_only_queued_as_undelivered() {
         )
     );
     assert_eq!(
-        other_lanes_line(&[claimed], &LaneScope::Root, Some("project"), false).as_deref(),
+        other_lanes_line(
+            &[claimed],
+            &LaneScope::Root,
+            Some(Path::new("/work/project")),
+            false
+        )
+        .as_deref(),
         Some("no messages in #main. 1 in 1 other lane — rimz message list --all")
     );
     assert_eq!(
@@ -702,7 +708,7 @@ fn other_lanes_line_counts_only_queued_as_undelivered() {
                 message_row("current", Some("project"), "current root"),
             ],
             &LaneScope::Named("ops".to_owned()),
-            Some("project"),
+            Some(Path::new("/work/project")),
             false,
         )
         .as_deref(),
@@ -741,7 +747,7 @@ fn render_digest(
         messages,
         &[],
         &lane_scope,
-        Some("project"),
+        Some(Path::new("/work/project")),
         0,
         0,
         &empty_message_digest(&lane_scope, status),

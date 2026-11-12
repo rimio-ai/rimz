@@ -50,7 +50,12 @@ pub(super) fn launch_layout(
         crate::cli::report_unknown_config_keys(&machine_config)?;
         let effective =
             rimz::config::effective::load(&machine_config, &ctx.workspace.project_root)?;
-        let lane = launch.cohort.channel.as_deref().or_else(|| ctx.channel());
+        let lane = launch
+            .cohort
+            .channel
+            .as_deref()
+            .map(rimz::ids::LaneName::dashed)
+            .or_else(|| ctx.current_channel().as_deref().cloned());
         let resolved_snapshot = if launch.spec.is_some() && lane.is_some() {
             Some(ctx.cached_snapshot()?)
         } else {
@@ -75,7 +80,7 @@ pub(super) fn launch_layout(
             &LaunchOverrideArgs::default(),
             launch.cohort.budget,
             launch.max_turns,
-            lane,
+            lane.as_ref(),
             launch.name.is_some(),
             Some((ctx.store.runtime_paths(), ctx.store.paths())),
         )
@@ -113,7 +118,7 @@ pub(super) fn launch_layout(
             machine: machine_config,
             mux: globals.mux,
             root: globals.root.clone(),
-            channel: ctx.channel().map(str::to_owned),
+            channel: ctx.current_channel().as_deref().cloned(),
         },
         launch: rimz::launcher::LayoutLaunch {
             spec: launch.spec.take(),
@@ -154,7 +159,7 @@ pub(super) fn launch_layout(
         rimz::launcher::Preparation::Handled(outcome) => outcome,
     };
     if let rimz::launcher::LaunchOutcome::Opened(launched) = outcome {
-        launched.write_receipt(&mut render::out(), &ctx.store, &ctx.workspace.project_root)?;
+        launched.write_receipt(&mut render::out(), &ctx.store)?;
     }
     Ok(())
 }

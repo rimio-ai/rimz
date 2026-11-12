@@ -452,8 +452,8 @@ pub(super) fn build_entry(
             idle_since: agent_idle_since(agent, row),
         },
         placement: PlacementReport {
-            lane_label: agent.lane_label(),
-            channel: agent.channel(),
+            lane_label: rimz::address::lane_label(agent),
+            channel: agent.lane_name().map(String::from),
             worktree: agent.worktree_path.clone(),
             branch: agent.worktree_branch.clone(),
             pane,

@@ -110,7 +110,9 @@ pub(crate) fn team_lifecycle_signals(
             .iter()
             .any(|peer| peer.kind == agent.kind && peer.agent_id == agent.agent_id)
     }));
-    let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+    let channel = member
+        .lane_name()
+        .map_or_else(|| "external".to_owned(), String::from);
     let payload = Map::from_iter([
         ("team".to_owned(), json!(team)),
         ("instance".to_owned(), json!(format!("{team}#{channel}"))),
@@ -171,7 +173,7 @@ fn payload_handle(
     if !conflict {
         return handle;
     }
-    match agent.lane_label() {
+    match crate::address::lane_label(agent) {
         Some(channel) => format!("@{}#{channel}", agent.agent_id),
         None => format!("@{}", agent.agent_id),
     }
@@ -239,7 +241,10 @@ mod tests {
             .iter()
             .find(|row| row.kind == event.kind && row.agent_id == event.agent_id)
             .unwrap();
-        let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+        let channel = member
+            .lane_name()
+            .map(String::from)
+            .unwrap_or_else(|| "external".to_owned());
         let cohorts = team_cohorts(rows);
         let live = cohorts
             .iter()
@@ -374,7 +379,7 @@ mod tests {
                 handle,
                 None,
                 &AddressContext {
-                    channel: Some("auth".to_owned()),
+                    channel: Some("auth".parse().unwrap()),
                     origin: ChannelOrigin::Explicit,
                 },
             );
@@ -404,7 +409,7 @@ mod tests {
             event.at,
         );
         let context = AddressContext {
-            channel: Some("auth".to_owned()),
+            channel: Some("auth".parse().unwrap()),
             origin: ChannelOrigin::Explicit,
         };
         assert_eq!(

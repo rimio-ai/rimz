@@ -152,6 +152,7 @@ pub(crate) fn activity_row(
         worktree_path: Some(worktree_path.display().to_string()),
         worktree_branch: None,
         channel: None,
+        lane: None,
         unread: false,
         inactive: false,
         archived: false,

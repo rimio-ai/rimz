@@ -17,7 +17,7 @@ use crate::harness::budget::{BudgetSpec, DailyBudgetScope};
 use crate::harness::prompt_compose::SystemPromptSources;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::harness::spend_ladder::{SpendFacts, SpendStep};
-use crate::ids::{AgentKind, AgentSessionId, EventId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, LaneName};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use crate::store::message::AutoCompact;
 use crate::store::{
@@ -1044,7 +1044,7 @@ pub struct SupervisedLaunch {
     pub team_name: Option<String>,
     /// The lane a bare team role was qualified in; set only when qualification
     /// rewrote the spec.
-    pub inferred_lane: Option<String>,
+    pub inferred_lane: Option<LaneName>,
     /// Why a subagent's isolation was capped at its scoped parent's.
     pub clamped: Option<ClampSource>,
     /// A higher default permission grant lowered to the caller's recorded mode.
@@ -1065,7 +1065,7 @@ pub struct SupervisedLaunch {
 pub fn plan_supervised_launch(
     request: &crate::harness::run::SupervisedRunRequest,
     caller: Option<&crate::agents::AgentState>,
-    lane: Option<(&str, &str)>,
+    lane: Option<(&LaneName, &str)>,
     parent_isolation: Option<crate::config::Isolation>,
     workspace: &crate::workspace::ResolvedWorkspace,
     machine_config: &crate::config::MachineConfig,
@@ -1084,7 +1084,7 @@ pub fn plan_supervised_launch(
     if let Some((channel, team)) = lane {
         let qualified = crate::harness::spec::qualify_spec_in_channel(
             &request.spec,
-            channel,
+            channel.as_str(),
             team,
             &effective.teams,
             effective.profiles_for(scope),
@@ -1092,7 +1092,7 @@ pub fn plan_supervised_launch(
         )?;
         if let Cow::Owned(qualified) = qualified {
             spec = Cow::Owned(qualified);
-            inferred_lane = Some(channel.to_owned());
+            inferred_lane = Some(channel.clone());
         }
     }
     let isolation = request.isolation.or_else(|| {

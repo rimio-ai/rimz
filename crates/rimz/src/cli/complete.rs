@@ -373,7 +373,7 @@ pub(crate) fn transcript_targets() -> Vec<CompletionCandidate> {
             .snapshot
             .agents
             .iter()
-            .filter_map(AgentState::lane_label)
+            .filter_map(rimz::address::lane_label)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .map(|lane| CompletionCandidate::new(format!("#{lane}"))),

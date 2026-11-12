@@ -15,7 +15,7 @@ use crate::agents::{
 };
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::ContextMeterScale;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
+use crate::ids::{AgentKind, AgentSessionId, Lane, LaneName, PaneId, legacy_lane_name};
 use crate::pane::PaneRef;
 
 /// One frame-admitted sidebar row. The base names the row and pane; [`RowCard`]
@@ -33,6 +33,10 @@ pub struct SidebarRow {
     pub worktree_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// The agent row's stored lane; absent for a process row and a row an
+    /// older binary wrote before lanes were stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<Lane>,
     /// Shared pending-look state: the row has an open unread episode not reached
     /// by any read receipt. The producer opens/prunes episodes in `unread.json`;
     /// every snapshot fold derives this bit from that file plus read marks.
@@ -418,6 +422,9 @@ pub struct PaneAgent {
     /// Copied from the bound row, or derived from the snapshot's project root for a sessionless pane.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
+    /// The bound session's stored lane, or the sessionless pane's row lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<Lane>,
     /// The bound session, or `None` for a wired pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
@@ -464,21 +471,19 @@ impl PaneAgent {
         }
     }
 
-    /// The channel this pane participates in: stamped lane, else lane-path directory basename. `None` means the pane is outside a known worktree.
-    pub fn channel(&self) -> Option<String> {
-        compose_channel(
-            self.channel.as_deref(),
-            self.lane_path().and_then(|path| path.rsplit('/').next()),
-        )
+    /// The pane's lane name, read as
+    /// [`AgentState::lane_name`](crate::agents::AgentState::lane_name) reads it.
+    pub fn lane_name(&self) -> Option<LaneName> {
+        match &self.lane {
+            Some(lane) => Some(lane.routing_name()),
+            None => legacy_lane_name(self.channel.as_deref(), self.lane_path()),
+        }
     }
 
-    /// The human lane name; the root lane is `main`, while [`Self::channel`] stays the routing key.
-    pub fn lane_label(&self) -> Option<String> {
-        if self.root_lane {
-            Some("main".to_owned())
-        } else {
-            self.channel()
-        }
+    /// Whether the pane is in trunk's own lane, read as
+    /// [`AgentState::in_trunk`](crate::agents::AgentState::in_trunk) reads it.
+    pub fn in_trunk(&self) -> bool {
+        self.lane.as_ref().map_or(self.root_lane, Lane::is_trunk)
     }
 }
 

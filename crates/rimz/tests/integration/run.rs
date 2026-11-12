@@ -2576,7 +2576,7 @@ fn assert_subagent_checkout_case(
         }
         if cwd.is_some() && !applied {
             assert_eq!(
-                child.channel().as_deref(),
+                child.lane_name().map(String::from).as_deref(),
                 checkout.file_name().and_then(|name| name.to_str())
             );
         }
@@ -2598,7 +2598,7 @@ fn assert_subagent_checkout_case(
             let address = format!(
                 "@{}#{}",
                 child.name.as_deref().unwrap(),
-                child.channel().unwrap()
+                child.lane_name().map(String::from).unwrap()
             );
             let mut inspect = env.rimz();
             inspect.args(["agents", "show", &address, "--json"]).envs(
@@ -2751,7 +2751,7 @@ fn assert_subagent_checkout_case(
                 .envs(rimz::room::pane_identity_env(
                     &workspace,
                     &lane_path,
-                    child.channel().as_deref(),
+                    child.lane_name().map(String::from).as_deref(),
                 ))
                 .env(rimz::harness::launch::ENV_AGENT_KIND, kind)
                 .env(
@@ -2772,7 +2772,8 @@ fn assert_subagent_checkout_case(
             "@{}{}",
             child.name.as_deref().unwrap(),
             child
-                .channel()
+                .lane_name()
+                .map(String::from)
                 .map(|channel| format!("#{channel}"))
                 .unwrap_or_default()
         );

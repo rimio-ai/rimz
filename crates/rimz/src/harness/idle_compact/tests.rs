@@ -258,6 +258,7 @@ fn producer_fires_at_each_seats_own_floor_with_its_brief() {
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: candidate.kind.clone(),
         kind_ordinal: None,
         name: None,
@@ -462,6 +463,7 @@ fn keep_warm_holding_defers_compaction_until_the_horizon() {
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: seat.kind.clone(),
         kind_ordinal: None,
         name: None,

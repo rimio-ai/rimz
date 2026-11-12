@@ -17,6 +17,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
         checkout: agent.lane_checkout().map(ToOwned::to_owned),
         worktree_branch: agent.worktree_branch.clone(),
         channel: agent.channel.clone(),
+        lane: agent.lane.clone(),
         unread: false,
         inactive: false,
         archived: false,

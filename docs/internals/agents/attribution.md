@@ -20,7 +20,7 @@ A report runs three filters in order: lane selection, lifetime admission, and br
 
 ### Lane selection
 
-Lane selection picks root records, and launched children join through their durable parent link regardless of their own lane stamp. The CLI handler (`cli/agents_cmd/attribution.rs`) resolves a channel filter as `agents list` does: the `SCOPE` when given, else the caller's current channel unless `--all` is set. With a filter, it takes the roots `address::agent_in_worktree` places in it. Without one, it takes the roots whose lane path is the caller's checkout, or every root under `--all`. It sets provider-native subagents aside for the [subagent breakdown](#the-subagent-breakdown). The branch a report filters on also defaults from the selection, as the reference's `--branch` row describes.
+Lane selection picks root records, and launched children join through their durable parent link regardless of their own lane stamp. The CLI handler (`cli/agents_cmd/attribution.rs`) resolves a channel filter as `agents list` does: the `SCOPE` when given, else the caller's current channel unless `--all` is set. With a filter, it takes the roots `address::agent_in_lane` places in the lane the filter selects. Without one, it takes the roots whose lane path is the caller's checkout, or every root under `--all`. It sets provider-native subagents aside for the [subagent breakdown](#the-subagent-breakdown). The branch a report filters on also defaults from the selection, as the reference's `--branch` row describes.
 
 ### Lifetime admission
 

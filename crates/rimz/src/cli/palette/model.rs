@@ -117,9 +117,8 @@ impl<'a> Roster<'a> {
             channel: None,
             origin: ChannelOrigin::Explicit,
         };
-        let handle = agent
-            .lane_label()
-            .map(|_| agent_handle(agent, &self.peers, true));
+        let handle =
+            rimz::address::lane_label(agent).map(|_| agent_handle(agent, &self.peers, true));
         let session = (!agent.agent_id.is_provisional()).then(|| format!("@{}", agent.agent_id));
         [handle, session]
             .into_iter()
@@ -241,13 +240,13 @@ fn child_card(
     pane: &PaneId,
 ) -> Candidate {
     let state = roster.agent(&child.id);
-    let parent_lane = roster.agent(&row.id).and_then(AgentState::lane_label);
+    let parent_lane = roster.agent(&row.id).and_then(rimz::address::lane_label);
     let own_lane = state
-        .and_then(AgentState::lane_label)
+        .and_then(rimz::address::lane_label)
         .filter(|lane| Some(lane) != parent_lane.as_ref());
     let home = match &own_lane {
         Some(lane) => {
-            let at_root = state.is_some_and(|state| state.root_lane);
+            let at_root = state.is_some_and(AgentState::in_trunk);
             let lane_key = format!("channel:{lane}");
             roster.snapshot.worktree_groups.iter().find(|group| {
                 if at_root {

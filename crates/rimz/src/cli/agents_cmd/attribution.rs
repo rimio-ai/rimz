@@ -47,11 +47,14 @@ pub(super) fn attribution(
             roots.push(agent);
         }
     }
+    let lane = channel.as_deref().map(|filter| {
+        rimz::address::LaneSelector::parse(Some(filter), Some(&ctx.workspace.project_root))
+    });
     let roots = roots
         .into_iter()
         .filter(|agent| {
-            if let Some(filter) = channel.as_deref() {
-                rimz::address::agent_in_worktree(agent, filter)
+            if let Some(lane) = &lane {
+                rimz::address::agent_in_lane(agent, lane)
             } else if let Some(worktree) = default_worktree {
                 agent
                     .lane_path()
@@ -120,13 +123,11 @@ pub(super) fn attribution(
         return render::json_pretty(&report);
     }
     report.scope.channel =
-        common_optional(roots.iter().map(|agent| agent.lane_label())).or_else(|| {
-            report.scope.channel.clone().map(|channel| {
-                if rimz::address::is_root_lane_filter(&channel, &ctx.workspace.project_root) {
-                    "main".to_owned()
-                } else {
-                    channel
-                }
+        common_optional(roots.iter().map(|agent| rimz::address::lane_label(agent))).or_else(|| {
+            report.scope.channel.as_deref().map(|channel| {
+                rimz::address::LaneSelector::parse(Some(channel), Some(&ctx.workspace.project_root))
+                    .label()
+                    .to_owned()
             })
         });
     let mut out = render::out();
@@ -144,7 +145,9 @@ fn report_scope(
     agents: &[&AgentState],
     lifetimes: &LaneLifetimes,
 ) -> AttributionScope {
-    let channel = common_optional(agents.iter().map(|agent| agent.channel())).or(filter);
+    let channel = common_optional(agents.iter().map(|agent| agent.lane_name()))
+        .map(String::from)
+        .or(filter);
     AttributionScope {
         selector,
         channel,
@@ -162,11 +165,11 @@ fn report_scope(
     }
 }
 
-fn common_optional(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+fn common_optional<T: PartialEq>(values: impl IntoIterator<Item = Option<T>>) -> Option<T> {
     let mut values = values.into_iter();
     let first = values.next()??;
     values
-        .all(|value| value.as_deref() == Some(first.as_str()))
+        .all(|value| value.as_ref() == Some(&first))
         .then_some(first)
 }
 

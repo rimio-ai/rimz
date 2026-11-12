@@ -189,7 +189,11 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
             identities: vec![launch_identity("claude", "peer")],
             leader_index: Some(0),
             team: None,
-            channel: Some("auth".into()),
+            lane: serde_json::from_value(serde_json::json!({
+                "home": "worktree",
+                "path": dir.path().join("auth").to_string_lossy(),
+            }))
+            .expect("lane"),
             cwd: dir.path().to_owned(),
             in_place: false,
             pick_session: false,
@@ -197,9 +201,7 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
             run: None,
         };
         let mut output = anstream::StripStream::new(Vec::new());
-        layout
-            .write_receipt(&mut output, &store, dir.path())
-            .unwrap();
+        layout.write_receipt(&mut output, &store).unwrap();
         String::from_utf8(output.into_inner()).unwrap()
     };
 
@@ -493,7 +495,7 @@ fn assert_receipt_handle_round_trip_beside_launched_child(ended_at: Option<jiff:
         &handle,
         None,
         &rimz::address::AddressContext {
-            channel: Some("auth".to_owned()),
+            channel: Some("auth".parse().unwrap()),
             origin: rimz::address::ChannelOrigin::Explicit,
         },
     );

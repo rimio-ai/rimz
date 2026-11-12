@@ -627,7 +627,7 @@ fn pane_json<'a>(
             kind: agent.kind.to_string(),
             handle: rimz::address::agent_handle(agent, peers, true),
             status: agent.effective_status(now).as_str().to_owned(),
-            worktree: agent.channel(),
+            worktree: agent.lane_name().map(String::from),
         }),
         command: pane.command.as_deref(),
         cwd: pane.cwd.as_deref(),
@@ -916,14 +916,14 @@ fn filter_panes_by_scope(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     scope: &str,
 ) -> Vec<PaneRef> {
-    let scope = scope.trim_start_matches('#');
+    let scope = rimz::address::LaneSelector::parse(Some(scope.trim_start_matches('#')), None);
     let views: HashSet<_> = panes
         .iter()
         .filter(|pane| {
             !pane.is_rimz_sidebar()
                 && snapshot
                     .agent_bound_to_pane(pane)
-                    .is_some_and(|agent| rimz::address::agent_in_worktree(agent, scope))
+                    .is_some_and(|agent| rimz::address::agent_in_lane(agent, &scope))
         })
         .filter_map(|pane| pane.view_id.clone())
         .collect();
@@ -933,7 +933,7 @@ fn filter_panes_by_scope(
             if !pane.is_rimz_sidebar()
                 && let Some(agent) = snapshot.agent_bound_to_pane(pane)
             {
-                return rimz::address::agent_in_worktree(agent, scope);
+                return rimz::address::agent_in_lane(agent, &scope);
             }
             pane.view_id
                 .as_ref()

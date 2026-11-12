@@ -972,6 +972,7 @@ fn snapshot(agent: AgentState, with_pane: bool, now: Timestamp) -> SidebarSnapsh
         snapshot.agent_panes = vec![PaneAgent {
             checkout: None,
             root_lane: false,
+            lane: None,
             kind: agent.kind.clone(),
             kind_ordinal: agent.kind_ordinal,
             name: agent.name.clone(),

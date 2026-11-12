@@ -694,6 +694,7 @@ fn pane(
     PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: name.map(ToOwned::to_owned),

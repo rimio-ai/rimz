@@ -27,7 +27,7 @@ impl SyntheticMessage<'_> {
             self.text,
             self.gate,
         )
-        .with_channel(self.agent.channel())
+        .with_channel(self.agent.lane_name().map(String::from))
         .with_sender(self.sender);
         match self.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),

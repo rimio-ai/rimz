@@ -9,7 +9,6 @@
 //! own lane, and one named lane is held at one checkout while live agents hold it.
 
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use crate::agents::AgentState;
 use crate::ids::{Lane, LaneHome, LaneName};
@@ -68,7 +67,10 @@ pub struct LaneRequest<'a> {
 pub fn decide(request: &LaneRequest<'_>) -> Result<Lane, LaneErr> {
     let own = own_lane(request.project_root, request.target);
     if let Some(typed) = request.typed.filter(|typed| !typed.is_empty()) {
-        if owned_names(&own, request.project_root).contains(&typed) {
+        if owned_names(&own, request.project_root)
+            .iter()
+            .any(|owned| owned == typed)
+        {
             return Ok(own);
         }
         let name = admit_named(request, &own, typed)?;
@@ -160,6 +162,18 @@ pub fn row_lane(agent: &AgentState, project_root: &Path) -> Option<Lane> {
     Some(own_lane(project_root, Path::new(path)).adopt(agent.channel.as_deref()))
 }
 
+/// The lane name a row's record `channel` field carries: its stored lane's
+/// stored name, else its old stamp when that is not empty.
+pub(super) fn stored_channel(agent: &AgentState) -> Option<&str> {
+    match &agent.lane {
+        Some(lane) => lane.stored_name(),
+        None => agent
+            .channel
+            .as_deref()
+            .filter(|channel| !channel.is_empty()),
+    }
+}
+
 /// The named lane an in-place team starts at trunk: `<project dir>/<team>`, or
 /// the team name alone when the root has no basename. Each whitespace
 /// character and `#` becomes `-`, so the name is always a lane name.
@@ -168,21 +182,16 @@ pub fn in_place_team_name(project_root: &Path, team: &str) -> LaneName {
         Some(dir) if !dir.is_empty() => format!("{dir}/{team}"),
         _ => team.to_owned(),
     };
-    let dashed = raw.replace(|ch: char| ch.is_whitespace() || ch == '#', "-");
-    // Every character a lane name refuses is mapped, so only an empty team at a
-    // root without a basename is left, and a configured team name is never empty.
-    dashed
-        .parse()
-        .unwrap_or_else(|_| LaneName::from_str("-").expect("`-` is a lane name"))
+    LaneName::dashed(&raw)
 }
 
 /// The routing name of `dir`'s own lane; trunk's own lane has none.
-pub fn directory_channel(project_root: &Path, dir: &Path) -> Option<String> {
+pub fn directory_channel(project_root: &Path, dir: &Path) -> Option<LaneName> {
     let lane = own_lane(project_root, dir);
     if lane.is_trunk() {
         return None;
     }
-    lane.routing_name().map(ToOwned::to_owned)
+    Some(lane.routing_name())
 }
 
 /// Admit a new managed worktree's name: no live agent holds a named lane under
@@ -233,7 +242,11 @@ fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<Lane
     if !LaneName::is_flat(name) {
         return Err(invalid());
     }
-    if !own.is_trunk() && owned_names(&trunk, project_root).contains(&name) {
+    if !own.is_trunk()
+        && owned_names(&trunk, project_root)
+            .iter()
+            .any(|owned| owned == name)
+    {
         return Err(LaneErr::TrunkCollision {
             name: name.to_owned(),
         });
@@ -257,14 +270,19 @@ fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<Lane
 }
 
 /// The names a checkout's own lane owns: its directory, and for trunk also `main`.
-fn owned_names<'a>(own: &'a Lane, project_root: &'a Path) -> Vec<&'a str> {
+fn owned_names(own: &Lane, project_root: &Path) -> Vec<String> {
     let mut names = Vec::new();
     match own.home() {
         LaneHome::Trunk => {
-            names.push("main");
-            names.extend(project_root.file_name().and_then(|name| name.to_str()));
+            names.push("main".to_owned());
+            names.extend(
+                project_root
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned),
+            );
         }
-        LaneHome::Worktree => names.extend(own.routing_name()),
+        LaneHome::Worktree => names.push(own.routing_name().into()),
         LaneHome::Foreign => {}
     }
     names
