@@ -973,11 +973,11 @@ This key is machine-only: project config cannot override it. It applies to every
 ```toml
 [agents.subagents]
 timeout = "30m"
-warn = ["6m", "3m"]
-grace = "3m"
+warn = ["10m", "5m"]
+grace = "5m"
 ```
 
-This table holds the defaults for [`rimz subagents`](../reference/cli/subagents.md), the agent-only doorway and the one launch path that creates a parented child. To give a child time to report instead of losing its work, supported providers receive warnings before the 30-minute work deadline. RimZ asks the child to stop at that deadline and allows three more minutes for reporting, then stops it with its last available assistant text as a partial response. Each launch can override the three values; the [deadline reference](../reference/cli/subagents.md#configure-the-deadline-ladder) covers delivery support and how to disable warnings or grace. A subagent cannot launch agents or subagents of its own.
+This table holds the defaults for [`rimz subagents`](../reference/cli/subagents.md), the agent-only doorway and the one launch path that creates a parented child. To give a child time to report instead of losing its work, supported providers receive warnings before the 30-minute work deadline. RimZ asks the child to stop at that deadline and allows five more minutes for reporting, then stops it with its last available assistant text as a partial response. Each launch can override the three values; the [deadline reference](../reference/cli/subagents.md#configure-the-deadline-ladder) covers delivery support and how to disable warnings or grace. A subagent cannot launch agents or subagents of its own.
 
 A child's own preset is Markdown, in `subagents/<name>.md`. This table holds only the doorway defaults.
 

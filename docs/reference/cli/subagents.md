@@ -48,8 +48,8 @@ rimz subagents wait "$first" "$second"
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
 | `--json` | off | With `--wait`, print a one-entry result map keyed by the child's petname instead of the petname and answer. The full run record is under `run` in `rimz agents show <ref> --json`. Refused without `--wait`. |
 | `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
-| `--warn <OFFSETS>` | `[agents.subagents] warn`, `6m,3m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
-| `--grace <DURATION>` | `[agents.subagents] grace`, `3m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
+| `--warn <OFFSETS>` | `[agents.subagents] warn`, `10m,5m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
+| `--grace <DURATION>` | `[agents.subagents] grace`, `5m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
 | `--keep` | off | Disable automatic completion cleanup; hold the pane after provider exit until its parent ends or Ctrl-C is pressed in the pane. Explicit stop and the run timeout still apply. |
 | `--isolation host\|scoped\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | Ordered host < scoped < sandbox: looser explicit overrides refuse; looser defaults clamp to the parent's level with a note. |
 | `--yolo` | off | Run the child in yolo mode, up to the parent's own recorded mode. A parent with no recorded mode is treated as auto, so the flag refuses there. Launch the parent with `--yolo` or a `mode: yolo` definition to allow it. |
@@ -115,8 +115,8 @@ JSON
 | `prompt_file` | one of the two | File whose contents become the assignment; a relative path resolves from the current directory |
 | `description` | no | Child card description and fleet report task label |
 | `timeout` | no | This child's deadline, as a duration string (`"45m"`) |
-| `warn` | no | Warning offsets as duration strings (`["6m", "3m"]`); `[]` disables warnings |
-| `grace` | no | Reporting time after the deadline, as a duration string (`"3m"`); `"0s"` kills at the deadline |
+| `warn` | no | Warning offsets as duration strings (`["10m", "5m"]`); `[]` disables warnings |
+| `grace` | no | Reporting time after the deadline, as a duration string (`"5m"`); `"0s"` kills at the deadline |
 | `model` | no | Model override |
 | `tier` | no | `intern`, `junior`, `senior`, or `principal`; conflicts with `model` |
 | `agent` | no | Re-base onto another profile or kind |
@@ -373,8 +373,8 @@ In the sidebar a child appears only under its direct parent's card, never as a d
 ```toml
 [agents.subagents]
 timeout = "30m"
-warn = ["6m", "3m"]
-grace = "3m"
+warn = ["10m", "5m"]
+grace = "5m"
 ```
 
 `[agents.subagents]` in `config.toml` sets the three defaults above. A duration is one whole number and one unit, `s`, `m`, `h`, or `d` (`90m`, not `1h30m`); bare `0` is invalid. Warning offsets are sorted largest first and deduplicated; zero offsets and offsets at or beyond the timeout are dropped. Use `warn = []` or `--warn none` for no warnings, and `grace = "0s"` or `--grace 0s` to kill at the deadline. The room enforces the kill bound even when no one waits on the child. These settings and flags do not change `rimz agents -p --timeout`.

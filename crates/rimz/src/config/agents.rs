@@ -322,8 +322,8 @@ impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             timeout: "30m".to_owned(),
-            warn: vec!["6m".to_owned(), "3m".to_owned()],
-            grace: "3m".to_owned(),
+            warn: vec!["10m".to_owned(), "5m".to_owned()],
+            grace: "5m".to_owned(),
         }
     }
 }
