@@ -132,6 +132,13 @@ impl<'a> Dashboard<'a> {
     }
 
     fn block(&self) -> RenderedBlock {
+        self.block_with(None)
+    }
+
+    fn block_with(
+        &self,
+        pixels: Option<&mut crate::sidebar_pane::pixel::meter::MeterPixels>,
+    ) -> RenderedBlock {
         dashboard_block(DashboardContext {
             theme: self.theme,
             providers: self.providers,
@@ -145,6 +152,7 @@ impl<'a> Dashboard<'a> {
             width: self.width,
             zones: &crate::config::BudgetBarConfig::default(),
             now: fixed_now(),
+            pixels,
         })
     }
 
@@ -688,6 +696,7 @@ fn bottom_chrome_texts_with_ui(
         ui,
         pane_ui,
         &ui.visible_roster(snapshot),
+        None,
     );
     (
         line_texts(&block.lines),

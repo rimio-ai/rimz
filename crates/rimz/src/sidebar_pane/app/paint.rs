@@ -505,7 +505,7 @@ impl FramePainter {
             return held.meter.clear(writer, permit);
         };
         held.sweep_once(writer, self.pixel_wrap, permit)?;
-        for (image_id, raster) in pixels.visible_rasters() {
+        for (image_id, raster) in pixels.visible_images() {
             held.meter
                 .ensure_transmitted(writer, image_id, raster, now_ms, permit)?;
         }

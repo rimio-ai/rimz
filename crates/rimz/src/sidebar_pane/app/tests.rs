@@ -51,8 +51,10 @@ fn kitty_commands(bytes: &[u8]) -> Vec<std::collections::BTreeMap<String, String
                     let (key, value) = field.split_once('=').expect("kitty control field");
                     (key.to_owned(), value.to_owned())
                 })
-                .collect()
+                .collect::<std::collections::BTreeMap<_, _>>()
         })
+        // A continuation chunk of a long transmission carries only `m`.
+        .filter(|command| command.contains_key("a"))
         .collect()
 }
 
@@ -537,7 +539,7 @@ fn a_denied_pane_shows_the_blank_box_and_cell_meter_and_retries() {
     assert!(!denied.sextants(), "a denied pane draws the blank pet box");
     assert!(ui.meter_pixels.is_none(), "a denied pane draws cell meters");
     assert!(
-        denied.bytes.contains("5h"),
+        denied.bytes.contains("5h") && denied.bytes.contains('▰'),
         "the budget bar is drawn as cells"
     );
 
@@ -1164,6 +1166,48 @@ fn meter_transmission_paints_visible_rasters_once() {
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0]["d"], "I");
     assert_eq!(commands[0]["i"], image_id.to_string());
+}
+
+#[test]
+fn dashboard_budget_bars_reach_the_visible_set_and_transmit_once() {
+    let (_root, pool) = slot_pool();
+    let snapshot = slot_snapshot();
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let now = Instant::now();
+    let routed = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+    if crate::tui::no_color() {
+        return;
+    }
+    let budget = ui
+        .meter_pixels
+        .as_ref()
+        .expect("meter pixels")
+        .visible_images()
+        .filter(|(_, image)| {
+            matches!(
+                image,
+                crate::sidebar_pane::pixel::meter::MeterImage::Budget(_)
+            )
+        })
+        .map(|(image_id, _)| image_id)
+        .collect::<Vec<_>>();
+    assert_eq!(budget.len(), 1, "the 5h bar is one visible image");
+    let transmitted = |frame: &SlotFrame| {
+        kitty_commands(frame.bytes.as_bytes())
+            .into_iter()
+            .filter(|command| {
+                command.get("a").is_some_and(|action| action == "t")
+                    && command.get("i") == Some(&budget[0].to_string())
+            })
+            .count()
+    };
+    assert_eq!(transmitted(&routed), 1, "the bar is transmitted once");
+    assert!(routed.placeholders().any(|(_, id)| id == budget[0]));
+    assert!(!routed.bytes.contains('▰'), "no text bar beside the image");
+
+    let steady = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+    assert_eq!(transmitted(&steady), 0, "a resident bar is not resent");
 }
 
 #[test]

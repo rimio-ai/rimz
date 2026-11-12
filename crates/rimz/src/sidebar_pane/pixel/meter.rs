@@ -1,4 +1,7 @@
-//! Pixel-precise context-meter rasterization and pane-local image residency.
+//! Pixel-precise meter rasterization and pane-local image residency, shared by
+//! the card's context meter and the dashboard's budget bars.
+
+mod budget;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -11,8 +14,46 @@ use super::{
     meter_image_id,
 };
 
+pub(in crate::sidebar_pane) use budget::{BudgetRaster, BudgetTick};
+
 const CELL_W: u32 = 8;
 const CELL_H: u32 = 16;
+
+/// One meter image of either shape. Both share the slot's meter ids, so a
+/// budget bar is interned, protected and transmitted as a context meter is.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::sidebar_pane) enum MeterImage {
+    Context(MeterRaster),
+    Budget(BudgetRaster),
+}
+
+impl MeterImage {
+    fn width_cells(&self) -> u16 {
+        match self {
+            Self::Context(raster) => raster.width_cells,
+            Self::Budget(raster) => raster.width_cells,
+        }
+    }
+
+    fn rasterize(&self) -> RgbaImage {
+        match self {
+            Self::Context(raster) => rasterize(raster),
+            Self::Budget(raster) => budget::rasterize(raster),
+        }
+    }
+}
+
+impl From<MeterRaster> for MeterImage {
+    fn from(raster: MeterRaster) -> Self {
+        Self::Context(raster)
+    }
+}
+
+impl From<BudgetRaster> for MeterImage {
+    fn from(raster: BudgetRaster) -> Self {
+        Self::Budget(raster)
+    }
+}
 
 /// The exact pixel shape of one context meter. Quantizing before interning keeps
 /// visually identical sub-pixel updates on the same terminal image id.
@@ -88,7 +129,7 @@ struct Entry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct MeterPixels {
     pub(in crate::sidebar_pane) id_base: u32,
-    table: BTreeMap<MeterRaster, Entry>,
+    table: BTreeMap<MeterImage, Entry>,
     clock: u64,
     /// Image ids referenced by the terminal's previous frame. They stay
     /// protected until composition identifies the next visible set.
@@ -114,7 +155,8 @@ impl MeterPixels {
     /// Return the content-stable image id, or fall back to the cell bar when the
     /// fixed id window is entirely protected by either terminal-visible images
     /// or placeholders already composed in this frame.
-    pub(in crate::sidebar_pane) fn intern(&mut self, raster: MeterRaster) -> Option<u32> {
+    pub(in crate::sidebar_pane) fn intern(&mut self, raster: impl Into<MeterImage>) -> Option<u32> {
+        let raster = raster.into();
         if let Some(entry) = self.table.get_mut(&raster) {
             entry.touched = self.clock;
             return Some(meter_image_id(self.id_base, entry.index));
@@ -181,15 +223,27 @@ impl MeterPixels {
         self.visible = visible;
     }
 
-    pub(in crate::sidebar_pane) fn visible_rasters(
+    pub(in crate::sidebar_pane) fn visible_images(
         &self,
-    ) -> impl Iterator<Item = (u32, &MeterRaster)> {
-        self.table.iter().filter_map(|(raster, entry)| {
+    ) -> impl Iterator<Item = (u32, &MeterImage)> {
+        self.table.iter().filter_map(|(image, entry)| {
             let image_id = meter_image_id(self.id_base, entry.index);
             self.visible
                 .contains(&image_id)
-                .then_some((image_id, raster))
+                .then_some((image_id, image))
         })
+    }
+
+    /// The visible context meters alone.
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn visible_rasters(
+        &self,
+    ) -> impl Iterator<Item = (u32, &MeterRaster)> {
+        self.visible_images()
+            .filter_map(|(image_id, image)| match image {
+                MeterImage::Context(raster) => Some((image_id, raster)),
+                MeterImage::Budget(_) => None,
+            })
     }
 }
 
@@ -272,7 +326,7 @@ fn clear_rect(image: &mut RgbaImage, x: u32, y: u32, width: u32, height: u32) {
 
 #[derive(Debug)]
 pub(in crate::sidebar_pane) struct MeterPainter {
-    residency: ImageResidency<u32, MeterRaster>,
+    residency: ImageResidency<u32, MeterImage>,
 }
 
 impl MeterPainter {
@@ -286,22 +340,24 @@ impl MeterPainter {
         &mut self,
         writer: &mut W,
         image_id: u32,
-        raster: &MeterRaster,
+        raster: &(impl Clone + Into<MeterImage>),
         now_ms: u64,
         permit: &ImagePermit,
     ) -> io::Result<()> {
+        let content: MeterImage = raster.clone().into();
+        let cols = content.width_cells();
         self.residency.ensure(
             writer,
             ImageRequest {
                 key: image_id,
                 image_id,
-                content: raster.clone(),
+                content,
                 now_ms,
-                cols: raster.width_cells,
+                cols,
                 rows: 1,
             },
             || {
-                let image = rasterize(raster);
+                let image = Into::<MeterImage>::into(raster.clone()).rasterize();
                 std::sync::Arc::from(encode_png(image.width, image.height, &image.data))
             },
             permit,

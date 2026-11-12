@@ -132,7 +132,16 @@ pub(super) fn compose_lines_with_meter(
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
     // position is known, below.
-    let bottom = build_bottom_chrome(snapshot, alert, theme, cells, view, ui, &roster);
+    let bottom = build_bottom_chrome(
+        snapshot,
+        alert,
+        theme,
+        cells,
+        view,
+        ui,
+        &roster,
+        meter_pixels.as_deref_mut(),
+    );
 
     let height = usize::from(height);
     let bottom_height = bottom.lines.len().min(height);
@@ -577,6 +586,10 @@ fn plan_bottom_chrome<'a>(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "lend the frame's meter images beside the immutable frame inputs"
+)]
 pub(super) fn build_bottom_chrome(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -585,6 +598,7 @@ pub(super) fn build_bottom_chrome(
     view: &ViewState,
     ui: &UiState,
     roster: &VisibleRoster<'_>,
+    meter_pixels: Option<&mut MeterPixels>,
 ) -> RenderedBlock {
     let plan = plan_bottom_chrome(snapshot, alert, view, ui);
     let inner = content_width(cells);
@@ -604,6 +618,7 @@ pub(super) fn build_bottom_chrome(
         ui,
         plan.dashboard,
         folded_footer,
+        meter_pixels,
     ));
     bottom.append(bottom_corner_chrome(
         snapshot,
@@ -691,6 +706,10 @@ fn notice_rows(lines: Vec<Line<'static>>, inner: usize) -> impl Iterator<Item = 
         .map(pad_chrome)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "lend the frame's meter images beside the immutable frame inputs"
+)]
 fn dashboard_chrome(
     snapshot: &SidebarSnapshot,
     theme: &Theme,
@@ -699,6 +718,7 @@ fn dashboard_chrome(
     ui: &UiState,
     mode: Option<DashboardMode>,
     folded_footer: Option<FooterParts>,
+    pixels: Option<&mut MeterPixels>,
 ) -> RenderedBlock {
     let Some(mode) = mode else {
         return RenderedBlock::default();
@@ -718,6 +738,7 @@ fn dashboard_chrome(
         width: inner,
         zones: &snapshot.theme.display.budget_bar,
         now: snapshot.now,
+        pixels,
     });
     panel.map_lines(pad_chrome);
     panel.translate_columns(1);

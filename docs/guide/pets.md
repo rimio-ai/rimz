@@ -99,7 +99,7 @@ The `sextant` tier draws the sprite as cell art, splitting each terminal cell in
 
 In a tmux room `auto` requires every attached client to qualify, not just yours: each one has to be a Ghostty or kitty terminal, or a browser tab served by RimZ. Attach a plain terminal to the room and the pet drops to cell art within ten seconds; detach it and the pixels come back.
 
-Two things outside `[theme.pets]` override the tier. `[theme.display] pixel = "off"` is the master kitty-graphics switch: it sends pets and the context meter alike back to cell art, whatever `glyphs` asks for ([display](./theme.md#display)). `NO_COLOR` in the environment goes further and drops the sprite entirely, leaving the caption standing alone.
+Two things outside `[theme.pets]` override the tier. `[theme.display] pixel = "off"` is the master kitty-graphics switch: it sends pets, the context meter, and the budget bars alike back to cell art, whatever `glyphs` asks for ([display](./theme.md#display)). `NO_COLOR` in the environment goes further and drops the sprite entirely, leaving the caption standing alone.
 
 ## When the pet looks wrong
 

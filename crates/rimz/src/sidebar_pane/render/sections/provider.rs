@@ -4,6 +4,7 @@
 use crate::agents::{BudgetWindow, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
+use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::store::snapshot::{
     CreditDisplay, ProviderBar, ProviderBudget, RedeemForecast, RemoteControlBadge,
@@ -19,8 +20,8 @@ use crate::sidebar_pane::render::fmt::{
     compact_count, dollars_cap, dollars2, expiry_label, reset_countdown, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    ManaTick, TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_style,
-    token_breakdown_spans, unknown_mana_bar_spans,
+    ManaTick, TokenColumns, TokenDetail, budget_bar_spans, mana_style, pace_style,
+    token_breakdown_spans,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -460,10 +461,12 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) zones: &'a BudgetBarConfig,
     pub(in crate::sidebar_pane::render) now: Timestamp,
+    /// The frame's meter images: lent, every budget bar draws in pixels.
+    pub(in crate::sidebar_pane::render) pixels: Option<&'a mut MeterPixels>,
 }
 
 pub(in crate::sidebar_pane::render) fn dashboard_block(
-    context: DashboardContext<'_>,
+    mut context: DashboardContext<'_>,
 ) -> RenderedBlock {
     let mut output = RenderedBlock::default();
     let Some(first) = context.providers.first() else {
@@ -478,13 +481,15 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
     };
 
     if context.mode == DashboardMode::Stacked {
-        for (index, panel) in context.providers.iter().enumerate() {
+        let providers = context.providers;
+        for (index, panel) in providers.iter().enumerate() {
             output.push_inert(if index == 0 {
                 super::super::hairline_rule(context.theme, context.width)
             } else {
                 Line::from("")
             });
-            output.extend_inert(provider_block_lines(&context, panel, context.width, None));
+            let width = context.width;
+            output.extend_inert(provider_block_lines(&mut context, panel, width, None));
         }
         return output;
     }
@@ -519,7 +524,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
         let pet_w = pet.width;
         let block_w = context.width.saturating_sub(pet_w + PET_COLUMN_GAP);
         output.push_inert(pet.caption);
-        let block = provider_block_lines(&context, active, block_w, None);
+        let block = provider_block_lines(&mut context, active, block_w, None);
         let footer_rows = usize::from(context.folded_footer.is_some());
         let block_rows = block.len() + footer_rows;
         let pet_rows = pet.body.len();
@@ -545,17 +550,18 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
 
     // A blank line below the rail sets tabs apart from the active account.
     output.push_inert(Line::from(""));
+    let (width, folded_footer) = (context.width, context.folded_footer.clone());
     output.extend_inert(provider_block_lines(
-        &context,
+        &mut context,
         active,
-        context.width,
-        context.folded_footer.clone(),
+        width,
+        folded_footer,
     ));
     output
 }
 
 fn provider_block_lines(
-    context: &DashboardContext<'_>,
+    context: &mut DashboardContext<'_>,
     panel: &SidebarProviderPanel,
     width: usize,
     folded_footer: Option<super::super::chrome::FooterParts>,
@@ -583,6 +589,7 @@ fn provider_block_lines(
         bar_region,
         context.zones,
         context.now,
+        context.pixels.as_deref_mut(),
     ));
     let crest = art_crest_row(panel, rights.len()).filter(|_| show_art);
     let mut lines = vec![provider_header_line(
@@ -1202,13 +1209,15 @@ fn provider_token_detail(
 /// placeholder unknown tracks (one anonymous row when the shape is unknown),
 /// or the metered bars in the reading's order. Each reset reads a two-unit
 /// countdown scaled to its magnitude. Each row aligns front and back within
-/// `region`, so they line up across providers too.
+/// `region`, so they line up across providers too. With `pixels` every bar
+/// draws in pixels where it can, in the text bar's cells.
 fn provider_bar_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     region: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
+    mut pixels: Option<&mut MeterPixels>,
 ) -> Vec<Vec<Span<'static>>> {
     match panel.budget(now) {
         ProviderBudget::Undecided => Vec::new(),
@@ -1229,22 +1238,35 @@ fn provider_bar_rows(
             )]
         }
         ProviderBudget::Api(credits) => {
-            vec![extra_credits_bar_row(theme, "api", credits, region, zones)]
+            vec![extra_credits_bar_row(
+                theme, "api", credits, region, zones, pixels,
+            )]
         }
-        ProviderBudget::Pending([]) => vec![unknown_bar_row(theme, "", region)],
+        ProviderBudget::Pending([]) => vec![unknown_bar_row(theme, "", region, pixels)],
         ProviderBudget::Pending(labels) => labels
             .iter()
-            .map(|label| unknown_bar_row(theme, label, region))
+            .map(|label| unknown_bar_row(theme, label, region, pixels.as_deref_mut()))
             .collect(),
         ProviderBudget::Bars(bars) => bars
             .into_iter()
             .map(|bar| match bar {
-                ProviderBar::Window { window, reading } => {
-                    metered_bar_row(theme, window, reading, region, zones, now)
-                }
-                ProviderBar::Extra(credits) => {
-                    extra_credits_bar_row(theme, "ex", credits, region, zones)
-                }
+                ProviderBar::Window { window, reading } => metered_bar_row(
+                    theme,
+                    window,
+                    reading,
+                    region,
+                    zones,
+                    now,
+                    pixels.as_deref_mut(),
+                ),
+                ProviderBar::Extra(credits) => extra_credits_bar_row(
+                    theme,
+                    "ex",
+                    credits,
+                    region,
+                    zones,
+                    pixels.as_deref_mut(),
+                ),
             })
             .collect(),
     }
@@ -1265,6 +1287,7 @@ fn metered_bar_row(
     region: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
+    pixels: Option<&mut MeterPixels>,
 ) -> Vec<Span<'static>> {
     let label = window_label(window);
     let bar_width = provider_bar_width(region);
@@ -1277,12 +1300,12 @@ fn metered_bar_row(
     } = reading
     else {
         if reading == WindowReading::Unknown {
-            return unknown_bar_row(theme, &label, region);
+            return unknown_bar_row(theme, &label, region, pixels);
         }
         return bar_row(
             &label,
             mana_style(theme, 100, zones),
-            mana_bar_spans(theme, 100, bar_width, zones, &[]),
+            budget_bar_spans(theme, Some(100), bar_width, zones, &[], pixels),
             unlimited_value_spans(theme),
         );
     };
@@ -1304,7 +1327,7 @@ fn metered_bar_row(
     bar_row(
         &label,
         mana_style(theme, remaining, zones),
-        mana_bar_spans(theme, remaining, bar_width, zones, &ticks),
+        budget_bar_spans(theme, Some(remaining), bar_width, zones, &ticks, pixels),
         reset_value_spans(theme, reset.as_deref(), reset_marker_style),
     )
 }
@@ -1312,12 +1335,24 @@ fn metered_bar_row(
 /// Unknown metered budget row: the same bar geometry as a reported window with
 /// no usage, with either a reported or definition-declared window label, or a
 /// blank label when the provider's window shape is unknown.
-fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'static>> {
+fn unknown_bar_row(
+    theme: &Theme,
+    label: &str,
+    region: usize,
+    pixels: Option<&mut MeterPixels>,
+) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     bar_row(
         label,
         theme.muted(),
-        unknown_mana_bar_spans(theme, bar_width),
+        budget_bar_spans(
+            theme,
+            None,
+            bar_width,
+            &BudgetBarConfig::default(),
+            &[],
+            pixels,
+        ),
         blank_value_spans(),
     )
 }
@@ -1387,10 +1422,11 @@ fn extra_credits_bar_row(
     credits: CreditDisplay,
     region: usize,
     zones: &BudgetBarConfig,
+    pixels: Option<&mut MeterPixels>,
 ) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     let (remaining, value) = match credits {
-        CreditDisplay::Unknown => return unknown_bar_row(theme, label, region),
+        CreditDisplay::Unknown => return unknown_bar_row(theme, label, region, pixels),
         CreditDisplay::Missing | CreditDisplay::Unlimited => (100, unlimited_value_spans(theme)),
         CreditDisplay::Off => (0, money_value_spans(theme, "$0")),
         CreditDisplay::Balance(left) => (
@@ -1404,7 +1440,7 @@ fn extra_credits_bar_row(
     bar_row(
         label,
         mana_style(theme, remaining, zones),
-        mana_bar_spans(theme, remaining, bar_width, zones, &[]),
+        budget_bar_spans(theme, Some(remaining), bar_width, zones, &[], pixels),
         value,
     )
 }

@@ -213,7 +213,7 @@ An unread card also rests on a soft wash, the selection blue lifted a step, the 
 | key | default | what it does |
 | --- | --- | --- |
 | `refresh_ms` | `100` | the animation and paint grid in milliseconds, clamped to 16 through 1000. Heads play frames in order, at most one per tick (slower with `speed`); late paints slow playback instead of skipping frames. Data polling keeps its own cadence |
-| `pixel` | `auto` | `auto` lets kitty-graphics pets and context meters paint where the terminal supports them; `off` keeps both drawn out of text cells |
+| `pixel` | `auto` | `auto` lets kitty-graphics pets, context meters, and provider budget bars paint where the terminal supports them; `off` keeps all three drawn out of text cells |
 | `width_percent` | unset | a fixed sidebar share of each view, clamped to 10 through `max_percent`. Unset means 30% on views wider than 240 columns or whenever pets are on, and 25% otherwise, also bounded by `max_percent`. Zellij uses the closest allowed 5% step |
 | `max_cols` | `72` | column cap on the unpinned sidebar default |
 | `max_percent` | `50` | maximum sidebar share, including widths you set with keys or dragging; clamped to 10 through 90. Zellij uses the nearest 5% step inside this bound (`44` permits at most 40%). The 24-column minimum wins on narrow views |
@@ -235,7 +235,7 @@ provider_list = ["claude", "codex", "all"]
 
 Sidebar width is the one setting here a running sidebar does not pick up. `width_percent`, `max_cols`, and `max_percent` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `<` and `>` resize it immediately and outrank the default percentage and column cap, but never `max_percent` ([sidebar](./sidebar.md#setting-the-width)).
 
-The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Its compaction end-stop shares the text wall's tone and position. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. Setting `pixel = "off"` opts out of both the pixel meter and pixel pets.
+The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Its compaction end-stop shares the text wall's tone and position. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. The provider dashboard's budget bars follow the same rule: on that path each bar is one continuous slanted pixel bar in the cells of its `▰▱` text bar, and anywhere else, or when your theme overrides a mana glyph, it stays the text bar. Setting `pixel = "off"` opts out of the pixel meter, the pixel budget bars, and pixel pets.
 
 ### Meter color stops
 
