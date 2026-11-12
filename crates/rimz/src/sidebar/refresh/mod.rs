@@ -342,11 +342,18 @@ pub(super) fn refresh_heavy_lanes(
         SeatPolicy::default()
     };
     let teams = &policy.teams;
+    let capacities = crate::harness::cache_keepalive::RoomCapacities::new(runtime, &logins);
     steps.step("stall_nudge", || {
         crate::harness::stall_nudge::nudge_stalled_teams(base, runtime, config, teams)
     });
     steps.step("idle_compact", || {
-        crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy)
+        crate::harness::idle_compact::compact_idle_agents(
+            base,
+            runtime,
+            &capacities,
+            config,
+            &policy,
+        )
     });
     steps.step("soft_compact", || {
         crate::harness::soft_compact::compact_agents(base, runtime, config, &policy)
@@ -367,7 +374,7 @@ pub(super) fn refresh_heavy_lanes(
         crate::harness::cache_keepalive::keepalive_agents(
             base,
             runtime,
-            &logins,
+            &capacities,
             &config.harness,
             &policy,
         )

@@ -409,7 +409,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &policy,
         |_| panic!("no live pane"),
@@ -435,7 +435,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &policy,
         |request| {
@@ -483,7 +483,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
             keepalive_agents_with(
                 &snapshot,
                 &runtime,
-                &BTreeMap::new(),
+                &RoomCapacities::default(),
                 &config,
                 &policy,
                 |_| panic!("concurrent spawn"),
@@ -494,7 +494,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &policy,
         |_| panic!("repeated anchor"),
@@ -505,7 +505,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     keepalive_agents_with(
         &switched,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &policy,
         |_| panic!("a source switch for the claimed request refired"),
@@ -517,7 +517,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &policy,
         |_| {
@@ -525,9 +525,14 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
         },
     );
     assert_eq!(count, 2);
-    keepalive_agents_with(&stale, &runtime, &BTreeMap::new(), &config, &policy, |_| {
-        panic!("stale producer respawned an older anchor")
-    });
+    keepalive_agents_with(
+        &stale,
+        &runtime,
+        &RoomCapacities::default(),
+        &config,
+        &policy,
+        |_| panic!("stale producer respawned an older anchor"),
+    );
 }
 
 fn paned(agent: &AgentState, workspace_id: WorkspaceId, now: i64) -> SidebarSnapshot {
@@ -572,7 +577,7 @@ fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
         keepalive_agents_with(
             &snapshot,
             runtime,
-            &BTreeMap::new(),
+            &RoomCapacities::default(),
             config,
             &policy,
             |request| {
@@ -585,7 +590,7 @@ fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
                 keepalive_agents_with(
                     &snapshot,
                     runtime,
-                    &BTreeMap::new(),
+                    &RoomCapacities::default(),
                     config,
                     &policy,
                     |_| panic!("concurrent producer fired at {now}"),
@@ -636,7 +641,7 @@ fn an_unmoved_anchor_gets_one_polite_and_one_forced_fire() {
     keepalive_agents_with(
         &snapshot,
         &fresh_runtime("late-polite"),
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &policy,
         |request| {
@@ -1444,7 +1449,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &SeatPolicy::default(),
         |_| panic!("no keep-warm, no ping"),
@@ -1453,7 +1458,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &held,
         |request| {
@@ -1509,11 +1514,8 @@ fn usage_window(used: Option<u8>, reset: i64, mins: u32, scope: Option<&str>) ->
 }
 
 /// The login's capacity as the producer's once-per-pass read hands it over.
-fn capacities(
-    agent: &AgentState,
-    windows: Vec<RateLimitWindow>,
-) -> BTreeMap<LoginKey, ProviderCapacity> {
-    [(agent.login_key(), ProviderCapacity::from_windows(windows))].into()
+fn capacities(agent: &AgentState, windows: Vec<RateLimitWindow>) -> RoomCapacities<'static> {
+    BTreeMap::from([(agent.login_key(), ProviderCapacity::from_windows(windows))]).into()
 }
 
 fn write_capacity(runtime: &RuntimePaths, agent: &AgentState, windows: Vec<RateLimitWindow>) {
@@ -1536,10 +1538,7 @@ fn write_capacity(runtime: &RuntimePaths, agent: &AgentState, windows: Vec<RateL
 }
 
 /// The producer's fires for `agent` at 3540 s, and whether it left a claim file behind.
-fn producer_fires(
-    agent: &AgentState,
-    capacities: &BTreeMap<LoginKey, ProviderCapacity>,
-) -> (usize, bool) {
+fn producer_fires(agent: &AgentState, capacities: &RoomCapacities<'_>) -> (usize, bool) {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
@@ -1594,7 +1593,7 @@ fn a_ping_still_goes_out_without_a_spent_window_for_the_model() {
     let mut agent = sleeping();
     agent.model = Some("claude-opus-4-6".into());
     for (case, capacities) in [
-        ("no reading", BTreeMap::new()),
+        ("no reading", RoomCapacities::default()),
         (
             "no known percentage",
             capacities(&agent, vec![usage_window(None, 9_000, 300, None)]),
@@ -1633,7 +1632,7 @@ fn helper_declines_a_window_spent_after_the_producer_claimed() {
     keepalive_agents_with(
         &snapshot,
         &runtime,
-        &BTreeMap::new(),
+        &RoomCapacities::default(),
         &config,
         &held,
         |request| {
@@ -1669,5 +1668,148 @@ fn helper_declines_a_window_spent_after_the_producer_claimed() {
         held.holding(&agent, &config, ts(3540)),
         Some(TWO_HOURS),
         "the hold the card, idle compaction and hibernation read is unchanged"
+    );
+}
+
+#[test]
+fn a_pass_reads_the_capacity_cache_once_and_only_for_an_agent_otherwise_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let agent = sleeping();
+    let logins = crate::agents::RoomLoginSet::native().with_agents(std::slice::from_ref(&agent));
+    let capacities = RoomCapacities::new(&runtime, &logins);
+    write_capacity(
+        &runtime,
+        &agent,
+        vec![usage_window(Some(100), 9_000, 300, None)],
+    );
+    let config = HarnessConfig::default();
+    let mut pings_off = config.clone();
+    pings_off.cache_keepalive = false;
+    keepalive_agents(
+        &paned(&agent, workspace_id.clone(), 3540),
+        &runtime,
+        &capacities,
+        &pings_off,
+        &SeatPolicy::default(),
+    );
+    let mut fires = 0;
+    keepalive_agents_with(
+        &paned(&agent, workspace_id.clone(), 60),
+        &runtime,
+        &capacities,
+        &config,
+        &SeatPolicy::default(),
+        |_| fires += 1,
+    );
+    assert!(
+        capacities.readings.get().is_none(),
+        "pings off, and an agent not yet due, read nothing"
+    );
+    let snapshot = paned(&agent, workspace_id, 3540);
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &capacities,
+        &config,
+        &SeatPolicy::default(),
+        |_| fires += 1,
+    );
+    assert_eq!(fires, 0, "the spent window read on first use");
+    write_capacity(
+        &runtime,
+        &agent,
+        vec![usage_window(Some(40), 9_000, 300, None)],
+    );
+    keepalive_agents_with(
+        &snapshot,
+        &runtime,
+        &capacities,
+        &config,
+        &SeatPolicy::default(),
+        |_| fires += 1,
+    );
+    assert_eq!(fires, 0, "the pass keeps its one reading");
+    assert!(
+        capacities.credits.get().is_none(),
+        "the ping never reads the credits cache"
+    );
+}
+
+/// A credits cache holding `agent`'s login with unlimited paid extra usage, observed at `now`.
+fn usable_paid(agent: &AgentState, now: i64) -> crate::agents::credits::CreditsCache {
+    crate::agents::credits::CreditsCache::with_extra_credits(
+        agent.login_key(),
+        crate::agents::ExtraCredits::Unlimited,
+        crate::agents::Entitlement::Ok,
+        ts(now),
+    )
+}
+
+#[test]
+fn a_spent_window_stops_the_ping_even_when_paid_extra_usage_carries_it() {
+    let agent = sleeping();
+    let spent = || capacities(&agent, vec![usage_window(Some(100), 9_000, 300, None)]);
+    assert_eq!(
+        producer_fires(&agent, &spent().with_credits(usable_paid(&agent, 3540))),
+        (0, false),
+        "the ping reads the subscription windows alone"
+    );
+    assert!(
+        !spent()
+            .with_credits(usable_paid(&agent, 3540))
+            .compaction_blocked(&agent, ts(3540)),
+        "while a compaction on the same reading goes"
+    );
+}
+
+#[test]
+fn a_pass_reads_the_credits_cache_once_and_only_for_a_spent_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let first = sleeping();
+    let mut second = sleeping();
+    second.agent_id = "second".into();
+    let seats = [first.clone(), second.clone()];
+    let logins = crate::agents::RoomLoginSet::native().with_agents(&seats);
+    let now = ts(3540);
+    write_capacity(
+        &runtime,
+        &first,
+        vec![usage_window(Some(40), 9_000, 300, None)],
+    );
+    let quiet = RoomCapacities::new(&runtime, &logins);
+    assert!(!quiet.compaction_blocked(&first, now));
+    assert!(
+        quiet.credits.get().is_none(),
+        "a window with room left reads no credits"
+    );
+    write_capacity(
+        &runtime,
+        &first,
+        vec![usage_window(Some(100), 9_000, 300, None)],
+    );
+    let pass = RoomCapacities::new(&runtime, &logins);
+    assert!(pass.compaction_blocked(&first, now), "no credits file");
+    assert!(
+        pass.credits.get().is_some(),
+        "read on the first spent window"
+    );
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_credits_path(),
+        &usable_paid(&first, 3540),
+    )
+    .unwrap();
+    assert!(
+        pass.compaction_blocked(&second, now),
+        "a second due seat reuses the pass's one credits reading"
+    );
+    assert!(
+        !RoomCapacities::new(&runtime, &logins).compaction_blocked(&second, now),
+        "the next pass reads the paid extra usage that now carries the login"
     );
 }

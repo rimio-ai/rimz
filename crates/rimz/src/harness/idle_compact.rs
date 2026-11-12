@@ -15,7 +15,7 @@ use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, MachineConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
-use crate::harness::cache_keepalive::SeatPolicy;
+use crate::harness::cache_keepalive::{RoomCapacities, SeatPolicy};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -97,29 +97,39 @@ fn should_compact(
         && idle < window.cache_expires.as_secs().min(i64::MAX as u64) as i64
 }
 
-/// The due seat's idle window and native compact command, unless keep-warm holds it.
+/// The due seat's idle window and native compact command, unless keep-warm holds it or its
+/// login's usage holds the compaction back. `compaction_blocked` answers that last test, as
+/// `RoomCapacities::compaction_blocked` in the host pass and as
+/// [`login_compaction_blocked`](crate::agents::ProviderCapacity::login_compaction_blocked) in
+/// the helper. It is asked only of a seat otherwise due, so a blocked seat is skipped without
+/// pacing it and compacts once the window resets while still due.
 pub fn due_compaction(
     agent: &AgentState,
     policy: &SeatPolicy,
     harness: &HarnessConfig,
     now: Timestamp,
+    compaction_blocked: impl FnOnce() -> bool,
 ) -> Option<(IdleWindow, String)> {
     let floor = policy.idle_compact_floor(agent, harness);
     let window = fire_point(agent, floor, harness)?;
     let command = crate::agents::compact_command(agent, harness)?;
     (should_compact(agent, Some(&command), Some(window), now)
-        && policy.holding(agent, harness, now).is_none())
+        && policy.holding(agent, harness, now).is_none()
+        && !compaction_blocked())
     .then_some((window, command))
 }
 
-/// Compact each eligible seat whose floor and idle window are due; a keep-warm hold defers it until its maximum or stage condition lets go.
+/// Compact each eligible seat whose floor and idle window are due. A keep-warm hold defers it
+/// until its maximum or stage condition lets go, and a spent usage window on the seat's login
+/// that no usable paid extra usage carries defers it until the window resets.
 pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
 ) {
-    compact_idle_agents_with(snapshot, runtime, config, policy, |request| {
+    compact_idle_agents_with(snapshot, runtime, capacities, config, policy, |request| {
         spawn_idle_compact(runtime, request)
     });
 }
@@ -127,12 +137,16 @@ pub(crate) fn compact_idle_agents(
 fn compact_idle_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    capacities: &RoomCapacities<'_>,
     config: &MachineConfig,
     policy: &SeatPolicy,
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
     for agent in snapshot.agents.iter() {
-        let Some((_, command)) = due_compaction(agent, policy, &config.harness, snapshot.now)
+        let Some((_, command)) =
+            due_compaction(agent, policy, &config.harness, snapshot.now, || {
+                capacities.compaction_blocked(agent, snapshot.now)
+            })
         else {
             continue;
         };

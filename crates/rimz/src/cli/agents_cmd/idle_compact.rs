@@ -4,6 +4,7 @@
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
+use rimz::agents::ProviderCapacity;
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::SeatPolicy;
@@ -29,9 +30,10 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
     let policy = SeatPolicy::load(&config, Some(&workspace.project_root));
-    let Some((_, expected_command)) =
-        due_compaction(agent, &policy, &config.harness, Timestamp::now())
-    else {
+    let now = Timestamp::now();
+    let Some((_, expected_command)) = due_compaction(agent, &policy, &config.harness, now, || {
+        ProviderCapacity::login_compaction_blocked(ctx.runtime(), agent, now)
+    }) else {
         return Ok(());
     };
     if request.command != expected_command {
@@ -84,7 +86,10 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         return Ok(());
     };
     let now = Timestamp::now();
-    let Some((window, expected_command)) = due_compaction(agent, &policy, &config.harness, now)
+    let Some((window, expected_command)) =
+        due_compaction(agent, &policy, &config.harness, now, || {
+            ProviderCapacity::login_compaction_blocked(ctx.runtime(), agent, now)
+        })
     else {
         return Ok(());
     };

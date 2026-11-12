@@ -435,11 +435,58 @@ impl ProviderCapacity {
     }
 
     /// Whether this reading of `agent`'s own login has a spent window blocking its model at
-    /// `now`: a 5-hour or weekly window at 100% with its reset ahead or unknown, or a spent sub-cap
-    /// for the agent's model. Paid extra usage is not read, so a window it would carry still
-    /// counts as spent. A window with no known percentage is not spent.
-    pub fn window_spent(&self, agent: &super::AgentState, now: Timestamp) -> bool {
+    /// `now`, the test the keep-warm ping reads: a 5-hour or weekly window at 100% with its reset
+    /// ahead or unknown, or a spent sub-cap for the agent's model. Paid extra usage is not read,
+    /// so a window it would carry still counts as spent. A window with no known percentage is
+    /// not spent.
+    pub(crate) fn window_spent(&self, agent: &super::AgentState, now: Timestamp) -> bool {
         self.subscription_exhausted_for_model(now, agent.model.as_deref())
+    }
+
+    /// [`ProviderCapacity::window_spent`] on `agent`'s login, read now from `runtime`'s shared
+    /// capacity cache: the recheck the ping helper asks before it pings. No reading, or an
+    /// unreadable cache, is not spent.
+    pub(crate) fn login_window_spent(
+        runtime: &RuntimePaths,
+        agent: &super::AgentState,
+        now: Timestamp,
+    ) -> bool {
+        Self::read(runtime, &agent.login_key())
+            .is_some_and(|capacity| capacity.window_spent(agent, now))
+    }
+
+    /// Whether this reading of `agent`'s login holds a compaction back at `now`, the test idle
+    /// compaction, smart compaction and compact-first read: the agent's model sub-cap is spent,
+    /// or a 5-hour or weekly window is spent (as [`ProviderCapacity::window_spent`] reads it) and
+    /// `paid_carries`, asked only then, finds no usable paid extra usage on the login. Unlike the
+    /// ping's test, usable paid extra usage lets the compaction go.
+    pub(crate) fn compaction_blocked(
+        &self,
+        agent: &super::AgentState,
+        now: Timestamp,
+        paid_carries: impl FnOnce() -> bool,
+    ) -> bool {
+        self.model_exhausted(now, agent.model.as_deref())
+            || (self.subscription_exhausted_for_model(now, None) && !paid_carries())
+    }
+
+    /// `ProviderCapacity::compaction_blocked` on `agent`'s login, read now from `runtime`'s
+    /// shared capacity and credits caches: the recheck a compaction helper asks before it
+    /// compacts, and compact-first asks before it types its command. No capacity reading is not
+    /// blocked; no credits entry, an unreadable credits cache, or a lapsed entitlement carries
+    /// nothing.
+    pub fn login_compaction_blocked(
+        runtime: &RuntimePaths,
+        agent: &super::AgentState,
+        now: Timestamp,
+    ) -> bool {
+        let login = agent.login_key();
+        Self::read(runtime, &login).is_some_and(|capacity| {
+            capacity.compaction_blocked(agent, now, || {
+                super::credits::read_credits_cache(&runtime.shared_credits_path())
+                    .paid_usage_carries(&login, now)
+            })
+        })
     }
 
     pub(crate) fn subscription_exhausted_for_model(

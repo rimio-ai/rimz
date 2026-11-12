@@ -1,5 +1,6 @@
 //! Best-effort prompt-cache pings for sleeping agents, and for idle agents a keep-warm horizon holds. Durable delivery belongs to the helper.
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
+use crate::agents::credits::{CreditsCache, read_credits_cache};
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger, ProviderCapacity, RoomLoginSet};
 use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::ids::{AgentKind, AgentSessionId, LoginKey, PaneId, WorkspaceId};
@@ -206,8 +208,8 @@ fn pingable(agent: &AgentState) -> bool {
 impl CacheKeepaliveRequest {
     /// The agent still due this exact ping, and the keep-warm horizon holding it, if any. A
     /// row whose ping turn is open is not: another fire's ping is in flight for this anchor. Nor
-    /// is one whose login's capacity, read from `runtime`'s shared cache, reads a spent window
-    /// since the producer claimed.
+    /// is one whose login reads a spent window (`ProviderCapacity::login_window_spent`) since the
+    /// producer claimed.
     pub fn target<'a>(
         &self,
         snapshot: &'a SidebarSnapshot,
@@ -228,8 +230,7 @@ impl CacheKeepaliveRequest {
         })?;
         let holding = policy.holding(agent, config, now);
         (should_keepalive(agent, config, holding, now)
-            && !ProviderCapacity::read(runtime, &agent.login_key())
-                .is_some_and(|capacity| capacity.window_spent(agent, now)))
+            && !ProviderCapacity::login_window_spent(runtime, agent, now))
         .then_some((agent, holding))
     }
 }
@@ -329,7 +330,7 @@ fn next_reaches_cap(
 fn keepalive_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    capacities: &BTreeMap<LoginKey, ProviderCapacity>,
+    capacities: &RoomCapacities<'_>,
     config: &HarnessConfig,
     policy: &SeatPolicy,
     mut spawn: impl FnMut(&CacheKeepaliveRequest),
@@ -345,9 +346,7 @@ fn keepalive_agents_with(
         // the ping still fires once the window resets while the agent is due.
         if agent.ping_turn
             || !should_keepalive(agent, config, holding, snapshot.now)
-            || capacities
-                .get(&agent.login_key())
-                .is_some_and(|capacity| capacity.window_spent(agent, snapshot.now))
+            || capacities.window_spent(agent, snapshot.now)
         {
             continue;
         }
@@ -394,20 +393,20 @@ fn keepalive_agents_with(
     }
 }
 
-/// Spawn a ping helper for each agent due one, reading the room's capacities once per pass and
-/// not at all with `harness.cache_keepalive` off.
+/// Spawn a ping helper for each agent due one. `capacities` is the pass's shared reading, which
+/// this step forces only for an agent otherwise due a ping, so never with
+/// `harness.cache_keepalive` off.
 pub(crate) fn keepalive_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    logins: &RoomLoginSet,
+    capacities: &RoomCapacities<'_>,
     config: &HarnessConfig,
     policy: &SeatPolicy,
 ) {
     if !config.cache_keepalive {
         return;
     }
-    let capacities = ProviderCapacity::read_all(runtime, logins);
-    keepalive_agents_with(snapshot, runtime, &capacities, config, policy, |request| {
+    keepalive_agents_with(snapshot, runtime, capacities, config, policy, |request| {
         let args = crate::child_process::agent_helper_argv("cache-keepalive", request);
         if let Err(err) =
             crate::child_process::spawn_detached_rimz(runtime, args, "agent-cache-keepalive")
@@ -415,6 +414,84 @@ pub(crate) fn keepalive_agents(
             tracing::debug!(error = %err, "failed to spawn cache keepalive");
         }
     });
+}
+
+/// The room's capacities for one host pass, shared by the ping and both compaction steps. The
+/// shared capacity cache is read on the first question asked and at most once, and the shared
+/// credits cache on the first [`RoomCapacities::compaction_blocked`] that finds a spent 5-hour or
+/// weekly window, at most once, so a pass where no agent is otherwise due a ping or a compaction
+/// reads neither.
+#[derive(Default)]
+pub(crate) struct RoomCapacities<'a> {
+    source: Option<(&'a RuntimePaths, &'a RoomLoginSet)>,
+    readings: OnceCell<BTreeMap<LoginKey, ProviderCapacity>>,
+    credits: OnceCell<CreditsCache>,
+}
+
+impl<'a> RoomCapacities<'a> {
+    pub(crate) fn new(runtime: &'a RuntimePaths, logins: &'a RoomLoginSet) -> Self {
+        Self {
+            source: Some((runtime, logins)),
+            readings: OnceCell::new(),
+            credits: OnceCell::new(),
+        }
+    }
+
+    /// [`ProviderCapacity::window_spent`] on this pass's reading of `agent`'s login; no reading is
+    /// not spent.
+    pub(crate) fn window_spent(&self, agent: &AgentState, now: Timestamp) -> bool {
+        self.reading(agent)
+            .is_some_and(|capacity| capacity.window_spent(agent, now))
+    }
+
+    /// [`ProviderCapacity::compaction_blocked`] on this pass's readings of `agent`'s login; no
+    /// capacity reading is not blocked, and no credits entry carries nothing.
+    pub(crate) fn compaction_blocked(&self, agent: &AgentState, now: Timestamp) -> bool {
+        self.reading(agent).is_some_and(|capacity| {
+            capacity.compaction_blocked(agent, now, || {
+                self.credits
+                    .get_or_init(|| {
+                        self.source
+                            .map_or_else(CreditsCache::default, |(runtime, _)| {
+                                read_credits_cache(&runtime.shared_credits_path())
+                            })
+                    })
+                    .paid_usage_carries(&agent.login_key(), now)
+            })
+        })
+    }
+
+    fn reading(&self, agent: &AgentState) -> Option<&ProviderCapacity> {
+        self.readings
+            .get_or_init(|| {
+                self.source.map_or_else(BTreeMap::new, |(runtime, logins)| {
+                    ProviderCapacity::read_all(runtime, logins)
+                })
+            })
+            .get(&agent.login_key())
+    }
+}
+
+#[cfg(test)]
+impl From<BTreeMap<LoginKey, ProviderCapacity>> for RoomCapacities<'_> {
+    fn from(readings: BTreeMap<LoginKey, ProviderCapacity>) -> Self {
+        Self {
+            source: None,
+            readings: OnceCell::from(readings),
+            credits: OnceCell::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl RoomCapacities<'_> {
+    /// These readings with `credits` as the pass's credits cache.
+    pub(crate) fn with_credits(self, credits: CreditsCache) -> Self {
+        Self {
+            credits: OnceCell::from(credits),
+            ..self
+        }
+    }
 }
 
 /// Sleeping agents and those held by keep-warm ([`holds`]) may qualify, subject to ping admission.

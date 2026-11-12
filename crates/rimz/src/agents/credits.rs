@@ -54,6 +54,48 @@ impl CreditsCache {
         })
     }
 
+    /// `key`'s entry as RimZ reads it current at `now`: displayable, kind-wide and not lapsed.
+    pub(crate) fn current(&self, key: &LoginKey, now: Timestamp) -> Option<&ProviderCreditsEntry> {
+        self.logins.get(key).filter(|entry| {
+            entry_is_displayable(entry, now.as_millisecond().max(0) as u64)
+                && entry.scope.is_kind_wide()
+                && !matches!(entry.entitlement, Entitlement::Lapsed { .. })
+        })
+    }
+
+    /// Whether usable paid extra usage carries `key` at `now`, by its [`CreditsCache::current`]
+    /// entry. No entry carries nothing.
+    pub(crate) fn paid_usage_carries(&self, key: &LoginKey, now: Timestamp) -> bool {
+        self.current(key, now)
+            .and_then(|entry| entry.extra_credits.as_ref())
+            .is_some_and(ExtraCredits::is_usable)
+    }
+
+    /// A cache holding one current `key` entry with `extra_credits`, observed at `now`.
+    #[cfg(test)]
+    pub(crate) fn with_extra_credits(
+        key: LoginKey,
+        extra_credits: ExtraCredits,
+        entitlement: Entitlement,
+        now: Timestamp,
+    ) -> Self {
+        let observed_at_ms = now.as_millisecond().max(0) as u64;
+        Self {
+            refreshed_at_ms: observed_at_ms,
+            logins: BTreeMap::from([(
+                key,
+                ProviderCreditsEntry {
+                    entitlement,
+                    observed_at_ms,
+                    ok: true,
+                    extra_credits: Some(extra_credits),
+                    ..Default::default()
+                },
+            )]),
+            scoped: BTreeMap::new(),
+        }
+    }
+
     /// The entry a write goes to. Sub-provider scopes live only in `scoped`; a
     /// sub-provider entry an older build left in `logins` moves there first when
     /// the write is kind-wide or to that entry's own scope.
