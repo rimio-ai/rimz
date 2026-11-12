@@ -875,28 +875,26 @@ pub struct SessionTokenTotals {
     pub output: u64,
 }
 
-/// Compute one live session's cumulative fresh input and output tokens from
-/// the transcript/store the adapter already parses for historical spending.
-/// Cache reads and writes stay outside these headline totals, matching the
-/// token figures rendered by `rimz agents history`.
+/// Total one live session's cumulative fresh input and output tokens from the
+/// rows the adapter already parsed for historical spending. Cache reads and
+/// writes stay outside these headline totals, matching the token figures
+/// rendered by `rimz agents history`.
 pub fn session_token_totals(
-    adapter: &AgentDefinition,
+    entries: &[CachedEntry],
     session_id: &str,
-    transcript_path: &Path,
-    prices: &PriceBook,
 ) -> Option<SessionTokenTotals> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         return None;
     }
-    let parsed = adapter.parse_spend(transcript_path, None, prices);
-    let totals = session_entries(&parsed.entries, session_id)
-        .into_iter()
-        .fold(SessionTokenTotals::default(), |mut totals, entry| {
+    let totals = session_entries(entries, session_id).into_iter().fold(
+        SessionTokenTotals::default(),
+        |mut totals, entry| {
             totals.input = totals.input.saturating_add(entry.input);
             totals.output = totals.output.saturating_add(entry.output);
             totals
-        });
+        },
+    );
     (totals.input > 0 || totals.output > 0).then_some(totals)
 }
 

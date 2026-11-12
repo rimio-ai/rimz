@@ -2036,6 +2036,7 @@ fn fail_run_if_nonterminal(context: &RunExecContext, reason: &str) {
 fn fail_run_if_owned(context: &RunExecContext, own_pane: Option<&rimz::ids::PaneId>, reason: &str) {
     match rimz::harness::run::fail_if_owned(
         context.store.paths(),
+        context.store.runtime_paths(),
         &context.run_id,
         own_pane,
         reason,

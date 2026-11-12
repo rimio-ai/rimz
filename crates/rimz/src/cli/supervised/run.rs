@@ -227,6 +227,7 @@ fn verify_phase(
         ) {
             if let Some(failed) = rimz::harness::run::fail_if_nonterminal(
                 prepared.store.paths(),
+                prepared.store.runtime_paths(),
                 &record.run_id,
                 &render::error_line(&err),
             )? {

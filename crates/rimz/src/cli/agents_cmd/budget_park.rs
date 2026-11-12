@@ -43,8 +43,12 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         {
             continue;
         }
-        let (record, wrote) =
-            rimz::harness::run::budget_exceeded(store.paths(), &record.run_id, at_cost)?;
+        let (record, wrote) = rimz::harness::run::budget_exceeded(
+            store.paths(),
+            store.runtime_paths(),
+            &record.run_id,
+            at_cost,
+        )?;
         if wrote {
             rimz::store::run::wake_run(store.runtime_paths(), &record);
         }

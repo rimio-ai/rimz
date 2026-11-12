@@ -469,18 +469,16 @@ fn session_token_totals_sum_and_scope_fresh_tokens() {
         conn.message(id, session_id, "assistant", 1_780_394_400_000, &data);
     }
     drop(conn);
+    let parsed = opencode_adapter().parse_spend(&path, None, &PriceBook::default());
 
     assert_eq!(
-        session_token_totals(opencode_adapter(), "sess-1", &path, &PriceBook::default()),
+        session_token_totals(&parsed.entries, "sess-1"),
         Some(SessionTokenTotals {
             input: 150,
             output: 30,
         })
     );
-    assert_eq!(
-        session_token_totals(opencode_adapter(), " ", &path, &PriceBook::default()),
-        None
-    );
+    assert_eq!(session_token_totals(&parsed.entries, " "), None);
 }
 
 #[test]
@@ -523,8 +521,9 @@ fn session_entries_dedup_exact_keys_and_sidechain_replays_in_file_order() {
     let dir = TempDir::new().unwrap();
     let line = claude_line_ts("2026-01-01T10:00:00.000Z", 1.0, "msg-a", "req-a");
     let path = write_jsonl(dir.path(), "session.jsonl", &[&line, &line]);
+    let parsed = claude_adapter().parse_spend(&path, None, &PriceBook::default());
     assert_eq!(
-        session_token_totals(claude_adapter(), "sess-1", &path, &PriceBook::default()),
+        session_token_totals(&parsed.entries, "sess-1"),
         Some(SessionTokenTotals {
             input: 10,
             output: 5,

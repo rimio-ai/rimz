@@ -143,7 +143,11 @@ impl RunWaiter {
                 return Ok(record);
             }
             let Some(wait) = next_wait(deadline) else {
-                let record = crate::harness::run::timeout(store.paths(), &self.expected.run_id)?;
+                let record = crate::harness::run::timeout(
+                    store.paths(),
+                    store.runtime_paths(),
+                    &self.expected.run_id,
+                )?;
                 if let Some(observer) = observer.as_deref_mut() {
                     observer(&record)?;
                 }

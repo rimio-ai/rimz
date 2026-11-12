@@ -106,7 +106,7 @@ fn terminal_run_closes_only_its_command_pane() {
         .find(|pane| pane.pane_id != unrelated)
         .unwrap()
         .pane_id;
-    rimz::harness::run::cancel(store.paths(), &record.run_id).unwrap();
+    rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
     let panes = poll_until(
         Duration::from_secs(10),
         || list_panes(room.path(), room.name()),

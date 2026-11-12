@@ -66,8 +66,13 @@ pub(super) fn run(request: ParkNoticeRequest, globals: &super::GlobalFlags) -> R
         Some(ParkAction::Fail {
             activity, failure, ..
         }) => {
-            let Some(record) =
-                rimz::harness::run::fail_limit_park(paths, &run.run_id, activity, failure)?
+            let Some(record) = rimz::harness::run::fail_limit_park(
+                paths,
+                ctx.store.runtime_paths(),
+                &run.run_id,
+                activity,
+                failure,
+            )?
             else {
                 return Ok(());
             };

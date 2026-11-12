@@ -141,7 +141,7 @@ fn check_command_pane(measure_memory: bool) {
         };
         crate::common::assert_wrapper_memory_budget("command wrapper", wrapper, 8);
     }
-    rimz::harness::run::cancel(store.paths(), &record.run_id).unwrap();
+    rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let panes = list_session_panes(&server, &workspace.session_name);

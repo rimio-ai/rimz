@@ -313,15 +313,16 @@ pub fn cancel_and_wake(store: &Store, run_id: &RunId) -> Result<RunRecord> {
 }
 
 pub(super) fn cancel_unserved_workflow_run(store: &Store, run_id: &RunId) -> Result<()> {
-    let (record, wrote) = update_record(store.paths(), run_id, |record, now| {
+    let (paths, runtime) = (store.paths(), store.runtime_paths());
+    let (record, wrote) = settle_terminal(paths, runtime, run_id, |record, now| {
         if record.workflow.is_none() || record.status.is_terminal() {
-            return Ok(RecordMutation::Keep(false));
+            return false;
         }
-        let projection = match crate::store::runtime::audit_projection(store.paths()) {
+        let projection = match crate::store::runtime::audit_projection(paths) {
             Ok(projection) => projection,
             Err(error) => {
                 tracing::warn!(%error, "rebirth: could not inspect workflow run owners");
-                return Ok(RecordMutation::Keep(false));
+                return false;
             }
         };
         if record.provider_pid.is_some_and(|pid| {
@@ -334,13 +335,12 @@ pub(super) fn cancel_unserved_workflow_run(store: &Store, run_id: &RunId) -> Res
                     crate::store::runtime::AgentLiveness::Live { .. }
                 )
         }) {
-            return Ok(RecordMutation::Keep(false));
+            return false;
         }
-        record.mark_terminal(RunStatus::Canceled, now);
-        Ok(RecordMutation::Write(true))
+        record.mark_terminal(RunStatus::Canceled, now)
     })?;
     if wrote {
-        crate::store::run::wake_run(store.runtime_paths(), &record);
+        crate::store::run::wake_run(runtime, &record);
     }
     Ok(())
 }
@@ -351,7 +351,7 @@ pub fn cancel_and_wake_paths(
     runtime: &RuntimePaths,
     run_id: &RunId,
 ) -> Result<RunRecord> {
-    let (record, wrote) = cancel(paths, run_id)?;
+    let (record, wrote) = cancel(paths, runtime, run_id)?;
     if wrote {
         crate::store::run::wake_run(runtime, &record);
     }
@@ -438,20 +438,26 @@ pub fn settle_stranded_park(
     if previous != Some(parked_at) {
         return Ok(ParkCheck::Stranded(parked_at));
     }
-    let (record, check) = update_record(store.paths(), &record.run_id, |record, now| {
-        if record.parked_at != Some(parked_at) || record.status.is_terminal() {
-            return Ok(RecordMutation::Keep(ParkCheck::Live));
-        }
-        if record.failure_tail.is_none() {
-            record.failure_tail = Some(STRANDED_PARK_REASON.to_owned());
-        }
-        record.mark_terminal(RunStatus::Failed, now);
-        Ok(RecordMutation::Write(ParkCheck::Settled))
-    })?;
-    if check == ParkCheck::Settled {
-        crate::store::run::wake_run(store.runtime_paths(), &record);
+    let (record, settled) = settle_terminal(
+        store.paths(),
+        store.runtime_paths(),
+        &record.run_id,
+        |record, now| {
+            if record.parked_at != Some(parked_at) || !record.mark_terminal(RunStatus::Failed, now)
+            {
+                return false;
+            }
+            if record.failure_tail.is_none() {
+                record.failure_tail = Some(STRANDED_PARK_REASON.to_owned());
+            }
+            true
+        },
+    )?;
+    if !settled {
+        return Ok(ParkCheck::Live);
     }
-    Ok(check)
+    crate::store::run::wake_run(store.runtime_paths(), &record);
+    Ok(ParkCheck::Settled)
 }
 
 fn update_record<T>(
@@ -660,8 +666,15 @@ fn capped_failure_tail(tail: &str) -> Option<String> {
     })
 }
 
-pub(super) fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
-    mark_terminal(paths, run_id, RunStatus::TimedOut).map(|(record, _wrote)| record)
+pub(super) fn timeout(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    run_id: &RunId,
+) -> Result<RunRecord> {
+    settle_terminal(paths, runtime, run_id, |record, now| {
+        record.mark_terminal(RunStatus::TimedOut, now)
+    })
+    .map(|(record, _wrote)| record)
 }
 
 /// Mark a run timed out only when its durable producer deadline is due.
@@ -671,20 +684,21 @@ pub(super) fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
 /// the helper was starting.
 pub fn timeout_if_due(
     paths: &StatePaths,
+    runtime: &RuntimePaths,
     run_id: &RunId,
     now: Timestamp,
-    harvest: Option<String>,
+    mut harvest: Option<String>,
 ) -> Result<(RunRecord, bool)> {
-    update_record(paths, run_id, |record, _| {
+    settle_terminal(paths, runtime, run_id, |record, _| {
         if !super::deadline::kill_due(record, now)
             || !record.mark_terminal(RunStatus::TimedOut, now)
         {
-            return Ok(RecordMutation::Keep(false));
+            return false;
         }
         if record.last_message.is_none() {
-            record.last_message = harvest;
+            record.last_message = harvest.take();
         }
-        Ok(RecordMutation::Write(true))
+        true
     })
 }
 
@@ -703,7 +717,7 @@ pub fn hold_interrupted_turn(paths: &StatePaths, run_id: &RunId, at: Timestamp) 
 }
 
 /// Settle a held run canceled once its interrupt window passed with no new
-/// turn, recording spend as the hook settle does and waking its waiter. The
+/// turn, with its spend in the terminal write, and wake its waiter. The
 /// window and the kill are judged at the locked write, so a run whose kill
 /// came due meanwhile is left to the kill. `harvest` fills an absent last
 /// message, as the kill's does. Returns the record only when this call settled
@@ -711,24 +725,27 @@ pub fn hold_interrupted_turn(paths: &StatePaths, run_id: &RunId, at: Timestamp) 
 pub fn expire_interrupt(
     store: &Store,
     run_id: &RunId,
-    harvest: Option<String>,
+    mut harvest: Option<String>,
 ) -> Result<Option<RunRecord>> {
-    let (record, settled) = update_record(store.paths(), run_id, |record, now| {
-        if !super::deadline::interrupt_expired(record, now)
-            || !record.mark_terminal(RunStatus::Canceled, now)
-        {
-            return Ok(RecordMutation::Keep(false));
-        }
-        if record.last_message.is_none() {
-            record.last_message = harvest;
-        }
-        Ok(RecordMutation::Write(true))
-    })?;
+    let (record, settled) = settle_terminal(
+        store.paths(),
+        store.runtime_paths(),
+        run_id,
+        |record, now| {
+            if !super::deadline::interrupt_expired(record, now)
+                || !record.mark_terminal(RunStatus::Canceled, now)
+            {
+                return false;
+            }
+            if record.last_message.is_none() {
+                record.last_message = harvest.take();
+            }
+            true
+        },
+    )?;
     if !settled {
         return Ok(None);
     }
-    let agent = crate::agents::definition_by_kind(record.kind.as_str()).ok();
-    let record = settle_spend_and_wake(store, record, agent);
     crate::store::run::wake_run(store.runtime_paths(), &record);
     Ok(Some(record))
 }
@@ -820,11 +837,12 @@ pub fn claim_limit_hold(
 /// only when this call wrote it.
 pub fn fail_limit_park(
     paths: &StatePaths,
+    runtime: &RuntimePaths,
     run_id: &RunId,
     activity: Timestamp,
     failure: crate::store::run::LimitFailure,
 ) -> Result<Option<RunRecord>> {
-    let (record, wrote) = update_record(paths, run_id, |record, now| {
+    let (record, wrote) = settle_terminal(paths, runtime, run_id, |record, now| {
         let owed = match record.limit_hold {
             Some(hold) if hold.activity == activity => hold.until <= now,
             _ => record
@@ -832,13 +850,13 @@ pub fn fail_limit_park(
                 .is_none_or(|noticed| noticed < activity),
         };
         if !owed || !record.mark_terminal(RunStatus::Failed, now) {
-            return Ok(RecordMutation::Keep(false));
+            return false;
         }
         if record.failure_tail.is_none() {
             record.failure_tail = capped_failure_tail(&super::park_notice::failure_tail(&failure));
         }
         record.limit_failure = Some(failure.clone());
-        Ok(RecordMutation::Write(true))
+        true
     })?;
     Ok(wrote.then_some(record))
 }
@@ -886,20 +904,27 @@ pub fn release_stall_notice(paths: &StatePaths, run_id: &RunId, at: Timestamp) -
     .map(|_| ())
 }
 
+/// Settle a turn run over its budget, writing the caller's `cost_usd`, the
+/// figure the park was judged on, over the cost its spend read finds.
 pub fn budget_exceeded(
     paths: &StatePaths,
+    runtime: &RuntimePaths,
     run_id: &RunId,
     cost_usd: Option<f64>,
 ) -> Result<(RunRecord, bool)> {
-    update_record(paths, run_id, |record, now| {
-        if record.workflow.is_some()
-            || record.lifecycle == RunLifecycle::Session
-            || !record.mark_terminal(RunStatus::BudgetExceeded, now)
-        {
-            return Ok(RecordMutation::Keep(false));
+    let read = |record: &RunRecord| {
+        let spend = read_run_spend(runtime, record);
+        RunSpend {
+            cost_usd: cost_usd
+                .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                .or(spend.cost_usd),
+            ..spend
         }
-        record.cost_usd = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0);
-        Ok(RecordMutation::Write(true))
+    };
+    settle_terminal_with(paths, run_id, read, |record, now| {
+        record.workflow.is_none()
+            && record.lifecycle != RunLifecycle::Session
+            && record.mark_terminal(RunStatus::BudgetExceeded, now)
     })
 }
 
@@ -926,8 +951,14 @@ fn record_spend(
     .map(|(record, ())| record)
 }
 
-pub fn cancel(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
-    mark_terminal(paths, run_id, RunStatus::Canceled)
+pub fn cancel(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    run_id: &RunId,
+) -> Result<(RunRecord, bool)> {
+    settle_terminal(paths, runtime, run_id, |record, now| {
+        record.mark_terminal(RunStatus::Canceled, now)
+    })
 }
 
 /// Fail a non-terminal run and record why in the same locked write, so a
@@ -939,10 +970,11 @@ pub fn cancel(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
 /// waiter once the lock has dropped.
 pub fn fail_if_nonterminal(
     paths: &StatePaths,
+    runtime: &RuntimePaths,
     run_id: &RunId,
     reason: &str,
 ) -> Result<Option<RunRecord>> {
-    fail_if_owned(paths, run_id, None, reason)
+    fail_if_owned(paths, runtime, run_id, None, reason)
 }
 
 /// [`fail_if_nonterminal`] for the wrapper in `pane`, which leaves a run that
@@ -950,11 +982,12 @@ pub fn fail_if_nonterminal(
 /// open by an interrupt settles canceled, the outcome its interrupt had.
 pub fn fail_if_owned(
     paths: &StatePaths,
+    runtime: &RuntimePaths,
     run_id: &RunId,
     pane: Option<&PaneId>,
     reason: &str,
 ) -> Result<Option<RunRecord>> {
-    let (record, wrote) = update_record(paths, run_id, |record, now| {
+    let (record, wrote) = settle_terminal(paths, runtime, run_id, |record, now| {
         let status = if record.interrupted_at.is_some() {
             RunStatus::Canceled
         } else {
@@ -962,12 +995,12 @@ pub fn fail_if_owned(
         };
         if pane.is_some_and(|pane| record.superseded_in(pane)) || !record.mark_terminal(status, now)
         {
-            return Ok(RecordMutation::Keep(false));
+            return false;
         }
         if record.failure_tail.is_none() {
             record.failure_tail = capped_failure_tail(reason);
         }
-        Ok(RecordMutation::Write(true))
+        true
     })?;
     Ok(wrote.then_some(record))
 }
@@ -992,7 +1025,8 @@ pub fn settle_verify(
 ) -> Result<VerifyStep> {
     if cancel_requested {
         reopen_for_verify(paths, run_id, verify)?;
-        return cancel(paths, run_id).map(|(record, _wrote)| VerifyStep::Settled(record));
+        return mark_terminal(paths, run_id, RunStatus::Canceled)
+            .map(|(record, _wrote)| VerifyStep::Settled(record));
     }
     if verify.passed {
         return verify_passed(paths, run_id, verify).map(VerifyStep::Settled);
@@ -1046,6 +1080,73 @@ fn require_completed(record: &RunRecord) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// End a run through `update`, which marks it terminal and returns true, or
+/// refuses with false, and write the run's spend in that same locked write.
+/// Returns the record and whether this call wrote it.
+fn settle_terminal(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    run_id: &RunId,
+    update: impl FnMut(&mut RunRecord, Timestamp) -> bool,
+) -> Result<(RunRecord, bool)> {
+    settle_terminal_with(
+        paths,
+        run_id,
+        |record| read_run_spend(runtime, record),
+        update,
+    )
+}
+
+/// [`settle_terminal`] over the spend read `spend`. The read (a transcript
+/// parse) runs off-lock from an unlocked load, and is taken again when the
+/// binding it read moved before the lock; a run already terminal at that load
+/// costs no read and no write. A peer run's spend is session-cumulative and a
+/// team run's is its whole cohort's, which one binding understates, so neither
+/// takes a read. The workflow wake follows the write that carries the spend.
+fn settle_terminal_with(
+    paths: &StatePaths,
+    run_id: &RunId,
+    mut spend: impl FnMut(&RunRecord) -> RunSpend,
+    mut update: impl FnMut(&mut RunRecord, Timestamp) -> bool,
+) -> Result<(RunRecord, bool)> {
+    loop {
+        let before = load(paths, run_id)?;
+        if before.status.is_terminal() {
+            return Ok((before, false));
+        }
+        let read = if before.peer.is_some() || before.team.is_some() {
+            RunSpend::default()
+        } else {
+            spend(&before)
+        };
+        let mut rebound = false;
+        let (record, wrote, newly_terminal) = write_record(paths, run_id, |record, now| {
+            if !same_binding(record, &before) {
+                rebound = true;
+                return Ok(RecordMutation::Keep(false));
+            }
+            if !update(record, now) {
+                return Ok(RecordMutation::Keep(false));
+            }
+            read.apply(record);
+            Ok(RecordMutation::Write(true))
+        })?;
+        if newly_terminal {
+            wake_workflow(paths, &record);
+        }
+        if !rebound {
+            return Ok((record, wrote));
+        }
+    }
+}
+
+/// Whether `record` still names the sessions a spend read of `before` covered.
+fn same_binding(record: &RunRecord, before: &RunRecord) -> bool {
+    record.agent_id == before.agent_id
+        && record.transcript_path == before.transcript_path
+        && record.earlier_sessions == before.earlier_sessions
 }
 
 fn mark_terminal(
@@ -1139,8 +1240,7 @@ pub fn settle_session_exit(
     failure_tail: impl FnOnce() -> Option<String>,
 ) -> Result<Option<RunRecord>> {
     settle_session_exit_with_spend(store, run_id, failure_tail, |record| {
-        let agent = crate::agents::definition_by_kind(record.kind.as_str()).ok();
-        read_spend(store, record, agent)
+        read_run_spend(store.runtime_paths(), record)
     })
 }
 
@@ -1161,10 +1261,7 @@ fn settle_session_exit_with_spend(
             if record.lifecycle != RunLifecycle::Session || record.status.is_terminal() {
                 return Ok(RecordMutation::Keep(false));
             }
-            if record.agent_id != before.agent_id
-                || record.transcript_path != before.transcript_path
-                || record.earlier_sessions != before.earlier_sessions
-            {
+            if !same_binding(record, &before) {
                 return Ok(RecordMutation::Keep(false));
             }
             let status = if record.status == RunStatus::Pending {
@@ -1232,7 +1329,7 @@ fn settle_spend_and_wake(
         wake_workflow(store.paths(), &record);
         return record;
     }
-    let spend = read_spend(store, &record, agent);
+    let spend = read_spend(store.runtime_paths(), &record, agent);
     let record = record_spend(
         store.paths(),
         &record.run_id,
@@ -1276,50 +1373,26 @@ impl RunSpend {
     }
 }
 
-fn read_spend(store: &Store, record: &RunRecord, agent: Option<&AgentDefinition>) -> RunSpend {
-    if record.lifecycle == RunLifecycle::Session && record.team.is_none() {
-        return read_session_spend(store, record, agent);
-    }
-    let kind = record.kind.as_str();
-    let cost_usd = record
-        .agent_id
-        .as_deref()
-        .and_then(|id| crate::store::agent_context::read_one(store.runtime_paths(), kind, id))
-        .and_then(|context| context.context.cost)
-        .and_then(|cost| cost.total_cost_usd);
-    let token_totals = agent.and_then(|agent| {
-        record
-            .agent_id
-            .as_deref()
-            .zip(record.transcript_path.as_deref())
-            .and_then(|(agent_id, transcript_path)| {
-                let prices = crate::agents::pricing::cached_book(
-                    &store.runtime_paths().shared_pricing_table_path(),
-                );
-                crate::agents::spending::session_token_totals(
-                    agent,
-                    agent_id,
-                    std::path::Path::new(transcript_path),
-                    &prices,
-                )
-            })
-    });
-    RunSpend {
-        cost_usd,
-        input_tokens: token_totals.map(|totals| totals.input),
-        output_tokens: token_totals.map(|totals| totals.output),
-    }
+fn read_run_spend(runtime: &RuntimePaths, record: &RunRecord) -> RunSpend {
+    let agent = crate::agents::definition_by_kind(record.kind.as_str()).ok();
+    read_spend(runtime, record, agent)
 }
 
-fn read_session_spend(
-    store: &Store,
+/// The spend of a run's current binding, and of every earlier one for a
+/// session run: each binding's cost from its context sidecar, else from its
+/// transcript's priced rows, and its fresh tokens from the transcript.
+fn read_spend(
+    runtime: &RuntimePaths,
     record: &RunRecord,
     agent: Option<&AgentDefinition>,
 ) -> RunSpend {
-    let prices =
-        crate::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_table_path());
-    let bindings = record
-        .earlier_sessions
+    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_table_path());
+    let earlier = if record.lifecycle == RunLifecycle::Session && record.team.is_none() {
+        record.earlier_sessions.as_slice()
+    } else {
+        &[]
+    };
+    let bindings = earlier
         .iter()
         .map(|session| (&session.agent_id, session.transcript_path.as_deref()))
         .chain(
@@ -1329,38 +1402,33 @@ fn read_session_spend(
                 .map(|id| (id, record.transcript_path.as_deref())),
         );
     let mut spend = RunSpend::default();
-    let mut tokens = crate::agents::spending::SessionTokenTotals::default();
+    let mut tokens = None::<crate::agents::spending::SessionTokenTotals>;
     for (id, path) in bindings {
         let parsed = agent
             .zip(path)
             .map(|(agent, path)| agent.parse_spend(std::path::Path::new(path), None, &prices));
-        let cost =
-            crate::store::agent_context::read_one(store.runtime_paths(), record.kind.as_str(), id)
-                .and_then(|context| context.context.cost)
-                .and_then(|cost| cost.total_cost_usd)
-                .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                .or_else(|| {
-                    crate::agents::spending::session_cost_from_entries(
-                        &parsed.as_ref()?.entries,
-                        id,
-                    )?
+        let cost = crate::store::agent_context::read_one(runtime, record.kind.as_str(), id)
+            .and_then(|context| context.context.cost)
+            .and_then(|cost| cost.total_cost_usd)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            .or_else(|| {
+                crate::agents::spending::session_cost_from_entries(&parsed.as_ref()?.entries, id)?
                     .total_cost_usd
-                });
+            });
         if let Some(cost) = cost {
             spend.cost_usd = Some(spend.cost_usd.unwrap_or_default() + cost);
         }
-        let Some(parsed) = parsed else {
+        let Some(session) = parsed
+            .and_then(|parsed| crate::agents::spending::session_token_totals(&parsed.entries, id))
+        else {
             continue;
         };
-        for entry in crate::agents::spending::session_entries(&parsed.entries, id) {
-            tokens.input = tokens.input.saturating_add(entry.input);
-            tokens.output = tokens.output.saturating_add(entry.output);
-        }
+        let sum = tokens.get_or_insert_default();
+        sum.input = sum.input.saturating_add(session.input);
+        sum.output = sum.output.saturating_add(session.output);
     }
-    if tokens.input > 0 || tokens.output > 0 {
-        spend.input_tokens = Some(tokens.input);
-        spend.output_tokens = Some(tokens.output);
-    }
+    spend.input_tokens = tokens.map(|tokens| tokens.input);
+    spend.output_tokens = tokens.map(|tokens| tokens.output);
     spend
 }
 

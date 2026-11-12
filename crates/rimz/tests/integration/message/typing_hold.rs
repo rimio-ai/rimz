@@ -1432,7 +1432,8 @@ fn sweep_withdraws_the_stop(fixture: &Fixture, stop: &MessageRecord, reason: &st
 fn a_held_deadline_stop_is_withdrawn_once_its_run_ends() {
     for kind in ["claude", "kimi"] {
         let (fixture, run, stop) = held_deadline_stop(kind);
-        rimz::harness::run::cancel(fixture.env.store().paths(), &run.run_id).unwrap();
+        let store = fixture.env.store();
+        rimz::harness::run::cancel(store.paths(), store.runtime_paths(), &run.run_id).unwrap();
         sweep_withdraws_the_stop(&fixture, &stop, "child run canceled before delivery");
     }
 }
@@ -1441,8 +1442,9 @@ fn a_held_deadline_stop_is_withdrawn_once_its_run_ends() {
 fn a_held_deadline_stop_is_withdrawn_once_its_run_reopens() {
     for kind in ["claude", "kimi"] {
         let (fixture, run, stop) = held_deadline_stop(kind);
-        let paths = fixture.env.store().paths().clone();
-        rimz::harness::run::cancel(&paths, &run.run_id).unwrap();
+        let store = fixture.env.store();
+        let paths = store.paths().clone();
+        rimz::harness::run::cancel(&paths, store.runtime_paths(), &run.run_id).unwrap();
         let observation = AgentLifecycleObservation::new(
             Some("typing-session".into()),
             LifecycleSignal::TurnStarted { turn_id: None },

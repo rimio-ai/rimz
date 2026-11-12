@@ -80,8 +80,13 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     let harvest = kill_due(&initial, now)
         .then(|| harvest_last_message(&initial))
         .flatten();
-    let (record, wrote) =
-        rimz::harness::run::timeout_if_due(ctx.store.paths(), &request.run_id, now, harvest)?;
+    let (record, wrote) = rimz::harness::run::timeout_if_due(
+        ctx.store.paths(),
+        ctx.store.runtime_paths(),
+        &request.run_id,
+        now,
+        harvest,
+    )?;
     let deadline_due = rimz::harness::deadline::kill_at(&record).is_some_and(|at| at <= now);
     if !wrote && !(record.status == rimz::store::run::RunStatus::TimedOut && deadline_due) {
         return Ok(());

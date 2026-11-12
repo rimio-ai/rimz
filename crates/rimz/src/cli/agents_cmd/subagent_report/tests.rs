@@ -802,7 +802,7 @@ fn two_peer_turns_survive_a_running_sibling_and_share_one_digest() {
         std::fs::read_to_string(&second_path).unwrap(),
         "second answer\n"
     );
-    let child = run::fail_if_nonterminal(store.paths(), &child.run_id, "")
+    let child = run::fail_if_nonterminal(store.paths(), store.runtime_paths(), &child.run_id, "")
         .unwrap()
         .unwrap();
     assert!(matches!(
@@ -862,7 +862,7 @@ fn settled_background_peer_reports_to_its_launcher_only() {
         .set_modified(std::time::SystemTime::UNIX_EPOCH)
         .unwrap();
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
-    let child = run::fail_if_nonterminal(store.paths(), &child.run_id, "")
+    let child = run::fail_if_nonterminal(store.paths(), store.runtime_paths(), &child.run_id, "")
         .unwrap()
         .unwrap();
     assert!(matches!(
@@ -911,7 +911,7 @@ fn dismissed_child_is_not_reported() {
         "stopped by parent",
     )
     .unwrap();
-    run::cancel(store.paths(), &second.run_id).unwrap();
+    run::cancel(store.paths(), store.runtime_paths(), &second.run_id).unwrap();
 
     assert!(matches!(
         report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap(),
@@ -948,7 +948,7 @@ fn dismissing_every_child_reports_nothing() {
             "stopped by parent",
         )
         .unwrap();
-        run::cancel(store.paths(), &record.run_id).unwrap();
+        run::cancel(store.paths(), store.runtime_paths(), &record.run_id).unwrap();
     }
 
     assert_eq!(
