@@ -555,10 +555,9 @@ fn discover_cached(
 
 impl CodexDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+        let forced = self.catalog.refresh(key.clone(), now, |topology| {
             enumerate_rollouts(&key, topology)
         });
-        let forced = scan.attempted();
         #[cfg(test)]
         if forced {
             self.work.full_scans += 1;

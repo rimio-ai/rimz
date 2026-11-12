@@ -574,10 +574,10 @@ impl KiroDiscoverySnapshot {
             catalog
         });
         #[cfg(test)]
-        if scan.attempted() {
+        if scan {
             self.work.full_scans += 1;
         }
-        scan.attempted()
+        scan
     }
 
     fn fold_candidates(&mut self, forced: bool) -> (Vec<LocalSessionObservation>, bool) {

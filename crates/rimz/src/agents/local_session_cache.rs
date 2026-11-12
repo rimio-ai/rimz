@@ -180,23 +180,6 @@ impl StampedPaths {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct CatalogRefresh {
-    attempted: bool,
-    stable: bool,
-}
-
-impl CatalogRefresh {
-    pub(super) fn attempted(self) -> bool {
-        self.attempted
-    }
-
-    #[cfg(test)]
-    fn stable(self) -> bool {
-        self.stable
-    }
-}
-
 pub(super) struct IncrementalCatalog<K, C> {
     key: Option<K>,
     last_stable_scan: Option<Instant>,
@@ -218,21 +201,19 @@ impl<K, C> Default for IncrementalCatalog<K, C> {
 }
 
 impl<K: Eq, C> IncrementalCatalog<K, C> {
+    /// Whether this call enumerated, stable or not.
     pub(super) fn refresh(
         &mut self,
         key: K,
         now: Instant,
         enumerate: impl FnOnce(&mut StampedPaths) -> Vec<C>,
-    ) -> CatalogRefresh {
+    ) -> bool {
         let due = self.invalidated
             || self.key.as_ref() != Some(&key)
             || !self.topology.unchanged()
             || full_scan_due(self.last_stable_scan, now);
         if !due {
-            return CatalogRefresh {
-                attempted: false,
-                stable: true,
-            };
+            return false;
         }
 
         let mut topology = StampedPaths::default();
@@ -249,10 +230,7 @@ impl<K: Eq, C> IncrementalCatalog<K, C> {
             self.last_stable_scan = None;
             self.entries.clear();
         }
-        CatalogRefresh {
-            attempted: true,
-            stable,
-        }
+        true
     }
 
     pub(super) fn entries(&self) -> &[C] {
@@ -586,38 +564,28 @@ mod tests {
             topology.record_exact(root.clone());
             vec![root.clone()]
         });
-        assert!(first.attempted() && first.stable());
+        assert!(first);
         assert_eq!(catalog.entries(), std::slice::from_ref(&root));
-        assert!(
-            !catalog
-                .refresh(1, start + Duration::from_secs(29), |_| unreachable!())
-                .attempted()
-        );
+        assert!(!catalog.refresh(1, start + Duration::from_secs(29), |_| unreachable!()));
 
         fs::write(root.join("entry"), "body").unwrap();
         assert!(
-            catalog
-                .refresh(1, start + Duration::from_secs(1), |topology| {
-                    topology.record_exact(root.clone());
-                    Vec::new()
-                })
-                .attempted()
+            catalog.refresh(1, start + Duration::from_secs(1), |topology| {
+                topology.record_exact(root.clone());
+                Vec::new()
+            })
         );
         assert!(
-            catalog
-                .refresh(2, start + Duration::from_secs(2), |topology| {
-                    topology.record_exact(root.clone());
-                    Vec::new()
-                })
-                .attempted()
+            catalog.refresh(2, start + Duration::from_secs(2), |topology| {
+                topology.record_exact(root.clone());
+                Vec::new()
+            })
         );
         assert!(
-            catalog
-                .refresh(2, start + Duration::from_secs(32), |topology| {
-                    topology.record_exact(root.clone());
-                    Vec::new()
-                })
-                .attempted()
+            catalog.refresh(2, start + Duration::from_secs(32), |topology| {
+                topology.record_exact(root.clone());
+                Vec::new()
+            })
         );
     }
 
@@ -633,16 +601,12 @@ mod tests {
             fs::write(root.join("entry"), "body").unwrap();
             vec![root.join("entry")]
         });
-        assert!(unstable.attempted() && !unstable.stable());
+        assert!(unstable);
         assert!(catalog.entries().is_empty());
-        assert!(
-            catalog
-                .refresh((), now, |topology| {
-                    topology.record_exact(root.clone());
-                    vec![root.join("entry")]
-                })
-                .attempted()
-        );
+        assert!(catalog.refresh((), now, |topology| {
+            topology.record_exact(root.clone());
+            vec![root.join("entry")]
+        }));
         assert_eq!(catalog.entries(), [root.join("entry")]);
     }
 
@@ -652,7 +616,7 @@ mod tests {
         let mut catalog = IncrementalCatalog::<(), ()>::default();
         catalog.refresh((), now, |_| vec![()]);
         catalog.invalidate();
-        assert!(catalog.refresh((), now, |_| vec![()]).attempted());
+        assert!(catalog.refresh((), now, |_| vec![()]));
     }
 
     #[test]

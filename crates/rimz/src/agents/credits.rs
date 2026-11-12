@@ -360,7 +360,7 @@ fn oauth_http_request_once(
             .and_then(|request| {
                 agent
                     .run(request)
-                    .map_err(|error| http_error(url, error_kind(error)))
+                    .map_err(|_| http_error(url, HttpErrKind::Transport))
             }),
         None => request
             .body(())
@@ -368,7 +368,7 @@ fn oauth_http_request_once(
             .and_then(|request| {
                 agent
                     .run(request)
-                    .map_err(|error| http_error(url, error_kind(error)))
+                    .map_err(|_| http_error(url, HttpErrKind::Transport))
             }),
     };
     let mut response = response?;
@@ -393,13 +393,6 @@ fn http_error(url: &str, kind: HttpErrKind) -> OAuthHttpErr {
         kind,
         host: url_host(url).to_owned(),
         body: String::new(),
-    }
-}
-
-fn error_kind(error: ureq::Error) -> HttpErrKind {
-    match error {
-        ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
-        _ => HttpErrKind::Transport,
     }
 }
 
