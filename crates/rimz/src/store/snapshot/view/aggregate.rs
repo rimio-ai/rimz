@@ -167,6 +167,7 @@ impl SidebarSnapshot {
         mut rows: Vec<SidebarRow>,
         demotion: &ParkDemotion,
         workflows: &[super::SidebarWorkflow],
+        open_pr_roots: &[String],
     ) -> Vec<SidebarWorktreeGroup> {
         let now = self.now;
         let windows = AttentionWindows::from_config(&self.attention);
@@ -255,6 +256,32 @@ impl SidebarSnapshot {
                 })
                 .or_insert(run);
             by_group.entry(key).or_insert_with(|| {
+                (
+                    identity.label,
+                    identity.kind,
+                    identity.root_lane,
+                    Vec::new(),
+                    identity.place,
+                )
+            });
+        }
+
+        // An open pull request holds its listed worktree's group without rows; a
+        // branch-split path keeps only its split groups, which carry the PR.
+        for root in open_pr_roots {
+            let identity = resolver.resolve(GroupEntry {
+                channel: None,
+                path: Some(root),
+                branch: None,
+            });
+            if identity.root_lane || identity.kind == SidebarWorktreeKind::External {
+                continue;
+            }
+            let split = format!("{}\n", identity.key);
+            if by_group.keys().any(|key| key.starts_with(&split)) {
+                continue;
+            }
+            by_group.entry(identity.key).or_insert_with(|| {
                 (
                     identity.label,
                     identity.kind,

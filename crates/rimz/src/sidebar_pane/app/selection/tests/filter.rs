@@ -1432,14 +1432,22 @@ fn pr_count_click_toggles_the_open_pr_lens() {
 }
 
 #[test]
-fn pr_count_click_keeps_a_rowless_workflow_lens_open() {
-    let snapshot = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+fn pr_count_click_keeps_a_rowless_lens_open() {
+    let run = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
         .unwrap()
         .at(Duration::ZERO);
+    let mut open_pr = run.clone();
+    std::sync::Arc::make_mut(&mut open_pr.worktree_groups)[0].workflow = None;
+    for (snapshot, shown) in [(run, "watch queued"), (open_pr, "merge-lane")] {
+        pr_count_click_keeps_a_rowless_lens_open_in(&snapshot, shown);
+    }
+}
+
+fn pr_count_click_keeps_a_rowless_lens_open_in(snapshot: &SidebarSnapshot, shown: &str) {
     let mut ui = ViewState::default();
     let mut pane_ui = UiState::default();
     let theme = pane_ui.theme(&snapshot.theme);
-    let frame = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
+    let frame = render::compose_lines(snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
     let hit = frame
         .interactions
         .regions()
@@ -1453,18 +1461,18 @@ fn pr_count_click_keeps_a_rowless_workflow_lens_open() {
         hit.rows.start as u16,
         &mut ui,
         &mut pane_ui,
-        &snapshot,
+        snapshot,
     );
     assert_eq!(ui.toggles.make_up_filter, BodyFilter::OpenPr.into());
     let theme = pane_ui.theme(&snapshot.theme);
-    let frame = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
+    let frame = render::compose_lines(snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 32);
     assert!(
         frame
             .lines
             .iter()
-            .any(|line| line.to_string().contains("watch queued"))
+            .any(|line| line.to_string().contains(shown))
     );
-    assert!(ui.visible_roster(&snapshot).rows().is_empty());
+    assert!(ui.visible_roster(snapshot).rows().is_empty());
 }
 
 fn text_cell_range(text: &str, start: u16, end: u16) -> String {

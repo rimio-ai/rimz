@@ -47,7 +47,8 @@ fn live_runs_seed_groups_but_terminal_and_external_runs_do_not() {
             workflow("/trees/lane", state),
             workflow("/elsewhere", state),
         ];
-        let groups = snapshot.build_worktree_groups(Vec::new(), &ParkDemotion::default(), &runs);
+        let groups =
+            snapshot.build_worktree_groups(Vec::new(), &ParkDemotion::default(), &runs, &[]);
         let expected = usize::from(!state.is_terminal());
         assert_eq!(
             groups.len(),
@@ -66,6 +67,38 @@ fn live_runs_seed_groups_but_terminal_and_external_runs_do_not() {
 }
 
 #[test]
+fn open_pr_roots_seed_one_rowless_group_per_listed_worktree() {
+    let snapshot = base();
+    let seeds = ["/trees/lane", "/elsewhere", "/repo"].map(str::to_owned);
+    let groups = snapshot.build_worktree_groups(Vec::new(), &ParkDemotion::default(), &[], &seeds);
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| group.key.as_str())
+            .collect::<Vec<_>>(),
+        ["channel:lane"],
+        "an external path and the root lane seed nothing"
+    );
+    assert!(groups[0].rows.is_empty() && groups[0].workflow.is_none());
+    assert!(groups[0].unit_statuses().is_empty());
+    assert!(groups[0].pipeline_owner().is_none());
+
+    let mut member = agent("codex", "member", AgentStatus::Idle, 0).worktree("/trees/lane");
+    member.channel = Some("lane".to_owned());
+    let run = workflow("/trees/lane", RunState::Active);
+    let groups = base_with(vec![member.clone()]).build_worktree_groups(
+        vec![row_from_agent(&member, epoch())],
+        &ParkDemotion::default(),
+        std::slice::from_ref(&run),
+        &seeds,
+    );
+    assert_eq!(groups.len(), 1, "the seed merges into the channel's group");
+    assert_eq!(groups[0].key, "channel:lane");
+    assert_eq!(groups[0].rows.len(), 1);
+    assert_eq!(groups[0].workflow.as_ref(), Some(&run));
+}
+
+#[test]
 fn step_launch_cwd_joins_the_run_group_and_newest_run_wins() {
     let mut step = agent("codex", "sweeper", AgentStatus::Running, 0).worktree("/trees/lane");
     step.channel = None;
@@ -78,6 +111,7 @@ fn step_launch_cwd_joins_the_run_group_and_newest_run_wins() {
         vec![row_from_agent(&step, epoch())],
         &ParkDemotion::default(),
         &[newer.clone(), older],
+        &[],
     );
     assert_eq!(
         groups.len(),
@@ -109,6 +143,7 @@ fn a_run_on_a_branch_split_path_joins_a_split_group() {
             rows,
             &ParkDemotion::default(),
             std::slice::from_ref(&run),
+            &[],
         )
     };
     let run_group = |groups: &[SidebarWorktreeGroup]| {
@@ -150,29 +185,38 @@ fn pane_exclusion_keeps_unrelated_and_newly_rowless_run_groups() {
     let mut empty = snapshot.worktree_groups[0].clone();
     empty.key = "channel:other".into();
     empty.rows = Vec::new().into();
-    Arc::make_mut(&mut snapshot.worktree_groups).push(empty);
+    let mut open_pr = empty.clone();
+    open_pr.key = "channel:open-pr".into();
+    open_pr.workflow = None;
+    open_pr.pr_state = Some(WorktreePrState::Open);
+    let mut merged_pr = open_pr.clone();
+    merged_pr.key = "channel:merged-pr".into();
+    merged_pr.pr_state = Some(WorktreePrState::Merged);
+    Arc::make_mut(&mut snapshot.worktree_groups).extend([empty, open_pr, merged_pr]);
     snapshot.remove_pane_rows(&"tmux:%absent".parse().unwrap());
     assert_eq!(
-        snapshot.worktree_groups.len(),
-        2,
-        "unrelated pane exclusion keeps rowless runs"
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| group.key.as_str())
+            .collect::<Vec<_>>(),
+        ["channel:lane", "channel:other", "channel:open-pr"],
+        "unrelated pane exclusion keeps rowless runs and open PRs"
     );
     snapshot.remove_pane_rows(&live.pane_id);
     assert_eq!(
         snapshot.worktree_groups.len(),
-        2,
+        3,
         "closing the step pane leaves its run"
     );
-    assert!(
-        snapshot
-            .worktree_groups
-            .iter()
-            .all(|group| group.rows.is_empty() && group.workflow.is_some())
-    );
+    assert!(snapshot.worktree_groups.iter().all(|group| {
+        group.rows.is_empty()
+            && (group.workflow.is_some() || group.pr_state == Some(WorktreePrState::Open))
+    }));
 }
 
 #[test]
-fn live_runs_prevent_inactivity_and_terminal_runs_use_member_clocks() {
+fn live_runs_and_open_prs_prevent_inactivity_and_ended_ones_use_member_clocks() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for state in [
@@ -182,21 +226,24 @@ fn live_runs_prevent_inactivity_and_terminal_runs_use_member_clocks() {
         RunState::Failed,
         RunState::Canceled,
     ] {
+        use WorktreePrState::{Closed, Merged, Open};
         let cases = if state.is_terminal() {
             vec![
-                (true, Some(3601), Some(SidebarInactive::Landed)),
-                (true, Some(3600), None),
-                (false, Some(90000), Some(SidebarInactive::Unlanded)),
+                (Some(Merged), Some(3601), Some(SidebarInactive::Landed)),
+                (Some(Merged), Some(3600), None),
+                (Some(Closed), Some(3601), Some(SidebarInactive::Landed)),
+                (None, Some(90000), Some(SidebarInactive::Unlanded)),
+                (Some(Open), Some(90000), None),
             ]
         } else {
             vec![
-                (false, None, None),
-                (true, None, None),
-                (false, Some(90000), None),
-                (true, Some(90000), None),
+                (Some(Open), None, None),
+                (Some(Merged), None, None),
+                (Some(Open), Some(90000), None),
+                (Some(Merged), Some(90000), None),
             ]
         };
-        for (landed, row_age, inactive) in cases {
+        for (pr_state, row_age, inactive) in cases {
             let members = row_age
                 .map(|age| {
                     let mut member =
@@ -219,32 +266,28 @@ fn live_runs_prevent_inactivity_and_terminal_runs_use_member_clocks() {
                 ago(90000)
             };
             let mut groups =
-                projected.build_worktree_groups(rows, &ParkDemotion::default(), &[run]);
+                projected.build_worktree_groups(rows, &ParkDemotion::default(), &[run], &[]);
             let group = &mut groups[0];
             group.clean = Some(true);
-            group.pr_state = Some(if landed {
-                WorktreePrState::Merged
-            } else {
-                WorktreePrState::Open
-            });
+            group.pr_state = pr_state;
             projected.worktree_groups = groups.into();
             projected.sort_groups_for_presentation();
             let group = &projected.worktree_groups[0];
             actual.push((
                 state,
-                landed,
+                pr_state,
                 row_age,
                 group.workflow.is_some(),
                 group.inactive,
             ));
-            expected.push((state, landed, row_age, !state.is_terminal(), inactive));
+            expected.push((state, pr_state, row_age, !state.is_terminal(), inactive));
         }
     }
     assert_eq!(actual, expected);
 }
 
 #[test]
-fn rowless_runs_follow_members_then_newest_node_entry() {
+fn rowless_runs_follow_members_then_newest_node_entry_then_open_prs_by_label() {
     let mut snapshot = base().with_live_panes(vec![pane("%1", "zsh", "/trees/members")], None);
     let mut older = snapshot.worktree_groups[0].clone();
     older.key = "channel:a-old".into();
@@ -255,15 +298,31 @@ fn rowless_runs_follow_members_then_newest_node_entry() {
     newer.key = "channel:z-new".into();
     newer.label = "z-new".into();
     newer.workflow.as_mut().unwrap().entered_at = ago(5);
+    let mut open_pr = older.clone();
+    open_pr.workflow = None;
+    open_pr.pr_state = Some(WorktreePrState::Open);
+    let pr_only = ["b-pr", "a-pr"].map(|label| {
+        let mut group = open_pr.clone();
+        group.key = format!("channel:{label}");
+        group.label = label.to_owned();
+        group
+    });
     let member = snapshot.worktree_groups[0].clone();
-    snapshot.worktree_groups = vec![older, newer, member].into();
+    snapshot.worktree_groups = [vec![older, newer, member], pr_only.into()].concat().into();
     snapshot.sort_groups_for_presentation();
     assert_eq!(
         snapshot
             .worktree_groups
             .iter()
-            .map(|group| group.label.as_str())
+            .map(|group| (group.label.as_str(), group.inactive))
             .collect::<Vec<_>>(),
-        ["members", "z-new", "a-old"]
+        [
+            ("members", None),
+            ("z-new", None),
+            ("a-old", None),
+            ("a-pr", None),
+            ("b-pr", None)
+        ],
+        "PR-only groups follow every rowless run, by label"
     );
 }

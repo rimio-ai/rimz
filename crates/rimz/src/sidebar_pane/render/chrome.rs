@@ -386,7 +386,12 @@ pub(super) fn search_line(
     let total: usize = snapshot
         .worktree_groups
         .iter()
-        .map(|group| group.rows.len().max(usize::from(group.workflow.is_some())))
+        .map(|group| {
+            group
+                .rows
+                .len()
+                .max(usize::from(group.stands_without_rows()))
+        })
         .sum();
     let shown = roster.len()
         + roster

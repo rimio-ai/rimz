@@ -115,6 +115,129 @@ fn marked_worktree_subfolder_shells_keep_one_place_and_its_git_facts() {
 }
 
 #[test]
+fn an_open_pr_on_a_listed_worktree_holds_a_rowless_group_until_it_ends() {
+    let (dir, runtime, snapshot) = runtime();
+    let snapshot = snapshot.with_project_root(Some(dir.path().to_path_buf()));
+    let [feature, trunk, unlisted] = ["feature", "trunk", "unlisted"].map(|name| {
+        let path = dir.path().join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    });
+    atomic::write_temp_then_rename_cache(
+        &runtime.group_roots_path(),
+        &serde_json::json!({
+            "refreshed_at_ms": unix_now_ms(),
+            "roots": [dir.path(), &feature, &trunk],
+            "marker_names": {}
+        }),
+    )
+    .unwrap();
+    let mut diff = DiffStatsCache::default();
+    diff.entries.insert(
+        trunk.display().to_string(),
+        DiffStatsCacheEntry {
+            branch: Some("main".to_owned()),
+            trunk: Some("origin/main".to_owned()),
+            ..Default::default()
+        },
+    );
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &diff).unwrap();
+    let frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("%1", "zsh", dir.path().to_str().unwrap())],
+        unix_now_ms(),
+        "test",
+    );
+    let links = |state| {
+        let link = PrLink {
+            open: Some(crate::forge::pr_state::OpenPrFacts {
+                head: "head".to_owned(),
+                base: None,
+                behind_by: None,
+                mergeability: Some(crate::forge::pr_state::SettledMergeability::Conflicting(
+                    "head".to_owned(),
+                )),
+                auto_merge: false,
+                review: None,
+                queue: None,
+            }),
+            stack: Default::default(),
+            branch: None,
+            incarnation: None,
+            state,
+            number: Some(1614),
+            url: Some("https://github.com/org/repo/pull/1614".to_owned()),
+            ci: Some(WorktreeCi::Failing),
+            ci_sha: None,
+            merge_sha: None,
+        };
+        [&feature, &trunk, &unlisted]
+            .map(|path| (path.display().to_string(), link.clone()))
+            .into()
+    };
+    let pr_groups = |state, producing: bool| {
+        let pr_states: BTreeMap<_, _> = links(state);
+        let folded = if producing {
+            let lanes = crate::sidebar::refresh::RefreshedLanes {
+                spending: Default::default(),
+                accounts: BTreeMap::new(),
+                pr_states,
+                branch_ci: BTreeMap::new(),
+            };
+            let mut opts = cached_opts();
+            opts.lanes = Some(&lanes);
+            fold(snapshot.clone(), Some(&frame), &runtime, opts)
+        } else {
+            let cache = crate::forge::pr_state::PrStateCache {
+                states: pr_states,
+                ..Default::default()
+            };
+            atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &cache).unwrap();
+            fold_cached(snapshot.clone(), Some(&frame), &runtime)
+        };
+        assert!(folded.worktree_groups.iter().any(|group| group.root_lane));
+        folded
+            .worktree_groups
+            .iter()
+            .filter(|group| !group.root_lane)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    for producing in [false, true, false] {
+        let groups = pr_groups(WorktreePrState::Open, producing);
+        let facts = groups
+            .iter()
+            .map(|group| {
+                (
+                    group.place.as_ref().map(|place| place.path.clone()),
+                    group.rows.len(),
+                    group.inactive,
+                    group.pr_state,
+                    group.pr_number,
+                    group.ci,
+                    group.pr_conflicting,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            facts,
+            [(
+                Some(feature.clone()),
+                0,
+                None,
+                Some(WorktreePrState::Open),
+                Some(1614),
+                Some(WorktreeCi::Failing),
+                true
+            )],
+            "only the listed non-trunk worktree is held (producing: {producing})"
+        );
+        for ended in [WorktreePrState::Merged, WorktreePrState::Closed] {
+            assert!(pr_groups(ended, producing).is_empty(), "{ended:?}");
+        }
+    }
+}
+
+#[test]
 fn cached_fold_reads_channel_markers_from_the_roots_lane() {
     let (dir, runtime, mut snapshot) = runtime();
     let worktree = dir.path().join("feature");
@@ -210,7 +333,13 @@ fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
     );
     assert_eq!(snapshot.worktree_groups[0].pr_stack, stack);
     atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &cache).unwrap();
-    project_cached_pr_states(&mut cached, &runtime, &DiffStatsCache::default());
+    let published = crate::forge::pr_state::read_pr_state_cache(&runtime.pr_state_path());
+    project_pr_state_map(
+        &mut cached,
+        &published.states,
+        &published.branch_ci,
+        &DiffStatsCache::default(),
+    );
     assert_eq!(cached.worktree_groups[0].pr_stack, stack);
     project_pr_state_map(
         &mut snapshot,

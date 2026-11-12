@@ -532,7 +532,8 @@ pub struct SidebarWorktreeGroup {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
     /// Quiet past the landed or unlanded window, with no running or attention
-    /// member and no live workflow run. Root-lane and external groups never fold.
+    /// member, no live workflow run, and no open pull request. Root-lane and
+    /// external groups never fold.
     /// A renderer may defer admission while the group is viewed or the layout is held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inactive: Option<SidebarInactive>,
@@ -677,8 +678,10 @@ impl SidebarWorktreeGroup {
         }
     }
 
-    pub(crate) fn has_rows_or_workflow(&self) -> bool {
-        !self.rows.is_empty()
+    /// A live workflow run or an open pull request: what keeps a group standing
+    /// once it has no rows, and what keeps any group out of the inactive fold.
+    pub(crate) fn stands_without_rows(&self) -> bool {
+        self.pr_state == Some(WorktreePrState::Open)
             || self
                 .workflow
                 .as_ref()

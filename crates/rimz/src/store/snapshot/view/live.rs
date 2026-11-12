@@ -21,7 +21,7 @@ use crate::store::snapshot::panes::{
 
 use super::aggregate::AttentionWindows;
 use super::layout::refresh_overlay_group;
-use super::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup};
+use super::{SidebarRow, SidebarSnapshot};
 
 mod projection;
 
@@ -235,7 +235,7 @@ impl SidebarSnapshot {
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, &ParkDemotion::default(), None);
+        self.fold_admitted_live_panes(&panes, None, None, &ParkDemotion::default(), None, &[]);
         self
     }
 
@@ -248,7 +248,7 @@ impl SidebarSnapshot {
     ) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
         let demotion = ParkDemotion::new(provider_capacities, BTreeSet::new(), self.now);
-        self.fold_admitted_live_panes(&panes, None, None, &demotion, None);
+        self.fold_admitted_live_panes(&panes, None, None, &demotion, None, &[]);
         self
     }
 
@@ -271,6 +271,7 @@ impl SidebarSnapshot {
         unread_row_ids: Option<&BTreeSet<String>>,
         demotion: &ParkDemotion,
         workflows: &[super::SidebarWorkflow],
+        open_pr_roots: &[String],
     ) -> (Self, Vec<DiagEvent>) {
         let diagnostics = self.fold_admitted_live_panes(
             &panes,
@@ -278,6 +279,7 @@ impl SidebarSnapshot {
             unread_row_ids,
             demotion,
             Some(workflows),
+            open_pr_roots,
         );
         (self, diagnostics)
     }
@@ -289,6 +291,7 @@ impl SidebarSnapshot {
         unread_row_ids: Option<&BTreeSet<String>>,
         demotion: &ParkDemotion,
         workflows: Option<&[super::SidebarWorkflow]>,
+        open_pr_roots: &[String],
     ) -> Vec<DiagEvent> {
         let mut projection = self.rows_from_panes(panes, lazy_pairings);
         if let Some(unread_row_ids) = unread_row_ids {
@@ -307,8 +310,12 @@ impl SidebarSnapshot {
                 &carried
             }
         };
-        self.worktree_groups =
-            Arc::new(self.build_worktree_groups(projection.rows, demotion, workflows));
+        self.worktree_groups = Arc::new(self.build_worktree_groups(
+            projection.rows,
+            demotion,
+            workflows,
+            open_pr_roots,
+        ));
         projection.diagnostics
     }
 
@@ -365,10 +372,10 @@ impl SidebarSnapshot {
         if self
             .worktree_groups
             .iter()
-            .any(|group| !group.has_rows_or_workflow())
+            .any(|group| group.rows.is_empty() && !group.stands_without_rows())
         {
             Arc::make_mut(&mut self.worktree_groups)
-                .retain(SidebarWorktreeGroup::has_rows_or_workflow);
+                .retain(|group| !group.rows.is_empty() || group.stands_without_rows());
         }
         if self
             .focused_pane
