@@ -12,7 +12,8 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
     record["scope"]["path"] = json!(checkout);
     record["attempt"] = json!({
         "kind":"agent", "seq":1, "node":"build", "started_at":jiff::Timestamp::now(),
-        "host":{"pid":std::process::id(),"start":rimz::proc::process_start_token(std::process::id())}
+        "host":{"pid":std::process::id(),"start":rimz::proc::process_start_token(std::process::id())},
+        "run":{"run_id":rimz::ids::RunId::new(),"handle":"@codex"}
     });
     let record: records::RunRecord = serde_json::from_value(record).unwrap();
     {
@@ -56,46 +57,69 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
 }
 
 #[test]
-fn oversized_step_groups_fail_without_taking_the_capacity_route() {
-    let room =
-        Room::new("throttle='off'\non.capacity='after'\n[steps.build.limit]\nmax-parallel=1\n");
-    let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
-    fs::write(
-        &spec,
-        fs::read_to_string(&spec)
-            .unwrap()
-            .replace("agent = 'codex'", "agent = 'codex,codex'"),
-    )
-    .unwrap();
-    let record = pending(&room, Some("nightly"));
-    let value = advance(&room, &record);
-    assert_eq!(value["record"]["state"], "failed", "{value:#}");
-    assert_eq!(value["record"]["node"], "build", "{value:#}");
-    assert!(value["record"]["wait"].is_null(), "{value:#}");
-    assert!(events(&value, "turn_end").is_empty(), "{value:#}");
-    assert!(
-        !events(&value, "route")
-            .iter()
-            .any(|row| row["outcome"] == "capacity"),
-        "{value:#}"
-    );
-    let attempts = events(&value, "attempt");
-    let failed = attempts
-        .iter()
-        .find(|row| row["outcome"] == "died")
-        .expect("died attempt");
+fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
+    let mut actual = Vec::new();
+    for machine_cap in [false, true] {
+        let room =
+            Room::new("throttle='off'\non.capacity='after'\n[steps.build.limit]\nmax-parallel=1\n");
+        let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+        fs::write(
+            &spec,
+            fs::read_to_string(&spec)
+                .unwrap()
+                .replace("agent = 'codex'", "agent = 'codex:lead,codex'"),
+        )
+        .unwrap();
+        if machine_cap {
+            let core = room.env.rimz_home().join("config.toml");
+            let mut config = fs::read_to_string(&core).unwrap_or_default();
+            config.push_str("\n[throttle]\nmax-parallel-automation=1\n");
+            fs::write(core, config).unwrap();
+        }
+        let record = pending(&room, Some("nightly"));
+        let value = advance(&room, &record);
+        assert!(value["record"]["wait"].is_null(), "{value:#}");
+        assert!(
+            !events(&value, "route")
+                .iter()
+                .any(|row| row["outcome"] == "capacity"),
+            "{value:#}"
+        );
+        actual.push((
+            value["record"]["state"].as_str().unwrap().to_owned(),
+            value["record"]["visits"]["build"]["total"].clone(),
+            events(&value, "attempt")
+                .iter()
+                .find(|row| row["outcome"] == "died")
+                .map(|row| row["reason"].clone()),
+        ));
+    }
     assert_eq!(
-        failed["reason"],
-        "this start opens 2 agents, more than max-parallel = 1 allows; raise max-parallel in step build's definition"
+        actual,
+        [
+            ("active".into(), json!(1), None),
+            (
+                "failed".into(),
+                json!(1),
+                Some(json!(
+                    "this start opens 2 agents, more than max-parallel-automation = 1 allows; raise it in ~/.rimz/config.toml"
+                ))
+            ),
+        ]
     );
-    assert!(tickets(&room).is_empty());
 }
 
 #[test]
-fn restart_is_manual_for_window_and_capacity_but_still_refuses_oversized_layouts() {
+fn restart_is_manual_for_window_and_capacity_but_still_refuses_layouts_over_a_machine_cap() {
     let mut actual = Vec::new();
-    for oversized in [false, true] {
+    for (oversized, machine_cap) in [(false, false), (true, false), (true, true)] {
         let room = Room::new("window='5h.left>=99'\n[steps.build.limit]\nmax-parallel=1\n");
+        if machine_cap {
+            let core = room.env.rimz_home().join("config.toml");
+            let mut config = fs::read_to_string(&core).unwrap_or_default();
+            config.push_str("\n[throttle]\nmax-parallel-automation=1\n");
+            fs::write(core, config).unwrap();
+        }
         let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
         if oversized {
             fs::write(
@@ -124,13 +148,14 @@ fn restart_is_manual_for_window_and_capacity_but_still_refuses_oversized_layouts
             events(&value, "attempt").iter().any(|event| {
                 event["reason"]
                     .as_str()
-                    .is_some_and(|reason| reason.contains("more than max-parallel = 1"))
+                    .is_some_and(|reason| reason.contains("more than max-parallel"))
             }),
         ));
     }
     assert_eq!(
         actual,
         [
+            ("active".into(), true, false),
             ("active".into(), true, false),
             ("failed".into(), true, true)
         ]
