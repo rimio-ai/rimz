@@ -15,6 +15,7 @@ mod brief;
 mod engine;
 mod graph;
 mod inspect;
+mod observe;
 mod script;
 mod spec;
 mod state;
@@ -31,6 +32,7 @@ pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
     repeats_evaluation, routing_hop, timeout_at,
 };
+pub use observe::observe;
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, OutcomeCap, Route,
@@ -200,7 +202,7 @@ pub struct LeaderTurn {
 /// Read the leader's closed turn and current eligibility while holding the workspace lock.
 /// Only pending frames from this leader's supervised run can defer rest; companion hooks
 /// do not decide the leader's rest. The advance's waking frame has already committed.
-pub fn leader_turn(
+fn leader_turn(
     store: &Store,
     leader: &AgentState,
     run: &WorkflowRunId,

@@ -2280,7 +2280,7 @@ path = "crates/rimz/src/harness"
 # WorkflowLaunchRecord, WorkflowLedger, load_workflows, and launched share typed launch memory with loop inspection.
 # LoadedTask::key_for_root reuses the loop list's resolved root across key and row reads (+1).
 # hibernation_entry shares the open-agent join with the transcript watcher (+1).
-# LeaderTurn and leader_turn share locked workflow eligibility with the CLI attempt host (+2).
+# LeaderTurn shares locked workflow eligibility with the CLI attempt host.
 # Observation limits leader-turn reads to workflow decisions that consume them (+1).
 # CapacityRecord, CapacityWaits and load_capacity share read-only waits; removing the hold notice offsets one (+2 net).
 # spec::validate_team shares per-item team validation with pack loading (+1).
@@ -2338,7 +2338,8 @@ path = "crates/rimz/src/harness"
 # run_log::{collect_run, collect_task_runs} collect a finished run from the commands that end it and the fire; the engine's workflow::forget_reported_launch is gone (+1).
 # The `task_login` module resolves a loop task's account outside the sidebar graph that `loop_task` joins (+1).
 # The neutral homes (`check_run`, `signal`, `throttle`, `when` and the rest) kept their items' surface once the trunk's fleet-report items took the slack they fitted in before (+3).
-surface-budget = 1139
+# workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
+surface-budget = 1140
 
 [[verdict]]
 kind = "item"
@@ -2442,13 +2443,13 @@ reason = "The engine explicitly requests locked leader-turn eligibility only for
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::LeaderTurn"
-reason = "The CLI host supplies a fresh leader turn identity and rest decision to the workflow engine."
+key = "harness::workflow::observe"
+reason = "The attempt host reads the run record, room snapshot, asks and window resets; the library decides what the observed attempt means."
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::leader_turn"
-reason = "Workflow eligibility reuses harness debt and rest predicates without exposing them to the CLI."
+key = "harness::workflow::LeaderTurn"
+reason = "An until observation carries the leader's fresh turn identity and rest decision, read by `observe`, to the workflow engine."
 
 [[verdict]]
 kind = "item"
@@ -5457,7 +5458,8 @@ allowed-dependencies = [
     "workspace::record",
     "worktree",
 ]
-surface-budget = 84
+# observe projects an observed agent attempt for the CLI host (+1).
+surface-budget = 85
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
