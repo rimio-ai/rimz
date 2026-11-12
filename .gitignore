@@ -3,6 +3,7 @@
 
 # Insta snapshot review files (pending acceptance, not golden)
 *.snap.new
+*.pending-snap
 
 # Python bytecode cache (examples/resolvers/)
 __pycache__/
