@@ -585,7 +585,7 @@ struct LaunchField {
     target: fn(&mut crate::agents::LaunchParams) -> LaunchFieldValue<'_>,
 }
 
-const LAUNCH_FIELDS: [LaunchField; 9] = [
+const LAUNCH_FIELDS: [LaunchField; 8] = [
     LaunchField {
         env: crate::harness::launch::ENV_AGENT_ROLE,
         encode: |params| params.role.clone(),
@@ -605,11 +605,6 @@ const LAUNCH_FIELDS: [LaunchField; 9] = [
         env: crate::harness::launch::ENV_LAUNCH_ORDINAL,
         encode: |params| params.launch_ordinal.map(|value| value.to_string()),
         target: |params| LaunchFieldValue::Ordinal(&mut params.launch_ordinal),
-    },
-    LaunchField {
-        env: crate::workspace::ENV_CHANNEL,
-        encode: |params| params.channel.clone(),
-        target: |params| LaunchFieldValue::Text(&mut params.channel),
     },
     LaunchField {
         env: crate::harness::launch::ENV_AGENT_PROFILE,

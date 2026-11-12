@@ -33,18 +33,7 @@ pub(super) fn record_assistant_response(
                 .as_ref()
                 .and_then(|state| state.worktree_path.as_deref())
         });
-    let channel = rimz::transcript::entry_channel(
-        recorded
-            .and_then(|recorded| recorded.observation.launch.channel.as_deref())
-            .or_else(|| state.as_ref().and_then(|state| state.channel.as_deref())),
-        worktree_path,
-    )
-    .or_else(|| {
-        workspace
-            .worktree_root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-    });
+    let channel = entry_lane_name(workspace, state.as_ref(), worktree_path);
     let mut entry = rimz::transcript::TranscriptEntry::new(
         jiff::Timestamp::now(),
         agent.spec().kind_id(),
@@ -134,8 +123,9 @@ pub(super) fn record_native_answer(
         .filter(|path| !path.is_empty())
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
-    let channel = rimz::transcript::entry_channel(
-        recorded.and_then(|recorded| recorded.observation.launch.channel.as_deref()),
+    let channel = entry_lane_name(
+        workspace,
+        state.as_ref(),
         recorded
             .and_then(|recorded| recorded.observation.launch.checkout.as_deref())
             .or_else(|| state.as_ref().and_then(|state| state.checkout.as_deref()))
@@ -258,21 +248,16 @@ pub(super) fn record_conversation(
             ))
         })
         .unwrap_or_default();
-    let channel = rimz::transcript::entry_channel(
-        observation.launch.channel.as_deref(),
+    let channel = entry_lane_name(
+        workspace,
+        state,
         observation
             .launch
             .checkout
             .as_deref()
             .or_else(|| state.and_then(|state| state.checkout.as_deref()))
             .or(observation.worktree_path.as_deref()),
-    )
-    .or_else(|| {
-        workspace
-            .worktree_root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-    });
+    );
     let entry_base = |entry, text: String| {
         let mut entry = rimz::transcript::TranscriptEntry::new(
             jiff::Timestamp::now(),
@@ -651,11 +636,8 @@ pub(super) fn record_turn_error_entry(
             .clone()
             .unwrap_or_else(|| "provider API error".to_owned()),
     );
-    entry.channel = workspace
-        .worktree_root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned());
     let state = agent_state(store, agent, &entry.agent_id);
+    entry.channel = entry_lane_name(workspace, state.as_ref(), None);
     stamp_parent(&mut entry, state.as_ref());
     if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
@@ -666,6 +648,26 @@ pub(super) fn record_turn_error_entry(
             "lifecycle: failed to record turn-error transcript entry",
         );
     }
+}
+
+/// The lane name a hook transcript entry carries: the row's lane, an older
+/// row's stamp-else-basename reading, or the checkout's own lane when there is
+/// no row.
+fn entry_lane_name(
+    workspace: &ResolvedWorkspace,
+    state: Option<&rimz::agents::AgentState>,
+    checkout: Option<&str>,
+) -> Option<String> {
+    let row_name = state.and_then(|state| match &state.lane {
+        Some(lane) => lane.routing_name().map(ToOwned::to_owned),
+        None => state.channel(),
+    });
+    row_name.or_else(|| {
+        let dir = checkout.map_or(workspace.worktree_root.as_path(), std::path::Path::new);
+        rimz::harness::lanes::own_lane(&workspace.project_root, dir)
+            .routing_name()
+            .map(ToOwned::to_owned)
+    })
 }
 
 pub(super) fn agent_state(

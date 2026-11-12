@@ -5,8 +5,10 @@ fn named(home: LaneHome, path: &str, name: &str) -> Lane {
     Lane::own(home, path).named(name.parse().expect("lane name"))
 }
 
+/// A launch event; a `channel` in `launch` is written as an older binary's stamp.
 fn lane_launch(state: AgentLaunchState, launch: LaunchParams) -> EventEnvelope {
-    launch_event(
+    let stamp = launch.channel.clone();
+    let mut event = launch_event(
         "codex",
         AgentLaunchPayload {
             state,
@@ -16,7 +18,13 @@ fn lane_launch(state: AgentLaunchState, launch: LaunchParams) -> EventEnvelope {
             prompt: None,
             ..launch_payload("launch_a", "coder")
         },
-    )
+    );
+    if let Some(stamp) = stamp {
+        let mut params: serde_json::Value = serde_json::from_str(event.params.get()).unwrap();
+        params["channel"] = stamp.into();
+        event.params = serde_json::value::to_raw_value(&params).unwrap();
+    }
+    event
 }
 
 fn registration(id: &str, extra: serde_json::Value) -> EventEnvelope {

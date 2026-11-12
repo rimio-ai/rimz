@@ -304,9 +304,9 @@ pub struct LaunchParams {
     /// layouts use agent-cell order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
-    /// The routing lane the launcher selected, passed through `RIMZ_CHANNEL`.
-    /// In-place teams already arrive as a stamped `<dir>/<team>` lane.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A lane name stamped by an older binary's launch or registration. A new
+    /// event writes `lane` instead; this is read only for a lane-less row.
+    #[serde(default, skip_serializing)]
     pub channel: Option<String>,
     /// The lane a fresh launch decided, copied by every relaunch. A row keeps
     /// the first lane an event brings it; one that does not decode reads as absent.

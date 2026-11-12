@@ -143,8 +143,11 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             workflow: None,
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(1),
-            channel: Some("identity-channel".to_owned()),
-            lane: None,
+            channel: None,
+            lane: Some(
+                crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+                    .named("identity-channel".parse().unwrap()),
+            ),
             kind_ordinal: Some(2),
             molted_from: None,
         },
@@ -235,7 +238,14 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
     }
 
     let starting = &payloads[0];
-    assert_eq!(starting.launch.channel.as_deref(), Some("identity-channel"));
+    assert_eq!(
+        starting
+            .launch
+            .lane
+            .as_ref()
+            .and_then(crate::ids::Lane::stored_name),
+        Some("identity-channel")
+    );
     assert_eq!(starting.state, AgentLaunchState::Starting);
     assert_eq!(starting.pane_id, None);
     assert_eq!(starting.runtime_owner, None);
@@ -252,7 +262,14 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
     assert_eq!(bound.worktree_path.as_deref(), Some("/wrapper/cwd"));
     assert_eq!(bound.worktree_branch, None);
     assert_eq!(bound.description, None);
-    assert_eq!(bound.launch.channel.as_deref(), Some("identity-channel"));
+    assert_eq!(
+        bound
+            .launch
+            .lane
+            .as_ref()
+            .and_then(crate::ids::Lane::stored_name),
+        Some("identity-channel")
+    );
     assert_eq!(
         bound.runtime_owner,
         Some(runtime::current_process_owner(
@@ -281,7 +298,11 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
     );
     assert_eq!(same_process_failed.description, None);
     assert_eq!(
-        same_process_failed.launch.channel.as_deref(),
+        same_process_failed
+            .launch
+            .lane
+            .as_ref()
+            .and_then(crate::ids::Lane::stored_name),
         Some("identity-channel")
     );
 }
@@ -762,7 +783,10 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
             team: Some("forge".to_owned()),
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(3),
-            channel: Some("auth".to_owned()),
+            lane: Some(
+                crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+                    .named("auth".parse().unwrap()),
+            ),
             model: Some("sonnet".to_owned()),
             effort: Some("high".to_owned()),
             ..LaunchParams::default()

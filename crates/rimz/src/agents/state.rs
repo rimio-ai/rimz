@@ -1034,8 +1034,9 @@ pub struct AgentState {
     /// agent-cell index. Roleless team cells leave it unset and tail the block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
-    /// The routing lane stamped by `RIMZ_CHANNEL` at launch and carried forward
-    /// like `team`. When absent, read paths fall back to the lane-path directory basename.
+    /// The routing lane name: the lane's stored name while `lane` is set, else an
+    /// older binary's stamp. When absent, read paths fall back to the lane-path
+    /// directory basename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Derived at the store fold exit from the workspace record's project root, never from an event.

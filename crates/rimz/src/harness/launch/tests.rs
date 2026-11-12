@@ -915,7 +915,7 @@ fn positional_prompts_cannot_be_mistaken_for_options() {
 fn process_compiler_composes_adapter_and_identity_environment() {
     let project = tempfile::tempdir().expect("project");
     let params = crate::agents::LaunchParams {
-        channel: Some("design".to_owned()),
+        team: Some("design".to_owned()),
         ..Default::default()
     };
     let mut invocation = request(
@@ -953,7 +953,7 @@ fn process_compiler_composes_adapter_and_identity_environment() {
     assert_eq!(
         process
             .env
-            .get(crate::workspace::ENV_CHANNEL)
+            .get(crate::harness::launch::ENV_TEAM)
             .map(String::as_str),
         Some("design")
     );
@@ -2653,7 +2653,7 @@ fn process_compiler_disables_opencode_native_subagents() {
 fn launch_environment_precedence_is_project_adapter_then_identity() {
     let adapter = crate::agents::find_definition("copilot").expect("copilot");
     let params = crate::agents::LaunchParams {
-        channel: Some("identity".to_owned()),
+        team: Some("identity".to_owned()),
         ..Default::default()
     };
     let mut invocation = request(
@@ -2669,7 +2669,7 @@ fn launch_environment_precedence_is_project_adapter_then_identity() {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
             "project",
         ),
-        (crate::workspace::ENV_CHANNEL, "project"),
+        (crate::harness::launch::ENV_TEAM, "project"),
     ]);
 
     let composed =
@@ -2679,7 +2679,7 @@ fn launch_environment_precedence_is_project_adapter_then_identity() {
         composed["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"],
         "false"
     );
-    assert_eq!(composed[crate::workspace::ENV_CHANNEL], "identity");
+    assert_eq!(composed[crate::harness::launch::ENV_TEAM], "identity");
 }
 
 #[test]
@@ -2721,7 +2721,6 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         team: Some("forge".to_owned()),
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
-        channel: Some("design".to_owned()),
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         budget: Some("$12.50/day".to_owned()),
@@ -2816,7 +2815,6 @@ fn exec_wire_round_trips_resume_and_fork() {
         team: Some("forge".to_owned()),
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
-        channel: Some("design".to_owned()),
         ..Default::default()
     };
     for action in [
@@ -2933,7 +2931,6 @@ fn exec_identity_env_maps_identity_fields() {
         team: Some("forge".to_owned()),
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
-        channel: Some("design".to_owned()),
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         budget: Some("$12.50/day".to_owned()),
@@ -2998,10 +2995,6 @@ fn exec_identity_env_maps_identity_fields() {
                 "2".to_owned()
             ),
             (
-                crate::workspace::ENV_CHANNEL.to_owned(),
-                "design".to_owned()
-            ),
-            (
                 crate::harness::launch::ENV_AGENT_MODEL.to_owned(),
                 "opus".to_owned()
             ),
@@ -3035,7 +3028,6 @@ fn exec_identity_env_round_trips_launch_params() {
         team: Some("forge".to_owned()),
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
-        channel: Some("design".to_owned()),
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         budget: Some("$12.50/day".to_owned()),
@@ -3068,7 +3060,6 @@ fn exec_identity_env_round_trips_launch_params() {
         ENV_TEAM,
         ENV_LAUNCH_GROUP,
         ENV_LAUNCH_ORDINAL,
-        crate::workspace::ENV_CHANNEL,
         ENV_AGENT_PROFILE,
         ENV_AGENT_MODEL,
         ENV_AGENT_EFFORT,

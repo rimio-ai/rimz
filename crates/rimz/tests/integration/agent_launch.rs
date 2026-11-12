@@ -1463,7 +1463,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             )),
             worktree_path: Some(worktree.display().to_string()),
             launch: LaunchParams {
-                channel: Some("review".to_owned()),
+                lane: Some(crate::common::wait::stamped_lane(&env, &worktree, "review")),
                 team: (action == "cohort" || hold).then(|| "duo".to_owned()),
                 role: hold.then(|| "lead".to_owned()),
                 ..Default::default()
@@ -1619,8 +1619,14 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             let holder = if root_hold {
                 env.project_root.clone()
             } else {
-                rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
-                    .unwrap()
+                rimz::utils::path::normalize_path_lexical(
+                    &rimz::worktree::worktree_path(
+                        &env.project_root,
+                        &Default::default(),
+                        "review",
+                    )
+                    .unwrap(),
+                )
             };
             assert!(
                 stderr.contains(&format!("at checkout `{}`", holder.display())),
@@ -2687,7 +2693,11 @@ fn user_shell_subagents_list_inspects_the_channel() {
                         parent_agent_id: parent_id.map(AgentSessionId::from),
                         parent_agent_kind: parent_kind.map(AgentKind::new_unchecked),
                         launch_depth: parent_id.map(|_| 1),
-                        channel: Some(channel.to_owned()),
+                        lane: Some(crate::common::wait::stamped_lane(
+                            &env,
+                            &env.project_root,
+                            channel,
+                        )),
                         ..Default::default()
                     },
                     state: AgentLaunchState::Bound,

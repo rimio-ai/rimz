@@ -71,7 +71,14 @@ fn agents_marks_accept_channel_scopes_require_alert_text_and_refuse_closed_agent
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let pane_env = [("TMUX_PANE", "%1"), ("RIMZ_CHANNEL", "attention")];
+    crate::common::wait::seed_launch_lane(
+        &env,
+        "scoped-mark",
+        "scoped-mark",
+        crate::common::wait::stamped_lane(&env, &env.project_root, "attention"),
+        None,
+    );
+    let pane_env = [("TMUX_PANE", "%1")];
     register_running_agent(&env, "scoped-mark", "feature", &pane_env);
     let pane = tmux_pane("%1", "claude", &env.project_root);
     let fixture = env.write_pane_fixture(&[pane]);

@@ -871,7 +871,9 @@ fn assert_tier_launch(routing: &str, surface: &str) {
                 agent_name_explicit: true,
                 launch: if resume {
                     LaunchParams {
-                        channel: lane.then(|| "restore".into()),
+                        lane: lane.then(|| {
+                            crate::common::wait::stamped_lane(&env, &env.project_root, "restore")
+                        }),
                         profile: Some("duo.coder".into()),
                         team: Some("duo".into()),
                         role: Some("coder".into()),
@@ -953,8 +955,13 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             backed.launch_id = Some("backed-launch".into());
             backed.agent_name = "backed".into();
             backed.pane_id = None;
+            let backed_path = std::path::PathBuf::from(backed.worktree_path.clone().unwrap());
             backed.launch = LaunchParams {
-                channel: Some("restore".into()),
+                lane: Some(crate::common::wait::stamped_lane(
+                    &env,
+                    &backed_path,
+                    "restore",
+                )),
                 ..Default::default()
             };
             store

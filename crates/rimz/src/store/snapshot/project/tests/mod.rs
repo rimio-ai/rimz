@@ -1515,7 +1515,10 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
                 profile: Some("codex-coder".to_owned()),
                 role: Some("coder".to_owned()),
                 team: Some("forge".to_owned()),
-                channel: Some("auth".to_owned()),
+                lane: Some(
+                    crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+                        .named("auth".parse().unwrap()),
+                ),
                 ..LaunchParams::default()
             },
             pane_id: Some(PaneId::parse("zellij:terminal_1").expect("pane id")),
@@ -1564,7 +1567,10 @@ fn same_process_successor_inherits_launch_identity_without_card_primacy() {
                 team: Some("forge".to_owned()),
                 launch_group: Some("launch_group_1".to_owned()),
                 launch_ordinal: Some(1),
-                channel: Some("card-state".to_owned()),
+                lane: Some(
+                    crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+                        .named("card-state".parse().unwrap()),
+                ),
                 launch_depth: Some(0),
                 ..LaunchParams::default()
             },

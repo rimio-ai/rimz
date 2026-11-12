@@ -203,7 +203,6 @@ fn record_mapped_lifecycle_observation(
     let mut rollup_model = None;
     if observation.parent_agent_id.is_none()
         && (observation.launch.role.is_none()
-            || observation.launch.channel.is_none()
             || observation.launch.profile.is_none()
             || observation.launch.model.is_none()
             || observation.launch.effort.is_none())
@@ -227,6 +226,15 @@ fn record_mapped_lifecycle_observation(
     }
     if observation.worktree_branch.is_none() {
         observation.worktree_branch = workspace.worktree_branch.clone();
+    }
+    if observation.parent_agent_id.is_none()
+        && observation.launch.lane.is_none()
+        && let Some(path) = observation.worktree_path.as_deref()
+    {
+        observation.launch.lane = Some(rimz::harness::lanes::own_lane(
+            &workspace.project_root,
+            std::path::Path::new(path),
+        ));
     }
     enrich_pane_stamp_from_cache(workspace, store, &mut observation);
     recover_focused_pane_binding(
