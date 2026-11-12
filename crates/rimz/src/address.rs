@@ -1,5 +1,6 @@
 //! Agent-address parsing, rendering, and live pane binding.
 //! Owns the launch-instance grouping and lineage projections used by addresses.
+//! [`selector`] holds the `agents list` field table, flat row, and `--filter` query.
 //!
 //! The address grammar is `@<handle>#<channel>` (the canonical handle is the
 //! inverse of the parser). Pane binding joins resolved panes to exact lifecycle
@@ -1900,6 +1901,8 @@ fn shares_token(a: &str, b: &str) -> bool {
         .filter(|token| token.len() >= 3)
         .any(|token| b.split('-').any(|other| other == token))
 }
+
+pub mod selector;
 
 #[cfg(test)]
 mod tests;
