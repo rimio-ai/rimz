@@ -439,7 +439,12 @@ fn fresh_restart_from_a_cap_park_leaves_the_kept_previous_card_live_and_detached
         .find(|agent| agent.name == run.agent_name)
         .unwrap();
     assert!(kept.pane.is_some(), "{kept:#?}");
-    assert_eq!(kept.lane_path(), kept_checkout.to_str());
+    assert_eq!(kept.working_path(), kept_checkout.to_str());
+    assert_eq!(
+        kept.lane.as_ref().map(rimz::ids::Lane::path),
+        room.env.project_root.to_str(),
+        "the kept card's lane stays homed where it launched"
+    );
     assert!(
         kept.ended_at.is_none() && kept.workflow.is_none(),
         "{kept:#?}"

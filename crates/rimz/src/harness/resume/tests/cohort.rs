@@ -3098,6 +3098,50 @@ fn team_restore_tabs_seed_every_declared_role() {
 }
 
 #[test]
+fn a_resumed_cohort_seat_without_a_lane_adopts_its_row_lane() {
+    let (teams, profiles, commands) = team_configs();
+    let planner = AgentState {
+        channel: Some("design".to_owned()),
+        ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
+    };
+    let design = Some(
+        crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+            .named("design".parse().expect("lane name")),
+    );
+    let seed_lane = |seeds: &[CohortSeed]| match seeds.first() {
+        Some(CohortSeed::Resume(seed)) => seed.lane.clone(),
+        other => panic!("expected a resume seed, got {other:?}"),
+    };
+
+    let resumed = cohort(
+        std::slice::from_ref(&planner),
+        &[cohort_cell("claude", Some("planner"))],
+        Some("forge"),
+    )
+    .expect("team resume plans the seat");
+    assert_eq!(seed_lane(&resumed.seeds), design, "team resume");
+
+    let tabs = plan_team_restore_tabs(
+        &[planner],
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        false,
+        &[],
+        dead,
+        |_| None,
+    )
+    .tabs;
+    assert_eq!(seed_lane(&tabs[0].cohort.seeds), design, "team restore");
+}
+
+#[test]
 fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     let (teams, profiles, commands) = team_configs();
     let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
@@ -3140,6 +3184,7 @@ fn cohort_resume_refuses_a_member_from_another_account() {
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
+        Path::new("/code"),
         |_| true,
         |_| true,
     )
@@ -3156,6 +3201,7 @@ fn cohort_resume_refuses_a_member_from_another_account() {
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
+        Path::new("/code"),
         |_| true,
         |_| true,
     )

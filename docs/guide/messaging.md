@@ -48,7 +48,9 @@ A channel is never created or removed on its own: it is derived from what backs 
 - **A Git worktree.** Every agent working an isolated worktree shares that channel, named for the worktree ([worktrees guide](./worktrees.md)).
 - **An explicit `--channel`.** A launch with `--channel design` puts its agents in `#design`, a lane with no branch and no directory behind it. It lasts while agents run in it.
 - **A team in place.** A named team launched at the room root gets a channel of its own, `<dir>/<team>`.
-- **The working directory.** Agents with no other channel fall back to their directory's name, except at the project root, which always displays `main`. The project's directory name remains accepted as an alias for `#main`.
+- **The checkout.** Agents with no other channel take their checkout's own lane: `#main` anywhere under the project root, a worktree's lane anywhere inside it, and a group of its own for a directory outside both. The project's directory name remains accepted as an alias for `#main`.
+
+An agent's channel is decided once, when it launches, and it keeps it through restarts, forks, and resumes. A child launched without flags joins its parent's channel; launched into another checkout with `--cwd`, it joins that checkout's lane instead.
 
 ```sh
 rimz agents claude --channel design "draft it"   # launch straight into #design, in a tab of that name
@@ -57,7 +59,7 @@ rimz agents list --all                           # every lane that has agents, w
 rimz worktree list                               # every worktree lane, with or without agents
 ```
 
-A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Channels and worktrees share one namespace: `--channel auth` is refused while a worktree named `auth` exists, and both `rimz worktree new auth` and a launch that would create worktree `auth` are refused while live agents hold channel `#auth`. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the launch flags are in [cli/agents.md](../reference/cli/agents.md#channel-worktree-and-placement).
+A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Channels and checkouts share one namespace: `--channel auth` is refused while a worktree named `auth` exists, except inside that worktree, where it is the worktree's own lane; `--channel main` at the project root is the root lane and is refused anywhere else; a name live agents hold in another checkout is refused until they end; and both `rimz worktree new auth` and a launch that would create worktree `auth` are refused while live agents hold channel `#auth`. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the launch flags are in [cli/agents.md](../reference/cli/agents.md#channel-worktree-and-placement).
 
 ## Park, steer, interrupt, or schedule
 

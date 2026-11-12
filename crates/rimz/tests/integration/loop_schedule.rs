@@ -1172,15 +1172,30 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
     );
     assert!(agent.parent_agent_id.is_none(), "{agent:?}");
     assert_eq!(agent.launch_depth, None, "{agent:?}");
-    let expected = (action == LoopLaunch::Check).then_some("linked");
+    // A check launches into its own checkout's lane, which carries no name:
+    // a foreign linked worktree for the check, trunk for an agent task.
+    let (home, path) = if action == LoopLaunch::Check {
+        (rimz::ids::LaneHome::Foreign, cwd.display().to_string())
+    } else {
+        (
+            rimz::ids::LaneHome::Trunk,
+            env.project_root.display().to_string(),
+        )
+    };
+    let lane = agent.lane.as_ref().expect("the launch decided a lane");
+    assert_eq!(
+        (lane.home(), lane.path()),
+        (home, path.as_str()),
+        "{lane:?}"
+    );
     assert_eq!(
         agent.channel.as_deref(),
-        expected,
+        None,
         "recorded channel after the pane's registration hook"
     );
     assert_eq!(
         pane_channel.as_deref(),
-        expected,
+        Some(""),
         "channel exported to the agent pane"
     );
     assert_eq!(
@@ -12786,9 +12801,7 @@ fn run_agent_hook(env: &Env, source: &str, payload: serde_json::Value, cwd: &Pat
     let mut cmd = env.hook_command(source);
     cmd.current_dir(cwd)
         .env("RIMZ_AGENT_PID", owner_pid.to_string());
-    if let Some(channel) =
-        rimz::harness::spec::resolve_room_channel(&env.project_root, cwd, None, None)
-    {
+    if let Some(channel) = rimz::harness::lanes::directory_channel(&env.project_root, cwd) {
         cmd.env(rimz::workspace::ENV_CHANNEL, channel);
     }
     let output = env

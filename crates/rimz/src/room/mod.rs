@@ -116,30 +116,18 @@ pub fn resolve_birth_logins(
     Ok(accounts)
 }
 
-/// Build the room identity pin carried by a pane opened in a managed session.
+/// Build the room identity pin carried by a pane opened in a managed session:
+/// `channel` is the stored name of the pane's lane, stated empty when it has none.
 pub fn pane_identity_env(
     workspace: &ResolvedWorkspace,
     cwd: &Path,
     channel: Option<&str>,
-    inherit_channel: bool,
-) -> BTreeMap<String, String> {
-    let ambient_channel = inherit_channel
-        .then(|| std::env::var(crate::workspace::ENV_CHANNEL).ok())
-        .flatten();
-    pane_identity_env_with_ambient(workspace, cwd, channel, ambient_channel.as_deref())
-}
-
-fn pane_identity_env_with_ambient(
-    workspace: &ResolvedWorkspace,
-    cwd: &Path,
-    channel: Option<&str>,
-    ambient_channel: Option<&str>,
 ) -> BTreeMap<String, String> {
     crate::workspace::pane_pin_env(
         &workspace.workspace_id,
         &workspace.project_root,
         cwd,
-        channel.or(ambient_channel),
+        channel,
     )
 }
 
@@ -689,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_identity_env_pins_workspace_and_selects_channel() {
+    fn pane_identity_env_pins_workspace_and_states_the_lane_name() {
         let workspace = workspace();
         let base = BTreeMap::from([
             ("RIMZ".to_owned(), "1".to_owned()),
@@ -700,23 +688,11 @@ mod tests {
             ("RIMZ_PROJECT_ROOT".to_owned(), "/code/rimz".to_owned()),
             ("RIMZ_WORKTREE_PATH".into(), "/other/checkout".to_owned()),
         ]);
-        for (explicit, ambient, channel) in [
-            (Some("explicit"), Some("ambient"), Some("explicit")),
-            (None, Some("ambient"), Some("ambient")),
-            (None, Some(""), None),
-            (None, None, None),
-        ] {
+        for (channel, stated) in [(Some("design"), "design"), (Some(""), ""), (None, "")] {
             let mut expected = base.clone();
-            if let Some(channel) = channel {
-                expected.insert("RIMZ_CHANNEL".to_owned(), channel.to_owned());
-            }
-            let actual = pane_identity_env_with_ambient(
-                &workspace,
-                Path::new("/other/checkout"),
-                explicit,
-                ambient,
-            );
-            assert_eq!(actual, expected);
+            expected.insert("RIMZ_CHANNEL".to_owned(), stated.to_owned());
+            let actual = pane_identity_env(&workspace, Path::new("/other/checkout"), channel);
+            assert_eq!(actual, expected, "{channel:?}");
         }
     }
 

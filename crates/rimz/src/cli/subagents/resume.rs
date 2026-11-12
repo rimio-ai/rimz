@@ -218,7 +218,15 @@ fn resume_resolved(
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
-    let mut request = resume_request(child, run, &posture, action.clone(), login.clone(), None);
+    let mut request = resume_request(
+        child,
+        run,
+        &posture,
+        action.clone(),
+        login.clone(),
+        None,
+        &workspace.project_root,
+    );
     request.identity.params.isolation = capped.isolation;
     if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
@@ -248,11 +256,10 @@ fn resume_resolved(
         parent_pane.pane_id.mux(),
         rimz::room::RoomSizing::OrdinaryTab,
     )?;
-    let env = rimz::room::pane_identity_env(
+    let env = agents_cmd::relaunch_identity_env(
         &parent_workspace,
         child.lane_path().map(Path::new).unwrap_or(&cwd),
-        child.channel.as_deref(),
-        false,
+        &request,
     );
     let _guard = rimz::launcher::placement::lock_subagent_zone(store)?;
     let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
@@ -294,6 +301,7 @@ fn resume_resolved(
             action,
             login,
             Some(message_id.clone()),
+            &workspace.project_root,
         );
         request.identity.params.isolation = capped.isolation;
         let pane = rimz::mux::PaneCmd {
@@ -321,7 +329,12 @@ fn resume_resolved(
             env,
             sidebar,
             &pane,
-            child.channel.as_deref(),
+            request
+                .identity
+                .params
+                .lane
+                .as_ref()
+                .and_then(rimz::ids::Lane::stored_name),
             Some(parent_pane.pane_id.clone()),
             &run.run_id,
         ) {
@@ -361,8 +374,10 @@ fn resume_request(
     action: ExecAction,
     login: Option<rimz::ids::LoginName>,
     follow_up_message: Option<rimz::ids::MessageId>,
+    project_root: &std::path::Path,
 ) -> ExecRequest {
-    let mut request = agents_cmd::relaunch_request(child, posture, action, login, None);
+    let mut request =
+        agents_cmd::relaunch_request(child, posture, action, login, None, project_root);
     request.identity.name_explicit = true;
     ExecRequest {
         follow_up_message,

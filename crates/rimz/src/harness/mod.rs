@@ -18,6 +18,7 @@ pub mod hibernate;
 pub mod hook_drain;
 pub mod idle_compact;
 pub mod idle_stop;
+pub mod lanes;
 pub mod launch;
 mod launch_context;
 pub mod launch_plan;

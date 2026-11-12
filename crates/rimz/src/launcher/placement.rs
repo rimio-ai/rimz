@@ -339,6 +339,11 @@ pub fn run_tab_title(
     }
 }
 
+/// The lane name a subagent zone is titled after: the launch lane's stored name.
+fn zone_lane_name(launch: &crate::agents::LaunchParams) -> Option<&str> {
+    launch.lane.as_ref().and_then(crate::ids::Lane::stored_name)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_run(
     backend: &dyn MuxBackend,
@@ -367,7 +372,7 @@ pub(super) fn execute_run(
                 request.identity_env,
                 request.sidebar,
                 single_pane(&request.panes)?,
-                identity.launch.channel.as_deref(),
+                zone_lane_name(&identity.launch),
                 request.tab_anchor,
                 run_id,
             ) {

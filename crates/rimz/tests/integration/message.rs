@@ -5963,7 +5963,6 @@ fn assert_parent_follow_up_case(
                 &env.project_root
             },
             channel,
-            false,
         ))
         .args(exec_args(&env, &request))
         .args(["--mux", "zellij"])

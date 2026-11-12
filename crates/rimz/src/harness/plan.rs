@@ -305,6 +305,7 @@ pub(super) struct ResumeLaunchIdentity {
     pub launch_group: Option<String>,
     pub launch_ordinal: Option<u32>,
     pub channel: Option<String>,
+    pub lane: Option<crate::ids::Lane>,
     pub launch_depth: Option<u8>,
     pub launched_by: Option<crate::agents::LaunchedBy>,
     pub isolation: Option<crate::config::Isolation>,
@@ -332,6 +333,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
             channel: agent.channel.clone(),
+            lane: agent.lane.clone(),
             launch_depth: agent.launch_depth,
             launched_by: agent.launched_by.clone(),
             isolation: agent.isolation,
@@ -1941,7 +1943,7 @@ pub fn launch_identity_requests(
     explicit_name: Option<&str>,
     generated_worktree_name: Option<&str>,
     team: Option<&str>,
-    channel: Option<&str>,
+    lane: Option<&crate::ids::Lane>,
     prompt: Option<(&str, usize)>,
     resume: Option<&CohortResumePlan>,
     ancestry: Option<&LaunchAncestry>,
@@ -1985,7 +1987,7 @@ pub fn launch_identity_requests(
         launch.team = team.map(ToOwned::to_owned);
         launch.launch_group.clone_from(&inline_launch_group);
         launch.launch_ordinal = launch_ordinal;
-        launch.channel = channel.map(ToOwned::to_owned);
+        launch.lane = lane.cloned();
         launch.kind_ordinal = None;
         if let Some(ancestry) = ancestry {
             match ancestry {
@@ -2065,6 +2067,7 @@ pub(super) fn resume_command(
         launch_group: identity.launch_group.clone(),
         launch_ordinal: identity.launch_ordinal,
         channel: channel.map(ToOwned::to_owned),
+        lane: identity.lane.clone(),
         mode: posture.mode,
         isolation: effective_resume_isolation(posture.isolation, identity.isolation),
         model: posture.model.clone(),

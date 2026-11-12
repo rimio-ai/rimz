@@ -982,6 +982,7 @@ fn pane_pin_env_extends_the_session_pin_with_worktree_and_channel() {
     let mut expected = pin_env(&ws, project_root);
     expected.insert("RIMZ".to_owned(), "1".to_owned());
     expected.insert(ENV_WORKTREE_PATH.to_owned(), "/proj root/wt".to_owned());
+    expected.insert(ENV_CHANNEL.to_owned(), String::new());
     for channel in [None, Some("")] {
         assert_eq!(
             pane_pin_env(&ws, project_root, worktree_path, channel),

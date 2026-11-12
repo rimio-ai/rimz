@@ -483,22 +483,11 @@ fn room_channel_stamps_in_place_team_members() {
     let workspace = workspace("/code/team-channel", "/code/team-channel", None);
 
     assert_eq!(
-        rimz::harness::spec::resolve_room_channel(
-            &workspace.project_root,
-            &workspace.worktree_root,
-            Some("forge"),
-            None,
-        )
-        .as_deref(),
-        Some("team-channel/forge")
+        rimz::harness::lanes::in_place_team_name(&workspace.project_root, "forge").as_str(),
+        "team-channel/forge"
     );
     assert_eq!(
-        rimz::harness::spec::resolve_room_channel(
-            &workspace.project_root,
-            &workspace.worktree_root,
-            None,
-            None,
-        ),
+        rimz::harness::lanes::directory_channel(&workspace.project_root, &workspace.worktree_root),
         None
     );
 }
@@ -507,22 +496,15 @@ fn room_channel_stamps_in_place_team_members() {
 fn room_channel_ignores_branch_for_lane_identity() {
     let branch = workspace("/code/project", "/code/project", Some("feat/auth"));
     assert_eq!(
-        rimz::harness::spec::resolve_room_channel(
-            &branch.project_root,
-            &branch.worktree_root,
-            None,
-            None,
-        ),
+        rimz::harness::lanes::directory_channel(&branch.project_root, &branch.worktree_root),
         None
     );
 
     let child_worktree = workspace("/code/project", "/code/project-wt/auth", None);
     assert_eq!(
-        rimz::harness::spec::resolve_room_channel(
+        rimz::harness::lanes::directory_channel(
             &child_worktree.project_root,
-            &child_worktree.worktree_root,
-            None,
-            None,
+            &child_worktree.worktree_root
         )
         .as_deref(),
         Some("auth")
@@ -649,18 +631,10 @@ fn current_channel_is_stable_across_branch_changes() {
     let before = workspace("/code/project", "/code/project-wt/auth", Some("feat/auth"));
     let after = workspace("/code/project", "/code/project-wt/auth", Some("scratch"));
 
-    let before_channel = rimz::harness::spec::resolve_room_channel(
-        &before.project_root,
-        &before.worktree_root,
-        None,
-        None,
-    );
-    let after_channel = rimz::harness::spec::resolve_room_channel(
-        &after.project_root,
-        &after.worktree_root,
-        None,
-        None,
-    );
+    let before_channel =
+        rimz::harness::lanes::directory_channel(&before.project_root, &before.worktree_root);
+    let after_channel =
+        rimz::harness::lanes::directory_channel(&after.project_root, &after.worktree_root);
     assert_eq!(before_channel, after_channel);
     assert_eq!(before_channel.as_deref(), Some("auth"));
 }

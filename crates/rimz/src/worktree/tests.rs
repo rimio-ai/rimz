@@ -550,6 +550,33 @@ fn requested_name_rejects_empty_segments_and_bad_chars() {
 }
 
 #[test]
+fn a_new_worktree_named_main_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+
+    let err = create(
+        &repo,
+        &config,
+        Some("main"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .expect_err("main is trunk's lane");
+    assert_eq!(
+        err.to_string(),
+        "`main` is the project checkout's lane; pick another worktree name"
+    );
+    assert!(matches!(
+        resolve_fresh_worktree(&repo, &config, None, Some("main"), true),
+        Err(WorktreeErr::TrunkName)
+    ));
+    assert!(!worktree_path(&repo, &config, "main").unwrap().exists());
+}
+
+#[test]
 fn merge_branch_mismatch_error_quotes_both_branch_names() {
     let error = WorktreeErr::MergeBranchMismatch {
         name: "demo".to_owned(),

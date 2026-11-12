@@ -1294,3 +1294,23 @@ impl RunFixture {
         self.record.run_id.clone()
     }
 }
+
+#[test]
+fn a_subagent_zone_is_titled_after_the_launch_lanes_stored_name() {
+    let lane = |name: Option<&str>| {
+        let own = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo".to_owned());
+        match name {
+            Some(name) => own.named(name.parse().unwrap()),
+            None => own,
+        }
+    };
+    let launch = |lane| crate::agents::LaunchParams {
+        lane: Some(lane),
+        ..Default::default()
+    };
+    assert_eq!(
+        zone_lane_name(&launch(lane(Some("design")))),
+        Some("design")
+    );
+    assert_eq!(zone_lane_name(&launch(lane(None))), None);
+}

@@ -586,31 +586,6 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
 }
 
 #[test]
-fn root_lane_identity_excludes_stamped_main_channel() {
-    let root = "/repo/rimz";
-    let mut stamped = agent_in("stamped", root, AgentStatus::Running, 0).in_pane("%1");
-    stamped.channel = Some("main".to_owned());
-    let snapshot = room(vec![
-        stamped,
-        agent_in("desk", root, AgentStatus::Idle, 0).in_pane("%2"),
-    ])
-    .with_project_root(Some(PathBuf::from(root)))
-    .with_live_panes(
-        vec![pane("%1", "claude", root), pane("%2", "claude", root)],
-        None,
-    );
-
-    assert_eq!(
-        snapshot
-            .worktree_groups
-            .iter()
-            .map(|group| (group.key.as_str(), group.root_lane))
-            .collect::<Vec<_>>(),
-        [(root, true), ("channel:main", false)]
-    );
-}
-
-#[test]
 fn every_branch_split_at_the_project_root_is_root_lane() {
     let root = "/repo/shared";
     let snapshot = room(vec![

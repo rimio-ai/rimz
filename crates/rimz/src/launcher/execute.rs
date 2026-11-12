@@ -70,7 +70,7 @@ pub(super) struct FreshLaunch {
     pub(super) name: Option<String>,
     pub(super) generated_name: Option<String>,
     pub(super) team: Option<(String, crate::config::Team)>,
-    pub(super) channel: Option<String>,
+    pub(super) lane: crate::ids::Lane,
     pub(super) logins: Vec<LoginName>,
     pub(super) managed_launches: Vec<crate::agents::ManagedLaunchState>,
     pub(super) ancestry: Option<LaunchAncestry>,
@@ -85,7 +85,6 @@ pub(super) struct FreshLaunch {
     pub(super) description: Option<String>,
     pub(super) report_to: ReportTo,
     pub(super) cleanup_worktree: bool,
-    pub(super) inherit_cwd: bool,
     pub(super) force_new_tab: bool,
     pub(super) agent_shell_persistence: crate::harness::launch::AgentShellPersistence,
     pub(super) room: Option<Arc<RoomContext>>,
@@ -298,7 +297,7 @@ fn open_fresh(
             .as_deref()
             .or_else(|| fresh.launch.generated_name()),
         fresh.team.as_ref().map(|(name, _)| name.as_str()),
-        fresh.channel.as_deref(),
+        Some(&fresh.lane),
         fresh.prompt.as_deref().zip(fresh.prompt_index),
         None,
         fresh.ancestry.as_ref(),
@@ -418,7 +417,7 @@ fn open_fresh(
     if fresh.pick_session && in_place {
         interaction.notice(Notice::PickerReceipt {
             kind: batch.identities()[0].kind.as_str(),
-            channel: fresh.channel.as_deref(),
+            channel: fresh.lane.stored_name(),
             cwd: batch.identities()[0]
                 .launch
                 .checkout
@@ -433,7 +432,7 @@ fn open_fresh(
             || {
                 placement::run_tab_title(
                     store,
-                    fresh.channel.as_deref(),
+                    fresh.lane.stored_name(),
                     leader.subagent,
                     &batch.identities()[leader_index].kind,
                 )
@@ -441,7 +440,7 @@ fn open_fresh(
             |task| format!("loop {task}"),
         )
     } else {
-        fresh.channel.as_deref().map_or_else(
+        fresh.lane.stored_name().map_or_else(
             || {
                 crate::harness::spec::default_tab_title(
                     &fresh.layout,
@@ -473,8 +472,7 @@ fn open_fresh(
         identity_env: crate::room::pane_identity_env(
             workspace,
             fresh.checkout.as_deref().map(Path::new).unwrap_or(cwd),
-            fresh.channel.as_deref(),
-            fresh.inherit_cwd,
+            fresh.lane.stored_name(),
         ),
         focus: fresh.focus,
         errors: if leader.is_some() {
@@ -538,7 +536,7 @@ fn open_fresh(
         identities: batch.identities().to_vec(),
         leader_index: fresh.leader_index,
         team: fresh.team,
-        channel: fresh.channel,
+        channel: fresh.lane.stored_name().map(ToOwned::to_owned),
         cwd: fresh.launch.cwd,
         in_place,
         pick_session: fresh.pick_session,

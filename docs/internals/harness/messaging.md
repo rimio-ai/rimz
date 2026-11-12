@@ -34,7 +34,7 @@ The rest of the page follows from that rule: how a record decides it is ready, w
 | [`cli/message/`](../../../crates/rimz/src/cli/message) | Flag parsing, rendering, reply polling, and the inbox verbs. No delivery logic. |
 | [`cli/hooks/lifecycle/delivery.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/delivery.rs) | The hook side: confirm sent records and spawn the delivery helper at turn boundaries. |
 
-Three neighbours carry pieces this module depends on. [`address.rs`](../../../crates/rimz/src/address.rs) resolves `@handle#channel` addresses, binds a match to a pane, and renders handles. [`transcript.rs`](../../../crates/rimz/src/transcript.rs) is the conversation log. [`channel.rs`](../../../crates/rimz/src/channel.rs) owns the lane-name rules.
+Three neighbours carry pieces this module depends on. [`address.rs`](../../../crates/rimz/src/address.rs) resolves `@handle#channel` addresses, binds a match to a pane, and renders handles. [`transcript.rs`](../../../crates/rimz/src/transcript.rs) is the conversation log. [`harness/lanes.rs`](../../../crates/rimz/src/harness/lanes.rs) decides a launch's lane and owns the lane-name rules.
 
 The layering runs one way: `dispatch` calls `reply`, `deliver`, and `send`; `synthetic`, `compact`, and `soft_compact` call `deliver`; `deliver` calls `send`; and `send` calls the store and the mux. `reply` uses dispatch's outcome types but calls nothing in `dispatch`, and nothing calls back up.
 
@@ -920,12 +920,16 @@ A channel is the cooperation lane inside one room. It is the group the sidebar d
 
 ### Where a lane comes from
 
-Launch resolves one lane and stamps it into `RIMZ_CHANNEL`, the launch event, and the rollup. [`resolve_room_channel`](../../../crates/rimz/src/harness/spec.rs) takes the first that applies:
+A fresh launch decides its lane once and stores it whole on the launch event (`LaunchParams.lane`) and the rollup row (`AgentState.lane`); `RIMZ_CHANNEL` states the lane's name, empty when it has none. [`decide`](../../../crates/rimz/src/harness/lanes.rs) classifies the target directory into its checkout (the deepest of the project root and a RimZ-owned worktree containing it, else a foreign checkout at its repository root, a `.git` directory holding `HEAD` or a `.git` file naming its `gitdir:`, unless that root is the user's `HOME` or contains it; else the directory itself) and takes the first that applies:
 
-1. An explicit `--channel`.
-2. The current directory's basename, whenever it differs from the project root. A RimZ-owned worktree is the common case.
-3. `<dir>/<team>` for a named team launched at the room root.
-4. No lane, for a bare directory room.
+1. A typed `--channel` the checkout owns (`main` or the project basename at the root, the directory name in a RimZ worktree) is the checkout's own lane.
+2. Any other typed `--channel` is a named lane at the checkout, after the namespace checks below.
+3. A bare role joining a live cohort takes the caller's named lane, when that lane is at the target checkout.
+4. `<dir>/<team>` for a named team launched in place at the project root, with each whitespace character and `#` mapped to `-` ([`in_place_team_name`](../../../crates/rimz/src/harness/lanes.rs)): `/code/my project` with team `forge` gets `my-project/forge`. Every reader that rebuilds the name (workflow `delivers`, `teams show`, the launcher) calls the same function. A row recorded before lanes were stored with a stamp that is no lane name (`my project/forge`) takes its checkout's own lane on relaunch.
+5. The calling agent's named lane, or a caller-less pane's pin (`RIMZ_CHANNEL` at `RIMZ_WORKTREE_PATH`), when it is at the target checkout. A pin that fails the namespace checks is ignored. Loop-task launches take no caller lane.
+6. Otherwise the checkout's own lane, which has no name at the project root and the directory name elsewhere.
+
+Restart (both ways), molt, fork, subagent resume, lane and team resume, team restore, and rebirth copy the row's lane and decide nothing, and the restart, molt, and subagent resume panes state its name in `RIMZ_CHANNEL` as a fresh launch's do; the fold keeps the first lane a row receives. A row recorded before lanes were stored reads as its old stamp adopted at the checkout its lane path classifies into (`crates/rimz/src/harness/lanes.rs::row_lane`).
 
 Read paths use the stamped lane, and fall back to the lane-path basename only for agents with no stamp: recorded `checkout` before `worktree_path`. Hooks resolve the git toplevel from the agent's own cwd at any depth, but do not replace a recorded checkout, so process-directory changes do not move its lane. A non-git agent whose lane path is the room root folds into the room's root lane.
 
@@ -935,10 +939,10 @@ Lane equality scopes target resolution, rendered handles, pane overlays, `messag
 
 No lane has a record of its own. Worktree lanes take their durable truth from the `rimz-worktree.json` marker ([worktrees.md](./worktrees.md)), and explicit, team, and directory lanes derive from the launch identity stamped on each agent. Worktrees still list without agents, but an empty explicit lane has nothing to list or restore, and a rebirth restores agent tabs only. The sidebar is presence-driven, so a group appears only while a pane runs in that lane. `rimz gc` removes a leftover `records/channels.json` under the `records` class, and no code reads or writes that file.
 
-Explicit lanes and RimZ-owned worktrees share one namespace, and `channel.rs` owns both halves of the rule:
+Named lanes and the checkouts' own lanes share one namespace, and `crates/rimz/src/harness/lanes.rs` owns both halves of the rule:
 
-- An explicit `--channel NAME` launch is refused for a malformed name and for a name a managed worktree owns (`channel::admit_launch`, a Git read with no store access).
-- `rimz worktree new NAME`, and a launch that would create an explicitly named worktree `NAME`, are refused while a live agent holds the lane (`channel::admit_worktree_name`). A live holder is an agent row with no end stamp, liveness other than dead, the lane stamped, and a checkout that is not the worktree of that name. Launch admission checks the dashed name before checkout creation. An existing worktree is entered without this check, fresh replacement included. Resume, generated names, and default `pr-<N>` names are not checked.
+- A typed `--channel NAME` that is not the target checkout's own name is refused for a malformed name, for a name a managed worktree owns, for `main` or the project basename outside the project root, and for a name live agents hold as a named lane at another checkout (`decide`). The managed-worktree check is a Git read with no store access.
+- `rimz worktree new NAME`, and a launch that would create an explicitly named worktree `NAME`, are refused while a live agent holds the named lane `NAME` (`admit_worktree_name`). A live holder is an agent row with no end stamp and liveness other than dead whose lane carries that name; a worktree's own lane carries none. Launch admission checks the dashed name before checkout creation. An existing worktree is entered without this check, fresh replacement included. Resume, generated names, and default `pr-<N>` names are not checked. A new worktree named `main` is refused (`crates/rimz/src/worktree.rs::resolve_fresh_worktree`), and the same admissions, and the palette's launch name step, refuse it before any work through `crates/rimz/src/worktree.rs::admit_fresh_name`.
 
 ### Addressing into a lane
 

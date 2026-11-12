@@ -426,6 +426,7 @@ fn cohort_with(
         liveness,
         cells,
         team,
+        Path::new("/repo"),
         worktree_exists,
         session_backed,
     )

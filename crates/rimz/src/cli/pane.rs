@@ -791,7 +791,15 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
         command: None,
         title: None,
         close_on_exit: false,
-        env: rimz::room::pane_identity_env(&workspace, &workspace.worktree_root, None, true),
+        env: rimz::room::pane_identity_env(
+            &workspace,
+            &workspace.worktree_root,
+            rimz::launcher::context::pin_channel_at(
+                &workspace.project_root,
+                &workspace.worktree_root,
+            )
+            .as_deref(),
+        ),
         placement: SplitPlacement::Directional(direction),
         focus: true,
     })?;

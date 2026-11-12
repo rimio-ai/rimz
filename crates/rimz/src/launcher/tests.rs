@@ -925,3 +925,29 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         login: crate::store::writer::LaunchLogin::RoomDefault,
     }
 }
+
+#[test]
+fn launch_worktree_admission_refuses_main_before_any_work() {
+    let project_root = PathBuf::from("/rooms/absent");
+    let workspace = crate::ResolvedWorkspace {
+        workspace_id: crate::WorkspaceId::from_project_root(&project_root),
+        project_root: project_root.clone(),
+        cwd_project_root: None,
+        root_class: crate::workspace::RootClass::Marker,
+        worktree_root: project_root,
+        worktree_branch: Some("main".to_owned()),
+        session_name: "rimz-room".to_owned(),
+        mux_hint: None,
+    };
+    let config = crate::config::WorktreeConfig::default();
+
+    let err = checkout::admit_launch_worktree_name(&workspace, &config, &[], Some("main"))
+        .expect_err("main is trunk's lane");
+
+    assert_eq!(
+        err.to_string(),
+        "`main` is the project checkout's lane; pick another worktree name"
+    );
+    checkout::admit_launch_worktree_name(&workspace, &config, &[], Some("docs"))
+        .expect("another name");
+}

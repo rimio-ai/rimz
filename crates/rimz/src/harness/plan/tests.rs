@@ -3816,12 +3816,14 @@ fn launch_request_names_and_metadata() {
         parent_agent_kind: AgentKind::new_unchecked("claude"),
         launch_generation: 2,
     };
+    let design = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+        .named("design".parse().expect("lane name"));
     let requests = launch_identity_requests(
         &layout,
         Some("docs"),
         None,
         Some("forge"),
-        Some("design"),
+        Some(&design),
         Some(("draft it", 0)),
         None,
         Some(&ancestry),
@@ -3843,7 +3845,8 @@ fn launch_request_names_and_metadata() {
     assert_eq!(requests[0].launch.model.as_deref(), Some("gpt-5-codex"));
     assert_eq!(requests[0].launch.effort.as_deref(), Some("high"));
     assert_eq!(requests[0].launch.team.as_deref(), Some("forge"));
-    assert_eq!(requests[0].launch.channel.as_deref(), Some("design"));
+    assert_eq!(requests[0].launch.lane.as_ref(), Some(&design));
+    assert_eq!(requests[0].launch.channel, None);
     assert_eq!(
         requests[0].launch.parent_agent_id.as_deref(),
         Some("root-session")

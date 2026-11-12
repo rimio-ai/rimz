@@ -1,6 +1,7 @@
 use super::*;
 
 mod branches;
+mod lanes;
 mod listing;
 mod paths;
 mod rooms;
