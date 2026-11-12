@@ -268,7 +268,7 @@ pub(super) fn parse(name: &str, source: &str) -> Result<Scenario, ScenarioError>
                     let valid = group
                         .text
                         .strip_prefix('#')
-                        .map_or_else(|| safe_name(&group.text), crate::channel::valid_name);
+                        .map_or_else(|| safe_name(&group.text), crate::ids::LaneName::is_flat);
                     if !valid {
                         return Err(ScenarioError::new(
                             line,

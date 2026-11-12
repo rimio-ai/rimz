@@ -102,7 +102,11 @@ pub(super) fn team_launch_context(
     Some(TeamLaunchContext {
         team: team_name.clone(),
         role: role.clone(),
-        channel: params.channel.clone(),
+        channel: params
+            .lane
+            .as_ref()
+            .and_then(crate::ids::Lane::stored_name)
+            .map(ToOwned::to_owned),
         leader,
         declared_leader: team.leader.is_some(),
         seats: team
@@ -347,7 +351,10 @@ mod tests {
         LaunchParams {
             team: Some("forge".to_owned()),
             role: Some("coder".to_owned()),
-            channel: Some("feature".to_owned()),
+            lane: Some(crate::ids::Lane::own(
+                crate::ids::LaneHome::Worktree,
+                "/repo-worktrees/feature",
+            )),
             ..LaunchParams::default()
         }
     }
@@ -524,6 +531,11 @@ mod tests {
         .unwrap();
         assert_eq!(context.leader, "coder");
         assert!(!reminder(&context).contains("user"));
+        assert!(
+            reminder(&context).contains("team `forge` on #feature."),
+            "{}",
+            reminder(&context)
+        );
         assert_eq!(files_block(&context), None);
         team.leader = None;
         team.roles[0].owns = vec!["Plan".to_owned()];

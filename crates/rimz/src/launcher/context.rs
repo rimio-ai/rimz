@@ -87,7 +87,44 @@ pub fn current_channel_with(
 }
 
 pub fn directory_channel(workspace: &crate::ResolvedWorkspace, cwd: &Path) -> Option<String> {
-    crate::harness::spec::resolve_room_channel(&workspace.project_root, cwd, None, None)
+    crate::harness::lanes::directory_channel(&workspace.project_root, cwd)
+}
+
+/// The lane a fresh launch's caller is in: the calling agent's row lane, else
+/// a caller-less pane's pin (`RIMZ_CHANNEL` homed at `RIMZ_WORKTREE_PATH`). A
+/// harness-owned launch has neither.
+pub fn caller_lane(
+    project_root: &Path,
+    caller: Option<&AgentState>,
+    harness_owned: bool,
+) -> Option<crate::harness::lanes::CallerLane> {
+    use crate::harness::lanes::{CallerLane, row_lane};
+    if let Some(caller) = caller {
+        return row_lane(caller, project_root).map(CallerLane::Agent);
+    }
+    if harness_owned {
+        return None;
+    }
+    let pin = pane_pin(project_root)?;
+    pin.name().is_some().then_some(CallerLane::Pin(pin))
+}
+
+/// The lane name a pane split at `dir` carries on: the calling pane's pin name
+/// when `dir` is in the pin's checkout, else none.
+pub fn pin_channel_at(project_root: &Path, dir: &Path) -> Option<String> {
+    let pin = pane_pin(project_root)?;
+    let same_checkout = crate::harness::lanes::own_lane(project_root, dir).path() == pin.path();
+    same_checkout
+        .then(|| pin.stored_name().map(ToOwned::to_owned))
+        .flatten()
+}
+
+/// The calling pane's pin: its `RIMZ_CHANNEL` adopted at the checkout its
+/// `RIMZ_WORKTREE_PATH` classifies into.
+fn pane_pin(project_root: &Path) -> Option<crate::ids::Lane> {
+    let name = std::env::var(crate::workspace::ENV_CHANNEL).ok()?;
+    let home = std::env::var_os(crate::workspace::ENV_WORKTREE_PATH)?;
+    Some(crate::harness::lanes::own_lane(project_root, Path::new(&home)).adopt(Some(&name)))
 }
 
 /// The caller identity for `message`. `--no-from` is deliberately unattributed

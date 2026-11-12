@@ -756,6 +756,7 @@ pub(super) struct PlannedTeamTab {
     pub label: String,
     pub cwd: PathBuf,
     pub channel: Option<String>,
+    pub lane: Option<crate::ids::Lane>,
     pub env: BTreeMap<String, String>,
     pub team: String,
     pub layout: LayoutSpec,
@@ -837,7 +838,7 @@ impl DetailedResumePlan {
 #[derive(Clone, Debug)]
 pub(super) enum RecoveryEntry {
     Flat(PlannedResumeTab),
-    Team(PlannedTeamTab),
+    Team(Box<PlannedTeamTab>),
 }
 
 impl RecoveryEntry {
@@ -929,7 +930,7 @@ impl RecoveryPlan {
         let mut entries = team
             .tabs
             .into_iter()
-            .map(RecoveryEntry::Team)
+            .map(|tab| RecoveryEntry::Team(Box::new(tab)))
             .collect::<Vec<_>>();
         entries.extend(flat_tabs.into_iter().map(RecoveryEntry::Flat));
         Self {
@@ -1167,6 +1168,7 @@ impl ResumeCandidate {
                 launch_group: None,
                 launch_ordinal: None,
                 channel: None,
+                lane: None,
                 launch_depth: None,
                 launched_by: None,
                 isolation: None,
@@ -1973,7 +1975,7 @@ fn materialize_team_restore_tab(
         None,
         None,
         Some(&planned.team),
-        planned.channel.as_deref(),
+        planned.lane.as_ref(),
         None,
         Some(&planned.cohort),
         ancestry.as_ref(),
@@ -2145,6 +2147,7 @@ fn plan_team_restore_tabs(
                 &liveness,
                 &cells,
                 Some(&team),
+                project_root,
                 |path| worktree_exists(path),
                 &session_backed,
             ) else {
@@ -2176,16 +2179,12 @@ fn plan_team_restore_tabs(
                 continue;
             }
         };
-        let channel = project_root
-            .and_then(|project_root| {
-                crate::harness::spec::resolve_room_channel(
-                    project_root,
-                    &cwd,
-                    Some(&team),
-                    cohort.channel.as_deref(),
-                )
-            })
-            .or_else(|| cohort.channel.clone());
+        let lane = project_root
+            .and_then(|project_root| crate::harness::lanes::row_lane(newest, project_root));
+        let channel = match &lane {
+            Some(lane) => lane.stored_name().map(ToOwned::to_owned),
+            None => cohort.channel.clone(),
+        };
         cohort.channel = channel.clone();
         let label = channel_label(channel.as_deref(), &cwd);
         let env = tab_pin_env(workspace_id, project_root, &cwd, channel.as_deref());
@@ -2194,6 +2193,7 @@ fn plan_team_restore_tabs(
             label,
             cwd,
             channel,
+            lane,
             env,
             team,
             layout,
@@ -2526,7 +2526,8 @@ fn plan_resume_candidates_detailed(
         if !seen.insert(candidate.key()) {
             continue;
         }
-        let channel = candidate_room_channel(ctx.project_root, &candidate);
+        candidate.identity.lane = candidate_lane(ctx.project_root, &candidate);
+        let channel = candidate_room_channel(candidate.identity.lane.as_ref(), &candidate);
         let lane_label = candidate.lane_label.as_deref().or_else(|| {
             if AgentState::is_root_lane(
                 channel.as_deref(),
@@ -2818,17 +2819,24 @@ fn tab_pin_env(
     })
 }
 
-fn candidate_room_channel(
+/// A candidate's lane: its stored lane, else its old stamp adopted at the
+/// checkout its lane path classifies into; tests plan without a project root.
+fn candidate_lane(
     project_root: Option<&Path>,
     candidate: &ResumeCandidate,
+) -> Option<crate::ids::Lane> {
+    candidate.identity.lane.clone().or_else(|| {
+        let own = crate::harness::lanes::own_lane(project_root?, candidate.lane_path());
+        Some(own.adopt(candidate.identity.channel.as_deref()))
+    })
+}
+
+fn candidate_room_channel(
+    lane: Option<&crate::ids::Lane>,
+    candidate: &ResumeCandidate,
 ) -> Option<String> {
-    match project_root {
-        Some(project_root) => crate::harness::spec::resolve_room_channel(
-            project_root,
-            candidate.lane_path(),
-            candidate.identity.team.as_deref(),
-            candidate.identity.channel.as_deref(),
-        ),
+    match lane {
+        Some(lane) => lane.stored_name().map(ToOwned::to_owned),
         None => candidate
             .identity
             .channel
@@ -2856,6 +2864,7 @@ pub fn plan_cohort_resume(
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
+    project_root: &Path,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
@@ -2866,6 +2875,7 @@ pub fn plan_cohort_resume(
         liveness,
         cells,
         team,
+        Some(project_root),
         &worktree_exists,
         session_backed,
     );
@@ -2921,6 +2931,7 @@ fn plan_cohort_members(
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
+    project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
@@ -3018,6 +3029,10 @@ fn plan_cohort_members(
             Some(agent) if supports_agent_resume(agent) && session_backed(agent) => {
                 CohortSeed::Resume(Box::new(AgentState {
                     login: relaunch_logins[index].clone().flatten(),
+                    lane: project_root.map_or_else(
+                        || agent.lane.clone(),
+                        |root| crate::harness::lanes::row_lane(agent, root),
+                    ),
                     ..agent.clone()
                 }))
             }

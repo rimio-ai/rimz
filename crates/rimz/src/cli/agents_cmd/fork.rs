@@ -74,13 +74,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         Path::is_dir,
     )?;
     let source_name = source.name.as_deref().unwrap_or("unnamed").to_owned();
-    let channel = rimz::harness::spec::resolve_room_channel(
-        &workspace.project_root,
-        source.lane_path().map(Path::new).unwrap_or(&seed.cwd),
-        source.team.as_deref(),
-        source.channel.as_deref(),
-    );
-    seed.launch.channel.clone_from(&channel);
+    seed.launch.lane = rimz::harness::lanes::row_lane(&source, &workspace.project_root);
+    let channel = seed
+        .launch
+        .lane
+        .as_ref()
+        .and_then(|lane| lane.stored_name())
+        .map(ToOwned::to_owned);
 
     if let Some(name) = args.name.as_deref() {
         validate_agent_name(name)?;
@@ -262,7 +262,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 workspace,
                 source.lane_path().map(Path::new).unwrap_or(&seed.cwd),
                 channel.as_deref(),
-                false,
             ),
             focus,
             errors: PlacementErrors {

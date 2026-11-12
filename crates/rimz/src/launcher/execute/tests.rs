@@ -72,7 +72,7 @@ impl Fixture {
                 name: Some("leader".into()),
                 generated_name: None,
                 team: None,
-                channel: None,
+                lane: crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo"),
                 logins: vec!["default".parse().unwrap()],
                 managed_launches: vec![crate::agents::ManagedLaunchState::Unsupported],
                 ancestry: Some(LaunchAncestry::Peer {
@@ -93,7 +93,6 @@ impl Fixture {
                 description: None,
                 report_to: ReportTo::Launcher,
                 cleanup_worktree: false,
-                inherit_cwd: true,
                 force_new_tab: true,
                 agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
                 room: Some(Arc::new(room)),

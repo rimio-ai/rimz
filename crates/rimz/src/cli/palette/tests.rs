@@ -913,6 +913,10 @@ fn name_step_refuses_invalid_and_listed_names_and_leaves_empty_to_generate() {
     for (name, reason) in [
         ("bad name", "invalid worktree name `bad name`"),
         (
+            "main",
+            "`main` is the project checkout's lane; pick another worktree name",
+        ),
+        (
             "docs",
             "worktree `docs` is listed; pick it in the where step",
         ),

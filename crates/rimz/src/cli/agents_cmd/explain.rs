@@ -96,7 +96,14 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &cwd,
         )?;
         (
-            restart::relaunch_request(&agent, &posture, action, login, None),
+            restart::relaunch_request(
+                &agent,
+                &posture,
+                action,
+                login,
+                None,
+                &workspace.project_root,
+            ),
             cwd,
             note.map(str::to_owned),
             agent.system_prompt_digest.clone(),
@@ -145,7 +152,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .transpose()?;
         // Explain launches nothing, so a refusal the real launch would raise
         // is reported and the plan renders without ancestry.
-        let ancestry = match projection.map(|projection| {
+        let ancestry = match projection.as_ref().map(|projection| {
             rimz::harness::ancestry::resolve_launch_ancestry_here(
                 &projection.agents,
                 false,
@@ -161,12 +168,25 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             }
             None => None,
         };
+        let agents = projection
+            .as_ref()
+            .map_or(&[][..], |projection| &projection.agents[..]);
+        let caller = rimz::harness::ancestry::resolve_calling_agent(agents).ok();
+        let lane = rimz::harness::lanes::decide(&rimz::harness::lanes::LaneRequest {
+            project_root: &workspace.project_root,
+            target: &workspace.worktree_root,
+            typed: None,
+            team: resolved.team_name.as_deref(),
+            joins_cohort: finalized.inferred_lane.is_some(),
+            caller: rimz::launcher::context::caller_lane(&workspace.project_root, caller, false),
+            agents,
+        })?;
         let identities = rimz::harness::plan::launch_identity_requests(
             &resolved.layout,
             None,
             None,
             resolved.team_name.as_deref(),
-            channel.as_deref().or(finalized.inferred_lane.as_deref()),
+            Some(&lane),
             None,
             None,
             ancestry.as_ref(),

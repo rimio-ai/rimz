@@ -72,6 +72,8 @@ pub enum WorktreeErr {
     InvalidName(String),
     #[error("worktree `{name}` already exists at {path}")]
     Exists { name: String, path: PathBuf },
+    #[error("`main` is the project checkout's lane; pick another worktree name")]
+    TrunkName,
     #[error("worktree `{name}` does not exist at {path}")]
     Missing { name: String, path: PathBuf },
     #[error("worktree `{name}` is not a RimZ-managed worktree at {path}")]
@@ -1977,6 +1979,15 @@ pub fn worktree_path(repo_root: &Path, config: &WorktreeConfig, name: &str) -> R
     Ok(worktree_parent(repo_root, config)?.join(requested.name))
 }
 
+/// Refuses `main` as a new tree's name: it is the project checkout's lane. An existing
+/// tree of that name is still reachable, so only a creation calls this.
+pub fn admit_fresh_name(name: &str) -> Result<()> {
+    if name == "main" {
+        return Err(WorktreeErr::TrunkName);
+    }
+    Ok(())
+}
+
 pub fn parse_requested_name(raw: &str) -> Result<RequestedName> {
     for segment in raw.split('/') {
         validate_requested_segment(raw, segment)?;
@@ -2288,6 +2299,7 @@ fn resolve_fresh_worktree(
         }
         return Err(WorktreeErr::Exists { name, path });
     }
+    admit_fresh_name(&name)?;
     Ok(WorktreeCreateTarget::Fresh(FreshWorktree {
         name,
         path,

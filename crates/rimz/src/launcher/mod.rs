@@ -301,6 +301,7 @@ struct PreparedLayout {
     team_name: Option<String>,
     inferred_lane: Option<String>,
     default_lane: Option<String>,
+    caller_lane: Option<crate::harness::lanes::CallerLane>,
     matching_overrides: LaunchOverrides,
     explicit_worktree_name: Option<String>,
     ancestry: Option<LaunchAncestry>,
@@ -491,6 +492,8 @@ pub fn prepare_layout(
         .as_ref()
         .map(|caller| ancestry::resolve_launch_caller(&projection.agents, caller))
         .transpose()?;
+    let caller_lane =
+        context::caller_lane(&workspace.project_root, launch_caller, loop_task.is_some());
     let ancestry = ancestry::resolve_launch_ancestry(
         launch_caller,
         false,
@@ -649,6 +652,7 @@ pub fn prepare_layout(
             team_name,
             inferred_lane,
             default_lane,
+            caller_lane,
             matching_overrides,
             explicit_worktree_name,
             ancestry,
@@ -707,6 +711,7 @@ fn settle_layout(
         team_name,
         inferred_lane,
         default_lane,
+        caller_lane,
         matching_overrides,
         explicit_worktree_name,
         ancestry,
@@ -829,15 +834,17 @@ fn settle_layout(
     } else {
         None
     };
-    // An inferred lane joins the exact channel it was inferred from, rather than
-    // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
-    // subdirectory would otherwise stamp that subdirectory's basename.
-    let explicit_channel = args
-        .launch
-        .cohort
-        .channel
-        .as_deref()
-        .or(inferred_lane.as_deref().filter(|_| cwd.is_none()));
+    let lane_request = |target: &'_ Path, agents: &'_ [crate::agents::AgentState]| {
+        crate::harness::lanes::decide(&crate::harness::lanes::LaneRequest {
+            project_root: &workspace.project_root,
+            target,
+            typed: args.launch.cohort.channel.as_deref(),
+            team: team_name.as_deref(),
+            joins_cohort: inferred_lane.is_some(),
+            caller: caller_lane.clone(),
+            agents,
+        })
+    };
     if let Some(team) = team_name.as_deref() {
         let target = if let Some(path) = cwd.as_deref() {
             Some((None, path))
@@ -870,15 +877,20 @@ fn settle_layout(
                 hold.team
             );
         }
+        // The team-hold guidance outranks the lane's own refusals, which the
+        // launch's lane decision below raises once the checkout is settled; a
+        // typed name the lane rules refuse is still checked for a hold, and a
+        // role joining a lane's cohort is checked against that lane.
+        let channel = inferred_lane.clone().or_else(|| {
+            target.and_then(|(_, path)| match lane_request(path, &[]) {
+                Ok(lane) => lane.routing_name().map(ToOwned::to_owned),
+                Err(_) => args.launch.cohort.channel.clone(),
+            })
+        });
         if let Some((_, path)) = target
-            && let Some(channel) = crate::harness::spec::resolve_room_channel(
-                &workspace.project_root,
-                path,
-                Some(team),
-                explicit_channel,
-            )
+            && let Some(channel) = channel.as_deref()
             && let Some(hold) =
-                crate::harness::resume::inspect_channel_hold(&projection.agents, &channel)
+                crate::harness::resume::inspect_channel_hold(&projection.agents, channel)
         {
             let comparable_path = |path: &Path| {
                 std::fs::canonicalize(path)
@@ -1037,15 +1049,10 @@ fn settle_layout(
         )?;
     }
     lsp_admission::admit(&launch.cwd, &machine_config, interaction)?;
-    if let Some(channel) = args.launch.cohort.channel.as_deref() {
-        crate::channel::admit_launch(workspace, channel)?;
-    }
-    let room_channel = crate::harness::spec::resolve_room_channel(
-        &workspace.project_root,
+    let room_lane = lane_request(
         checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
-        team_name.as_deref(),
-        explicit_channel,
-    );
+        &projection.agents,
+    )?;
     Ok(SettledLayout::Fresh(Box::new(FreshLaunch {
         context: ctx.clone(),
         layout,
@@ -1057,7 +1064,7 @@ fn settle_layout(
             .as_deref()
             .zip(team)
             .map(|(name, team)| (name.to_owned(), team.clone())),
-        channel: room_channel,
+        lane: room_lane,
         logins: preflighted_logins,
         ancestry,
         focus,
@@ -1075,7 +1082,6 @@ fn settle_layout(
         managed_launches: Vec::new(),
         loop_task: loop_task.clone(),
         cleanup_worktree: true,
-        inherit_cwd: !worktree_launch && loop_task.is_none(),
         // A run-bearing leader opens its own tab, as a supervised launch does.
         force_new_tab: args.leader_run.is_some(),
         agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
@@ -1495,6 +1501,7 @@ fn launch_resume_layout(
         crate::store::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),
+        &workspace.project_root,
         |path| path.is_dir(),
         crate::harness::resume::resume_session_present,
     )
@@ -1633,12 +1640,29 @@ fn launch_resume_layout(
             crate::harness::plan::CohortSeed::Fresh => None,
         })
         .unwrap_or(&cwd);
-    let channel = crate::harness::spec::resolve_room_channel(
-        &workspace.project_root,
-        lane_path,
-        team_name.as_deref(),
-        plan.channel.as_deref(),
-    );
+    // A resumed cohort keeps its members' lane; one with no member row left
+    // reads its old stamp, or an in-place team's name, at its checkout.
+    let lane = plan
+        .seeds
+        .iter()
+        .find_map(|seed| match seed {
+            crate::harness::plan::CohortSeed::Resume(agent) => {
+                crate::harness::lanes::row_lane(agent, &workspace.project_root)
+            }
+            crate::harness::plan::CohortSeed::Fresh => None,
+        })
+        .unwrap_or_else(|| {
+            let own = crate::harness::lanes::own_lane(&workspace.project_root, lane_path);
+            let team_lane = team_name.as_deref().filter(|_| own.is_trunk()).map(|team| {
+                crate::harness::lanes::in_place_team_name(&workspace.project_root, team)
+            });
+            own.adopt(
+                plan.channel
+                    .as_deref()
+                    .or(team_lane.as_ref().map(crate::ids::LaneName::as_str)),
+            )
+        });
+    let channel = lane.stored_name().map(ToOwned::to_owned);
     plan.channel = channel.clone();
     let scoped_resume = resume_outside_launch_dir(
         channel.as_deref(),
@@ -1677,7 +1701,7 @@ fn launch_resume_layout(
         None,
         None,
         team_name.as_deref(),
-        channel.as_deref(),
+        Some(&lane),
         None,
         Some(&plan),
         ancestry,
@@ -1758,12 +1782,7 @@ fn launch_resume_layout(
             title,
             panes,
             sidebar,
-            identity_env: crate::room::pane_identity_env(
-                workspace,
-                lane_path,
-                channel.as_deref(),
-                false,
-            ),
+            identity_env: crate::room::pane_identity_env(workspace, lane_path, channel.as_deref()),
             focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },

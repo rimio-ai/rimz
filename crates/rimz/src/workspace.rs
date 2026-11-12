@@ -76,7 +76,8 @@ pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<Stri
 }
 
 /// The pane-scope identity pin: the session pin plus `RIMZ=1`, the pane's
-/// worktree path, and its channel when it has one.
+/// worktree path, and its channel, stated empty when it has none so a pane never
+/// inherits another's.
 pub fn pane_pin_env(
     workspace_id: &WorkspaceId,
     project_root: &Path,
@@ -89,9 +90,10 @@ pub fn pane_pin_env(
         ENV_WORKTREE_PATH.to_owned(),
         worktree_path.display().to_string(),
     );
-    if let Some(channel) = channel.filter(|value| !value.is_empty()) {
-        env.insert(ENV_CHANNEL.to_owned(), channel.to_owned());
-    }
+    env.insert(
+        ENV_CHANNEL.to_owned(),
+        channel.unwrap_or_default().to_owned(),
+    );
     env
 }
 

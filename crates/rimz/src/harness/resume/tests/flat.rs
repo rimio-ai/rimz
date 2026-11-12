@@ -507,12 +507,13 @@ fn build_label_prefers_channel_over_worktree_dir() {
 
 #[test]
 fn resume_tab_labels_and_replayed_channel() {
-    for (label, agent, project_root, tab_label, channel, team) in [
+    for (label, agent, project_root, tab_label, channel, lane, team) in [
         (
             "no channel falls back to the worktree directory",
             agent("codex", "c1", "/code/query-engine", 1),
             None,
             "#query-engine",
+            None,
             None,
             None,
         ),
@@ -526,12 +527,14 @@ fn resume_tab_labels_and_replayed_channel() {
             "#design",
             Some("design"),
             None,
+            None,
         ),
         (
-            "a team worktree under the project root resolves a room channel",
+            "a team checkout beside the project root carries its own lane, unnamed",
             team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1),
             Some(Path::new("/code/project")),
             "#auth",
+            None,
             Some("auth"),
             Some("forge"),
         ),
@@ -549,6 +552,16 @@ fn resume_tab_labels_and_replayed_channel() {
         assert_eq!(
             request.identity.params.channel.as_deref(),
             channel,
+            "{label}"
+        );
+        assert_eq!(
+            request
+                .identity
+                .params
+                .lane
+                .as_ref()
+                .and_then(crate::ids::Lane::routing_name),
+            lane,
             "{label}"
         );
         assert_eq!(request.identity.params.team.as_deref(), team, "{label}");
@@ -569,7 +582,7 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
             Some("design"),
         ),
         (
-            "a room-root tab labelled by its directory carries no channel",
+            "a room-root tab labelled by its directory states an empty channel",
             agent("codex", "c1", "/code/project", 1),
             "#project",
             None,
@@ -607,7 +620,7 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
             tab.env
                 .get(crate::workspace::ENV_CHANNEL)
                 .map(String::as_str),
-            channel,
+            Some(channel.unwrap_or_default()),
             "{label}"
         );
     }

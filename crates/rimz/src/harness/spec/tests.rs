@@ -317,49 +317,6 @@ fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
     }
 }
 
-#[test]
-fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project-wt/auth"),
-            Some("forge"),
-            None,
-        )
-        .as_deref(),
-        Some("auth")
-    );
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project"),
-            Some("forge"),
-            None,
-        )
-        .as_deref(),
-        Some("project/forge")
-    );
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project"),
-            None,
-            None,
-        ),
-        None
-    );
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project-wt/auth"),
-            Some("forge"),
-            Some("design"),
-        )
-        .as_deref(),
-        Some("design")
-    );
-}
-
 fn profile(agent: &str) -> Profile {
     Profile {
         empty_dir: None,

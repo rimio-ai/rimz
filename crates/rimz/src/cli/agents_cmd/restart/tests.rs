@@ -20,11 +20,21 @@ fn a_fresh_restart_of_a_molt_successor_keeps_its_predecessor_superseded() {
     predecessor.agent_id = "launch_old".into();
     predecessor.launch_id = Some(predecessor.agent_id.clone());
     predecessor.molted_from = None;
-    let mut predecessor_request =
-        fresh_launch_request(&predecessor, restart_cell(&predecessor, &posture), None).unwrap();
+    let mut predecessor_request = fresh_launch_request(
+        &predecessor,
+        restart_cell(&predecessor, &posture),
+        None,
+        Path::new("/repo"),
+    )
+    .unwrap();
     predecessor_request.agent_id = predecessor.agent_id;
-    let mut request =
-        fresh_launch_request(&successor, restart_cell(&successor, &posture), None).unwrap();
+    let mut request = fresh_launch_request(
+        &successor,
+        restart_cell(&successor, &posture),
+        None,
+        Path::new("/repo"),
+    )
+    .unwrap();
     request.agent_id = successor.agent_id.clone();
     store
         .begin_agent_launch_batch(
@@ -168,7 +178,8 @@ fn restart_cell_carries_the_current_postures_auto_compact_count() {
     let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
         panic!("agent cell")
     };
-    let request = fresh_launch_request(&agent, Cell::Agent(cell.clone()), None).unwrap();
+    let request =
+        fresh_launch_request(&agent, Cell::Agent(cell.clone()), None, Path::new("/repo")).unwrap();
     assert_eq!(
         (
             cell.auto_compact.as_deref(),
@@ -210,7 +221,7 @@ fn restart_requests_preserve_automation_for_resumed_and_fresh_sessions() {
     ]
     .into_iter()
     .map(|action| {
-        let request = relaunch_request(&agent, &posture, action, None, None);
+        let request = relaunch_request(&agent, &posture, action, None, None, Path::new("/repo"));
         serde_json::to_value(request.identity.params).unwrap()["automation"].clone()
     })
     .collect();
@@ -226,6 +237,14 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
     let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
     agent.name = Some("otter".to_owned());
     agent.role = Some("coder".to_owned());
+    // A relaunch copies the lane without admitting it again, so a name a
+    // worktree has since claimed stays the agent's lane.
+    agent.lane = Some(
+        serde_json::from_value(
+            serde_json::json!({"home": "trunk", "path": "/repo", "name": "auth"}),
+        )
+        .expect("lane"),
+    );
     // A restart replays the session's context, not the fire's supervision.
     agent.loop_task = Some("fixer".to_owned());
     agent.workflow = Some(rimz::agents::WorkflowAttemptRef {
@@ -262,7 +281,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
         extra_args: Vec::new(),
     };
 
-    let request = relaunch_request(&agent, &posture, action, None, None);
+    let request = relaunch_request(&agent, &posture, action, None, None, Path::new("/repo"));
     let expected = Some(rimz::harness::launch::ReminderSection::Loop(
         "The original loop fire".into(),
     ));
@@ -275,10 +294,15 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
         },
         None,
         None,
+        Path::new("/repo"),
     );
     assert_eq!(
         fresh.reminder_section, expected,
         "fresh fallback keeps the loop context"
+    );
+    assert_eq!(
+        fresh.identity.params.lane, agent.lane,
+        "fresh fallback keeps the lane"
     );
 
     let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
@@ -320,6 +344,7 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
                     role: Some("coder".to_owned()),
                     model: Some("opus".to_owned()),
                     loop_task: Some("fixer".to_owned()),
+                    lane: agent.lane.clone(),
                     record: posture.launch.record.clone(),
                     ..Default::default()
                 },
@@ -355,6 +380,7 @@ fn a_handed_over_child_carries_its_run_and_a_settled_one_carries_none() {
         },
         None,
         None,
+        Path::new("/repo"),
     );
     let summary = |request: &ExecRequest| {
         (
@@ -487,6 +513,7 @@ fn relaunch_request_does_not_treat_a_peer_as_a_child() {
         },
         None,
         None,
+        Path::new("/repo"),
     );
 
     assert!(!request.subagent);
@@ -608,11 +635,17 @@ fn relaunch_requests_preserve_a_forks_profile_scope_without_child_treatment() {
         },
     ]
     .map(|action| {
-        let request = relaunch_request(&agent, &posture, action, None, None);
+        let request = relaunch_request(&agent, &posture, action, None, None, Path::new("/repo"));
         assert!(!request.subagent);
         request.identity.params.profile_scope
     });
-    let fresh = fresh_launch_request(&agent, restart_cell(&agent, &posture), None).unwrap();
+    let fresh = fresh_launch_request(
+        &agent,
+        restart_cell(&agent, &posture),
+        None,
+        Path::new("/repo"),
+    )
+    .unwrap();
     assert_eq!(
         [actual[0], actual[1], fresh.launch.profile_scope],
         [Some(ProfileScope::Subagents); 3]
@@ -704,6 +737,7 @@ fn fresh_relaunch_exec_uses_the_allocated_login() {
             },
             Some("work".parse().unwrap()),
             Some(&identity),
+            Path::new("/repo"),
         );
         assert_eq!(
             request.identity.params.login, allocated,
@@ -841,7 +875,14 @@ fn relaunch_refuses_a_session_from_another_account_and_reopens_its_own() {
     )
     .expect("pooled relaunch");
     assert_eq!(login, Some("work".parse().expect("login name")));
-    let request = relaunch_request(&agent, &ResumePosture::default(), action, login, None);
+    let request = relaunch_request(
+        &agent,
+        &ResumePosture::default(),
+        action,
+        login,
+        None,
+        Path::new("/repo"),
+    );
     assert_eq!(
         request.identity.params.login,
         Some("work".parse().expect("login name"))
@@ -858,11 +899,76 @@ fn relaunch_refuses_a_session_from_another_account_and_reopens_its_own() {
     let (action, login, _) =
         relaunch_action(&agent, &room("personal"), &standalone, Path::new("/repo"))
             .expect("same-account relaunch");
-    let request = relaunch_request(&agent, &ResumePosture::default(), action, login, None);
+    let request = relaunch_request(
+        &agent,
+        &ResumePosture::default(),
+        action,
+        login,
+        None,
+        Path::new("/repo"),
+    );
     let dir = tempfile::tempdir().unwrap();
     rimz::harness::launch_plan::testkit::assert_claude_stamped_home(
         &request,
         dir.path(),
         Some("personal"),
     );
+}
+
+#[test]
+fn relaunches_of_a_lane_less_row_adopt_its_old_channel_stamp() {
+    let mut agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
+    agent.worktree_path = Some("/repo".into());
+    agent.channel = Some("design".into());
+    let root = Path::new("/repo");
+    let expected = rimz::harness::lanes::own_lane(root, root).adopt(Some("design"));
+    let posture = ResumePosture::default();
+    let fresh = fresh_launch_request(&agent, restart_cell(&agent, &posture), None, root).unwrap();
+    let relaunch = relaunch_request(
+        &agent,
+        &posture,
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        None,
+        None,
+        root,
+    );
+    assert_eq!(expected.stored_name(), Some("design"));
+    assert_eq!(
+        [fresh.launch.lane, relaunch.identity.params.lane],
+        [Some(expected.clone()), Some(expected)]
+    );
+}
+
+#[test]
+fn a_relaunch_pane_states_the_carried_lanes_stored_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let root = workspace.project_root.clone();
+    let mut agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
+    agent.worktree_path = Some(root.display().to_string());
+    for (stamp, expected) in [("main", None), ("design", Some("design"))] {
+        agent.channel = Some(stamp.into());
+        let request = relaunch_request(
+            &agent,
+            &ResumePosture::default(),
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+            None,
+            None,
+            &root,
+        );
+        let env = relaunch_identity_env(&workspace, &root, &request);
+        assert_eq!(
+            env.get("RIMZ_CHANNEL")
+                .map(String::as_str)
+                .filter(|name| !name.is_empty()),
+            expected,
+            "{stamp}"
+        );
+    }
 }

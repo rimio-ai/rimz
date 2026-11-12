@@ -2040,13 +2040,12 @@ fn delivers(
                 .get("team")
                 .and_then(serde_json::Value::as_str)
             {
-                let channel = crate::harness::spec::resolve_room_channel(
-                    project_root,
-                    checkout,
-                    Some(team),
-                    None,
-                )
-                .unwrap_or_else(|| "external".into());
+                let own = crate::harness::lanes::own_lane(project_root, checkout);
+                let channel = if own.is_trunk() {
+                    crate::harness::lanes::in_place_team_name(project_root, team).to_string()
+                } else {
+                    own.routing_name().unwrap_or("external").to_owned()
+                };
                 matches.insert("instance".into(), format!("{team}#{channel}"));
             }
         }

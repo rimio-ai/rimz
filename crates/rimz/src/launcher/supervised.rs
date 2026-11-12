@@ -25,12 +25,9 @@ pub(super) fn prepare_run_layout(
     supervised
         .from_pr
         .clone_from(&request.launch.cohort.from_pr);
-    supervised.channel = request
-        .launch
-        .cohort
+    supervised
         .channel
-        .clone()
-        .or_else(|| request.context.channel.clone());
+        .clone_from(&request.launch.cohort.channel);
     supervised.name.clone_from(&request.launch.name);
     supervised
         .description
@@ -131,6 +128,7 @@ fn prepare(
     let reader = caller.and_then(|caller| caller.name.clone());
     // The room pin keeps the store and effective config on the same project root.
     let workspace = checkout::anchor_caller_workspace(workspace, caller, context.root.as_deref())?;
+    let caller_lane = super::context::caller_lane(&workspace.project_root, caller, harness_owned);
     check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
     checkout::admit_launch_worktree_name(
         &workspace,
@@ -473,7 +471,6 @@ fn prepare(
         }
         preflight_launch.untrusted_checkout = true;
     }
-    preflight_launch.channel.clone_from(&request.channel);
     preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
     let mut checkout = None;
     let mut empty_dir_name = None;
@@ -543,20 +540,15 @@ fn prepare(
     if !request.subagent {
         super::lsp_admission::admit(&launch.cwd, &machine_config, interaction)?;
     }
-    if let Some(channel) = request.channel.as_deref() {
-        crate::channel::admit_launch(&workspace, channel)?;
-    }
-    // An inferred lane joins the exact channel it was inferred from, rather than
-    // one recomputed from the caller's cwd.
-    let room_channel = crate::harness::spec::resolve_room_channel(
-        &workspace.project_root,
-        checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
-        team_name.as_deref(),
-        request
-            .channel
-            .as_deref()
-            .or(inferred_lane.as_deref().filter(|_| cwd.is_none())),
-    );
+    let room_lane = crate::harness::lanes::decide(&crate::harness::lanes::LaneRequest {
+        project_root: &workspace.project_root,
+        target: checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
+        typed: request.channel.as_deref(),
+        team: team_name.as_deref(),
+        joins_cohort: inferred_lane.is_some(),
+        caller: caller_lane,
+        agents: &projection.agents,
+    })?;
     let mut preflighted_logins = Vec::new();
     let mut managed_launches = Vec::new();
     let mut companion_logins = companion_logins.into_iter();
@@ -672,7 +664,7 @@ fn prepare(
                 machine: machine_config,
                 mux: context.mux,
                 root: context.root,
-                channel: room_channel.clone(),
+                channel: room_lane.stored_name().map(ToOwned::to_owned),
             },
             layout,
             launch,
@@ -680,7 +672,7 @@ fn prepare(
             name: request.name.clone(),
             generated_name: empty_dir_name,
             team: None,
-            channel: room_channel,
+            lane: room_lane,
             logins: preflighted_logins,
             ancestry,
             focus: LaunchFocus::Keep,
@@ -695,9 +687,6 @@ fn prepare(
             managed_launches,
             loop_task: None,
             cleanup_worktree: request.retries == 0,
-            inherit_cwd: request.worktree.is_none()
-                && request.from_pr.is_none()
-                && request.loop_task.is_none(),
             force_new_tab: request.force_new_tab,
             agent_shell_persistence: request.agent_shell_persistence,
             room,

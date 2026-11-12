@@ -304,7 +304,7 @@ pub(crate) fn channels() -> Vec<CompletionCandidate> {
 
 /// Lanes an explicit `--channel` stamped on agents that have not ended. A
 /// worktree's own agents carry their checkout's name as the stamp, so the
-/// checkout tells the two apart, as in `rimz::channel::admit_worktree_name`.
+/// checkout tells the two apart, as `rimz::harness::lanes::row_lane` does.
 fn explicit_lanes(agents: &[AgentState]) -> std::collections::BTreeSet<&str> {
     agents
         .iter()
@@ -319,16 +319,16 @@ fn explicit_lanes(agents: &[AgentState]) -> std::collections::BTreeSet<&str> {
         .collect()
 }
 
-/// The explicit lanes `rimz::channel::admit_launch` would accept. Admission
-/// names a worktree by its branch; its directory name is the lane its own
-/// agents stamp, so neither is offered.
+/// The explicit lanes a typed `--channel` could name. A managed worktree's
+/// directory name is the lane its own agents stamp, and its branch is not a
+/// lane name, so neither is offered.
 fn launch_channels(
     agents: &[AgentState],
     worktrees: &[rimz::worktree::ManagedWorktree],
 ) -> Vec<CompletionCandidate> {
     explicit_lanes(agents)
         .into_iter()
-        .filter(|lane| rimz::channel::valid_name(lane))
+        .filter(|lane| rimz::ids::LaneName::is_flat(lane))
         .filter(|lane| {
             !worktrees.iter().any(|worktree| {
                 worktree.marker.name == *lane || worktree.branch.as_deref() == Some(lane)

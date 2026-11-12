@@ -52,6 +52,9 @@ impl LaunchSetup {
             Ok(requested) => requested,
             Err(error) => return Some(error.to_string()),
         };
+        if let Err(error) = rimz::worktree::admit_fresh_name(&requested.name) {
+            return Some(error.to_string());
+        }
         self.trees
             .as_deref()
             .unwrap_or_default()

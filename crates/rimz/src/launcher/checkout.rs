@@ -20,7 +20,8 @@ pub fn admit_launch_worktree_name(
     {
         return Ok(());
     }
-    crate::channel::admit_worktree_name(agents, &requested.name)?;
+    crate::worktree::admit_fresh_name(&requested.name)?;
+    crate::harness::lanes::admit_worktree_name(agents, &workspace.project_root, &requested.name)?;
     Ok(())
 }
 

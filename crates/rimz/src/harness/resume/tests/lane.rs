@@ -471,9 +471,15 @@ fn fresh_lane_materializes_new_team_launches() {
         assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
         assert_eq!(request.identity.params.role.as_deref(), Some(role));
         assert_eq!(
-            request.identity.params.channel.as_deref(),
+            request
+                .identity
+                .params
+                .lane
+                .as_ref()
+                .and_then(crate::ids::Lane::stored_name),
             Some("saved-channel")
         );
+        assert_eq!(request.identity.params.channel, None);
         assert!(!["planner", "coder"].contains(&request.identity.launch_id.as_deref().unwrap()));
     }
 }

@@ -109,7 +109,8 @@ use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 pub(in crate::cli) use restart::{
-    newest_run_for_child, relaunch_action, relaunch_request, restart_resolved, with_run,
+    newest_run_for_child, relaunch_action, relaunch_identity_env, relaunch_request,
+    restart_resolved, with_run,
 };
 use resume::resume_lane;
 use run_timeout::run_timeout;
@@ -1727,7 +1728,7 @@ fn create_launch_args(
     // and inline `#name` launch into a named lane.
     let inline_named_channel = target
         .split_once('#')
-        .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
+        .is_some_and(|(_, channel)| rimz::ids::LaneName::is_flat(channel));
     let named = channel_flag.is_some()
         || (worktree_flag.is_none() && inline_named_channel)
         || create

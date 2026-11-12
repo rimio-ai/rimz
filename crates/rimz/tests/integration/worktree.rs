@@ -2693,6 +2693,26 @@ fn worktree_new_rejects_pr_url_for_another_repository() {
 }
 
 #[test]
+fn worktree_new_main_refuses_before_reading_the_pr() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "main", "--from-pr", "1"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "`main` is the project checkout's lane; pick another worktree name",
+        ))
+        .stderr(contains("PR").not());
+    assert!(!env.home_root.join("project-worktrees/main").exists());
+}
+
+#[test]
 fn from_pr_reuse_requires_matching_pr_provenance() {
     if git_missing() {
         return;
@@ -2907,6 +2927,54 @@ fn worktree_new_from_pr_reuses_marked_head_and_preserves_channel() {
     );
     assert!(!env.home_root.join("project-worktrees/pr-1").exists());
     assert_eq!(env.store().list_messages().unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_main_from_pr_reuses_an_existing_managed_main() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    env.rimz()
+        .args(["worktree", "new", "feature", "--base", &head])
+        .assert()
+        .success();
+    // A managed tree named `main`, as a binary before the trunk-name rule made it.
+    let trees = env.home_root.join("project-worktrees");
+    let path = trees.join("main");
+    let mut marker = rimz::worktree::read_marker_for_worktree(&trees.join("feature"))
+        .unwrap()
+        .unwrap();
+    git(
+        &env.project_root,
+        &[
+            "worktree",
+            "move",
+            trees.join("feature").to_str().unwrap(),
+            path.to_str().unwrap(),
+        ],
+    );
+    marker.name = "main".to_owned();
+    marker.worktree_path.clone_from(&path);
+    let git_dir =
+        std::path::PathBuf::from(git_stdout(&path, &["rev-parse", "--absolute-git-dir"]).trim());
+    std::fs::write(
+        git_dir.join("rimz-worktree.json"),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+    configure_github_origin_rewrite(&env);
+    let shim = write_gh_pr_head_shim(&env, gh_same_repo_head());
+
+    env.rimz()
+        .args(["worktree", "new", "main", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .success()
+        .stdout(contains("reused main"));
 }
 
 #[cfg(unix)]

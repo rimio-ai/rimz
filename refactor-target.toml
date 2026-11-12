@@ -53,7 +53,6 @@ layers = [
     "reload",
     "uninstall",
     "daemon_content",
-    "channel",
     "launcher",
 ],
     [
@@ -948,10 +947,6 @@ surface-budget = 0
 [[module]]
 path = "crates/rimz/src/build_id.rs"
 surface-budget = 6
-
-[[module]]
-path = "crates/rimz/src/channel.rs"
-surface-budget = 5
 
 [[module]]
 path = "crates/rimz/src/child_process.rs"
@@ -2343,7 +2338,8 @@ path = "crates/rimz/src/harness"
 # workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
 # workflow::{Cohort, stop_cohort, detach_cohort, without_excluded, leader} pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot workflow::leader_turn left (+4).
 # AttemptHost::{orphan, leader_session, start_groups}, workflow::{orphan, launch_groups}, and throttle::StartGroup close the engine's reads around the attempt host (+6).
-surface-budget = 1150
+# harness::lanes and its LaneErr, CallerLane, LaneRequest, decide, own_lane, row_lane, in_place_team_name, directory_channel and admit_worktree_name replace spec::resolve_room_channel and the channel module as the one lane constructor (+9).
+surface-budget = 1159
 
 [[verdict]]
 kind = "item"
@@ -4667,7 +4663,8 @@ path = "crates/rimz/src/worktree"
 # emit_worktree_created moves here from launcher::checkout so the harness can signal creation (+1).
 # create_for_loop_fire names and marks a loop fire's fresh tree for the scheduler (+1).
 # worktree_paths shares the lossless `git worktree list` decoder with the sidebar (+1).
-surface-budget = 89
+# admit_fresh_name gives the launcher, CLI and palette the create branch's `main` refusal (+1).
+surface-budget = 90
 
 [[verdict]]
 kind = "item"
@@ -4716,7 +4713,9 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # Sidebar close shares offers_resume with the stop receipt's eligibility gate (+1).
 # Restart hands a child's run over through newest_run_for_child and with_run, which the
 # subagent resume doorway shares (+2).
-surface-budget = 28
+# relaunch_identity_env states the relaunch's carried lane in the subagent resume pane's
+# env, as restart and molt do (+1).
+surface-budget = 29
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
@@ -5142,6 +5141,7 @@ allowed-dependencies = [
     "disk::paths",
     "harness::ancestry",
     "harness::fleet",
+    "harness::lanes",
     "harness::plan",
     "harness::scratch",
     "harness::spec",
@@ -5469,6 +5469,7 @@ allowed-dependencies = [
     "harness::headless::judge",
     "harness::hook_drain",
     "harness::idle_stop",
+    "harness::lanes",
     "harness::launch",
     "harness::loop_task",
     "harness::name",
@@ -6991,11 +6992,6 @@ reason = "The durable message pane pin reaches this guard through bind_agent; it
 
 [[verdict]]
 kind = "item"
-key = "harness::spec::resolve_room_channel"
-reason = "Launch-lane precedence belongs with layout policy; team is absent for bare-root current-channel lookup and present for team launches (pass 14)."
-
-[[verdict]]
-kind = "item"
 key = "cli::address::message_target"
 reason = "Uses the canonical live renderer when a peer exists, but preserves a readable durable address after the agent leaves the snapshot (pass 14)."
 
@@ -7067,7 +7063,7 @@ reason = "Ordinary tabs never override refresh; birth carries --refresh-ms throu
 [[verdict]]
 kind = "item"
 key = "room::pane_identity_env"
-reason = "inherit_channel has four conditional callers in agent launch and supervised runs (pass 15c)."
+reason = "Agent launch, relaunch and supervised runs share the pane identity pin and its stated lane name (pass 15c)."
 
 [[verdict]]
 kind = "item"
@@ -10796,13 +10792,58 @@ reason = "Serde skip predicate shared with forge::pr_state::PrLink; empty displa
 
 [[verdict]]
 kind = "item"
-key = "channel::Result"
-reason = "Return alias of the pub namespace admissions the launch and worktree handlers call."
+key = "harness::lanes::LaneErr"
+reason = "Error of the lane constructor and the worktree-name admission the launch, explain and worktree handlers call."
 
 [[verdict]]
 kind = "item"
-key = "channel::ChannelErr"
-reason = "Error of the pub namespace admissions the launch and worktree handlers call."
+key = "harness::lanes::CallerLane"
+reason = "The calling agent's lane or the human pane's pin, which launcher context hands to the lane constructor."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::LaneRequest"
+reason = "Input of the one lane constructor that layout, supervised and explain launches share."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::decide"
+reason = "The one constructor of a fresh launch's lane; relaunches copy the stored lane and never call it."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::own_lane"
+reason = "A directory's own checkout lane, shared by the constructor, pane pins, team holds and resume."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::row_lane"
+reason = "A row's stored lane, or its pre-change checkout's own lane, read by caller attribution, fork, resume and team holds."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::in_place_team_name"
+reason = "The `<repo>/<team>` lane name an in-place team takes at trunk, shared by launch, workflow team holds and `teams show`."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::directory_channel"
+reason = "The routing name a directory's own lane carries, read by launcher context for caller lanes."
+
+[[verdict]]
+kind = "item"
+key = "harness::lanes::admit_worktree_name"
+reason = "Refuses a new worktree name that `main` or a live lane already holds, for every worktree-creating path."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::caller_lane"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::pin_channel_at"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
 
 [[verdict]]
 kind = "item"
@@ -10872,7 +10913,7 @@ reason = "Field type of UiState::gate_notice, so it follows the field to pane re
 [[verdict]]
 kind = "guard"
 key = "$0.root_class!=RootClass::Repo"
-reason = "Four sites turn one workspace-root fact into three different outcomes: channel.rs:77 returns an empty channel set, cli/gc.rs:324 reports WorktreeSweepStatus::Skipped, cli/worktree.rs:117 and cli/agents_cmd/resume.rs:183 bail with their own message (pass 24c)."
+reason = "Three sites turn one workspace-root fact into two different outcomes: cli/gc.rs:324 reports WorktreeSweepStatus::Skipped, cli/worktree.rs:117 and cli/agents_cmd/resume.rs:183 bail with their own message (pass 24c)."
 
 [[verdict]]
 kind = "item"

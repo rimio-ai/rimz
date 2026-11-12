@@ -2425,14 +2425,13 @@ fn assert_subagent_checkout_case(
             child.root_lane,
             matches!(empty, Some("root" | "revoked" | "stubs"))
         );
+        // The child keeps the lane of its checkout, the project root's or a
+        // foreign directory's, and neither carries a name.
         assert_eq!(
-            child.channel.as_deref(),
-            if cwd.is_some() {
-                lane_path.file_name().and_then(|name| name.to_str())
-            } else {
-                matches!(empty, Some("named" | "grant")).then_some("parent-checkout")
-            }
+            child.lane.as_ref().map(rimz::ids::Lane::path),
+            lane_path.to_str()
         );
+        assert_eq!(child.channel.as_deref(), None);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -2647,7 +2646,6 @@ fn assert_subagent_checkout_case(
                     &workspace,
                     &lane_path,
                     child.channel().as_deref(),
-                    false,
                 ))
                 .env(rimz::harness::launch::ENV_AGENT_KIND, kind)
                 .env(

@@ -329,9 +329,7 @@ fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
         ..signal(name, payload)
     };
     let cohort = |channel: &str| json!({"team": "forge", "instance": format!("forge#{channel}")});
-    let here =
-        crate::harness::spec::resolve_room_channel(dir.path(), dir.path(), Some("forge"), None)
-            .unwrap();
+    let here = crate::harness::lanes::in_place_team_name(dir.path(), "forge").to_string();
     let idle = lifecycle("team.idle", cohort(&here));
     assert!(
         !hears_lifecycle(&state, &idle, &|_| None).unwrap(),

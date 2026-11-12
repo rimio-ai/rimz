@@ -26,12 +26,10 @@ pub(super) fn run(
         if rimz::address::is_root_lane_filter(lane, &workspace.project_root) {
             (
                 Some("main"),
-                rimz::harness::spec::resolve_room_channel(
-                    &workspace.project_root,
-                    &workspace.project_root,
-                    name,
-                    None,
-                ),
+                name.map(|team| {
+                    rimz::harness::lanes::in_place_team_name(&workspace.project_root, team)
+                        .to_string()
+                }),
             )
         } else {
             (Some(lane), None)
