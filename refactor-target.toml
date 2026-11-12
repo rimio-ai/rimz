@@ -3615,7 +3615,7 @@ path = "crates/rimz/src/pane"
 # PaneTitle, PaneTitleOrigin and the title's text/lead accessors and builders carry origin metadata (+6).
 # The origin class and lead accessor stay crate-only; all six still cross the pane module boundary.
 # RoomMode and ClientRoomMode carry non-normal client modes without changing pane-view identity (+2).
-# work_pane_behind is the one work-pane-behind-the-sidebar rule `rimz sidebar focus --toggle`, `rimz pane zoom` and the in-pane `q` share (+1).
+# work_pane_behind is the one work-pane-behind-the-sidebar rule `rimz sidebar focus --toggle`, `rimz sidebar split`, `rimz pane zoom` and the in-pane `q` share.
 surface-budget = 53
 
 [[verdict]]
@@ -3636,7 +3636,7 @@ reason = "Off Linux, live message sends and sidebar pens share the attached-clie
 [[verdict]]
 kind = "item"
 key = "pane::work_pane_behind"
-reason = "`rimz sidebar focus --toggle` and `rimz pane zoom` over a pane listing and the sidebar's `q` over the room frame go to the same work pane, preferring the frame's remembered per-tab work pane; the CLI reaches only pub items."
+reason = "`rimz sidebar focus --toggle`, `rimz sidebar split` and `rimz pane zoom` over a pane listing and the sidebar's `q` over the room frame go to the same work pane, preferring the frame's remembered per-tab work pane; the CLI reaches only pub items."
 
 [[module]]
 path = "crates/rimz/src/proc"
