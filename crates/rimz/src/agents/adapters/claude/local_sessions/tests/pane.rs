@@ -34,6 +34,13 @@ fn key(roots: &[PathBuf]) -> DiscoveryKey {
     }
 }
 
+fn pane_key(roots: &[PathBuf]) -> PaneDiscoveryKey {
+    PaneDiscoveryKey {
+        config_dirs: roots.to_vec(),
+        project_dir_name: None,
+    }
+}
+
 fn session(root: &Path, id: &str, created: &str, activity: &str) -> PathBuf {
     let project = root.join("projects/-workspace-project");
     let records = [created, activity]
@@ -103,7 +110,11 @@ fn pane_named_paths_match_full_scan_across_config_root_changes() {
     assert_eq!(full[&(workspace.clone(), OWNER.into())], owner);
     let mut cache = ClaudePaneDiscovery::default();
     assert_eq!(
-        paths(cache.refresh(key.clone(), std::slice::from_ref(&request), now)),
+        paths(cache.refresh(
+            &pane_key(&key.config_dirs),
+            std::slice::from_ref(&request),
+            now
+        )),
         full
     );
 
@@ -112,7 +123,10 @@ fn pane_named_paths_match_full_scan_across_config_root_changes() {
     let after_backstop = now + Duration::from_secs(31);
     let full = paths(ClaudeDiscoverySnapshot::default().refresh(key.clone(), after_backstop));
     assert_eq!(full[&(workspace, OWNER.into())], revision);
-    assert_eq!(paths(cache.refresh(key, &[request], after_backstop)), full);
+    assert_eq!(
+        paths(cache.refresh(&pane_key(&key.config_dirs), &[request], after_backstop)),
+        full
+    );
 }
 
 #[test]
@@ -152,12 +166,12 @@ fn pane_warm_work_is_independent_of_history_for_settled_and_open_windows() {
                     fresh_since: Some("2025-01-01T00:00:00Z".parse().unwrap()),
                 });
             }
-            let key = key(&[temp.path().to_path_buf()]);
+            let key = pane_key(&[temp.path().to_path_buf()]);
             let mut cache = ClaudePaneDiscovery::default();
             let now = Instant::now();
-            cache.refresh(key.clone(), std::slice::from_ref(&demand), now);
+            cache.refresh(&key, std::slice::from_ref(&demand), now);
             let before = testkit::read_counts();
-            let found = cache.refresh(key, &[demand], now);
+            let found = cache.refresh(&key, &[demand], now);
             let after = testkit::read_counts();
             actual.push((
                 history,
@@ -203,15 +217,15 @@ fn pane_window_reopen_keeps_learned_history_until_a_listing_removes_it() {
         "2025-01-02T00:00:00Z",
         "2025-01-02T00:00:00Z",
     );
-    let key = key(&[temp.path().to_path_buf()]);
+    let key = pane_key(&[temp.path().to_path_buf()]);
     let now = Instant::now();
     let mut cache = ClaudePaneDiscovery::default();
     let open = demand(&[], &[], Some("2025-01-02T00:00:00Z"));
-    assert_eq!(ids(&cache.refresh(key.clone(), &[open], now)), [OWNER]);
+    assert_eq!(ids(&cache.refresh(&key, &[open], now)), [OWNER]);
     let settled = demand(&[OWNER], &[], Some("2025-01-02T00:00:00Z"));
     for _ in 0..2 {
         assert_eq!(
-            ids(&cache.refresh(key.clone(), std::slice::from_ref(&settled), now)),
+            ids(&cache.refresh(&key, std::slice::from_ref(&settled), now)),
             [OWNER]
         );
     }
@@ -224,7 +238,7 @@ fn pane_window_reopen_keeps_learned_history_until_a_listing_removes_it() {
     let reopen = demand(&[], &[], Some("2025-01-03T00:00:00Z"));
     let before = testkit::read_counts();
     assert_eq!(
-        ids(&cache.refresh(key.clone(), std::slice::from_ref(&reopen), now)),
+        ids(&cache.refresh(&key, std::slice::from_ref(&reopen), now)),
         [RECENT]
     );
     let after = testkit::read_counts();
@@ -235,7 +249,7 @@ fn pane_window_reopen_keeps_learned_history_until_a_listing_removes_it() {
     );
 
     fs::remove_file(owner).unwrap();
-    cache.refresh(key.clone(), std::slice::from_ref(&reopen), now);
+    cache.refresh(&key, std::slice::from_ref(&reopen), now);
     session(
         temp.path(),
         OWNER,
@@ -243,7 +257,7 @@ fn pane_window_reopen_keeps_learned_history_until_a_listing_removes_it() {
         "2025-01-03T00:00:00Z",
     );
     let before = testkit::read_counts();
-    assert_eq!(ids(&cache.refresh(key, &[reopen], now)), [OWNER, RECENT]);
+    assert_eq!(ids(&cache.refresh(&key, &[reopen], now)), [OWNER, RECENT]);
     assert_eq!(testkit::read_counts().2 - before.2, 2);
 }
 
@@ -299,7 +313,7 @@ fn pane_workspace_changes_keep_the_account_history_warm() {
 #[test]
 fn pane_window_rebinds_cold_and_sees_new_and_completed_files_on_next_pass() {
     let temp = tempfile::tempdir().unwrap();
-    let key = key(&[temp.path().to_path_buf()]);
+    let key = pane_key(&[temp.path().to_path_buf()]);
     let demand = demand(&[], &[], Some("2025-01-02T00:00:00Z"));
     session(
         temp.path(),
@@ -316,15 +330,11 @@ fn pane_window_rebinds_cold_and_sees_new_and_completed_files_on_next_pass() {
     let now = Instant::now();
     let mut cache = ClaudePaneDiscovery::default();
     assert_eq!(
-        ids(&cache.refresh(key.clone(), std::slice::from_ref(&demand), now)),
+        ids(&cache.refresh(&key, std::slice::from_ref(&demand), now)),
         [RECENT]
     );
     assert_eq!(
-        ids(&ClaudePaneDiscovery::default().refresh(
-            key.clone(),
-            std::slice::from_ref(&demand),
-            now
-        )),
+        ids(&ClaudePaneDiscovery::default().refresh(&key, std::slice::from_ref(&demand), now)),
         [RECENT]
     );
     let pending = temp
@@ -332,7 +342,7 @@ fn pane_window_rebinds_cold_and_sees_new_and_completed_files_on_next_pass() {
         .join(format!("projects/-workspace-project/{NEXT}.jsonl"));
     fs::write(&pending, "").unwrap();
     assert_eq!(
-        ids(&cache.refresh(key.clone(), std::slice::from_ref(&demand), now)),
+        ids(&cache.refresh(&key, std::slice::from_ref(&demand), now)),
         [RECENT]
     );
     session(
@@ -342,7 +352,7 @@ fn pane_window_rebinds_cold_and_sees_new_and_completed_files_on_next_pass() {
         "2025-01-03T00:00:00Z",
     );
     assert_eq!(
-        ids(&cache.refresh(key.clone(), std::slice::from_ref(&demand), now)),
+        ids(&cache.refresh(&key, std::slice::from_ref(&demand), now)),
         [RECENT, NEXT]
     );
     fs::OpenOptions::new()
@@ -351,7 +361,7 @@ fn pane_window_rebinds_cold_and_sees_new_and_completed_files_on_next_pass() {
         .unwrap()
         .write_all(b"\n{\"cwd\":\"/workspace/project\",\"timestamp\":\"2025-01-04T00:00:00Z\"}\n")
         .unwrap();
-    let found = cache.refresh(key.clone(), std::slice::from_ref(&demand), now);
+    let found = cache.refresh(&key, std::slice::from_ref(&demand), now);
     assert_eq!(
         found
             .iter()
@@ -365,14 +375,14 @@ fn pane_window_rebinds_cold_and_sees_new_and_completed_files_on_next_pass() {
     let late = "44444444-4444-4444-8444-444444444444";
     let stale = pending.with_file_name(format!("{late}.jsonl"));
     abandoned(&stale);
-    cache.refresh(key.clone(), std::slice::from_ref(&demand), now);
+    cache.refresh(&key, std::slice::from_ref(&demand), now);
     fs::OpenOptions::new()
         .append(true)
         .open(&stale)
         .unwrap()
         .write_all(b"{\"cwd\":\"/workspace/project\",\"timestamp\":\"2025-01-05T00:00:00Z\"}\n")
         .unwrap();
-    let found = cache.refresh(key, &[demand], now + Duration::from_secs(30));
+    let found = cache.refresh(&key, &[demand], now + Duration::from_secs(30));
     assert!(ids(&found).contains(&late.to_owned()));
 }
 
@@ -402,8 +412,11 @@ fn pane_named_sessions_bypass_history_cap_and_deduplicate_by_newest_activity() {
         "2024-01-02T00:00:00Z",
     );
     let demand = demand(&[OWNER], &[OWNER], Some("2025-01-01T00:00:00Z"));
-    let found =
-        ClaudePaneDiscovery::default().refresh(key(&[first, second]), &[demand], Instant::now());
+    let found = ClaudePaneDiscovery::default().refresh(
+        &pane_key(&[first, second]),
+        &[demand],
+        Instant::now(),
+    );
     assert_eq!(ids(&found), [OWNER]);
     assert_eq!(found[0].transcript_path, newest);
 }
@@ -430,7 +443,7 @@ fn pane_window_keeps_newest_creation_cap_and_only_top_level_roots() {
     );
     let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
     let found = ClaudePaneDiscovery::default().refresh(
-        key(&[temp.path().to_path_buf()]),
+        &pane_key(&[temp.path().to_path_buf()]),
         &[demand],
         Instant::now(),
     );
@@ -496,7 +509,7 @@ fn pane_named_sessions_do_not_consume_the_window_cap() {
     );
     let demand = demand(&[], &[OWNER], Some("2025-01-01T00:00:00Z"));
     let found = ClaudePaneDiscovery::default().refresh(
-        key(&[temp.path().to_path_buf()]),
+        &pane_key(&[temp.path().to_path_buf()]),
         &[demand],
         Instant::now(),
     );
@@ -523,12 +536,12 @@ fn pane_shared_bucket_rejections_do_not_add_warm_metadata() {
             "2025-01-01T00:00:00Z",
         );
         let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
-        let key = key(&[temp.path().to_path_buf()]);
+        let key = pane_key(&[temp.path().to_path_buf()]);
         let mut cache = ClaudePaneDiscovery::default();
         let now = Instant::now();
-        cache.refresh(key.clone(), std::slice::from_ref(&demand), now);
+        cache.refresh(&key, std::slice::from_ref(&demand), now);
         let before = testkit::read_counts();
-        let found = cache.refresh(key, &[demand], now);
+        let found = cache.refresh(&key, &[demand], now);
         let after = testkit::read_counts();
         actual.push((
             ids(&found),
@@ -623,8 +636,11 @@ fn pane_window_ranks_a_session_by_its_newest_twin_creation() {
     );
     session(&first, NEXT, "2025-01-02T00:00:00Z", "2025-01-02T00:00:00Z");
     let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
-    let found =
-        ClaudePaneDiscovery::default().refresh(key(&[first, second]), &[demand], Instant::now());
+    let found = ClaudePaneDiscovery::default().refresh(
+        &pane_key(&[first, second]),
+        &[demand],
+        Instant::now(),
+    );
     assert_eq!(found.len(), MAX_DISCOVERED_SESSIONS);
     assert!(found.iter().all(|row| row.session_id != NEXT));
     let owner_row = found.iter().find(|row| row.session_id == OWNER).unwrap();
@@ -643,7 +659,7 @@ fn pane_rows_return_newest_activity_first() {
     }
     let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
     let found = ClaudePaneDiscovery::default().refresh(
-        key(&[temp.path().to_path_buf()]),
+        &pane_key(&[temp.path().to_path_buf()]),
         &[demand],
         Instant::now(),
     );
@@ -670,7 +686,7 @@ fn pane_window_cutoff_tie_keeps_lowest_ids() {
     }
     let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
     let found = ClaudePaneDiscovery::default().refresh(
-        key(&[temp.path().to_path_buf()]),
+        &pane_key(&[temp.path().to_path_buf()]),
         &[demand],
         Instant::now(),
     );
@@ -695,12 +711,12 @@ fn pane_warm_rewrite_rechecks_creation_after_the_read() {
         "2025-01-02T00:00:00Z",
         "2025-01-02T00:00:00Z",
     );
-    let key = key(&[temp.path().to_path_buf()]);
+    let key = pane_key(&[temp.path().to_path_buf()]);
     let demand = demand(&[], &[], Some("2025-01-01T00:00:00Z"));
     let now = Instant::now();
     let mut cache = ClaudePaneDiscovery::default();
     assert_eq!(
-        ids(&cache.refresh(key.clone(), std::slice::from_ref(&demand), now)),
+        ids(&cache.refresh(&key, std::slice::from_ref(&demand), now)),
         [OWNER, NEXT]
     );
     fs::write(
@@ -709,7 +725,7 @@ fn pane_warm_rewrite_rechecks_creation_after_the_read() {
 {"timestamp":"2024-12-31T00:00:00Z","rewritten":true}"#,
     )
     .unwrap();
-    assert_eq!(ids(&cache.refresh(key, &[demand], now)), [NEXT]);
+    assert_eq!(ids(&cache.refresh(&key, &[demand], now)), [NEXT]);
 }
 
 #[test]
@@ -731,7 +747,7 @@ fn pane_cold_shared_memo_reads_each_file_once() {
     });
     let before = testkit::read_counts();
     let found = ClaudePaneDiscovery::default().refresh(
-        key(&[temp.path().to_path_buf()]),
+        &pane_key(&[temp.path().to_path_buf()]),
         &[demand],
         Instant::now(),
     );

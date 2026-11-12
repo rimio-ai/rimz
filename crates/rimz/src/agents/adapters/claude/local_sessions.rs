@@ -84,15 +84,6 @@ struct PaneDiscoveryKey {
     project_dir_name: Option<String>,
 }
 
-impl From<&DiscoveryKey> for PaneDiscoveryKey {
-    fn from(key: &DiscoveryKey) -> Self {
-        Self {
-            config_dirs: key.config_dirs.clone(),
-            project_dir_name: key.project_dir_name.clone(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct CatalogEntry {
     config_dir: PathBuf,
@@ -124,7 +115,6 @@ thread_local! {
 
 #[derive(Default)]
 struct ClaudePaneDiscovery {
-    key: Option<PaneDiscoveryKey>,
     catalog: IncrementalCatalog<Vec<(PathBuf, Timestamp)>, CatalogEntry>,
     // Learned heads survive demand changes until a fresh listing removes them.
     candidates: StableValueCache<CatalogEntry, PaneCandidate>,
@@ -165,13 +155,8 @@ pub(super) fn discover_panes(
     if demand.is_empty() {
         return Vec::new();
     }
-    let workspaces = demand
-        .iter()
-        .map(|demand| demand.workspace.as_path())
-        .collect::<Vec<_>>();
-    let key = DiscoveryKey {
+    let key = PaneDiscoveryKey {
         config_dirs: claude_config_roots(login_env),
-        workspaces: normalized_workspace_inputs(&workspaces),
         project_dir_name: project_directory_name_override(),
     };
     let now = Instant::now();
@@ -179,25 +164,20 @@ pub(super) fn discover_panes(
         let mut cache = cache.borrow_mut();
         cache.retain(|_, (last_used, _)| !full_scan_due(Some(*last_used), now));
         let (last_used, snapshot) = cache
-            .entry(PaneDiscoveryKey::from(&key))
+            .entry(key.clone())
             .or_insert_with(|| (now, ClaudePaneDiscovery::default()));
         *last_used = now;
-        snapshot.refresh(key, demand, now)
+        snapshot.refresh(&key, demand, now)
     })
 }
 
 impl ClaudePaneDiscovery {
     fn refresh(
         &mut self,
-        key: DiscoveryKey,
+        key: &PaneDiscoveryKey,
         demand: &[PaneSessionDemand],
         now: Instant,
     ) -> Vec<LocalSessionObservation> {
-        let account = PaneDiscoveryKey::from(&key);
-        if self.key.as_ref() != Some(&account) {
-            *self = Self::default();
-            self.key = Some(account);
-        }
         let mut checked = HashMap::new();
         let mut observations = Vec::new();
         for demand in demand {
@@ -209,7 +189,7 @@ impl ClaudePaneDiscovery {
                 if Uuid::parse_str(session.id.as_str()).is_err() {
                     continue;
                 }
-                for (config_dir, project) in project_directories(&key, &demand.workspace) {
+                for (config_dir, project) in project_directories(key, &demand.workspace) {
                     let entry = CatalogEntry {
                         config_dir,
                         workspace: demand.workspace.clone(),
@@ -240,7 +220,7 @@ impl ClaudePaneDiscovery {
                 let mut seen = HashSet::new();
                 let mut listed = HashSet::new();
                 for (workspace, _) in &windows {
-                    for (config_dir, project) in project_directories(&key, workspace) {
+                    for (config_dir, project) in project_directories(key, workspace) {
                         if !seen.insert((workspace.clone(), project.clone())) {
                             continue;
                         }
@@ -403,7 +383,7 @@ impl ClaudePaneDiscovery {
     }
 }
 
-fn project_directories(key: &DiscoveryKey, workspace: &Path) -> Vec<(PathBuf, PathBuf)> {
+fn project_directories(key: &PaneDiscoveryKey, workspace: &Path) -> Vec<(PathBuf, PathBuf)> {
     key.config_dirs
         .iter()
         .flat_map(|root| {
