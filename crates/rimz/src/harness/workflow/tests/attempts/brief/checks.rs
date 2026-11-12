@@ -62,7 +62,7 @@ fn sealed_judge_without_summary_uses_a_safe_note_and_lists_stay_ordered() {
     let definition = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen=['cheap','review']\n[checks.cheap]\nrun='true'\non.pass='review'\n[checks.review]\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
     let (_dir, state, record) = setup(definition);
     let paths = state.workflow(&record.id);
-    let spec = crate::harness::workflow::load_run(&paths.home, &record).unwrap();
+    let spec = crate::harness::workflow::load(&paths.home).unwrap();
     let text = crate::harness::workflow::brief::step(&paths, &spec, &record);
     assert!(!text.contains("private-judge.md"), "{text}");
     assert!(text.contains("agent judge"), "{text}");

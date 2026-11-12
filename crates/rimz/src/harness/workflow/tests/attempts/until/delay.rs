@@ -38,7 +38,7 @@ fn a_delay_keeps_the_verdict_without_rechecking_then_closes_once() {
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
     assert!(hops(&spec, &journal, record.held.as_ref()).is_empty());
     record.held.as_mut().unwrap().verdict.as_mut().unwrap().at =
-        Some(Timestamp::now() - Duration::from_secs(1800));
+        Timestamp::now() - Duration::from_secs(1800);
     update(&state, &record);
     host.observed.borrow_mut().turn.as_mut().unwrap().at_rest = false;
     assert_eq!(advance_ok(&state, &record.id, &host), record);
@@ -66,15 +66,7 @@ fn a_delay_keeps_the_verdict_without_rechecking_then_closes_once() {
 #[test]
 fn a_new_turn_discards_a_delay_and_the_next_verdict_gets_its_own_clock() {
     let (_dir, state, record, host) = pending();
-    let first = record
-        .held
-        .as_ref()
-        .unwrap()
-        .verdict
-        .as_ref()
-        .unwrap()
-        .at
-        .unwrap();
+    let first = record.held.as_ref().unwrap().verdict.as_ref().unwrap().at;
     host.observed.borrow_mut().turn = None;
     let restored = advance_ok(&state, &record.id, &host);
     assert!(restored.held.is_none());
@@ -84,12 +76,12 @@ fn a_new_turn_discards_a_delay_and_the_next_verdict_gets_its_own_clock() {
     host.observed.borrow_mut().turn = Some(next_turn);
     let mut next = advance_ok(&state, &record.id, &host);
     let verdict = next.held.as_ref().unwrap().verdict.as_ref().unwrap();
-    assert!(verdict.at.unwrap() >= first);
+    assert!(verdict.at >= first);
     assert_eq!(advance_ok(&state, &record.id, &host), next);
     assert_eq!(evaluations(&state, &next), 2);
     assert_eq!(host.stops.get(), 0);
     next.held.as_mut().unwrap().verdict.as_mut().unwrap().at =
-        Some(Timestamp::now() - Duration::from_secs(1801));
+        Timestamp::now() - Duration::from_secs(1801);
     update(&state, &next);
     let ended = advance_ok(&state, &record.id, &host);
     assert_eq!(ended.state, RunState::Done);
@@ -116,9 +108,7 @@ fn an_overlong_delay_warns_and_closes_the_session_at_once() {
     );
     assert!(ended.held.is_none());
     assert_eq!(host.stops.get(), 1);
-    let spec =
-        super::super::super::super::spec::load_run(&state.workflow(&record.id).home, &record)
-            .unwrap();
+    let spec = super::super::super::super::spec::load(&state.workflow(&record.id).home).unwrap();
     assert!(
         spec.ignored
             .iter()
@@ -163,7 +153,7 @@ fn cancel_deadline_and_provider_exit_interrupt_a_delayed_close() {
             "{ending}"
         );
         if ending == "deadline" {
-            assert_eq!(ended.state, RunState::Parked);
+            assert_eq!(ended.state, RunState::Failed);
             assert!(ended.deadline_fired);
         }
         if ending == "cancel" {
@@ -188,25 +178,6 @@ fn extending_a_run_preserves_its_delayed_verdict() {
 }
 
 #[test]
-fn a_legacy_delay_uses_check_entry_without_resetting_at_each_advance() {
-    let (_dir, state, mut record, host) = pending();
-    record.held.as_mut().unwrap().verdict.as_mut().unwrap().at = None;
-    update(&state, &record);
-    assert_eq!(advance_ok(&state, &record.id, &host), record);
-    record
-        .held
-        .as_mut()
-        .unwrap()
-        .verdict
-        .as_mut()
-        .unwrap()
-        .entered_at = Timestamp::UNIX_EPOCH;
-    update(&state, &record);
-    assert_eq!(advance_ok(&state, &record.id, &host).state, RunState::Done);
-    assert_eq!(host.stops.get(), 1);
-}
-
-#[test]
 fn resuming_at_the_check_without_a_held_session_routes_at_once() {
     let (dir, state, mut record) = setup(&definition());
     record.state = RunState::Parked;
@@ -221,7 +192,7 @@ fn resuming_at_the_check_without_a_held_session_routes_at_once() {
 
 #[test]
 fn a_held_timeout_can_delay_its_close_without_retriggering_the_timeout() {
-    let text = format!("{}on.timeout={{to='@user',delay='30m'}}\n", definition());
+    let text = format!("{}on.timeout={{to='@failed',delay='30m'}}\n", definition());
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
@@ -247,9 +218,9 @@ fn a_held_timeout_can_delay_its_close_without_retriggering_the_timeout() {
     );
     assert_eq!(advance_ok(&state, &record.id, &host), pending);
     assert_eq!(host.stops.get(), 0);
-    pending.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Some(Timestamp::UNIX_EPOCH);
+    pending.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Timestamp::UNIX_EPOCH;
     update(&state, &pending);
     let ended = advance_ok(&state, &record.id, &host);
-    assert_eq!(ended.state, RunState::Parked);
+    assert_eq!(ended.state, RunState::Failed);
     assert_eq!(decisions(&state, &ended)[0]["action"], "closed");
 }

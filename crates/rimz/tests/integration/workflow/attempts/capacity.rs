@@ -103,7 +103,7 @@ fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
             .unwrap();
         let value = show(&room.env, record.id.as_str());
         actual.push((
-            value["record"]["state"] == "done",
+            value["record"]["state"] == "failed",
             events(&value, "attempt")
                 .iter()
                 .any(|row| row["outcome"] == "died"),
@@ -498,7 +498,7 @@ fn capacity_admission_rechecks_bounds_and_windows_and_releases_unused_turns() {
             if closes == "window" {
                 &value["record"]["wait"]["outcome"]
             } else {
-                &value["record"]["park"]["reason"]
+                &value["record"]["input"]["outcome"]
             },
             closes,
             "{value:#}"

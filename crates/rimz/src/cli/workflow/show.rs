@@ -31,7 +31,7 @@ pub(super) fn render(
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
     let journal = records::journal(&run.paths)?;
-    let spec = workflow::load_run(&run.paths.home, &run.record);
+    let spec = workflow::load(&run.paths.home);
     let notes = run
         .record
         .notes
@@ -723,7 +723,7 @@ mod tests {
             "spec_dir":"/spec","spec_digest":"digest","project_root":"/repo",
             "scope":{"kind":"worktree","path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
-            "state":"active","node":"gate","visits":{"build":{"total":1,"keys":[]}},
+            "state":"active","node":"gate","visits":{"build":{"total":1,"outcomes":[]}},
             "visit_grant":0,"deadline_fired":false,"next_seq":3,
             "wait":{"node":"gate","outcome":"pending","first":Timestamp::UNIX_EPOCH,
                 "last":Timestamp::UNIX_EPOCH,"count":2},
@@ -785,7 +785,7 @@ mod tests {
                 waiting.contains(&render::paint(style, "☾ waiting at gate 2m: pending")),
                 waiting.contains(&render::paint(
                     render::palette::muted(),
-                    &format!(" · gives up {clock}, then @user")
+                    &format!(" · gives up {clock}, then @failed")
                 )),
                 with_you.contains(&render::paint(style, "⢿ build is with you")),
                 with_you.contains(&render::paint(

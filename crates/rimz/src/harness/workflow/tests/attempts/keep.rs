@@ -27,13 +27,12 @@ fn keep_launch_note_explains_that_the_pane_will_remain_outside_the_run() {
 fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
     let mut actual = Vec::new();
     for keep in [false, true] {
-        for (cause, cap_park) in [
-            (EndCause::Lifecycle, None),
-            (EndCause::Lifecycle, Some(false)),
-            (EndCause::Lifecycle, Some(true)),
-            (EndCause::Timeout, None),
-            (EndCause::Deadline, None),
-            (EndCause::Cancel, None),
+        for (cause, capped) in [
+            (EndCause::Lifecycle, false),
+            (EndCause::Lifecycle, true),
+            (EndCause::Timeout, false),
+            (EndCause::Deadline, false),
+            (EndCause::Cancel, false),
         ] {
             let definition = STEP.replace("max-visits=2", &format!("max-visits=2\nkeep={keep}"));
             let (_dir, state, record) = setup(&definition);
@@ -42,11 +41,11 @@ fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
             live.attempt.as_mut().unwrap().ending = Some(Ending {
                 cause,
                 outcome: AttemptOutcome::Ended,
-                route: cap_park.map(|park| Verdict {
+                route: capped.then(|| Verdict {
                     node: "build".into(),
                     entered_at: live.entered_at,
-                    at: None,
-                    target: if park { "@user" } else { "@done" }.into(),
+                    at: live.entered_at,
+                    target: "@done".into(),
                     object: json!({"outcome":"cap", "step":"build"}),
                     reason: ParkReason::Cap,
                 }),
@@ -70,10 +69,8 @@ fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
             (false, 1, 0),
             (false, 1, 0),
             (false, 1, 0),
-            (false, 1, 0),
             (true, 0, 1),
             (true, 0, 1),
-            (true, 1, 0),
             (true, 1, 0),
             (true, 1, 0),
             (true, 1, 0),
@@ -82,7 +79,7 @@ fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
 }
 
 #[test]
-fn kept_until_close_detaches_and_cap_parks_still_stop() {
+fn kept_until_close_and_cap_endings_detach() {
     let mut actual = Vec::new();
     for (outcome, cap, edge) in [
         ("done", 2, ""),
@@ -106,7 +103,7 @@ fn kept_until_close_detaches_and_cap_parks_still_stop() {
         [
             (RunState::Done, 0, 1),
             (RunState::Done, 0, 1),
-            (RunState::Parked, 1, 0),
+            (RunState::Failed, 0, 1),
         ]
     );
 }

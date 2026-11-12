@@ -108,7 +108,7 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
             .replace("on.fail='@failed'", "on.fail='@wait'"),
     )
     .unwrap();
-    let id = start_legacy(&env);
+    let id = start(&env);
     let value = until(&env, &id, |v| {
         v["record"]["wait"]["outcome"] == "fail" && v["record"]["attempt"].is_null()
     });
@@ -123,7 +123,7 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
     assert!(!text.contains("said fail"), "{text}");
     fs::create_dir(Path::new(value["dir"].as_str().unwrap()).join("2.check.log")).unwrap();
     success(command(&env, &["workflow", "advance", &id]));
-    let invalid = settled(&env, &id, "parked");
+    let invalid = settled(&env, &id, "failed");
     assert_eq!(invalid["record"]["input"]["outcome"], "invalid");
     assert!(
         invalid["record"]["input"]["reason"]
@@ -144,7 +144,7 @@ fn shell_spawn_errors_are_invalid() {
             .replace("on.fail='@failed'", "on.fail='@wait'"),
     )
     .unwrap();
-    let id = start_legacy(&env);
+    let id = start(&env);
     until(&env, &id, |v| {
         v["record"]["wait"]["outcome"] == "fail" && v["record"]["attempt"].is_null()
     });
@@ -155,7 +155,7 @@ fn shell_spawn_errors_are_invalid() {
         .output()
         .unwrap();
     success(output);
-    let value = settled(&env, &id, "parked");
+    let value = settled(&env, &id, "failed");
     assert_eq!(value["record"]["input"]["outcome"], "invalid");
     assert!(
         value["record"]["input"]["reason"]
@@ -166,7 +166,7 @@ fn shell_spawn_errors_are_invalid() {
 }
 
 #[test]
-fn shell_timeout_kills_the_group_and_routes_or_parks() {
+fn shell_timeout_kills_the_group_and_routes_or_fails() {
     for edge in ["", "on.timeout='report'"] {
         let (env, _) = shell_fixture(
             LIVE,
@@ -174,14 +174,14 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
                 "timeout='1h'\n{edge}\n[checks.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
             ),
         );
-        let id = start_legacy(&env);
+        let id = start(&env);
         let (value, child, descendant) = live_group(&env, &id, "pr");
         let state =
             rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
         expire_check(&env, &value);
         drop(guard);
-        let value = settled(&env, &id, if edge.is_empty() { "parked" } else { "done" });
+        let value = settled(&env, &id, if edge.is_empty() { "failed" } else { "done" });
         let input = if edge.is_empty() {
             value["record"]["input"].clone()
         } else {
@@ -199,7 +199,7 @@ fn shell_timeout_kills_the_group_and_routes_or_parks() {
 #[test]
 fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
     let (env, _) = shell_fixture(LIVE, "");
-    let id = start_legacy(&env);
+    let id = start(&env);
     let (_, child, descendant) = live_group(&env, &id, "pr");
     let deadline = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
     success(command(
@@ -212,7 +212,7 @@ fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
             &format!("deadline={deadline}"),
         ],
     ));
-    let value = settled(&env, &id, "parked");
+    let value = settled(&env, &id, "failed");
     assert_eq!(value["record"]["input"]["outcome"], "deadline");
     assert_group_stopped(child, descendant);
 }

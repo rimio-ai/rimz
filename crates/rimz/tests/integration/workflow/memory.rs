@@ -54,13 +54,13 @@ fn terminal_runs_keep_history_and_overwrite_an_existing_copy() {
 }
 
 #[test]
-fn cancel_keeps_history_but_legacy_runs_without_notes_do_not_write_a_copy() {
-    for legacy in [true, false] {
+fn cancel_keeps_history_but_runs_without_notes_do_not_write_a_copy() {
+    for without_notes in [true, false] {
         let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
         let id = start(&env);
         until(&env, &id, |value| value["record"]["wait"].is_object());
         let kept = history_path(&env, &id);
-        if legacy {
+        if without_notes {
             let state = env.state_path_for(&env.project_root);
             let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
             let paths = state.workflow(&id.parse().unwrap());
@@ -70,10 +70,10 @@ fn cancel_keeps_history_but_legacy_runs_without_notes_do_not_write_a_copy() {
         }
         success(command(&env, &["workflow", "cancel", &id]));
         settled(&env, &id, "canceled");
-        if legacy {
+        if without_notes {
             assert!(
                 !kept.exists(),
-                "legacy runs must not write {}",
+                "runs without notes must not write {}",
                 kept.display()
             );
         } else {

@@ -59,7 +59,7 @@ fn a_hold_preserves_routed_context_and_counts_until_the_reset_case_fires() {
         record.key = Some(Key::String("prior".into()));
         record.input = Some(json!({"outcome":"seed", "key":"prior"}));
         record.visits = serde_json::from_value(json!({
-            "build":{"total":2,"keys":[{"key":"prior","visits":2}]}
+            "build":{"total":2,"outcomes":[{"key":"prior","visits":2}]}
         }))
         .unwrap();
         let original = record.clone();

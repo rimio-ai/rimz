@@ -110,7 +110,7 @@ fn timeout_edges_name_the_missing_clock() {
             because.map(|text| json!(text)).as_ref()
         );
         assert_eq!(actual_mark, mark);
-        assert_eq!(edge["target"], "@user");
+        assert_eq!(edge["target"], "@failed");
     }
 }
 
@@ -222,39 +222,15 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
 }
 
 #[test]
-fn judge_invalid_fires_after_retry_only_with_on_break_defaults() {
-    for (settings, target, source) in [
-        ("", "@user", "default"),
-        ("on.invalid='work'", "work", "explicit"),
-    ] {
-        let mut spec = spec(
+fn judge_invalid_fires_after_retry_and_defaults_to_the_on_break_target() {
+    for (settings, target) in [("", "@failed"), ("on.invalid='work'", "work")] {
+        let spec = spec(
             &format!("agent='claude'\non.ready='work'\n{settings}"),
             "agent='claude'\nthen='gate'",
         );
-        let (edge, mark) = edge(&spec, "gate", "invalid");
-        assert_eq!(
-            edge,
-            json!({
-                "outcome":"invalid", "target":target, "source":source,
-                "fires":"never", "because":"judge-retries"
-            })
-        );
-        assert_eq!(
-            mark,
-            Some("never: a judge retries once, then parks at @user")
-        );
-        assert_eq!(spec.target("gate", "invalid").as_deref(), Some(target));
-        spec.route_defaults = crate::store::workflow::RouteDefaults::OnBreak;
-        let (resolved, mark) = self::edge(&spec, "gate", "invalid");
+        let (resolved, mark) = edge(&spec, "gate", "invalid");
         assert_eq!(resolved["fires"], "yes");
-        assert_eq!(
-            resolved["target"],
-            if settings.is_empty() {
-                "@failed"
-            } else {
-                target
-            }
-        );
+        assert_eq!(resolved["target"], target);
         assert_eq!(mark, None);
     }
 }
@@ -273,7 +249,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
         for node in ["gate", "work"] {
             let (edge, mark) = edge(&spec, node, "deadline");
             assert_eq!(edge["fires"], fires);
-            assert_eq!(edge["target"], target.unwrap_or("@user"));
+            assert_eq!(edge["target"], target.unwrap_or("@failed"));
             assert_eq!(
                 edge["source"],
                 if target.is_some() {
@@ -292,7 +268,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
 fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     let spec = spec(
         "cases=[{when=['pr=merged'],outcome='zeta'},{when=['ci=passed'],outcome='alpha'},{when=['ci=failed'],outcome='zeta'}]\nelse='pending'\non={alpha='@done',zeta='work',pending='@wait'}\ntimeout='1d'",
-        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',cap='@user',capacity='@failed'}",
+        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',cap='@failed',capacity='@failed'}",
     );
     let outcomes = |node| {
         spec.edges(node)
@@ -308,7 +284,7 @@ fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     );
     assert_eq!(
         outcomes("work"),
-        ["then", "asked", "cap", "capacity", "deadline"]
+        ["then", "asked", "invalid", "cap", "capacity", "deadline"]
     );
     let spec = self::spec(
         "run='true'\non={zeta='work',alpha='@done'}",
@@ -329,7 +305,7 @@ scope='worktree'
 start='begin'
 [checks.begin]
 shell='true'
-on={pass='sweep',fail='@user'}
+on={pass='sweep',fail='@failed'}
 [checks.watch]
 cases=[{when=['pr=merged'],outcome='merged'},{when=['ci=failed'],outcome='red'}]
 else='waiting'
@@ -361,11 +337,11 @@ start='evidence'
 on.deadline='report'
 [checks.evidence]
 run='true'
-on={plan='plan',build='build',review='judge',report='report',wait='@wait',broken='@user'}
+on={plan='plan',build='build',review='judge',report='report',wait='@wait',broken='@failed'}
 timeout='1d'
 [checks.judge]
 agent='claude'
-on={build='build',plan='plan',report='report',halt='@user'}
+on={build='build',plan='plan',report='report',halt='@failed'}
 [checks.reported]
 run='true'
 on={complete='@done',halted='@failed',missing='report'}
@@ -577,7 +553,7 @@ fn walk_positions_distinguish_downward_routes_from_returns_and_cross_routes() {
 
 #[test]
 fn validation_rows_follow_the_walk_then_alphabetical_unreachable_nodes() {
-    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[checks.z]\nshell='true'\non={pass='work',fail='@done'}\n[checks.a]\nshell='true'\non={pass='@done',fail='@user'}\n[steps.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3").unwrap();
+    let spec: WorkflowSpec = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[checks.z]\nshell='true'\non={pass='work',fail='@done',invalid='@failed'}\n[checks.a]\nshell='true'\non={pass='@done',fail='@failed',invalid='@failed'}\n[steps.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={cap='@failed'}").unwrap();
     let report = super::super::validate::validate_spec(
         std::path::Path::new("."),
         "example",

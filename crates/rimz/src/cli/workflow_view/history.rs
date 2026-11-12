@@ -232,7 +232,7 @@ pub(in crate::cli) fn write_copy(state: &rimz::StatePaths, record: &RunRecord) -
         return Ok(());
     }
     let paths = state.workflow(&record.id);
-    let spec = workflow::load_run(&paths.home, record)?;
+    let spec = workflow::load(&paths.home)?;
     let journal = records::journal(&paths)?;
     let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Never);
     terminal(record, &spec, &journal, render::prose::Prose::Raw, &mut out)?;

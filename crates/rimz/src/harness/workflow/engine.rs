@@ -258,9 +258,6 @@ fn publish(
     let now = Timestamp::now();
     let mut record = RunRecord {
         version: workflow::VERSION,
-        default_lifecycle: workflow::StepLifecycle::Until,
-        route_defaults: workflow::RouteDefaults::OnBreak,
-        spec_version: spec::SPEC_VERSION,
         break_agents: Vec::new(),
         id,
         origin: start.origin,
@@ -520,7 +517,7 @@ fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
 /// Whether the run entered an agent or message step, read against its sealed graph; a graph
 /// that no longer reads counts any visited step.
 fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
-    match spec::load_run(&paths.home, record) {
+    match spec::load(&paths.home) {
         Ok(spec) => entered_act(&spec, record),
         Err(_) => !record.visits.is_empty(),
     }
@@ -687,7 +684,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     if record.state.is_terminal() {
         return Ok(());
     }
-    let spec = spec::load_run(&paths.home, &record)?;
+    let spec = spec::load(&paths.home)?;
     let mut seen = BTreeSet::new();
     let mut admission = Admission::default();
     loop {
@@ -1289,7 +1286,7 @@ fn prepare(
                 route: Some(Verdict {
                     node: t.record.node.clone(),
                     entered_at: t.record.entered_at,
-                    at: Some(t.now),
+                    at: t.now,
                     target: "@failed".into(),
                     object: json!({"outcome":"died", "reason":error.to_string()}),
                     reason: ParkReason::User,
@@ -1532,7 +1529,7 @@ pub fn cancel(
     if record.state.is_terminal() {
         return Ok(false);
     }
-    let spec = spec::load_run(&paths.home, &record)?;
+    let spec = spec::load(&paths.home)?;
     let mut t = Transition {
         record,
         spec: &spec,
@@ -1640,7 +1637,7 @@ pub fn restart(
     host: &dyn AttemptHost,
 ) -> Result<RunRecord> {
     let paths = state.workflow(id);
-    let spec = spec::load_run(&paths.home, &workflow::load(&paths)?)?;
+    let spec = spec::load(&paths.home)?;
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut t = Transition {
         record: workflow::load(&paths)?,
@@ -1815,7 +1812,7 @@ pub fn resume(
     extend: &[String],
 ) -> Result<RunRecord> {
     let paths = state.workflow(id);
-    let spec = spec::load_run(&paths.home, &workflow::load(&paths)?)?;
+    let spec = spec::load(&paths.home)?;
     let record = {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         let record = workflow::load(&paths)?;
@@ -1909,7 +1906,7 @@ pub fn resume(
                     route: Some(workflow::Verdict {
                         node: t.record.node.clone(),
                         entered_at: t.record.entered_at,
-                        at: Some(t.now),
+                        at: t.now,
                         target,
                         object: t.record.input.clone().unwrap_or_else(|| json!({})),
                         reason: ParkReason::User,
@@ -2186,7 +2183,7 @@ pub(crate) fn hears_lifecycle(
         {
             continue;
         }
-        let spec = spec::load_run(&state.workflow(&record.id).home, &record)?;
+        let spec = spec::load(&state.workflow(&record.id).home)?;
         let Some(step) = spec.steps.get(&attempt.node) else {
             continue;
         };
@@ -2210,7 +2207,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
             if current.state != RunState::Active {
                 return Ok(());
             }
-            let spec = spec::load_run(&paths.home, &current)?;
+            let spec = spec::load(&paths.home)?;
             let woken = match spec.checks.get(&current.node) {
                 Some(check) => check.subscriptions()?.into_iter().any(|subscription| {
                     delivers(

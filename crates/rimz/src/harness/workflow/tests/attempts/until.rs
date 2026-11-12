@@ -94,7 +94,7 @@ pub(super) fn held(record: &RunRecord, verdict: bool) -> RunRecord {
         verdict: verdict.then(|| Verdict {
             node: "pr".into(),
             entered_at: Timestamp::now(),
-            at: None,
+            at: Timestamp::now(),
             target: "@done".into(),
             object: json!({"outcome":"done"}),
             reason: records::ParkReason::User,
@@ -359,7 +359,7 @@ fn end_kept_wait(canceled: bool) {
 #[test]
 fn closing_verdicts_stop_once_and_follow_the_saved_route() {
     let mut actual = Vec::new();
-    for target in ["@done", "@user", "next", "other"] {
+    for target in ["@done", "@failed", "next", "other"] {
         let text = format!(
             "{}\n[steps.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[checks.other]\nshell='true'\non.pass='@done'\n",
             UNTIL.replace("on.done='@done'", &format!("on.done='{target}'"))
@@ -408,7 +408,7 @@ fn closing_verdicts_stop_once_and_follow_the_saved_route() {
         actual,
         vec![
             ("@done", 1, RunState::Done, "pr".into(), 1, true),
-            ("@user", 1, RunState::Parked, "pr".into(), 1, true),
+            ("@failed", 1, RunState::Failed, "pr".into(), 1, true),
             ("next", 1, RunState::Active, "next".into(), 1, true),
             ("other", 1, RunState::Done, "other".into(), 1, true),
         ]
@@ -538,7 +538,7 @@ fn provider_endings_and_deadlines_interrupt_the_held_check() {
                 .as_ref()
                 .is_some_and(|previous| previous.outcome == expected)
                 && ended.held.is_none()
-                && (!deadline || (ended.state == RunState::Parked && ended.deadline_fired)))
+                && (!deadline || (ended.state == RunState::Failed && ended.deadline_fired)))
                 .then_some(expected),
             rows.iter()
                 .map(|row| row["action"].clone())

@@ -176,7 +176,7 @@ fn live_current_node_roles_differ_from_every_node_mark_in_each_set() {
 }
 
 #[test]
-fn legacy_parks_and_needs_fix_holds_use_the_held_mark_and_warning_color() {
+fn parks_and_needs_fix_holds_use_the_held_mark_and_warning_color() {
     let spec: WorkflowSpec = toml::from_str(LAND).unwrap();
     let machine = super::super::super::machine_config();
     let glyph = rimz::theme::theme_glyphs(&machine.theme)(GlyphRole::WorkflowHeld);

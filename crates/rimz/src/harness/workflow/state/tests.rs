@@ -262,7 +262,7 @@ fn deadline_wins_at_ties_and_fires_only_once() {
         t.bound().unwrap(),
         "a deadline reached exactly now must fire"
     );
-    assert_eq!(t.record.park.as_ref().unwrap().reason, ParkReason::Deadline);
+    assert_eq!(t.record.state, crate::store::workflow::RunState::Failed);
     assert!(t.record.deadline_fired);
     assert!(!t.bound().unwrap());
     assert_eq!(

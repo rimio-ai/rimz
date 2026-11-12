@@ -2,9 +2,9 @@ use super::*;
 
 const RAIL: &str = include_str!("../fixtures/reached.toml");
 
-fn setup_rail() -> (tempfile::TempDir, StatePaths, RunRecord) {
-    let (dir, state, record) = setup(RAIL);
-    let spec = super::super::super::spec::parse(RAIL).unwrap();
+fn setup_rail(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
+    let (dir, state, record) = setup(text);
+    let spec = super::super::super::spec::parse(text).unwrap();
     let validation = super::super::super::validate::validate_spec(
         dir.path(),
         "test",
@@ -27,7 +27,7 @@ fn reached_nodes(state: &StatePaths, record: &RunRecord) -> Vec<String> {
 
 #[test]
 fn reached_tracks_engine_entries_and_keeps_them_after_looping_back() {
-    let (_dir, state, record) = setup_rail();
+    let (_dir, state, record) = setup_rail(RAIL);
     let host = FakeHost::new();
     let launched = advance_ok(&state, &record.id, &host);
     assert_eq!(launched.node, "build");
@@ -41,24 +41,25 @@ fn reached_tracks_engine_entries_and_keeps_them_after_looping_back() {
     let looped = answer(&state, &record, &host, json!({"outcome":"again"}));
     assert_eq!(
         (looped.node.as_str(), looped.state),
-        ("build", RunState::Parked)
+        ("build", RunState::Failed)
     );
     assert_eq!(reached_nodes(&state, &looped), all);
 }
 
 #[test]
 fn reached_credits_resume_target_but_not_the_nodes_it_skipped() {
-    let (_dir, state, record) = setup_rail();
+    let (_dir, state, record) =
+        setup_rail(&RAIL.replace("on-break = '@failed'", "on-break = {agent='claude'}"));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
-    let parked = answer(&state, &record, &host, json!({"outcome":"again"}));
-    assert_eq!(
-        (parked.node.as_str(), parked.state),
-        ("build", RunState::Parked)
-    );
-    assert_eq!(reached_nodes(&state, &parked), ["build", "gate"]);
+    let broken = answer(&state, &record, &host, json!({"outcome":"again"}));
+    assert_eq!(broken.node, "@break");
+    assert_eq!(reached_nodes(&state, &broken), ["build", "gate"]);
     resume(&state, &record.id, Some("finish"), &[]).unwrap();
-    let resumed = records::load(&state.workflow(&record.id)).unwrap();
+    let resumed = advance_ok(&state, &record.id, &host);
     assert_eq!(resumed.node, "finish");
-    assert_eq!(reached_nodes(&state, &resumed), ["build", "finish", "gate"]);
+    assert_eq!(
+        reached_nodes(&state, &resumed),
+        ["@break", "build", "finish", "gate"]
+    );
 }

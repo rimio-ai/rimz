@@ -20,7 +20,7 @@ fn kept_waits_merge_the_saved_answers_instant_instead_of_the_later_advance() {
         };
         pending.held.as_mut().unwrap().verdict = saved_verdict.clone();
         let verdict = pending.held.as_mut().unwrap().verdict.as_mut().unwrap();
-        verdict.at = Some(at);
+        verdict.at = at;
         verdict.target = "@wait".into();
         verdict.object = json!({"outcome":"pending"});
         update(&state, &pending);
@@ -31,45 +31,6 @@ fn kept_waits_merge_the_saved_answers_instant_instead_of_the_later_advance() {
             (first, at, index as u64 + 1)
         );
     }
-}
-
-#[test]
-fn a_legacy_held_verdict_without_an_answer_instant_uses_the_merge_instant() {
-    let (_dir, state, record) = setup(UNTIL);
-    let host = FakeHost::new();
-    let live = advance_ok(&state, &record.id, &host);
-    host.observed.borrow_mut().turn = Some(turn());
-    let mut pending = held(&live, true);
-    let verdict = pending.held.as_mut().unwrap().verdict.as_mut().unwrap();
-    verdict.at = Some(Timestamp::UNIX_EPOCH);
-    verdict.target = "@wait".into();
-    verdict.object = json!({"outcome":"pending"});
-    let mut saved = serde_json::to_value(pending).unwrap();
-    saved["held"]["verdict"]
-        .as_object_mut()
-        .unwrap()
-        .remove("at");
-    let pending: RunRecord = serde_json::from_value(saved).unwrap();
-    assert!(
-        pending
-            .held
-            .as_ref()
-            .unwrap()
-            .verdict
-            .as_ref()
-            .unwrap()
-            .at
-            .is_none()
-    );
-    update(&state, &pending);
-    let kept = advance_ok(&state, &record.id, &host);
-    let wait = kept.wait.as_ref().unwrap();
-    let merged_at: Timestamp =
-        serde_json::from_value(decisions(&state, &kept)[0]["at"].clone()).unwrap();
-    assert_eq!(
-        (wait.first, wait.last, wait.count),
-        (merged_at, merged_at, 1)
-    );
 }
 
 #[test]
@@ -183,7 +144,7 @@ fn a_held_checks_timeout_closes_through_the_same_verdict_gate() {
     host.observed.borrow_mut().turn = Some(turn());
     let ended = advance_ok(&state, &record.id, &host);
     assert_eq!(host.stops.get(), 1);
-    assert_eq!(ended.state, RunState::Parked);
+    assert_eq!(ended.state, RunState::Failed);
     let rows = decisions(&state, &ended);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["action"], "closed");
@@ -269,7 +230,7 @@ fn judge(limited: bool) {
         ),
         (
             RunState::Active,
-            Some(if limited { "build" } else { "@user" }.into())
+            Some(if limited { "build" } else { "@failed" }.into())
         )
     );
     if t.record.held.is_some() {
@@ -281,7 +242,7 @@ fn judge(limited: bool) {
             if limited {
                 RunState::Active
             } else {
-                RunState::Parked
+                RunState::Failed
             }
         );
         assert_eq!(host.stops.get(), usize::from(!limited));

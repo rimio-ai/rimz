@@ -94,8 +94,8 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
     );
     for (node, outcome, target) in [
         ("pr", "pass", "build"),
-        ("pr", "timeout", "@user"),
-        ("pr", "invalid", "@user"),
+        ("pr", "timeout", "@failed"),
+        ("pr", "invalid", "@failed"),
         ("pr", "hold", "@wait"),
         ("condition", "unknown", "@wait"),
         ("build", "ended", "pr"),
@@ -103,11 +103,10 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
         ("build", "timeout", "pr"),
         ("build", "canceled", "pr"),
         ("build", "limited", "pr"),
-        ("build", "asked", "@user"),
-        ("build", "cap", "@user"),
+        ("build", "cap", "@failed"),
         ("build", "capacity", "@failed"),
-        ("pr", "deadline", "@user"),
-        ("build", "deadline", "@user"),
+        ("pr", "deadline", "@failed"),
+        ("build", "deadline", "@failed"),
     ] {
         assert_eq!(
             spec.target(node, outcome).as_deref(),
@@ -118,6 +117,7 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
     assert_eq!(spec.target("missing", "pass"), None);
     assert_eq!(spec.target("pr", "missing"), None);
     assert_eq!(spec.target("build", "missing"), None);
+    assert_eq!(spec.target("build", "asked"), None);
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn edge_lookup_keeps_explicit_overrides() {
 fn visit_bounds_keep_total_first_typed_keys_and_grants() {
     let spec = spec();
     let visits: StepVisits = serde_json::from_value(json!({
-        "total":4, "keys":[{"key":42,"visits":2},{"key":"42","visits":1}]
+        "total":4, "outcomes":[{"key":42,"visits":2},{"key":"42","visits":1}]
     }))
     .unwrap();
     let step = &spec.steps["build"];
@@ -220,7 +220,7 @@ fn hops_count_invalid_evaluation_and_route_once() {
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
-        [route("invalid", "@user", 1)]
+        [route("invalid", "@failed", 1)]
     );
 }
 
@@ -241,7 +241,7 @@ fn hops_do_not_count_an_abandoned_check_as_a_routing_decision() {
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
-        [route("timeout", "@user", 1)],
+        [route("timeout", "@failed", 1)],
     );
 }
 
@@ -291,7 +291,7 @@ fn hops_keep_engine_caps_and_parks_separate() {
             .map(detail)
             .collect::<Vec<_>>(),
         [
-            route("cap", "@user", 1),
+            route("cap", "@failed", 1),
             (
                 HopKind::Park {
                     reason: ParkReason::Cap

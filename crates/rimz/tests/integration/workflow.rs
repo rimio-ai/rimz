@@ -164,7 +164,11 @@ fn success(output: std::process::Output) -> String {
 }
 
 fn start(env: &Env) -> String {
-    let mut cmd = env.rimz();
+    start_with(|| env.rimz())
+}
+
+fn start_with(command: impl Fn() -> std::process::Command) -> String {
+    let mut cmd = command();
     cmd.args(["workflow", "run", "review", "--prompt", "Review this"]);
     let output = success(cmd.output().unwrap());
     output
@@ -172,80 +176,6 @@ fn start(env: &Env) -> String {
         .find(|s| s.starts_with("wf_"))
         .expect("run receipt must include its id")
         .into()
-}
-
-fn start_legacy(env: &Env) -> String {
-    start_legacy_with(env, || env.rimz())
-}
-
-fn start_legacy_with(env: &Env, command: impl Fn() -> std::process::Command) -> String {
-    use rimz::store::workflow as records;
-    use sha2::Digest as _;
-
-    let state = env.state_path_for(&env.project_root);
-    let dir = env.rimz_home().join("workflows/review");
-    let text = fs::read_to_string(dir.join("workflow.toml")).unwrap();
-    let spec: rimz::harness::workflow::WorkflowSpec = toml::from_str(&text).unwrap();
-    let id = rimz::ids::WorkflowRunId::new();
-    let now = jiff::Timestamp::now();
-    let value = json!({
-        "version":rimz::store::workflow::VERSION, "default_lifecycle":"until", "id":id, "workflow":"review",
-        "spec_dir":dir, "spec_digest":hex::encode(sha2::Sha256::digest(text.as_bytes())),
-        "prompt":"Review this", "project_root":env.project_root,
-        "scope":{"kind":spec.workflow.scope,"path":env.project_root},
-        "created_at":now, "state":"active", "node":spec.workflow.start, "entered_at":now,
-        "deadline":spec.workflow.deadline.map(|raw| raw.parse::<jiff::Timestamp>().unwrap()),
-        "deadline_fired":false, "next_seq":1, "visits":{}, "visit_grant":0,
-    });
-    {
-        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-        records::initialize(
-            &state,
-            &serde_json::from_value(value.clone()).unwrap(),
-            text.as_bytes(),
-            &guard,
-        )
-        .unwrap();
-        rimz::disk::atomic::write_temp_then_rename(&state.workflow(&id).record, &value).unwrap();
-    }
-    let program = command().get_program().to_owned();
-    rimz::child_process::spawn_detached_reaped(
-        program,
-        |advance| {
-            use std::os::unix::process::CommandExt;
-
-            let configured = command();
-            advance.args(configured.get_args());
-            for (key, value) in configured.get_envs() {
-                if let Some(value) = value {
-                    advance.env(key, value);
-                } else {
-                    advance.env_remove(key);
-                }
-            }
-            advance
-                .current_dir(configured.get_current_dir().unwrap())
-                .process_group(0);
-            advance
-                .args(["workflow", "advance", id.as_str()])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            Ok(())
-        },
-        "legacy workflow advance",
-    )
-    .unwrap();
-    id.to_string()
-}
-
-fn keep_legacy_routes(env: &Env, id: &str) {
-    let state = env.state_path_for(&env.project_root);
-    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    let path = state.workflow(&id.parse().unwrap()).record;
-    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    value.as_object_mut().unwrap().remove("route_defaults");
-    rimz::disk::atomic::write_temp_then_rename(&path, &value).unwrap();
 }
 
 fn show(env: &Env, id: &str) -> Value {
@@ -355,16 +285,20 @@ fn assists_once(env: &Env, key: &str, count: u64) -> Value {
 }
 
 #[test]
-fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
-    let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='@user'\n"),
+fn workflow_accounting_tracks_routes_and_terminal_states() {
+    let (env, dir) = fixture(
+        &format!(
+            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='gate'\n{}",
+            WAIT.replace("[checks.pr]", "[checks.gate]")
+                .replace("checks/pr.sh", "checks/gate.sh")
+        ),
         &evaluation_script("ok"),
     );
-    let id = start_legacy(&env);
-    settled(&env, &id, "parked");
-    let stats = assists_once(&env, "workflow_parks", 1);
+    fs::write(dir.join("checks/gate.sh"), PENDING).unwrap();
+    let id = start(&env);
+    until(&env, &id, |value| value["record"]["wait"].is_object());
+    let stats = assists_once(&env, "workflow_routes", 1);
     assert_eq!(stats["rollup"]["workflow_routes"], 1);
-    assert_eq!(stats["rollup"]["workflow_parks"], 1);
     let routes: Vec<_> = stats["events"]
         .as_array()
         .unwrap()
@@ -374,7 +308,7 @@ fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0]["run"], id);
     assert_eq!(routes[0]["node"], "pr");
-    assert_eq!(routes[0]["to"], "@user");
+    assert_eq!(routes[0]["to"], "gate");
     success(command(&env, &["workflow", "cancel", &id]));
     let stats = assists(&env);
     assert_eq!(stats["rollup"]["workflow_ends"], 1);
@@ -481,9 +415,15 @@ fn list_skips_unreadable_homes_but_named_commands_fail() {
     let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
     assert_eq!(rows[0]["id"], id);
-    for bad_id in bad_ids {
-        for verb in ["show", "advance", "cancel", "resume"] {
+    let state = env.state_path_for(&env.project_root);
+    for (index, bad_id) in bad_ids.iter().enumerate() {
+        for verb in ["show", "advance", "resume", "cancel"] {
             let output = command(&env, &["workflow", verb, bad_id.as_str()]);
+            if verb == "cancel" && index == 2 {
+                success(output);
+                assert!(!state.workflow(bad_id).home.exists(), "{bad_id}");
+                continue;
+            }
             assert_eq!(output.status.code(), Some(1), "{verb} {bad_id}");
             assert!(String::from_utf8_lossy(&output.stderr).contains("record.json"));
         }
@@ -878,16 +818,19 @@ fn malformed_and_unrouted_objects_are_invalid() {
 }
 
 #[test]
-fn invalid_defaults_park_and_deleted_script_is_invalid() {
+fn invalid_defaults_fail_and_deleted_script_is_invalid() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
-    let id = start_legacy(&env);
+    let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     fs::remove_file(dir.join("checks/pr.sh")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
-    let value = settled(&env, &id, "parked");
-    assert_eq!(value["record"]["park"]["reason"], "invalid");
+    let value = settled(&env, &id, "failed");
+    assert_eq!(
+        events(&value, "route").last().unwrap()["outcome"],
+        "invalid"
+    );
     assert!(
-        value["record"]["park"]["text"]
+        events(&value, "evaluation").last().unwrap()["object"]["reason"]
             .as_str()
             .unwrap()
             .contains("pr.sh")
@@ -900,14 +843,13 @@ fn failed_script(body: &str) -> Value {
         body,
     );
     fs::rename(dir.join("checks/pr.sh"), dir.join("checks/broken.sh")).unwrap();
-    let id = start_legacy(&env);
-    settled(&env, &id, "parked")
+    let id = start(&env);
+    settled(&env, &id, "failed")
 }
 
 #[test]
 fn invalid_script_exit_names_its_definition_path_and_code() {
     let value = failed_script("exit 7\n");
-    assert_eq!(value["record"]["park"]["text"], "checks/broken.sh exited 7");
     assert_eq!(
         events(&value, "evaluation")[0]["object"]["reason"],
         "checks/broken.sh exited 7"
@@ -917,10 +859,6 @@ fn invalid_script_exit_names_its_definition_path_and_code() {
 #[test]
 fn invalid_script_signal_names_the_signal() {
     let value = failed_script("kill -TERM \"$$\"\n");
-    assert_eq!(
-        value["record"]["park"]["text"],
-        "checks/broken.sh killed by SIGTERM"
-    );
     assert_eq!(
         events(&value, "evaluation")[0]["object"]["reason"],
         "checks/broken.sh killed by SIGTERM"
@@ -1001,7 +939,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
 }
 
 #[test]
-fn timeout_kills_script_and_routes_or_parks() {
+fn timeout_kills_script_and_routes_or_fails() {
     for edge in ["", "on.timeout = 'report'"] {
         let spec = format!(
             "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n{edge}\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
@@ -1011,11 +949,11 @@ fn timeout_kills_script_and_routes_or_parks() {
             "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
         );
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
-        let id = start_legacy(&env);
+        let id = start(&env);
         let value = until(&env, &id, |v| script_pid(v).is_some());
         let pid = script_pid(&value).unwrap();
         backdate_check(&env, &value);
-        let value = settled(&env, &id, if edge.is_empty() { "parked" } else { "done" });
+        let value = settled(&env, &id, if edge.is_empty() { "failed" } else { "done" });
         let input = if edge.is_empty() {
             value["record"]["input"].clone()
         } else {
@@ -1051,7 +989,7 @@ fn timeout_before_script_spawn_records_no_digests() {
     let socket = env.runtime_root.join("context-gate.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let id = start_legacy_with(&env, || {
+    let id = start_with(|| {
         let mut command = env.rimz();
         command.env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket);
         command
@@ -1071,7 +1009,7 @@ fn timeout_before_script_spawn_records_no_digests() {
     let value = show(&env, id);
     backdate_check(&env, &value);
     gate.write_all(&[1]).unwrap();
-    let value = settled(&env, id, "parked");
+    let value = settled(&env, id, "failed");
     let evaluations = events(&value, "evaluation");
     assert_eq!(evaluations.len(), 1, "{evaluations:#?}");
     assert_eq!(evaluations[0]["outcome"], "timeout");
@@ -1081,17 +1019,19 @@ fn timeout_before_script_spawn_records_no_digests() {
             .join("script.pid")
             .exists()
     );
-    assert_eq!(value["record"]["park"]["reason"], "timeout");
+    assert_eq!(events(&value, "route")[0]["outcome"], "timeout");
 }
 
 #[test]
 fn waiting_timeout_and_live_deadline_use_original_clock() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start_legacy(&env);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     backdate_check(&env, &value);
     success(command(&env, &["workflow", "advance", &id]));
-    assert_eq!(show(&env, &id)["record"]["park"]["reason"], "timeout");
+    let value = show(&env, &id);
+    assert_eq!(value["record"]["state"], "failed");
+    assert_eq!(events(&value, "route")[0]["outcome"], "timeout");
     let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
     let (env, dir) = fixture(spec, "exec sleep 60");
     fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
@@ -1236,7 +1176,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
     use std::io::Write;
     use std::os::unix::net::UnixListener;
 
-    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'pr'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
     let (env, _) = fixture(
         spec,
         "while ! test -f \"$RIMZ_WORKFLOW_DIR/consume\"; do sleep 0.01; done\ndd if=\"$RIMZ_WORKFLOW_DIR/context.json\" of=\"$RIMZ_WORKFLOW_DIR/consumed.tmp\" 2>/dev/null\nmv \"$RIMZ_WORKFLOW_DIR/consumed.tmp\" \"$RIMZ_WORKFLOW_DIR/consumed.json\"\nexec sleep 60",
@@ -1244,7 +1184,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
     let socket = env.runtime_root.join("context-gate.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let id = start_legacy_with(&env, || {
+    let id = start_with(|| {
         let mut command = env.rimz();
         command.env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket);
         command
@@ -1272,17 +1212,6 @@ fn stale_host_cannot_overwrite_resumed_context() {
             id,
             "--extend",
             "deadline=2000-01-01T00:00:00Z",
-        ],
-    ));
-    settled(&env, id, "parked");
-    success(command(
-        &env,
-        &[
-            "workflow",
-            "resume",
-            id,
-            "--extend",
-            "deadline=2099-01-01T00:00:00Z",
         ],
     ));
     let value = until(&env, id, |v| {
@@ -1416,7 +1345,6 @@ fn human_show_wait_and_journal_are_readable() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &pending);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
-    keep_legacy_routes(&env, &id);
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
         text.starts_with("review#project\n☾ waiting at pr"),
@@ -1488,9 +1416,9 @@ fn human_show_wait_and_journal_are_readable() {
     );
     fs::write(dir.join("checks/pr.sh"), "printf 'not-json'").unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
-    settled(&env, &id, "parked");
-    let parked = success(command(&env, &["workflow", "show", &id]));
-    assert!(parked.contains("parked invalid"), "{parked}");
+    settled(&env, &id, "failed");
+    let failed = success(command(&env, &["workflow", "show", &id]));
+    assert!(failed.contains("! failed"), "{failed}");
     let history = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(history.contains("pr wake review.ready"), "{history}");
     assert!(
@@ -1498,43 +1426,16 @@ fn human_show_wait_and_journal_are_readable() {
         "{history}"
     );
     assert_eq!(
-        history.matches("pr said invalid → @user").count(),
+        history.matches("pr said invalid → @failed").count(),
         1,
         "{history}"
     );
     assert!(!history.contains("pr route invalid"), "{history}");
     let value = show(&env, &id);
-    let reason = value["record"]["park"]["text"].as_str().unwrap();
+    let evaluation = events(&value, "evaluation").last().unwrap().clone();
+    let reason = evaluation["object"]["reason"].as_str().unwrap();
     assert_eq!(history.matches(reason).count(), 1, "{history}");
-    assert!(history.ends_with("pr park invalid\n"), "{history}");
-    assert_eq!(parked.matches(reason).count(), 1, "{parked}");
     assert_eq!(value["record"]["prompt"], "Review this");
-    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
-    success(command(&env, &["workflow", "resume", &id]));
-    settled(&env, &id, "done");
-    let terminal = success(command(&env, &["workflow", "show", &id]));
-    assert!(
-        terminal.lines().nth(1).unwrap().contains("done"),
-        "{terminal}"
-    );
-}
-
-#[test]
-fn history_park_omits_text_only_after_a_routed_answer() {
-    let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.review='@user'\n"),
-        "printf '%s\\n' '{\"outcome\":\"review\",\"reason\":\"Choose the next move\"}'\n",
-    );
-    let id = start_legacy(&env);
-    settled(&env, &id, "parked");
-    let history = success(command(&env, &["workflow", "show", &id, "--history"]));
-    assert!(history.contains("pr said review → @user\n"), "{history}");
-    assert_eq!(
-        history.matches("Choose the next move").count(),
-        1,
-        "{history}"
-    );
-    assert!(history.ends_with("pr park user\n"), "{history}");
 }
 
 #[test]

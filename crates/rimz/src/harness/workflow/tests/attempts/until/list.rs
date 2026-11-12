@@ -27,10 +27,10 @@ fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
 fn sealed_then_accepts_a_name_or_a_list_with_the_same_entry() {
     let (_dir, state, record) = setup(UNTIL);
     let paths = state.workflow(&record.id);
-    let scalar = crate::harness::workflow::load_run(&paths.home, &record).unwrap();
+    let scalar = crate::harness::workflow::load(&paths.home).unwrap();
     assert_eq!(scalar.engine_target("build", "then"), "pr");
     fs::write(&paths.spec, definition()).unwrap();
-    let listed = crate::harness::workflow::load_run(&paths.home, &record).unwrap();
+    let listed = crate::harness::workflow::load(&paths.home).unwrap();
     assert_eq!(listed.engine_target("build", "then"), "pr");
 }
 
@@ -130,7 +130,7 @@ fn listed_second_check_waits_resamples_and_uses_its_own_close_delay() {
         assert_eq!(close_after(&spec, &delayed).unwrap().1, "@done");
         assert_eq!(host.stops.get(), 0);
         delayed.held.as_mut().unwrap().verdict.as_mut().unwrap().at =
-            Some(Timestamp::now() - Duration::from_secs(1801));
+            Timestamp::now() - Duration::from_secs(1801);
         update(&state, &delayed);
         assert_eq!(advance_ok(&state, &live.id, &host).state, RunState::Done);
         assert_eq!(decisions(&state, &live).last().unwrap()["check"], "review");

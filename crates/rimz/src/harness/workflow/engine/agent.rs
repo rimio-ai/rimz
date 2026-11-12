@@ -56,7 +56,7 @@ pub(super) fn compose(
 }
 
 fn break_prompt(record: &RunRecord, paths: &WorkflowPaths) -> Result<String> {
-    let spec = spec::load_run(&paths.home, record)?;
+    let spec = spec::load(&paths.home)?;
     let input = record.input.as_ref();
     let from = input
         .and_then(|input| input["from"].as_str())
@@ -185,16 +185,13 @@ pub(super) fn fold_limited(observed: &mut Observed, outcome: AttemptOutcome) {
 }
 
 /// Fold blocking evidence into one hold, crediting overlapping pauses only once.
-/// Legacy open asks supply their start until the shared hold has been published.
 pub(super) fn hold(
     attempt: &mut workflow::LiveAttempt,
     ask: Option<&workflow::Asking>,
     stopped: Option<&super::super::Stopped>,
     now: Timestamp,
 ) -> bool {
-    let previous = attempt
-        .held_since
-        .or_else(|| attempt.asking.as_ref().map(|asking| asking.since));
+    let previous = attempt.held_since;
     let asking = ask.map(|seen| workflow::Asking {
         since: match &attempt.asking {
             Some(open) => open.since,
@@ -497,26 +494,17 @@ pub(super) fn launch(
                     Ending {
                         outcome: failure.outcome,
                         cause: EndCause::Lifecycle,
-                        route: (if spec.route_defaults == workflow::RouteDefaults::OnBreak {
-                            failure.outcome == AttemptOutcome::Died
-                        } else {
-                            record
-                                .restart
-                                .as_ref()
-                                .is_some_and(|restart| restart.resume.is_some())
-                        })
-                        .then(|| workflow::Verdict {
-                            node: record.node.clone(),
-                            entered_at: record.entered_at,
-                            at: Some(t.now),
-                            target: if spec.route_defaults == workflow::RouteDefaults::Park {
-                                "@user".into()
-                            } else {
-                                spec.engine_target(&record.node, "invalid")
-                            },
-                            object: t
-                                .engine_object(json!({"outcome":"died", "reason":failure.reason})),
-                            reason: workflow::ParkReason::Invalid,
+                        route: (failure.outcome == AttemptOutcome::Died).then(|| {
+                            workflow::Verdict {
+                                node: record.node.clone(),
+                                entered_at: record.entered_at,
+                                at: t.now,
+                                target: spec.engine_target(&record.node, "invalid"),
+                                object: t.engine_object(
+                                    json!({"outcome":"died", "reason":failure.reason}),
+                                ),
+                                reason: workflow::ParkReason::Invalid,
+                            }
                         }),
                         reason: None,
                     },
@@ -538,11 +526,7 @@ fn detaches(spec: &WorkflowSpec, attempt: &LiveAttempt) -> bool {
         return true;
     }
     let ending = attempt.ending.as_ref().expect("published agent ending");
-    spec.steps[&attempt.node].keep.unwrap_or(false)
-        && ending.cause == EndCause::Lifecycle
-        && ending.route.as_ref().is_none_or(|route| {
-            route.reason != workflow::ParkReason::Cap || route.target != "@user"
-        })
+    spec.steps[&attempt.node].keep.unwrap_or(false) && ending.cause == EndCause::Lifecycle
 }
 
 pub(super) fn finish(

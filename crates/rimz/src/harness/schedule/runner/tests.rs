@@ -2057,7 +2057,7 @@ fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
         "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
         "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
         "entered_at":"2000-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
-        "deadline_fired":false, "next_seq":1, "spec_version":1
+        "deadline_fired":false, "next_seq":1
     }))
     .unwrap();
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
@@ -2094,7 +2094,7 @@ fn a_capped_fire_reads_the_budget_only_after_a_concurrent_fire_publishes_its_run
             "scope":{"kind":"worktree","path":root_path}, "project_root":root_path,
             "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
             "entered_at":"2000-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
-            "deadline_fired":false, "next_seq":1, "spec_version":1
+            "deadline_fired":false, "next_seq":1
         }))
         .unwrap();
         let guard =

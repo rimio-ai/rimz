@@ -107,7 +107,7 @@ fn command_step_cycles_stop_at_total_and_outcome_caps_without_consuming_a_sequen
         let result = advance(&state, &record.id, &host);
         let ended = records::load(&state.workflow(&record.id)).unwrap();
         let valid = result.is_ok()
-            && ended.state == RunState::Parked
+            && ended.state == RunState::Failed
             && ended
                 .visits
                 .get("build")

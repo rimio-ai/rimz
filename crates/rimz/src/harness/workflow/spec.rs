@@ -11,7 +11,7 @@ use crate::harness::signal::{
 };
 use crate::harness::throttle::Limit;
 use crate::harness::when::WhenExpr;
-use crate::store::workflow::{Key, RouteDefaults, RunRecord, StepLifecycle, StepVisits};
+use crate::store::workflow::{Key, RunRecord, StepLifecycle, StepVisits};
 
 pub use crate::store::workflow::ScopeKind;
 
@@ -32,24 +32,12 @@ pub(super) fn issue(path: &str, message: impl Display) -> Issue {
     }
 }
 
-/// The definition rules a new run is sealed under. A record without the key was sealed before
-/// version 1, which added step launch overrides, `on.failed`, a turn step's terminal `then`,
-/// message session pins, default routes, and honoured `timeout` on until steps.
-pub(super) const SPEC_VERSION: u32 = 1;
-
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct WorkflowSpec {
     #[serde(skip)]
     #[schemars(skip)]
-    pub route_defaults: RouteDefaults,
-    #[serde(skip)]
-    #[schemars(skip)]
     pub ignored: Vec<Issue>,
-    /// The definition rules this spec was read under (`SPEC_VERSION`, or a sealed run's own).
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub spec_version: u32,
     pub workflow: Header,
     #[serde(default)]
     pub checks: BTreeMap<String, Check>,
@@ -59,7 +47,7 @@ pub struct WorkflowSpec {
 
 impl WorkflowSpec {
     pub(super) fn is_break(&self, node: &str) -> bool {
-        node == "@break" && self.route_defaults == RouteDefaults::OnBreak
+        node == "@break"
     }
 
     /// `Some(empty)` demands checkout facts; `None` means no condition, wake or subscription needs
@@ -793,47 +781,13 @@ pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
     parse(&text)
 }
 
-pub fn load_run(dir: &Path, record: &RunRecord) -> Result<WorkflowSpec, SpecErr> {
-    let path = crate::disk::paths::workflow_spec_file(dir);
-    let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io { path, source })?;
-    parse_run(&text, record)
-}
-
-pub(crate) fn parse_run(text: &str, record: &RunRecord) -> Result<WorkflowSpec, SpecErr> {
-    parse_with_defaults(
-        text,
-        record.default_lifecycle,
-        record.route_defaults,
-        record.spec_version,
-    )
-}
-
 pub(crate) fn parse(text: &str) -> Result<WorkflowSpec, SpecErr> {
-    parse_with_defaults(
-        text,
-        StepLifecycle::Until,
-        RouteDefaults::OnBreak,
-        SPEC_VERSION,
-    )
-}
-
-fn parse_with_defaults(
-    text: &str,
-    default: StepLifecycle,
-    routes: RouteDefaults,
-    version: u32,
-) -> Result<WorkflowSpec, SpecErr> {
     let value: toml::Value = toml::from_str(text).map_err(|source| SpecErr::Toml {
         path: "workflow".into(),
         source,
     })?;
-    if routes == RouteDefaults::OnBreak {
-        reject_reserved_targets(&value)?;
-    }
-    let mut spec = tolerant::parse(value, default, routes, version)?;
-    if routes == RouteDefaults::Park {
-        return Ok(spec);
-    }
+    reject_reserved_targets(&value)?;
+    let mut spec = tolerant::parse(value)?;
     for (kind, exists) in [
         ("checks", spec.checks.contains_key("@break")),
         ("steps", spec.steps.contains_key("@break")),

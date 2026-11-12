@@ -34,11 +34,11 @@ pub use inspect::{
 };
 pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
+pub(crate) use spec::parse;
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, OutcomeCap, Route,
-    ScopeKind, SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, load_run, schema,
+    ScopeKind, SpecErr, Step, StepEdges, StepKind, WorkflowSpec, load, schema,
 };
-pub(crate) use spec::{parse, parse_run};
 pub use validate::{NodeRow, Validation, validate};
 
 pub struct ScopeRoots {

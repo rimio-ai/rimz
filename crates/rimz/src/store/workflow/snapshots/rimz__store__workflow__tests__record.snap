@@ -23,7 +23,6 @@ expression: value
   "created_at": "2026-01-01T00:00:00Z",
   "deadline": null,
   "deadline_fired": false,
-  "default_lifecycle": "turn",
   "entered_at": "2026-01-01T00:00:00Z",
   "id": "wf_0190b8172c0070008000000000000001",
   "input": null,
@@ -59,14 +58,12 @@ expression: value
   "project_root": "/project",
   "prompt": "Review this PR",
   "recheck_at": null,
-  "route_defaults": "park",
   "scope": {
     "kind": "worktree",
     "path": "/project"
   },
   "spec_digest": "abc",
   "spec_dir": "/definitions/review",
-  "spec_version": 0,
   "state": "active",
   "task": null,
   "terminal_at": null,

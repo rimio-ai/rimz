@@ -1531,15 +1531,6 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
     let records = records::list(&paths).unwrap();
     assert_eq!(records.len(), 1);
     let id = records[0].id.to_string();
-    keep_legacy_routes(&room.env, &id);
-    let sealed = paths.workflow(&records[0].id).spec;
-    fs::write(
-        &sealed,
-        fs::read_to_string(&sealed)
-            .unwrap()
-            .replace("then = 'after'", "then = 'after'\non.asked = '@user'"),
-    )
-    .unwrap();
     assert_eq!(records[0].task.as_deref(), Some("review"));
     let manual = success(room.command(&["loop", "fire", "review"]).output().unwrap());
     assert!(
@@ -1570,7 +1561,7 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
             .iter()
             .any(|row| overlapped_by(row, &id))
     );
-    // A visible permission prompt parks the active run, and still blocks a duplicate.
+    // A visible permission prompt holds the active run, and still blocks a duplicate.
     let run = room.attempt(&id);
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
     room.hook(
@@ -1578,40 +1569,15 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
         &run,
         serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
     );
-    assert_eq!(show(&room.env, &id)["record"]["state"], "active");
     room.expire_permission_review(&run);
     success(
         room.command(&["workflow", "advance", &id])
             .output()
             .unwrap(),
     );
-    until(&room.env, &id, |v| v["record"]["state"] == "parked");
-    let list: Value = serde_json::from_str(&success(
-        room.command(&["loop", "list", "--json"]).output().unwrap(),
-    ))
-    .unwrap();
-    let task = list["rooms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|room| room["tasks"].as_array().unwrap())
-        .find(|task| task["name"] == "review")
-        .unwrap();
-    assert_eq!(task["section"], "needs_you", "{task}");
-    assert_eq!(task["attention"], "parked");
-    assert_eq!(task["workflow_runs"][0]["id"], id);
-    assert_eq!(task["workflow_runs"][0]["state"], "parked");
-    assert_eq!(task["workflow_runs"][0]["reason"], "asked");
-    let human = success(room.command(&["loop", "list"]).output().unwrap());
-    assert!(
-        human.contains("NEEDS YOU") && human.contains("1 run(s) parked: review"),
-        "{human}"
-    );
-    assert_eq!(
-        human.matches("review#project build asked").count(),
-        1,
-        "{human}"
-    );
+    let asked = show(&room.env, &id);
+    assert_eq!(asked["record"]["state"], "active", "{asked:#}");
+    assert!(asked["record"]["attempt"].is_object(), "{asked:#}");
     assert_eq!(history()["workflow_runs"][0]["id"], id);
     let show = success(room.command(&["loop", "show", "review"]).output().unwrap());
     assert!(
@@ -1834,12 +1800,6 @@ impl Room {
 
     fn launch(&self) -> (String, RunRecord) {
         let id = self.start();
-        let run = self.attempt(&id);
-        (id, run)
-    }
-
-    fn launch_legacy(&self) -> (String, RunRecord) {
-        let id = start_legacy_with(&self.env, || self.command(&[]));
         let run = self.attempt(&id);
         (id, run)
     }

@@ -337,7 +337,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 .output()
                 .unwrap()
         };
-        let id = start_legacy_with(&env, || {
+        let id = start_with(|| {
             let mut command = env.rimz();
             command
                 .env("SHELL", &shell)
@@ -380,8 +380,8 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 assert!(Path::new(context(&value)["output_path"].as_str().unwrap()).is_file());
             }
             "missing" => {
-                let value = settled(&env, id, "parked");
-                assert_eq!(value["record"]["park"]["reason"], "check");
+                let value = settled(&env, id, "failed");
+                assert_eq!(value["record"]["input"]["outcome"], "invalid");
                 assert_eq!(value["record"]["check_retry"], 1);
                 assert_eq!(events(&value, "evaluation").len(), 2);
                 assert_eq!(context(&value)["retry"]["outcome"], "died");
