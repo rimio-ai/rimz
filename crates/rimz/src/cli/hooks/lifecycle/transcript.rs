@@ -522,7 +522,7 @@ fn launched_parent_handle(
             name: parent.name.clone(),
             profile: parent.profile.clone(),
             role: parent.role.clone(),
-            channel: parent.channel(),
+            channel: parent.lane_name().map(String::from),
         },
         None => rimz::store::message::MessageSender::Agent {
             agent_id: None,
@@ -534,11 +534,12 @@ fn launched_parent_handle(
         },
     };
     let peers = rimz::address::addressable_agents(snapshot);
-    let root_channel = snapshot
-        .project_root
-        .as_deref()
-        .and_then(rimz::address::root_lane_channel);
-    rimz::address::agent_sender_handle(&sender, &peers, child_channel, root_channel.as_deref())
+    rimz::address::agent_sender_handle(
+        &sender,
+        &peers,
+        child_channel,
+        snapshot.project_root.as_deref(),
+    )
 }
 
 fn append_turn_entry<'a>(
@@ -658,16 +659,12 @@ fn entry_lane_name(
     state: Option<&rimz::agents::AgentState>,
     checkout: Option<&str>,
 ) -> Option<String> {
-    let row_name = state.and_then(|state| match &state.lane {
-        Some(lane) => lane.routing_name().map(ToOwned::to_owned),
-        None => state.channel(),
-    });
-    row_name.or_else(|| {
+    let row_name = state.and_then(rimz::agents::AgentState::lane_name);
+    let name = row_name.unwrap_or_else(|| {
         let dir = checkout.map_or(workspace.worktree_root.as_path(), std::path::Path::new);
-        rimz::harness::lanes::own_lane(&workspace.project_root, dir)
-            .routing_name()
-            .map(ToOwned::to_owned)
-    })
+        rimz::harness::lanes::own_lane(&workspace.project_root, dir).routing_name()
+    });
+    Some(name.into())
 }
 
 pub(super) fn agent_state(

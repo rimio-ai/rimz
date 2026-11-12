@@ -99,9 +99,13 @@ pub(super) fn reconcile_cohort_launch(
                         resuming_recipient: None,
                         target: target.clone(),
                         text: prompt.to_owned(),
-                        target_scope: leader.channel(),
+                        target_scope: leader.lane_name().map(String::from),
                         current_channel: channel.address_context(),
-                        sender: context::sender_for(caller.as_ref(), channel.as_deref(), false),
+                        sender: context::sender_for(
+                            caller.as_ref(),
+                            channel.as_deref().map(LaneName::as_str),
+                            false,
+                        ),
                         caller,
                         automated: false,
                         allow_fanout: false,
@@ -159,8 +163,14 @@ pub(super) fn reconcile_cohort_launch(
                 return launch_fresh(name, &subject, interaction);
             }
             let facts = worktree_entry::inspect(store, path, &marker)?;
-            let (resume_command, fresh_command) =
-                relaunch_commands(name, spec_display, team, channel.as_deref(), prompt, None);
+            let (resume_command, fresh_command) = relaunch_commands(
+                name,
+                spec_display,
+                team,
+                channel.as_ref().map(crate::ids::LaneName::as_str),
+                prompt,
+                None,
+            );
             // A loop fire refuses with guidance even when fired from a terminal.
             let mut unattended = Unattended;
             let interaction: &mut dyn Interaction = if loop_fire {

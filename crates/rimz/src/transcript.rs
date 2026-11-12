@@ -18,7 +18,7 @@ use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
 use crate::disk::retention::TRANSCRIPT_FILE_DAYS as FILE_DAYS;
 use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId};
-use crate::ids::{AskId, compose_channel};
+use crate::ids::{AskId, legacy_lane_name};
 use crate::workspace::{KnownWorkspace, known_workspaces_under};
 
 pub const HARNESS_FROM: &str = "rimz";
@@ -195,10 +195,7 @@ impl TranscriptEntry {
 /// Chat transcript lane: launch-stamped channel when known, else worktree
 /// basename fallback for older agent payloads that carry only a path.
 pub fn entry_channel(stamped: Option<&str>, worktree_path: Option<&str>) -> Option<String> {
-    compose_channel(
-        stamped,
-        worktree_path.and_then(|path| path.rsplit('/').next().filter(|value| !value.is_empty())),
-    )
+    legacy_lane_name(stamped, worktree_path).map(String::from)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

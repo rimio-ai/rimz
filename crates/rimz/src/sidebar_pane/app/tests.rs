@@ -1473,6 +1473,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                 worktree_path: Some("/repo/main".to_owned()),
                 worktree_branch: Some("main".to_owned()),
                 channel: None,
+                lane: None,
                 unread,
                 inactive: false,
                 archived: false,

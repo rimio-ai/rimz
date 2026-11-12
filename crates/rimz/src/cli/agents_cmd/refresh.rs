@@ -84,12 +84,16 @@ pub(super) fn refresh_targets<'a>(
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     channel: Option<&str>,
 ) -> Vec<&'a AgentState> {
+    let lane = channel.map(|filter| {
+        rimz::address::LaneSelector::parse(Some(filter), snapshot.project_root.as_deref())
+    });
     rimz::address::addressable_agents(snapshot)
         .into_iter()
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| rimz::agents::find_definition(agent.kind.as_str()).is_some())
         .filter(|agent| {
-            channel.is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
+            lane.as_ref()
+                .is_none_or(|lane| rimz::address::agent_in_lane(agent, lane))
         })
         .collect()
 }

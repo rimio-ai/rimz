@@ -680,6 +680,7 @@ mod tests {
         snapshot.agent_panes = vec![rimz::store::snapshot::PaneAgent {
             checkout: None,
             root_lane: false,
+            lane: None,
             kind: owner.kind.clone(),
             kind_ordinal: owner.kind_ordinal,
             name: owner.name.clone(),

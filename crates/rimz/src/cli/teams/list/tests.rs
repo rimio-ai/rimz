@@ -356,6 +356,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
             worktree_path: Some(path.to_string_lossy().into_owned()),
             worktree_branch: agent.worktree_branch.clone(),
             channel: Some(lane.into()),
+            lane: None,
             unread: false,
             inactive: false,
             archived: false,
@@ -563,6 +564,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         worktree_path: Some(root.to_owned()),
         worktree_branch: agent.worktree_branch.clone(),
         channel: Some("main".into()),
+        lane: None,
         unread: false,
         inactive: false,
         archived: false,
@@ -653,7 +655,7 @@ fn catalog_member_handles_round_trip_beside_teamless_role_rivals() {
         &handle,
         None,
         &rimz::address::AddressContext {
-            channel: Some("feat-x".to_owned()),
+            channel: Some("feat-x".parse().unwrap()),
             origin: rimz::address::ChannelOrigin::Explicit,
         },
     );
@@ -1125,6 +1127,7 @@ fn live_instances_use_the_published_unit_in_the_matching_cohort() {
                 id: agent.agent_id.to_string(),
                 name: "claude".into(),
                 channel: channel.map(str::to_owned),
+                lane: None,
                 card: RowCard::Agent(std::sync::Arc::new(AgentCard {
                     status,
                     team: Some("forge".into()),

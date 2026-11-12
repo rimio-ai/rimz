@@ -562,7 +562,6 @@ fn write_text(
                     .all(|message| message.body == MessageBody::Prompt)
             );
             let peers = crate::address::addressable_agents(snapshot);
-            let root_channel = crate::address::root_lane_channel(&workspace.project_root);
             let payload = batch
                 .iter()
                 .map(|message| {
@@ -570,7 +569,7 @@ fn write_text(
                         &message.sender,
                         &peers,
                         message.channel.as_deref(),
-                        root_channel.as_deref(),
+                        Some(&workspace.project_root),
                     ) {
                         Some(header) => format!("{header}{}", message.text),
                         None => message.text.clone(),

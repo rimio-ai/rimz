@@ -196,6 +196,18 @@ impl SidebarSnapshot {
     }
 }
 
+/// Whether a row with no stored lane is in trunk's own lane: unstamped, at the
+/// project root. The fold stamps rows with it too. Link 3 deletes it with the
+/// lane-less rows.
+pub(in crate::store::snapshot) fn legacy_root_lane(
+    channel: Option<&str>,
+    lane_path: Option<&str>,
+    project_root: Option<&std::path::Path>,
+) -> bool {
+    channel.is_none_or(str::is_empty)
+        && project_root.is_some_and(|root| lane_path.map(std::path::Path::new) == Some(root))
+}
+
 fn pane_agent_from_sessionless(
     row: &SidebarRow,
     pane: &PaneRef,
@@ -206,11 +218,8 @@ fn pane_agent_from_sessionless(
     // ordinal until a lifecycle hook binds one.
     PaneAgent {
         checkout: row.checkout.clone(),
-        root_lane: AgentState::is_root_lane(
-            row.channel.as_deref(),
-            row.lane_path().map(std::path::Path::new),
-            project_root,
-        ),
+        root_lane: legacy_root_lane(row.channel.as_deref(), row.lane_path(), project_root),
+        lane: row.lane.clone(),
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
@@ -265,17 +274,15 @@ fn pane_agent_from_agent_with_worktree(
         checkout: agent.lane_checkout().map(ToOwned::to_owned),
         root_lane: agent.lane.as_ref().map_or_else(
             || {
-                AgentState::is_root_lane(
+                legacy_root_lane(
                     agent.channel.as_deref(),
-                    agent
-                        .lane_path()
-                        .or(worktree_path.as_deref())
-                        .map(std::path::Path::new),
+                    agent.lane_path().or(worktree_path.as_deref()),
                     project_root,
                 )
             },
             crate::ids::Lane::is_trunk,
         ),
+        lane: agent.lane.clone(),
         kind: agent.kind.clone(),
         kind_ordinal: agent.kind_ordinal,
         name: agent.name.clone(),

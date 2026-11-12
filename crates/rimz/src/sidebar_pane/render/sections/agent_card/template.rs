@@ -221,6 +221,7 @@ mod tests {
             checkout: None,
             worktree_branch: None,
             channel: None,
+            lane: None,
             unread: false,
             inactive: false,
             archived: false,

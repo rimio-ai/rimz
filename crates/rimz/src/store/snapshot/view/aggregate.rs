@@ -383,6 +383,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             channel: None,
+            lane: None,
             unread: false,
             inactive: false,
             archived: false,

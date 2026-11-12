@@ -412,6 +412,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: agent.kind.clone(),
         kind_ordinal: None,
         name: None,
@@ -501,6 +502,7 @@ fn paned(agent: &AgentState, workspace_id: WorkspaceId, now: i64) -> SidebarSnap
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: agent.kind.clone(),
         kind_ordinal: None,
         name: None,
@@ -1374,6 +1376,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: agent.kind.clone(),
         kind_ordinal: None,
         name: None,

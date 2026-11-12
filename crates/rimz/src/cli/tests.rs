@@ -350,7 +350,7 @@ fn current_channel_uses_callers_card_before_worktree() {
                     vec![agent.clone()]
                 )))
                 .into_name(),
-                Some("card".to_owned()),
+                Some("card".parse().unwrap()),
             );
         }
     }
@@ -359,19 +359,19 @@ fn current_channel_uses_callers_card_before_worktree() {
             "explicit channel needs no lookup"
         ))
         .into_name(),
-        Some("explicit".to_owned())
+        Some("explicit".parse().unwrap())
     );
     assert_eq!(current_channel_with(&root, None, || None).into_name(), None);
     assert_eq!(
         current_channel_with(&worktree, None, || Some((caller.clone(), vec![]))).into_name(),
-        Some("other".to_owned())
+        Some("other".parse().unwrap())
     );
     agent.channel = None;
     agent.worktree_path = Some("/elsewhere/own-card".to_owned());
     assert_eq!(
         current_channel_with(&root, Some(String::new()), || Some((caller, vec![agent])))
             .into_name(),
-        Some("own-card".to_owned())
+        Some("own-card".parse().unwrap())
     );
 }
 
@@ -380,19 +380,19 @@ fn address_context_preserves_current_channel_provenance() {
     use rimz::address::ChannelOrigin;
     for (current, channel, origin) in [
         (
-            CurrentChannel::Named("card".into()),
+            CurrentChannel::Named("card".parse().unwrap()),
             Some("card"),
             ChannelOrigin::Stamped,
         ),
         (
-            CurrentChannel::Derived("checkout".into()),
+            CurrentChannel::Derived("checkout".parse().unwrap()),
             Some("checkout"),
             ChannelOrigin::Directory,
         ),
         (CurrentChannel::Unscoped, None, ChannelOrigin::Stamped),
     ] {
         let context = current.address_context();
-        assert_eq!(context.channel.as_deref(), channel);
+        assert_eq!(context.channel.as_ref().map(|lane| lane.as_str()), channel);
         assert_eq!(context.origin, origin);
     }
 }
@@ -506,7 +506,8 @@ fn room_channel_ignores_branch_for_lane_identity() {
             &child_worktree.project_root,
             &child_worktree.worktree_root
         )
-        .as_deref(),
+        .as_ref()
+        .map(|lane| lane.as_str()),
         Some("auth")
     );
 }
@@ -636,7 +637,10 @@ fn current_channel_is_stable_across_branch_changes() {
     let after_channel =
         rimz::harness::lanes::directory_channel(&after.project_root, &after.worktree_root);
     assert_eq!(before_channel, after_channel);
-    assert_eq!(before_channel.as_deref(), Some("auth"));
+    assert_eq!(
+        before_channel.as_ref().map(|lane| lane.as_str()),
+        Some("auth")
+    );
 }
 
 #[test]

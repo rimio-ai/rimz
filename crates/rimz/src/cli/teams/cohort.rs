@@ -60,10 +60,12 @@ pub(super) fn select<'a>(
 
 pub(super) fn matches_worktree(cohort: &TeamCohort<'_>, worktree: &str) -> bool {
     cohort.channel == worktree
-        || cohort
-            .members
-            .iter()
-            .any(|agent| rimz::address::agent_in_worktree(agent, worktree))
+        || cohort.members.iter().any(|agent| {
+            rimz::address::agent_in_lane(
+                agent,
+                &rimz::address::LaneSelector::parse(Some(worktree), None),
+            )
+        })
 }
 
 pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {

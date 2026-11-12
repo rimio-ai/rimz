@@ -5,7 +5,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -1530,6 +1529,45 @@ impl AgentState {
             .or(self.checkout.as_deref())
     }
 
+    /// The row's lane name: its stored lane's routing name, else the reading of
+    /// a row an older binary wrote before rows stored their lane, from its stamp
+    /// or its lane path. Link 3 deletes that fallback.
+    pub fn lane_name(&self) -> Option<crate::ids::LaneName> {
+        match &self.lane {
+            Some(lane) => Some(lane.routing_name()),
+            None => crate::ids::legacy_lane_name(self.channel.as_deref(), self.lane_path()),
+        }
+    }
+
+    /// Whether the row is in trunk's own lane: its stored lane's reading, else
+    /// the root predicate the fold stamped on a lane-less row.
+    pub fn in_trunk(&self) -> bool {
+        self.lane
+            .as_ref()
+            .map_or(self.root_lane, crate::ids::Lane::is_trunk)
+    }
+
+    /// The row's lane path when the row is its checkout's own lane: a stored
+    /// lane without a name, else a lane-less row with no stamp. Link 3 deletes
+    /// that fallback.
+    pub(crate) fn own_lane_path(&self) -> Option<&str> {
+        let own = match &self.lane {
+            Some(lane) => lane.name().is_none(),
+            None => self.channel.as_deref().is_none_or(str::is_empty),
+        };
+        own.then(|| self.lane_path()).flatten()
+    }
+
+    /// A lane-less row's stamp when no lane name can hold it (a directory with
+    /// a space), shown as written. Link 3 deletes it.
+    pub(crate) fn stamp_label(&self) -> Option<&str> {
+        let stamp = self.channel.as_deref().filter(|_| self.lane.is_none())?;
+        stamp
+            .parse::<crate::ids::LaneName>()
+            .is_err()
+            .then_some(stamp)
+    }
+
     /// Point `channel` and `root_lane` at the lane, when the row has one.
     pub(crate) fn project_lane(&mut self) {
         let Some(lane) = &self.lane else {
@@ -1537,35 +1575,6 @@ impl AgentState {
         };
         self.channel = lane.stored_name().map(ToOwned::to_owned);
         self.root_lane = lane.is_trunk();
-    }
-
-    /// Whether an unstamped launch belongs to the project's root lane.
-    pub fn is_root_lane(
-        channel: Option<&str>,
-        worktree_path: Option<&Path>,
-        project_root: Option<&Path>,
-    ) -> bool {
-        channel.is_none_or(str::is_empty)
-            && project_root.is_some_and(|root| worktree_path == Some(root))
-    }
-
-    /// The agent's channel — the lane it cooperates in: stamped lane, else
-    /// lane-path directory basename.
-    /// `None` when the agent runs outside any channel context.
-    pub fn channel(&self) -> Option<String> {
-        crate::ids::compose_channel(
-            self.channel.as_deref(),
-            self.lane_path().and_then(|path| path.rsplit('/').next()),
-        )
-    }
-
-    /// The human lane name; the root lane is `main`, while [`Self::channel`] stays the routing key.
-    pub fn lane_label(&self) -> Option<String> {
-        if self.root_lane {
-            Some("main".to_owned())
-        } else {
-            self.channel()
-        }
     }
 
     pub(crate) fn seed(

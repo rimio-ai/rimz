@@ -716,7 +716,11 @@ pub(super) fn resume_lane(
                     },
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(pane.argv),
-                    env: rimz::room::pane_identity_env(&workspace, &cwd, channel.as_deref()),
+                    env: rimz::room::pane_identity_env(
+                        &workspace,
+                        &cwd,
+                        channel.as_ref().map(rimz::ids::LaneName::as_str),
+                    ),
                     title: pane.name,
                     close_on_exit: false,
                     placement: SplitPlacement::Rejoin(direction),

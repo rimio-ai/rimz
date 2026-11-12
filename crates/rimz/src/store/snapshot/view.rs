@@ -56,6 +56,7 @@ pub use reap::RuntimeReapInputs;
 
 #[cfg(test)]
 pub(super) use aggregate::{attach_sub_agents, sub_agent_from_state};
+pub(super) use live::legacy_root_lane;
 #[cfg(test)]
 pub(crate) use live::row_identity_violations;
 #[cfg(test)]
@@ -137,7 +138,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 93;
+pub const SNAPSHOT_VERSION: u32 = 94;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(

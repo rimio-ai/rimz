@@ -681,7 +681,10 @@ mod tests {
             launch_id: "leader-launch".into(),
             instance: format!(
                 "forge#{}",
-                leader.channel().unwrap_or_else(|| "external".into())
+                leader
+                    .lane_name()
+                    .map(String::from)
+                    .unwrap_or_else(|| "external".into())
             ),
         });
         let mut agents = [launcher.clone(), leader];

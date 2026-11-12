@@ -13,6 +13,7 @@ use crate::harness::plan::{
     LaunchFinalizeOptions, LaunchFinalizeWarning, PermissionModeChoice, ResolvedLaunch,
 };
 use crate::harness::spec::{Cell, LayoutSpec};
+use crate::ids::LaneName;
 use crate::store::snapshot::SidebarSnapshot;
 use anyhow::{Context, Result, bail};
 
@@ -24,7 +25,7 @@ pub struct FinalizedLaunch {
     pub resolved: ResolvedLaunch,
     pub preset: LaunchPreset,
     pub warnings: Vec<LaunchFinalizeWarning>,
-    pub inferred_lane: Option<String>,
+    pub inferred_lane: Option<LaneName>,
     pub qualified_spec: Option<String>,
 }
 
@@ -42,7 +43,7 @@ pub fn resolve_finalized_layout(
     overrides: &LaunchOverrides,
     budget: Option<BudgetSpec>,
     max_turns: Option<u32>,
-    lane: Option<&str>,
+    lane: Option<&LaneName>,
     enforce_name_cardinality: bool,
     room: Option<(&crate::RuntimePaths, &crate::StatePaths)>,
 ) -> Result<FinalizedLaunch> {
@@ -54,7 +55,7 @@ pub fn resolve_finalized_layout(
     {
         let qualified = crate::harness::spec::qualify_spec_in_channel(
             spec,
-            channel,
+            channel.as_str(),
             team,
             &effective.teams,
             effective.profiles_for(scope),
@@ -62,7 +63,7 @@ pub fn resolve_finalized_layout(
         )?;
         if let Cow::Owned(qualified) = qualified {
             qualified_spec = Some(qualified);
-            inferred_lane = Some(channel.to_owned());
+            inferred_lane = Some(channel.clone());
         }
     }
     let spec = qualified_spec.as_deref().or(spec);

@@ -45,7 +45,7 @@ pub(super) fn resolve_finalized_layout(
     overrides: &LaunchOverrideArgs,
     budget: Option<BudgetSpec>,
     max_turns: Option<u32>,
-    lane: Option<&str>,
+    lane: Option<&rimz::ids::LaneName>,
     enforce_name_cardinality: bool,
     room: Option<(&rimz::RuntimePaths, &rimz::StatePaths)>,
 ) -> Result<FinalizedLaunch> {

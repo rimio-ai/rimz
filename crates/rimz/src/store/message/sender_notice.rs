@@ -35,10 +35,11 @@ pub(crate) fn resolve_sender<'a>(
     };
     // Team roles repeat a name across lanes, so only the recorded channel tells these apart.
     let channel = channel.as_ref()?;
-    [first, second]
-        .into_iter()
-        .chain(cards)
-        .find(|agent| agent.channel().as_ref() == Some(channel))
+    [first, second].into_iter().chain(cards).find(|agent| {
+        agent
+            .lane_name()
+            .is_some_and(|lane| lane.as_str() == channel)
+    })
 }
 
 fn receiver_label(record: &MessageRecord) -> String {
@@ -98,6 +99,6 @@ pub(crate) fn compose(
     text: String,
 ) -> MessageRecord {
     MessageRecord::new(workspace_id, sender_card, text, DeliveryGate::Done)
-        .with_channel(sender_card.channel())
+        .with_channel(sender_card.lane_name().map(String::from))
         .with_sender(MessageSender::Harness { notice })
 }

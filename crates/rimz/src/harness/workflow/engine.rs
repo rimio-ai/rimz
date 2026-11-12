@@ -2042,7 +2042,7 @@ fn delivers(
                 let channel = if own.is_trunk() {
                     crate::harness::lanes::in_place_team_name(project_root, team).to_string()
                 } else {
-                    own.routing_name().unwrap_or("external").to_owned()
+                    own.routing_name().to_string()
                 };
                 matches.insert("instance".into(), format!("{team}#{channel}"));
             }

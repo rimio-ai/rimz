@@ -21,11 +21,17 @@ fn empty_dir_cwd_keeps_checkout_lane_group_and_address() {
                 None,
             );
         assert_eq!(
-            snapshot.agents[0].channel().as_deref(),
+            snapshot.agents[0].lane_name().map(String::from).as_deref(),
             Some(if root_lane { "repo" } else { lane })
         );
         assert_eq!(snapshot.agent_panes[0].root_lane, root_lane);
-        assert_eq!(snapshot.agent_panes[0].lane_label().as_deref(), Some(lane));
+        let pane = &snapshot.agent_panes[0];
+        assert_eq!(
+            pane.lane_name()
+                .map(|name| name.label(pane.in_trunk()).to_owned())
+                .as_deref(),
+            Some(lane)
+        );
         let row = rows(&snapshot)[0];
         assert_eq!(serde_json::to_value(row).unwrap()["checkout"], checkout);
         assert_eq!(
@@ -174,7 +180,7 @@ fn floating_agent_pane_stays_addressable_without_room_row() {
         "@codex",
         None,
         &crate::address::AddressContext {
-            channel: Some("main".to_owned()),
+            channel: Some("main".parse().unwrap()),
             origin: crate::address::ChannelOrigin::Stamped,
         },
     )
@@ -273,4 +279,69 @@ fn plain_shell_pane_is_not_an_agent_pane() {
         snapshot.agent_panes.is_empty(),
         "a plain shell never becomes an addressable @agent"
     );
+}
+
+#[test]
+fn a_laned_and_a_lane_less_row_of_one_lane_read_the_same_name_and_trunk() {
+    use crate::ids::{Lane, LaneHome};
+    let trunk = Lane::own(LaneHome::Trunk, "/repo");
+    let cases = [
+        (trunk.clone(), None, true, "repo", "main"),
+        (
+            Lane::own(LaneHome::Worktree, "/repo/.rimz/worktrees/auth"),
+            Some("auth"),
+            false,
+            "auth",
+            "auth",
+        ),
+        (
+            trunk.named("design".parse().unwrap()),
+            Some("design"),
+            false,
+            "design",
+            "design",
+        ),
+    ];
+    for (lane, stamp, trunk, name, label) in cases {
+        let mut readings = Vec::new();
+        for laned in [true, false] {
+            let mut bound = agent("codex", "sess-1", AgentStatus::Running, 1_000).in_pane("term1");
+            bound.worktree_path = Some(lane.path().to_owned());
+            if laned {
+                bound.lane = Some(lane.clone());
+            } else {
+                bound.channel = stamp.map(ToOwned::to_owned);
+                bound.root_lane = trunk;
+            }
+            let snapshot = room(vec![bound])
+                .with_project_root(Some(PathBuf::from("/repo")))
+                .with_live_panes(vec![pane("term1", "codex", lane.path())], None);
+            let agent = &snapshot.agents[0];
+            let pane = &snapshot.agent_panes[0];
+            assert_eq!(
+                pane.lane.as_ref(),
+                laned.then_some(&lane),
+                "{lane:?} laned={laned}"
+            );
+            assert_eq!(
+                rows(&snapshot)[0].lane.as_ref(),
+                laned.then_some(&lane),
+                "{lane:?} laned={laned}"
+            );
+            for (reading, in_trunk) in [
+                (agent.lane_name(), agent.in_trunk()),
+                (pane.lane_name(), pane.in_trunk()),
+            ] {
+                let reading = reading.expect("every row here has a lane name");
+                assert_eq!(reading.as_str(), name, "{lane:?} laned={laned}");
+                assert_eq!(in_trunk, trunk, "{lane:?} laned={laned}");
+                assert_eq!(reading.label(in_trunk), label, "{lane:?} laned={laned}");
+                readings.push((reading, in_trunk));
+            }
+        }
+        assert!(
+            readings.windows(2).all(|pair| pair[0] == pair[1]),
+            "{lane:?}"
+        );
+    }
 }

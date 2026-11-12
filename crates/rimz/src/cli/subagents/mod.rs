@@ -707,7 +707,10 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     let scope = list_scope(caller.is_some());
     let children = match caller {
         Some(caller) => rimz::address::launched_children(&audit.agents, caller),
-        None => rimz::address::launched_children_in_channel(&audit.agents, ctx.channel()),
+        None => rimz::address::launched_children_in_channel(
+            &audit.agents,
+            ctx.current_channel().address_context().lane().as_ref(),
+        ),
     };
     let runs = rimz::harness::run::list(ctx.store.paths())?;
     let reports = child_reports(&demotion, &audit.agents, &children, &runs, now);
@@ -811,8 +814,8 @@ fn child_reports(
                                 .expect("launched children have a parent")
                         )
                     }),
-                channel: child.channel(),
-                lane_label: child.lane_label(),
+                channel: child.lane_name().map(String::from),
+                lane_label: rimz::address::lane_label(child),
                 kind: child.kind.to_string(),
                 status: child.rowless_status(demotion, now).0.as_str().to_owned(),
                 description: child.activity_line(),

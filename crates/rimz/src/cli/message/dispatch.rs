@@ -442,7 +442,12 @@ pub(super) fn message_miss(
     let agents = rimz::address::addressable_agents(snapshot)
         .into_iter()
         .filter(|agent| {
-            channel.is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
+            channel.is_none_or(|filter| {
+                rimz::address::agent_in_lane(
+                    agent,
+                    &rimz::address::LaneSelector::parse(Some(filter), None),
+                )
+            })
         })
         .collect::<Vec<_>>();
     if agents.is_empty() {

@@ -719,6 +719,7 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: agent.kind.clone(),
         kind_ordinal: None,
         name: None,

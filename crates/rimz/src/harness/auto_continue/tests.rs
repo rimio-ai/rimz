@@ -577,6 +577,7 @@ fn live_pane() -> PaneAgent {
     PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: AgentKind::new_unchecked("claude"),
         kind_ordinal: None,
         name: None,

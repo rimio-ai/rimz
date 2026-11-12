@@ -372,7 +372,9 @@ fn with_rewake<T>(
         return Ok(None);
     }
     let owner = resolve_owner(team_name, team, &stage.name)?;
-    let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+    let channel = member
+        .lane_name()
+        .map_or_else(|| "external".to_owned(), String::from);
     apply(
         &StageOpening {
             workspace,
@@ -467,7 +469,9 @@ fn cohort_members<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     member: &AgentState,
 ) -> Vec<&'a AgentState> {
-    let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+    let channel = member
+        .lane_name()
+        .map_or_else(|| "external".to_owned(), String::from);
     crate::address::team_cohorts(agents)
         .into_iter()
         .find(|cohort| Some(cohort.team) == member.team.as_deref() && cohort.channel == channel)
@@ -839,7 +843,9 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
     }
     let cohort = opening.members.iter().filter(|member| {
         member.team.as_deref() == Some(opening.team_name)
-            && member.channel().as_deref() == Some(opening.channel)
+            && member
+                .lane_name()
+                .is_some_and(|lane| lane.as_str() == opening.channel)
     });
     let Some(member) = crate::address::role_holders(cohort, owner)
         .into_iter()
@@ -865,7 +871,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
             ),
             target_scope: None,
             current_channel: crate::address::AddressContext {
-                channel: Some(opening.channel.to_owned()),
+                channel: opening.channel.parse().ok(),
                 origin: crate::address::ChannelOrigin::Stamped,
             },
             caller: None,

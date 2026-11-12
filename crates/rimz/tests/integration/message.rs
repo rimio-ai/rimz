@@ -1876,7 +1876,7 @@ fn receiver_end_tells_the_agent_sender_and_arms_the_wake_stamp() {
         name: sender.name.clone(),
         profile: None,
         role: None,
-        channel: sender.channel(),
+        channel: sender.lane_name().map(String::from),
     });
     store.queue_message(&sent, "rimz-test").unwrap();
     let _ = std::fs::remove_file(wake_stamp_path(&env));
@@ -2440,7 +2440,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
             name: sender.name.clone(),
             profile: None,
             role: None,
-            channel: sender.channel(),
+            channel: sender.lane_name().map(String::from),
         };
         let mut first = MessageRecord::new(
             env.workspace_id.clone(),
@@ -2558,7 +2558,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
                 .find(|notice| notice.text.contains(record.message_id.as_str()))
                 .unwrap();
             assert_eq!(notice.agent_id, sender.agent_id);
-            assert_eq!(notice.channel, sender.channel());
+            assert_eq!(notice.channel, sender.lane_name().map(String::from));
             assert!(notice.text.contains("stays queued"));
             assert!(
                 notice
@@ -9295,7 +9295,7 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
         "@first completed: first result\n@second completed: second result".to_owned(),
         DeliveryGate::Done,
     )
-    .with_channel(parent.channel())
+    .with_channel(parent.lane_name().map(String::from))
     .with_sender(MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
     })
@@ -11153,7 +11153,10 @@ fn queued_delivery_labels_an_ended_root_sender_main() {
         .iter()
         .find(|agent| agent.agent_id == "receiver")
         .unwrap();
-    assert_eq!(receiver.channel().as_deref(), Some("docs"));
+    assert_eq!(
+        receiver.lane_name().map(String::from).as_deref(),
+        Some("docs")
+    );
     let message = MessageRecord::new(
         env.workspace_id.clone(),
         receiver,
@@ -11166,7 +11169,7 @@ fn queued_delivery_labels_an_ended_root_sender_main() {
         name: sender.name.clone(),
         profile: None,
         role: None,
-        channel: sender.channel(),
+        channel: sender.lane_name().map(String::from),
     });
     queue_messages(&env, &[&message]);
     append_lifecycle(
@@ -13697,7 +13700,7 @@ fn queue_compact_command(idle_tagged: bool) -> (Env, PathBuf, MessageRecord) {
         rimz::agents::compact_command(&receiver, &rimz::config::HarnessConfig::default()).unwrap(),
         DeliveryGate::Done,
     )
-    .with_channel(receiver.channel())
+    .with_channel(receiver.lane_name().map(String::from))
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
     .with_sender(MessageSender::System)
     .with_body(MessageBody::Command)

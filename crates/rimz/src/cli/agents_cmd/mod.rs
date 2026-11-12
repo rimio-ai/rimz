@@ -1612,8 +1612,11 @@ pub(super) fn create_on_miss(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let channel_filter = worktree_flag.or(channel_flag);
-    let Some(create) =
-        rimz::address::create_mention(target, channel_filter, current_channel.as_deref())?
+    let Some(create) = rimz::address::create_mention(
+        target,
+        channel_filter,
+        current_channel.as_deref().map(rimz::ids::LaneName::as_str),
+    )?
     else {
         bail!(
             "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"
@@ -1665,14 +1668,15 @@ fn create_launch_args(
         || create
             .channel
             .as_deref()
-            .is_some_and(|channel| matches!(current_channel, super::CurrentChannel::Named(current) if current == channel));
+            .is_some_and(|channel| matches!(current_channel, super::CurrentChannel::Named(current) if current.as_str() == channel));
     let (worktree, channel) = if named {
         (None, create.channel)
     } else {
         (
-            create
-                .channel
-                .filter(|channel| Some(channel.as_str()) != current_channel.as_deref()),
+            create.channel.filter(|channel| {
+                Some(channel.as_str())
+                    != current_channel.as_deref().map(rimz::ids::LaneName::as_str)
+            }),
             None,
         )
     };

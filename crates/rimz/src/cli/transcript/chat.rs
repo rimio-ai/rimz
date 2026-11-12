@@ -8,7 +8,7 @@ pub(super) fn render_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> RenderEntry {
     RenderEntry {
         source: LineSource::Log {
@@ -17,7 +17,7 @@ pub(super) fn render_entry_for_log_entry(
             id: entry.id.clone(),
             opener_hidden: false,
         },
-        chat: chat_entry_for_log_entry(entry, identities, include_channel, root_channel),
+        chat: chat_entry_for_log_entry(entry, identities, include_channel, project_root),
     }
 }
 
@@ -65,7 +65,7 @@ pub(super) fn render_entry_for_flip(
 
 /// The rendered author of a turn-opening entry. `"user"` is reserved for a
 /// human origin; anything RimZ or an agent introduced renders as its handle.
-fn chat_from(entry: &TranscriptEntry, root_channel: Option<&str>) -> String {
+fn chat_from(entry: &TranscriptEntry, project_root: Option<&Path>) -> String {
     if entry.origin() == EntryOrigin::Human {
         return rimz::transcript::HUMAN_FROM.to_owned();
     }
@@ -73,7 +73,7 @@ fn chat_from(entry: &TranscriptEntry, root_channel: Option<&str>) -> String {
         return rimz::transcript::HARNESS_FROM.to_owned();
     };
     if let Ok((selector, Some(channel))) = rimz::address::parse_selector(from) {
-        let lane = rimz::address::record_lane_label(Some(&channel), root_channel);
+        let lane = rimz::address::record_lane_label(Some(&channel), project_root);
         if lane != Some(channel.as_str()) {
             return render_handle(&format!("@{selector}"), lane, true);
         }
@@ -85,7 +85,7 @@ pub(super) fn chat_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> ChatLine {
     let receiver = handle_for(entry, identities, include_channel);
     let message_id = entry.message_id.as_ref().map(ToString::to_string);
@@ -95,7 +95,7 @@ pub(super) fn chat_entry_for_log_entry(
         | TranscriptKind::Message
         | TranscriptKind::SubagentReport
         | TranscriptKind::Wait
-        | TranscriptKind::Answer => (chat_from(entry, root_channel), Some(receiver)),
+        | TranscriptKind::Answer => (chat_from(entry, project_root), Some(receiver)),
         TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => (receiver, None),
     };
     let error = entry.entry == TranscriptKind::Error;
@@ -133,7 +133,7 @@ pub(super) fn handle_for(
         return render_handle(
             &identity.base_handle,
             if identity.root_lane {
-                Some("main")
+                Some(LaneName::TRUNK_LABEL)
             } else {
                 entry.channel.as_deref().or(identity.lane_label())
             },

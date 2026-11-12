@@ -779,6 +779,7 @@ fn idle_agent_row(
         checkout: None,
         worktree_branch: None,
         channel: None,
+        lane: None,
         unread: false,
         inactive: false,
         archived: false,

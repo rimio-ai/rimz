@@ -18,6 +18,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::config::effective::SmartCompactSeat;
 use crate::config::{HarnessConfig, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::auto_continue::CardStatus;
+use crate::ids::LaneName;
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
@@ -335,22 +336,24 @@ pub fn dispatch(
         ),
         None => resolution.resolve(&request.target)?,
     };
+    let caller_lane = request
+        .target_scope
+        .as_deref()
+        .or(request
+            .current_channel
+            .channel
+            .as_ref()
+            .map(LaneName::as_str))
+        .and_then(|channel| {
+            crate::address::record_lane_label(Some(channel), Some(&workspace.project_root))
+        })
+        .map(str::to_owned);
     exclude_broadcast_caller(
         &request.target,
         &mut targets,
         &durable_agents,
         request.caller.as_ref(),
-        request
-            .target_scope
-            .as_deref()
-            .or(request.current_channel.channel.as_deref())
-            .map(|channel| {
-                if crate::address::is_root_lane_filter(channel, &workspace.project_root) {
-                    "main"
-                } else {
-                    channel
-                }
-            }),
+        caller_lane.as_deref(),
     )?;
     if targets.len() > 1 && !request.allow_fanout && !crate::address::is_broadcast(&request.target)
     {
@@ -395,7 +398,11 @@ pub fn dispatch(
         snapshot: &snapshot,
         card_status: &resolution.card_status,
         pending: &pending,
-        scope_channel: request.current_channel.channel.as_deref(),
+        scope_channel: request
+            .current_channel
+            .channel
+            .as_ref()
+            .map(LaneName::as_str),
         reply: reply_preparation.as_ref(),
         in_reply_to: &in_reply_to,
         compact_defaults: compact_defaults.as_ref(),

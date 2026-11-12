@@ -137,23 +137,27 @@ fn prepare(
         &projection.agents,
         request.worktree.as_deref(),
     )?;
-    let lane = request.channel.clone().or_else(|| {
-        if harness_owned {
-            super::context::directory_channel(
-                &workspace,
-                cwd.as_deref().unwrap_or(&workspace.worktree_root),
-            )
-        } else {
-            super::context::current_channel(&workspace, Some(&store)).into_name()
-        }
-    });
+    let lane = request
+        .channel
+        .as_deref()
+        .map(LaneName::dashed)
+        .or_else(|| {
+            if harness_owned {
+                super::context::directory_channel(
+                    &workspace,
+                    cwd.as_deref().unwrap_or(&workspace.worktree_root),
+                )
+            } else {
+                super::context::current_channel(&workspace, Some(&store)).into_name()
+            }
+        });
     let snapshot = lane
         .is_some()
         .then(|| store.snapshot_cached())
         .transpose()
         .context("reading agent snapshot")?;
     let team_lane = lane
-        .as_deref()
+        .as_ref()
         .zip(snapshot.as_ref())
         .and_then(|(channel, snapshot)| {
             crate::address::channel_team(&snapshot.agents, channel).map(|team| (channel, team))
@@ -170,7 +174,7 @@ fn prepare(
             &args.launch.overrides,
             args.launch.cohort.budget,
             args.launch.max_turns,
-            lane.as_deref(),
+            lane.as_ref(),
             args.launch.name.is_some(),
             Some((store.runtime_paths(), store.paths())),
         )?;
@@ -680,7 +684,7 @@ fn prepare(
                 machine: machine_config,
                 mux: context.mux,
                 root: context.root,
-                channel: room_lane.stored_name().map(ToOwned::to_owned),
+                channel: room_lane.stored_name().map(LaneName::dashed),
             },
             layout,
             launch,

@@ -38,12 +38,14 @@ pub(super) fn list_agents(
 
     let channel = list_channel_filter(all, scope.as_deref(), &workspace);
     let reader = crate::cli::current_channel(&workspace, Some(&store)).address_context();
+    let lane = channel.as_deref().map(|filter| {
+        rimz::address::LaneSelector::parse(Some(filter), Some(&workspace.project_root))
+    });
     let agents: Vec<&AgentState> = snapshot
         .pane_bound_roots()
         .filter(|agent| {
-            channel
-                .as_deref()
-                .is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
+            lane.as_ref()
+                .is_none_or(|lane| rimz::address::agent_in_lane(agent, lane))
         })
         .collect();
     if agents.is_empty() {
@@ -270,11 +272,15 @@ fn group_header_cells(
     if let Some(qualifier) = qualifier {
         cells.push(render::cell(format!("· {qualifier}")).fg(render::palette::meta()));
     }
+    let group_lane = rimz::address::LaneSelector::parse(Some(&group.label), None);
     if !group
         .agents
         .iter()
-        .all(|agent| rimz::address::agent_in_worktree(agent, &group.label))
-        && let Some(lane) = group.agents.first().and_then(|agent| agent.lane_label())
+        .all(|agent| rimz::address::agent_in_lane(agent, &group_lane))
+        && let Some(lane) = group
+            .agents
+            .first()
+            .and_then(|agent| rimz::address::lane_label(agent))
     {
         cells.push(render::cell(format!("· #{lane}")).fg(render::palette::meta()));
     }
@@ -405,7 +411,9 @@ pub(super) fn list_channel_filter(
     list_channel_filter_for_current(
         all,
         worktree,
-        crate::cli::current_channel(workspace, store.as_ref()).into_name(),
+        crate::cli::current_channel(workspace, store.as_ref())
+            .into_name()
+            .map(String::from),
     )
 }
 
@@ -647,7 +655,10 @@ mod tests {
         root.worktree_path = Some("/repo/checkout".into());
         root.root_lane = true;
         let filter = list_channel_filter_for_current(false, Some("#main"), None).unwrap();
-        assert!(rimz::address::agent_in_worktree(&root, &filter));
+        assert!(rimz::address::agent_in_lane(
+            &root,
+            &rimz::address::LaneSelector::parse(Some(&filter), None)
+        ));
         assert_eq!(
             list_channel_filter_for_current(true, Some("manual"), Some("feature".to_owned()))
                 .as_deref(),
@@ -686,6 +697,7 @@ mod tests {
             PaneAgent {
                 checkout: None,
                 root_lane: false,
+                lane: None,
                 kind: AgentKind::new_unchecked("codex"),
                 kind_ordinal: None,
                 name: None,
@@ -880,6 +892,7 @@ mod tests {
             worktree_path: Some("/repo/worktree".to_owned()),
             worktree_branch: Some("feature".to_owned()),
             channel: None,
+            lane: None,
             unread: false,
             inactive: false,
             archived: false,
@@ -912,6 +925,7 @@ mod tests {
         PaneAgent {
             checkout: None,
             root_lane: false,
+            lane: None,
             kind: AgentKind::new_unchecked("codex"),
             kind_ordinal: None,
             name: None,

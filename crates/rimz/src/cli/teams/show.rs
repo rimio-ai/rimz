@@ -23,9 +23,11 @@ pub(super) fn run(
     let (lane, resume_lane) = if let Some(lane) = lane {
         let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
-        if rimz::address::is_root_lane_filter(lane, &workspace.project_root) {
+        let selector =
+            rimz::address::LaneSelector::parse(Some(lane), Some(&workspace.project_root));
+        if selector.is_trunk() {
             (
-                Some("main"),
+                Some(rimz::ids::LaneName::TRUNK_LABEL),
                 name.map(|team| {
                     rimz::harness::lanes::in_place_team_name(&workspace.project_root, team)
                         .to_string()

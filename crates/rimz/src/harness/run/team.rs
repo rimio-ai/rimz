@@ -17,7 +17,9 @@ use super::{RecordMutation, Result, RunRecord};
 /// `<team>#<channel>` for a team seat, grouped as `address::team_cohorts` groups it.
 fn team_instance(seat: &AgentState) -> Option<String> {
     let team = seat.team.as_deref().filter(|team| !team.is_empty())?;
-    let channel = seat.channel().unwrap_or_else(|| "external".to_owned());
+    let channel = seat
+        .lane_name()
+        .map_or_else(|| "external".to_owned(), String::from);
     Some(format!("{team}#{channel}"))
 }
 

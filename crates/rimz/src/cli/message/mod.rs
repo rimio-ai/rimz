@@ -1,7 +1,7 @@
 //! `rimz message` — parse command input, call message domain, and render output.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -15,6 +15,7 @@ use super::address;
 use super::send::{self, SendFlags, resolve_message};
 use super::usage::{UsageError, shell_command};
 use crate::cli::render;
+use rimz::address::LaneSelector;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::message::deliver;

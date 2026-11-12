@@ -1772,7 +1772,11 @@ fn channel_hold_table() {
         } else if board_path.exists() {
             std::fs::remove_file(&board_path).unwrap();
         }
-        assert_eq!(inspect_channel_hold(&agents, "X"), expected, "case {index}");
+        assert_eq!(
+            inspect_channel_hold(&agents, &"X".parse().unwrap()),
+            expected,
+            "case {index}"
+        );
         for team in ["forge", "other"] {
             assert_eq!(
                 inspect_cohort_hold(&agents, team, "X"),
@@ -1954,7 +1958,7 @@ fn cohort_resume_ignores_launched_children() {
             assert_eq!(
                 inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell], None, None),
                 CohortRelaunchState::Closed {
-                    channel: Some("feature".into())
+                    channel: Some(LaneName::dashed("feature"))
                 },
             );
         }
@@ -2764,7 +2768,7 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
             None,
         ),
         CohortRelaunchState::Closed {
-            channel: Some("feature".into())
+            channel: Some(LaneName::dashed("feature"))
         }
     );
 }
@@ -2845,7 +2849,7 @@ fn closed_team_relaunch_carries_the_newest_members_channel() {
                 None,
             ),
             CohortRelaunchState::Closed {
-                channel: Some("triage".into())
+                channel: Some(LaneName::dashed("triage"))
             },
         );
         agents.reverse();
@@ -2919,7 +2923,7 @@ fn cohort_relaunch_presence_table() {
             &one_cell,
             None,
             CohortRelaunchState::Closed {
-                channel: Some("feature".into()),
+                channel: Some(LaneName::dashed("feature")),
             },
         ),
         (
@@ -2939,7 +2943,7 @@ fn cohort_relaunch_presence_table() {
             &one_cell,
             None,
             CohortRelaunchState::Closed {
-                channel: Some("feature".into()),
+                channel: Some(LaneName::dashed("feature")),
             },
         ),
         (
@@ -2959,7 +2963,7 @@ fn cohort_relaunch_presence_table() {
             &two_cells,
             None,
             CohortRelaunchState::Closed {
-                channel: Some("feature".into()),
+                channel: Some(LaneName::dashed("feature")),
             },
         ),
         (
@@ -3006,7 +3010,7 @@ fn cohort_relaunch_presence_table() {
             &two_cells,
             Some("forge"),
             CohortRelaunchState::Closed {
-                channel: Some("feature".into()),
+                channel: Some(LaneName::dashed("feature")),
             },
         ),
     ] {

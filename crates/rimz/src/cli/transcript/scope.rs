@@ -18,7 +18,7 @@ pub(super) fn live_agents(store: Option<&rimz::Store>) -> Vec<LiveAgent> {
                 .into_iter()
                 .filter(|agent| !agent.is_provider_subagent())
                 .map(|agent| {
-                    let channel = agent.channel();
+                    let channel = agent.lane_name().map(String::from);
                     let root = agent.parent_agent_id.is_none();
                     LiveAgent {
                         key: (agent.kind, agent.agent_id),
@@ -47,7 +47,7 @@ fn live_agent_in_scope(agent: &LiveAgent, scope: &Scope) -> bool {
                 && channel_matches(
                     agent.channel.as_deref(),
                     scope.channel_filter.as_deref(),
-                    scope.root_channel.as_deref(),
+                    scope.project_root.as_deref(),
                 )
         }
     }
@@ -65,7 +65,7 @@ pub(super) fn entry_in_scope(
         || (channel_matches(
             entry.channel.as_deref(),
             scope.channel_filter.as_deref(),
-            scope.root_channel.as_deref(),
+            scope.project_root.as_deref(),
         ) && !identities
             .get(&entry_key(entry))
             .is_some_and(|identity| identity.child))
@@ -96,7 +96,7 @@ pub(super) fn entry_matches_focus(
                 focus,
                 identities,
                 scope.channel_filter.as_deref(),
-                scope.root_channel.as_deref(),
+                scope.project_root.as_deref(),
             )
     })
 }
@@ -106,9 +106,9 @@ pub(super) fn sender_matches_focus(
     focus: &BTreeSet<AgentKey>,
     identities: &HashMap<AgentKey, Identity>,
     channel_filter: Option<&str>,
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> bool {
-    let matches = matching_handle_keys(sender, channel_filter, identities, root_channel);
+    let matches = matching_handle_keys(sender, channel_filter, identities, project_root);
     matches.len() == 1 && focus.contains(matches[0])
 }
 
@@ -116,7 +116,7 @@ pub(super) fn matching_handle_keys<'a>(
     handle: &str,
     channel_filter: Option<&str>,
     identities: &'a HashMap<AgentKey, Identity>,
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> Vec<&'a AgentKey> {
     let (base, channel) = split_rendered_handle(handle);
     let mut matches: Vec<_> = identities
@@ -126,7 +126,7 @@ pub(super) fn matching_handle_keys<'a>(
                 && channel_matches(
                     identity.channel.as_deref(),
                     channel.or(channel_filter),
-                    root_channel,
+                    project_root,
                 ))
             .then_some(key)
         })
@@ -181,13 +181,13 @@ pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> 
 
 pub(super) fn build_identities(
     entries: &[TranscriptEntry],
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> HashMap<AgentKey, Identity> {
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
-            root_lane: root_channel.is_some()
-                && rimz::address::record_in_root_lane(entry.channel.as_deref(), root_channel),
+            root_lane: project_root.is_some()
+                && LaneSelector::parse(entry.channel.as_deref(), project_root).is_trunk(),
             base_handle: rimz::agents::petname::sender_handle(
                 entry.role.as_deref(),
                 entry.name.as_deref(),
@@ -231,11 +231,8 @@ pub(super) fn resolve_scope(
     store: Option<&rimz::Store>,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
 ) -> Result<Scope> {
-    let root_channel = snapshot
-        .project_root
-        .as_deref()
-        .and_then(rimz::address::root_lane_channel);
-    let current = context.channel.as_deref();
+    let project_root = snapshot.project_root.as_deref();
+    let current = context.channel.as_ref().map(LaneName::as_str);
     match target {
         None => {
             let channel = worktree.or(current).map(ToOwned::to_owned);
@@ -271,7 +268,7 @@ pub(super) fn resolve_scope(
                 store, snapshot, raw, worktree, context,
             ) {
                 Ok(agent) => {
-                    let channel = agent.channel();
+                    let channel = agent.lane_name().map(String::from);
                     let mut scope = Scope::for_channel(channel, snapshot.project_root.as_deref());
                     let handle = rimz::agents::petname::sender_handle(
                         agent.role.as_deref(),
@@ -280,7 +277,7 @@ pub(super) fn resolve_scope(
                     );
                     scope.focus = Some(render_handle(
                         &handle,
-                        agent.lane_label().as_deref(),
+                        rimz::address::lane_label(agent).as_deref(),
                         scope.include_channel,
                     ));
                     scope.focus_keys = Some(BTreeSet::from([(
@@ -301,22 +298,16 @@ pub(super) fn resolve_scope(
                 .then_some(requested_channel.as_deref())
                 .flatten();
             let normalized_channel = resolution_channel.map(|channel| {
-                if snapshot
-                    .project_root
-                    .as_deref()
-                    .is_some_and(|root| rimz::address::is_root_lane_filter(channel, root))
+                if project_root.is_some()
+                    && LaneSelector::parse(Some(channel), project_root).is_trunk()
                 {
-                    "main"
+                    LaneName::TRUNK_LABEL
                 } else {
                     channel
                 }
             });
-            let mut matches = matching_identities(
-                &selector,
-                normalized_channel,
-                identities,
-                root_channel.as_deref(),
-            );
+            let mut matches =
+                matching_identities(&selector, normalized_channel, identities, project_root);
             matches.sort_by(|left, right| {
                 (&left.1.base_handle, &left.1.channel)
                     .cmp(&(&right.1.base_handle, &right.1.channel))
@@ -415,7 +406,7 @@ pub(super) fn matching_identities<'a>(
     selector: &str,
     channel: Option<&str>,
     identities: &'a HashMap<AgentKey, Identity>,
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> Vec<(&'a AgentKey, &'a Identity)> {
     let selector = selector.strip_prefix('@').unwrap_or(selector);
     let mut exact: Vec<_> = identities
@@ -439,7 +430,7 @@ pub(super) fn matching_identities<'a>(
                 || identity.role.as_deref() == Some(selector)
                 || key.1.as_str() == selector
                 || key.1.as_str().starts_with(selector))
-                && channel_matches(identity.channel.as_deref(), channel, root_channel)
+                && channel_matches(identity.channel.as_deref(), channel, project_root)
         })
         .collect();
     matches.sort_by(|left, right| {
@@ -464,11 +455,11 @@ pub(super) fn candidate_label(key: &AgentKey, identity: &Identity) -> String {
 pub(super) fn channel_matches(
     entry_channel: Option<&str>,
     filter: Option<&str>,
-    root_channel: Option<&str>,
+    project_root: Option<&Path>,
 ) -> bool {
     filter.is_none_or(|filter| {
-        if filter == "main" || Some(filter) == root_channel {
-            rimz::address::record_in_root_lane(entry_channel, root_channel)
+        if LaneSelector::parse(Some(filter), project_root).is_trunk() {
+            LaneSelector::parse(entry_channel, project_root).is_trunk()
         } else {
             entry_channel == Some(filter)
         }

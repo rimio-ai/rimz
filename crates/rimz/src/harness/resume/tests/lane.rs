@@ -8,7 +8,7 @@ fn empty_dir_lane_listing_uses_checkout_instead_of_process_cwd() {
     for checkout in ["/repo", "/repo/feature"] {
         let mut agent = agent("claude", "searcher", "/rimz/empty/room/searcher", 1);
         agent.checkout = Some(checkout.to_owned());
-        let lanes = lane_summaries(&[agent], Path::new("/repo"), |_| AgentLiveness::Dead);
+        let lanes = lane_summaries(&[agent], |_| AgentLiveness::Dead);
         assert_eq!(lanes.len(), 1);
         assert_eq!(lanes[0].path, Path::new(checkout));
     }

@@ -560,7 +560,8 @@ fn resume_tab_labels_and_replayed_channel() {
                 .params
                 .lane
                 .as_ref()
-                .and_then(crate::ids::Lane::routing_name),
+                .map(|lane| lane.routing_name().to_string())
+                .as_deref(),
             lane,
             "{label}"
         );

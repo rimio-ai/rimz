@@ -1,26 +1,27 @@
 //! Caller attribution and current-lane facts shared by launch and message paths.
 
 use crate::agents::AgentState;
+use crate::ids::LaneName;
 use crate::store::message::MessageSender;
 use anyhow::Result;
 use std::path::Path;
 
 pub enum CurrentChannel {
-    Named(String),
-    Derived(String),
-    Root(String),
+    Named(LaneName),
+    Derived(LaneName),
+    Root(LaneName),
     Unscoped,
 }
 
 impl CurrentChannel {
-    pub fn as_deref(&self) -> Option<&str> {
+    pub fn as_deref(&self) -> Option<&LaneName> {
         match self {
             Self::Named(name) | Self::Derived(name) | Self::Root(name) => Some(name),
             Self::Unscoped => None,
         }
     }
 
-    pub fn into_name(self) -> Option<String> {
+    pub fn into_name(self) -> Option<LaneName> {
         match self {
             Self::Named(name) | Self::Derived(name) | Self::Root(name) => Some(name),
             Self::Unscoped => None,
@@ -29,7 +30,7 @@ impl CurrentChannel {
 
     pub fn address_context(&self) -> crate::address::AddressContext {
         crate::address::AddressContext {
-            channel: self.as_deref().map(ToOwned::to_owned),
+            channel: self.as_deref().cloned(),
             origin: match self {
                 Self::Derived(_) => crate::address::ChannelOrigin::Directory,
                 Self::Root(_) => crate::address::ChannelOrigin::Root,
@@ -68,25 +69,25 @@ pub fn current_channel_with(
     caller: impl FnOnce() -> Option<(crate::harness::ancestry::CallerIdentity, Vec<AgentState>)>,
 ) -> CurrentChannel {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        return CurrentChannel::Named(channel);
+        return CurrentChannel::Named(LaneName::dashed(&channel));
     }
     if let Some((caller, rows)) = caller()
         && let Ok(agent) = crate::harness::ancestry::resolve_launch_caller(&rows, &caller)
-        && let Some(channel) = agent.channel()
+        && let Some(channel) = agent.lane_name()
     {
-        return if agent.root_lane {
+        return if agent.in_trunk() {
             CurrentChannel::Root(channel)
-        } else if agent.channel.is_some() {
-            CurrentChannel::Named(channel)
-        } else {
+        } else if agent.own_lane_path().is_some() {
             CurrentChannel::Derived(channel)
+        } else {
+            CurrentChannel::Named(channel)
         };
     }
     directory_channel(workspace, &workspace.worktree_root)
         .map_or(CurrentChannel::Unscoped, CurrentChannel::Derived)
 }
 
-pub fn directory_channel(workspace: &crate::ResolvedWorkspace, cwd: &Path) -> Option<String> {
+pub fn directory_channel(workspace: &crate::ResolvedWorkspace, cwd: &Path) -> Option<LaneName> {
     crate::harness::lanes::directory_channel(&workspace.project_root, cwd)
 }
 

@@ -581,7 +581,7 @@ fn agent_sender_turn_openers_follow_the_senders_session_before_its_name() {
             "a stale id names no row"
         );
         assert_eq!(
-            turn_openers_for_sender(&snapshot, &sender(None, auth.channel())),
+            turn_openers_for_sender(&snapshot, &sender(None, auth.lane_name().map(String::from))),
             vec![opener(2)],
             "duplicate names resolve by the recorded channel"
         );
@@ -833,7 +833,7 @@ fn resolution<'a>(
 
 fn context(channel: Option<&str>) -> AddressContext {
     AddressContext {
-        channel: channel.map(ToOwned::to_owned),
+        channel: channel.map(|channel| channel.parse().unwrap()),
         origin: crate::address::ChannelOrigin::Stamped,
     }
 }
@@ -881,6 +881,7 @@ fn owner_pane(id: &str, role: Option<&str>) -> PaneAgent {
     PaneAgent {
         checkout: None,
         root_lane: false,
+        lane: None,
         kind: AgentKind::new_unchecked("claude"),
         kind_ordinal: Some(2),
         name: Some("owner".to_owned()),

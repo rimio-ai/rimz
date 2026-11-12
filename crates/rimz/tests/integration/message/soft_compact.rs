@@ -195,7 +195,7 @@ fn full_cycle(kind: &str) {
         "earlier user message".into(),
         DeliveryGate::Done,
     )
-    .with_channel(agent.channel());
+    .with_channel(agent.lane_name().map(String::from));
     earlier.message_id = MessageId::parse("msg_v000000000000000").unwrap();
     store.queue_message(&earlier, "rimz-test").unwrap();
     fixture.end_turn();

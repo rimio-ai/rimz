@@ -561,7 +561,7 @@ mod tests {
         let profiles = pane_profiles(panes.clone(), &children, Some(&snapshot));
         assert_eq!(profiles.len(), panes.len());
         let context = rimz::address::AddressContext {
-            channel: Some("main".to_owned()),
+            channel: Some("main".parse().unwrap()),
             origin: rimz::address::ChannelOrigin::Explicit,
         };
         for ((profile, pane), expected) in

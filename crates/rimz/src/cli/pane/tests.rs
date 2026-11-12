@@ -394,7 +394,7 @@ fn pane_list_role_handle_counts_only_same_lane_historical_roots() {
             assert_eq!(handle, "@coder#main");
         }
         let context = rimz::address::AddressContext {
-            channel: Some("main".to_owned()),
+            channel: Some("main".parse().unwrap()),
             origin: rimz::address::ChannelOrigin::Explicit,
         };
         assert_eq!(
@@ -449,7 +449,7 @@ fn pane_list_root_and_launched_child_profile_handles_round_trip() {
     let raw = String::from_utf8(out).unwrap();
     let text = anstream::adapter::strip_str(&raw).to_string();
     let context = rimz::address::AddressContext {
-        channel: Some("main".to_owned()),
+        channel: Some("main".parse().unwrap()),
         origin: rimz::address::ChannelOrigin::Explicit,
     };
     for (pane, (agent_id, expected)) in panes.iter().zip([

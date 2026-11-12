@@ -389,7 +389,7 @@ fn channel_miss_prints_a_shell_runnable_corrected_command() {
     agent.worktree_path = Some(root.into());
     agent.root_lane = true;
     let scope = rimz::address::AddressContext {
-        channel: Some("scratch".into()),
+        channel: Some("scratch".parse().unwrap()),
         origin: rimz::address::ChannelOrigin::Directory,
     };
     for (args, target, flag) in [

@@ -102,32 +102,23 @@ impl Interaction for CliInteraction {
                 &result.outcomes,
                 &result.compacted,
             )?,
-            Notice::PickerReceipt {
-                kind,
-                channel,
-                cwd,
-                project,
-            } => write_picker_receipt(
-                &mut render::out(),
-                kind,
-                launched_lane_label(channel, cwd, project).as_deref(),
-            )?,
+            Notice::PickerReceipt { kind, lane } => {
+                write_picker_receipt(&mut render::out(), kind, Some(&lane.label()))?
+            }
             Notice::ResumeAnnouncement(plan) => {
                 write_resume_announcement(&mut render::out(), plan)?
             }
             Notice::ResumeReceipt {
                 plan,
                 team,
-                channel,
-                cwd,
-                project,
+                lane,
                 identities,
                 leader,
             } => write_resume_receipt(
                 &mut render::out(),
                 plan,
                 team,
-                launched_lane_label(channel, cwd, project).as_deref(),
+                Some(&lane.label()),
                 identities,
                 leader,
             )?,
@@ -150,38 +141,18 @@ pub(super) fn admit_lsp(checkout: &Path, machine: &rimz::config::MachineConfig) 
     launcher::lsp_admission::admit(checkout, machine, &mut CliInteraction)
 }
 pub(super) trait LayoutReceipt {
-    fn write_receipt(
-        &self,
-        w: &mut impl Write,
-        store: &rimz::Store,
-        project_root: &Path,
-    ) -> Result<()>;
+    fn write_receipt(&self, w: &mut impl Write, store: &rimz::Store) -> Result<()>;
 }
 
 impl LayoutReceipt for LaunchedLayout {
-    fn write_receipt(
-        &self,
-        w: &mut impl Write,
-        store: &rimz::Store,
-        project_root: &Path,
-    ) -> Result<()> {
+    fn write_receipt(&self, w: &mut impl Write, store: &rimz::Store) -> Result<()> {
         if self.in_place {
             return Ok(());
         }
         let paths = store.paths();
-        let lane_path = self
-            .identities
-            .first()
-            .and_then(|identity| identity.launch.checkout.as_deref())
-            .map(Path::new)
-            .unwrap_or(&self.cwd);
-        let lane_label = launched_lane_label(self.channel.as_deref(), lane_path, project_root);
+        let lane_label = self.lane.label();
         if self.pick_session {
-            return write_picker_receipt(
-                w,
-                self.identities[0].kind.as_str(),
-                lane_label.as_deref(),
-            );
+            return write_picker_receipt(w, self.identities[0].kind.as_str(), Some(&lane_label));
         }
         // The agents are already launched, so an unreadable snapshot only
         // costs the receipt its list handles.
@@ -191,7 +162,7 @@ impl LayoutReceipt for LaunchedLayout {
             w,
             &LaunchReceipt {
                 team: self.team.as_ref().map(|(name, team)| (name.as_str(), team)),
-                channel: lane_label.as_deref(),
+                channel: Some(&lane_label),
                 cwd: &self.cwd,
                 identities: &self.identities,
                 handles: &handles,
@@ -204,20 +175,10 @@ impl LayoutReceipt for LaunchedLayout {
             w,
             &self.identities,
             self.peer.as_ref(),
-            self.channel.as_ref().and(lane_label.as_deref()),
+            self.lane.stored_name().and(Some(&lane_label)),
             paths,
         )
     }
-}
-
-fn launched_lane_label(channel: Option<&str>, cwd: &Path, project_root: &Path) -> Option<String> {
-    if rimz::agents::AgentState::is_root_lane(channel, Some(cwd), Some(project_root)) {
-        return Some("main".to_owned());
-    }
-    channel
-        .filter(|channel| !channel.is_empty())
-        .map(str::to_owned)
-        .or_else(|| cwd.file_name()?.to_str().map(str::to_owned))
 }
 
 fn write_picker_receipt(w: &mut impl Write, kind: &str, lane: Option<&str>) -> Result<()> {

@@ -55,13 +55,12 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     }
 
     let agents = rimz::address::addressable_agents(&cached_snapshot);
-    let root_channel = rimz::address::root_lane_channel(&ctx.workspace.project_root);
-    let lane_label =
-        rimz::address::record_lane_label(message.channel.as_deref(), root_channel.as_deref());
-    let raw_target = message_target(&message, &agents, root_channel.as_deref());
+    let project_root = Some(ctx.workspace.project_root.as_path());
+    let lane_label = rimz::address::record_lane_label(message.channel.as_deref(), project_root);
+    let raw_target = message_target(&message, &agents, project_root);
     let target = scoped_handle(raw_target.clone(), lane_label);
     let sender = scoped_handle(
-        message_sender(&message.sender, &agents, root_channel.as_deref()),
+        message_sender(&message.sender, &agents, project_root),
         lane_label,
     );
     let prose = render::prose::Prose::for_stdout();
@@ -126,8 +125,7 @@ fn open_delivery(
         &rimz::harness::CardStatus::new(&ctx.store),
     );
     let agents = rimz::address::addressable_agents(&snapshot);
-    let root_channel = rimz::address::root_lane_channel(&ctx.workspace.project_root);
-    let target = message_target(message, &agents, root_channel.as_deref());
+    let target = message_target(message, &agents, Some(&ctx.workspace.project_root));
     let verdict = check.verdict();
     let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverEnded {
         snapshot

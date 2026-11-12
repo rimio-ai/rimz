@@ -220,12 +220,9 @@ pub(super) fn message_target_for_record(
 ) -> String {
     let row = MessageListRow::from_record(record.clone());
     let agents = rimz::address::addressable_agents(snapshot);
-    let root_channel = snapshot
-        .project_root
-        .as_deref()
-        .and_then(rimz::address::root_lane_channel);
-    let lane = rimz::address::record_lane_label(row.channel.as_deref(), root_channel.as_deref());
-    scoped_handle(message_target(&row, &agents, root_channel.as_deref()), lane)
+    let project_root = snapshot.project_root.as_deref();
+    let lane = rimz::address::record_lane_label(row.channel.as_deref(), project_root);
+    scoped_handle(message_target(&row, &agents, project_root), lane)
 }
 
 pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
@@ -289,22 +286,17 @@ pub(super) fn clear_messages(
                 "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a RimZ channel"
             )
         })?;
-    let root_lane = rimz::address::is_root_lane_filter(lane, &workspace.project_root);
-    let canceled = if root_lane {
-        let root_channel = rimz::address::root_lane_channel(&workspace.project_root);
+    let project_root = Some(workspace.project_root.as_path());
+    let selector = LaneSelector::parse(Some(lane), project_root);
+    let canceled = if selector.is_trunk() {
         store.clear_messages_matching(
-            |message| {
-                rimz::address::record_in_root_lane(
-                    message.channel.as_deref(),
-                    root_channel.as_deref(),
-                )
-            },
+            |message| LaneSelector::parse(message.channel.as_deref(), project_root).is_trunk(),
             &workspace.session_name,
         )?
     } else {
         store.clear_channel_messages(lane, &workspace.session_name)?
     };
-    let lane = if root_lane { "main" } else { lane };
+    let lane = selector.label();
     print_canceled_summary(&format!("in #{lane}"), &canceled);
     Ok(())
 }
