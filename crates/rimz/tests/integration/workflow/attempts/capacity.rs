@@ -24,7 +24,7 @@ fn pending(room: &Room, task: Option<&str>) -> records::RunRecord {
     let dir = room.env.rimz_home().join("workflows/review");
     let now = jiff::Timestamp::now();
     let record = serde_json::from_value(json!({
-        "version":1, "id":WorkflowRunId::new(), "workflow":"review", "task":task,
+        "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review", "task":task,
         "spec_dir":dir, "spec_digest":"test", "prompt":"Build it",
         "scope":{"kind":"worktree", "path":room.env.project_root},
         "project_root":room.env.project_root, "created_at":now, "state":"active",

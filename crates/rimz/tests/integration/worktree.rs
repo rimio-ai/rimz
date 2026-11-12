@@ -601,7 +601,7 @@ fn parked_workflow(
     let id = rimz::ids::WorkflowRunId::new();
     let now = jiff::Timestamp::now();
     let value = serde_json::json!({
-        "version":3, "id":id, "workflow":workflow, "spec_dir":dir,
+        "version":rimz::store::workflow::VERSION, "id":id, "workflow":workflow, "spec_dir":dir,
         "spec_digest":hex::encode(sha2::Sha256::digest(spec.as_bytes())),
         "project_root":env.project_root, "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":"active", "node":"check",

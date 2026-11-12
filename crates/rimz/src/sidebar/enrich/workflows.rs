@@ -215,7 +215,7 @@ mod tests {
 
     fn record() -> RunRecord {
         serde_json::from_value(json!({
-            "version": 1, "id": crate::ids::WorkflowRunId::new(), "workflow": "land",
+            "version": crate::store::workflow::VERSION, "id": crate::ids::WorkflowRunId::new(), "workflow": "land",
             "spec_dir": "/spec", "spec_digest": "digest", "project_root": "/repo",
             "scope": {"kind": "worktree", "path": "/trees/lane"},
             "created_at": Timestamp::UNIX_EPOCH, "entered_at": "2026-01-01T00:00:00Z",

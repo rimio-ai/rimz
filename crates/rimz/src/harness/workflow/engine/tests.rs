@@ -259,7 +259,7 @@ fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, WorkflowSpe
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":1, "id":WorkflowRunId::new(), "workflow":"review",
+        "version":crate::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
         "spec_dir":home.path(), "spec_digest":"abc", "prompt":null,
         "scope":{"kind":"worktree","path":home.path()}, "project_root":home.path(),
         "created_at":"2000-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",

@@ -40,7 +40,7 @@ fn child_start_mismatch_or_missing_token_never_kills_a_group() {
 
 fn record() -> RunRecord {
     serde_json::from_value(json!({
-        "version":1, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",
+        "version":crate::store::workflow::VERSION, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",
         "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":null,
         "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",

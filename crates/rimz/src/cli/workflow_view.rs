@@ -312,7 +312,7 @@ mod tests {
 
     fn record() -> RunRecord {
         serde_json::from_value(json!({
-            "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
+            "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
             "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,

@@ -629,7 +629,7 @@ mod tests {
         let now = Timestamp::now();
         let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version":3,"id":WorkflowRunId::new(),"workflow":"review",
+            "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
             "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
             "scope":{"kind":"worktree","path":dir.path()},"state":"parked","node":"gate",
             "created_at":now,"entered_at":now,"visits":{},"visit_grant":0,
@@ -675,7 +675,7 @@ mod tests {
         let now = Timestamp::now();
         let state = paths::StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version":3,"id":WorkflowRunId::new(),"workflow":"review",
+            "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
             "spec_dir":dir.path(),"spec_digest":"digest","project_root":dir.path(),
             "scope":{"kind":"worktree","path":dir.path()},"state":"active","node":"build",
             "created_at":now,"entered_at":now-jiff::SignedDuration::from_mins(10),"visits":{},
@@ -719,7 +719,7 @@ mod tests {
     fn output(with_you: bool) -> (String, String) {
         let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
         let record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version":1,"id":WorkflowRunId::new(),"workflow":"review",
+            "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"review",
             "spec_dir":"/spec","spec_digest":"digest","project_root":"/repo",
             "scope":{"kind":"worktree","path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,

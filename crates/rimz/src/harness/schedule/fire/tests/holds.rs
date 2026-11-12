@@ -6,7 +6,7 @@ fn workflow_tick_resamples_a_hold_before_its_due_time() {
     let state = StatePaths::for_project_root(root.path()).unwrap();
     let runtime = RuntimePaths::for_state(&state).unwrap();
     let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":1,"id":"wf_0190b8172c0070008000000000000001","workflow":"review",
+        "version":crate::store::workflow::VERSION,"id":"wf_0190b8172c0070008000000000000001","workflow":"review",
         "spec_dir":"/definitions/review","spec_digest":"abc","scope":{"kind":"worktree","path":root.path()},
         "project_root":root.path(),"created_at":"2026-01-01T00:00:00Z","state":"active","node":"pr",
         "entered_at":"2026-01-01T00:00:00Z","visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1,

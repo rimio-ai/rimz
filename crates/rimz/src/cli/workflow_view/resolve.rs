@@ -78,6 +78,26 @@ pub(in crate::cli) fn all() -> Result<Vec<Located>> {
     Ok(runs)
 }
 
+/// The refusal of every run whose record another RimZ version wrote, across all rooms.
+pub(in crate::cli) fn refused() -> Result<Vec<records::WorkflowStoreErr>> {
+    Ok(paths::workflow_runs_under(&paths::rimz_home())?
+        .into_iter()
+        .filter_map(|(_, run)| records::load(&run).err().filter(|error| error.is_refused()))
+        .collect())
+}
+
+/// The room and paths of a run named by id whose record another RimZ version wrote; none for
+/// any other target, which `select` resolves and reports.
+pub(in crate::cli) fn refused_run(raw: &str) -> Option<(rimz::StatePaths, paths::WorkflowPaths)> {
+    let Ok(Target::Id(id)) = Target::parse(raw) else {
+        return None;
+    };
+    let (state, run) = locate(&id).ok()?;
+    records::load(&run)
+        .is_err_and(|error| error.is_refused())
+        .then_some((state, run))
+}
+
 pub(in crate::cli) fn command(
     verb: &str,
     targets: &[&str],
@@ -488,7 +508,7 @@ mod tests {
     fn run(root: &str, lane: &str, state: &str, second: i64) -> Located {
         let at = jiff::Timestamp::from_second(second).unwrap();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version": 1, "id": WorkflowRunId::new(), "workflow": "review", "task": "sweep",
+            "version": rimz::store::workflow::VERSION, "id": WorkflowRunId::new(), "workflow": "review", "task": "sweep",
             "spec_dir": "/spec", "spec_digest": "digest",
             "scope": { "kind": "worktree", "path": format!("{root}/{lane}") },
             "project_root": root, "created_at": at, "state": state, "node": "gate",

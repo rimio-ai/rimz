@@ -527,13 +527,21 @@ fn collect_owned(
     // A run home without its record is a crash during `initialize`, which runs
     // under the workspace lock held here, or during an inline run's sealing,
     // which precedes it by moments; every reader skips it, so it goes once the
-    // home itself is past the grace.
+    // home itself is past the grace. A record another RimZ version wrote is
+    // skipped by every reader too, and goes once the record is past the grace.
     for home in paths.workflow_runs()? {
         let recordless = !home.record.try_exists().map_err(|source| GcErr::Io {
             path: home.record.clone(),
             source,
         })?;
-        if recordless && super::collect::is_older_than(&home.home, retention::OWNED_GRACE)? {
+        let aged = if recordless {
+            &home.home
+        } else if crate::store::workflow::load(&home).is_err_and(|error| error.is_refused()) {
+            &home.record
+        } else {
+            continue;
+        };
+        if super::collect::is_older_than(aged, retention::OWNED_GRACE)? {
             let files = sweep.files_under(&home.home)?.len();
             sweep.remove_tree(&home.home, files, report)?;
         }

@@ -53,7 +53,7 @@ fn worktree_recreation_refuses_an_unfinished_workflow_run() {
     )
     .unwrap();
     let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"land",
+        "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"land",
         "spec_dir":dir.path(), "spec_digest":"test", "project_root":repo,
         "scope":{"kind":"worktree","path":created.marker.worktree_path},
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"check",

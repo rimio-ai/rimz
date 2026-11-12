@@ -4,56 +4,52 @@ use jiff::Timestamp;
 use std::time::Duration;
 
 #[test]
-fn step_timeout_holds_for_limits_errors_and_budgets_and_upgrades_old_records() {
-    for version in [1, 2] {
-        for kind in [StopKind::Limit, StopKind::Error, StopKind::Budget] {
-            for seconds in [5400, 10800, 0] {
-                let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
-                let host = FakeHost::new();
-                let mut live = advance_ok(&state, &record.id, &host);
-                let now = Timestamp::now();
-                let start = now - Duration::from_secs(7200);
-                let since = if seconds == 0 {
-                    now + Duration::from_secs(60)
-                } else {
-                    now - Duration::from_secs(seconds)
-                };
-                live.version = version;
-                live.attempt.as_mut().unwrap().started_at = start;
-                update(&state, &live);
-                host.observed.borrow_mut().stopped = Some(Stopped { since, kind });
-                let held = advance_ok(&state, &record.id, &host);
-                assert_eq!(held.state, RunState::Active, "{kind:?}");
-                let attempt = held.attempt.as_ref().unwrap();
-                let opened = attempt.held_since.unwrap();
-                if seconds == 0 {
-                    assert!(now <= opened && opened <= Timestamp::now());
-                } else {
-                    assert_eq!(opened, since.max(start));
-                }
-                assert_eq!(attempt.asked_ms, 0);
-                assert_eq!(held.version, records::VERSION);
-                assert!(
-                    timeout_at(&load(&state.workflow(&record.id).home).unwrap(), &held)
-                        .unwrap()
-                        .is_none()
+fn step_timeout_holds_for_limits_errors_and_budgets() {
+    for kind in [StopKind::Limit, StopKind::Error, StopKind::Budget] {
+        for seconds in [5400, 10800, 0] {
+            let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
+            let host = FakeHost::new();
+            let mut live = advance_ok(&state, &record.id, &host);
+            let now = Timestamp::now();
+            let start = now - Duration::from_secs(7200);
+            let since = if seconds == 0 {
+                now + Duration::from_secs(60)
+            } else {
+                now - Duration::from_secs(seconds)
+            };
+            live.attempt.as_mut().unwrap().started_at = start;
+            update(&state, &live);
+            host.observed.borrow_mut().stopped = Some(Stopped { since, kind });
+            let held = advance_ok(&state, &record.id, &host);
+            assert_eq!(held.state, RunState::Active, "{kind:?}");
+            let attempt = held.attempt.as_ref().unwrap();
+            let opened = attempt.held_since.unwrap();
+            if seconds == 0 {
+                assert!(now <= opened && opened <= Timestamp::now());
+            } else {
+                assert_eq!(opened, since.max(start));
+            }
+            assert_eq!(attempt.asked_ms, 0);
+            assert!(
+                timeout_at(&load(&state.workflow(&record.id).home).unwrap(), &held)
+                    .unwrap()
+                    .is_none()
+            );
+            host.observed.borrow_mut().stopped = None;
+            let earliest = Timestamp::now();
+            let resumed = advance_ok(&state, &record.id, &host);
+            if seconds == 0 {
+                assert_eq!(
+                    resumed.prev_attempt.unwrap().outcome,
+                    AttemptOutcome::Timeout
                 );
-                host.observed.borrow_mut().stopped = None;
-                let earliest = Timestamp::now();
-                let resumed = advance_ok(&state, &record.id, &host);
-                if seconds == 0 {
-                    assert_eq!(
-                        resumed.prev_attempt.unwrap().outcome,
-                        AttemptOutcome::Timeout
-                    );
-                } else {
-                    let credit = i128::from(resumed.attempt.as_ref().unwrap().asked_ms);
-                    assert!(earliest.duration_since(opened).as_millis() <= credit);
-                    assert!(credit <= Timestamp::now().duration_since(opened).as_millis());
-                    let again = advance_ok(&state, &record.id, &host);
-                    assert_eq!(again.attempt.unwrap().asked_ms, credit as u64);
-                    assert_eq!(host.stops.get(), 0);
-                }
+            } else {
+                let credit = i128::from(resumed.attempt.as_ref().unwrap().asked_ms);
+                assert!(earliest.duration_since(opened).as_millis() <= credit);
+                assert!(credit <= Timestamp::now().duration_since(opened).as_millis());
+                let again = advance_ok(&state, &record.id, &host);
+                assert_eq!(again.attempt.unwrap().asked_ms, credit as u64);
+                assert_eq!(host.stops.get(), 0);
             }
         }
     }

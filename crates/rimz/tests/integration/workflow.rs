@@ -34,7 +34,7 @@ const WAIT: &str = "[checks.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wai
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
 
 #[test]
-fn new_runs_seal_definitions_at_version_three() {
+fn new_runs_seal_definitions_at_the_current_record_version() {
     let actual: Vec<_> = [
         String::new(),
         "[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\n".into(),
@@ -56,7 +56,50 @@ fn new_runs_seal_definitions_at_version_three() {
         )
     })
     .collect();
-    assert_eq!(actual, [(3, true); 3]);
+    assert_eq!(
+        actual,
+        [(u64::from(rimz::store::workflow::VERSION), true); 3]
+    );
+}
+
+#[test]
+fn a_run_an_older_rimz_wrote_is_refused_until_cancel_clears_it() {
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let id = start(&env);
+    until(&env, &id, |value| value["record"]["wait"].is_object());
+    let state = env.state_path_for(&env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    {
+        let _guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        let mut value: Value = serde_json::from_slice(&fs::read(&paths.record).unwrap()).unwrap();
+        value["version"] = json!(3);
+        rimz::disk::atomic::write_temp_then_rename(&paths.record, &value).unwrap();
+    }
+    let refusal = format!("Clear it with `rimz workflow cancel {id}`");
+    let listed = command(&env, &["workflow", "list"]);
+    let stderr = String::from_utf8_lossy(&listed.stderr);
+    assert!(
+        listed.status.success() && stderr.contains(&refusal),
+        "list must print the refusal: {stderr}"
+    );
+    let shown = command(&env, &["workflow", "show", &id]);
+    assert!(
+        !shown.status.success() && String::from_utf8_lossy(&shown.stderr).contains(&refusal),
+        "show must refuse: {}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let canceled = success(command(&env, &["workflow", "cancel", &id]));
+    assert!(canceled.starts_with(&format!("removed {id}")), "{canceled}");
+    assert!(!paths.home.exists(), "cancel must remove the run home");
+    let listed = command(&env, &["workflow", "list"]);
+    assert!(
+        listed.status.success() && !String::from_utf8_lossy(&listed.stderr).contains(&id),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let again = start(&env);
+    let value = until(&env, &again, |value| value["record"]["wait"].is_object());
+    assert_eq!(value["record"]["state"], "active");
 }
 
 #[test]
@@ -146,7 +189,7 @@ fn start_legacy_with(env: &Env, command: impl Fn() -> std::process::Command) -> 
     let id = rimz::ids::WorkflowRunId::new();
     let now = jiff::Timestamp::now();
     let value = json!({
-        "version":3, "default_lifecycle":"until", "id":id, "workflow":"review",
+        "version":rimz::store::workflow::VERSION, "default_lifecycle":"until", "id":id, "workflow":"review",
         "spec_dir":dir, "spec_digest":hex::encode(sha2::Sha256::digest(text.as_bytes())),
         "prompt":"Review this", "project_root":env.project_root,
         "scope":{"kind":spec.workflow.scope,"path":env.project_root},
@@ -471,7 +514,7 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
     let state =
         rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
     let mut future = value["record"].clone();
-    future["version"] = json!(4);
+    future["version"] = json!(rimz::store::workflow::VERSION + 1);
     let mut ids = Vec::new();
     for contents in [
         None,

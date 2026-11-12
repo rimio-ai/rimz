@@ -4,12 +4,12 @@ use std::fs;
 
 fn record() -> RunRecord {
     serde_json::from_value(json!({
-        "version":1, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",
+        "version":VERSION, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",
         "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":"Review this PR",
         "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
-        "wait":null, "visits":{"build":{"total":2,"keys":[{"key":42,"visits":1},{"key":"42","visits":1}]}},
+        "wait":null, "visits":{"build":{"total":2,"outcomes":[{"outcome":null,"key":42,"visits":1},{"outcome":null,"key":"42","visits":1}]}},
         "visit_grant":0, "deadline":null, "deadline_fired":false, "next_seq":2,
         "attempt":{"kind":"script","seq":1,"node":"pr","started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":"token"}},
         "prev_attempt":null, "terminal_at":null
@@ -53,34 +53,56 @@ fn notes_round_trip_and_initialize_links_kept_memory() {
 }
 
 #[test]
-fn record_version_fence_accepts_one_through_three() {
+fn record_version_fence_refuses_every_other_version_before_decoding() {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    let mut record = record();
+    let record = record();
     let paths = state.workflow(&record.id);
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
-    let actual: Vec<_> = (0..=4)
-        .map(|version| {
-            record.version = version;
-            write(&paths, &record, &guard).unwrap();
-            match load(&paths) {
-                Ok(loaded) => (version, Some(loaded.version), false),
-                Err(WorkflowStoreErr::Version { version, .. }) => (version, None, true),
-                Err(error) => panic!("version {version}: {error}"),
-            }
-        })
-        .collect();
-    assert_eq!(
-        actual,
-        [
-            (0, None, true),
-            (1, Some(1), false),
-            (2, Some(2), false),
-            (3, Some(3), false),
-            (4, None, true),
-        ]
-    );
+    assert_eq!(load(&paths).unwrap(), record);
+    let id = record.id.as_str();
+    let fix = format!("`rimz workflow cancel {id}`, then start the workflow again");
+    for version in [1, 2, 3, VERSION + 1] {
+        let mut value = serde_json::to_value(&record).unwrap();
+        value["version"] = json!(version);
+        // A version-2 body this binary no longer decodes still meets the refusal first.
+        if version == 2 {
+            value.as_object_mut().unwrap().remove("visits");
+        }
+        fs::write(&paths.record, serde_json::to_vec(&value).unwrap()).unwrap();
+        let error = load(&paths).unwrap_err();
+        let text = error.to_string();
+        assert!(
+            matches!(error, WorkflowStoreErr::Version { version: v, .. } if v == version)
+                && text.contains(&format!("workflow run {id} at "))
+                && text.contains(&format!(
+                    "record version {version}, written by another RimZ version"
+                ))
+                && text.contains(&fix),
+            "version {version}: {text}"
+        );
+    }
+    fs::write(&paths.record, br#"{"id":"x"}"#).unwrap();
+    assert!(matches!(load(&paths), Err(WorkflowStoreErr::Json { .. })));
+}
+
+#[test]
+fn remove_refused_clears_only_a_refused_run_home() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let record = record();
+    let paths = state.workflow(&record.id);
+    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    assert!(!remove_refused(&paths, &guard).unwrap());
+    assert!(paths.record.is_file());
+    let mut value = serde_json::to_value(&record).unwrap();
+    value["version"] = json!(3);
+    fs::write(&paths.record, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(remove_refused(&paths, &guard).unwrap());
+    assert!(!paths.home.exists());
+    assert!(!remove_refused(&paths, &guard).unwrap());
 }
 
 #[test]
@@ -181,33 +203,34 @@ fn unfinished_run_reader_pins_active_and_parked_but_not_terminal_states() {
 }
 
 #[test]
-fn strict_run_reader_refuses_bad_json_and_unknown_versions_with_the_record_path() {
-    let mut failures = Vec::new();
-    for version in [None, Some(999)] {
-        let home = tempfile::tempdir().unwrap();
-        let (state, run) = pin_record(home.path(), "project", RunState::Active);
-        let path = state.workflow(&run.id).record;
-        let text = match version {
-            None => "{".into(),
-            Some(version) => {
-                let mut value = serde_json::to_value(&run).unwrap();
-                value["version"] = json!(version);
-                value.to_string()
-            }
-        };
-        fs::write(&path, text).unwrap();
-        let result = unfinished_under(home.path(), RunRead::Strict);
-        failures.push((
-            version,
-            result
-                .as_ref()
-                .err()
-                .map(ToString::to_string)
-                .is_some_and(|error| error.contains(path.to_str().unwrap())),
-            format!("{result:?}"),
-        ));
+fn strict_run_reader_skips_refused_versions_but_refuses_bad_json_with_the_record_path() {
+    let home = tempfile::tempdir().unwrap();
+    let (_, live) = pin_record(home.path(), "live", RunState::Active);
+    for version in [3, 999] {
+        let (state, run) = pin_record(home.path(), "old", RunState::Active);
+        let mut value = serde_json::to_value(&run).unwrap();
+        value["version"] = json!(version);
+        fs::write(state.workflow(&run.id).record, value.to_string()).unwrap();
     }
-    assert!(failures.iter().all(|(_, named, _)| *named), "{failures:?}");
+    for mode in [RunRead::Strict, RunRead::BestEffort] {
+        let ids: Vec<_> = unfinished_under(home.path(), mode)
+            .unwrap()
+            .into_iter()
+            .map(|run| run.id)
+            .collect();
+        assert_eq!(ids, std::slice::from_ref(&live.id), "{mode:?}");
+    }
+    let (state, run) = pin_record(home.path(), "project", RunState::Active);
+    let path = state.workflow(&run.id).record;
+    fs::write(&path, "{").unwrap();
+    let result = unfinished_under(home.path(), RunRead::Strict);
+    assert!(
+        result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.to_string().contains(path.to_str().unwrap())),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -333,7 +356,7 @@ fn capacity_wait_round_trips_and_legacy_waits_still_load() {
 }
 
 #[test]
-fn until_session_round_trips_with_its_verdict_and_version_fence() {
+fn until_session_round_trips_with_its_verdict() {
     let turn = json!({
         "agent_id":"leader", "started_at":"2026-01-01T00:00:00Z",
         "ended_at":"2026-01-01T00:00:01Z"
@@ -343,7 +366,6 @@ fn until_session_round_trips_with_its_verdict_and_version_fence() {
         "object":{"outcome":"merged"}, "reason":"user"
     });
     let mut value = serde_json::to_value(record()).unwrap();
-    value["version"] = json!(2);
     value["held"] = json!({
         "attempt":value["attempt"], "entered_at":"2026-01-01T00:00:00Z",
         "verdict":verdict
@@ -364,9 +386,7 @@ fn until_session_round_trips_with_its_verdict_and_version_fence() {
         StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &decoded, b"[workflow]", &guard).unwrap();
-    let loaded = load(&state.workflow(&decoded.id));
-    assert!(loaded.is_ok(), "version 2 must load: {loaded:?}");
-    assert_eq!(loaded.unwrap(), decoded);
+    assert_eq!(load(&state.workflow(&decoded.id)).unwrap(), decoded);
 }
 
 #[test]
@@ -404,9 +424,8 @@ fn until_turn_end_journal_preserves_each_decision() {
 }
 
 #[test]
-fn legacy_records_omit_until_fields() {
+fn records_without_a_held_session_omit_until_fields() {
     let value = serde_json::to_value(record()).unwrap();
-    assert_eq!(value["version"], 1);
     assert!(value.get("held").is_none());
     assert!(value["attempt"].get("judged").is_none());
     assert_eq!(
@@ -467,7 +486,7 @@ fn durable_record_round_trip_and_json_shape() {
             {"outcome":null,"key":42,"visits":1},
             {"outcome":null,"key":"42","visits":1}
         ]}),
-        "trunk-shaped keys rows load and serialize as null-outcome buckets"
+        "keyed rows without an outcome serialize as null-outcome buckets"
     );
     value["prev_attempt"] = json!({
         "step":"merge", "outcome":"died", "seq":1, "visit":1, "key":null, "routed_by":"red",
@@ -619,7 +638,7 @@ fn listing_skips_unreadable_records_but_named_loads_fail() {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     initialize(&state, &record, b"[workflow]", &guard).unwrap();
     let mut future = record.clone();
-    future.version = 4;
+    future.version = VERSION + 1;
     for contents in [
         None,
         Some(b"corrupt".to_vec()),

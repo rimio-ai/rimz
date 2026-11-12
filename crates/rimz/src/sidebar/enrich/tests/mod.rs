@@ -115,7 +115,7 @@ fn legacy_workflow_parks_do_not_publish_attention_notices() {
         let paths = state.workflow(&id);
         std::fs::create_dir_all(&paths.home).unwrap();
         std::fs::write(&paths.record, serde_json::to_vec(&serde_json::json!({
-            "version":1,"id":id,"workflow":"review","spec_dir":"/definitions/review","spec_digest":"abc",
+            "version":crate::store::workflow::VERSION,"id":id,"workflow":"review","spec_dir":"/definitions/review","spec_digest":"abc",
             "scope":{"kind":"worktree","path":"/repo"},"project_root":"/repo","created_at":entered,"state":status,
             "park":{"reason":"asked","text":"Which fix?","at":entered},"node":"triage","entered_at":entered,
             "visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1

@@ -2052,7 +2052,7 @@ fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
     .unwrap();
     let state = StatePaths::for_project_root(root.path()).unwrap();
     let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"review", "task":"sweep",
+        "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"review", "task":"sweep",
         "spec_dir":source.path(), "spec_digest":"abc",
         "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
         "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
@@ -2089,7 +2089,7 @@ fn a_capped_fire_reads_the_budget_only_after_a_concurrent_fire_publishes_its_run
     let publisher = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
         let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"capped",
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"capped",
             "task":"capped", "spec_dir":root_path, "spec_digest":"abc",
             "scope":{"kind":"worktree","path":root_path}, "project_root":root_path,
             "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",

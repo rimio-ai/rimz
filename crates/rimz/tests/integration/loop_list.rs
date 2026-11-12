@@ -49,7 +49,7 @@ fn seed_task_run(
     let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
     let now = Timestamp::now();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
-        "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
+        "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
         "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
         "scope":{"kind":"worktree","path":checkout}, "project_root":env.project_root,
         "created_at":now, "entered_at":now, "state":"active", "node":"agent", "wait":wait,

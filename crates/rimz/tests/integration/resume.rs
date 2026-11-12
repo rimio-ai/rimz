@@ -742,7 +742,7 @@ mod agent_ref {
             };
             let seq = if case == "newer" { 8 } else { 7 };
             let mut record: RunRecord = serde_json::from_value(serde_json::json!({
-                "version":3, "id":pin.run, "workflow":"review", "spec_dir":fixture.cwd,
+                "version":rimz::store::workflow::VERSION, "id":pin.run, "workflow":"review", "spec_dir":fixture.cwd,
                 "spec_digest":"test", "project_root":fixture.env.project_root,
                 "scope":{"kind":"worktree","path":fixture.cwd},
                 "created_at":"2026-01-01T00:00:00Z", "state":state,

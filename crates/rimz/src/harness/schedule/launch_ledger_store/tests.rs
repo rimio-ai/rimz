@@ -529,7 +529,7 @@ fn redefinition_forgets_only_checkouts_whose_runs_have_not_reached_an_agent() {
             let id = crate::ids::WorkflowRunId::new();
             let record: crate::store::workflow::RunRecord =
                 serde_json::from_value(serde_json::json!({
-                    "version":1, "id":id, "workflow":"redefined", "task":"redefined",
+                    "version":crate::store::workflow::VERSION, "id":id, "workflow":"redefined", "task":"redefined",
                     "spec_dir":home.path(), "spec_digest":"abc", "prompt":null,
                     "scope":{"kind":"worktree","path":checkout},
                     "project_root":home.path(), "created_at":"2000-01-01T00:00:00Z",

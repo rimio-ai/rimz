@@ -10,7 +10,7 @@ fn seed(env: &Env, root: &Path, checkout: &Path, state: &str) -> RunRecord {
     let id = rimz::ids::WorkflowRunId::new();
     let now = jiff::Timestamp::now();
     let record = serde_json::from_value(json!({
-        "version":1, "id":id, "workflow":"review", "spec_dir":"/spec",
+        "version":rimz::store::workflow::VERSION, "id":id, "workflow":"review", "spec_dir":"/spec",
         "spec_digest":"digest", "project_root":root,
         "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":state, "node":"gate",

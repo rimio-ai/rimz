@@ -8427,7 +8427,7 @@ fn loop_rename_moves_live_workflow_runs() {
         .enumerate()
         .map(|(index, (state, task))| {
             let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
-                "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
+                "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
                 "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
                 "prompt":null, "scope":{"kind":"worktree","path":env.project_root.join(index.to_string())},
                 "project_root":env.project_root, "created_at":"2026-01-01T00:00:00Z",
@@ -9273,7 +9273,7 @@ fn a_declined_run_the_backstop_reports_removes_its_fresh_tree() {
     let paths = env.state_path_for(&root).workflow(&id);
     std::fs::create_dir_all(paths.record.parent().unwrap()).unwrap();
     let record = json!({
-        "version":1, "id":id, "workflow":"nightly", "origin":"inline", "task":"nightly",
+        "version":rimz::store::workflow::VERSION, "id":id, "workflow":"nightly", "origin":"inline", "task":"nightly",
         "spec_dir":"/spec", "spec_digest":"abc", "fire_tree":true,
         "scope":{"kind":"worktree","path":tree}, "project_root":root,
         "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"check",

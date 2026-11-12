@@ -54,7 +54,7 @@ fn attempt(root: &str, node: &str, lifecycle: StepLifecycle) -> (workflow::RunRe
         step: node.into(),
     });
     let workflow = serde_json::from_value(json!({
-        "version":1, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
+        "version":crate::store::workflow::VERSION, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
         "spec_digest":"test", "scope":{"kind":"worktree", "path":root},
         "project_root":root, "created_at":Timestamp::UNIX_EPOCH,
         "entered_at":Timestamp::UNIX_EPOCH, "node":node, "state":"active",
@@ -695,4 +695,32 @@ fn limits_fail_closed_on_unreadable_rooms_and_corrupt_stamp_records_they_read() 
         held(try_admit_in(&fake.host(), &config(""), &request).unwrap()).kind,
         HoldKind::Store
     );
+}
+
+#[test]
+fn system_census_skips_a_refused_run_home_but_not_an_unreadable_one() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(root.path());
+    let state = crate::StatePaths::for_workspace(workspace.clone()).unwrap();
+    let (mut live, _) = attempt(root.path().to_str().unwrap(), "build", StepLifecycle::Stay);
+    live.project_root = root.path().to_owned();
+    std::fs::create_dir_all(&state.root).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    workflow::initialize(&state, &live, b"[workflow]", &guard).unwrap();
+    let (old, _) = attempt(root.path().to_str().unwrap(), "build", StepLifecycle::Stay);
+    workflow::initialize(&state, &old, b"[workflow]", &guard).unwrap();
+    let mut value = serde_json::to_value(&old).unwrap();
+    value["version"] = json!(3);
+    std::fs::write(state.workflow(&old.id).record, value.to_string()).unwrap();
+    drop(guard);
+    let ids: Vec<_> = SystemHost
+        .workflows(&workspace)
+        .unwrap()
+        .into_iter()
+        .map(|run| run.id)
+        .collect();
+    assert_eq!(ids, [live.id]);
+    std::fs::write(state.workflow(&old.id).record, "{").unwrap();
+    let error = SystemHost.workflows(&workspace).unwrap_err();
+    assert!(error.contains("unreadable"), "{error}");
 }

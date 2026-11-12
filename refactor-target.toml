@@ -4265,7 +4265,8 @@ path = "crates/rimz/src/store"
 # store::run::LimitFailure and LimitFailureCause keep a limit-failed child's typed cause for the fleet report (+2).
 # workflow::{RunOutcome, RunEnding} carry a terminal run's outcome from the engine to the scheduler's collector (+2).
 # workflow::RunFire freezes what a loop fire tells its run's briefs (+1).
-surface-budget = 603
+# workflow::remove_refused clears a run home whose record another RimZ version wrote, for `workflow cancel` (+1).
+surface-budget = 604
 
 [[verdict]]
 kind = "item"
@@ -11604,6 +11605,11 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 kind = "item"
 key = "store::workflow::load"
 reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::remove_refused"
+reason = "The store alone reads the record version, so `rimz workflow cancel` clears a run another version wrote through it, under the caller's workspace lock."
 
 [[verdict]]
 kind = "item"

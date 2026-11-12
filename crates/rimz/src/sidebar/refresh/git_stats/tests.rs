@@ -546,7 +546,7 @@ outcome = "ready"
         )
         .unwrap();
         let record = serde_json::json!({
-            "version": 1, "id": id, "workflow": "review",
+            "version": crate::store::workflow::VERSION, "id": id, "workflow": "review",
             "spec_dir": root.path().join("unsealed-definition"), "spec_digest": "abc",
             "scope": {"kind": "worktree", "path": scope.canonicalize().unwrap()},
             "project_root": root.path(), "created_at": now, "state": status,
