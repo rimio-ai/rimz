@@ -794,6 +794,15 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
     }
     homes.push(refused.pop().unwrap());
     let refused = refused.pop().unwrap();
+    // A newer RimZ may still be running its run, however old the record.
+    let newer = paths.workflow(&crate::ids::WorkflowRunId::new());
+    fs::create_dir_all(&newer.home).unwrap();
+    fs::write(&newer.record, r#"{"version":999,"state":"active"}"#).unwrap();
+    fs::File::open(&newer.record)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    homes.push(newer);
     let orphan = paths.workflow(&crate::ids::WorkflowRunId::new());
     fs::create_dir_all(&orphan.work).unwrap();
     fs::write(&orphan.spec, "spec").unwrap();
@@ -831,7 +840,7 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
     assert!(homes[..3].iter().all(|p| !p.home.exists()));
     assert!(
         homes[3..].iter().all(|p| p.home.exists()),
-        "live, recent, unreported, fresh recordless, corrupt, and fresh refused homes must stay"
+        "live, recent, unreported, fresh recordless, corrupt, fresh refused, and newer homes stay"
     );
     assert!(!orphan.home.exists(), "an old recordless home must go");
     assert!(!refused.home.exists(), "an old refused home must go");
