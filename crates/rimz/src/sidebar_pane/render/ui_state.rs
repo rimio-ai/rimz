@@ -195,8 +195,9 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// What the next paint does with the viewport, issued through [`Self::request`].
     pub(in crate::sidebar_pane) viewport: ViewportRequest,
     /// Rows new to this view's presented rows, by row id, each dropped at the first fold
-    /// past its birth window or once its row leaves. Written by reconciliation and marked
-    /// laid out by the draw, read by the offset-zero rule and the birth reveal.
+    /// past its birth window or once its row leaves, or moved to the new id when a
+    /// provider registration adopts its card. Written by reconciliation and marked laid
+    /// out by the draw, read by the offset-zero rule and the birth reveal.
     pub(in crate::sidebar_pane) newborns: BTreeMap<String, Newborn>,
     /// The card a birth reveal showed, whose group header anchors the view until the card
     /// leaves `Fresh`, the selection or the roster, or input makes the offset authoritative.
