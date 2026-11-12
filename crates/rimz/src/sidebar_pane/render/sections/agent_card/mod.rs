@@ -42,6 +42,7 @@ use self::{description::*, gauge::*};
 use entry::{Entry, push_entry};
 use identity::{identity_line, stale_line};
 use template::{CardSlot, CardStage, template};
+pub(in crate::sidebar_pane::render) use template::{engaged_base_lines, is_fresh};
 
 use super::process::{not_tracked_lines, process_detail_line, process_row_line};
 use super::{

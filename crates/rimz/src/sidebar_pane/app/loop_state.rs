@@ -3264,7 +3264,7 @@ impl PaneState {
         // The notice is pane chrome over the view's gate, which another pane may have moved.
         self.ui.gate_notice = v.context.gate.rule.map(|rule| render::GateNotice { rule });
         self.ui.room_modes = viewer_modes(&v.viewers, &v.context.current.client_modes);
-        let user_input = user_input || v.state.scroll_ease.in_flight();
+        let user_input = user_input || v.state.scroll_ease.wheel_in_flight();
         let interactions = std::mem::take(&mut self.ui.interactions);
         let roster = std::mem::take(&mut self.ui.painted_roster);
         let rows = std::mem::take(&mut self.ui.painted_rows);

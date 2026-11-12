@@ -120,6 +120,25 @@ const ENGAGED_RESTING_EXPANDED: &[CardSlot] = &[
     CardSlot::DelegationEntries,
 ];
 
+/// Whether `row` draws as a card that has not started its first turn.
+pub(in crate::sidebar_pane::render) fn is_fresh(row: &SidebarRow) -> bool {
+    matches!(CardStage::of(row), CardStage::Fresh { .. })
+}
+
+/// The lines a selected Engaged card always draws, one per slot that is never empty: what
+/// a birth reveal reserves for a card still Fresh.
+pub(in crate::sidebar_pane::render) fn engaged_base_lines() -> usize {
+    ENGAGED
+        .iter()
+        .filter(|slot| {
+            !matches!(
+                slot,
+                CardSlot::Question | CardSlot::Cache | CardSlot::Delegation
+            )
+        })
+        .count()
+}
+
 /// The ordered slot skeleton for one agent-card state.
 pub(super) fn template(
     stage: CardStage,

@@ -1,4 +1,5 @@
-//! Wheel viewport motion, sampled purely from the serve loop's millisecond clock.
+//! Wheel and birth-reveal viewport motion, sampled purely from the serve loop's millisecond
+//! clock.
 
 use std::time::Duration;
 
@@ -11,6 +12,8 @@ pub(in crate::sidebar_pane) const SCROLL_EASE_FRAME: Duration = Duration::from_m
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub(in crate::sidebar_pane) struct ScrollEase {
     armed: bool,
+    /// The flight armed or running is a birth reveal's, a move the user did not make.
+    birth: bool,
     from: isize,
     to: isize,
     started_ms: FrameTime,
@@ -19,6 +22,13 @@ pub(in crate::sidebar_pane) struct ScrollEase {
 impl ScrollEase {
     pub(in crate::sidebar_pane) fn arm(&mut self) {
         self.armed = true;
+        self.birth = false;
+    }
+
+    /// Arm the next target change as a birth reveal's glide.
+    pub(super) fn arm_birth(&mut self) {
+        self.armed = true;
+        self.birth = true;
     }
 
     /// Resolve a draw's target without mutating the flight; an unarmed change snaps.
@@ -56,6 +66,15 @@ impl ScrollEase {
 
     pub(in crate::sidebar_pane) fn in_flight(&self) -> bool {
         self.from != self.to
+    }
+
+    /// In flight on the user's own wheel, not on a birth reveal.
+    pub(in crate::sidebar_pane) fn wheel_in_flight(&self) -> bool {
+        self.in_flight() && !self.birth
+    }
+
+    pub(in crate::sidebar_pane) fn birth_in_flight(&self) -> bool {
+        self.in_flight() && self.birth
     }
 
     fn position(&self, now_ms: FrameTime) -> usize {
