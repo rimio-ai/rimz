@@ -46,8 +46,8 @@ pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Alert, EntryCursor, FrameTime, PresentationToggles, UiState, ViewState, ViewportIntent,
-    ViewportRequest,
+    Alert, EntryCursor, FrameTime, Newborn, PresentationToggles, UiState, ViewState,
+    ViewportIntent, ViewportRequest,
 };
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
@@ -148,6 +148,12 @@ fn draw_into(
     view.anchor_banner_shown = composed.banner_shown;
     view.drawn_selection = composed.drawn_selection;
     view.held_expansions = composed.held_expansions;
+    view.birth_hold = composed.birth_hold;
+    for id in composed.laid_out {
+        if let Some(born) = view.newborns.get_mut(&id) {
+            born.laid_out = true;
+        }
+    }
     ui.scroll_zone_top = top_height;
     ui.banner_shown = composed.banner_shown;
     ui.skipped_shown =

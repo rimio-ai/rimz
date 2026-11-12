@@ -1545,3 +1545,762 @@ fn line_containing<'a>(rendered: &'a str, needle: &str) -> &'a str {
 fn ends_with_rail(line: &str) -> bool {
     matches!(line.chars().last(), Some('▐' | '▕'))
 }
+
+/// Insert a never-prompted idle card `id` at `at` in group `group`, as a launch's first fold
+/// delivers it.
+fn bear(snapshot: &mut SidebarSnapshot, group: usize, at: usize, id: &str) {
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    let rows = std::sync::Arc::make_mut(&mut groups[group].rows);
+    let mut row = rows[0].clone();
+    row.id = id.to_owned();
+    row.unread = false;
+    let card = row.as_agent_mut().unwrap();
+    card.status = AgentStatus::Idle;
+    card.phase = crate::agents::TurnPhase::Idle;
+    card.handle = Some(id.to_owned());
+    card.task = Some(format!("{id}-task"));
+    rows.insert(at, row);
+}
+
+/// The card's first prompt: it leaves `Fresh` and draws its working height.
+fn engage(snapshot: &mut SidebarSnapshot, id: &str) {
+    let row = snapshot.rows_mut().find(|row| row.id == id).unwrap();
+    let card = row.as_agent_mut().unwrap();
+    card.status = AgentStatus::Running;
+    card.phase = crate::agents::TurnPhase::Acting;
+    card.prompt = Some("go".to_owned());
+}
+
+fn select_id(snapshot: &SidebarSnapshot, view: &mut ViewState, id: &str) {
+    view.selected_index = view.visible_roster(snapshot).ordinal_of_id(id);
+    assert!(view.selected_index.is_some(), "{id} is listed");
+}
+
+/// The focus reached the newborn `id`, as reconciliation hands it to the next draw.
+fn focus_newborn(snapshot: &SidebarSnapshot, view: &mut ViewState, id: &str) {
+    view.newborns.insert(
+        id.to_owned(),
+        crate::sidebar_pane::render::Newborn {
+            born_ms: 0,
+            revealed: true,
+            laid_out: false,
+        },
+    );
+    select_id(snapshot, view, id);
+    view.request(ViewportIntent::RevealBirth(id.to_owned()));
+}
+
+fn draw_lines(
+    snapshot: &SidebarSnapshot,
+    view: &mut ViewState,
+    pane_ui: &mut UiState,
+    height: u16,
+) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(54, height)).unwrap();
+    draw_to_terminal(&mut terminal, snapshot, None, view, pane_ui).unwrap();
+    (0..height)
+        .map(|y| {
+            (0..54)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+/// Draw once more after the glide's duration, so the frame shows the target.
+fn settle(
+    snapshot: &SidebarSnapshot,
+    view: &mut ViewState,
+    pane_ui: &mut UiState,
+    height: u16,
+) -> Vec<String> {
+    view.frame_ms = FrameTime::from_millis(
+        u64::try_from(
+            view.frame_ms
+                .elapsed_since(FrameTime::default())
+                .as_millis(),
+        )
+        .unwrap()
+            + 200,
+    );
+    draw_lines(snapshot, view, pane_ui, height)
+}
+
+fn row_with(lines: &[String], needle: &str) -> Option<usize> {
+    lines.iter().position(|line| line.contains(needle))
+}
+
+/// The pane rows of the last draw's scroll zone.
+fn zone(
+    snapshot: &SidebarSnapshot,
+    view: &ViewState,
+    pane_ui: &UiState,
+    height: u16,
+) -> std::ops::Range<usize> {
+    let frame = compose_lines(
+        snapshot,
+        None,
+        view,
+        pane_ui,
+        &Theme::fixed(false),
+        54,
+        height,
+    );
+    pane_ui.scroll_zone_top..usize::from(height) - frame.bottom_height
+}
+
+fn lines_of(map: &[Option<usize>], ordinal: usize) -> usize {
+    map.iter().filter(|entry| **entry == Some(ordinal)).count()
+}
+
+/// Every line of `id`, its group header when it leads the group, is in the last frame.
+fn shown_whole(snapshot: &SidebarSnapshot, view: &ViewState, pane_ui: &UiState, id: &str) -> bool {
+    let ordinal = view.visible_roster(snapshot).ordinal_of_id(id).unwrap();
+    let tall = compose_lines(snapshot, None, view, pane_ui, &Theme::fixed(false), 54, 200);
+    lines_of(pane_ui.interactions.row_map(), ordinal)
+        == lines_of(tall.interactions.row_map(), ordinal)
+}
+
+fn bar_awake(snapshot: &SidebarSnapshot, view: &ViewState) -> bool {
+    view.scrollbar
+        .visible(view.frame_ms, snapshot.theme.display.resolved_refresh_ms())
+}
+
+/// The shortest pane whose scroll zone has `viewport` rows.
+fn height_for_viewport(snapshot: &SidebarSnapshot, view: &ViewState, viewport: usize) -> u16 {
+    (8..80)
+        .find(|&height| {
+            let frame = compose_lines(
+                snapshot,
+                None,
+                view,
+                &UiState::default(),
+                &Theme::fixed(false),
+                54,
+                height,
+            );
+            usize::from(height) - frame.top_height - frame.bottom_height == viewport
+        })
+        .expect("a pane with that viewport")
+}
+
+fn scrolled_to(
+    snapshot: &SidebarSnapshot,
+    view: &mut ViewState,
+    pane_ui: &mut UiState,
+    height: u16,
+    offset: usize,
+) -> Vec<String> {
+    view.scroll_offset = offset;
+    view.request(ViewportIntent::Wheel);
+    draw_lines(snapshot, view, pane_ui, height);
+    view.scroll_ease.cancel();
+    draw_lines(snapshot, view, pane_ui, height)
+}
+
+#[test]
+fn a_focused_newborn_above_the_anchor_is_drawn_whole_beneath_its_header() {
+    for scrolled in [false, true] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        let (group, header, anchor) = if scrolled {
+            (1, "beta", "codex-4")
+        } else {
+            (0, "alpha", "codex-2")
+        };
+        select_id(&snapshot, &mut view, anchor);
+        let before = scrolled_to(
+            &snapshot,
+            &mut view,
+            &mut pane_ui,
+            22,
+            if scrolled { 12 } else { 0 },
+        );
+        assert_eq!(row_with(&before, header).is_none(), scrolled);
+        bear(&mut snapshot, group, 0, "babe");
+        focus_newborn(&snapshot, &mut view, "babe");
+        draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+        let lines = settle(&snapshot, &mut view, &mut pane_ui, 22);
+        let header_row = row_with(&lines, header).expect("header drawn");
+        assert_eq!(row_with(&lines, "babe"), Some(header_row + 1));
+        assert!(shown_whole(&snapshot, &view, &pane_ui, "babe"));
+        assert_eq!(view.birth_hold.as_deref(), Some("babe"));
+        if scrolled {
+            assert_eq!(header_row, pane_ui.scroll_zone_top, "least move up");
+            assert!(bar_awake(&snapshot, &view), "the reveal moved the view");
+        } else {
+            assert_eq!(view.scroll_offset, 0, "nothing needed to move");
+            assert!(!bar_awake(&snapshot, &view));
+        }
+    }
+}
+
+#[test]
+fn a_focused_newborn_below_the_view_reserves_its_working_height() {
+    for start in [0, 2] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, "codex-0");
+        let before = scrolled_to(&snapshot, &mut view, &mut pane_ui, 22, start);
+        assert!(row_with(&before, "beta").is_none(), "beta starts below");
+        bear(&mut snapshot, 1, 0, "babe");
+        focus_newborn(&snapshot, &mut view, "babe");
+        draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+        let lines = settle(&snapshot, &mut view, &mut pane_ui, 22);
+        let identity = row_with(&lines, "babe").expect("revealed");
+        assert_eq!(row_with(&lines, "beta"), Some(identity - 1));
+        let zone = zone(&snapshot, &view, &pane_ui, 22);
+        assert_eq!(
+            identity + 3,
+            zone.end - 1,
+            "room for four lines, by the least move"
+        );
+        let offset = view.scroll_offset;
+        engage(&mut snapshot, "babe");
+        let engaged = draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+        assert_eq!(view.scroll_offset, offset, "the first prompt moves nothing");
+        assert_eq!(row_with(&engaged, "babe"), Some(identity));
+        assert!(shown_whole(&snapshot, &view, &pane_ui, "babe"));
+        assert!(view.birth_hold.is_none(), "the hold ends with Fresh");
+    }
+}
+
+#[test]
+fn a_focused_newborn_last_in_the_roster_is_whole_once_it_engages() {
+    let mut snapshot = overflowing_fleet();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "codex-0");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    bear(&mut snapshot, 1, 3, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    settle(&snapshot, &mut view, &mut pane_ui, 22);
+    assert!(shown_whole(&snapshot, &view, &pane_ui, "babe"));
+    assert_eq!(view.birth_hold.as_deref(), Some("babe"));
+    engage(&mut snapshot, "babe");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    assert!(
+        shown_whole(&snapshot, &view, &pane_ui, "babe"),
+        "whole on the paint it engages"
+    );
+    settle(&snapshot, &mut view, &mut pane_ui, 22);
+    assert!(shown_whole(&snapshot, &view, &pane_ui, "babe"));
+    assert!(view.birth_hold.is_none());
+}
+
+#[test]
+fn the_birth_hold_keeps_the_header_and_then_yields_to_the_card() {
+    let mut snapshot = overflowing_fleet();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "codex-0");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    bear(&mut snapshot, 1, 0, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    let revealed = settle(&snapshot, &mut view, &mut pane_ui, 22);
+    assert!(view.scroll_offset > 0);
+    let header = row_with(&revealed, "beta").unwrap();
+    let identity = row_with(&revealed, "babe").unwrap();
+
+    bear(&mut snapshot, 1, 0, "kid");
+    view.newborns.insert(
+        "kid".into(),
+        crate::sidebar_pane::render::Newborn {
+            born_ms: 0,
+            revealed: false,
+            laid_out: false,
+        },
+    );
+    select_id(&snapshot, &mut view, "babe");
+    let held = draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    assert_eq!(row_with(&held, "beta"), Some(header), "the header holds");
+    assert!(
+        row_with(&held, "babe").unwrap() > identity,
+        "the newborn moves down"
+    );
+
+    engage(&mut snapshot, "babe");
+    let engaged = draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    assert!(view.birth_hold.is_none());
+    let card = row_with(&engaged, "babe").unwrap();
+    bear(&mut snapshot, 1, 0, "kid-2");
+    select_id(&snapshot, &mut view, "babe");
+    let after = draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    assert_eq!(
+        row_with(&after, "babe"),
+        Some(card),
+        "the card anchors again"
+    );
+}
+
+#[test]
+fn a_reveal_taller_than_the_view_lands_by_header_card_or_first_line() {
+    // (newborn's place in beta, viewport rows, what lands on the top row or fits)
+    for (at, viewport) in [(0, 4), (1, 5), (1, 3)] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, "codex-0");
+        let height = height_for_viewport(&snapshot, &view, viewport);
+        draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+        bear(&mut snapshot, 1, at, "babe");
+        focus_newborn(&snapshot, &mut view, "babe");
+        draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+        let lines = settle(&snapshot, &mut view, &mut pane_ui, height);
+        let zone = zone(&snapshot, &view, &pane_ui, height);
+        assert_eq!(zone.len(), viewport);
+        let identity = row_with(&lines, "babe").expect("revealed");
+        match (at, viewport) {
+            (0, _) => assert_eq!(
+                row_with(&lines, "beta"),
+                Some(zone.start),
+                "the header lands on the top row"
+            ),
+            (_, 5) => assert_eq!(identity + 3, zone.end - 1, "the card alone, whole"),
+            _ => assert_eq!(identity, zone.start, "the card's first line on top"),
+        }
+    }
+    // A team leader: its group's pipeline line sits between the header and the card. A second
+    // group makes the worktree header draw.
+    let mut snapshot = super::worktree::pipeline_snapshot();
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    let mut solo = groups[0].clone();
+    solo.key = "solo".to_owned();
+    solo.label = "solo".to_owned();
+    solo.pipeline = None;
+    let mut row = solo.rows[0].clone();
+    row.id = "solo".to_owned();
+    let card = row.as_agent_mut().unwrap();
+    card.team = None;
+    card.handle = Some("solo".to_owned());
+    solo.rows = std::sync::Arc::new(vec![row]);
+    groups.push(solo);
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "coder");
+    let height = height_for_viewport(&snapshot, &view, 5);
+    draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+    bear(&mut snapshot, 0, 0, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+    let lines = settle(&snapshot, &mut view, &mut pane_ui, height);
+    let zone = zone(&snapshot, &view, &pane_ui, height);
+    let identity = row_with(&lines, "babe").expect("revealed");
+    assert!(
+        lines[zone.start].contains("⑂ pipeline"),
+        "the header lands on the top row: {:?}",
+        &lines[zone.clone()]
+    );
+    assert!(lines[zone.start + 1].contains("Implement"));
+    assert_eq!(
+        identity,
+        zone.start + 2,
+        "the card follows the pipeline line"
+    );
+}
+
+#[test]
+fn a_short_reveal_glides_a_long_one_lands_and_a_wheel_tick_wins() {
+    for (viewport, glides) in [(12, true), (6, false)] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, "codex-0");
+        let height = height_for_viewport(&snapshot, &view, viewport);
+        draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+        let start = view.scroll_offset;
+        bear(&mut snapshot, 1, 0, "babe");
+        focus_newborn(&snapshot, &mut view, "babe");
+        view.frame_ms = ms(1000);
+        draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+        let target = view.scroll_offset;
+        assert_eq!(target - start <= viewport, glides, "{viewport}");
+        assert_eq!(view.scroll_ease.in_flight(), glides, "{viewport}");
+        if glides {
+            assert!(target - start >= 2);
+            let mid = view.scroll_ease.visible(target, ms(1050));
+            assert!(start < mid && mid < target, "{start} < {mid} < {target}");
+        }
+    }
+    let mut snapshot = overflowing_fleet();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "codex-0");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    bear(&mut snapshot, 1, 0, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    view.scroll_offset = 1;
+    view.request(ViewportIntent::Wheel);
+    let lines = draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    assert_eq!(view.scroll_offset, 1, "the wheel wins");
+    assert!(row_with(&lines, "babe").is_none());
+    assert!(view.birth_hold.is_none());
+}
+
+#[test]
+fn a_reveal_measured_with_the_banner_puts_the_header_under_it() {
+    let mut snapshot = overflowing_fleet();
+    {
+        let rows = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+        );
+        let lead = rows.last_mut().unwrap();
+        lead.unread = true;
+        lead.as_agent_mut().unwrap().status = AgentStatus::Waiting;
+    }
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "codex-5");
+    scrolled_to(&snapshot, &mut view, &mut pane_ui, 22, usize::MAX);
+    assert!(!pane_ui.banner_shown, "the lead starts in view");
+    bear(&mut snapshot, 0, 0, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+    let lines = settle(&snapshot, &mut view, &mut pane_ui, 22);
+    assert!(pane_ui.banner_shown, "the reveal raised the banner");
+    assert_eq!(row_with(&lines, "alpha"), Some(pane_ui.scroll_zone_top));
+    assert_eq!(row_with(&lines, "babe"), Some(pane_ui.scroll_zone_top + 1));
+}
+
+#[test]
+fn an_unfocused_newborn_above_keeps_a_top_resting_view_at_the_top() {
+    for start in [0, 3] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, "codex-2");
+        let before = scrolled_to(&snapshot, &mut view, &mut pane_ui, 30, start);
+        let task_0 = row_with(&before, "task-0");
+        let header = row_with(&before, "alpha");
+        let task_2 = row_with(&before, "task-2").unwrap();
+        bear(&mut snapshot, 0, 0, "babe");
+        view.newborns.insert(
+            "babe".into(),
+            crate::sidebar_pane::render::Newborn {
+                born_ms: 0,
+                revealed: false,
+                laid_out: false,
+            },
+        );
+        select_id(&snapshot, &mut view, "codex-2");
+        let after = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+        if start == 0 {
+            let born = lines_of(
+                compose_lines(
+                    &snapshot,
+                    None,
+                    &view,
+                    &pane_ui,
+                    &Theme::fixed(false),
+                    54,
+                    200,
+                )
+                .interactions
+                .row_map(),
+                0,
+            ) - 1;
+            assert_eq!(view.scroll_offset, 0, "the view stays at the top");
+            assert_eq!(row_with(&after, "alpha"), header);
+            assert_eq!(row_with(&after, "task-0"), Some(task_0.unwrap() + born));
+            assert_eq!(row_with(&after, "task-2"), Some(task_2 + born));
+            assert!(!pane_ui.anchor_clamped);
+        } else {
+            assert_eq!(row_with(&after, "task-2"), Some(task_2), "the anchor holds");
+        }
+    }
+}
+
+#[test]
+fn a_newborn_that_loses_the_selection_or_leaves_before_its_paint_moves_nothing() {
+    for leaves in [false, true] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, "codex-0");
+        let before = draw_lines(&snapshot, &mut view, &mut pane_ui, 22);
+        bear(&mut snapshot, 1, 0, "babe");
+        focus_newborn(&snapshot, &mut view, "babe");
+        if leaves {
+            snapshot = overflowing_fleet();
+        }
+        select_id(&snapshot, &mut view, "codex-0");
+        let after = settle(&snapshot, &mut view, &mut pane_ui, 22);
+        let cards = pane_ui.scroll_zone_top..;
+        assert_eq!(after[cards.clone()], before[cards], "leaves {leaves}");
+        assert!(view.birth_hold.is_none(), "leaves {leaves}");
+    }
+}
+
+/// A worktree group `key` holding only the newborn `id`, inserted at group `index`.
+fn bear_group(snapshot: &mut SidebarSnapshot, index: usize, key: &str, id: &str) {
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    let mut group = groups[0].clone();
+    group.key = key.to_owned();
+    group.label = key.to_owned();
+    group.rows = std::sync::Arc::new(vec![groups[0].rows[0].clone()]);
+    groups.insert(index, group);
+    bear(snapshot, index, 0, id);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[index].rows,
+    )
+    .truncate(1);
+}
+
+#[test]
+fn a_new_group_born_above_a_top_resting_view_keeps_it_at_the_top() {
+    // (where the new group lands, the anchor, a line above the new group, lines below it)
+    for (index, anchor, above, below) in [
+        (0, "codex-2", None, ["task-0", "task-2"]),
+        (1, "codex-3", Some("task-0"), ["beta", "task-3"]),
+    ] {
+        let mut snapshot = overflowing_fleet();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, anchor);
+        let before = scrolled_to(&snapshot, &mut view, &mut pane_ui, 30, 0);
+        bear_group(&mut snapshot, index, "gamma", "babe");
+        view.newborns.insert(
+            "babe".into(),
+            crate::sidebar_pane::render::Newborn {
+                born_ms: 0,
+                revealed: false,
+                laid_out: false,
+            },
+        );
+        select_id(&snapshot, &mut view, anchor);
+        let after = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+        let ordinal = view
+            .visible_roster(&snapshot)
+            .ordinal_of_id("babe")
+            .unwrap();
+        let tall = compose_lines(
+            &snapshot,
+            None,
+            &view,
+            &pane_ui,
+            &Theme::fixed(false),
+            54,
+            200,
+        );
+        let group_and_gap = lines_of(tall.interactions.row_map(), ordinal) + 1;
+        assert_eq!(view.scroll_offset, 0, "the view stays at the top: {index}");
+        assert!(!pane_ui.anchor_clamped, "{index}");
+        if let Some(above) = above {
+            assert_eq!(row_with(&after, above), row_with(&before, above), "{index}");
+        }
+        for needle in below {
+            let moved = row_with(&before, needle).unwrap() + group_and_gap;
+            assert_eq!(row_with(&after, needle), Some(moved), "{needle}: {index}");
+        }
+    }
+}
+
+/// Remember `id` as new to the view, unfocused, as reconciliation records it.
+fn record_newborn(view: &mut ViewState, id: &str) {
+    view.newborns.insert(
+        id.to_owned(),
+        crate::sidebar_pane::render::Newborn {
+            born_ms: 0,
+            revealed: false,
+            laid_out: false,
+        },
+    );
+}
+
+/// The offset after one draw that changes `snapshot` by `change`, with `born` recorded new.
+fn offset_after(
+    snapshot: &SidebarSnapshot,
+    anchor: &str,
+    height: u16,
+    born: Option<&str>,
+    change: impl Fn(&mut SidebarSnapshot),
+) -> (usize, Vec<String>, Vec<String>) {
+    let mut snapshot = snapshot.clone();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, anchor);
+    let before = scrolled_to(&snapshot, &mut view, &mut pane_ui, height, 0);
+    change(&mut snapshot);
+    if let Some(id) = born {
+        record_newborn(&mut view, id);
+    }
+    select_id(&snapshot, &mut view, anchor);
+    let after = draw_lines(&snapshot, &mut view, &mut pane_ui, height);
+    (view.scroll_offset, before, after)
+}
+
+#[test]
+fn a_rowless_group_above_growth_and_a_newborn_below_move_the_view_as_the_base() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let lane = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+        .unwrap()
+        .at(Duration::ZERO)
+        .worktree_groups[0]
+        .clone();
+    assert!(lane.rows.is_empty() && lane.workflow.is_some());
+    let label = lane.label.clone();
+    Arc::make_mut(&mut snapshot.worktree_groups).insert(0, lane);
+    let change = |snapshot: &mut SidebarSnapshot| {
+        snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+        bear(snapshot, 2, 3, "babe");
+    };
+    let (base, before, _) = offset_after(&snapshot, "codex-1", 22, None, change);
+    let (offset, _, after) = offset_after(&snapshot, "codex-1", 22, Some("babe"), change);
+    assert!(row_with(&before, &label) < row_with(&before, "task-1"));
+    assert!(row_with(&after, "babe").is_none(), "born below the view");
+    assert!(base > 0, "growth above moves the view");
+    assert_eq!(offset, base, "the rowless group is no birth");
+}
+
+#[test]
+fn a_newborn_drawn_below_and_then_resorted_above_moves_the_view_as_a_resort() {
+    let snapshot = overflowing_fleet();
+    for born in [None, Some("babe")] {
+        let mut snapshot = snapshot.clone();
+        let mut view = ViewState::default();
+        let mut pane_ui = UiState::default();
+        select_id(&snapshot, &mut view, "codex-3");
+        scrolled_to(&snapshot, &mut view, &mut pane_ui, 30, 0);
+        bear(&mut snapshot, 1, 3, "babe");
+        if let Some(id) = born {
+            record_newborn(&mut view, id);
+        }
+        select_id(&snapshot, &mut view, "codex-3");
+        let first = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+        assert!(
+            row_with(&first, "babe").is_none(),
+            "first drawn below the view"
+        );
+        let task_3 = row_with(&first, "task-3").expect("the anchor is in view");
+        let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[1].rows);
+        let babe = rows.pop().unwrap();
+        rows.insert(0, babe);
+        select_id(&snapshot, &mut view, "codex-3");
+        let resorted = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+        assert_eq!(
+            row_with(&resorted, "task-3"),
+            Some(task_3),
+            "the anchor keeps its row: {born:?}"
+        );
+        assert!(view.scroll_offset > 0, "{born:?}");
+    }
+}
+
+#[test]
+fn a_team_born_into_a_group_above_a_top_resting_view_counts_its_pipeline_line() {
+    let mut snapshot = overflowing_fleet();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "codex-2");
+    let before = scrolled_to(&snapshot, &mut view, &mut pane_ui, 30, 0);
+    let mut pipeline = super::worktree::pipeline_snapshot().worktree_groups[0]
+        .pipeline
+        .clone();
+    pipeline.as_mut().unwrap().owner = None;
+    for id in ["mate", "lead"] {
+        bear(&mut snapshot, 0, 0, id);
+        record_newborn(&mut view, id);
+    }
+    let groups = Arc::make_mut(&mut snapshot.worktree_groups);
+    groups[0].team = Some("forge".to_owned());
+    groups[0].pipeline = pipeline;
+    for row in Arc::make_mut(&mut groups[0].rows).iter_mut().take(2) {
+        row.as_agent_mut().unwrap().team = Some("forge".to_owned());
+    }
+    select_id(&snapshot, &mut view, "codex-2");
+    let after = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+    assert!(
+        after.iter().any(|line| line.contains("Implement")),
+        "{after:#?}"
+    );
+    let tall = compose_lines(
+        &snapshot,
+        None,
+        &view,
+        &pane_ui,
+        &Theme::fixed(false),
+        54,
+        200,
+    );
+    let roster = view.visible_roster(&snapshot);
+    let born: usize = ["lead", "mate"]
+        .map(|id| {
+            lines_of(
+                tall.interactions.row_map(),
+                roster.ordinal_of_id(id).unwrap(),
+            )
+        })
+        .iter()
+        .sum();
+    // The header line now maps the lead but was drawn before; the strip line is new.
+    let moved = born;
+    assert_eq!(view.scroll_offset, 0, "the view stays at the top");
+    for needle in ["task-0", "task-2"] {
+        let expected = row_with(&before, needle).unwrap() + moved;
+        assert_eq!(row_with(&after, needle), Some(expected), "{needle}");
+    }
+}
+
+#[test]
+fn a_panes_first_draw_lands_a_birth_reveal_in_one_frame() {
+    let mut snapshot = overflowing_fleet();
+    let mut view = ViewState::default();
+    select_id(&snapshot, &mut view, "codex-0");
+    draw_lines(&snapshot, &mut view, &mut UiState::default(), 22);
+    bear(&mut snapshot, 1, 0, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    let mut fresh_pane = UiState::default();
+    draw_lines(&snapshot, &mut view, &mut fresh_pane, 22);
+    assert!(view.scroll_offset > 0, "the reveal moved the view");
+    assert!(!view.scroll_ease.in_flight(), "no glide on a first draw");
+    assert!(shown_whole(&snapshot, &view, &fresh_pane, "babe"));
+}
+
+#[test]
+fn the_birth_hold_at_the_top_keeps_the_header_and_then_yields_to_the_card() {
+    let mut snapshot = overflowing_fleet();
+    let mut view = ViewState::default();
+    let mut pane_ui = UiState::default();
+    select_id(&snapshot, &mut view, "codex-2");
+    scrolled_to(&snapshot, &mut view, &mut pane_ui, 30, 0);
+    bear(&mut snapshot, 0, 0, "babe");
+    focus_newborn(&snapshot, &mut view, "babe");
+    draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+    let revealed = settle(&snapshot, &mut view, &mut pane_ui, 30);
+    assert_eq!(view.scroll_offset, 0);
+    let header = row_with(&revealed, "alpha").unwrap();
+    let identity = row_with(&revealed, "babe").unwrap();
+
+    bear(&mut snapshot, 0, 0, "kid");
+    record_newborn(&mut view, "kid");
+    select_id(&snapshot, &mut view, "babe");
+    let held = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+    assert_eq!(view.scroll_offset, 0);
+    assert_eq!(row_with(&held, "alpha"), Some(header), "the header holds");
+    let kid = row_with(&held, "kid").unwrap();
+    assert_eq!(kid, identity, "the teammate takes the newborn's row");
+    assert!(
+        row_with(&held, "babe").unwrap() > identity,
+        "the newborn moves down"
+    );
+    assert_eq!(view.birth_hold.as_deref(), Some("babe"));
+
+    engage(&mut snapshot, "babe");
+    let engaged = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+    assert!(view.birth_hold.is_none());
+    let card = row_with(&engaged, "babe").unwrap();
+    engage(&mut snapshot, "kid");
+    select_id(&snapshot, &mut view, "babe");
+    let grown = draw_lines(&snapshot, &mut view, &mut pane_ui, 30);
+    assert_eq!(
+        row_with(&grown, "babe"),
+        Some(card),
+        "the card anchors again"
+    );
+    assert!(view.scroll_offset > 0, "growth above moves the view");
+}

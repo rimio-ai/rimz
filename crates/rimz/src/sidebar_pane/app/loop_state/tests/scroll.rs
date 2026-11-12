@@ -3578,3 +3578,457 @@ fn glide_arrival_lands_the_glide_over_a_pending_placement() {
     assert!(!pair.view(1).scroll_ease.in_flight());
     assert_eq!(pair.view(1).scroll_offset, target);
 }
+
+/// The rig's published rows with `id` born on `raw` at `at`, optionally under the focus.
+fn born(rig: &Rig, at: usize, id: &str, raw: &str, focused: bool) -> SidebarSnapshot {
+    let mut next = rig.state.views.mirror().clone();
+    let rows = Arc::make_mut(&mut Arc::make_mut(&mut next.worktree_groups)[0].rows);
+    let mut row = rows[0].clone();
+    row.id = id.to_owned();
+    row.name = format!("scroll-card-{id}");
+    row.pane = Some(pane(raw, "tab_0"));
+    rows.insert(at, row);
+    if focused {
+        next.focused_pane = Some(pane(raw, "tab_0").pane_id);
+    }
+    next
+}
+
+fn birth_hold(rig: &mut Rig) -> Option<String> {
+    rig.view().ui().birth_hold.clone()
+}
+
+#[test]
+fn a_newborn_reveals_once_when_its_row_and_the_focus_meet_inside_the_window() {
+    // (row before focus, gap between them, focus ever reaches it, reveals)
+    for (row_first, gap_ms, focuses, reveals) in [
+        (true, 1_000, true, true),
+        (false, 1_000, true, true),
+        (true, 2_500, true, false),
+        (true, 1_000, false, false),
+    ] {
+        let (mut rig, _) = scroll_rig();
+        let clock = play_clock(&mut rig);
+        let case = format!("row first {row_first}, gap {gap_ms}, focus {focuses}");
+        if row_first {
+            let row = born(&rig, 3, "agent-20", "terminal_20", false);
+            rig.fold(row, SnapshotSource::Produced);
+            paint_at(&mut rig, 0);
+            clock.advance(Duration::from_millis(gap_ms));
+            let mut focus = rig.state.views.mirror().clone();
+            if focuses {
+                focus.focused_pane = Some(pane("terminal_20", "tab_0").pane_id);
+            }
+            rig.fold(focus, SnapshotSource::Produced);
+        } else {
+            let mut focus = rig.state.views.mirror().clone();
+            focus.focused_pane = Some(pane("terminal_20", "tab_0").pane_id);
+            rig.fold(focus, SnapshotSource::Produced);
+            paint_at(&mut rig, 0);
+            clock.advance(Duration::from_millis(gap_ms));
+            rig.fold(
+                born(&rig, 3, "agent-20", "terminal_20", true),
+                SnapshotSource::Produced,
+            );
+        }
+        let expected = reveals.then(|| "agent-20".to_owned());
+        assert_eq!(
+            rig.view().ui().reveals_birth().map(str::to_owned),
+            expected,
+            "{case}"
+        );
+        paint_at(&mut rig, 0);
+        assert_eq!(birth_hold(&mut rig), expected, "{case}");
+        let mut again = rig.state.views.mirror().clone();
+        again.now += Duration::from_millis(10);
+        rig.fold(again, SnapshotSource::Produced);
+        assert_eq!(rig.view().ui().reveals_birth(), None, "once: {case}");
+    }
+}
+
+#[test]
+fn a_views_first_fetch_has_no_newborns_though_its_initial_focus_arms_the_freeze() {
+    let mut rig = Rig::with_own_pane(pane("terminal_99", "tab_0").pane_id);
+    let mut snapshot = agent_snapshot(&rig.ws);
+    snapshot.focused_pane = Some(pane("terminal_9", "tab_0").pane_id);
+    rig.fold(snapshot, SnapshotSource::Produced);
+    assert!(rig.view().ui().newborns.is_empty());
+    assert_eq!(rig.view().ui().reveals_birth(), None);
+    assert!(
+        rig.view().ui().freeze.is_some(),
+        "initial focus arms the freeze"
+    );
+    rig.paint(true);
+    assert_eq!(birth_hold(&mut rig), None);
+}
+
+#[test]
+fn an_in_place_launch_on_the_focused_pane_reveals_its_card() {
+    let (mut rig, _) = scroll_rig_with(|snapshot| {
+        // An agent's exit changes the foreground command; unchanged zsh is gated as a flicker.
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[15]
+            .pane
+            .as_mut()
+            .unwrap()
+            .command = Some("claude".to_owned());
+    });
+    let clock = play_clock(&mut rig);
+    let mut shell = rig.state.views.mirror().clone();
+    let process = process_row(&rig, "terminal_15");
+    *Arc::make_mut(&mut Arc::make_mut(&mut shell.worktree_groups)[0].rows)
+        .iter_mut()
+        .find(|row| row.id == "agent-15")
+        .unwrap() = process.clone();
+    rig.fold(shell, SnapshotSource::Produced);
+    paint_at(&mut rig, 0);
+    clock.advance(Duration::from_millis(2_500));
+    let mut focus = rig.state.views.mirror().clone();
+    focus.focused_pane = Some(pane("terminal_15", "tab_0").pane_id);
+    rig.fold(focus, SnapshotSource::Produced);
+    paint_at(&mut rig, 0);
+    assert_eq!(birth_hold(&mut rig), None, "an existing card never reveals");
+    let mut exec = rig.state.views.mirror().clone();
+    let mut agent = rig
+        .view()
+        .ctx()
+        .current
+        .rows()
+        .find(|row| row.id == "agent-0")
+        .unwrap()
+        .clone();
+    agent.id = "agent-15-exec".into();
+    agent.pane = Some(pane("terminal_15", "tab_0"));
+    *exec.rows_mut().find(|row| row.id == process.id).unwrap() = agent;
+    rig.fold(exec, SnapshotSource::Produced);
+    assert_eq!(rig.view().ui().reveals_birth(), Some("agent-15-exec"));
+    paint_at(&mut rig, 0);
+    assert!(
+        rig.state
+            .pane
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-15-exec")
+    );
+}
+
+#[test]
+fn a_frozen_admission_is_revealed_where_the_freeze_placed_it() {
+    let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
+    let now_ms = rig.state.pane.clock.now_ms() as i64;
+    layout_freeze::arm_freeze(rig.view().ui(), now_ms);
+    rig.fold(
+        born(&rig, 12, "agent-20", "terminal_20", true),
+        SnapshotSource::Produced,
+    );
+    paint_at(&mut rig, 0);
+    let frozen_at = rig
+        .view()
+        .ui()
+        .freeze
+        .as_ref()
+        .unwrap()
+        .frozen
+        .rows
+        .iter()
+        .position(|row| row.id == "agent-20");
+    let drawn_at = rig.view().ctx().current.worktree_groups[0]
+        .rows
+        .iter()
+        .position(|row| row.id == "agent-20");
+    assert_eq!(drawn_at, frozen_at);
+    assert!(drawn_at.unwrap() > 6, "admitted below the first screen");
+    assert_eq!(birth_hold(&mut rig).as_deref(), Some("agent-20"));
+    assert!(
+        rig.state
+            .pane
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-20")
+    );
+}
+
+#[test]
+fn birth_moves_arm_the_click_guard_and_the_birth_glide_keeps_it() {
+    let (mut rig, _) = scroll_rig();
+    let clock = play_clock(&mut rig);
+    let mut inbox = queued((0..40).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    clock.advance(Duration::from_secs(1));
+    rig.state.pane.next_frame = clock.now();
+    rig.paint(true);
+    let (first, last) = rig.state.pane.ui.interactions.visible_row_span().unwrap();
+    assert_eq!(last, 19, "the roster's last card is in view");
+    let row = rig
+        .state
+        .pane
+        .ui
+        .interactions
+        .line_for_row(first + 1)
+        .unwrap() as u16;
+    rig.fold(
+        born(&rig, 20, "agent-20", "terminal_20", true),
+        SnapshotSource::Produced,
+    );
+    paint_at(&mut rig, 5_000);
+    assert!(
+        rig.view().ui().scroll_ease.in_flight(),
+        "a short reveal glides"
+    );
+    let sequence = rig.view().ui().layout_sequence;
+    let mirror = rig.view().ui().hidden_mirror();
+    assert!(!mirror.scroll_ease.in_flight(), "a mirror draws no glide");
+    clock.advance(Duration::from_millis(16));
+    paint_at(&mut rig, 5_016);
+    assert_eq!(
+        rig.view().ui().layout_sequence,
+        sequence,
+        "a glide frame with a fixed target publishes no layout"
+    );
+    clock.advance(Duration::from_millis(134));
+    paint_at(&mut rig, 5_150);
+    assert!(!rig.view().ui().scroll_ease.in_flight());
+    let outcome = rig
+        .state
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(
+        outcome.effects,
+        vec![InputEffect::Focus(
+            pane(&format!("terminal_{}", first + 1), "tab_0").pane_id
+        )],
+        "the click lands on the card drawn before the birth glide"
+    );
+
+    let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
+    assert_eq!(rig.view().ui().scroll_offset, 0);
+    let mut next = born(&rig, 0, "agent-20", "terminal_20", false);
+    // The newest registration ranks first among calm cards.
+    let now = next.now;
+    Arc::make_mut(&mut Arc::make_mut(&mut next.worktree_groups)[0].rows)[0]
+        .as_agent_mut()
+        .unwrap()
+        .registered_at = Some(now);
+    rig.fold(next, SnapshotSource::Produced);
+    assert_eq!(
+        rig.view().ctx().current.worktree_groups[0].rows[0].id,
+        "agent-20"
+    );
+    paint_at(&mut rig, 0);
+    assert_eq!(
+        rig.view().ui().scroll_offset,
+        0,
+        "the view stays at the top"
+    );
+    assert!(
+        rig.state.pane.click_guard.is_some(),
+        "cards moved under the pointer"
+    );
+    rig.state
+        .apply_input([Wakeup::Scroll { down: true }], &mut rig.terminal)
+        .unwrap();
+    assert!(
+        rig.state.pane.click_guard.is_none(),
+        "a wheel paint clears it"
+    );
+}
+
+#[test]
+fn a_hidden_mirror_draws_none_of_a_pending_birth_reveal() {
+    let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
+    rig.fold(
+        born(&rig, 15, "agent-20", "terminal_20", true),
+        SnapshotSource::Produced,
+    );
+    assert_eq!(rig.view().ui().reveals_birth(), Some("agent-20"));
+    let mirror = rig.view().ui().hidden_mirror();
+    assert_eq!(mirror.reveals_birth(), None);
+    assert_eq!(mirror.newborns, rig.view().ui().newborns);
+}
+
+#[test]
+fn an_arrival_with_a_pending_birth_reveal_lands_it_in_one_frame() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+        let row = v.context.current.worktree_groups[0].rows[15].clone();
+        v.state.newborns.insert(
+            row.id.clone(),
+            render::Newborn {
+                born_ms: 0,
+                revealed: true,
+                laid_out: false,
+            },
+        );
+        v.state.selected_pane = row.pane.as_ref().map(|pane| pane.pane_id.clone());
+        v.state.baseline_pane = v.state.selected_pane.clone();
+        v.state.selected_index = Some(15);
+        v.state.request(render::ViewportIntent::RevealBirth(row.id));
+    });
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let view = pair.view(1);
+    assert!(
+        !view.scroll_ease.in_flight(),
+        "an arrival lands in one frame"
+    );
+    assert!(view.scroll_offset > 0);
+    assert!(view.birth_hold.is_some());
+}
+
+/// The process row a shell pane `raw` shows before an agent binds it.
+fn process_row(rig: &Rig, raw: &str) -> crate::store::snapshot::SidebarRow {
+    let row =
+        snapshot_with_panes(&rig.ws, vec![pane(raw, "tab_0")]).worktree_groups[0].rows[0].clone();
+    assert!(row.as_process().is_some());
+    row
+}
+
+/// `next` with every row's panes recorded as the working panes the view's clients see.
+fn seen(mut next: SidebarSnapshot) -> SidebarSnapshot {
+    let working: Vec<_> = next
+        .rows()
+        .flat_map(|row| row.pane_ids())
+        .cloned()
+        .collect();
+    let own = next.own_view.as_mut().unwrap();
+    own.sibling_count = working.len();
+    own.working_pane_ids = working.clone();
+    next.viewed_panes = working;
+    next
+}
+
+#[test]
+fn a_process_row_born_under_the_focus_reveals_nothing() {
+    // (a new shell pane, or a focused agent exiting to its shell)
+    for exits in [false, true] {
+        let (mut rig, _) = scroll_rig_with(|snapshot| {
+            let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows);
+            for row in rows.iter_mut().take(15) {
+                row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+            }
+            // A real exit changes the foreground command; unchanged zsh is gated as a flicker.
+            rows[15].pane.as_mut().unwrap().command = Some("claude".to_owned());
+            *snapshot = seen(snapshot.clone());
+        });
+        play_clock(&mut rig);
+        if exits {
+            let mut focus = rig.state.views.mirror().clone();
+            focus.focused_pane = Some(pane("terminal_15", "tab_0").pane_id);
+            rig.fold(focus, SnapshotSource::Produced);
+            paint_at(&mut rig, 0);
+        }
+        paint_scrolled(&mut rig, 3);
+        rig.view().ui().scroll_ease.cancel();
+        let process = process_row(&rig, if exits { "terminal_15" } else { "terminal_20" });
+        let mut next = rig.state.views.mirror().clone();
+        next.focused_pane = Some(process.pane.as_ref().unwrap().pane_id.clone());
+        let rows = Arc::make_mut(&mut Arc::make_mut(&mut next.worktree_groups)[0].rows);
+        if exits {
+            *rows.iter_mut().find(|row| row.id == "agent-15").unwrap() = process;
+        } else {
+            rows.insert(15, process);
+        }
+        rig.fold(seen(next), SnapshotSource::Produced);
+        assert_eq!(rig.view().ui().reveals_birth(), None, "exits {exits}");
+        paint_at(&mut rig, 0);
+        assert_eq!(rig.view().ui().scroll_offset, 3, "exits {exits}");
+        assert_eq!(birth_hold(&mut rig), None, "exits {exits}");
+    }
+}
+
+#[test]
+fn a_provider_registration_adopting_a_launch_row_is_no_birth() {
+    for wheels in [false, true] {
+        let (mut rig, _) = scroll_rig();
+        let clock = play_clock(&mut rig);
+        rig.fold(
+            born(&rig, 15, "launch-a", "terminal_20", true),
+            SnapshotSource::Produced,
+        );
+        paint_at(&mut rig, 0);
+        clock.advance(Duration::from_millis(200));
+        paint_at(&mut rig, 200);
+        assert_eq!(birth_hold(&mut rig).as_deref(), Some("launch-a"));
+        if wheels {
+            rig.state
+                .apply_input(
+                    (0..3).map(|_| Wakeup::Scroll { down: false }),
+                    &mut rig.terminal,
+                )
+                .unwrap();
+            rig.view().ui().scroll_ease.cancel();
+            paint_at(&mut rig, 200);
+        }
+        let offset = rig.view().ui().scroll_offset;
+        let mut adopted = rig.state.views.mirror().clone();
+        Arc::make_mut(&mut Arc::make_mut(&mut adopted.worktree_groups)[0].rows)
+            .iter_mut()
+            .find(|row| row.id == "launch-a")
+            .unwrap()
+            .id = "real-session".into();
+        rig.fold(adopted, SnapshotSource::Produced);
+        assert_eq!(rig.view().ui().reveals_birth(), None, "wheels {wheels}");
+        assert!(!rig.view().ui().newborns.contains_key("real-session"));
+        paint_at(&mut rig, 200);
+        assert_eq!(rig.view().ui().scroll_offset, offset, "wheels {wheels}");
+        let hold = (!wheels).then(|| "real-session".to_owned());
+        assert_eq!(
+            birth_hold(&mut rig),
+            hold,
+            "the hold carries: wheels {wheels}"
+        );
+    }
+}
+
+#[test]
+fn a_hidden_mirror_ahead_of_its_source_runs_no_birth_ensure() {
+    let (mut rig, _) = scroll_rig();
+    let clock = play_clock(&mut rig);
+    let mut inbox = queued((0..40).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    clock.advance(Duration::from_secs(1));
+    rig.state.pane.next_frame = clock.now();
+    rig.paint(true);
+    rig.fold(
+        born(&rig, 20, "agent-20", "terminal_20", true),
+        SnapshotSource::Produced,
+    );
+    paint_at(&mut rig, 5_000);
+    clock.advance(Duration::from_millis(200));
+    paint_at(&mut rig, 5_200);
+    assert_eq!(birth_hold(&mut rig).as_deref(), Some("agent-20"));
+    let mut engaged = rig.state.views.mirror().clone();
+    let row = engaged.rows_mut().find(|row| row.id == "agent-20").unwrap();
+    let card = row.as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Running;
+    card.phase = crate::agents::TurnPhase::Acting;
+    card.prompt = Some("go".to_owned());
+    rig.fold(engaged, SnapshotSource::Produced);
+    let snapshot = rig.view().ctx().current.clone();
+    let source = rig.view().ui().clone();
+    let theme = rig.state.pane.ui.theme(&snapshot.theme);
+    let size = rig.terminal.get_frame().area();
+    let compose = |view: &render::ViewState| {
+        render::compose_lines(
+            &snapshot,
+            None,
+            view,
+            &rig.state.pane.ui,
+            &theme,
+            size.width,
+            size.height,
+        )
+        .scroll_offset
+    };
+    assert_ne!(
+        compose(&source),
+        source.scroll_offset,
+        "the source paint ensures"
+    );
+    let mirror = source.hidden_mirror();
+    assert_eq!(compose(&mirror), source.scroll_offset, "a mirror does not");
+}

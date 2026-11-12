@@ -1,6 +1,6 @@
 //! Portable reconciliation state advanced by the attachment painting a view.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,7 +19,7 @@ use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::timing::{FOCUS_MARKER_TMUX_DWELL, FOCUS_MARKER_ZELLIJ_DWELL, TAB_READ_DWELL};
 use crate::sidebar::unread::UnreadClearCause;
 use crate::sidebar_pane::render::{self, ViewState, ViewportIntent};
-use crate::store::snapshot::{HeldRank, SidebarOwnView, SidebarSnapshot};
+use crate::store::snapshot::{HeldRank, SidebarOwnView, SidebarRow, SidebarSnapshot};
 
 use super::clock::LoopClock;
 use super::fetch::{FetchUpdate, FoldInputs, SnapshotSource};
@@ -36,6 +36,10 @@ use super::state::{
     set_rows_unread,
 };
 use super::timing::frame_clock;
+
+/// How long a view remembers a row new to it, on the fold clock: the focus reaching the row
+/// inside this window reveals it.
+const BIRTH_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub(super) struct ReadContext<'a> {
     pub(super) own_pane: &'a PaneId,
@@ -708,6 +712,7 @@ impl ViewContext {
             }
             super::selection::anchor_selection(ui, &self.current);
         }
+        self.note_births(ui, previous, focused.as_ref(), now_ms);
         if ui.freeze.is_none()
             && let Some(filter) = ui.toggles.make_up_filter.filter
             && filter.total(&self.current.worktree_groups) == 0
@@ -720,6 +725,59 @@ impl ViewContext {
             && previous_filter.is_some()
             && ui.toggles.make_up_filter.filter.is_none();
         (persist_filter, held && ui.freeze.is_none())
+    }
+
+    /// Remember the rows this fold made new to a view that has painted, forget each past the
+    /// birth window or gone, and reveal once the newborn card the view's derived focus sits
+    /// on. A card that takes over another card's pane under a new id (a provider registration
+    /// adopting its launch row) is no birth: it takes over the birth hold instead.
+    fn note_births(
+        &self,
+        ui: &mut ViewState,
+        previous: &SidebarSnapshot,
+        focused: Option<&PaneId>,
+        now_ms: i64,
+    ) {
+        let window = i64::try_from(BIRTH_WINDOW.as_millis()).unwrap_or(i64::MAX);
+        let current: BTreeSet<&str> = self.current.rows().map(|row| row.id.as_str()).collect();
+        ui.newborns.retain(|id, born| {
+            now_ms.saturating_sub(born.born_ms) <= window && current.contains(id.as_str())
+        });
+        let presented: BTreeSet<&str> = previous.rows().map(|row| row.id.as_str()).collect();
+        // A view's first fetch, a fold before its first paint, or one after it painted only the
+        // placeholder of a host with no fold yet, has no rows it presented.
+        if !presented.is_empty() && ui.layout_key.is_some() {
+            for row in self.current.rows() {
+                if presented.contains(row.id.as_str()) {
+                    continue;
+                }
+                if let Some(adopted) = adopted_card(previous, &current, row) {
+                    if ui.birth_hold.as_deref() == Some(adopted) {
+                        ui.birth_hold = Some(row.id.clone());
+                    }
+                    continue;
+                }
+                ui.newborns
+                    .entry(row.id.clone())
+                    .or_insert(render::Newborn {
+                        born_ms: now_ms,
+                        revealed: false,
+                        laid_out: false,
+                    });
+            }
+        }
+        let Some(row) = focused
+            .and_then(|pane| self.current.row_owning_pane(pane))
+            .filter(|row| row.as_agent().is_some())
+        else {
+            return;
+        };
+        if let Some(born) = ui.newborns.get_mut(&row.id)
+            && !born.revealed
+        {
+            born.revealed = true;
+            ui.request(ViewportIntent::RevealBirth(row.id.clone()));
+        }
     }
 
     pub(super) fn fold_spend_rolls(&self, ui: &mut ViewState, clock: &LoopClock) {
@@ -752,4 +810,18 @@ impl ViewContext {
             refresh_ms,
         );
     }
+}
+
+/// The id of the card that showed `row`'s pane in `previous` and has left the roster, when
+/// `row` is a card too: the same agent adopted under a new id, not a birth.
+fn adopted_card<'a>(
+    previous: &'a SidebarSnapshot,
+    current: &BTreeSet<&str>,
+    row: &SidebarRow,
+) -> Option<&'a str> {
+    row.as_agent()?;
+    let pane = &row.pane.as_ref()?.pane_id;
+    let before = previous.row_owning_pane(pane)?;
+    before.as_agent()?;
+    (!current.contains(before.id.as_str())).then_some(before.id.as_str())
 }

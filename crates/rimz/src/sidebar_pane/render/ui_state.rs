@@ -162,15 +162,17 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Preserve the last painted order until the arriving pane's first composition, even when its hold has expired.
     pub(in crate::sidebar_pane) arrival_pending: bool,
     /// Target first scroll-zone content line of the agent-cards viewport.
-    /// Resolved around the previous target window's selected or topmost card,
-    /// clamped to the zone, and written back like frame interactions. Only this
-    /// sidebar's own input reveals an off-screen card or a clipped entry within it.
+    /// Resolved around the previous target window's selected or topmost card, or the
+    /// held newborn's group header, clamped to the zone, and written back like frame
+    /// interactions. Only this sidebar's own input reveals an off-screen card or a
+    /// clipped entry within it, besides a birth reveal of a newborn under the focus.
     /// The line actually shown is [`Self::scroll_ease`]'s visible row.
     /// Travels with the client view between painting panes.
     pub(in crate::sidebar_pane) scroll_offset: usize,
-    /// The wheel glide from the last shown line toward `scroll_offset`: armed
-    /// by a wheel tick, observed at every draw's write-back, translated by card
-    /// corrections, and snapped by selection changes and explicit jumps.
+    /// The glide from the last shown line toward `scroll_offset`: armed by a wheel
+    /// tick or a birth reveal of at most one viewport, observed at every draw's
+    /// write-back, translated by card corrections, and snapped by selection changes
+    /// and explicit jumps.
     pub(in crate::sidebar_pane) scroll_ease: ScrollEase,
     /// Previous target-window placements relative to the scroll zone, independent of the wheel's painted position.
     pub(in crate::sidebar_pane) anchored_rows: Vec<(String, isize)>,
@@ -192,6 +194,14 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) last_focus_anchor_ms: u64,
     /// What the next paint does with the viewport, issued through [`Self::request`].
     pub(in crate::sidebar_pane) viewport: ViewportRequest,
+    /// Rows new to this view's presented rows, by row id, each dropped at the first fold
+    /// past its birth window or once its row leaves. Written by reconciliation and marked
+    /// laid out by the draw, read by the offset-zero rule and the birth reveal.
+    pub(in crate::sidebar_pane) newborns: BTreeMap<String, Newborn>,
+    /// The card a birth reveal showed, whose group header anchors the view until the card
+    /// leaves `Fresh`, the selection or the roster, or input makes the offset authoritative.
+    /// A provider registration that adopts the card under a new id carries it.
+    pub(in crate::sidebar_pane) birth_hold: Option<String>,
     /// The loop owns the dwell clock; render only consumes readiness.
     pub(in crate::sidebar_pane) focus_marker_ready: bool,
     /// The row id a manual mark-unread just reopened while it is the focused
@@ -225,8 +235,8 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) toggles: PresentationToggles,
 }
 
-/// The one-paint viewport facts input and jumps leave for the next draw, which clears them.
-/// They accumulate across input passes until that draw, and a hidden mirror draws none.
+/// The one-paint viewport facts input, jumps and birth reveals leave for the next draw, which
+/// clears them. They accumulate across passes until that draw, and a hidden mirror draws none.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct ViewportRequest {
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
@@ -244,13 +254,30 @@ pub(in crate::sidebar_pane) struct ViewportRequest {
     /// This sidebar's input changed the card or entry selection, or its requested focus landed.
     /// The next draw may reveal that stop, then consumes the mark.
     pub(super) own_input_reveal: bool,
+    /// A newborn card that took the focus: the next draw shows it whole beneath its group
+    /// header and starts the birth hold, unless it lost the selection or an authoritative
+    /// offset is pending.
+    pub(super) birth_reveal: Option<String>,
+}
+
+/// A row new to a view: absent from the snapshot the view presented before the fold, and not a
+/// card that took over another card's pane under a new id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct Newborn {
+    /// Fold-clock milliseconds of the fold that found the row new.
+    pub(in crate::sidebar_pane) born_ms: i64,
+    /// A birth reveal was issued for it, so the focus reaching it again issues none.
+    pub(in crate::sidebar_pane) revealed: bool,
+    /// A draw has laid the row out, so the offset-zero rule no longer counts it as born.
+    pub(in crate::sidebar_pane) laid_out: bool,
 }
 
 /// What a caller asks of the next paint's viewport. Each intent changes only the facts it
 /// names, so every other pending fact survives. Only input dispatch, and an arrival landing
 /// the user's own wheel glide (`LandGlide`), issue an intent that sets authority: a change the
 /// user did not ask for never does. An authoritative offset suppresses a pending
-/// jump's scroll target but keeps its held set.
+/// jump's scroll target but keeps its held set, and drops a pending birth reveal and the
+/// birth hold. `RevealBirth`, the one intent reconciliation issues, sets no authority.
 pub(in crate::sidebar_pane) enum ViewportIntent {
     /// A wheel tick: the offset is authoritative and glides there.
     Wheel,
@@ -268,8 +295,11 @@ pub(in crate::sidebar_pane) enum ViewportIntent {
     OwnInput,
     /// An entry step: the offset is no longer authoritative, and pending reveals wait.
     EntryStep,
-    /// A view arriving mid-glide lands the glide's target as authoritative.
+    /// A view arriving mid-glide lands the glide's target: as authoritative for the user's
+    /// wheel glide, and without authority for a birth reveal's.
     LandGlide,
+    /// A newborn card took the focus: the next draw shows it whole beneath its header.
+    RevealBirth(String),
 }
 
 /// The presentation choices a user makes in a client view. They travel with the view across
@@ -413,10 +443,14 @@ impl ViewState {
             ViewportIntent::DropJump => viewport.focus_placement = None,
             ViewportIntent::OwnInput => viewport.own_input_reveal = true,
             ViewportIntent::EntryStep => viewport.offset_authoritative = false,
+            ViewportIntent::LandGlide if self.scroll_ease.birth_in_flight() => {
+                self.scroll_ease.cancel();
+            }
             ViewportIntent::LandGlide if self.scroll_ease.in_flight() => {
                 self.request(ViewportIntent::Hold);
             }
             ViewportIntent::LandGlide => {}
+            ViewportIntent::RevealBirth(row) => viewport.birth_reveal = Some(row),
         }
     }
 
@@ -425,11 +459,13 @@ impl ViewState {
         self.viewport.focus_placement.as_ref()
     }
 
-    /// A copy for a hidden mirror, which draws none of the pending request and no glide.
+    /// A copy for a hidden mirror, which draws none of the pending request, no glide and no
+    /// birth hold, so it never ensures a held card or arms a birth glide.
     pub(in crate::sidebar_pane) fn hidden_mirror(&self) -> Self {
         let mut mirror = self.clone();
         mirror.viewport = ViewportRequest::default();
         mirror.scroll_ease.cancel();
+        mirror.birth_hold = None;
         mirror
     }
 
@@ -451,6 +487,17 @@ impl ViewState {
     #[cfg(test)]
     pub(in crate::sidebar_pane) fn reveals_own_input(&self) -> bool {
         self.viewport.own_input_reveal
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn reveals_birth(&self) -> Option<&str> {
+        self.viewport.birth_reveal.as_deref()
+    }
+
+    /// The first line of group `key` in the last draw's target window, zone-relative.
+    pub(super) fn drawn_group_row(&self, key: &str) -> Option<isize> {
+        let groups = &self.layout_key.as_ref()?.groups;
+        groups.iter().find(|(id, _)| id == key).map(|&(_, row)| row)
     }
 
     pub(super) fn note_layout(&mut self, frame: &super::compose::ComposedFrame) {

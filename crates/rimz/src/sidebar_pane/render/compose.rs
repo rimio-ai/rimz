@@ -6,7 +6,7 @@ use crate::config::{GlyphRole, ScrollbarMode};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
-    SidebarInactive, SidebarSnapshot, SidebarWorktreeGroup, SkippedSettings,
+    SidebarInactive, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SkippedSettings,
     actionable_unread_count, lead_unread_row,
 };
 use ratatui::style::Modifier;
@@ -20,9 +20,9 @@ use super::chrome::{
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
     CardWalk, CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext,
-    cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, fleet_header_lines,
-    fleet_size, fleet_store_lines, fleet_total_lines, open_pr_attention, open_pr_total,
-    worktree_group_lines_windowed,
+    cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, engaged_base_lines,
+    fleet_header_lines, fleet_size, fleet_store_lines, fleet_total_lines, is_fresh,
+    open_pr_attention, open_pr_total, worktree_group_lines_windowed,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -61,7 +61,10 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// anchored to the selected or topmost surviving card from the previous target
 /// window, then clamped to the zone. Only the sidebar's own input reveals a
 /// changed card selection when no card line is visible, or an entry selection
-/// whose lines are clipped inside an already visible card.
+/// whose lines are clipped inside an already visible card. A birth reveal shows a
+/// newborn under the focus whole beneath its group header, gliding when short, and
+/// its hold anchors that header until the card leaves `Fresh`; births above a view
+/// resting at the top leave it there.
 /// Wheel, banner, and toggle inputs make the offset authoritative once; opening
 /// the inactive chip also reveals its first newly shown receipt, and the banner
 /// reveals the full-roster lead where it sits. The unread
@@ -158,6 +161,7 @@ pub(super) fn compose_lines_with_meter(
         scroll_map: scroll.interactions.row_map(),
         scroll_interactions: &scroll.interactions,
         card_starts: &scroll.card_starts,
+        group_spans: &group_spans,
         inactive_span,
         scroll_len: scroll.lines.len(),
         top_len: top.lines.len(),
@@ -190,6 +194,17 @@ pub(super) fn compose_lines_with_meter(
     };
     let painted_rows = placements(layout.offset, layout.top_shown);
     let anchored_rows = placements(layout.resolution.offset, 0);
+    let laid_out = view
+        .newborns
+        .iter()
+        .filter(|(id, born)| {
+            !born.laid_out
+                && roster
+                    .ordinal_of_id(id)
+                    .is_some_and(|ordinal| scroll.interactions.row_map().contains(&Some(ordinal)))
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
     let target_window =
         layout.resolution.offset..layout.resolution.offset.saturating_add(layout.viewport);
     let group_placements = group_spans
@@ -328,6 +343,8 @@ pub(super) fn compose_lines_with_meter(
         held_expansions,
         banner_shown: layout.show_banner,
         anchor_clamped: layout.resolution.clamped,
+        birth_hold: next_birth_hold(view, &roster),
+        laid_out,
         correction: layout.resolution.correction,
         scroll_ease: layout.scroll_ease,
     }
@@ -349,6 +366,8 @@ struct ScrollResolution {
     correction: isize,
     clamped: bool,
     snap: bool,
+    /// A birth reveal moved the offset by at most one viewport: it glides there.
+    glide: bool,
 }
 
 struct ZoneInputs<'a, 'snapshot> {
@@ -359,6 +378,7 @@ struct ZoneInputs<'a, 'snapshot> {
     scroll_map: &'a [Option<usize>],
     scroll_interactions: &'a FrameInteractions,
     card_starts: &'a [(usize, usize)],
+    group_spans: &'a [(usize, Range<usize>)],
     inactive_span: Option<(usize, usize)>,
     scroll_len: usize,
     top_len: usize,
@@ -395,6 +415,9 @@ fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
     scroll_ease.shift(resolution.correction);
     if resolution.snap {
         scroll_ease.cancel();
+    }
+    if resolution.glide {
+        scroll_ease.arm_birth();
     }
     ZoneLayout {
         show_banner,
@@ -745,6 +768,9 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(super) held_expansions: BTreeSet<String>,
     pub(super) banner_shown: bool,
     pub(super) anchor_clamped: bool,
+    pub(super) birth_hold: Option<String>,
+    /// Newborns this draw laid out for the first time, marked on their records.
+    pub(super) laid_out: Vec<String>,
     pub(super) correction: isize,
     pub(super) scroll_ease: ScrollEase,
     pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
@@ -782,6 +808,7 @@ fn resolve_scroll_offset(
         correction: 0,
         clamped: false,
         snap: false,
+        glide: false,
     };
     if view.viewport.offset_authoritative {
         let reveal = view.viewport.reveal_row.as_deref();
@@ -828,12 +855,24 @@ fn resolve_scroll_offset(
             first_line(&placement.row_id)
                 .map(|first| (first as isize).saturating_sub(placement.viewport_row))
         });
+    let held_header = view
+        .birth_hold
+        .as_deref()
+        .filter(|id| selected.is_some_and(|row| row.id == *id))
+        .and_then(|id| {
+            let (key, header) = group_header(input, first_line(id)?)?;
+            Some((header, view.drawn_group_row(key).filter(|row| *row >= 0)?))
+        });
     let target = shared.or_else(|| {
-        let (id, y) = anchor?;
-        first_line(id).map(|first| {
-            (first as isize).saturating_sub(*y) + isize::from(show_banner)
+        let (line, y) = held_header.or_else(|| {
+            let (id, y) = anchor?;
+            Some((first_line(id)?, *y))
+        })?;
+        Some(
+            (line as isize).saturating_sub(y) + isize::from(show_banner)
                 - isize::from(view.anchor_banner_shown)
-        })
+                - births_above(input, line) as isize,
+        )
     });
     if let Some(target) = target {
         resolved.offset = target.clamp(0, max_offset as isize) as usize;
@@ -845,6 +884,22 @@ fn resolve_scroll_offset(
     let Some(selected_index) = view.selected_index.filter(|_| selected.is_some()) else {
         return resolved;
     };
+    if let Some(row) = selected.filter(|row| reveals_birth(view, row))
+        && let Some(first) = first_line(&row.id)
+        && let Some(offset) =
+            birth_reveal_offset(input, selected_index, first, resolved.offset, viewport)
+    {
+        let anchored = resolved.offset;
+        resolved.offset = offset.min(max_offset);
+        let moved = resolved.offset.abs_diff(anchored);
+        resolved.glide = view.viewport.birth_reveal.as_deref() == Some(row.id.as_str())
+            && moved > 0
+            && moved <= viewport
+            && input.ui.drawn_scroll_max.is_some()
+            && !view.arrival_pending;
+        resolved.snap &= !resolved.glide;
+        return resolved;
+    }
     if view.viewport.own_input_reveal
         && let (Some(cursor), Some(row)) = (&view.entry_cursor, selected)
     {
@@ -885,6 +940,150 @@ fn resolve_scroll_offset(
         auto_scroll_to_selection(input.scroll_map, selected_index, resolved.offset, viewport)
             .min(max_offset);
     resolved
+}
+
+/// Whether this draw shows the newborn `row` whole beneath its header: the paint after the
+/// focus reached it, and the paint on which the held card first draws past `Fresh`.
+fn reveals_birth(view: &ViewState, row: &SidebarRow) -> bool {
+    view.viewport.birth_reveal.as_deref() == Some(&row.id)
+        || (view.birth_hold.as_deref() == Some(&row.id) && !is_fresh(row))
+}
+
+/// The card that stays held by its header on the next draw: a newborn revealed or held, while
+/// it is selected and still `Fresh` and no input set the offset.
+fn next_birth_hold(view: &ViewState, roster: &VisibleRoster<'_>) -> Option<String> {
+    let row = view.selected_index.and_then(|index| roster.row(index))?;
+    let held = view
+        .viewport
+        .birth_reveal
+        .as_ref()
+        .or(view.birth_hold.as_ref());
+    (!view.viewport.offset_authoritative && held == Some(&row.id) && is_fresh(row))
+        .then(|| row.id.clone())
+}
+
+/// The key and header line of the group drawing the card whose first line is `first`, when
+/// that group draws a header which routes to a row.
+fn group_header<'a>(input: &ZoneInputs<'a, '_>, first: usize) -> Option<(&'a str, usize)> {
+    let (index, span) = input
+        .group_spans
+        .iter()
+        .find(|(_, span)| span.contains(&first))?;
+    let header = span.start;
+    (header < first && input.scroll_map.get(header).is_some_and(Option::is_some))
+        .then(|| (input.roster.groups()[*index].source().key.as_str(), header))
+}
+
+/// Lines above `line` that rows new to this view add on the first draw to lay them out,
+/// while the last draw rested at the top: a birth there leaves the view at the top. A group
+/// that maps rows, all of them such, counts whole with its gap; in another, its header line
+/// was drawn before, and a team born into it adds its new pipeline line.
+fn births_above(input: &ZoneInputs<'_, '_>, line: usize) -> usize {
+    let view = input.view;
+    if view.scroll_offset != 0 || view.newborns.is_empty() {
+        return 0;
+    }
+    let unplaced = |ordinal: usize| {
+        input
+            .roster
+            .row(ordinal)
+            .and_then(|row| view.newborns.get(&row.id))
+            .is_some_and(|born| !born.laid_out)
+    };
+    input
+        .group_spans
+        .iter()
+        .filter(|(_, span)| span.start < line)
+        .map(|(index, span)| {
+            let lines = &input.scroll_map[span.clone()];
+            let mut rows = lines.iter().flatten().peekable();
+            let maps_rows = rows.peek().is_some();
+            if span.end <= line
+                && input.group_spans.len() > 1
+                && maps_rows
+                && rows.all(|&ordinal| unplaced(ordinal))
+            {
+                return span.len() + 1;
+            }
+            let end = line.min(span.end);
+            let born = input.scroll_map[span.start + 1..end]
+                .iter()
+                .filter(|entry| entry.is_some_and(unplaced))
+                .count();
+            born + (span.start + 1..end)
+                .filter(|&at| born_strip(input, *index, lines, at, &unplaced))
+                .count()
+        })
+        .sum()
+}
+
+/// Whether scroll line `at` is the pipeline line of group `index` (span `lines`) that a team
+/// born whole into the group brought with it.
+fn born_strip(
+    input: &ZoneInputs<'_, '_>,
+    index: usize,
+    lines: &[Option<usize>],
+    at: usize,
+    unplaced: &impl Fn(usize) -> bool,
+) -> bool {
+    let group = input.roster.groups()[index].source();
+    if group.pipeline.is_none()
+        || input.scroll_map[at].is_some()
+        || !matches!(
+            u16::try_from(at).map(|row| input.scroll_interactions.target_at(0, row)),
+            Ok(Some(HitTarget::Row(_)))
+        )
+    {
+        return false;
+    }
+    let mut team = lines
+        .iter()
+        .flatten()
+        .filter(|&&ordinal| {
+            input
+                .roster
+                .row(ordinal)
+                .is_some_and(|row| row.team().is_some() && row.team() == group.team.as_deref())
+        })
+        .peekable();
+    team.peek().is_some() && team.all(|&ordinal| unplaced(ordinal))
+}
+
+/// The offset showing the newborn card at `ordinal`, first line `first`, beneath its group
+/// header with room for an Engaged card's base height, by the least move from `offset`. A
+/// span taller than the view puts the header on top when no line between them maps a row
+/// (a team leader's pipeline line may sit there), else shows the card alone at that height,
+/// else the card's first line on top.
+fn birth_reveal_offset(
+    input: &ZoneInputs<'_, '_>,
+    ordinal: usize,
+    first: usize,
+    offset: usize,
+    viewport: usize,
+) -> Option<usize> {
+    if viewport == 0 {
+        return None;
+    }
+    let last = input
+        .scroll_map
+        .iter()
+        .rposition(|entry| *entry == Some(ordinal))?;
+    let reserved = last.max(first + engaged_base_lines() - 1);
+    let header = group_header(input, first).map(|(_, header)| header);
+    let top = header.unwrap_or(first);
+    Some(if reserved - top < viewport {
+        nudge_into_view(top, reserved, offset, viewport)
+    } else if let Some(header) = header.filter(|header| {
+        input.scroll_map[header + 1..first]
+            .iter()
+            .all(Option::is_none)
+    }) {
+        header
+    } else if reserved - first < viewport {
+        nudge_into_view(first, reserved, offset, viewport)
+    } else {
+        first
+    })
 }
 
 /// True when the lead-unread row selected by the triage key has a line inside

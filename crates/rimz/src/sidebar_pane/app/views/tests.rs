@@ -855,3 +855,27 @@ fn a_split_copy_keeps_the_pending_viewport_request_and_glide() {
         assert_eq!(compose(&fork), compose(&source), "in flight: {in_flight}");
     }
 }
+
+#[test]
+fn a_split_copy_keeps_the_pending_birth_reveal_its_newborn_and_its_hold() {
+    use crate::sidebar_pane::render;
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10), (2, 10)]);
+    let source = views.input(&pane(10), clock.now());
+    let born = render::Newborn {
+        born_ms: 1_000,
+        revealed: true,
+        laid_out: false,
+    };
+    source.newborns.insert("agent-7".to_owned(), born);
+    source.birth_hold = Some("agent-3".to_owned());
+    source.request(render::ViewportIntent::RevealBirth("agent-7".to_owned()));
+    let expected = format!("{source:?}");
+    sample(&mut views, &clock, &[(1, 10), (2, 20)]);
+    let fork = views.paint(&pane(20), clock.now()).clone();
+    assert_eq!(format!("{fork:?}"), expected);
+    assert_eq!(fork.reveals_birth(), Some("agent-7"));
+    assert_eq!(fork.newborns.get("agent-7"), Some(&born));
+    assert_eq!(fork.birth_hold.as_deref(), Some("agent-3"));
+}
