@@ -1843,4 +1843,12 @@ fn a_limit_refusal_claude_leaves_running_keeps_the_record_of_the_last_request_th
             "{case} prompt after"
         );
     }
+    // A second refused prompt at 200 opens over the first, which never closed, so the row
+    // still reads the record of the last request that ran.
+    let twice = [refused.to_vec(), vec![started(200)]].concat();
+    assert_eq!(
+        clock(&view(&twice, 18, Some(19), rate, 205)),
+        (Some(at(19)), true, Some(at(20))),
+        "two refusals"
+    );
 }
