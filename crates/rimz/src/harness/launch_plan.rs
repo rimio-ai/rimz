@@ -727,6 +727,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     reminders.long_cache = long_cache_requested(&request, inputs.machine, inputs.effective);
     reminders.disable_native_idle_compaction =
         idle_compact_covered(&request, inputs.machine, inputs.effective);
+    // A headless check or judge has no pane for RimZ to resume.
+    reminders.disable_native_auto_continue =
+        request.headless.is_none() && inputs.machine.resume.auto_continue;
     if request
         .allowed_tools
         .as_ref()

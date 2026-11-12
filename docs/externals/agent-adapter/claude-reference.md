@@ -591,6 +591,10 @@ The settings reference requires an interactive session, auto-compaction on, a on
 
 Observed in the installed Claude Code 2.1.319 binary on 2026-11-06: it fires at 90% of the cache lifetime (about 54 minutes for a one-hour cache), with auto-compaction on, `idleCompaction` not false, a one-hour cache, context at least `max(100000, CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS ?? 200000)`, no near usage limit, and no newer request. It abandons an attempt more than 60 seconds late. These exact timing and usage-limit gates are binary observations, not a published settings contract.
 
+### Native auto-continue at a usage limit
+
+Observed in the installed Claude Code 2.1.322 binary on 2026-11-12 (`strings` over the executable; no published settings entry found): the settings schema carries `autoContinueAtUsageLimit`, an optional boolean described as "When a claude.ai usage limit stops your session, wait for the limit to reset and continue the task automatically. When off, the limit dialog offers the wait as a choice instead." It is on when absent, and the `/config` row "Continue automatically at usage limit" is consent-gated. A source check reads true only for an unset value or one from user settings; whether a value from launch `--settings` is honoured was not verified. While armed, the session shows `Continuing automatically` with the reset time, and `Automatic continue cancelled` when the user cancels it.
+
 ### Per-launch skill overrides
 
 [`skillOverrides`](https://code.claude.com/docs/en/skills) accepts `"user-invocable-only"`, which leaves explicit `/skill` expansion available while removing model invocation. [`--settings`](https://code.claude.com/docs/en/cli-reference) accepts a file or inline JSON. Local probes on 2.1.282 found that keys are skill directory names, only the last `--settings` takes effect, and `*` is not a wildcard.

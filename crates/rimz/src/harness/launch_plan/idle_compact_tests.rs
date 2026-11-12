@@ -1,6 +1,6 @@
 use super::*;
 
-fn compile_seat(
+pub(super) fn compile_seat(
     project: &Path,
     request: &ExecRequest,
     machine: &crate::config::MachineConfig,
@@ -31,7 +31,7 @@ fn compile_seat(
     .unwrap()
 }
 
-fn settings(plan: &LaunchPlan) -> Option<serde_json::Value> {
+pub(super) fn settings(plan: &LaunchPlan) -> Option<serde_json::Value> {
     let process = plan.process();
     let values: Vec<_> = process
         .provider_argv

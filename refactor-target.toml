@@ -400,8 +400,9 @@ upward-dependencies = ["address"]
 # AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
 # PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
 # over from the fold to the cache clock's read (+2).
+# LaunchCapability::disable_native_auto_continue_args leaves the usage-limit resume to RimZ (+1).
 # ProviderCapacity::window_spent is the one spent-window test the cache ping, compaction and compact-first share (+1).
-surface-budget = 1258
+surface-budget = 1259
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
