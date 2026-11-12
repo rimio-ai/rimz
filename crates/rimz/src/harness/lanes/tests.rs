@@ -183,6 +183,9 @@ fn a_foreign_directory_is_homed_only_at_a_real_repository_root_off_the_home() {
     for dir in [&under_marker, &under_home, &other_sub, &linked_sub] {
         std::fs::create_dir_all(dir).unwrap();
     }
+    let home_link = room.parent.join("home-link");
+    std::os::unix::fs::symlink(&home, &home_link).unwrap();
+    let through_link = home_link.join("scratch");
 
     for (dir, home, expect, why) in [
         (
@@ -214,6 +217,18 @@ fn a_foreign_directory_is_homed_only_at_a_real_repository_root_off_the_home() {
             Some(&other_sub.join("me")),
             &other_sub,
             "nor one containing the home",
+        ),
+        (
+            &under_home,
+            Some(&home_link),
+            &under_home,
+            "a home named through a link still homes nothing",
+        ),
+        (
+            &through_link,
+            Some(&home),
+            &through_link,
+            "nor a directory reached through a link to the home",
         ),
     ] {
         assert_eq!(

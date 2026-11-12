@@ -920,7 +920,7 @@ A channel is the cooperation lane inside one room. It is the group the sidebar d
 
 ### Where a lane comes from
 
-A fresh launch decides its lane once and stores it whole on the launch event (`LaunchParams.lane`) and the rollup row (`AgentState.lane`); `RIMZ_CHANNEL` states the lane's name, empty when it has none. [`decide`](../../../crates/rimz/src/harness/lanes.rs) classifies the target directory into its checkout (the deepest of the project root and a RimZ-owned worktree containing it, else a foreign checkout at its repository root, a `.git` directory holding `HEAD` or a `.git` file naming its `gitdir:`, unless that root is the user's `HOME` or contains it; else the directory itself) and takes the first that applies:
+A fresh launch decides its lane once and stores it whole on the launch event (`LaunchParams.lane`) and the rollup row (`AgentState.lane`); `RIMZ_CHANNEL` states the lane's name, empty when it has none. [`decide`](../../../crates/rimz/src/harness/lanes.rs) classifies the target directory into its checkout (the deepest of the project root and a RimZ-owned worktree containing it, else a foreign checkout at its repository root, a `.git` directory holding `HEAD` or a `.git` file naming its `gitdir:`, unless that root is the user's `HOME` or contains it, both compared with links resolved; else the directory itself) and takes the first that applies:
 
 1. A typed `--channel` the checkout owns (`main` or the project basename at the root, the directory name in a RimZ worktree) is the checkout's own lane.
 2. Any other typed `--channel` is a named lane at the checkout, after the namespace checks below.

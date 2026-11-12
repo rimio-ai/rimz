@@ -100,8 +100,8 @@ pub fn decide(request: &LaneRequest<'_>) -> Result<Lane, LaneErr> {
 /// worktree containing it, else a foreign checkout homed at its repository
 /// root, else at `dir` itself. A non-repository room's project root is its
 /// trunk; a managed worktree whose directory is `main` is foreign. A repository
-/// at or above the user's home homes no foreign lane, so every directory under
-/// a dotfiles home keeps its own.
+/// at or above the user's home, compared with links resolved, homes no foreign
+/// lane, so every directory under a dotfiles home keeps its own.
 pub fn own_lane(project_root: &Path, dir: &Path) -> Lane {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
     own_lane_at_home(project_root, dir, home.as_deref().map(Path::new))
@@ -122,13 +122,18 @@ fn own_lane_at_home(project_root: &Path, dir: &Path, home: Option<&Path>) -> Lan
             return Lane::own(home, path_text(ancestor));
         }
     }
-    let home = home.map(crate::utils::path::normalize_path_lexical);
     let root = dir
         .ancestors()
         .find(|ancestor| is_repository_root(ancestor))
-        .filter(|root| !home.as_ref().is_some_and(|home| home.starts_with(root)))
+        .filter(|root| !home.is_some_and(|home| resolved(home).starts_with(resolved(root))))
         .unwrap_or(&dir);
     Lane::own(LaneHome::Foreign, path_text(root))
+}
+
+/// `path` with every link resolved, or as written when it cannot be resolved,
+/// so a home and a root named through different links still compare equal.
+fn resolved(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(path))
 }
 
 /// A `.git` directory holding `HEAD`, or a `.git` file naming its `gitdir:`;
