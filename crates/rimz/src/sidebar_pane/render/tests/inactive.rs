@@ -67,6 +67,7 @@ fn paged_snapshot() -> SidebarSnapshot {
         let mut group = template.clone();
         group.key = name.clone();
         group.label = name.clone();
+        group.branch = None;
         let row = &mut std::sync::Arc::make_mut(&mut group.rows)[0];
         row.id = name.clone();
         row.name = name.clone();

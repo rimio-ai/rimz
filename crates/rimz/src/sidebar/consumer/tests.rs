@@ -472,7 +472,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     )
     .expect("published base");
 
-    // The worktree group carries the cached +7/-2 and the live branch label,
+    // The worktree group carries the cached +7/-2 and the live branch,
     // projected from the cache with no git fork.
     let group = snapshot
         .worktree_groups
@@ -488,7 +488,8 @@ fn read_published_snapshot_folds_caches_without_forking() {
         Some("main"),
         "the ≡/✓ markers name the branch, so origin/ strips for display",
     );
-    assert_eq!(group.label, "feat");
+    assert_eq!(group.label, "main", "trunk's own lane keeps its label");
+    assert_eq!(group.branch.as_deref(), Some("feat"));
     assert_eq!(group.clean, Some(false), "the status verdict projects too");
     assert_eq!(group.landed, Some(false), "the landed verdict projects too");
     assert_eq!(

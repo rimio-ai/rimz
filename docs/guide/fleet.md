@@ -79,7 +79,7 @@ Once a few agents are working, the same `rimz agents` command reads the room and
 
 **See the whole room at a glance.** `rimz agents list` lists the current channel's cards; `--all` includes every channel. Cards group by the worktree each lives in and put whoever needs you on top:
 
-The addresses in `list` and `top` work from where you are: `#channel` appears when a bare handle would reach another agent or miss. Copy the whole address, including that suffix, into `show`, `focus`, or `stop`. A branch header also shows `· #channel` when its branch name would not select that group.
+The addresses in `list` and `top` work from where you are: `#channel` appears when a bare handle would reach another agent or miss. Copy the whole address, including that suffix, into `show`, `focus`, or `stop`. A group header also shows `· #channel` when its label would not select that group.
 
 ```console
 $ rimz agents list --all

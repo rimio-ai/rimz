@@ -212,7 +212,7 @@ fn a_subdirectory_launch_groups_with_its_checkout_and_an_outside_one_by_its_git_
             group(key(&room.root), &["rootsub"]),
             group("channel:auth", &["wtsub"]),
             group(key(&outside), &["outside"]),
-            group("external", &["bare"]),
+            group(key(&bare), &["bare"]),
         ])
     );
 }
@@ -282,4 +282,68 @@ fn a_stamped_main_row_from_before_lanes_merges_into_trunk_at_its_registration() 
         ),
         BTreeSet::from([group(key(&room.root), &["desk", "old"])])
     );
+}
+
+#[test]
+fn two_branches_in_trunks_own_lane_form_one_group_headed_main() {
+    let room = room();
+    let plain = decided(&request(&room, &room.root));
+    let (feature, feature_pane) = seat("feature", plain.clone(), &room.root);
+    let (main, main_pane) = branched(seat("desk", plain, &room.root));
+    let snapshot = super::room(vec![feature.branch("feature"), main])
+        .with_project_root(Some(room.root.clone()))
+        .with_worktree_roots(vec![room.root.clone(), room.auth.clone()], BTreeMap::new())
+        .with_live_panes(vec![feature_pane, main_pane], None);
+
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| (group.key.clone(), group.label.as_str(), group.rows.len()))
+            .collect::<Vec<_>>(),
+        vec![(key(&room.root), "main", 2)]
+    );
+}
+
+#[test]
+fn a_shell_in_a_worktree_joins_its_lanes_group_and_one_outside_every_root_is_external() {
+    let room = room();
+    let sub = room.auth.join("sub");
+    let nowhere = room.parent.join("nowhere");
+    for dir in [&sub, &nowhere] {
+        std::fs::create_dir_all(dir).expect("dir");
+    }
+    let (agent, agent_pane) = seat("wt", decided(&request(&room, &room.auth)), &room.auth);
+    let snapshot = super::room(vec![agent])
+        .with_project_root(Some(room.root.clone()))
+        .with_worktree_roots(
+            vec![room.root.clone(), room.auth.clone()],
+            BTreeMap::from([(room.auth.clone(), "auth".to_owned())]),
+        )
+        .with_live_panes(
+            vec![
+                agent_pane,
+                pane("%80", "zsh", &sub.display().to_string()),
+                pane("%81", "zsh", &nowhere.display().to_string()),
+            ],
+            None,
+        );
+
+    let members = |key: &str| {
+        snapshot
+            .worktree_groups
+            .iter()
+            .find(|group| group.key == key)
+            .map(|group| {
+                let mut agents = group
+                    .rows
+                    .iter()
+                    .map(|row| row.is_agent())
+                    .collect::<Vec<_>>();
+                agents.sort();
+                agents
+            })
+    };
+    assert_eq!(members("channel:auth"), Some(vec![false, true]));
+    assert_eq!(members("external"), Some(vec![false]));
 }

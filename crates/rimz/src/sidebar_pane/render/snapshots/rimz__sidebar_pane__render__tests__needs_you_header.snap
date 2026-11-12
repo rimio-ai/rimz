@@ -10,7 +10,7 @@ expression: screen
  ? 0   ! 1   ⏸︎ 0   ✓ 0   ⢿ 1   ☾ 0
  needs-you: 1
 
- ⑂ main
+ ⑂ query-engine · main
  ! claude
    db migrate
    ▢ ──────────────────────────  0.0%

@@ -36,7 +36,7 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
             None,
             root,
             SidebarWorktreeKind::Worktree,
-            "rimz",
+            "main",
             true,
             Some(root),
             false,
@@ -51,7 +51,7 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
             None,
             root,
             SidebarWorktreeKind::Worktree,
-            "rimz",
+            "main",
             true,
             Some(root),
             false,
@@ -66,7 +66,7 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
             None,
             root,
             SidebarWorktreeKind::Worktree,
-            "rimz",
+            "main",
             true,
             Some(root),
             false,
@@ -171,7 +171,7 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
             Some("main"),
             foreign,
             SidebarWorktreeKind::Worktree,
-            "main",
+            "dotfiles",
             false,
             Some(foreign),
             true,
@@ -306,7 +306,7 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
             Some("main"),
             foreign,
             SidebarWorktreeKind::Worktree,
-            "main",
+            "dotfiles",
             false,
             Some(foreign),
             false,
@@ -335,12 +335,14 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
         snapshot.worktree_channels =
             BTreeMap::from([(PathBuf::from(marked), "link-notices".to_owned())]);
         let entry = GroupEntry {
-            channel: None,
+            lane: None,
+            stamp: None,
             path,
             branch,
         };
         let entries = std::iter::once(entry).chain(row_root.map(|path| GroupEntry {
-            channel: None,
+            lane: None,
+            stamp: None,
             path: Some(path),
             branch: Some("main"),
         }));
@@ -384,7 +386,8 @@ fn lane_table_uses_the_marker_place_independently_of_the_rows_path() {
     ]
     .map(|(channel, path)| {
         let group = resolver.resolve(GroupEntry {
-            channel,
+            lane: None,
+            stamp: channel,
             path,
             branch: None,
         });
@@ -451,17 +454,20 @@ fn duplicate_marker_names_choose_one_lexicographic_place_for_every_row() {
     let resolver = GroupResolver::new(&snapshot, []);
     let identities = [
         GroupEntry {
-            channel: Some("topic"),
+            lane: None,
+            stamp: Some("topic"),
             path: None,
             branch: None,
         },
         GroupEntry {
-            channel: None,
+            lane: None,
+            stamp: None,
             path: Some("/z/topic/src"),
             branch: None,
         },
         GroupEntry {
-            channel: None,
+            lane: None,
+            stamp: None,
             path: Some("/a/topic/src"),
             branch: None,
         },
@@ -502,7 +508,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             panes: vec![pane("%1", "zsh", root)],
             expect_kind: SidebarWorktreeKind::Worktree,
             expect_key: root,
-            expect_label: "rimz",
+            expect_label: "main",
             expect_rows: 1,
             expect_root_lane: true,
         },
@@ -586,7 +592,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
 }
 
 #[test]
-fn every_branch_split_at_the_project_root_is_root_lane() {
+fn every_branch_at_the_project_root_shares_the_root_lane() {
     let root = "/repo/shared";
     let snapshot = room(vec![
         agent_in("feature", root, AgentStatus::Idle, 0)
@@ -608,10 +614,7 @@ fn every_branch_split_at_the_project_root_is_root_lane() {
             .iter()
             .map(|group| (group.key.as_str(), group.label.as_str(), group.root_lane))
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            ("/repo/shared\nfeature", "feature", true),
-            ("/repo/shared\nmain", "main", true),
-        ])
+        BTreeSet::from([("/repo/shared", "main", true)])
     );
 }
 
@@ -633,7 +636,7 @@ fn same_branch_in_distinct_paths_keeps_distinct_group_identity() {
             .iter()
             .map(|group| (group.key.as_str(), group.label.as_str()))
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from([("/home/me/.agents", "main"), ("/workspace/rimz", "main"),])
+        BTreeSet::from([("/home/me/.agents", ".agents"), ("/workspace/rimz", "rimz")])
     );
 }
 
@@ -753,7 +756,7 @@ fn worktree_home_does_not_admit_unlisted_shell_paths() {
             Some("/repo/rimz-worktrees/message-channel"),
             SidebarWorktreeKind::Worktree,
             "/repo/rimz-worktrees/message-channel",
-            "message-channel",
+            "main",
         ),
     ] {
         let snapshot = room(Vec::new())
@@ -770,3 +773,60 @@ fn worktree_home_does_not_admit_unlisted_shell_paths() {
 }
 
 // ── Fleet rooms: directory/marker roots, row-derived git pods, root pod ──────
+
+#[test]
+fn foreign_own_lanes_group_by_their_home_even_unlisted_and_branchless() {
+    use crate::ids::{Lane, LaneHome};
+    let homes = [
+        "/elsewhere/a/tools",
+        "/elsewhere/b/tools",
+        "/elsewhere/notes",
+    ];
+    let agents = homes
+        .iter()
+        .enumerate()
+        .map(|(index, home)| {
+            let raw = format!("%{index}");
+            let mut agent =
+                agent_in(&format!("foreign-{index}"), home, AgentStatus::Idle, 0).in_pane(&raw);
+            agent.lane = Some(Lane::own(LaneHome::Foreign, *home));
+            agent
+        })
+        .collect();
+    let panes = homes
+        .iter()
+        .enumerate()
+        .map(|(index, home)| pane(&format!("%{index}"), "claude", home))
+        .collect();
+    let snapshot = room(agents)
+        .with_project_root(Some(PathBuf::from("/repo/rimz")))
+        .with_live_panes(panes, None);
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| (
+                group.key.as_str(),
+                group.label.as_str(),
+                group
+                    .place
+                    .as_ref()
+                    .map(|place| (place.path.clone(), place.foreign)),
+                group.rows.len(),
+            ))
+            .collect::<BTreeSet<_>>(),
+        homes
+            .iter()
+            .map(|home| (
+                *home,
+                std::path::Path::new(home)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                Some((PathBuf::from(home), true)),
+                1,
+            ))
+            .collect::<BTreeSet<_>>()
+    );
+}

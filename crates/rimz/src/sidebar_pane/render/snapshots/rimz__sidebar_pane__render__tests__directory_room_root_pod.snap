@@ -12,7 +12,7 @@ expression: screen
 ▎main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▌○ zsh                                     ▐
 
- ⑂ main                          ⇡2  +12 -3
+ ⑂ query-engine · main           ⇡2  +12 -3
  ⣾ claude
    db migrate
    ▢ ────────────────────────────────  0.0%

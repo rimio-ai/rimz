@@ -1459,6 +1459,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,
+            branch: None,
             kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,

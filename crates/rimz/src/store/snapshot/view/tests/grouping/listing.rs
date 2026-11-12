@@ -26,7 +26,7 @@ fn listing_roster_sinks_landed_groups_using_published_identity_keys() {
             .iter()
             .map(|group| group.label.as_str())
             .collect::<Vec<_>>(),
-        ["feature", "feature"]
+        ["unlanded", "landed"]
     );
     assert_eq!(
         listing
@@ -152,10 +152,9 @@ fn groups_by_worktree_attention_first_external_last_uncapped() {
 }
 
 #[test]
-fn one_path_two_branches_splits_into_two_listing_pods() {
+fn one_path_two_branches_form_one_listing_pod() {
     // Parity with the sidebar's row fold (see `grouping::branches`): two
-    // checkouts of one path must split by branch, not collapse under a single
-    // mislabeled header.
+    // branches reported at one path are one checkout, so one pod.
     let feature = agent("claude", "sess-a", AgentStatus::Idle, 1_000)
         .worktree("/repo/shared")
         .branch("feature");
@@ -167,19 +166,10 @@ fn one_path_two_branches_splits_into_two_listing_pods() {
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
 
-    assert_eq!(
-        groups.len(),
-        2,
-        "two branches under one path split into two pods: {groups:?}"
-    );
-    for group in &groups {
-        assert_eq!(group.agents.len(), 1);
-        assert_eq!(
-            group.agents[0].worktree_branch.as_deref(),
-            Some(group.label.as_str()),
-            "each pod's label matches its branch",
-        );
-    }
+    assert_eq!(groups.len(), 1, "one path is one pod: {groups:?}");
+    assert_eq!(groups[0].key, "/repo/shared");
+    assert_eq!(groups[0].label, "shared");
+    assert_eq!(groups[0].agents.len(), 2);
 }
 
 #[test]
@@ -230,7 +220,7 @@ fn git_backed_out_of_project_agent_gets_own_worktree_pod() {
     let external = (SidebarWorktreeKind::External, "external".to_owned());
     assert_eq!(
         grouped(with_branch),
-        (SidebarWorktreeKind::Worktree, "main".to_owned())
+        (SidebarWorktreeKind::Worktree, "teams".to_owned())
     );
     assert_eq!(grouped(without_branch), external);
 }
@@ -264,7 +254,8 @@ fn branch_named_unmatched_path_keeps_pre_enumeration_worktree_group() {
     let group = snapshot.worktree_groups.first().expect("a group");
     assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
     assert_eq!(group.key, "/work/query-engine-feature-x/src");
-    assert_eq!(group.label, "feature-x");
+    assert_eq!(group.label, "src");
+    assert_eq!(group.branch.as_deref(), Some("feature-x"));
 }
 
 #[test]

@@ -261,14 +261,15 @@ fn group_header_cells(
         }
     };
     let mut cells = vec![render::cell(label).fg(render::palette::header())];
+    if let Some(branch) = group.header_branch() {
+        cells.push(render::cell(format!("· {branch}")).fg(render::palette::meta()));
+    }
     // The published qualifier deepens colliding labels; a snapshot that skipped
-    // enrichment (the message-miss table) still names a foreign repo's folder.
+    // enrichment (the message-miss table) still names a foreign repo's folder,
+    // by the rule enrichment applies.
     let qualifier = group_pr(snapshot, &group.key)
         .and_then(|published| published.label_qualifier.clone())
-        .or_else(|| {
-            let place = group.place.as_ref().filter(|place| place.foreign)?;
-            Some(place.folder_name())
-        });
+        .or_else(|| group.place.as_ref()?.foreign_qualifier(&group.label));
     if let Some(qualifier) = qualifier {
         cells.push(render::cell(format!("· {qualifier}")).fg(render::palette::meta()));
     }

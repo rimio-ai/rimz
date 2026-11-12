@@ -231,7 +231,7 @@ fn row_card(
 
 /// A child renders under its parent's group but can run in another lane: it then takes that
 /// lane's group when the room has one, else the lane alone with no PR. The group is found by its
-/// own marker, since a repo root's label is its branch and another checkout's may equal a lane.
+/// key, or for trunk by its root marker, since another checkout's label may equal a lane.
 fn child_card(
     roster: &Roster<'_>,
     group: &SidebarWorktreeGroup,

@@ -43,6 +43,8 @@ pub(crate) enum Component {
     WorktreeHeader,
     /// The dim repo qualifier after a colliding worktree group label.
     WorktreeQualifier,
+    /// The dim `· branch` after a group label that differs from its branch.
+    WorktreeBranchName,
     /// The `· team` cohort label on a pipeline line or worktree header.
     TeamLabel,
     /// A completed pipeline stage — the passed dots and the `Done` seal alike;
@@ -192,6 +194,7 @@ impl Component {
         Component::EntrySpine,
         Component::WorktreeHeader,
         Component::WorktreeQualifier,
+        Component::WorktreeBranchName,
         Component::TeamLabel,
         Component::PipelinePassed,
         Component::PipelineRevisited,
@@ -281,9 +284,10 @@ impl Component {
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
             FastMode => palette.fast_mode(),
-            WorktreeQualifier | WorktreeMerged | InactiveChip | WindowMedium | RemoteControlOff
-            | ContextCompacted | WorkflowVisits | StallLeadFading | StallFading | StallOverflow
-            | NotTrackedSuffix | NotTrackedTip | NeedsYouFilter => palette.muted,
+            WorktreeQualifier | WorktreeBranchName | WorktreeMerged | InactiveChip
+            | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits
+            | StallLeadFading | StallFading | StallOverflow | NotTrackedSuffix | NotTrackedTip
+            | NeedsYouFilter => palette.muted,
         })
     }
 }

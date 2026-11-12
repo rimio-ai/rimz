@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::agents::{AgentState, AgentStatus};
-use crate::ids::PaneId;
+use crate::ids::{Lane, LaneHome, LaneName, PaneId};
 use crate::store::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -15,17 +15,42 @@ use super::{
     SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
 };
 
-/// The branch shared by a group's branched rows, if any. Returns `None` for a
-/// group with no branch information, leaving the caller's path-basename seed.
-pub(super) fn group_branch_label(rows: &[SidebarRow]) -> Option<String> {
-    rows.iter()
-        .find_map(|row| row.worktree_branch.as_deref().filter(|b| !b.is_empty()))
+/// The branch the first of a group's rows reported, if any; the header shows it
+/// beside the lane label until the checkout's live branch replaces it. Only a
+/// checkout has a branch: a root pod, the catch-all and a lane with no place
+/// ignore one a stray row reported.
+pub(super) fn group_branch_label<'b>(
+    kind: SidebarWorktreeKind,
+    place: Option<&SidebarPlace>,
+    branches: impl IntoIterator<Item = Option<&'b str>>,
+) -> Option<String> {
+    let checkout = matches!(
+        kind,
+        SidebarWorktreeKind::Worktree | SidebarWorktreeKind::Channel
+    ) && place.is_some();
+    checkout
+        .then(|| {
+            branches
+                .into_iter()
+                .find_map(|branch| branch.filter(|branch| !branch.is_empty()))
+        })
+        .flatten()
         .map(ToOwned::to_owned)
+}
+
+/// The branch a group header draws beside its lane label: only one that differs
+/// from the label.
+pub(super) fn shown_branch<'b>(branch: Option<&'b str>, label: &str) -> Option<&'b str> {
+    branch.filter(|branch| *branch != label)
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct GroupEntry<'a> {
-    pub channel: Option<&'a str>,
+    /// The row's stored lane, which alone decides its group.
+    pub lane: Option<&'a Lane>,
+    /// The `channel` stamp of a row an older binary wrote before rows stored
+    /// their lane. Link 3 deletes it.
+    pub stamp: Option<&'a str>,
     pub path: Option<&'a str>,
     pub branch: Option<&'a str>,
 }
@@ -45,7 +70,6 @@ pub(super) struct GroupResolver<'a> {
     worktree_channels: &'a BTreeMap<PathBuf, String>,
     channel_places: BTreeMap<&'a str, &'a Path>,
     root_class: RootClass,
-    multi_branch_paths: BTreeSet<String>,
 }
 
 impl<'a> GroupResolver<'a> {
@@ -53,24 +77,17 @@ impl<'a> GroupResolver<'a> {
         snapshot: &'a SidebarSnapshot,
         entries: impl IntoIterator<Item = GroupEntry<'entry>>,
     ) -> Self {
+        // A row that reported a branch names a checkout at its path, which
+        // places the shells working there.
         let mut worktree_roots: BTreeSet<PathBuf> =
             snapshot.worktree_roots.iter().cloned().collect();
-        let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for entry in entries {
-            let (Some(path), Some(branch)) = (
-                entry.path.filter(|path| !path.is_empty()),
-                entry.branch.filter(|branch| !branch.is_empty()),
-            ) else {
-                continue;
-            };
-            worktree_roots.insert(PathBuf::from(path));
-            branches_per_path.entry(path).or_default().insert(branch);
-        }
-        let multi_branch_paths = branches_per_path
-            .into_iter()
-            .filter(|(_, branches)| branches.len() > 1)
-            .map(|(path, _)| path.to_owned())
-            .collect();
+        worktree_roots.extend(
+            entries
+                .into_iter()
+                .filter(|entry| entry.branch.is_some_and(|branch| !branch.is_empty()))
+                .filter_map(|entry| entry.path.filter(|path| !path.is_empty()))
+                .map(PathBuf::from),
+        );
         let mut channel_places = BTreeMap::new();
         for (path, channel) in &snapshot.worktree_channels {
             if snapshot.worktree_roots.contains(path) {
@@ -86,26 +103,54 @@ impl<'a> GroupResolver<'a> {
             worktree_channels: &snapshot.worktree_channels,
             channel_places,
             root_class: snapshot.root_class,
-            multi_branch_paths,
         }
     }
 
+    /// A row with a lane groups by that lane alone; any other row by its path,
+    /// in the own lane of the deepest known root holding it.
     pub(super) fn resolve(&self, entry: GroupEntry<'_>) -> GroupIdentity {
-        if let Some(channel) = entry.channel.filter(|channel| !channel.is_empty()) {
-            return self.channel_group(channel);
+        if let Some(lane) = entry.lane {
+            return self.lane_group(lane);
         }
-        let branch = entry.branch.filter(|branch| !branch.is_empty());
+        if let Some(stamp) = entry.stamp.filter(|stamp| !stamp.is_empty()) {
+            return self.channel_group(stamp);
+        }
         let Some(path) = entry.path.filter(|path| !path.is_empty()) else {
-            return branch.map_or_else(external_group, branch_group);
+            return entry
+                .branch
+                .filter(|branch| !branch.is_empty())
+                .map_or_else(external_group, branch_group);
         };
-        self.resolve_path(path, branch)
+        self.resolve_path(path)
     }
 
-    fn resolve_path(&self, path: &str, branch: Option<&str>) -> GroupIdentity {
+    /// Trunk's own lane keeps its path group, and a foreign checkout's own lane
+    /// is the group of its home path, listed or not; a worktree's own lane and
+    /// every named lane are channels homed at the lane's checkout.
+    fn lane_group(&self, lane: &Lane) -> GroupIdentity {
+        match (lane.name(), lane.home()) {
+            (None, LaneHome::Trunk) => return self.resolve_path(lane.path()),
+            (None, LaneHome::Foreign) => return self.matched_root_group(Path::new(lane.path())),
+            _ => {}
+        }
+        let label = lane.label();
+        GroupIdentity {
+            kind: SidebarWorktreeKind::Channel,
+            key: format!("channel:{label}"),
+            label,
+            root_lane: false,
+            place: Some(SidebarPlace {
+                path: PathBuf::from(lane.path()),
+                foreign: lane.home() == LaneHome::Foreign,
+            }),
+        }
+    }
+
+    fn resolve_path(&self, path: &str) -> GroupIdentity {
         let Some(root) = self.deepest_root(Path::new(path)) else {
             return external_group();
         };
-        self.matched_root_group(root, branch)
+        self.matched_root_group(root)
     }
 
     fn deepest_root(&self, cwd: &Path) -> Option<&Path> {
@@ -130,7 +175,7 @@ impl<'a> GroupResolver<'a> {
         }
     }
 
-    fn matched_root_group(&self, root: &Path, branch: Option<&str>) -> GroupIdentity {
+    fn matched_root_group(&self, root: &Path) -> GroupIdentity {
         let root_key = root.to_string_lossy().into_owned();
         let root_lane = self.project_root == Some(root);
         let place = SidebarPlace {
@@ -143,7 +188,7 @@ impl<'a> GroupResolver<'a> {
             return GroupIdentity {
                 kind: SidebarWorktreeKind::Root,
                 key: root_key,
-                label: "main".to_owned(),
+                label: LaneName::TRUNK_LABEL.to_owned(),
                 root_lane: true,
                 place: Some(place),
             };
@@ -155,35 +200,16 @@ impl<'a> GroupResolver<'a> {
             return self.channel_group(channel);
         }
         GroupIdentity {
+            kind: SidebarWorktreeKind::Worktree,
+            key: root_key,
+            label: if root_lane {
+                LaneName::TRUNK_LABEL.to_owned()
+            } else {
+                path_basename(root)
+            },
             root_lane,
             place: Some(place),
-            ..worktree_group(
-                &root_key,
-                root,
-                branch,
-                self.multi_branch_paths.contains(&root_key),
-            )
         }
-    }
-}
-
-fn worktree_group(
-    key_path: &str,
-    label_path: &Path,
-    branch: Option<&str>,
-    split_by_branch: bool,
-) -> GroupIdentity {
-    GroupIdentity {
-        kind: SidebarWorktreeKind::Worktree,
-        key: branch.filter(|_| split_by_branch).map_or_else(
-            || key_path.to_owned(),
-            |branch| format!("{key_path}\n{branch}"),
-        ),
-        label: branch
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| path_basename(label_path)),
-        root_lane: false,
-        place: None,
     }
 }
 
@@ -705,12 +731,19 @@ pub struct AgentWorktreeGroup<'a> {
     pub label: String,
     pub kind: SidebarWorktreeKind,
     pub place: Option<SidebarPlace>,
+    /// The published group's live branch, else the one its agents reported.
+    pub branch: Option<String>,
     pub agents: Vec<&'a AgentState>,
 }
 
 impl AgentWorktreeGroup<'_> {
     pub fn team(&self) -> Option<&str> {
         super::cohort_team(self.agents.iter().map(|agent| agent.team.as_deref()))
+    }
+
+    /// The branch the header draws beside the lane label, as the sidebar's does.
+    pub fn header_branch(&self) -> Option<&str> {
+        shown_branch(self.branch.as_deref(), &self.label)
     }
 }
 
@@ -739,21 +772,17 @@ pub fn group_live_agents_by_worktree<'a>(
         .filter(|row| row.is_agent())
         .filter_map(|row| Some(((row.name.as_str(), row.id.as_str()), row.attention_at_ms?)))
         .collect();
+    let laneless: Vec<_> = agents.iter().map(|agent| laneless_stamp(agent)).collect();
     let resolver = GroupResolver::new(
         snapshot,
-        agents.iter().map(|agent| GroupEntry {
-            channel: agent.channel.as_deref(),
-            path: agent.lane_path(),
-            branch: agent.worktree_branch.as_deref(),
-        }),
+        agents
+            .iter()
+            .zip(&laneless)
+            .map(|(agent, stamp)| agent_entry(agent, stamp.as_ref())),
     );
     let mut by_key: BTreeMap<String, (bool, AgentWorktreeGroup<'a>)> = BTreeMap::new();
-    for &agent in agents {
-        let identity = resolver.resolve(GroupEntry {
-            channel: agent.channel.as_deref(),
-            path: agent.lane_path(),
-            branch: agent.worktree_branch.as_deref(),
-        });
+    for (&agent, stamp) in agents.iter().zip(&laneless) {
+        let identity = resolver.resolve(agent_entry(agent, stamp.as_ref()));
         by_key
             .entry(identity.key.clone())
             .or_insert_with(|| {
@@ -764,6 +793,7 @@ pub fn group_live_agents_by_worktree<'a>(
                         label: identity.label,
                         kind: identity.kind,
                         place: identity.place,
+                        branch: None,
                         agents: Vec::new(),
                     },
                 )
@@ -784,6 +814,21 @@ pub fn group_live_agents_by_worktree<'a>(
                     .copied(),
             ))
         });
+        group.branch = snapshot
+            .worktree_groups
+            .iter()
+            .find(|published| published.key == group.key)
+            .and_then(|published| published.branch.clone())
+            .or_else(|| {
+                group_branch_label(
+                    group.kind,
+                    group.place.as_ref(),
+                    group
+                        .agents
+                        .iter()
+                        .map(|agent| agent.worktree_branch.as_deref()),
+                )
+            });
     }
     groups.sort_by_cached_key(|(root_lane, group)| {
         group_sort_key(
@@ -801,6 +846,25 @@ pub fn group_live_agents_by_worktree<'a>(
         )
     });
     groups.into_iter().map(|(_, group)| group).collect()
+}
+
+/// What the listing groups an agent by, as the sidebar groups its row.
+fn agent_entry<'e>(agent: &'e AgentState, stamp: Option<&'e LaneName>) -> GroupEntry<'e> {
+    GroupEntry {
+        lane: agent.lane.as_ref(),
+        stamp: agent.stamp_label().or(stamp.map(LaneName::as_str)),
+        path: agent.lane_path(),
+        branch: agent.worktree_branch.as_deref(),
+    }
+}
+
+/// The stamped name of a lane-less row an older binary wrote, as its sidebar row
+/// carries it. Link 3 deletes it.
+fn laneless_stamp(agent: &AgentState) -> Option<LaneName> {
+    if agent.lane.is_some() || agent.own_lane_path().is_some() {
+        return None;
+    }
+    agent.lane_name()
 }
 
 /// Pane creation ordinal, the roster's final ordinal tiebreak, as in the sidebar.

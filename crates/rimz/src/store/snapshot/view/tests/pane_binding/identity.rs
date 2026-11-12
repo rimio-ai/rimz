@@ -52,7 +52,7 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
         .with_project_root(Some(PathBuf::from(root)))
         .with_live_panes(vec![pane("%1", "zsh", root), external_race], None);
     assert_eq!(snapshot.worktree_groups.len(), 1);
-    assert_eq!(snapshot.worktree_groups[0].label, "rimz");
+    assert_eq!(snapshot.worktree_groups[0].label, "main");
 }
 
 #[test]

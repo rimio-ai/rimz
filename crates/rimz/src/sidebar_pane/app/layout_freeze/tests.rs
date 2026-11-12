@@ -97,6 +97,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         key: key.to_owned(),
         label: key.to_owned(),
         label_qualifier: None,
+        branch: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

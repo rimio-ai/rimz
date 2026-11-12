@@ -517,7 +517,7 @@ fn assert_feature_group(stdout: &[u8], context: &str) {
         .and_then(|groups| {
             groups
                 .iter()
-                .find(|group| group["label"] == "feature-migration")
+                .find(|group| group["branch"] == "feature-migration")
         })
         .unwrap_or_else(|| {
             panic!("expected a feature-migration worktree group in {context}:\n{parsed:#}")

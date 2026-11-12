@@ -2218,18 +2218,26 @@ mod render {
     }
 
     #[test]
-    fn agents_table_branch_header_includes_selectable_channel() {
+    fn agents_table_header_shows_the_branch_beside_the_lane_only_when_they_differ() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut agent = agent_in_lane("coder", None, Some("/repo/worktrees/short"), None);
         agent.worktree_branch = Some("feature/long-branch".to_owned());
+        let mut same = agent_in_lane("fixer", None, Some("/repo/worktrees/feat"), None);
+        same.worktree_branch = Some("feat".to_owned());
         let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo")),
-            vec![agent],
+            vec![agent, same],
             now,
         )
         .with_project_root(Some(PathBuf::from("/repo")));
         let text = render_agents_text(&snapshot, now, 180);
-        assert!(text.contains("feature/long-branch · #short"), "{text}");
+        let headers = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('⑂'))
+            .collect::<Vec<_>>();
+        assert!(headers.contains(&"⑂ short · feature/long-branch"), "{text}");
+        assert!(headers.contains(&"⑂ feat"), "{text}");
     }
 
     #[test]
@@ -2474,11 +2482,18 @@ mod render {
         );
 
         let text = render_agents_text(&snapshot, now, 120);
-        assert!(text.contains("⑂ auth-refresh · forge team #91 ✓"), "{text}");
+        assert!(
+            text.contains("⑂ auth-refresh · main · forge team #91 ✓"),
+            "{text}"
+        );
         assert!(text.contains("# docs"), "{text}");
         assert!(text.contains("external"), "{text}");
-        assert!(text.contains("⑂ main · dotfiles"), "{text}");
-        assert_eq!(text.matches("· dotfiles").count(), 1, "{text}");
+        // A foreign checkout's lane is its folder, so no qualifier repeats it.
+        assert!(
+            text.lines().any(|line| line.trim() == "⑂ dotfiles · main"),
+            "{text}"
+        );
+        assert!(!text.contains("· dotfiles"), "{text}");
         assert!(
             !text.lines().next().unwrap_or_default().contains("CHANNEL"),
             "{text}"
@@ -2530,7 +2545,7 @@ mod render {
             std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(
                 serde_json::from_value(serde_json::json!({
                     "key": key,
-                    "label": "main",
+                    "label": "dotfiles",
                     "kind": "worktree",
                     "status_counts": [],
                     "rows": [],
@@ -2541,8 +2556,16 @@ mod render {
         }
 
         let text = render_agents_text(&snapshot, now, 120);
-        assert_eq!(text.matches("⑂ main · a/dotfiles").count(), 1, "{text}");
-        assert_eq!(text.matches("⑂ main · b/dotfiles").count(), 1, "{text}");
+        assert_eq!(
+            text.matches("⑂ dotfiles · main · a/dotfiles").count(),
+            1,
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("⑂ dotfiles · main · b/dotfiles").count(),
+            1,
+            "{text}"
+        );
     }
 
     #[test]

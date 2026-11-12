@@ -3,7 +3,9 @@
 use super::*;
 
 #[test]
-fn foreign_places_always_have_a_qualifier_and_collisions_deepen_it() {
+fn foreign_places_get_a_qualifier_unless_it_repeats_the_label_and_collisions_deepen_it() {
+    // A foreign checkout's own lane is labelled by its folder, so the folder
+    // qualifier would only repeat it.
     let (_, _, mut snapshot) = runtime();
     let mut groups = vec![
         group("/home/me/dotfiles", "dotfiles"),
@@ -24,7 +26,7 @@ fn foreign_places_always_have_a_qualifier_and_collisions_deepen_it() {
             .iter()
             .map(|group| group.label_qualifier.as_deref())
             .collect::<Vec<_>>(),
-        [Some("dotfiles"), Some("work/app"), Some("oss/app")]
+        [None, Some("work/app"), Some("oss/app")]
     );
 }
 
@@ -121,13 +123,14 @@ fn pass_preserves_identity_and_clears_stale_qualifiers() {
 }
 
 #[test]
-fn identical_paths_under_split_keys_get_no_qualifier() {
+fn a_named_lane_sharing_its_checkouts_place_gets_no_qualifier() {
+    // One checkout is one group; the only group that shares its place is a
+    // named lane homed there, and a channel label never collides.
     let (_, _, mut snapshot) = runtime();
-    let mut first = group("/repo/app", "main");
-    first.key.push_str("\nold-main");
-    let mut second = group("/repo/app", "main");
-    second.key.push_str("\nnew-main");
-    snapshot.worktree_groups = vec![first, second].into();
+    let mut named = group("/repo/app", "app");
+    named.kind = SidebarWorktreeKind::Channel;
+    named.key = "channel:app".to_owned();
+    snapshot.worktree_groups = vec![group("/repo/app", "app"), named].into();
 
     disambiguate_group_labels(&mut snapshot);
 

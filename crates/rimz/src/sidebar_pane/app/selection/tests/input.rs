@@ -2835,6 +2835,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
+        branch: None,
         kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

@@ -183,6 +183,7 @@ pub(crate) fn worktree_group(
         key: path.display().to_string(),
         label: "wt".to_owned(),
         label_qualifier: None,
+        branch: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

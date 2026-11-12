@@ -186,6 +186,7 @@ mod tests {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,
+            branch: None,
             kind: SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
