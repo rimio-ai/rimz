@@ -244,10 +244,15 @@ fn workflow_sections_partition_before_the_cap_and_survive_held_order() {
 }
 
 #[test]
-fn rowless_workflow_visibility_has_no_phantom_ordinals() {
-    let snapshot = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
+fn rowless_run_and_open_pr_visibility_has_no_phantom_ordinals() {
+    let run = crate::sidebar::scenario::Scenario::parse("workflow", "preset workflow")
         .unwrap()
         .at(std::time::Duration::ZERO);
+    let mut open_pr = run.clone();
+    std::sync::Arc::make_mut(&mut open_pr.worktree_groups)[0].workflow = None;
+    let mut merged = open_pr.clone();
+    std::sync::Arc::make_mut(&mut merged.worktree_groups)[0].pr_state =
+        Some(crate::store::snapshot::WorktreePrState::Merged);
     let lenses = [
         BodyLens::default(),
         BodyFilter::OpenPr.into(),
@@ -262,17 +267,25 @@ fn rowless_workflow_visibility_has_no_phantom_ordinals() {
             ..Default::default()
         },
     ];
-    let shown = lenses
-        .iter()
-        .map(|lens| {
-            let roster = VisibleRoster::new(&snapshot, lens, &BTreeSet::new(), None);
-            assert_eq!(roster.len(), 0);
-            assert_eq!(roster.pane_at_ordinal(0), None);
-            assert_eq!(roster.neighboring_group_head(0, 1), None);
-            roster.groups().iter().filter(|group| group.shown()).count()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(shown, [1, 1, 1, 0, 0, 0]);
+    let shown = |snapshot: &SidebarSnapshot| {
+        lenses
+            .iter()
+            .map(|lens| {
+                let roster = VisibleRoster::new(snapshot, lens, &BTreeSet::new(), None);
+                assert_eq!(roster.len(), 0);
+                assert_eq!(roster.pane_at_ordinal(0), None);
+                assert_eq!(roster.neighboring_group_head(0, 1), None);
+                roster.groups().iter().filter(|group| group.shown()).count()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(shown(&run), [1, 1, 1, 0, 0, 0]);
+    assert_eq!(
+        shown(&open_pr),
+        [1, 1, 0, 0, 0, 0],
+        "the run's name no longer matches"
+    );
+    assert_eq!(shown(&merged), [0, 0, 0, 0, 0, 0]);
 }
 
 #[test]

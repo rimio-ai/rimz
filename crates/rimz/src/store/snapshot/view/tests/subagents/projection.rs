@@ -542,7 +542,7 @@ fn exhausted_child_demotes_entry_and_parent_before_paused_sibling() {
     let snapshot = room(vec![parent.clone(), first, spent]);
     let demotion = crate::agents::ParkDemotion::new(&BTreeMap::new(), exhausted, epoch());
     let groups =
-        snapshot.build_worktree_groups(vec![row_from_agent(&parent, epoch())], &demotion, &[]);
+        snapshot.build_worktree_groups(vec![row_from_agent(&parent, epoch())], &demotion, &[], &[]);
     let row = &groups[0].rows[0];
     assert_eq!(row.status(), Some(AgentStatus::Failed));
     assert_eq!(row.turn_error_label(), Some("@spent: spent limit"));

@@ -812,7 +812,9 @@ fn group_header(
         .map(|span| span.content.as_ref())
         .collect::<String>();
     let ci_width = ci.as_ref().map_or(0, Span::width);
-    if group.rows.is_empty() && group.workflow.is_some() && group.kind != SidebarWorktreeKind::Root
+    if group.rows.is_empty()
+        && group.stands_without_rows()
+        && group.kind != SidebarWorktreeKind::Root
     {
         let identity = text_width(&full_label)
             + ci_width

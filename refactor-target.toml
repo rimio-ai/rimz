@@ -4236,7 +4236,7 @@ path = "crates/rimz/src/store"
 # SidebarSnapshot::sort_presented_groups orders renderer-deferred membership (+1).
 # HeldRank and SidebarSnapshot::{capture_held_rank, sort_groups_with_holds, sort_rows_in_order} keep focus and frozen position keys inside the view (+4).
 # SidebarWorkflow, SidebarWorkflowNode, WorkflowNodeKind, RunRecord::{session_attempt, step_agent},
-# and SidebarWorktreeGroup::has_rows_or_workflow share live run groups (+6).
+# and SidebarWorktreeGroup::stands_without_rows share run and open-PR groups (+6).
 # workflow::parse_journal shares lenient row decoding with cached sidebar reads (+1).
 # SidebarSnapshot::process_attention_facts shares process-slot aging with enrichment (+1).
 # TypingHold, TypingHoldReplay and Store::hold_message_claims share durable input deferral (+3).

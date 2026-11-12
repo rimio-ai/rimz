@@ -89,9 +89,21 @@ fn snapshot_to_screen_for_theme(
     snapshot_to_screen_with_alert_and_ui(snapshot, None, &ui, &pane_ui, width, height)
 }
 
-#[test]
-fn rowless_workflow_header_drops_churn_before_its_name() {
+/// The preset's run lane with its run gone, held by its open PR alone.
+fn open_pr_snapshot() -> SidebarSnapshot {
     let mut snapshot = snapshot();
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].workflow = None;
+    snapshot
+}
+
+#[test]
+fn rowless_header_drops_churn_before_its_name() {
+    for snapshot in [snapshot(), open_pr_snapshot()] {
+        rowless_header_drops_churn_before_its_name_in(snapshot);
+    }
+}
+
+fn rowless_header_drops_churn_before_its_name_in(mut snapshot: SidebarSnapshot) {
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
     group.trunk_sync = Some(crate::store::snapshot::WorktreeTrunkSync::Diverged);
     group.diff_added = Some(1234);
@@ -180,7 +192,7 @@ fn workflow_narrow_trim_boundaries_keep_the_current_name_whole() {
 }
 
 #[test]
-fn rowless_workflow_lenses_queries_and_no_match_use_groups() {
+fn rowless_lenses_queries_and_no_match_use_groups() {
     let snapshot = snapshot();
     let mut ui = ViewState::default();
     let pane_ui = UiState::default();
@@ -191,6 +203,18 @@ fn rowless_workflow_lenses_queries_and_no_match_use_groups() {
         assert!(
             screen.contains("1/1"),
             "rowless match counts once: {screen}"
+        );
+        assert!(!screen.contains("no match"), "{screen}");
+    }
+    let open_pr = open_pr_snapshot();
+    assert_eq!(BodyFilter::OpenPr.total(&open_pr.worktree_groups), 1);
+    for query in ["merge-lane", "#91"] {
+        ui.toggles.make_up_filter.query = Some(query.to_owned());
+        let screen = snapshot_to_screen_with_alert_and_ui(&open_pr, None, &ui, &pane_ui, 54, 22);
+        assert!(screen.contains("merge-lane"), "{query}: {screen}");
+        assert!(
+            screen.contains("1/1"),
+            "an open PR lane counts once: {screen}"
         );
         assert!(!screen.contains("no match"), "{screen}");
     }

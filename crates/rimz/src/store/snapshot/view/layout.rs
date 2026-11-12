@@ -519,8 +519,9 @@ pub(super) fn compare_groups(
 fn live_group_key(group: &SidebarWorktreeGroup) -> GroupRankKey {
     // Active project work leads external, then inactive groups. Only
     // actionable groups use urgency. Unlanded groups lead landed ones after
-    // urgency; members lead rowless runs within each slice. Rowless runs rank
-    // by node entry rather than agent clocks.
+    // urgency; members lead rowless groups within each slice. Rowless runs
+    // rank by node entry rather than agent clocks, and a rowless group with no
+    // run (one an open pull request holds) follows them by label.
     group_sort_key(
         group.rows.iter().map(row_rank_facts),
         group.kind,
@@ -637,7 +638,7 @@ fn group_inactive(
 ) -> Option<SidebarInactive> {
     if group.root_lane
         || group.kind == SidebarWorktreeKind::External
-        || group.workflow.is_some()
+        || group.stands_without_rows()
         || group
             .rows
             .iter()

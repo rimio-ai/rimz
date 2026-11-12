@@ -36,7 +36,7 @@ pub(super) struct VisibleGroup<'a> {
     expanded: bool,
     natural_hidden_count: usize,
     hidden_count: usize,
-    rowless_workflow: bool,
+    shown_rowless: bool,
 }
 
 impl<'a> VisibleGroup<'a> {
@@ -57,7 +57,7 @@ impl<'a> VisibleGroup<'a> {
     }
 
     pub(super) fn shown(&self) -> bool {
-        !self.is_empty() || self.hidden_count > 0 || self.rowless_workflow
+        !self.is_empty() || self.hidden_count > 0 || self.shown_rowless
     }
 
     pub(super) fn expanded(&self) -> bool {
@@ -109,7 +109,7 @@ impl<'a> VisibleRoster<'a> {
                     0
                 },
                 hidden_count,
-                rowless_workflow: projection.rowless_workflow,
+                shown_rowless: projection.shown_rowless,
             });
         }
         Self { rows, groups }
@@ -146,7 +146,7 @@ impl<'a> VisibleRoster<'a> {
                     0
                 },
                 hidden_count,
-                rowless_workflow: projection.rowless_workflow,
+                shown_rowless: projection.shown_rowless,
             }],
         }
     }
@@ -210,7 +210,7 @@ pub(super) fn group_can_fold(group: &SidebarWorktreeGroup) -> bool {
 struct GroupProjection<'a> {
     rows: Vec<&'a SidebarRow>,
     natural_hidden_count: usize,
-    rowless_workflow: bool,
+    shown_rowless: bool,
 }
 
 fn project_group<'a>(
@@ -276,8 +276,8 @@ fn project_group<'a>(
         lens.filter.zip(facts.as_ref()),
         focused_pane,
     );
-    projection.rowless_workflow = group.rows.is_empty()
-        && group.workflow.is_some()
+    projection.shown_rowless = group.rows.is_empty()
+        && group.stands_without_rows()
         && lens.filter.is_none_or(|filter| filter.shows_group(group));
     let Some(query) = &lens.query else {
         return projection;
@@ -297,7 +297,7 @@ fn project_group<'a>(
     {
         return projection;
     }
-    projection.rowless_workflow = false;
+    projection.shown_rowless = false;
     projection.rows.retain(|row| {
         contains(&row.name)
             || row.worktree_branch.as_deref().is_some_and(contains)
@@ -370,7 +370,7 @@ fn project_rows<'a>(
     GroupProjection {
         rows,
         natural_hidden_count: source.len().saturating_sub(natural_visible),
-        rowless_workflow: false,
+        shown_rowless: false,
     }
 }
 

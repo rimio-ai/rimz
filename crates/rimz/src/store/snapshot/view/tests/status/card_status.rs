@@ -202,6 +202,7 @@ fn card_and_reader_agree_on_pausing_rows() {
             vec![row_from_agent(rolled_up, epoch())],
             &demotion,
             &[],
+            &[],
         );
         let card = &groups[0].rows[0];
         if with_live_child {

@@ -118,7 +118,8 @@ impl BodyFilter {
             }
     }
 
-    /// Matching units for status lenses; otherwise rows, with rowless runs counting once.
+    /// Matching units for status lenses; otherwise rows, with a rowless group
+    /// (a live run or an open pull request) counting once.
     pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
         match self {
             Self::NeedsYou => groups
@@ -150,7 +151,12 @@ impl BodyFilter {
             Self::OpenPr => groups
                 .iter()
                 .filter(|group| self.shows_group(group))
-                .map(|group| group.rows.len().max(usize::from(group.workflow.is_some())))
+                .map(|group| {
+                    group
+                        .rows
+                        .len()
+                        .max(usize::from(group.stands_without_rows()))
+                })
                 .sum(),
         }
     }

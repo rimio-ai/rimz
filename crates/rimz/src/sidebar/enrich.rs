@@ -335,15 +335,9 @@ fn project_pr_state_map(
             continue;
         };
         let path = path.to_string_lossy();
-        let trunk = diff_cache.entries.get(path.as_ref()).is_some_and(|entry| {
-            entry
-                .branch
-                .as_deref()
-                .is_some_and(|branch| is_trunk_branch(branch, entry.trunk.as_deref()))
-        });
         let link = states.get(path.as_ref());
         let ci = branch_ci.get(path.as_ref()).copied();
-        if trunk {
+        if is_trunk_checkout(diff_cache, &path) {
             group.pr_state = None;
             group.pr_queue = None;
             group.ci = ci;
@@ -377,13 +371,44 @@ fn project_pr_state_map(
     }
 }
 
-fn project_cached_pr_states(
-    snapshot: &mut SidebarSnapshot,
-    runtime: &RuntimePaths,
+fn is_trunk_checkout(diff_cache: &DiffStatsCache, path: &str) -> bool {
+    diff_cache.entries.get(path).is_some_and(|entry| {
+        entry
+            .branch
+            .as_deref()
+            .is_some_and(|branch| is_trunk_branch(branch, entry.trunk.as_deref()))
+    })
+}
+
+/// The listed worktree roots whose pull request reads open, trunk checkouts
+/// excluded as `project_pr_state_map` clears them: each seeds a group that
+/// stands without rows.
+fn open_pr_roots(
+    snapshot: &SidebarSnapshot,
+    states: &BTreeMap<String, PrLink>,
     diff_cache: &DiffStatsCache,
-) {
-    let cache = read_pr_state_cache(&runtime.pr_state_path());
-    project_pr_state_map(snapshot, &cache.states, &cache.branch_ci, diff_cache);
+) -> Vec<String> {
+    snapshot
+        .worktree_roots
+        .iter()
+        .map(|root| root.to_string_lossy().into_owned())
+        .filter(|path| {
+            states
+                .get(path)
+                .is_some_and(|link| link.state == WorktreePrState::Open)
+                && !is_trunk_checkout(diff_cache, path)
+        })
+        .collect()
+}
+
+/// A group seeded without rows stays only while a live run or an open pull
+/// request still holds it once PR facts are projected.
+fn drop_unheld_rowless_groups(snapshot: &mut SidebarSnapshot) {
+    let unheld =
+        |group: &SidebarWorktreeGroup| group.rows.is_empty() && !group.stands_without_rows();
+    if snapshot.worktree_groups.iter().any(unheld) {
+        Arc::make_mut(&mut snapshot.worktree_groups).retain(|group| !unheld(group));
+    }
 }
 
 fn classify_trunk_sync(
@@ -756,6 +781,17 @@ fn enrich_core(
     }
     let workflow_records = project_workflow_and_throttle_state(&mut snapshot, state);
     let workflow_seeds = workflows::seeds(&workflow_records, state);
+    // The pane fold seeds open-PR groups from the same reading the late PR
+    // projection applies, so both see one map.
+    let cached_pr_states;
+    let (pr_states, branch_ci) = match opts.lanes {
+        Some(lanes) => (&lanes.pr_states, &lanes.branch_ci),
+        None => {
+            cached_pr_states = read_pr_state_cache(&runtime.pr_state_path());
+            (&cached_pr_states.states, &cached_pr_states.branch_ci)
+        }
+    };
+    let pr_seeds = open_pr_roots(&snapshot, pr_states, &diff_cache);
     let outages = crate::harness::drainer_outage::read(runtime);
     snapshot.hook_drainer_outage = outages.first().map(|first| HookDrainerOutage {
         since: Timestamp::from_millisecond(first.since_ms.min(i64::MAX as u64) as i64)
@@ -896,6 +932,7 @@ fn enrich_core(
             Some(&unread_row_ids),
             &demotion,
             &workflow_seeds,
+            &pr_seeds,
         );
         snapshot = next_snapshot;
         for event in diagnostics {
@@ -938,11 +975,8 @@ fn enrich_core(
         &machine_config.harness,
         runtime,
     );
-    if let Some(lanes) = lanes {
-        project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
-    } else {
-        project_cached_pr_states(&mut folded, runtime, &diff_cache);
-    }
+    project_pr_state_map(&mut folded, pr_states, branch_ci, &diff_cache);
+    drop_unheld_rowless_groups(&mut folded);
     snapshot = folded;
     // The fleet `value_tally` — the JSONL headline / month / trailing-year pile
     // read by the cockpit's headline figure and the bottom value corner — attaches
