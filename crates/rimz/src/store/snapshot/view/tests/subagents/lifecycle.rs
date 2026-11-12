@@ -492,6 +492,75 @@ fn recently_finished_child_holds_off_the_stall() {
 }
 
 #[test]
+fn finished_child_keeps_a_parent_silent_past_the_stall_window_running() {
+    let parent = agent("claude", "sess-root", AgentStatus::Running, 100)
+        .active_ago(default_stall_secs() + 600);
+    let child = child_state("sess-root", "child-1", AgentStatus::Success, 60);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent_row = row(&snapshot, "sess-root");
+    assert_eq!(parent_row.last_activity, ago(60));
+    assert_eq!(parent_row.status(), Some(AgentStatus::Running));
+}
+
+#[test]
+fn settle_marker_folded_under_a_finished_child_settles_on_the_parent_clock() {
+    // The child's clock folds the row past the parent's marker, so the row's
+    // own marker rungs miss and the parent's own clock decides.
+    for (outcome, expected) in [
+        (TurnSettleOutcome::Complete, AgentStatus::Success),
+        (TurnSettleOutcome::Interrupted, AgentStatus::Idle),
+    ] {
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100)
+            .active_ago(600)
+            .settle(300, outcome);
+        let child = child_state("sess-root", "child-1", AgentStatus::Success, 100);
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent_row = row(&snapshot, "sess-root");
+        assert_eq!(parent_row.last_activity, ago(100), "{outcome:?}");
+        assert_eq!(parent_row.status(), Some(expected), "{outcome:?}");
+    }
+
+    // A permission under automatic review seeds the card `running`, so the
+    // child's clock can fold past a native-wait marker the parent left after it.
+    let mut parent = agent("codex", "review", AgentStatus::Waiting, 0)
+        .worktree("/repo/main")
+        .active_ago(50)
+        .settle(30, TurnSettleOutcome::NativeWait);
+    parent.mode = Some(crate::agents::PermissionMode::Auto);
+    parent.open_ask = Some(crate::agents::OpenAsk {
+        extra_questions: 0,
+        id: crate::ids::AskId::new(),
+        kind: crate::agents::AskKind::Permission,
+        detail: Some("shell: cargo test".to_owned()),
+        native_key: None,
+        since: ago(50),
+    });
+    let mut child = child_state("review", "child", AgentStatus::Success, 10);
+    child.kind = AgentKind::new_unchecked("codex");
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent_row = row(&snapshot, "review");
+    assert_eq!(parent_row.last_activity, ago(10));
+    assert_eq!(parent_row.status(), Some(AgentStatus::Waiting));
+}
+
+#[test]
+fn live_child_over_a_resting_parent_resets_the_phase() {
+    for status in [AgentStatus::Idle, AgentStatus::Success] {
+        let mut parent = agent("claude", "sess-root", status, 100).active_ago(600);
+        parent.phase = TurnPhase::Reasoning;
+        let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent_row = row(&snapshot, "sess-root");
+        assert_eq!(
+            parent_row.status(),
+            Some(AgentStatus::Running),
+            "{status:?}"
+        );
+        assert_eq!(parent_row.phase(), TurnPhase::Idle, "{status:?}");
+    }
+}
+
+#[test]
 fn child_activity_does_not_reclock_parent_attention_or_dead_turns() {
     for (label, parent, child_status, expected_status, expected_error) in [
         (
