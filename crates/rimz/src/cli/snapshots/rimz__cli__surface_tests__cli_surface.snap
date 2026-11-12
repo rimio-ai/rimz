@@ -3042,6 +3042,7 @@ rimz setup
     --config-only  [action=set-true takes=0..=0 long-aliases=yes]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --reset  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]

@@ -3895,6 +3895,43 @@ fn fake_agent_bin_dir(names: &[&str]) -> tempfile::TempDir {
 
 #[cfg(unix)]
 #[test]
+fn hooks_install_marks_a_removed_codex_rules_file() {
+    let env = Env::new();
+    let bin_dir = fake_agent_bin_dir(&["codex"]);
+    env.install_agent_hooks("codex");
+    let rules = env.home_root.join(".codex/rules/rimz.rules");
+    assert!(rules.exists());
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nallow-routine-rimz = false\n",
+    )
+    .unwrap();
+
+    let install = env
+        .rimz()
+        .env("PATH", bin_dir.path())
+        .args(["hooks", "install"])
+        .output()
+        .expect("spawn install");
+    assert!(install.status.success(), "{install:?}");
+    let stdout = String::from_utf8_lossy(&install.stdout);
+    assert!(!rules.exists(), "{stdout}");
+    assert!(stdout.contains("✓ codex  "), "{stdout}");
+    assert!(
+        stdout.contains("\n         removed → ~/.codex/rules/rimz.rules\n"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("config → ~/.codex/rules/rimz.rules"),
+        "{stdout}"
+    );
+    for line in stdout.lines().take_while(|line| !line.is_empty()) {
+        assert!(line.chars().count() <= 80, "{line:?} passes 80 columns");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     let env = Env::new();
     let bin_dir = fake_agent_bin_dir(&["claude", "codex"]);
@@ -3924,7 +3961,7 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     let install_stdout = String::from_utf8_lossy(&install.stdout);
     assert!(install_stdout.contains("✓ claude  installed"));
     assert!(install_stdout.contains("~/.claude/settings.json"));
-    assert!(install_stdout.contains("✓ codex  installed"));
+    assert!(install_stdout.contains("✓ codex   installed"));
     assert!(install_stdout.contains("~/.codex/config.toml"));
     assert!(env.agent_hooks_installed("claude"));
     assert!(env.agent_hooks_installed("codex"));
@@ -3944,7 +3981,7 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     );
     let rerun_stdout = String::from_utf8_lossy(&rerun.stdout);
     assert!(rerun_stdout.contains("✓ claude  hooks up to date"));
-    assert!(rerun_stdout.contains("✓ codex  hooks up to date"));
+    assert!(rerun_stdout.contains("✓ codex   hooks up to date"));
 
     let empty_path = fake_agent_bin_dir(&[]);
     let uninstall = env

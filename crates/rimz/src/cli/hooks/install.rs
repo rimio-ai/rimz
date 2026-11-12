@@ -14,11 +14,17 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     }
 
     let adapters = install_definitions(agent, &login_env)?;
+    let width = adapters
+        .iter()
+        .map(|adapter| adapter.spec().kind.len())
+        .max()
+        .unwrap_or_default();
     let mut out = crate::cli::render::out();
+    let mut pending = false;
     for integration in adapters {
-        install_hooks_into(integration, &login_env, &mut out)?;
+        pending |= install_hooks_into(integration, &login_env, width, &mut out)?;
     }
-    crate::cli::render::finish(write_post_install_footer(&mut out))
+    crate::cli::render::finish(write_post_install_footer(&mut out, pending))
 }
 
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {

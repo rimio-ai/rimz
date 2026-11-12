@@ -3,7 +3,7 @@
 //! exits before any side effect instead of emitting a doomed nested
 //! `attach`.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -1666,7 +1666,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     );
     for lasting_notice in [
         "No terminal input",
-        "hooks are installed but untrusted",
+        "until trusted",
         "saved untrusted",
         "has no trust decision",
         "directory workspace rooted at",
@@ -1685,6 +1685,123 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     assert!(
         !output.contains("Trust this project's config on this machine?"),
         "the reconnect must not prompt for trust: {output}"
+    );
+}
+
+#[test]
+fn first_attended_start_asks_only_the_mux_and_hooks_and_opens_past_a_broken_file() {
+    let env = Env::new();
+    let bin_dir = seed_actionable_agent(&env);
+    crate::common::write_path_shim(&bin_dir, "tmux", "echo 'no server running' >&2\nexit 1");
+    crate::common::write_path_shim(&bin_dir, "zellij", "exit 0");
+    crate::common::write_path_shim(&bin_dir, "pi", "exit 0");
+    let loop_toml = env.rimz_home().join("loop.toml");
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(&loop_toml, "[broken\n").unwrap();
+    let pi_extension = env.home_root.join("agent-config/pi/rimz.ts");
+    std::fs::create_dir_all(pi_extension.parent().unwrap()).unwrap();
+    std::fs::write(&pi_extension, "// my own extension\n").unwrap();
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").unwrap();
+    let zellij_log = env.project_root.join("zellij-first-start.log");
+    let _room = ShimRoom::watch(&env, &zellij_log);
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 40,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open pty");
+    let mut command = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut command);
+    command.cwd(&env.project_root);
+    command.args(["start", "--no-attach"]);
+    command.env("PATH", &bin_dir);
+    command.env("TERM", "dumb");
+    command.env("RIMZ_PETS_OFFLINE", "1");
+    command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
+    command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
+    command.env("RIMZ_PRESENCE_PLUGIN", &presence);
+    command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "");
+    command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
+    command.env("RIMZ_PI_EXTENSION", &pi_extension);
+    command.env(
+        "RIMZ_ANTIGRAVITY_HOOKS",
+        env.home_root.join("agent-config/hooks.json"),
+    );
+    command.env(
+        "RIMZ_ANTIGRAVITY_SETTINGS",
+        env.home_root.join("agent-config/settings.json"),
+    );
+
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn first start");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    writer.write_all(b"2\ny\n").expect("write start input");
+    writer.flush().expect("flush start input");
+    drop(writer);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll first start") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let status = status.unwrap_or_else(|| {
+        panic!("first start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
+    });
+
+    assert!(
+        status.success(),
+        "a broken loop.toml must not refuse the start: {output}"
+    );
+    assert!(output.contains("Multiplexer?"), "{output}");
+    assert!(
+        output.contains("! pi hooks not installed: ") && output.contains("unmarked user"),
+        "{output}"
+    );
+    assert!(
+        output.contains("antigravity"),
+        "the rest are still offered: {output}"
+    );
+    for question in [
+        "Room keys",
+        "truecolor",
+        "Nerd Font",
+        "Pet",
+        "While you're away",
+        "Review",
+    ] {
+        assert!(!output.contains(question), "{question} asked: {output}");
+    }
+    let config = std::fs::read_to_string(env.rimz_home().join("config.toml")).unwrap();
+    let config: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        config["mux"]["default"].as_str(),
+        Some("zellij"),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&pi_extension).unwrap(),
+        "// my own extension\n"
     );
 }
 

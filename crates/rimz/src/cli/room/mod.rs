@@ -224,11 +224,19 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     rimz::harness::hibernate::reconcile_at(&paths, &workspace.workspace_id)?;
+    // The first plain start asks for the multiplexer ahead of room admission,
+    // since the answer decides which backend admits the birth.
+    let mux_answer = ask_first_start_mux(&workspace.session_name, globals, posture)?;
+    // The answer is a default, not a `--mux`: a room another terminal birthed
+    // on either backend while the question waited still takes this start.
+    let answer_pick = mux_answer.filter(|_| !session_is_live_anywhere(&workspace.session_name));
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to
     // the birth guard below and refuses the cross-backend split.
-    let mux =
-        render::room::present_mux_pick(pick_mux_for_session(&workspace.session_name, globals.mux))?;
+    let mux = render::room::present_mux_pick(pick_mux_for_session(
+        &workspace.session_name,
+        answer_pick.or(globals.mux),
+    ))?;
     // A same-mux room can't be nested: if we're already inside this backend's
     // session, report the directory's room and stop before any launch side
     // effect — hook install, session birth, sidebar, or the doomed nested
@@ -258,6 +266,18 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         report_start_notices(&workspace)?;
     }
     let first_run = ensure_default_config_for_start(posture)?;
+    // No config read or write here may refuse the start: the answer already
+    // picked this birth's backend.
+    if let Some(answer) = mux_answer
+        && first_run::mux_answer_differs(&rimz::config::MachineConfig::load_lenient(), answer)
+        && let Err(error) =
+            rimz::config::ConfigEditor::machine().set("mux.default", answer.as_str())
+    {
+        writeln!(
+            render::err(),
+            "rimz: warning: mux.default not saved: {error:#}"
+        )?;
+    }
     enter_room(
         RoomEntry::Start {
             workspace,
@@ -383,6 +403,40 @@ fn workspace_record_for_web_session(session: &str) -> Result<WorkspaceRecord> {
 fn preflight_web_engine() -> Result<()> {
     rimz::web::preflight()?;
     Ok(())
+}
+
+/// Ask for the multiplexer on a machine's first attended start, when both are
+/// installed and nothing else decides it. `None` when the question is not asked.
+fn ask_first_start_mux(
+    session: &str,
+    globals: &GlobalFlags,
+    posture: StartPosture,
+) -> Result<Option<MuxName>> {
+    let config_missing =
+        !rimz::disk::entry_exists(&rimz::config::MachineConfig::config_path()).unwrap_or(true);
+    let gate = first_run::FirstStartMux {
+        first_run: config_missing && rimz::disk::paths::legacy_config_roots().is_empty(),
+        attended: posture.is_attended(),
+        flag: globals.mux,
+        enclosing: rimz::mux::enclosing_mux(),
+    };
+    let asks = gate.asks(rimz::mux::is_installed, || {
+        session_is_live_anywhere(session)
+    });
+    if !asks {
+        return Ok(None);
+    }
+    let config = rimz::config::MachineConfig::load().unwrap_or_default();
+    let answer =
+        first_run::ask_first_start_mux(&config, &mut std::io::stdin().lock(), &mut render::err())?;
+    match answer {
+        Some(mux) => Ok(Some(mux)),
+        None => bail!("quit before the room opened; nothing changed"),
+    }
+}
+
+fn session_is_live_anywhere(session: &str) -> bool {
+    session_is_live(MuxName::Zellij, session) || session_is_live(MuxName::Tmux, session)
 }
 
 fn ensure_default_config_for_start(posture: StartPosture) -> Result<bool> {
@@ -557,29 +611,23 @@ fn prepare_room(
         .map(|source| rimz::room::admit_birth(source, mux).map(|admission| (source, admission)))
         .transpose()?;
 
-    let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
+    if matches!(entry, RoomEntry::Start { .. }) && !was_live {
         let hook_mode = match posture {
             StartPosture::Attended => HookInstallMode::Attended,
             StartPosture::NoTerminal => HookInstallMode::NoTerminal,
             StartPosture::Reconnect => HookInstallMode::Reconnect,
         };
-        match ensure_detected_agent_hooks(hook_mode) {
-            Ok(rendered) => rendered,
-            Err(error) => {
-                writeln!(render::err(), "rimz: warning: {error:#}")?;
-                false
-            }
+        if let Err(error) = ensure_detected_agent_hooks(hook_mode, None) {
+            writeln!(render::err(), "rimz: warning: {error:#}")?;
         }
-    } else {
-        false
-    };
+    }
     if let RoomEntry::Start {
         first_run: true, ..
     } = &entry
         && posture.is_attended()
     {
-        first_run::run(&machine_config, hook_intro_rendered)?;
         let mut out = render::err();
+        first_run::write_first_start_defaults(&machine_config, mux, &mut out)?;
         writeln!(out, "Opening the room...")?;
         match rimz::config::MachineConfig::load() {
             Ok(config) => machine_config = std::sync::Arc::new(config),
