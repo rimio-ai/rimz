@@ -32,7 +32,7 @@ pub use inspect::{
     Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
     repeats_evaluation, routing_hop, timeout_at,
 };
-pub use observe::observe;
+pub use observe::{Cohort, detach_cohort, leader, observe, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub use spec::{
     Case, Check, CheckKind, Header, HeaderEdges, Issue, LaunchOverrides, OutcomeCap, Route,

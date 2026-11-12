@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -9,8 +8,7 @@ use rimz::harness::workflow::{self, WorkflowErr};
 use rimz::ids::EventId;
 use rimz::launcher::{self, LaunchOutcome, Preparation};
 use rimz::store::run::{ReportTo, RunLifecycle, RunRecord};
-use rimz::store::snapshot::SidebarSnapshot;
-use rimz::store::workflow::{AttemptOutcome, AttemptRun, ChildRef, Children, TeamRef};
+use rimz::store::workflow::{AttemptOutcome, AttemptRun, Children};
 
 use crate::cli::{GlobalFlags, agents_cmd, ctx::Ctx, supervised};
 
@@ -47,7 +45,7 @@ impl<'a> Host<'a> {
         stops: bool,
     ) -> Result<Option<workflow::Occupancy>> {
         let ctx = self.ctx()?;
-        let snapshot = occupancy_snapshot(ctx.alive_snapshot()?, &eviction.excluded);
+        let snapshot = workflow::without_excluded(ctx.alive_snapshot()?, &eviction.excluded);
         let card_status = rimz::harness::CardStatus::new(&ctx.store);
         let takeover = takeover::read(
             &snapshot,
@@ -109,26 +107,6 @@ fn occupancy_of(takeover: Takeover<'_>, peers: &[&AgentState]) -> workflow::Occu
     }
 }
 
-fn occupancy_snapshot(mut snapshot: SidebarSnapshot, excluded: &[String]) -> SidebarSnapshot {
-    if excluded.is_empty() {
-        return snapshot;
-    }
-    let peers = rimz::address::addressable_agents(&snapshot);
-    let context = rimz::address::AddressContext {
-        channel: None,
-        origin: rimz::address::ChannelOrigin::Explicit,
-    };
-    let excluded = excluded
-        .iter()
-        .filter_map(|handle| rimz::address::resolve_agent(handle, None, &context, &peers).ok())
-        .flat_map(|agent| std::iter::once(agent).chain(descendants(&snapshot.agents, agent)))
-        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-        .collect::<BTreeSet<_>>();
-    std::sync::Arc::make_mut(&mut snapshot.agents)
-        .retain(|agent| !excluded.contains(&(agent.kind.clone(), agent.agent_id.clone())));
-    snapshot
-}
-
 /// Queue an automated `@rimz` notice once under `message` for `agent`'s next done boundary,
 /// then send it now if the agent rests; `about_run` withdraws it once that run ends.
 fn queue_notice(
@@ -163,70 +141,6 @@ fn queue_notice(
     Ok(())
 }
 
-fn agent<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<&'a AgentState> {
-    run.agent_id
-        .as_ref()
-        .and_then(|id| rimz::address::launch_row(snapshot.agents.iter(), &run.kind, id))
-}
-
-fn descendants<'a>(agents: &'a [AgentState], root: &AgentState) -> Vec<&'a AgentState> {
-    let mut pending = rimz::address::launched_children(agents, root);
-    let mut found = Vec::new();
-    let mut seen = BTreeSet::new();
-    while let Some(child) = pending.pop() {
-        if child.ended_at.is_some() || !seen.insert((&child.kind, &child.agent_id)) {
-            continue;
-        }
-        pending.extend(rimz::address::launched_children(agents, child));
-        found.push(child);
-    }
-    found
-}
-
-fn child_ref(agent: &AgentState, peers: &[&AgentState]) -> ChildRef {
-    ChildRef {
-        handle: rimz::address::agent_handle(agent, peers, true),
-        kind: agent.kind.clone(),
-        team: agent.team.as_ref().map(|name| TeamRef {
-            name: name.clone(),
-            channel: agent.channel().unwrap_or_else(|| "external".into()),
-            stage: agent
-                .lane_path()
-                .and_then(|path| rimz::harness::scratch::board_stage(Path::new(path)))
-                .map(|stage| stage.name),
-        }),
-    }
-}
-
-fn children(snapshot: &SidebarSnapshot, root: &AgentState, stopped: &[&AgentState]) -> Children {
-    let peers = rimz::address::addressable_agents(snapshot);
-    let mut live = rimz::address::launched_fleet(snapshot.agents.iter(), root);
-    for cohort in rimz::address::team_cohorts(snapshot.agents.iter()) {
-        if cohort.members.iter().any(|member| member.launcher_is(root)) {
-            live.extend(cohort.members);
-        }
-    }
-    let mut seen = BTreeSet::new();
-    live.retain(|agent| {
-        agent.ended_at.is_none()
-            && rimz::address::is_launch_row(snapshot.agents.iter(), agent)
-            && !stopped
-                .iter()
-                .any(|child| child.kind == agent.kind && child.agent_id == agent.agent_id)
-            && seen.insert((&agent.kind, &agent.agent_id))
-    });
-    Children {
-        stopped: stopped
-            .iter()
-            .map(|child| child_ref(child, &peers))
-            .collect(),
-        live: live
-            .into_iter()
-            .map(|child| child_ref(child, &peers))
-            .collect(),
-    }
-}
-
 impl workflow::AttemptHost for Host<'_> {
     fn occupancy(
         &self,
@@ -236,7 +150,7 @@ impl workflow::AttemptHost for Host<'_> {
     ) -> Result<workflow::Occupancy, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
-            let snapshot = occupancy_snapshot(ctx.alive_snapshot()?, excluded);
+            let snapshot = workflow::without_excluded(ctx.alive_snapshot()?, excluded);
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
             let takeover = takeover::read(&snapshot, &card_status, scope, root)?;
             let peers = rimz::address::addressable_agents(&snapshot);
@@ -439,8 +353,8 @@ impl workflow::AttemptHost for Host<'_> {
                 return Ok(workflow::Pushed { queued: false });
             }
             let snapshot = ctx.cached_snapshot()?;
-            let root =
-                agent(&snapshot, &run).context("workflow leader is no longer in the room")?;
+            let root = workflow::leader(&snapshot, &run)
+                .context("workflow leader is no longer in the room")?;
             let mut message = rimz::message::synthetic::SyntheticMessage {
                 agent: root,
                 text: text.into(),
@@ -483,8 +397,8 @@ impl workflow::AttemptHost for Host<'_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
             let snapshot = ctx.cached_snapshot()?;
-            let root =
-                agent(&snapshot, &run).context("workflow leader is no longer in the room")?;
+            let root = workflow::leader(&snapshot, &run)
+                .context("workflow leader is no longer in the room")?;
             queue_notice(
                 &ctx,
                 root,
@@ -507,16 +421,8 @@ impl workflow::AttemptHost for Host<'_> {
             };
             let snapshot = ctx.cached_snapshot()?;
             let rows = ctx.store.audit_rows()?;
-            let mut result = Children::default();
-            let peers = rimz::address::addressable_agents(&snapshot);
-            for root in rows
-                .iter()
-                .filter(|agent| agent.workflow.as_ref() == Some(pin))
-            {
-                result.live.extend(children(&snapshot, root, &[]).live);
-                if root.ended_at.is_none() && !run.matches_agent(root) {
-                    result.live.push(child_ref(root, &peers));
-                }
+            let cohort = workflow::detach_cohort(&snapshot, rows.iter(), &run);
+            for root in cohort.agents {
                 ctx.store.clear_workflow_pin(
                     &root.kind,
                     &root.agent_id,
@@ -524,11 +430,7 @@ impl workflow::AttemptHost for Host<'_> {
                     &ctx.workspace.session_name,
                 )?;
             }
-            let mut seen = BTreeSet::new();
-            result
-                .live
-                .retain(|child| seen.insert((child.kind.clone(), child.handle.clone())));
-            Ok(result)
+            Ok(cohort.children)
         })()
         .map_err(host_error)
     }
@@ -628,65 +530,23 @@ impl workflow::AttemptHost for Host<'_> {
                 }
             }
             let snapshot = ctx.cached_snapshot()?;
-            let launch_group = snapshot
-                .agents
-                .iter()
-                .find(|agent| run.matches_agent(agent))
-                .and_then(|agent| agent.launch_group.as_ref());
-            let roots = snapshot
-                .agents
-                .iter()
-                .filter(|agent| {
-                    let detached_cohort = agent.workflow.is_none()
-                        && (run.matches_agent(agent)
-                            || (launch_group.is_some()
-                                && agent.launch_group.as_ref() == launch_group));
-                    agent.ended_at.is_none()
-                        && run.workflow.is_some()
-                        && (agent.workflow == run.workflow || detached_cohort)
-                })
-                .collect::<Vec<_>>();
-            if roots.is_empty() {
+            let Some(cohort) = workflow::stop_cohort(&snapshot, &run) else {
                 supervised::stop_supervised_run(&ctx.workspace, &ctx.store, self.globals, &run)?;
                 return Ok(Children::default());
-            }
-            let mut stopped = Vec::new();
-            let mut result = Children::default();
-            for root in &roots {
-                let tree = descendants(&snapshot.agents, root);
-                result.live.extend(children(&snapshot, root, &tree).live);
-                stopped.extend(tree);
-                if !run.matches_agent(root) {
-                    stopped.push(*root);
-                }
-            }
-            let mut seen = BTreeSet::new();
-            stopped.retain(|agent| seen.insert((&agent.kind, &agent.agent_id)));
+            };
             let peers = rimz::address::addressable_agents(&snapshot);
-            result.stopped = stopped
-                .iter()
-                .map(|agent| child_ref(agent, &peers))
-                .collect();
-            let mut live = BTreeSet::new();
-            result.live.retain(|agent| {
-                !result
-                    .stopped
-                    .iter()
-                    .any(|stopped| stopped.kind == agent.kind && stopped.handle == agent.handle)
-                    && live.insert((agent.kind.clone(), agent.handle.clone()))
-            });
             supervised::cancel_supervised_run(&ctx.store, &run)?;
-            for (root, stop) in roots.iter().zip(agents_cmd::stop_resolved(
+            for (root, stop) in cohort.agents.iter().zip(agents_cmd::stop_resolved(
                 &ctx,
                 self.globals,
                 &snapshot,
-                &roots,
+                &cohort.agents,
             )?) {
                 let handle = rimz::address::agent_handle(root, &peers, true);
                 stop.into_result(&handle)
                     .context("stopping workflow attempt")?;
             }
-            Ok(result)
+            Ok(cohort.children)
         })()
         .map_err(host_error)
     }

@@ -136,6 +136,127 @@ pub fn leader<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<&'a 
         .and_then(|id| crate::address::launch_row(snapshot.agents.iter(), &run.kind, id))
 }
 
+/// The agents a stop or detach acts on, with the children the attempt reports.
+pub struct Cohort<'a> {
+    pub agents: Vec<&'a AgentState>,
+    pub children: Children,
+}
+
+/// What stopping the attempt led by `run` reaches, or `None` when no live row belongs to it.
+///
+/// Its roots are the live rows the run's workflow attempt pins, and, once a pin is cleared, the
+/// detached leader and its launch group. Every live descendant of a root is stopped, as is each
+/// root but the leader; `children.live` keeps the rest of their launched fleets and cohorts.
+pub fn stop_cohort<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<Cohort<'a>> {
+    let launch_group = snapshot
+        .agents
+        .iter()
+        .find(|agent| run.matches_agent(agent))
+        .and_then(|agent| agent.launch_group.as_ref());
+    let roots = snapshot
+        .agents
+        .iter()
+        .filter(|agent| {
+            let detached_cohort = agent.workflow.is_none()
+                && (run.matches_agent(agent)
+                    || (launch_group.is_some() && agent.launch_group.as_ref() == launch_group));
+            agent.ended_at.is_none()
+                && run.workflow.is_some()
+                && (agent.workflow == run.workflow || detached_cohort)
+        })
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        return None;
+    }
+    let mut stopped = Vec::new();
+    let mut result = Children::default();
+    for root in &roots {
+        let tree = descendants(&snapshot.agents, root);
+        result.live.extend(children(snapshot, root, &tree).live);
+        stopped.extend(tree);
+        if !run.matches_agent(root) {
+            stopped.push(*root);
+        }
+    }
+    let mut seen = BTreeSet::new();
+    stopped.retain(|agent| seen.insert((&agent.kind, &agent.agent_id)));
+    let peers = crate::address::addressable_agents(snapshot);
+    result.stopped = stopped
+        .iter()
+        .map(|agent| child_ref(agent, &peers))
+        .collect();
+    let mut live = BTreeSet::new();
+    result.live.retain(|agent| {
+        !result
+            .stopped
+            .iter()
+            .any(|stopped| stopped.kind == agent.kind && stopped.handle == agent.handle)
+            && live.insert((agent.kind.clone(), agent.handle.clone()))
+    });
+    Some(Cohort {
+        agents: roots,
+        children: result,
+    })
+}
+
+/// What detaching the attempt led by `run` releases: `agents` are the audit `rows` its workflow
+/// attempt pins, and `children.live` their live children with every live pinned row but the
+/// leader, read over `snapshot`. A run without a pin releases nothing.
+pub fn detach_cohort<'a>(
+    snapshot: &SidebarSnapshot,
+    rows: impl IntoIterator<Item = &'a AgentState>,
+    run: &RunRecord,
+) -> Cohort<'a> {
+    let Some(pin) = &run.workflow else {
+        return Cohort {
+            agents: Vec::new(),
+            children: Children::default(),
+        };
+    };
+    let pinned = rows
+        .into_iter()
+        .filter(|agent| agent.workflow.as_ref() == Some(pin))
+        .collect::<Vec<_>>();
+    let mut result = Children::default();
+    let peers = crate::address::addressable_agents(snapshot);
+    for root in &pinned {
+        result.live.extend(children(snapshot, root, &[]).live);
+        if root.ended_at.is_none() && !run.matches_agent(root) {
+            result.live.push(child_ref(root, &peers));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    result
+        .live
+        .retain(|child| seen.insert((child.kind.clone(), child.handle.clone())));
+    Cohort {
+        agents: pinned,
+        children: result,
+    }
+}
+
+/// `snapshot` without the agents an occupancy read excludes: each handle in `excluded` that
+/// resolves, with its live launched descendants.
+pub fn without_excluded(mut snapshot: SidebarSnapshot, excluded: &[String]) -> SidebarSnapshot {
+    if excluded.is_empty() {
+        return snapshot;
+    }
+    let peers = crate::address::addressable_agents(&snapshot);
+    let context = crate::address::AddressContext {
+        channel: None,
+        origin: crate::address::ChannelOrigin::Explicit,
+    };
+    let excluded = excluded
+        .iter()
+        .filter_map(|handle| crate::address::resolve_agent(handle, None, &context, &peers).ok())
+        .flat_map(|agent| std::iter::once(agent).chain(descendants(&snapshot.agents, agent)))
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .collect::<BTreeSet<_>>();
+    std::sync::Arc::make_mut(&mut snapshot.agents)
+        .retain(|agent| !excluded.contains(&(agent.kind.clone(), agent.agent_id.clone())));
+    snapshot
+}
+
 /// `root`'s live launched descendants, depth first. An ended child is skipped with its whole
 /// subtree, so its live children are never reached.
 fn descendants<'a>(agents: &'a [AgentState], root: &AgentState) -> Vec<&'a AgentState> {
