@@ -24,7 +24,7 @@ use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
 const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
 
-pub(crate) fn reconcile_snapshot(
+pub(super) fn reconcile_snapshot(
     runtime: &RuntimePaths,
     snapshot: &mut SidebarSnapshot,
 ) -> ReconcileOutcome {
@@ -158,7 +158,7 @@ impl UnreadEpisodes {
             .collect()
     }
 
-    pub(crate) fn reconcile(
+    pub(super) fn reconcile(
         &mut self,
         snapshot: &mut SidebarSnapshot,
         marks: &ReadMarks,

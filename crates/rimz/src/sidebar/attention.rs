@@ -13,7 +13,7 @@ use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
 const ATTENTION_VERSION: &str = "rimz.attention.v1";
 
-pub(crate) fn reconcile_snapshot(runtime: &RuntimePaths, snapshot: &mut SidebarSnapshot) {
+pub(super) fn reconcile_snapshot(runtime: &RuntimePaths, snapshot: &mut SidebarSnapshot) {
     let mut stamps = AttentionStamps::load(runtime);
     if stamps.reconcile(snapshot)
         && let Err(err) = stamps.persist(runtime)

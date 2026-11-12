@@ -539,7 +539,7 @@ fn reconciled_shell_slot_survives_launch_focus_release_and_freeze_expiry() {
             row.pane.as_mut().unwrap().first_seen_at_ms =
                 Some(row.last_activity.as_millisecond() as u64);
         }
-        crate::sidebar::attention::reconcile_snapshot(&runtime, &mut previous);
+        crate::sidebar::engine::reconcile_final_fold(&runtime, &mut previous);
         assert_eq!(row_ids(&previous, "a"), ["newer", "shell", "older"]);
         let focused = previous
             .rows()
@@ -582,7 +582,7 @@ fn reconciled_shell_slot_survives_launch_focus_release_and_freeze_expiry() {
         launched.last_activity = now;
         launched.as_agent_mut().unwrap().registered_at = Some(now);
         *previous.rows_mut().find(|row| row.id == "shell").unwrap() = launched;
-        crate::sidebar::attention::reconcile_snapshot(&runtime, &mut previous);
+        crate::sidebar::engine::reconcile_final_fold(&runtime, &mut previous);
         rig.present(
             previous.clone(),
             std::slice::from_ref(&focused.pane_id),

@@ -13,7 +13,6 @@ use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
 
 use crate::sidebar::scenario::{Action, Scenario, ScenarioError, UiAction};
-use crate::sidebar::unread::reconcile_snapshot;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::SectionLabel;
 use crate::{PaneId, RuntimePaths, SidebarInstanceId};
@@ -292,8 +291,7 @@ impl Column {
         if matches!(self.surface, Surface::Text) {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
         }
-        crate::sidebar::attention::reconcile_snapshot(&self.runtime, &mut snapshot);
-        reconcile_snapshot(&self.runtime, &mut snapshot);
+        crate::sidebar::engine::reconcile_final_fold(&self.runtime, &mut snapshot);
         let mut views = self.state.views.registry.lock();
         views.publish(
             FetchUpdate::Snapshot {

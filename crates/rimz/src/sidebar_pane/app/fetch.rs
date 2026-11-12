@@ -21,7 +21,7 @@ use crate::sidebar::produce::{HostInputs, PaneProducer};
 use crate::sidebar::timing::FOLD_FLOOR;
 #[cfg(test)]
 use crate::sidebar::unread::UnreadEpisodes;
-use crate::sidebar::unread::{ClearedUnread, OpenedUnread, reconcile_snapshot};
+use crate::sidebar::unread::{ClearedUnread, OpenedUnread};
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot, SidebarStallItem};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
@@ -1079,9 +1079,9 @@ impl FetchWorker {
     ) {
         fold.workspace.0.stall = sink.inputs.stall.clone();
         let final_snapshot = phase == FetchPhase::Final;
-        if final_snapshot {
-            crate::sidebar::attention::reconcile_snapshot(&self.runtime, &mut fold.workspace.0);
-        }
+        let unread = final_snapshot.then(|| {
+            crate::sidebar::engine::reconcile_final_fold(&self.runtime, &mut fold.workspace.0)
+        });
         sink.context = Some(Arc::new(FoldShared {
             observation: self.observer.as_mut().map(|observer| {
                 observer.extract(fold.workspace.snapshot(), sink.cycle[0].instance_id.clone())
@@ -1090,18 +1090,20 @@ impl FetchWorker {
         }));
         let roster = (final_snapshot && source == SnapshotSource::Produced)
             .then(|| crate::sidebar::produce::live_roster_from_snapshot(fold.workspace.snapshot()));
-        let mut deliveries = if final_snapshot {
-            evaluate_notifications(
-                &self.runtime,
-                &self.config.notification_prefs,
-                &mut self.notifications,
-                &mut self.link_notifications,
-                &self.diag,
-                &mut fold.workspace.0,
-                self.clock.now_ms(),
-            )
-        } else {
-            Vec::new()
+        let mut deliveries = match &unread {
+            Some(unread) => {
+                emit_unread_reconcile_trace(&self.diag, &unread.opened, &unread.cleared);
+                evaluate_notifications(
+                    &self.config.notification_prefs,
+                    &mut self.notifications,
+                    &mut self.link_notifications,
+                    &self.diag,
+                    fold.workspace.snapshot(),
+                    &unread.opened,
+                    self.clock.now_ms(),
+                )
+            }
+            None => Vec::new(),
         };
         if final_snapshot {
             let now_ms = self.clock.now_ms();
@@ -1165,18 +1167,15 @@ impl FetchWorker {
 }
 
 fn evaluate_notifications(
-    runtime: &RuntimePaths,
     prefs: &NotificationsPrefs,
     state: &mut NotificationState,
     link_state: &mut LinkNotificationState,
     diag: &crate::diag::DiagSink,
-    snapshot: &mut SidebarSnapshot,
+    snapshot: &SidebarSnapshot,
+    opened: &[OpenedUnread],
     now_ms: u64,
 ) -> Vec<NotificationDelivery> {
-    let unread = reconcile_snapshot(runtime, snapshot);
-    emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
-
-    let notifications = state.evaluate(snapshot, &unread.opened, prefs, now_ms);
+    let notifications = state.evaluate(snapshot, opened, prefs, now_ms);
     if let Some(alert) = link_state.evaluate(snapshot, now_ms) {
         emit_link_alert(diag, alert);
     }

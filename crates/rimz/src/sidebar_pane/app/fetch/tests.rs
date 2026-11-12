@@ -1577,16 +1577,18 @@ fn unread_write_back_copies_only_the_changed_group() {
     second.id = "second".into();
     Arc::make_mut(&mut Arc::make_mut(&mut shared.worktree_groups)[0].rows).push(second);
     for row in Arc::make_mut(&mut Arc::make_mut(&mut shared.worktree_groups)[0].rows) {
-        row.unread = true;
         row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
     }
     let mut unchanged = shared.worktree_groups[0].clone();
     Arc::make_mut(&mut unchanged.rows).truncate(1);
     Arc::make_mut(&mut unchanged.rows)[0].id = "unchanged".into();
-    Arc::make_mut(&mut unchanged.rows)[0].unread = false;
     Arc::make_mut(&mut shared.worktree_groups).push(unchanged);
     let mut worker = fixture.worker();
-    crate::sidebar::attention::reconcile_snapshot(&worker.runtime, &mut shared);
+    // The entry first, so it records attention and clears no bit set below.
+    crate::sidebar::engine::reconcile_final_fold(&worker.runtime, &mut shared);
+    for row in Arc::make_mut(&mut Arc::make_mut(&mut shared.worktree_groups)[0].rows) {
+        row.unread = true;
+    }
     let retained = shared.clone();
     let projected = frameless(shared);
 
