@@ -1103,7 +1103,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     let key = catalog.for_run("nightly").unwrap().key("nightly");
     let run = |state: &str, visits: serde_json::Value| -> crate::store::workflow::RunRecord {
         serde_json::from_value(serde_json::json!({
-            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
             "origin":"inline", "task":"nightly", "spec_dir":"/spec", "spec_digest":"abc",
             "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":state, "node":"agent",
@@ -1198,7 +1198,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
     let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
     let key = catalog.for_run("nightly").unwrap().key("nightly");
     let failed: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
+        "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"nightly",
         "origin":"inline", "task":"nightly", "spec_dir":"/spec", "spec_digest":"abc",
         "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
         "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"@failed",
@@ -1248,7 +1248,7 @@ fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_
         ("canceled", true, true),
     ] {
         let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"resident",
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"resident",
             "origin":"inline", "task":"resident", "spec_dir":"/spec", "spec_digest":"abc",
             "scope":{"kind":"worktree","path":checkout}, "project_root":root.path(),
             "created_at":"2026-01-01T00:00:00Z", "state":run_state, "node":"agent",

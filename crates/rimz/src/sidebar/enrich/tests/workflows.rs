@@ -14,7 +14,7 @@ fn history_run(state: &StatePaths, journal: &str) -> RunRecord {
     std::fs::write(&paths.spec, RAIL).unwrap();
     std::fs::write(&paths.journal, journal).unwrap();
     serde_json::from_value(serde_json::json!({
-        "version":1, "id":id, "workflow":"test", "spec_dir":"/unused-definition",
+        "version":crate::store::workflow::VERSION, "id":id, "workflow":"test", "spec_dir":"/unused-definition",
         "spec_digest":"test", "project_root":"/repo",
         "scope":{"kind":"worktree", "path":"/repo/lane"},
         "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
@@ -170,7 +170,7 @@ fn live_run(
     )
     .unwrap();
     let record = serde_json::json!({
-        "version":1, "id":id, "workflow":"land", "spec_dir":"/unused-definition",
+        "version":crate::store::workflow::VERSION, "id":id, "workflow":"land", "spec_dir":"/unused-definition",
         "spec_digest":"digest", "project_root":root,
         "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":"active",

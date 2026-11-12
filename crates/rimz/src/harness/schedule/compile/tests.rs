@@ -1021,7 +1021,7 @@ fn judge_at(node: &str) -> (crate::disk::paths::WorkflowPaths, RunRecord) {
     )
     .unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":1,"id":crate::ids::WorkflowRunId::new(),"workflow":"nightly","spec_dir":"/spec","spec_digest":"test",
+        "version":crate::store::workflow::VERSION,"id":crate::ids::WorkflowRunId::new(),"workflow":"nightly","spec_dir":"/spec","spec_digest":"test",
         "scope":{"kind":"worktree","path":"/project"},"project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z","state":"active","node":node,"entered_at":"2026-01-01T00:00:00Z",
         "deadline_fired":false,"next_seq":2,"visits":{},"visit_grant":0,

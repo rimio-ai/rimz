@@ -742,7 +742,7 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
         ("failed", true, "owed"),
     ] {
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"review",
+            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"review",
             "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":null,
             "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
             "created_at":"2026-01-01T00:00:00Z", "state":state, "park":null, "node":"pr",
@@ -770,9 +770,30 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
         fs::create_dir_all(&home.home).unwrap();
         if let Some(contents) = contents {
             fs::write(&home.record, contents).unwrap();
+            fs::File::open(&home.record)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
         }
         homes.push(home);
     }
+    // Another version's record goes past the grace, as a terminal one does.
+    let mut refused = Vec::new();
+    for age in [true, false] {
+        let home = paths.workflow(&crate::ids::WorkflowRunId::new());
+        fs::create_dir_all(&home.home).unwrap();
+        fs::write(&home.spec, "spec").unwrap();
+        fs::write(&home.record, r#"{"version":3,"state":"active"}"#).unwrap();
+        if age {
+            fs::File::open(&home.record)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        refused.push(home);
+    }
+    homes.push(refused.pop().unwrap());
+    let refused = refused.pop().unwrap();
     let orphan = paths.workflow(&crate::ids::WorkflowRunId::new());
     fs::create_dir_all(&orphan.work).unwrap();
     fs::write(&orphan.spec, "spec").unwrap();
@@ -793,10 +814,10 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
         "unreadable workflow homes must not block GC: {collected:?}"
     );
     assert_eq!(
-        preview.sidecar_files_removed, 7,
-        "old terminal and old recordless workflow homes must be collected together"
+        preview.sidecar_files_removed, 9,
+        "old terminal, refused, and recordless workflow homes must be collected together"
     );
-    assert!(homes.iter().all(|p| p.home.exists()) && orphan.home.exists());
+    assert!(homes.iter().all(|p| p.home.exists()) && orphan.home.exists() && refused.home.exists());
     let mut actual = GcReport::default();
     collect_owned(
         &paths,
@@ -810,9 +831,10 @@ fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
     assert!(homes[..3].iter().all(|p| !p.home.exists()));
     assert!(
         homes[3..].iter().all(|p| p.home.exists()),
-        "live, recent, unreported, and fresh recordless homes must stay"
+        "live, recent, unreported, fresh recordless, corrupt, and fresh refused homes must stay"
     );
     assert!(!orphan.home.exists(), "an old recordless home must go");
+    assert!(!refused.home.exists(), "an old refused home must go");
 }
 
 #[test]

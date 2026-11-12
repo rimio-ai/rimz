@@ -246,7 +246,7 @@ fn workflow_view() -> ShowView {
         if state != "gone" {
             records.push(
                 serde_json::from_value(serde_json::json!({
-                    "version": 1, "id": id, "workflow": "review", "task": "sweep",
+                    "version": rimz::store::workflow::VERSION, "id": id, "workflow": "review", "task": "sweep",
                     "spec_dir": "/spec", "spec_digest": "digest", "scope": {
                         "kind": "worktree", "path": checkout,
                     },
@@ -4832,7 +4832,7 @@ fn task_run(state: &str, lane: &str, node: &str, second: i64) -> rimz::store::wo
     let at = Timestamp::from_second(second).unwrap();
     let terminal = !matches!(state, "active" | "parked");
     serde_json::from_value(serde_json::json!({
-        "version": 1, "id": rimz::ids::WorkflowRunId::new(), "workflow": "review",
+        "version": rimz::store::workflow::VERSION, "id": rimz::ids::WorkflowRunId::new(), "workflow": "review",
         "task": "sweep", "spec_dir": "/spec", "spec_digest": "digest",
         "scope": { "kind": "worktree", "path": format!("/repo/{lane}") },
         "project_root": "/repo", "created_at": at, "state": state, "node": node,

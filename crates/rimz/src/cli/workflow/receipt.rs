@@ -19,6 +19,17 @@ pub(super) fn cancel(
     reason: Option<&str>,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
+    if let Some((state, paths)) = resolve::refused_run(target) {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
+        if records::remove_refused(&paths, &guard)? {
+            writeln!(
+                render::out(),
+                "removed {target}: another RimZ version wrote its record, so it was cleared \
+                 unread; any agent it left running is untouched"
+            )?;
+            return Ok(());
+        }
+    }
     let run = select(target, "cancel", globals, None, &[])?;
     let changed = workflow::cancel(
         &run.state,

@@ -11,7 +11,7 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, MessageId, RunId, WorkflowRunId};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -31,13 +31,29 @@ pub enum WorkflowStoreErr {
         #[source]
         source: serde_json::Error,
     },
-    #[error("workflow record at {path} has unsupported version {version}")]
-    Version { path: PathBuf, version: u32 },
+    #[error(
+        "workflow run {run} at {path} has record version {version}, written by another RimZ \
+         version; this RimZ reads only version {current}. Clear it with \
+         `rimz workflow cancel {run}`, then start the workflow again",
+        current = VERSION
+    )]
+    Version {
+        run: String,
+        path: PathBuf,
+        version: u32,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, WorkflowStoreErr>;
 
 impl WorkflowStoreErr {
+    /// Whether this is `load`'s refusal of another version's record: a run every background
+    /// reader treats as absent, and only `rimz workflow cancel` or GC past the owned grace
+    /// removes.
+    pub fn is_refused(&self) -> bool {
+        matches!(self, Self::Version { .. })
+    }
+
     fn io(path: &std::path::Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
         move |source| Self::Io {
             path: path.to_path_buf(),
@@ -919,20 +935,39 @@ pub enum JournalEvent {
     },
 }
 
+/// Read a run record, refusing one of any other version before its body is decoded.
 pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
+    #[derive(Deserialize)]
+    struct Probe {
+        version: u32,
+    }
     let bytes = std::fs::read(&paths.record).map_err(WorkflowStoreErr::io(&paths.record))?;
-    let record: RunRecord =
-        serde_json::from_slice(&bytes).map_err(|source| WorkflowStoreErr::Json {
-            path: paths.record.clone(),
-            source,
-        })?;
-    if !matches!(record.version, 1 | 2 | VERSION) {
+    let json = |source| WorkflowStoreErr::Json {
+        path: paths.record.clone(),
+        source,
+    };
+    let Probe { version } = serde_json::from_slice(&bytes).map_err(json)?;
+    if version != VERSION {
         return Err(WorkflowStoreErr::Version {
+            run: paths.home.file_name().map_or_else(
+                || paths.home.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
             path: paths.record.clone(),
-            version: record.version,
+            version,
         });
     }
-    Ok(record)
+    serde_json::from_slice(&bytes).map_err(json)
+}
+
+/// Remove a run home whose record `load` refuses as another version's, without reading it
+/// further; false, touching nothing, when the record now loads or is gone.
+pub fn remove_refused(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<bool> {
+    if !load(paths).is_err_and(|error| error.is_refused()) {
+        return Ok(false);
+    }
+    std::fs::remove_dir_all(&paths.home).map_err(WorkflowStoreErr::io(&paths.home))?;
+    Ok(true)
 }
 
 /// Write an inline definition's text and assets into a definition root: a run's own, before
@@ -1115,7 +1150,7 @@ pub fn unfinished_under(home: &std::path::Path, mode: RunRead) -> Result<Vec<Run
             Ok(_) => {}
             Err(WorkflowStoreErr::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if mode == RunRead::BestEffort => {
+            Err(error) if mode == RunRead::BestEffort || error.is_refused() => {
                 tracing::warn!(path = %paths.record.display(), %error,
                     "skipping workflow with unreadable record");
             }

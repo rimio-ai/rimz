@@ -374,7 +374,7 @@ fn wait_rows_match_the_nodes_outcome_and_inclusive_span() {
 
 fn waiting_record(first: i64, last: i64, count: u64) -> RunRecord {
     serde_json::from_value(json!({
-        "version":2, "id":WorkflowRunId::new(), "workflow":"review",
+        "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
         "spec_dir":"/spec", "spec_digest":"digest",
         "scope":{"kind":"worktree", "path":"/checkout"}, "project_root":"/checkout",
         "created_at":at(0), "state":"active", "node":"build", "entered_at":at(0),

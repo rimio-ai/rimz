@@ -34,7 +34,7 @@ fn terminal_home_removal_requires_a_history_copy_and_calls_the_writer_off_lock()
         )
         .unwrap();
         let record = serde_json::from_value(json!({
-            "version":3,"id":id,"workflow":"test","spec_dir":home.path(),
+            "version":crate::store::workflow::VERSION,"id":id,"workflow":"test","spec_dir":home.path(),
             "spec_digest":"test","project_root":home.path(),"notes":relative,
             "scope":{"kind":"worktree","path":home.path()},"state":"done","node":"build",
             "created_at":at,"entered_at":at,"terminal_at":at,
@@ -99,7 +99,7 @@ fn automation_notes_sweep_reads_workflow_ownership_and_live_launch_records() {
         )
         .unwrap();
         let record = serde_json::from_value(json!({
-            "version":3,"id":id,"workflow":"test","spec_dir":home.path(),
+            "version":crate::store::workflow::VERSION,"id":id,"workflow":"test","spec_dir":home.path(),
             "spec_digest":"test","project_root":home.path(),"notes":relative,
             "scope":{"kind":"worktree","path":home.path()},"state":state,"node":"build",
             "created_at":at,"entered_at":at,"deadline_fired":false,"next_seq":1,"visits":{},"visit_grant":0,

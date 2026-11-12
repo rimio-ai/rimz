@@ -66,7 +66,7 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
 
 fn record(node: &str) -> RunRecord {
     serde_json::from_value(serde_json::json!({
-        "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
+        "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
         "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
         "scope":{"kind":"worktree", "path":"/repo/lane"},
         "created_at":jiff::Timestamp::UNIX_EPOCH, "entered_at":jiff::Timestamp::UNIX_EPOCH,

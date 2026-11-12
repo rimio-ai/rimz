@@ -449,7 +449,7 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
     let now = Timestamp::from_second(1_000).unwrap();
     let records = ["first", "second"].map(|lane| {
         serde_json::from_value(serde_json::json!({
-            "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
+            "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
             "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":format!("/repo/{lane}")},
             "created_at":now, "entered_at":Timestamp::from_second(100).unwrap(),

@@ -19,7 +19,7 @@ fn legacy_agent_invalid_route_with_the_wrong_type_warns_and_is_ignored() {
         );
         let (_home, dir) = fixture();
         let record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version":3,"id":crate::ids::WorkflowRunId::new(),"workflow":"test","spec_dir":dir,
+            "version":crate::store::workflow::VERSION,"id":crate::ids::WorkflowRunId::new(),"workflow":"test","spec_dir":dir,
             "spec_digest":"test","scope":{"kind":"worktree","path":dir},"project_root":dir,
             "created_at":"2026-01-01T00:00:00Z","entered_at":"2026-01-01T00:00:00Z",
             "state":"active","node":"build","visits":{},"visit_grant":0,

@@ -33,7 +33,7 @@ pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     fs::write(dir.path().join("prompt.md"), "Build it").unwrap();
     let spec: WorkflowSpec = toml::from_str(text).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":3, "default_lifecycle":"until", "spec_version":super::spec::SPEC_VERSION,
+        "version":crate::store::workflow::VERSION, "default_lifecycle":"until", "spec_version":super::spec::SPEC_VERSION,
         "id":WorkflowRunId::new(),
         "workflow":"test", "spec_dir":dir.path(),
         "spec_digest":"test", "prompt":"Run request", "project_root":dir.path(),
@@ -2520,7 +2520,7 @@ fn judge_fixture() -> (WorkflowSpec, crate::disk::paths::WorkflowPaths, RunRecor
     )
     .unwrap();
     let record: RunRecord = serde_json::from_value(json!({
-        "version":1,"id":WorkflowRunId::new(),"workflow":"test","spec_dir":"/spec","spec_digest":"test",
+        "version":crate::store::workflow::VERSION,"id":WorkflowRunId::new(),"workflow":"test","spec_dir":"/spec","spec_digest":"test",
         "scope":{"kind":"worktree","path":"/project"},"project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z","state":"active","node":"judge","entered_at":"2026-01-01T00:00:00Z",
         "deadline_fired":false,"next_seq":2,"visits":{},"visit_grant":0,

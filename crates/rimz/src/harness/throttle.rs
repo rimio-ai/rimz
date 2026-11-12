@@ -299,6 +299,10 @@ impl Host for SystemHost {
                 {
                     continue;
                 }
+                Err(err) if err.is_refused() => {
+                    tracing::warn!(%err, "skipping workflow with unreadable record");
+                    continue;
+                }
                 Err(err) => return Err(unreadable(&err)),
             };
             if !record.state.is_terminal() {

@@ -681,7 +681,7 @@ fn workflow_env_pins_survive_both_isolations() {
     std::fs::write(
         &workflow_paths.record,
         serde_json::to_vec(&serde_json::json!({
-            "version":3,"id":workflow.run,"workflow":"test","spec_dir":definition,
+            "version":crate::store::workflow::VERSION,"id":workflow.run,"workflow":"test","spec_dir":definition,
             "spec_digest":"test","project_root":project.path(),
             "scope":{"kind":"worktree","path":project.path()},"state":"active","node":"build",
             "created_at":"2026-01-01T00:00:00Z","entered_at":"2026-01-01T00:00:00Z",

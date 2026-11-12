@@ -15,7 +15,7 @@ fn workflow_wait(state: &StatePaths, suffix: u32, status: &str, outcome: &str) -
     std::fs::create_dir_all(&paths.home).unwrap();
     let at = "2026-01-01T00:00:00Z";
     let record = serde_json::json!({
-        "version": 1, "id": id, "workflow": "review",
+        "version": crate::store::workflow::VERSION, "id": id, "workflow": "review",
         "spec_dir": "/definitions/review", "spec_digest": "abc",
         "scope": {"kind": "worktree", "path": "/repo"}, "project_root": "/repo",
         "created_at": at, "state": status, "node": "triage", "entered_at": at,

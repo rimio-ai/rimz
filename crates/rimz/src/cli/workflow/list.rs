@@ -42,6 +42,13 @@ fn capacity_wait(record: &RunRecord) -> Option<&Wait> {
 }
 
 pub(super) fn run(json: bool, globals: &super::super::GlobalFlags) -> Result<()> {
+    for refusal in resolve::refused()? {
+        writeln!(
+            render::err(),
+            "{} {refusal}",
+            render::paint(render::palette::warn().bold(), "warning:")
+        )?;
+    }
     render(&resolve::all()?, None, json, globals)
 }
 
@@ -332,7 +339,7 @@ mod tests {
 
     fn record(lane: &str, task: Option<&str>, manual: bool, held: bool) -> RunRecord {
         serde_json::from_value(serde_json::json!({
-            "version":1, "id":WorkflowRunId::new(), "workflow":"review",
+            "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
             "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":format!("/repo/{lane}")},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
@@ -538,7 +545,7 @@ mod tests {
     #[test]
     fn json_adds_only_known_capacity_causes_and_keeps_the_detail() {
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
-            "version":1, "id":WorkflowRunId::new(), "workflow":"review",
+            "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
             "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/feature"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
@@ -572,7 +579,7 @@ mod tests {
     #[test]
     fn narrow_rows_clip_detail_before_age() {
         let record = serde_json::from_value(serde_json::json!({
-            "version":1, "id":WorkflowRunId::new(), "workflow":"review",
+            "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
             "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/feature"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,

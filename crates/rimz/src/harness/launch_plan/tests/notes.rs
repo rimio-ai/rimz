@@ -48,7 +48,7 @@ fn automation_notes_follow_workflow_cells_descendants_and_replayed_records() {
     std::fs::write(team_run.join("blackboard.md"), "Stage: Build\n").unwrap();
     std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
     let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":3,"id":id,"workflow":"review","spec_dir":project.path(),
+        "version":crate::store::workflow::VERSION,"id":id,"workflow":"review","spec_dir":project.path(),
         "spec_digest":"test","project_root":project.path(),"notes":relative,
         "scope":{"kind":"worktree","path":project.path()},"state":"active","node":"build",
         "created_at":stamp,"entered_at":stamp,"deadline_fired":false,
