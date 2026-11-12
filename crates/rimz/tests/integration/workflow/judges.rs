@@ -377,7 +377,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                         "judges must read the workflow view, not raw context: {prompt}"
                     );
                 }
-                assert!(Path::new(context(&value)["output_path"].as_str().unwrap()).is_file());
+                assert!(moved(context(&value)["output_path"].as_str().unwrap()).is_file());
             }
             "missing" => {
                 let value = settled(&env, id, "failed");

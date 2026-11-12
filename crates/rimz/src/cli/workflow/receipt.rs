@@ -7,11 +7,27 @@ fn select(
     globals: &super::super::GlobalFlags,
     at: Option<&str>,
     extend: &[String],
-) -> Result<resolve::Located> {
+) -> Result<std::result::Result<resolve::Located, resolve::Other>> {
     match resolve::select(target, verb, globals, at, extend)? {
-        resolve::Selection::Run(run) => Ok(*run),
+        resolve::Selection::Run(run) => Ok(Ok(*run)),
+        resolve::Selection::Other(other) => Ok(Err(*other)),
         resolve::Selection::Workflow(_) => unreachable!("only show selects workflow lists"),
     }
+}
+
+/// A run named by id that a resume or restart cannot reach: refused with why, before any
+/// definition is read.
+fn refuse(other: &resolve::Other, verb: &str) -> anyhow::Error {
+    other.refusal().map_or_else(
+        || {
+            anyhow::anyhow!(
+                "workflow run {} has ended ({}); cannot {verb}",
+                other.id,
+                other.state_word()
+            )
+        },
+        |refusal| anyhow::anyhow!("{refusal}"),
+    )
 }
 
 pub(super) fn cancel(
@@ -19,18 +35,37 @@ pub(super) fn cancel(
     reason: Option<&str>,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    if let Some((state, paths)) = resolve::refused_run(target) {
-        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
-        if records::remove_refused(&paths, &guard)? {
+    let run = match select(target, "cancel", globals, None, &[])? {
+        Ok(run) => run,
+        Err(other) => {
+            if let Some(refusal) = other.refusal() {
+                bail!("{refusal}");
+            }
+            let mut out = render::out();
+            if let records::RunClass::Current(record) = &other.found.class {
+                writeln!(
+                    out,
+                    "{} is already {}; unchanged",
+                    record.address(),
+                    record.state.as_str()
+                )?;
+                writeln!(
+                    out,
+                    "→ {}",
+                    resolve::run_command(record, "show", globals, None, &[], &[])
+                )?;
+                return Ok(());
+            }
             writeln!(
-                render::out(),
-                "removed {target}: another RimZ version wrote its record, so it was cleared \
-                 unread; any agent it left running is untouched"
+                out,
+                "{} is already {}; unchanged",
+                other.id,
+                other.state_word()
             )?;
+            writeln!(out, "→ {}", other.show_command(globals))?;
             return Ok(());
         }
-    }
-    let run = select(target, "cancel", globals, None, &[])?;
+    };
     let changed = workflow::cancel(
         &run.state,
         &run.record.id,
@@ -39,18 +74,16 @@ pub(super) fn cancel(
     );
     run_log::collect_run(&run.state, &run.record.id);
     let changed = changed?;
-    write_history_copy(&run.state, &records::load(&run.paths)?)?;
+    let record = finish_run(&run.state, &run.record.id)?;
     let address = run.record.address().to_string();
     let mut out = render::out();
     if changed {
         writeln!(out, "canceled {address}")?;
     } else {
-        let record = records::load(&run.paths)?;
-        writeln!(
-            out,
-            "{address} is already {}; unchanged",
-            record.state.as_str()
-        )?;
+        let state = record
+            .as_ref()
+            .map_or(run.record.state, |record| record.state);
+        writeln!(out, "{address} is already {}; unchanged", state.as_str())?;
     }
     writeln!(
         out,
@@ -66,7 +99,8 @@ pub(super) fn resume(
     extend: &[String],
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let run = select(target, "resume", globals, at, extend)?;
+    let run =
+        select(target, "resume", globals, at, extend)?.map_err(|other| refuse(&other, "resume"))?;
     refuse_unwritable_home("resumed")?;
     let spec = workflow::load(&run.paths.home)?;
     let resumed = run.record.state == RunState::Parked || run.record.node == "@break";
@@ -139,7 +173,8 @@ pub(in crate::cli) fn restart(
     continued: bool,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let run = select(target, "restart", globals, None, &[])?;
+    let run = select(target, "restart", globals, None, &[])?
+        .map_err(|other| refuse(&other, "restart"))?;
     refuse_unwritable_home("restarted")?;
     let resume = if continued {
         Some(continue_session(&run, globals)?)
@@ -151,8 +186,9 @@ pub(in crate::cli) fn restart(
     let restarted = workflow::restart(&run.state, &run.record.id, resume, &host);
     run_log::collect_run(&run.state, &run.record.id);
     let (restarted, advance) = restarted?;
-    let record = first_pass(&run.paths, advance.as_ref())?;
-    write_history_copy(&run.state, &record)?;
+    // A run that ended meanwhile may already have left the live directory.
+    let record = first_pass(&run.paths, advance.as_ref())?.unwrap_or_else(|| restarted.clone());
+    let record = finish_run(&run.state, &run.record.id)?.unwrap_or(record);
     let step = restarted
         .session_attempt()
         .map_or(&restarted.node, |attempt| &attempt.node);
@@ -205,14 +241,23 @@ pub(in crate::cli) fn restart(
 /// The run's record once the advance a start or restart spawned has had its first pass: it
 /// shows a wait, a launched attempt, or a run no longer active, or no process that could
 /// decide (the spawned advance, a live attempt's host) still runs. Bounded at 30 s, after
-/// which the record is returned as it stands.
+/// which the record is returned as it stands. None once the run has left the live directory:
+/// it ended and was moved to the finished directory or forgotten.
 pub(in crate::cli) fn first_pass(
     paths: &paths::WorkflowPaths,
     advance: Option<&workflow::Advance>,
-) -> Result<RunRecord> {
+) -> Result<Option<RunRecord>> {
     let deadline = std::time::Instant::now().checked_add(std::time::Duration::from_secs(30));
     loop {
-        let record = records::load(paths)?;
+        let record = match records::load(paths) {
+            Ok(record) => record,
+            Err(records::WorkflowStoreErr::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
         let deciding = advance.is_some_and(workflow::Advance::is_running)
             || record.attempt.as_ref().is_some_and(|attempt| {
                 rimz::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
@@ -223,7 +268,7 @@ pub(in crate::cli) fn first_pass(
             || !deciding
             || deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
         {
-            return Ok(record);
+            return Ok(Some(record));
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -385,7 +430,7 @@ mod tests {
                 records::write(&paths, &record, &guard).unwrap();
             })
         };
-        let seen = first_pass(&paths, None).unwrap();
+        let seen = first_pass(&paths, None).unwrap().unwrap();
         writer.join().unwrap();
         assert!(
             seen.attempt

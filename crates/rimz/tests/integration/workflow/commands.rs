@@ -34,7 +34,7 @@ fn command_step_start_runs_without_an_initial_check() {
     assert_eq!(attempts[0]["node"], "build");
     assert_eq!(attempts[0]["seq"], 1);
     assert_eq!(attempts[0]["outcome"], "ended");
-    let log = fs::read_to_string(attempts[0]["log"].as_str().unwrap()).unwrap();
+    let log = fs::read_to_string(moved(attempts[0]["log"].as_str().unwrap())).unwrap();
     assert_eq!(log, "started");
     let history = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(
@@ -114,7 +114,7 @@ fn terminal_run_step_outlived_by_its_session_leader_runs_to_completion() {
     assert!(leader_alive, "the session leader outlives the run");
     assert_eq!(value["record"]["state"], "done", "{value:#}");
     let attempts = events(&value, "attempt");
-    let log = fs::read_to_string(attempts[0]["log"].as_str().unwrap()).unwrap();
+    let log = fs::read_to_string(moved(attempts[0]["log"].as_str().unwrap())).unwrap();
     assert!(log.contains("step-ready"), "{log}");
 }
 
@@ -138,6 +138,14 @@ fn ready_step(env: &Env, dir: &Path) -> String {
     .unwrap();
     let id = start(env);
     settled(env, &id, "done");
+    // The ended run left the live directory; put its home back to rewind it.
+    let state = env.state_path_for(&env.project_root);
+    let run = id.parse().unwrap();
+    fs::rename(
+        state.finished_workflow(&run).home,
+        state.workflow(&run).home,
+    )
+    .unwrap();
     edit_record(env, &id, |record| {
         record.state = RunState::Active;
         record.terminal_at = None;
@@ -217,10 +225,15 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
     assert_eq!(ctx["prev_attempt"], *previous);
     let log_path = Path::new(attempt["log"].as_str().unwrap());
     assert_eq!(log_path.file_name().unwrap(), "2.step.log");
-    let log = fs::read_to_string(log_path).unwrap();
+    let log = fs::read_to_string(moved(attempt["log"].as_str().unwrap())).unwrap();
+    // The command ran in the live home, which the ended run has since left.
+    let live_dir = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap())
+        .work;
     for expected in [
         env.project_root.to_str().unwrap(),
-        value["dir"].as_str().unwrap(),
+        live_dir.to_str().unwrap(),
         &id,
         "stderr",
     ] {
@@ -239,7 +252,10 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
         "{text}"
     );
     assert!(
-        text.contains(&format!("log: {}", log_path.display())),
+        text.contains(&format!(
+            "log: {}",
+            moved(attempt["log"].as_str().unwrap()).display()
+        )),
         "{text}"
     );
     let stats = assists_once(&env, "workflow_steps", 1);
@@ -396,11 +412,8 @@ fn command_bound(mode: &str) {
         }
     );
     assert_eq!(
-        attempts[0]["log"],
-        Path::new(value["dir"].as_str().unwrap())
-            .join("2.step.log")
-            .to_str()
-            .unwrap()
+        moved(attempts[0]["log"].as_str().unwrap()),
+        Path::new(value["dir"].as_str().unwrap()).join("2.step.log")
     );
     if mode.contains("deadline") {
         assert_eq!(value["record"]["input"]["outcome"], "deadline");

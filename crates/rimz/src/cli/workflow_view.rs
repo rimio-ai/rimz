@@ -304,6 +304,7 @@ pub(super) fn glyph_role(record: &RunRecord) -> GlyphRole {
 mod tests {
     use super::*;
     use rimz::config::GlyphRole;
+    use rimz::store::workflow::ScopeKind;
     use serde_json::json;
 
     fn record() -> RunRecord {
@@ -345,6 +346,26 @@ mod tests {
             }))
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn a_header_names_its_run_by_the_records_own_address() {
+        let cases = [
+            (ScopeKind::Worktree, "/repo/a#b", "land#a-b"),
+            (ScopeKind::Project, "/repo/a#b", "land#main"),
+            (ScopeKind::Worktree, "/repo", "land#main"),
+        ];
+        for (kind, path, address) in cases {
+            let mut record = record();
+            record.scope.kind = kind;
+            record.scope.path = path.into();
+            assert_eq!(
+                history::address(&record.header()).as_deref(),
+                Some(address),
+                "{kind:?} {path}"
+            );
+            assert_eq!(record.address().to_string(), address, "{kind:?} {path}");
+        }
     }
 
     #[test]

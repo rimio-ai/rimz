@@ -416,7 +416,11 @@ fn cap_after_an_engine_route_fails_the_run_and_names_both_hops() {
     let value = settled(&env, &id, "failed");
     assert_eq!(value["record"]["input"]["outcome"], "cap", "{value:#}");
     let text = success(command(&env, &["workflow", "show", &id]));
-    contains(&text, &["pr invalid → build", "build cap → @failed"]);
+    // A finished run shows its saved history, which names both hops in its own words.
+    contains(
+        &text,
+        &["pr said invalid → build", "build route cap → @failed"],
+    );
 }
 
 #[test]

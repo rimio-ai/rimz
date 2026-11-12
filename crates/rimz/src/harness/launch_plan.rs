@@ -707,7 +707,31 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     if let Some(workflow) = &request.identity.params.workflow {
-        match crate::store::workflow::load(&inputs.state.workflow(&workflow.run)) {
+        let record = crate::store::workflow::find(inputs.state, &workflow.run)
+            .map_err(|error| error.to_string())
+            .and_then(|found| {
+                let found = found.ok_or_else(|| "run record not found".to_owned())?;
+                if found.finished {
+                    return Err("run is finished".to_owned());
+                }
+                match found.class {
+                    crate::store::workflow::RunClass::Current(record) => Ok(record),
+                    crate::store::workflow::RunClass::Stranded { cause, .. } => {
+                        Err(cause.to_string())
+                    }
+                    crate::store::workflow::RunClass::Ended(_) => Err("run has ended".to_owned()),
+                    crate::store::workflow::RunClass::Newer { version } => {
+                        Err(format!("a newer RimZ wrote it (record version {version})"))
+                    }
+                    crate::store::workflow::RunClass::NotObject => {
+                        Err("run record is not a JSON object".to_owned())
+                    }
+                    crate::store::workflow::RunClass::Recordless => {
+                        Err("run record not found".to_owned())
+                    }
+                }
+            });
+        match record {
             Ok(record) => {
                 if workflow.role == crate::agents::WorkflowAttemptRole::Step {
                     request

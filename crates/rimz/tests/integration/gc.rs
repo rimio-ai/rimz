@@ -1439,7 +1439,7 @@ fn gc_fanout_does_not_pin_its_arming_directory() {
 }
 
 #[test]
-fn gc_skips_worktrees_when_another_rooms_workflow_record_is_broken() {
+fn gc_skips_worktrees_when_another_rooms_workflow_record_cannot_be_read() {
     if git_missing() {
         return;
     }
@@ -1457,7 +1457,19 @@ fn gc_skips_worktrees_when_another_rooms_workflow_record_is_broken() {
         .state_path_for(&other)
         .workflow(&rimz::ids::WorkflowRunId::new());
     std::fs::create_dir_all(&paths.home).unwrap();
+    // A record that holds no JSON object protects nothing and no longer stops the sweep.
     std::fs::write(&paths.record, "broken JSON").unwrap();
+    let output = env
+        .rimz()
+        .args(["gc", "--dry-run", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_ne!(report["worktrees"]["skipped"], "workflow_runs_unavailable");
+    assert!(tree.exists());
+    // A record that cannot be read at all still does: a directory fails the read for any uid.
+    std::fs::remove_file(&paths.record).unwrap();
+    std::fs::create_dir(&paths.record).unwrap();
     let output = env.rimz().args(["gc", "--json"]).assert().success();
     let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
     assert_eq!(report["worktrees"]["skipped"], "workflow_runs_unavailable");

@@ -798,7 +798,7 @@ fn limits_fail_closed_on_unreadable_rooms_and_corrupt_stamp_records_they_read() 
 }
 
 #[test]
-fn system_census_skips_a_refused_run_home_but_not_an_unreadable_one() {
+fn system_census_skips_a_stranded_or_broken_run_home_but_not_an_unreadable_one() {
     let root = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(root.path());
     let state = crate::StatePaths::for_workspace(workspace.clone()).unwrap();
@@ -827,8 +827,22 @@ fn system_census_skips_a_refused_run_home_but_not_an_unreadable_one() {
         .into_iter()
         .map(|run| run.id)
         .collect();
-    assert_eq!(ids, [live.id]);
+    assert_eq!(ids, [live.id.clone()]);
     std::fs::write(state.workflow(&old.id).record, "{").unwrap();
+    let ids: Vec<_> = SystemHost
+        .workflows(&workspace)
+        .unwrap()
+        .into_iter()
+        .map(|run| run.id)
+        .collect();
+    assert_eq!(
+        ids,
+        [live.id],
+        "a record that is no JSON object holds no launch"
+    );
+    // A directory where the record belongs fails the read for any uid.
+    std::fs::remove_file(state.workflow(&old.id).record).unwrap();
+    std::fs::create_dir(state.workflow(&old.id).record).unwrap();
     let error = SystemHost.workflows(&workspace).unwrap_err();
     assert!(error.contains("unreadable"), "{error}");
 }

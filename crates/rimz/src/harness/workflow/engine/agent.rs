@@ -408,14 +408,16 @@ pub(super) fn launch(
     };
 
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let reloaded = super::reload(paths)?;
+    let moved = reloaded.is_none();
     let mut t = Transition {
-        record: workflow::load(paths)?,
+        record: reloaded.unwrap_or_else(|| record.clone()),
         spec,
         paths,
         now: Timestamp::now(),
         entries: Vec::new(),
     };
-    if !t.current(attempt.seq) {
+    if moved || !t.current(attempt.seq) {
         drop(guard);
         if let Ok(run) = launched {
             if spec.is_break(&record.node) {
@@ -573,8 +575,11 @@ pub(super) fn finish(
     };
     let head_end = super::super::head(&record.scope.path);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let Some(current) = super::reload(paths)? else {
+        return Ok(false);
+    };
     let mut t = Transition {
-        record: workflow::load(paths)?,
+        record: current,
         spec,
         paths,
         now: Timestamp::now(),

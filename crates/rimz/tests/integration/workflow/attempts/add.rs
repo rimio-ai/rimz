@@ -86,7 +86,7 @@ fn loop_add_workflow_writes_a_task_that_fires_per_owned_checkout() {
             .output()
             .unwrap(),
     );
-    let runs = records::list(&room.env.state_path_for(&room.env.project_root)).unwrap();
+    let runs = every_run(&room.env.state_path_for(&room.env.project_root));
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].task.as_deref(), Some("review"));
     assert_eq!(

@@ -3,7 +3,7 @@ use rimz::disk::paths::Class;
 
 pub(super) fn history_path(env: &Env, id: &str) -> PathBuf {
     let state = env.state_path_for(&env.project_root);
-    let record = rimz::store::workflow::load(&state.workflow(&id.parse().unwrap())).unwrap();
+    let record = rimz::store::workflow::load(&run_home(env, id)).unwrap();
     state
         .notes_run(Class::AutomationNotes, record.notes.as_ref().unwrap())
         .join("history.txt")
@@ -125,14 +125,24 @@ fn history_copy_failures_warn_without_failing_committed_transitions() {
             &id,
             if verb == "cancel" { "canceled" } else { "done" },
         );
+        let state = env.state_path_for(&env.project_root);
+        let run: rimz::ids::WorkflowRunId = id.parse().unwrap();
+        assert!(
+            state.workflow(&run).record.is_file(),
+            "{verb}: a failed copy keeps the home live"
+        );
         fs::remove_dir(&history).unwrap();
         success(command(&env, &["workflow", "advance", &id]));
         assert_history_copy(&env, &id);
+        assert!(
+            !state.workflow(&run).home.exists() && state.finished_workflow(&run).record.is_file(),
+            "{verb}: the retry moves the home"
+        );
     }
 }
 
 #[test]
-fn gc_backfills_history_before_removing_a_terminal_home_and_keeps_it_on_failure() {
+fn gc_backfills_history_before_removing_a_finished_home_and_keeps_it_on_failure() {
     let mut actual = Vec::new();
     for fail in [false, true] {
         let (env, _) = fixture(
@@ -147,8 +157,13 @@ fn gc_backfills_history_before_removing_a_terminal_home_and_keeps_it_on_failure(
         if fail {
             fs::create_dir(&history).unwrap();
         }
+        let paths = run_home(&env, &id);
         let state = env.state_path_for(&env.project_root);
-        let paths = state.workflow(&id.parse().unwrap());
+        assert_eq!(
+            paths.home,
+            state.finished_workflow(&id.parse().unwrap()).home,
+            "the ended run moved"
+        );
         fs::File::open(&paths.record)
             .unwrap()
             .set_modified(std::time::SystemTime::now() - Duration::from_secs(8 * 86_400))

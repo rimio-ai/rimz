@@ -6415,8 +6415,8 @@ fn bare_word_naming_a_live_agent_launches_without_reading_the_room() {
         "leader: planner\nstages: [Build]\nroles:\n  - {role: planner, agent: worker, owns: [Build]}",
         "Complete the work.",
     );
-    // A run home another RimZ version wrote: reading the room's workflows
-    // warns about it, so a launch that reads them says so on stderr.
+    // A run home another RimZ version wrote: a launch that read it would
+    // say so on stderr.
     let stale = env
         .state_path_for(&env.project_root)
         .workflow(&rimz::ids::WorkflowRunId::new());

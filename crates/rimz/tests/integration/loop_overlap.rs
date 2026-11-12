@@ -159,7 +159,7 @@ fn concurrent_fires_admit_one_run() {
         )),
         "{rows:?}"
     );
-    let runs = rimz::store::workflow::list(env.store().paths()).unwrap();
+    let runs = rimz::store::workflow::live_runs(env.store().paths()).unwrap();
     assert_eq!(runs.len(), 1, "one workflow run for four fires: {runs:?}");
     wait_for_path(&env.project_root.join("check-ready"));
     std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
@@ -213,7 +213,7 @@ fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
     assert_eq!(rows[3].signal.as_ref().unwrap().payload["to"], "b");
     let load = |row: &LoopRunRecord| {
         let id = row.run_id.as_deref().unwrap().parse().unwrap();
-        rimz::store::workflow::load(&env.store().paths().workflow(&id)).unwrap()
+        rimz::store::workflow::load(&run_paths(&env, &env.project_root, &id)).unwrap()
     };
     let (old, new) = (load(&blocker), load(&rows[3]));
     assert_eq!(old.state, rimz::store::workflow::RunState::Canceled);

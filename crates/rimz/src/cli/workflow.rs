@@ -257,13 +257,20 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             woken_by,
             ..
         } => {
-            let (state, _) = resolve::locate(&id)?;
+            let (state, found) = resolve::locate(&id)?;
+            if !matches!(found.class, records::RunClass::Current(_)) || found.finished {
+                let other = resolve::Other { state, id, found };
+                return match other.refusal() {
+                    Some(refusal) => bail!("{refusal}"),
+                    None => Ok(()),
+                };
+            }
             // A terminal write can precede a later error, so the run is collected either way.
             let advanced = workflow::advance(&state, &id, &Host::new(&state, globals, woken_by));
             run_log::collect_run(&state, &id);
             advanced?;
-            let record = records::load(&state.workflow(&id))?;
-            write_history_copy(&state, &record)
+            finish_run(&state, &id)?;
+            Ok(())
         }
         Command::Advance {
             wake_signal: Some(signal),
@@ -283,15 +290,58 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
     }
 }
 
-fn write_history_copy(state: &rimz::StatePaths, record: &records::RunRecord) -> Result<()> {
-    if let Err(error) = workflow_view::history::write_copy(state, record) {
-        writeln!(
-            render::err(),
-            "warning: could not write history for run `{}`: {error}; GC will retry",
-            record.id
-        )?;
+/// The run's record in the live directory, or none once it has left it, or when this RimZ does
+/// not read it.
+fn live_record(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<Option<RunRecord>> {
+    Ok(match records::find(state, id)? {
+        Some(records::FoundRun {
+            class: records::RunClass::Current(record),
+            finished: false,
+            ..
+        }) => Some(*record),
+        _ => None,
+    })
+}
+
+/// The tail of a command that may have ended a run: once the run has ended and owes its loop
+/// nothing, save its rendered history in its home and in its notes archive, and move the home to
+/// the finished directory. Returns the record as last read in the live directory, or none when
+/// the run is not a live run this RimZ reads. A failure warns and leaves the home where it is.
+fn finish_run(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<Option<RunRecord>> {
+    let found = match records::find(state, id) {
+        Ok(Some(found)) if !found.finished => found,
+        Ok(_) => return Ok(None),
+        Err(error) => {
+            writeln!(render::err(), "warning: could not read run `{id}`: {error}")?;
+            return Ok(None);
+        }
+    };
+    let records::RunClass::Current(record) = found.class else {
+        return Ok(None);
+    };
+    if !record.state.is_terminal() || record.owes_loop_report() {
+        return Ok(Some(*record));
     }
-    Ok(())
+    let history =
+        workflow_view::history::saved(&found.paths, &state.finished_workflow(id), &record);
+    let moved = workflow_view::history::copy_to_notes(state, record.notes.as_deref(), &history)
+        .and_then(|()| {
+            let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
+            Ok(records::finish(state, id, Some(&history), &guard)?)
+        });
+    match moved {
+        Ok(records::Finished::Collision) => writeln!(
+            render::err(),
+            "warning: run `{id}` stays in the live directory: the finished directory already \
+             holds a run of that id"
+        )?,
+        Ok(_) => {}
+        Err(error) => writeln!(
+            render::err(),
+            "warning: could not finish run `{id}`: {error}; it stays in the live directory"
+        )?,
+    }
+    Ok(Some(*record))
 }
 
 /// Refuses before `action` changes anything when the detached engine could not open the
@@ -366,11 +416,13 @@ fn start(
         resolve::run_command(&record, "show", globals, None, &[], &[])
     )?;
     let paths = ctx.store.paths().workflow(&record.id);
-    let record = receipt::first_pass(&paths, Some(&advance))?;
-    receipt::write_held(&paths, &record, "")
+    match receipt::first_pass(&paths, Some(&advance))? {
+        Some(record) => receipt::write_held(&paths, &record, ""),
+        None => Ok(()),
+    }
 }
 
-fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Located> {
+fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Selection> {
     let outside = || {
         anyhow::anyhow!(
             "caller is not part of a workflow run; use rimz workflow show <run> or rimz workflow list"
@@ -385,11 +437,24 @@ fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Located> {
     let mut seen = std::collections::BTreeSet::new();
     while seen.insert((&agent.kind, &agent.agent_id)) {
         if let Some(pin) = &agent.workflow {
-            let paths = state.workflow(&pin.run);
-            return Ok(resolve::Located {
-                record: records::load(&paths)?,
-                paths,
-                state,
+            let id = pin.run.clone();
+            let found = records::find(&state, &id)?
+                .with_context(|| format!("workflow run {id} is no longer available"))?;
+            return Ok(match found.class {
+                records::RunClass::Current(record) if !found.finished => {
+                    resolve::Selection::Run(Box::new(resolve::Located {
+                        paths: found.paths,
+                        record: *record,
+                        state,
+                    }))
+                }
+                _ => {
+                    let other = resolve::Other { state, id, found };
+                    if let Some(refusal) = other.refusal() {
+                        bail!("{refusal}");
+                    }
+                    resolve::Selection::Other(Box::new(other))
+                }
             });
         }
         agent =
@@ -406,11 +471,27 @@ fn show(
     globals: &super::GlobalFlags,
 ) -> Result<()> {
     let Some(target) = target else {
-        return show::render(&calling_run(globals)?, json, history, globals);
+        return match calling_run(globals)? {
+            resolve::Selection::Run(run) => show::render(&run, json, history, globals),
+            resolve::Selection::Other(other) => show::render_other(&other, json, history),
+            resolve::Selection::Workflow(_) => unreachable!("a pin names one run"),
+        };
     };
     let definition = definition::Definition::resolve(target, globals)?;
     if let Some(node) = node {
         let Some(definition) = definition else {
+            let run = target.strip_prefix("workflow:").unwrap_or(target);
+            if let Ok(resolve::Selection::Other(other)) =
+                resolve::select(run, "show", globals, None, &[])
+                && other.found.finished
+            {
+                bail!(
+                    "workflow run {} is finished, so it has no node view; `{}` prints its saved \
+                     history",
+                    other.id,
+                    other.show_command(globals)
+                );
+            }
             return Err(super::usage::UsageError::new(
                 concat!(
                     "use rimz workflow show <workflow> <node>; ",
@@ -453,6 +534,7 @@ fn show(
             list::render(&runs, Some(target), json, globals)
         }
         resolve::Selection::Run(run) => show::render(&run, json, history, globals),
+        resolve::Selection::Other(other) => show::render_other(&other, json, history),
     }
 }
 

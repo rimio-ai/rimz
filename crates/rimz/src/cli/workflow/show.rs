@@ -30,7 +30,15 @@ pub(super) fn render(
     history: bool,
     globals: &super::super::GlobalFlags,
 ) -> Result<()> {
-    let journal = records::journal(&run.paths)?;
+    let mut journal = records::journal(&run.paths)?;
+    let refound = moved_home(run)?;
+    let run = match &refound {
+        Some(refound) => {
+            journal = records::journal(&refound.paths)?;
+            refound
+        }
+        None => run,
+    };
     let spec = workflow::load(&run.paths.home);
     let notes = run
         .record
@@ -116,6 +124,100 @@ pub(super) fn render(
         "all of it: {}",
         view.command("show", None, &[], &["--history"])
     )?;
+    Ok(())
+}
+
+/// The run in its finished home when the live home its record was read from moved there before
+/// its journal was read, so the view takes record and journal from one home.
+fn moved_home(run: &resolve::Located) -> Result<Option<resolve::Located>> {
+    let finished = run.state.finished_workflow(&run.record.id);
+    if run.paths.home.exists() || run.paths.home == finished.home {
+        return Ok(None);
+    }
+    let records::RunClass::Current(record) = records::classify(&finished)? else {
+        return Ok(None);
+    };
+    Ok(Some(resolve::Located {
+        state: run.state.clone(),
+        paths: finished,
+        record: *record,
+    }))
+}
+
+/// `workflow show` of a run this RimZ does not run: a finished one, from its record's header and
+/// its saved history, never its definition; one it cannot continue, from the header; a newer
+/// RimZ's, refused.
+pub(super) fn render_other(other: &resolve::Other, json: bool, history: bool) -> Result<()> {
+    let paths = &other.found.paths;
+    let header = other.found.class.header();
+    if let records::RunClass::Newer { .. } = other.found.class
+        && let Some(refusal) = other.refusal()
+    {
+        bail!("{refusal}");
+    }
+    let saved = match std::fs::read_to_string(paths.history()) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if json {
+        let record = std::fs::read(&paths.record)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let mut value = serde_json::json!({
+            "address": header
+                .as_deref()
+                .and_then(workflow_view::history::address)
+                .unwrap_or_else(|| other.id.to_string()),
+            "dir": paths.work,
+            "record": record,
+            "journal": records::journal(paths).unwrap_or_default(),
+            "history": saved,
+        });
+        if let Some(notes) = header.as_ref().and_then(|header| header.notes.as_ref()) {
+            value["notes"] =
+                serde_json::json!(other.state.notes_run(paths::Class::AutomationNotes, notes));
+        }
+        return render::json_pretty(&value);
+    }
+    let mut out = render::out();
+    if !(history && other.found.finished) {
+        let why = match &other.found.class {
+            records::RunClass::Stranded { cause, .. } => format!(
+                "this RimZ cannot continue the run: {cause}; it reads only record version {}. \
+                 It will end the run as failed",
+                records::VERSION
+            ),
+            records::RunClass::NotObject => "this RimZ cannot read the run: its record holds no \
+                JSON object. It will set the run aside"
+                .into(),
+            _ if other.found.finished => "the run is finished".into(),
+            _ => "the run has ended".into(),
+        };
+        let text = workflow_view::history::header_only(&other.id, header.as_deref(), &why);
+        out.write_all(&text)?;
+    }
+    match saved {
+        Some(saved) => {
+            if history {
+                out.write_all(saved.as_bytes())?;
+            } else {
+                writeln!(out)?;
+                // Both saved formats start with the name and ending, then an optional reason.
+                // Those facts have already been printed from the record's header.
+                let mut rows = saved.split_once('\n').map_or("", |(_, rows)| rows);
+                if header.is_some() {
+                    rows = rows.split_once('\n').map_or("", |(_, rows)| rows);
+                }
+                if rows.starts_with("reason: ") {
+                    rows = rows.split_once('\n').map_or("", |(_, rows)| rows);
+                }
+                out.write_all(rows.as_bytes())?;
+            }
+        }
+        None if other.found.finished => writeln!(out, "no saved history")?,
+        None => {}
+    }
     Ok(())
 }
 

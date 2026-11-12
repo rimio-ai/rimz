@@ -187,30 +187,11 @@ fn task_roots() -> BTreeSet<PathBuf> {
         .map(|task| task.entry().resolved_root())
         .collect::<BTreeSet<_>>();
     roots.extend(rimz::harness::schedule::catalog::workspace_instance_roots());
-    match rimz::disk::paths::workflow_runs_under(&rimz::disk::paths::rimz_home()) {
-        Ok(runs) => {
-            // A version raise refuses every older record on each tick until GC removes it, so
-            // refused records share one counted line per pass rather than one line each.
-            let mut refused = 0usize;
-            for (_, paths) in runs {
-                match rimz::store::workflow::load(&paths) {
-                    Ok(run) if !run.state.is_terminal() => {
-                        roots.insert(run.project_root);
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.is_refused() => refused += 1,
-                    Err(error) => tracing::warn!(%error, "loop tick could not read workflow run"),
-                }
-            }
-            if refused > 0 {
-                tracing::warn!(
-                    count = refused,
-                    "loop tick skipping workflow runs whose record another RimZ version \
-                     wrote; `rimz workflow list` names each, and \
-                     `rimz workflow cancel <run-id>` clears one"
-                );
-            }
-        }
+    match rimz::store::workflow::unfinished_under(
+        &rimz::disk::paths::rimz_home(),
+        rimz::store::workflow::RunRead::BestEffort,
+    ) {
+        Ok(runs) => roots.extend(runs.into_iter().map(|run| run.project_root)),
         Err(error) => tracing::warn!(%error, "loop tick could not enumerate workflow roots"),
     }
     match rimz::trust::granted_roots() {

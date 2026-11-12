@@ -74,8 +74,15 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
         let id = start(&env);
         let value = settled(&env, &id, "done");
         let log = Path::new(value["dir"].as_str().unwrap()).join("2.check.log");
-        let mut expected =
-            json!({"outcome":if code == 0 {"pass"} else {"fail"}, "code":code, "log":log, "key":7});
+        // The record keeps the path the check wrote, in the live home the run has since left.
+        let recorded = env
+            .state_path_for(&env.project_root)
+            .workflow(&id.parse().unwrap())
+            .work
+            .join("2.check.log");
+        let mut expected = json!({
+            "outcome":if code == 0 {"pass"} else {"fail"}, "code":code, "log":recorded, "key":7
+        });
         if let Some(reason) = reason {
             expected["reason"] = json!(reason);
         }
@@ -89,7 +96,10 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
             output.contains(env.project_root.to_str().unwrap()),
             "{output}"
         );
-        assert!(output.contains(value["dir"].as_str().unwrap()), "{output}");
+        assert!(
+            output.contains(recorded.parent().unwrap().to_str().unwrap()),
+            "{output}"
+        );
         assert!(
             output.contains(&id) && output.contains("stderr"),
             "{output}"

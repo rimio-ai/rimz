@@ -180,8 +180,9 @@ pub fn fire_due_tasks(
 fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, host: LoopRunHost) {
     let records = match StatePaths::for_project_root(project_root)
         .map_err(|error| error.to_string())
-        .and_then(|state| crate::store::workflow::list(&state).map_err(|error| error.to_string()))
-    {
+        .and_then(|state| {
+            crate::store::workflow::live_runs(&state).map_err(|error| error.to_string())
+        }) {
         Ok(records) => records,
         Err(error) => {
             tracing::warn!(%error, "workflow tick could not read runs");

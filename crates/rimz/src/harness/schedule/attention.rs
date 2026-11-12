@@ -585,7 +585,7 @@ pub fn read_room(
 fn list_runs(state: &StatePaths) -> Vec<RunRecord> {
     #[cfg(test)]
     tests::RUN_LISTINGS.set(tests::RUN_LISTINGS.get() + 1);
-    crate::store::workflow::list(state).unwrap_or_default()
+    crate::store::workflow::live_runs(state).unwrap_or_default()
 }
 
 fn parked_summary(run: &RunRecord, now: Timestamp) -> (String, String) {

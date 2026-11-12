@@ -105,8 +105,9 @@ workspace store         ~/.rimz/ws/<basename>-<hex>/
   room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root
   records/lsp-usage.jsonl retains room-scoped query counts across broker restarts
-  owned/workflows/<run-id>/ holds workflow records, sealed specs and journals;
-  its work/ subtree is the node-writable workflow directory
+  owned/workflows/<run-id>/ holds live workflow records, sealed specs and journals;
+  its work/ subtree is the node-writable workflow directory; an ended run's home
+  moves whole to owned/finished-workflows/<run-id>/ with its saved history.txt
 
 empty agent directories ~/.rimz/empty/<workspace-dir>/<candidate-handle>/
   persistent agent cwd, separate from temp units; retained session rows keep it

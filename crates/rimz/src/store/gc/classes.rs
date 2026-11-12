@@ -79,13 +79,7 @@ pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<Stri
                 super::collect::collect_locks(&paths.lock_path(""), &mut sweep, &mut report)
             }
             Class::Owned => match &agents {
-                Some(agents) => collect_owned(
-                    paths,
-                    agents,
-                    &mut sweep,
-                    &mut report,
-                    &policy.workflow_history,
-                ),
+                Some(agents) => collect_owned(paths, agents, &mut sweep, &mut report),
                 None => Ok(()),
             },
             Class::Tmp => match &agents {
@@ -289,17 +283,7 @@ fn collect_automation_notes(
             }
             let open = match &manifest.kind {
                 crate::store::notes::Kind::Workflow { run, .. } => {
-                    match crate::store::workflow::load(&paths.workflow(run)) {
-                        Ok(record) => {
-                            !record.state.is_terminal() && record.notes.as_deref() == Some(relative)
-                        }
-                        Err(crate::store::workflow::WorkflowStoreErr::Io { source, .. })
-                            if source.kind() == std::io::ErrorKind::NotFound =>
-                        {
-                            false
-                        }
-                        Err(_) => true,
-                    }
+                    workflow_holds_notes(paths, run, relative)
                 }
                 crate::store::notes::Kind::Loop { .. } => false,
                 crate::store::notes::Kind::Team { .. } => true,
@@ -307,6 +291,30 @@ fn collect_automation_notes(
             Ok((!open).then_some(guard))
         },
     )
+}
+
+/// Whether a workflow run still holds its notes archive open: a live run this RimZ runs that is
+/// unfinished and names the archive, or a live run this RimZ cannot judge (one it cannot
+/// continue, a newer RimZ's, one whose record cannot be read). A finished or missing run, or one
+/// whose record ends it, holds nothing.
+fn workflow_holds_notes(
+    paths: &crate::StatePaths,
+    run: &crate::ids::WorkflowRunId,
+    relative: &Path,
+) -> bool {
+    use crate::store::workflow::RunClass;
+    match crate::store::workflow::find(paths, run) {
+        Ok(None) => false,
+        Ok(Some(found)) if found.finished => false,
+        Ok(Some(found)) => match found.class {
+            RunClass::Current(record) => {
+                !record.state.is_terminal() && record.notes.as_deref() == Some(relative)
+            }
+            RunClass::Ended(_) | RunClass::Recordless => false,
+            RunClass::Stranded { .. } | RunClass::Newer { .. } | RunClass::NotObject => true,
+        },
+        Err(_) => true,
+    }
 }
 
 fn collect_notes(
@@ -471,31 +479,8 @@ fn collect_owned(
     agents: &crate::store::snapshot::AgentRollup,
     sweep: &mut Sweep,
     report: &mut GcReport,
-    preserve_history: &impl Fn(&crate::StatePaths, &crate::store::workflow::RunRecord) -> bool,
 ) -> Result<()> {
     collect_units(&paths.agents_dir, agents, sweep, report)?;
-    let mut histories = std::collections::BTreeSet::new();
-    if !sweep.is_dry_run() {
-        for run in crate::store::workflow::list(paths)? {
-            if !run.state.is_terminal()
-                || !super::collect::is_older_than(
-                    &paths.workflow(&run.id).record,
-                    retention::OWNED_GRACE,
-                )?
-            {
-                continue;
-            }
-            let Some(relative) = &run.notes else {
-                continue;
-            };
-            let copy = paths
-                .notes_run(Class::AutomationNotes, relative)
-                .join("history.txt");
-            if copy.is_file() || preserve_history(paths, &run) {
-                histories.insert((run.id, run.next_seq, relative.clone()));
-            }
-        }
-    }
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
     for run in crate::store::run::list(&paths.runs_dir)? {
         let path = crate::store::run::run_path(&paths.runs_dir, &run.run_id);
@@ -508,50 +493,78 @@ fn collect_owned(
             )?;
         }
     }
-    for run in crate::store::workflow::list(paths)? {
-        let home = paths.workflow(&run.id);
-        // A run that still owes its loop report keeps its home until the
-        // workflow tick's backstop reports it.
-        if run.state.is_terminal()
-            && !run.owes_loop_report()
-            && super::collect::is_older_than(&home.record, retention::OWNED_GRACE)?
-            && (sweep.is_dry_run()
-                || run.notes.as_ref().is_none_or(|relative| {
-                    histories.contains(&(run.id.clone(), run.next_seq, relative.clone()))
-                }))
+    // A finished home goes once its record, or the home when it has none, is past the grace,
+    // whatever version wrote it; the move into the finished directory keeps the record's mtime.
+    for home in paths.finished_workflow_runs()? {
+        let aged = if exists(&home.record)? {
+            &home.record
+        } else {
+            &home.home
+        };
+        if !super::collect::is_older_than(aged, retention::OWNED_GRACE)? {
+            continue;
+        }
+        if !sweep.is_dry_run() && !archive_history(paths, &home) {
+            continue;
+        }
+        let files = sweep.files_under(&home.home)?.len();
+        sweep.remove_tree(&home.home, files, report)?;
+    }
+    // In the live directory only a home without its record goes: a crash during `initialize`,
+    // which runs under the workspace lock held here, or during an inline run's sealing, which
+    // precedes it by moments. Every other live home is a run that is still running, still owes
+    // its loop report, waits for the workflow pass to end or move it, or is a newer RimZ's.
+    for home in paths.workflow_runs()? {
+        if !exists(&home.record)?
+            && super::collect::is_older_than(&home.home, retention::OWNED_GRACE)?
         {
             let files = sweep.files_under(&home.home)?.len();
             sweep.remove_tree(&home.home, files, report)?;
         }
     }
-    // A run home without its record is a crash during `initialize`, which runs
-    // under the workspace lock held here, or during an inline run's sealing,
-    // which precedes it by moments; every reader skips it, so it goes once the
-    // home itself is past the grace. A record an older RimZ wrote is skipped
-    // by every reader too, and goes once the record is past the grace; a newer
-    // RimZ's record stays, since that RimZ may still be running it.
-    for home in paths.workflow_runs()? {
-        let recordless = !home.record.try_exists().map_err(|source| GcErr::Io {
-            path: home.record.clone(),
-            source,
-        })?;
-        let aged = if recordless {
-            &home.home
-        } else if matches!(
-            crate::store::workflow::load(&home),
-            Err(crate::store::workflow::WorkflowStoreErr::Version { version, .. })
-                if version < crate::store::workflow::VERSION
-        ) {
-            &home.record
-        } else {
-            continue;
-        };
-        if super::collect::is_older_than(aged, retention::OWNED_GRACE)? {
-            let files = sweep.files_under(&home.home)?.len();
-            sweep.remove_tree(&home.home, files, report)?;
+    Ok(())
+}
+
+fn exists(path: &Path) -> Result<bool> {
+    path.try_exists().map_err(|source| GcErr::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Copy a finished home's saved history into the notes archive its run names, when that archive
+/// exists and lacks one, so the archive keeps the history once the home is gone. False keeps the
+/// home: the copy failed.
+fn archive_history(paths: &crate::StatePaths, home: &crate::disk::paths::WorkflowPaths) -> bool {
+    let notes = match crate::store::workflow::classify(home) {
+        Ok(class) => class.header().and_then(|header| header.notes.clone()),
+        Err(_) => None,
+    };
+    let Some(relative) = notes else {
+        return true;
+    };
+    let folder = paths.notes_run(Class::AutomationNotes, &relative);
+    let copy = folder.join("history.txt");
+    if !folder.is_dir() || copy.is_file() {
+        return true;
+    }
+    let saved = match std::fs::read(home.history()) {
+        Ok(saved) => saved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(error) => {
+            tracing::warn!(home = %home.home.display(), %error,
+                "keeping finished workflow home whose history cannot be read");
+            return false;
+        }
+    };
+    match crate::disk::atomic::write_bytes_atomically(&copy, &saved) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(home = %home.home.display(), %error,
+                "keeping finished workflow home without a history copy");
+            false
         }
     }
-    Ok(())
 }
 
 /// Temp units use their own grace; a shared unit keeps every owner's hold.

@@ -36,8 +36,7 @@ pub enum WorkflowStoreErr {
     },
     #[error(
         "workflow run {run} at {path} has record version {version}, written by another RimZ \
-         version; this RimZ reads only version {current}. Clear it with \
-         `rimz workflow cancel {run}`, then start the workflow again",
+         version; this RimZ reads only version {current}",
         current = VERSION
     )]
     Version {
@@ -50,13 +49,6 @@ pub enum WorkflowStoreErr {
 pub type Result<T> = std::result::Result<T, WorkflowStoreErr>;
 
 impl WorkflowStoreErr {
-    /// Whether this is `load`'s refusal of another version's record: a run every background
-    /// reader treats as absent, and only `rimz workflow cancel` removes, or GC past the owned
-    /// grace when the record is an older version's.
-    pub fn is_refused(&self) -> bool {
-        matches!(self, Self::Version { .. })
-    }
-
     fn io(path: &std::path::Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
         move |source| Self::Io {
             path: path.to_path_buf(),
@@ -738,17 +730,12 @@ impl RunRecord {
     /// Derive the lane without resolving or reading the checkout, which may be gone:
     /// a run scoped to the project root, per project or per worktree, is trunk's.
     pub fn address(&self) -> RunAddress {
-        let trunk = self.scope.kind == ScopeKind::Project || self.scope.path == self.project_root;
-        let home = if trunk {
-            crate::ids::LaneHome::Trunk
-        } else {
-            crate::ids::LaneHome::Worktree
-        };
-        let lane = crate::ids::Lane::own(home, self.scope.path.to_string_lossy());
-        RunAddress {
-            workflow: self.workflow.clone(),
-            lane: lane.routing_name(),
-        }
+        run_address(
+            self.workflow.clone(),
+            self.scope.kind,
+            &self.scope.path,
+            Some(&self.project_root),
+        )
     }
 
     /// The shared predicate for a live run of a loop task.
@@ -946,16 +933,6 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
     serde_json::from_slice(&bytes).map_err(json)
 }
 
-/// Remove a run home whose record `load` refuses as another version's, without reading it
-/// further; false, touching nothing, when the record now loads or is gone.
-pub fn remove_refused(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<bool> {
-    if !load(paths).is_err_and(|error| error.is_refused()) {
-        return Ok(false);
-    }
-    std::fs::remove_dir_all(&paths.home).map_err(WorkflowStoreErr::io(&paths.home))?;
-    Ok(true)
-}
-
 /// Write a definition's text and assets into a definition root: a run's own, sealed before
 /// `initialize` publishes the record, or an ejected task's staging directory. Each asset,
 /// directory and link name is a relative path inside that root. An asset named in `modes` is
@@ -1140,34 +1117,410 @@ pub(crate) fn parse_journal(bytes: &[u8], path: &Path) -> Vec<JournalEntry> {
     entries
 }
 
-pub fn list(state: &StatePaths) -> Result<Vec<RunRecord>> {
-    let mut records = Vec::new();
-    let mut refused = 0;
-    for paths in state.workflow_runs()? {
-        match load(&paths) {
-            Ok(record) => records.push(record),
-            Err(WorkflowStoreErr::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) if err.is_refused() => refused += 1,
-            Err(err) => {
-                tracing::warn!(path = %paths.record.display(), error = %err, "skipping workflow with unreadable record");
+fn run_address(
+    workflow: String,
+    kind: ScopeKind,
+    path: &Path,
+    project_root: Option<&Path>,
+) -> RunAddress {
+    let trunk = kind == ScopeKind::Project || project_root == Some(path);
+    let home = if trunk {
+        crate::ids::LaneHome::Trunk
+    } else {
+        crate::ids::LaneHome::Worktree
+    };
+    let lane = crate::ids::Lane::own(home, path.to_string_lossy());
+    RunAddress {
+        workflow,
+        lane: lane.routing_name(),
+    }
+}
+
+/// What a field-by-field read of `record.json` finds, whatever version wrote it: each field is
+/// decoded on its own, so a missing or malformed field leaves only that field unknown.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RunHeader {
+    pub version: Option<u64>,
+    pub workflow: Option<String>,
+    pub task: Option<String>,
+    pub manual: bool,
+    pub project_root: Option<PathBuf>,
+    pub scope_kind: Option<ScopeKind>,
+    pub scope_path: Option<PathBuf>,
+    pub fire_tree: bool,
+    pub created_at: Option<Timestamp>,
+    pub state: Option<RunState>,
+    pub node: Option<String>,
+    pub terminal_at: Option<Timestamp>,
+    pub loop_report: Option<LoopReport>,
+    pub ending: Option<RunEnding>,
+    pub reason: Option<String>,
+    pub acted: Option<bool>,
+    pub notes: Option<PathBuf>,
+}
+
+impl RunHeader {
+    fn read(record: &serde_json::Map<String, Value>) -> Self {
+        fn field<T: serde::de::DeserializeOwned>(value: Option<&Value>) -> Option<T> {
+            value.and_then(|value| T::deserialize(value).ok())
+        }
+        let outcome = record.get("outcome");
+        Self {
+            version: field(record.get("version")),
+            workflow: field(record.get("workflow")),
+            task: field(record.get("task")),
+            manual: field(record.get("manual")).unwrap_or(false),
+            project_root: field(record.get("project_root")),
+            scope_kind: field(record.get("scope").and_then(|scope| scope.get("kind"))),
+            scope_path: field(record.get("scope").and_then(|scope| scope.get("path"))),
+            fire_tree: field(record.get("fire_tree")).unwrap_or(false),
+            created_at: field(record.get("created_at")),
+            state: field(record.get("state")),
+            node: field(record.get("node")),
+            terminal_at: field(record.get("terminal_at")),
+            loop_report: field(record.get("loop_report")),
+            ending: field(outcome.and_then(|outcome| outcome.get("ending"))),
+            reason: field(outcome.and_then(|outcome| outcome.get("reason"))),
+            acted: field(outcome.and_then(|outcome| outcome.get("acted"))),
+            notes: field(record.get("notes")),
+        }
+    }
+
+    /// Whether the record names a state that ends a run.
+    pub fn is_terminal(&self) -> bool {
+        self.state.is_some_and(RunState::is_terminal)
+    }
+
+    /// The run's address, derived as [`RunRecord::address`] derives it; a record naming no
+    /// scope kind reads as a worktree run.
+    pub fn address(&self) -> Option<RunAddress> {
+        Some(run_address(
+            self.workflow.clone()?,
+            self.scope_kind.unwrap_or(ScopeKind::Worktree),
+            self.scope_path.as_deref()?,
+            self.project_root.as_deref(),
+        ))
+    }
+
+    /// A finished run whose loop task has not yet heard how it ended.
+    pub fn owes_loop_report(&self) -> bool {
+        self.is_terminal() && self.task.is_some() && self.loop_report == Some(LoopReport::Owed)
+    }
+}
+
+/// Why this RimZ cannot continue a run whose record it finds unfinished.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StrandedCause {
+    /// An older RimZ wrote the record.
+    Older { version: u64 },
+    /// The record names no version.
+    MissingVersion,
+    /// The record's version is not a version number.
+    InvalidVersion,
+    /// The record names this version but does not decode.
+    Undecodable { error: String },
+}
+
+impl std::fmt::Display for StrandedCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Older { version } => {
+                write!(f, "an older RimZ wrote it (record version {version})")
+            }
+            Self::MissingVersion => f.write_str("its record names no version"),
+            Self::InvalidVersion => f.write_str("its record's version is not a number"),
+            Self::Undecodable { error } => {
+                write!(f, "its version {VERSION} record does not decode: {error}")
             }
         }
     }
-    warn_refused(refused);
-    Ok(records)
 }
 
-/// One warning for every run a listing skipped because another RimZ version wrote its record,
-/// so a room holding thousands of old runs does not print a line for each.
-fn warn_refused(count: usize) {
-    if count > 0 {
-        tracing::warn!(
-            count,
-            "skipping workflow runs whose record another RimZ version wrote; \
-             `rimz workflow list` names each, and `rimz workflow cancel <run-id>` clears one"
-        );
+/// What a run home's record is to this RimZ.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunClass {
+    /// A record this RimZ reads, whatever its state.
+    Current(Box<RunRecord>),
+    /// An unfinished run this RimZ cannot continue.
+    Stranded {
+        header: Box<RunHeader>,
+        cause: StrandedCause,
+    },
+    /// A record that ends its run but that this RimZ does not decode.
+    Ended(Box<RunHeader>),
+    /// A newer RimZ wrote the record; nothing else of it is read.
+    Newer { version: u64 },
+    /// `record.json` holds no JSON object.
+    NotObject,
+    /// The home has no `record.json`.
+    Recordless,
+}
+
+impl RunClass {
+    /// The record's header, where this RimZ read one.
+    pub fn header(&self) -> Option<std::borrow::Cow<'_, RunHeader>> {
+        match self {
+            Self::Current(record) => Some(std::borrow::Cow::Owned(record.header())),
+            Self::Stranded { header, .. } | Self::Ended(header) => {
+                Some(std::borrow::Cow::Borrowed(header))
+            }
+            Self::Newer { .. } | Self::NotObject | Self::Recordless => None,
+        }
     }
+}
+
+impl RunRecord {
+    /// The record's header, as a field-by-field read finds it.
+    pub fn header(&self) -> RunHeader {
+        RunHeader {
+            version: Some(self.version.into()),
+            workflow: Some(self.workflow.clone()),
+            task: self.task.clone(),
+            manual: self.manual,
+            project_root: Some(self.project_root.clone()),
+            scope_kind: Some(self.scope.kind),
+            scope_path: Some(self.scope.path.clone()),
+            fire_tree: self.fire_tree,
+            created_at: Some(self.created_at),
+            state: Some(self.state),
+            node: Some(self.node.clone()),
+            terminal_at: self.terminal_at,
+            loop_report: Some(self.loop_report),
+            ending: self.outcome.as_ref().map(|outcome| outcome.ending.clone()),
+            reason: self
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.reason.clone()),
+            acted: self.outcome.as_ref().map(|outcome| outcome.acted),
+            notes: self.notes.clone(),
+        }
+    }
+}
+
+/// Classify a run home by its record, reading a newer RimZ's record no further than its
+/// version. A read error other than a missing record is returned.
+pub fn classify(paths: &WorkflowPaths) -> Result<RunClass> {
+    let bytes = match std::fs::read(&paths.record) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RunClass::Recordless);
+        }
+        Err(source) => {
+            return Err(WorkflowStoreErr::Io {
+                path: paths.record.clone(),
+                source,
+            });
+        }
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(RunClass::NotObject);
+    };
+    let Some(record) = value.as_object() else {
+        return Ok(RunClass::NotObject);
+    };
+    let version = record.get("version");
+    if let Some(version) = version
+        .and_then(Value::as_u64)
+        .filter(|version| *version > u64::from(VERSION))
+    {
+        return Ok(RunClass::Newer { version });
+    }
+    let decoded = (version.and_then(Value::as_u64) == Some(VERSION.into()))
+        .then(|| RunRecord::deserialize(&value));
+    if let Some(Ok(decoded)) = decoded {
+        return Ok(RunClass::Current(Box::new(decoded)));
+    }
+    let header = Box::new(RunHeader::read(record));
+    if header.is_terminal() {
+        return Ok(RunClass::Ended(header));
+    }
+    let cause = match (version, decoded) {
+        (_, Some(Err(error))) => StrandedCause::Undecodable {
+            error: error.to_string(),
+        },
+        (None, _) => StrandedCause::MissingVersion,
+        (Some(version), _) => match version.as_u64() {
+            Some(version) => StrandedCause::Older { version },
+            None => StrandedCause::InvalidVersion,
+        },
+    };
+    Ok(RunClass::Stranded { header, cause })
+}
+
+/// One home of a room's live directory.
+#[derive(Clone, Debug)]
+pub struct LiveRun {
+    pub paths: WorkflowPaths,
+    pub class: RunClass,
+}
+
+/// Every home of the room's live directory that this RimZ has a part in: a run it runs, or one it
+/// must end or move. A newer RimZ's run, a home without a record, and a home whose record cannot
+/// be read are skipped without a warning; only an unreadable directory fails the listing.
+pub fn live(state: &StatePaths) -> Result<Vec<LiveRun>> {
+    let mut runs = Vec::new();
+    for paths in state.workflow_runs()? {
+        match classify(&paths) {
+            Ok(RunClass::Newer { .. } | RunClass::Recordless) => {}
+            Ok(class) => runs.push(LiveRun { paths, class }),
+            Err(error) => {
+                tracing::debug!(path = %paths.record.display(), %error,
+                    "skipping workflow home that cannot be read");
+            }
+        }
+    }
+    Ok(runs)
+}
+
+/// Every record in the room's live directory that this RimZ runs, in any state.
+pub fn live_runs(state: &StatePaths) -> Result<Vec<RunRecord>> {
+    Ok(live(state)?
+        .into_iter()
+        .filter_map(|run| match run.class {
+            RunClass::Current(record) => Some(*record),
+            _ => None,
+        })
+        .collect())
+}
+
+/// A run found by id, in the live directory or the finished one.
+#[derive(Clone, Debug)]
+pub struct FoundRun {
+    pub paths: WorkflowPaths,
+    /// The home is in the finished directory: the run is over, whatever its record says.
+    pub finished: bool,
+    pub class: RunClass,
+}
+
+/// Find a run of this room by id: its live home first, then its finished one. None when neither
+/// holds it, or the live home has no record and no finished home exists.
+pub fn find(state: &StatePaths, id: &WorkflowRunId) -> Result<Option<FoundRun>> {
+    let live = state.workflow(id);
+    match classify(&live)? {
+        RunClass::Recordless => {}
+        class => {
+            #[cfg(feature = "testkit")]
+            crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_AFTER_FIND");
+            return Ok(Some(FoundRun {
+                paths: live,
+                finished: false,
+                class,
+            }));
+        }
+    }
+    let finished = state.finished_workflow(id);
+    if !finished
+        .home
+        .try_exists()
+        .map_err(WorkflowStoreErr::io(&finished.home))?
+    {
+        return Ok(None);
+    }
+    Ok(Some(FoundRun {
+        class: classify(&finished)?,
+        paths: finished,
+        finished: true,
+    }))
+}
+
+/// Find a run by id in every recorded room under `home`, probing each room's two homes for it.
+/// A room that fails the probe is skipped, unless one of its homes for the run exists: then the
+/// run is there and cannot be read, and that error is returned.
+pub fn find_under(home: &Path, id: &WorkflowRunId) -> Result<Option<(StatePaths, FoundRun)>> {
+    for state in crate::disk::paths::recorded_rooms_under(home)? {
+        match find(&state, id) {
+            Ok(Some(found)) => return Ok(Some((state, found))),
+            Ok(None) => {}
+            Err(error)
+                if state.workflow(id).home.is_dir()
+                    || state.finished_workflow(id).home.is_dir() =>
+            {
+                return Err(error);
+            }
+            Err(error) => {
+                tracing::debug!(path = %state.root.display(), %error,
+                    "skipping room whose workflow homes cannot be probed");
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// What [`finish`] did with a run's live home.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Finished {
+    /// The home moved to the finished directory.
+    Moved,
+    /// The home was already in the finished directory; the move's barriers were completed.
+    Already,
+    /// Neither directory holds the run.
+    Gone,
+    /// The run may not leave the live directory: it is unfinished, still owes its loop report,
+    /// or a newer RimZ wrote it. Nothing changed.
+    Kept,
+    /// The finished directory already holds a home of that id, which was left alone. The live
+    /// home keeps its `history.txt`.
+    Collision,
+}
+
+/// Move a run's home from the live directory to the finished one, once its record ends the run
+/// and owes no loop report, or holds no JSON object at all. `history`, when given, is written to
+/// the home's `history.txt` first. The rename never replaces a destination, and a retry after a
+/// crash completes the barriers of a move already made.
+#[must_use = "durability barrier; check the result"]
+pub fn finish(
+    state: &StatePaths,
+    id: &WorkflowRunId,
+    history: Option<&[u8]>,
+    _guard: &WorkspaceLock,
+) -> Result<Finished> {
+    let live = state.workflow(id);
+    let finished = state.finished_workflow(id);
+    let movable = match classify(&live)? {
+        RunClass::Recordless => {
+            if !finished
+                .home
+                .try_exists()
+                .map_err(WorkflowStoreErr::io(&finished.home))?
+            {
+                return Ok(Finished::Gone);
+            }
+            sync_parents(&live, &finished)?;
+            return Ok(Finished::Already);
+        }
+        RunClass::NotObject => true,
+        class => class
+            .header()
+            .is_some_and(|header| header.is_terminal() && !header.owes_loop_report()),
+    };
+    if !movable {
+        return Ok(Finished::Kept);
+    }
+    if let Some(history) = history {
+        crate::disk::atomic::write_bytes_atomically(&live.history(), history)?;
+    }
+    let parent = parent_dir(&finished.home)?;
+    std::fs::create_dir_all(parent).map_err(WorkflowStoreErr::io(parent))?;
+    crate::disk::atomic::sync_dir(parent_dir(parent)?)?;
+    match crate::disk::atomic::publish_staged_no_replace(&live.home, &finished.home) {
+        Ok(()) => {}
+        Err(crate::disk::atomic::AtomicErr::Exists { .. }) => return Ok(Finished::Collision),
+        Err(error) => return Err(error.into()),
+    }
+    crate::disk::atomic::sync_dir(parent_dir(&live.home)?)?;
+    Ok(Finished::Moved)
+}
+
+fn sync_parents(live: &WorkflowPaths, finished: &WorkflowPaths) -> Result<()> {
+    crate::disk::atomic::sync_dir(parent_dir(&finished.home)?)?;
+    Ok(crate::disk::atomic::sync_dir(parent_dir(&live.home)?)?)
+}
+
+fn parent_dir(path: &Path) -> Result<&Path> {
+    path.parent().ok_or_else(|| WorkflowStoreErr::Io {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "no parent directory"),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1176,31 +1529,28 @@ pub enum RunRead {
     BestEffort,
 }
 
-/// Read unfinished runs in every recorded room without resolving their checkout paths.
+/// Read unfinished runs this RimZ runs in every recorded room's live directory, without
+/// resolving their checkout paths. Every other home is skipped without a warning: a run this
+/// RimZ cannot continue protects nothing until it is ended, and a newer RimZ's run is its own.
+/// Strict fails on a room or a home it cannot read; best effort skips it.
 pub fn unfinished_under(home: &std::path::Path, mode: RunRead) -> Result<Vec<RunRecord>> {
     let homes = match mode {
         RunRead::Strict => crate::disk::paths::workflow_runs_under_strict(home)?,
         RunRead::BestEffort => crate::disk::paths::workflow_runs_under(home)?,
     };
     let mut records = Vec::new();
-    let mut refused = 0;
     for (_, paths) in homes {
-        match load(&paths) {
-            Ok(record) if !record.state.is_terminal() => records.push(record),
+        match classify(&paths) {
+            Ok(RunClass::Current(record)) if !record.state.is_terminal() => records.push(*record),
             Ok(_) => {}
-            Err(WorkflowStoreErr::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.is_refused() => refused += 1,
             Err(error) if mode == RunRead::BestEffort => {
-                tracing::warn!(path = %paths.record.display(), %error,
-                    "skipping workflow with unreadable record");
+                tracing::debug!(path = %paths.record.display(), %error,
+                    "skipping workflow home that cannot be read");
             }
             Err(error) => return Err(error),
         }
     }
-    warn_refused(refused);
     Ok(records)
 }
-
 #[cfg(test)]
 mod tests;

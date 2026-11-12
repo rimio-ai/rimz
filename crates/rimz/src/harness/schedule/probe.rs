@@ -107,7 +107,7 @@ pub(crate) fn probe_demand(
             return demand;
         }
     };
-    let records = match crate::store::workflow::list(&state) {
+    let records = match crate::store::workflow::live_runs(&state) {
         Ok(records) => records,
         Err(error) => {
             tracing::warn!(%error, "workflow probes could not read runs");

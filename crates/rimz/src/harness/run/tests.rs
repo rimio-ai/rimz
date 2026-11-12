@@ -2185,9 +2185,12 @@ fn assert_spend_before_workflow_wake(end: SpendWake) {
         }
         SpendWake::Hook | SpendWake::Cancel => {}
     }
-    // A missing workflow makes the wake observable synchronously without spawning a child.
+    // A workflow record that cannot be read makes the wake observable synchronously without
+    // spawning a child: a run that is simply gone is skipped without a warning.
+    let workflow = crate::ids::WorkflowRunId::new();
+    std::fs::create_dir_all(paths.workflow(&workflow).record).unwrap();
     record.workflow = Some(crate::agents::WorkflowAttemptRef {
-        run: crate::ids::WorkflowRunId::new(),
+        run: workflow,
         seq: 1,
         role: crate::agents::WorkflowAttemptRole::Step,
     });

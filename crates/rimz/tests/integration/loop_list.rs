@@ -2021,8 +2021,9 @@ fn stop_cancels_every_live_run_before_failing_on_one_that_would_not_cancel() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
     let state = |home: &PathBuf| {
+        let run = run_paths(&env, &env.project_root, &id(home).parse().unwrap());
         let record: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(home).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(run.record).unwrap()).unwrap();
         record["state"].as_str().unwrap().to_owned()
     };
     let (stuck, other) = match state(&runs[0]).as_str() {

@@ -287,34 +287,15 @@ impl Host for SystemHost {
             |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
         let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
         let mut runs = Vec::new();
-        let mut refused = 0;
         for paths in state.workflow_runs().map_err(|err| unreadable(&err))? {
-            let record = match crate::store::workflow::load(&paths) {
-                Ok(record) => record,
-                Err(crate::store::workflow::WorkflowStoreErr::Io { source, .. })
-                    if source.kind() == io::ErrorKind::NotFound =>
+            match crate::store::workflow::classify(&paths).map_err(|err| unreadable(&err))? {
+                crate::store::workflow::RunClass::Current(record)
+                    if !record.state.is_terminal() =>
                 {
-                    continue;
+                    runs.push(*record);
                 }
-                Err(err) if err.is_refused() => {
-                    refused += 1;
-                    continue;
-                }
-                Err(err) => return Err(unreadable(&err)),
-            };
-            if !record.state.is_terminal() {
-                runs.push(record);
+                _ => {}
             }
-        }
-        // One line per census walk, as the store's run loaders warn, so a room holding
-        // thousands of old runs does not print a line for each.
-        if refused > 0 {
-            tracing::warn!(
-                %workspace,
-                count = refused,
-                "skipping workflow runs whose record another RimZ version wrote; \
-                 `rimz workflow list` names each, and `rimz workflow cancel <run-id>` clears one"
-            );
         }
         Ok(runs)
     }

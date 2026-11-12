@@ -1152,7 +1152,7 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
     assert_eq!(calls, 1);
     assert_eq!(done.record.result, LoopRunResult::Launched);
     let state = StatePaths::for_project_root(&project_root).unwrap();
-    let run = crate::store::workflow::list(&state)
+    let run = crate::store::workflow::live_runs(&state)
         .unwrap()
         .into_iter()
         .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
@@ -1208,7 +1208,7 @@ fn a_fired_run_keeps_its_rows_surplus_gate_for_inline_and_named_workflows() {
                 panic!("named={named}: {:?}", plan.err());
             };
             let state = StatePaths::for_project_root(&project_root).unwrap();
-            let run = crate::store::workflow::list(&state)
+            let run = crate::store::workflow::live_runs(&state)
                 .unwrap()
                 .into_iter()
                 .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
@@ -2294,7 +2294,7 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
         done.record
     );
     let state = StatePaths::for_project_root(root.path()).unwrap();
-    let run = crate::store::workflow::list(&state)
+    let run = crate::store::workflow::live_runs(&state)
         .unwrap()
         .into_iter()
         .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
@@ -2397,7 +2397,7 @@ fn a_runs_trigger_sentence_stays_as_fired_when_its_task_is_edited_renamed_or_rem
             assert_eq!(done.record.result, LoopRunResult::Launched, "{change}");
             drop(fire);
             let state = StatePaths::for_project_root(root.path()).unwrap();
-            let run = crate::store::workflow::list(&state)
+            let run = crate::store::workflow::live_runs(&state)
                 .unwrap()
                 .into_iter()
                 .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))

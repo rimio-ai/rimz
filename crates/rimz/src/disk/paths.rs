@@ -286,6 +286,40 @@ impl WorkflowPaths {
     pub fn claim(&self, seq: u64) -> PathBuf {
         self.work.join(format!("{seq}.claim.json"))
     }
+
+    /// The run's history as rendered when it left the live directory.
+    pub fn history(&self) -> PathBuf {
+        self.home.join("history.txt")
+    }
+
+    /// Where a path the run recorded under one of its homes is under this one: a home that moves
+    /// to the finished directory keeps every file at the same place within it. A path outside
+    /// the run's homes is returned as recorded.
+    pub fn relocate(&self, recorded: &Path) -> PathBuf {
+        let Some(id) = self.home.file_name() else {
+            return recorded.to_path_buf();
+        };
+        let mut components = recorded.components();
+        while let Some(component) = components.next() {
+            if component.as_os_str() == id {
+                return self.home.join(components.as_path());
+            }
+        }
+        recorded.to_path_buf()
+    }
+
+    fn at(home: PathBuf) -> Self {
+        let work = home.join("work");
+        Self {
+            record: home.join("record.json"),
+            journal: home.join("journal.jsonl"),
+            spec: workflow_spec_file(&home),
+            definition: home.join("definition"),
+            context: work.join("context.json"),
+            home,
+            work,
+        }
+    }
 }
 
 pub fn workflows_dir_under(home: &Path) -> PathBuf {
@@ -308,16 +342,21 @@ pub(crate) fn workflow_runs_under_strict(home: &Path) -> Result<Vec<(StatePaths,
     workflow_runs_under_impl(home, true)
 }
 
-fn workflow_runs_under_impl(home: &Path, strict: bool) -> Result<Vec<(StatePaths, WorkflowPaths)>> {
+/// Every room under `home` whose workspace record names its id.
+pub fn recorded_rooms_under(home: &Path) -> Result<Vec<StatePaths>> {
     let ws = workspaces_dir_under(home);
+    Ok(workspace_dir_names(&ws)?
+        .filter_map(|name| {
+            let root = ws.join(name.as_str());
+            let id = recorded_workspace_id(&root).and_then(|id| WorkspaceId::parse(&id).ok())?;
+            Some(StatePaths::under_named(id, name, home))
+        })
+        .collect())
+}
+
+fn workflow_runs_under_impl(home: &Path, strict: bool) -> Result<Vec<(StatePaths, WorkflowPaths)>> {
     let mut runs = Vec::new();
-    for name in workspace_dir_names(&ws)? {
-        let root = ws.join(name.as_str());
-        let Some(id) = recorded_workspace_id(&root).and_then(|id| WorkspaceId::parse(&id).ok())
-        else {
-            continue;
-        };
-        let state = StatePaths::under_named(id, name, home);
+    for state in recorded_rooms_under(home)? {
         let homes = match state.workflow_runs() {
             Ok(homes) => homes,
             Err(error) if !strict => {
@@ -394,33 +433,50 @@ impl StatePaths {
         self.empty_room_dir().join(handle)
     }
 
+    /// A run's home in the live directory, where every run is created and runs.
     pub fn workflow(&self, id: &crate::ids::WorkflowRunId) -> WorkflowPaths {
-        let home = Class::Owned
-            .path_under(&self.root)
-            .join("workflows")
-            .join(id.as_str());
-        let work = home.join("work");
-        WorkflowPaths {
-            record: home.join("record.json"),
-            journal: home.join("journal.jsonl"),
-            spec: workflow_spec_file(&home),
-            definition: home.join("definition"),
-            context: work.join("context.json"),
-            home,
-            work,
-        }
+        WorkflowPaths::at(self.live_workflows_dir().join(id.as_str()))
     }
 
+    /// A run's home in the finished directory, which a home enters once, by a move from the
+    /// live directory, and never leaves but to GC.
+    pub fn finished_workflow(&self, id: &crate::ids::WorkflowRunId) -> WorkflowPaths {
+        WorkflowPaths::at(self.finished_workflows_dir().join(id.as_str()))
+    }
+
+    fn live_workflows_dir(&self) -> PathBuf {
+        Class::Owned.path_under(&self.root).join("workflows")
+    }
+
+    fn finished_workflows_dir(&self) -> PathBuf {
+        Class::Owned
+            .path_under(&self.root)
+            .join("finished-workflows")
+    }
+
+    /// Every run home in the live directory.
     pub fn workflow_runs(&self) -> Result<Vec<WorkflowPaths>> {
-        let dir = Class::Owned.path_under(&self.root).join("workflows");
-        let entries = match fs::read_dir(&dir) {
+        self.workflow_homes(&self.live_workflows_dir(), Self::workflow)
+    }
+
+    /// Every run home in the finished directory.
+    pub fn finished_workflow_runs(&self) -> Result<Vec<WorkflowPaths>> {
+        self.workflow_homes(&self.finished_workflows_dir(), Self::finished_workflow)
+    }
+
+    fn workflow_homes(
+        &self,
+        dir: &Path,
+        at: fn(&Self, &crate::ids::WorkflowRunId) -> WorkflowPaths,
+    ) -> Result<Vec<WorkflowPaths>> {
+        let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(PathErr::io(&dir)(err)),
+            Err(err) => return Err(PathErr::io(dir)(err)),
         };
         let mut paths = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(PathErr::io(&dir))?;
+            let entry = entry.map_err(PathErr::io(dir))?;
             if !entry
                 .file_type()
                 .map_err(PathErr::io(&entry.path()))?
@@ -433,7 +489,7 @@ impl StatePaths {
                 .to_str()
                 .and_then(|name| crate::ids::WorkflowRunId::parse(name).ok())
             {
-                paths.push(self.workflow(&id));
+                paths.push(at(self, &id));
             }
         }
         paths.sort_by(|a, b| a.home.cmp(&b.home));

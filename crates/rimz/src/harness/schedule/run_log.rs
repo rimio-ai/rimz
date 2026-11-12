@@ -339,7 +339,11 @@ fn try_collect_run(
     use crate::store::workflow;
     let paths = state.workflow(run);
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
-    let mut record = workflow::load(&paths)?;
+    // A run that left the live directory owes nothing, and one this RimZ does not run is the
+    // workflow pass's to report.
+    let workflow::RunClass::Current(mut record) = workflow::classify(&paths)? else {
+        return Ok(());
+    };
     if !record.owes_loop_report() {
         return Ok(());
     }
@@ -361,7 +365,7 @@ pub fn collect_task_runs(root: &Path, task: &str) -> bool {
         if !state.root.exists() {
             return Ok(None);
         }
-        let runs: Vec<_> = crate::store::workflow::list(&state)?
+        let runs: Vec<_> = crate::store::workflow::live_runs(&state)?
             .into_iter()
             .filter(|record| record.ran_for(task) && record.owes_loop_report())
             .map(|record| record.id)
@@ -391,9 +395,14 @@ pub(super) fn forget_collected_launch(
     run: &crate::ids::WorkflowRunId,
 ) -> anyhow::Result<()> {
     use crate::store::workflow;
-    let paths = state.workflow(run);
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
-    let record = workflow::load(&paths)?;
+    let Some(workflow::FoundRun {
+        class: workflow::RunClass::Current(record),
+        ..
+    }) = workflow::find(state, run)?
+    else {
+        return Ok(());
+    };
     if record.loop_report == workflow::LoopReport::Sent
         && let Some(task) = record.task.as_deref()
         && let Some(outcome) = &record.outcome

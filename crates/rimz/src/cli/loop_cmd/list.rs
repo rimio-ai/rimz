@@ -590,7 +590,7 @@ fn load(
         };
         let workflows = StatePaths::for_project_root(&root)
             .ok()
-            .and_then(|paths| rimz::store::workflow::list(&paths).ok())
+            .and_then(|paths| rimz::store::workflow::live_runs(&paths).ok())
             .unwrap_or_default();
         let workflow_specs = StatePaths::for_project_root(&root)
             .map(|state| crate::cli::workflow_view::sealed_specs(&state, &workflows))
@@ -1262,11 +1262,14 @@ pub(super) struct WorkflowRunRow {
 pub(super) struct RunEvidence {
     pub(super) spec: rimz::harness::workflow::Definition,
     pub(super) journal: Vec<rimz::store::workflow::JournalEntry>,
+    /// The run's home where it is now, which the journal's recorded paths are relocated into.
+    pub(super) paths: rimz::disk::paths::WorkflowPaths,
 }
 
 impl WorkflowRunRow {
     pub(super) fn for_show(
         records: &[rimz::store::workflow::RunRecord],
+        ended: &[(rimz::ids::WorkflowRunId, rimz::store::workflow::RunHeader)],
         task: &str,
         root: &Path,
         launches: &BTreeMap<PathBuf, launch_ledger::WorkflowLaunchRecord>,
@@ -1287,6 +1290,12 @@ impl WorkflowRunRow {
                     .iter()
                     .find(|record| record.id == *run)
                     .map(|record| Self::of_record(record, specs.get(&record.id), now))
+                    .or_else(|| {
+                        ended
+                            .iter()
+                            .find(|(id, _)| id == run)
+                            .map(|(id, header)| Self::of_header(id, header, checkout, now))
+                    })
                     .unwrap_or_else(|| Self {
                         id: run.clone(),
                         address: None,
@@ -1311,6 +1320,16 @@ impl WorkflowRunRow {
             .filter(|record| record.ran_for(task) && record.project_root == root)
             .filter(|record| !runs.iter().any(|listed| listed.id == record.id))
             .map(|record| Self::of_record(record, specs.get(&record.id), now))
+            .chain(
+                ended
+                    .iter()
+                    .filter(|(_, header)| {
+                        header.task.as_deref() == Some(task)
+                            && header.project_root.as_deref() == Some(root)
+                    })
+                    .filter(|(id, _)| !runs.iter().any(|listed| &listed.id == id))
+                    .map(|(id, header)| Self::of_header(id, header, root, now)),
+            )
             .collect::<Vec<_>>();
         others.sort_by_key(|run| run.finished_at().map(std::cmp::Reverse));
         runs.extend(others);
@@ -1363,19 +1382,61 @@ impl WorkflowRunRow {
         }
     }
 
-    /// Reads the run's sealed graph and journal; a run whose home is unreadable keeps none.
+    pub(super) fn of_header(
+        id: &rimz::ids::WorkflowRunId,
+        header: &rimz::store::workflow::RunHeader,
+        root: &Path,
+        now: Timestamp,
+    ) -> Self {
+        Self {
+            id: id.clone(),
+            address: None,
+            checkout: header
+                .scope_path
+                .clone()
+                .unwrap_or_else(|| root.to_path_buf()),
+            state: header
+                .state
+                .map_or("unknown", rimz::store::workflow::RunState::as_str),
+            node: header.node.clone().unwrap_or_default(),
+            since: header.terminal_at.or(header.created_at).unwrap_or(now),
+            reason: None,
+            text: None,
+            parked_at: None,
+            detail: String::new(),
+            terminal_at: header.terminal_at,
+            live: false,
+            target: None,
+            command: None,
+            evidence: None,
+        }
+    }
+
+    /// Reads the run's sealed graph and journal from its live or finished home; a run whose home
+    /// is gone or unreadable keeps none. A live home that moves while it is read is read again in
+    /// its finished home, so the graph and the journal come from one home.
     pub(super) fn read_evidence(
         &mut self,
         state: &StatePaths,
         record: &rimz::store::workflow::RunRecord,
     ) {
-        let paths = state.workflow(&record.id);
-        let read = rimz::harness::workflow::load(&paths.home)
-            .map_err(anyhow::Error::from)
-            .and_then(|spec| {
-                let journal = rimz::store::workflow::journal(&paths)?;
-                Ok(RunEvidence { spec, journal })
-            });
+        let paths = match rimz::store::workflow::find(state, &record.id) {
+            Ok(Some(found)) => found.paths,
+            _ => state.workflow(&record.id),
+        };
+        let evidence = |paths: rimz::disk::paths::WorkflowPaths| {
+            let spec = rimz::harness::workflow::load(&paths.home)?;
+            let journal = rimz::store::workflow::journal(&paths)?;
+            anyhow::Ok(RunEvidence {
+                spec,
+                journal,
+                paths,
+            })
+        };
+        let mut read = evidence(paths.clone());
+        if !paths.home.exists() {
+            read = evidence(state.finished_workflow(&record.id));
+        }
         match read {
             Ok(evidence) => self.evidence = Some(Box::new(evidence)),
             Err(error) => {

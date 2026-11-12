@@ -472,7 +472,18 @@ fn write_launched_run_command(
         return Ok(());
     };
     let paths = StatePaths::for_project_root(&entry.resolved_root())?;
-    let run = rimz::store::workflow::load(&paths.workflow(&id))?;
+    // A finished run keeps its `workflow show` hint; a run with no home left points at the task.
+    let run = match rimz::store::workflow::find(&paths, &id)? {
+        Some(rimz::store::workflow::FoundRun {
+            class: rimz::store::workflow::RunClass::Current(run),
+            ..
+        }) => *run,
+        Some(_) => return Ok(()),
+        None => {
+            writeln!(ui::out(), "  → rimz loop show {}", record.task)?;
+            return Ok(());
+        }
+    };
     writeln!(
         ui::out(),
         "  → {}",
@@ -482,8 +493,10 @@ fn write_launched_run_command(
         writeln!(ui::out(), "{}", ui::paint(ui::palette::muted(), hint))?;
     }
     let paths = paths.workflow(&id);
-    let run = crate::cli::workflow::first_pass(&paths, advance)?;
-    crate::cli::workflow::write_held(&paths, &run, "  ")
+    match crate::cli::workflow::first_pass(&paths, advance)? {
+        Some(run) => crate::cli::workflow::write_held(&paths, &run, "  "),
+        None => Ok(()),
+    }
 }
 
 fn execute_prepared_delivery(

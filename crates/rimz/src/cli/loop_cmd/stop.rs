@@ -80,7 +80,7 @@ fn live_workflow_runs(name: &str, root: &Path) -> Result<Vec<rimz::store::workfl
     if !state.root.exists() {
         return Ok(Vec::new());
     }
-    let mut runs = rimz::store::workflow::list(&state)?;
+    let mut runs = rimz::store::workflow::live_runs(&state)?;
     runs.retain(|run| run.started_by(name));
     Ok(runs)
 }

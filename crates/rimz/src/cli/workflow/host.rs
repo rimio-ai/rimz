@@ -83,7 +83,10 @@ impl<'a> Host<'a> {
         let Some(pin) = &run.workflow else {
             return Ok(());
         };
-        let record = rimz::store::workflow::load(&self.state.workflow(&pin.run))?;
+        // A run that has left the live directory owns no push-back; its agent still stops.
+        let Some(record) = super::live_record(self.state, &pin.run)? else {
+            return Ok(());
+        };
         if let Some(push) = record
             .session_attempt()
             .filter(|current| current.seq == pin.seq)
@@ -103,7 +106,10 @@ impl<'a> Host<'a> {
             .workflow
             .as_ref()
             .context("workflow leader has no pin")?;
-        let record = rimz::store::workflow::load(&self.state.workflow(&pin.run))?;
+        // A run that has left the live directory owns no push-back.
+        let Some(record) = super::live_record(self.state, &pin.run)? else {
+            return Ok(false);
+        };
         Ok(record.session_attempt().is_some_and(|current| {
             current.seq == pin.seq
                 && current.ending.is_none()

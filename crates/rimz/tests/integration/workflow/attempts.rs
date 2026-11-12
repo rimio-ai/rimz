@@ -956,7 +956,7 @@ fn loop_project_scope_skips_before_reading_an_edited_definition() {
     .unwrap();
     success(room.command(&["loop", "run", "review"]).output().unwrap());
     let state = room.env.state_path_for(&room.env.project_root);
-    let runs = records::list(&state).unwrap();
+    let runs = every_run(&state);
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].scope.kind, records::ScopeKind::Project);
     assert_eq!(runs[0].scope.path, room.env.project_root);
@@ -1032,7 +1032,7 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
     let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
     fire();
     let paths = room.env.state_path_for(&room.env.project_root);
-    let first = records::list(&paths).unwrap().remove(0);
+    let first = every_run(&paths).remove(0);
     let key = room.env.project_root.to_str().unwrap();
     assert_eq!(
         workflow_launches(&room)["tasks"]["review"][key]["run"],
@@ -1050,7 +1050,7 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
             .unwrap(),
     );
     fire();
-    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    assert_eq!(every_run(&paths).len(), 1);
     assert_eq!(
         workflow_task_history(&room, "review")["workflow_runs"][0]["state"],
         "canceled"
@@ -1101,7 +1101,7 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
             .unwrap(),
     );
     success(room.command(&["loop", "run", "renamed"]).output().unwrap());
-    assert_eq!(records::list(&paths).unwrap().len(), 2);
+    assert_eq!(every_run(&paths).len(), 2);
     assert_eq!(
         workflow_launches(&room)["tasks"]["renamed"][key]["run"],
         second
@@ -1124,8 +1124,7 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
         "{list}"
     );
     assert_eq!(
-        records::list(&paths)
-            .unwrap()
+        every_run(&paths)
             .iter()
             .find(|record| record.id.as_str() == second)
             .unwrap()
@@ -1146,7 +1145,7 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
     assert!(workflow_launches(&room)["tasks"].get("renamed").is_none());
     condition_workflow(&room, "worktree", false);
     fire();
-    assert_eq!(records::list(&paths).unwrap().len(), 3);
+    assert_eq!(every_run(&paths).len(), 3);
 }
 
 #[test]
@@ -1156,7 +1155,7 @@ fn condition_workflow_removed_before_its_agent_cancels_the_run_and_readds_fresh(
     let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
     fire();
     let paths = room.env.state_path_for(&room.env.project_root);
-    let old = records::list(&paths).unwrap().remove(0);
+    let old = every_run(&paths).remove(0);
     success(
         room.command(&["loop", "remove", "review"])
             .output()
@@ -1169,7 +1168,7 @@ fn condition_workflow_removed_before_its_agent_cancels_the_run_and_readds_fresh(
     );
     condition_workflow(&room, "worktree", false);
     fire();
-    let runs = records::list(&paths).unwrap();
+    let runs = every_run(&paths);
     assert_eq!(runs.len(), 2, "{runs:?}");
     let new = runs.iter().find(|run| run.id != old.id).unwrap();
     assert_eq!(new.task.as_deref(), Some("review"));
@@ -1195,7 +1194,7 @@ fn condition_workflow_readded_while_its_removed_acted_run_lives_starts_fresh_aft
     let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
     fire();
     let paths = room.env.state_path_for(&room.env.project_root);
-    let old = records::list(&paths).unwrap().remove(0);
+    let old = every_run(&paths).remove(0);
     room.attempt(old.id.as_str());
     success(
         room.command(&["loop", "remove", "review"])
@@ -1217,14 +1216,14 @@ fn condition_workflow_readded_while_its_removed_acted_run_lives_starts_fresh_aft
         workflow_launches(&room)["tasks"].get("review").is_none(),
         "a re-added task must not adopt the removed task's live run"
     );
-    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    assert_eq!(every_run(&paths).len(), 1);
     success(
         room.command(&["workflow", "cancel", old.id.as_str()])
             .output()
             .unwrap(),
     );
     fire();
-    let runs = records::list(&paths).unwrap();
+    let runs = every_run(&paths);
     assert_eq!(runs.len(), 2, "{runs:?}");
     let new = runs.iter().find(|run| run.id != old.id).unwrap();
     assert_eq!(new.task.as_deref(), Some("review"));
@@ -1248,7 +1247,7 @@ fn condition_workflow_repairs_its_own_live_run_once() {
     let fire = || success(room.command(&["loop", "run", "review"]).output().unwrap());
     fire();
     let paths = room.env.state_path_for(&room.env.project_root);
-    let id = records::list(&paths).unwrap().remove(0).id;
+    let id = every_run(&paths).remove(0).id;
     let path = paths.root.join("records/loop-workflow-launches.json");
     if path.exists() {
         fs::remove_file(path).unwrap();
@@ -1336,7 +1335,7 @@ fn condition_project_workflow_covers_new_checkouts_even_after_finishing() {
     };
     fire(&first);
     let paths = room.env.state_path_for(&room.env.project_root);
-    let id = records::list(&paths).unwrap().remove(0).id;
+    let id = every_run(&paths).remove(0).id;
     let before = workflow_task_history(&room, "review")["runs"].clone();
     success(room.command(&["worktree", "new", "two"]).output().unwrap());
     let second = rimz::worktree::discover_owned(&room.env.project_root)
@@ -1361,7 +1360,7 @@ fn condition_project_workflow_covers_new_checkouts_even_after_finishing() {
             && runs.len() == 1
             && runs[0]["run_id"] == before[0]["run_id"]
             && runs[0]["result"] == "canceled"
-            && records::list(&paths).unwrap().len() == 1,
+            && every_run(&paths).len() == 1,
         "live_unchanged={live_unchanged}, {after}"
     );
     let entry = workflow_launches(&room)["tasks"]["review"]
@@ -1514,7 +1513,7 @@ fn condition_workflow_ledger_write_failure_keeps_the_launched_history_and_repair
         workflow_launches(&room)["tasks"]["review"][room.env.project_root.to_str().unwrap()]["run"]
             .is_string()
     );
-    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    assert_eq!(every_run(&paths).len(), 1);
 }
 
 #[test]
@@ -1536,7 +1535,7 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
         String::from_utf8_lossy(&output.stderr)
     );
     let paths = room.env.state_path_for(&room.env.project_root);
-    let records = records::list(&paths).unwrap();
+    let records = every_run(&paths);
     assert_eq!(records.len(), 1);
     let id = records[0].id.to_string();
     assert_eq!(records[0].task.as_deref(), Some("review"));
@@ -1607,11 +1606,11 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
     fs::write(&spec_file, "not = [toml").unwrap();
     success(fire());
     fs::write(&spec_file, spec).unwrap();
-    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    assert_eq!(every_run(&paths).len(), 1);
     assert_eq!(skipped(), before + 1, "{}", history());
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     success(fire());
-    assert_eq!(records::list(&paths).unwrap().len(), 2);
+    assert_eq!(every_run(&paths).len(), 2);
     assert_eq!(assists(&room.env)["rollup"]["workflow_starts"], 2);
 }
 
@@ -1673,7 +1672,7 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let records = records::list(&room.env.state_path_for(&room.env.project_root)).unwrap();
+    let records = every_run(&room.env.state_path_for(&room.env.project_root));
     assert_eq!(records.len(), 2);
     assert_ne!(records[0].scope.path, records[1].scope.path);
     for (field, hint) in [
@@ -1715,7 +1714,7 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
                 .unwrap(),
         );
     }
-    let runs = records::list(&room.env.state_path_for(&room.env.project_root)).unwrap();
+    let runs = every_run(&room.env.state_path_for(&room.env.project_root));
     let active: Vec<_> = runs.iter().filter(|run| !run.state.is_terminal()).collect();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].scope.kind, records::ScopeKind::Project);

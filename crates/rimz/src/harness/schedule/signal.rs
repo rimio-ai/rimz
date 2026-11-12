@@ -511,7 +511,7 @@ fn wake_workflows(project_root: &Path, signal: &Signal) {
                     .and_then(|run| run.agent_id)
             })?
         } else {
-            crate::store::workflow::list(&paths)?
+            crate::store::workflow::live_runs(&paths)?
                 .iter()
                 .any(|r| r.state == crate::store::workflow::RunState::Active)
         };
