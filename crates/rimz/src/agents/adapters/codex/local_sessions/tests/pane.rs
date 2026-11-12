@@ -735,3 +735,103 @@ fn pane_named_sessions_do_not_consume_the_window_cap() {
     let found = CodexPaneDiscovery::default().refresh(key(temp.path()), &[demand], Instant::now());
     assert_eq!(found.len(), MAX_EXAMINED_FILES + 1);
 }
+
+#[test]
+fn pane_name_index_spans_workspaces_and_duplicate_groups() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let first = PathBuf::from("/workspace/project");
+    let second = PathBuf::from("/workspace/other");
+    let since = at();
+    let created = since.checked_sub(jiff::Span::new().hours(1)).unwrap();
+    let rollout = |id: &str, workspace: &Path, revision: Option<&str>| {
+        let path = write_rollout(
+            &date_path(home, false, 0),
+            id,
+            workspace.to_str().unwrap(),
+            &created.to_string(),
+            created.as_second() as u64,
+        );
+        let Some(revision) = revision else {
+            return path;
+        };
+        let renamed = path.with_file_name(format!(
+            "{}_{revision}.jsonl",
+            path.file_stem().unwrap().to_str().unwrap()
+        ));
+        fs::rename(path, &renamed).unwrap();
+        renamed
+    };
+    let revision = "66666666-6666-4666-8666-666666666666";
+    let shared_second = rollout(OWNER, &second, Some(revision));
+    let shared_first = rollout(OWNER, &first, None);
+    rollout(RECENT, &second, Some(revision));
+    let extra = rollout(RECENT, &first, None);
+    let named = |id: &str, path: &PathBuf| NamedSession {
+        id: AgentSessionId::from(id),
+        transcript_path: Some(path.clone()),
+    };
+    let pane = |own: Vec<NamedSession>, named: Vec<NamedSession>, since| PaneSessionNeed {
+        own,
+        named,
+        fresh_since: since,
+    };
+    let request = [
+        PaneSessionDemand {
+            workspace: first.clone(),
+            panes: vec![pane(vec![named(OWNER, &shared_first)], vec![], None)],
+        },
+        PaneSessionDemand {
+            workspace: second.clone(),
+            panes: vec![
+                pane(vec![named(OWNER, &shared_second)], vec![], None),
+                pane(vec![], vec![], Some(since)),
+            ],
+        },
+        PaneSessionDemand {
+            workspace: first.clone(),
+            panes: vec![pane(vec![], vec![named(RECENT, &extra)], None)],
+        },
+        PaneSessionDemand {
+            workspace: second.clone(),
+            panes: vec![],
+        },
+    ];
+    let mut key = key(home);
+    key.workspaces = vec![first.clone(), second.clone()];
+    let mut found = CodexPaneDiscovery::default()
+        .refresh(key, &request, Instant::now())
+        .into_iter()
+        .map(|row| (row.workspace, row.session_id.to_string()))
+        .collect::<Vec<_>>();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (second, OWNER.to_owned()),
+            (first.clone(), OWNER.to_owned()),
+            (first, RECENT.to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn pane_window_admits_only_the_owner_found_late() {
+    let temp = tempfile::tempdir().unwrap();
+    let clock = at();
+    let request = demand(&[(OWNER, None)], &[], Some(clock));
+    let now = Instant::now();
+    let mut cache = CodexPaneDiscovery::default();
+    assert!(
+        cache
+            .refresh(key(temp.path()), std::slice::from_ref(&request), now)
+            .is_empty()
+    );
+    session(temp.path(), OWNER, 0, clock);
+    session(temp.path(), RECENT, 0, clock);
+    let before = testkit::read_counts();
+    let found = cache.refresh(key(temp.path()), &[request], now + Duration::from_secs(29));
+    let after = testkit::read_counts();
+    assert_eq!(ids(&found), [OWNER]);
+    assert_eq!(after.2 - before.2, 2, "the window reads both new heads");
+}

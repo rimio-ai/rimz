@@ -601,3 +601,22 @@ fn turn_error_labels_are_capped_and_accept_flat_content() {
     let error = detect_turn_error(entry).expect("detected");
     assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
 }
+
+#[test]
+fn resting_turn_scan_continues_past_blank_lines() {
+    let at = "2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap();
+    let tail = format!("{INTERRUPTED_ENTRY}\n \t\u{2003}\n");
+    assert_eq!(detect_turn_interrupted(&tail), Some(at));
+    assert!(detect_turn_error(&tail).is_none());
+    let child = r#"{"type":"user","isSidechain":true,"agentId":"child","timestamp":"2026-06-04T03:01:00.000Z","message":{"role":"user","content":"[Request interrupted by user]"}}"#;
+    let tail = format!("{child}\n \t\u{2003}\n");
+    assert!(detect_subagent_interrupted(&tail, "child"));
+    assert_eq!(detect_turn_interrupted(&tail), None);
+}
+
+#[test]
+fn resting_turn_scan_trims_unicode_space_around_an_entry() {
+    let at = "2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap();
+    let tail = format!("\u{2003}{INTERRUPTED_ENTRY}\u{2003}\n");
+    assert_eq!(detect_turn_interrupted(&tail), Some(at));
+}

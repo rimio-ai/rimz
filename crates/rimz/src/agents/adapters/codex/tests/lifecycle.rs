@@ -559,6 +559,72 @@ fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
 }
 
 #[test]
+fn child_header_fields_fall_back_one_by_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-2026-06-26T00-00-01-c.jsonl");
+    let start = |header: &str, payload: Value| {
+        std::fs::write(&path, format!("{header}\n")).unwrap();
+        let mut payload = payload;
+        payload["agent_transcript_path"] = json!(path);
+        let observation = with_codex_sessions_root(dir.path(), || {
+            hook_lifecycle(&CodexAdapter, "SubagentStart", &payload)
+        });
+        (
+            observation.agent_name,
+            observation.task,
+            observation.launch.role,
+        )
+    };
+    let partial = r#"{"type":"session_meta","payload":{"id":"c","thread_source":"subagent","agent_nickname":"Atlas"}}"#;
+    let review = || Some("review".to_owned());
+    assert_eq!(
+        start(
+            partial,
+            json!({"session_id":"p","agent_id":"c","agent_type":"review"})
+        ),
+        (Some("Atlas".to_owned()), review(), review())
+    );
+    assert_eq!(
+        start(partial, json!({"session_id":"p","agent_id":"c"})),
+        (Some("Atlas".to_owned()), None, None)
+    );
+    assert_eq!(
+        start(
+            r#"{"type":"session_meta","payload":{"id":"c","thread_source":"user","agent_nickname":"Ignored"}}"#,
+            json!({"session_id":"p","agent_id":"c","agent_type":"review"})
+        ),
+        (review(), review(), review())
+    );
+}
+
+#[test]
+fn child_question_reply_keeps_name_and_role_without_a_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let submit = |prompt: &str| {
+        with_codex_sessions_root(dir.path(), || {
+            hook_lifecycle(
+                &CodexAdapter,
+                "UserPromptSubmit",
+                &json!({"session_id":"p","agent_id":"c","agent_type":"review","prompt":prompt}),
+            )
+        })
+    };
+    let reply = submit("<send_user_message_question_reply>[]</send_user_message_question_reply>");
+    assert_eq!(reply.agent_name.as_deref(), Some("review"));
+    assert_eq!(reply.launch.role.as_deref(), Some("review"));
+    assert_eq!(reply.task, None);
+    assert!(reply.prompt.is_none());
+    assert_eq!(reply.ask_queue.map(|edit| edit.clear_all), Some(false));
+    let ordinary = submit("continue");
+    assert_eq!(ordinary.task.as_deref(), Some("review"));
+    assert_eq!(
+        ordinary.prompt.as_ref().map(|prompt| prompt.as_str()),
+        Some("continue")
+    );
+    assert_eq!(ordinary.ask_queue.map(|edit| edit.clear_all), Some(true));
+}
+
+#[test]
 fn root_identity_events_stamp_codex_session_origin() {
     let dir = tempfile::tempdir().unwrap();
     let day_dir = dir.path().join("2026").join("06").join("26");
