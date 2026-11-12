@@ -311,7 +311,7 @@ Hook ingestion dispatches real-edge envelopes through a static reactor table; st
 
 The rollup holds the agent-reported lifecycle status. `rimz sidebar snapshot` reports it in `snapshot.agents`, except that a current [local-session observation](./instances.md#local-session-observations) overwrites a row's status and phase there without touching the rollup (`crates/rimz/src/store/snapshot/view/live.rs::apply_local_lifecycle`). The displayed status is a projection over that status, computed in two layers.
 
-[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap operational projection that message delivery, reply waits, keepalive, and idle stop use. The sidebar applies a separate display-rest projection for in-flight work. Effective status reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
+[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap operational projection that message delivery, reply waits, keepalive, and idle stop use. The sidebar applies a separate display-rest projection for in-flight work. Both walk one rung order in `agents::state`: effective status walks it on the agent's own fields with no row facts, and the [sidebar ladder](#the-sidebar-ladder) walks it on a card with the row's own rungs added. Effective status reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
 
 1. A `waiting` agent whose turn ended on an error newer than `last_activity` first reads as `running` in the `reasoning` phase, so the error rungs can display its outcome. An answered keyless ask has the same normalization: `waiting_since` is present, `last_activity` is newer, and no interruption marker applies. An Auto permission whose asking Code Mode cell finished has the same projection and closes its ask. Without that proof, a permission still under automatic review has that projection for its first 60 seconds ([waiting and asks](#waiting-and-asks)). Every later step sees these as `running`. A keyed ask, or a wait without answer or turn-end evidence, otherwise stays `waiting`. A local-session observation that still reports `waiting` stamps the ask no earlier than its last observed write, so that write cannot pass for an answer. A later activity heartbeat can still release it.
 2. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
@@ -331,7 +331,7 @@ A turn-class change must check card and nested-child status and attention (inclu
 
 Raised attention uses the same ladder before attention scoring. Native waiting wins first. Otherwise an unread card alert overrides the projected status with `failed` and its text; otherwise an open raised ask lifts only clean `idle` or `success` to `waiting`, with its first question sentence (or first non-blank line), normalized to at most 160 characters. Running, failed, paused, sleeping, and parked-background cards keep their real status for a raised ask. The ask remains available in `rimz asks` regardless. These enrich-only overlays never change native pane-input ownership.
 
-The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs), adds liveness, children, and provider budget windows on top. The first rung whose condition holds decides the displayed status:
+The sidebar row projection, [`project_display`](../../../crates/rimz/src/agents/state.rs), holds the rung order and adds liveness, children, and provider budget windows on top. The store's [`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs) supplies each card's row facts: its source agent, its child-folded clock, its live children, and its delegated park. The first rung whose condition holds decides the displayed status:
 
 | Rung | Condition | Displays |
 | --- | --- | --- |
@@ -347,7 +347,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 | 10 | a clean turn parked on background work | `success`, keeping the `parked` phase |
 | 11 | identical consecutive tool calls reach the attention threshold | `failed`, labelled `loop: <tool> ×<count>` |
 | 12 | a `running` row silent past the stall window | `paused` when the row's login (kind and account) has a spent window, otherwise `failed` |
-| 13 | none of the above | the rested lifecycle or context status |
+| 13 | none of the above | the source agent's own rested status (rungs 1 to 5 and 8 to 10 on its own fields and clock, a pausing marker staying `paused`), or the row's resolved status when the row has no source agent |
 
 A `waiting` row that fails rung 1 first resolves by the shared waiting rule. With an interruption marker it becomes `idle` and continues down the ladder, skipping rung 3. A qualifying turn-ending error continues as `running` in the `reasoning` phase so its outcome reaches the error rungs. An answered keyless ask, including an Auto permission with asking-cell completion proof, uses that same normalization until a durable clear lands; an unsettled auto-reviewed permission does so until its visibility deadline. Interruption and turn-ending-error checks use the row's child-folded activity clock, while activity-based answer proof and review use the source agent's own activity. Permission-settle proof uses that source agent's ask arrival. A wait without `waiting_since` holds at rung 1 unless interrupted, ended on an error, settled by asking-cell proof, or under automatic review; without a source agent, only interruption or turn-ending error can release it. These normalized running rows are eligible for either child rung, including a delegated park, and a raw `failed` parent is not. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
 
@@ -367,7 +367,7 @@ The stall rung also covers children. Any open native or launched child takes the
 
 Each rung leaves the rollup's lifecycle status untouched. Claude transcript-death can leave the rollup `running` while Codex's `Stop` over a rollout error records it `failed`, and the projection displays either as `paused` when the error class pauses.
 
-A projection to any status other than `running` drops the phase, except `success` or `sleeping` over `parked`, the settled shapes that keep pending background work visible. The compaction head pulses over any displayed status.
+On a sidebar row, a projection to any status other than `running` drops the phase, except `success` or `sleeping` over `parked`, the settled shapes that keep pending background work visible. A row whose source agent rests at `idle` or `success` drops a non-`parked` phase whatever it displays, so a `running` shown by a child rung or by the rest lift keeps no phase. [`AgentState::rowless_status`](../../../crates/rimz/src/agents/state.rs) keeps a phase only on a `running` result, so a rowless `success` over `parked` reads the `idle` phase. The compaction head pulses over any displayed status.
 
 ### Sleeping
 

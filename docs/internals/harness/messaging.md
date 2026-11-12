@@ -520,7 +520,7 @@ Interrupt is paste first, key second, inside `send::send_batch_to_live_pane` und
 2. It writes exactly as steer does: any smart-compaction command, the paste, the `Sent` record, Enter.
 3. After `RIMZ_MESSAGE_INTERRUPT_DELAY_MS` (default 3000) it presses the adapter's key once, still under the lock.
 
-A clean turn parked on background work already projects to `Success` in `rested_status()`, so it skips the key as a resting turn.
+A clean turn parked on background work already reads `success` in [`AgentState::effective_status`](../../../crates/rimz/src/agents/state.rs) (`sleeping` with a pending wait), so it skips the key as a resting turn.
 
 The key does not guarantee a fresh turn. Codex's expanded question editor, for one, takes pasted text as an answer ([codex-reference.md § Async questions](../../externals/agent-adapter/codex-reference.md#async-questions-observed-on-01580)).
 
