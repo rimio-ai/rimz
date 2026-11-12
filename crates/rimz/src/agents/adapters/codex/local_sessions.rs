@@ -168,14 +168,15 @@ impl CodexPaneDiscovery {
         }
         let mut checked = HashMap::new();
         let mut observations = Vec::new();
-        let mut named_ids = HashSet::new();
+        let mut names: HashMap<PathBuf, HashSet<AgentSessionId>> = HashMap::new();
         for demand in demand {
+            let workspace_names = names.entry(demand.workspace.clone()).or_default();
             for session in demand
                 .panes
                 .iter()
                 .flat_map(|pane| pane.own.iter().chain(&pane.named))
             {
-                named_ids.insert(session.id.clone());
+                workspace_names.insert(session.id.clone());
                 if let Some(found) =
                     self.named_session(&key.home, session, &demand.workspace, now, &mut checked)
                 {
@@ -215,15 +216,11 @@ impl CodexPaneDiscovery {
             self.check_header(candidate, &mut checked);
         }
         for (workspace, since) in windows {
+            let Some(workspace_named) = names.get(&workspace) else {
+                continue;
+            };
             let workspaces = HashSet::from([workspace.as_path()]);
-            let workspace_named = demand
-                .iter()
-                .filter(|demand| demand.workspace == workspace)
-                .flat_map(|demand| &demand.panes)
-                .flat_map(|pane| pane.own.iter().chain(&pane.named))
-                .map(|session| session.id.clone())
-                .collect::<HashSet<_>>();
-            let candidates = self.window_candidates(&workspace, since, &workspace_named);
+            let candidates = self.window_candidates(&workspace, since, workspace_named);
             let mut window = Vec::new();
             for (id, paths) in candidates {
                 let named = workspace_named.contains(&id);
@@ -261,19 +258,17 @@ impl CodexPaneDiscovery {
             .map(|row| (row.workspace.clone(), row.session_id.clone()))
             .collect::<HashSet<_>>();
         observations.retain(|row| {
-            demand.iter().any(|demand| {
-                demand.workspace == row.workspace
-                    && (demand
-                        .panes
-                        .iter()
-                        .flat_map(|pane| pane.own.iter().chain(&pane.named))
-                        .any(|session| session.id == row.session_id)
-                        || demand
+            names
+                .get(&row.workspace)
+                .is_some_and(|ids| ids.contains(&row.session_id))
+                || demand.iter().any(|demand| {
+                    demand.workspace == row.workspace
+                        && demand
                             .fresh_window(|id| {
                                 found.contains(&(demand.workspace.clone(), id.clone()))
                             })
-                            .is_some_and(|since| row.created_at >= since))
-            })
+                            .is_some_and(|since| row.created_at >= since)
+                })
         });
         observations.sort_by(|left, right| {
             let left_active = left.transcript_path.starts_with(key.home.join("sessions"));
@@ -285,7 +280,8 @@ impl CodexPaneDiscovery {
         });
         let mut seen = HashSet::new();
         observations.retain(|row| seen.insert((row.workspace.clone(), row.session_id.clone())));
-        self.locations.retain(|id, _| named_ids.contains(id));
+        self.locations
+            .retain(|id, _| names.values().any(|ids| ids.contains(id)));
         observations
     }
 
