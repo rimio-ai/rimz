@@ -474,13 +474,15 @@ pub struct SidebarPlace {
 }
 
 impl SidebarPlace {
-    /// The place's own folder name, which qualifies a foreign group's label.
-    pub fn folder_name(&self) -> String {
-        self.path
+    /// The repo-folder qualifier a foreign place adds to its group's label, unless
+    /// the folder name would repeat that label.
+    pub fn foreign_qualifier(&self, label: &str) -> Option<String> {
+        let folder = self
+            .path
             .file_name()
             .unwrap_or(self.path.as_os_str())
-            .to_string_lossy()
-            .into_owned()
+            .to_string_lossy();
+        (self.foreign && folder != label).then(|| folder.into_owned())
     }
 }
 
@@ -489,10 +491,15 @@ pub struct SidebarWorktreeGroup {
     pub key: String,
     pub label: String,
     /// Dim repo-folder qualifier for a foreign place, or the shortest trailing
-    /// path suffix distinguishing colliding labels. Foreign places keep it
-    /// even when the folder name equals the label.
+    /// path suffix distinguishing colliding labels; never one that repeats the
+    /// label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_qualifier: Option<String>,
+    /// The place's branch: the live checkout's once git facts arrive, else
+    /// the one its rows reported. The header shows it beside the lane label
+    /// only when the two differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub kind: SidebarWorktreeKind,
     /// The root that made this group, independent of its rows' subfolders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -663,6 +670,11 @@ impl UnitStatus {
 }
 
 impl SidebarWorktreeGroup {
+    /// The branch the header draws beside the lane label: only one that differs.
+    pub fn header_branch(&self) -> Option<&str> {
+        super::layout::shown_branch(self.branch.as_deref(), &self.label)
+    }
+
     /// A channel named by a listed checkout's marker, even before git facts arrive.
     pub fn worktree_backed(&self) -> bool {
         self.kind == SidebarWorktreeKind::Channel && self.place.is_some()
@@ -988,6 +1000,7 @@ mod tests {
             key: "group".to_owned(),
             label: "group".to_owned(),
             label_qualifier: None,
+            branch: None,
             kind: SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,

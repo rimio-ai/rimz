@@ -291,8 +291,9 @@ pub(super) fn refresh_diff_stats_for(
 }
 
 /// The live worktree paths this snapshot needs git facts for: a git-backed
-/// group whose place is a live directory, de-duplicated so two
-/// branch-split groups and live CI conditions for one dir share a single git read.
+/// group whose place is a live directory, de-duplicated so groups sharing a
+/// place (a named lane at trunk and trunk's own lane) and live CI conditions
+/// for one dir share a single git read.
 pub(super) fn needed_worktree_paths(
     snapshot: &SidebarSnapshot,
     condition_scopes: BTreeSet<String>,

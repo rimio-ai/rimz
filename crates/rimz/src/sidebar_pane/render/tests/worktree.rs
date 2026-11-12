@@ -32,7 +32,42 @@ fn foreign_header_draws_its_repo_chip_in_the_qualifier_tone() {
         theme.styled(Component::WorktreeQualifier, Modifier::empty())
     );
     let text = snapshot_to_screen(&snapshot, 44, 14);
-    assert!(text.contains("⑂ main · dotfiles"), "{text}");
+    assert!(text.contains("⑂ dotfiles · main · dotfiles"), "{text}");
+}
+
+#[test]
+fn header_shows_the_branch_beside_the_lane_label_only_when_they_differ() {
+    let theme = Theme::fixed(false);
+    for (path, branch, shown) in [
+        ("/repo/shared", "feature", Some(" · feature")),
+        ("/repo/main", "main", None),
+    ] {
+        let snapshot = snapshot_with(vec![agent(
+            "worker",
+            "claude",
+            AgentStatus::Idle,
+            Some(path),
+            Some(branch),
+            None,
+        )]);
+        let lines = group_lines(&snapshot, &theme, 0);
+        let branch_span = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == format!(" · {branch}"));
+        assert_eq!(
+            branch_span.map(|span| span.content.as_ref()),
+            shown,
+            "{path}: {:?}",
+            lines[0]
+        );
+        if let Some(span) = branch_span {
+            assert_eq!(
+                span.style,
+                theme.styled(Component::WorktreeBranchName, Modifier::empty())
+            );
+        }
+    }
 }
 
 #[test]
@@ -212,6 +247,7 @@ fn header_label_parts_keep_styles_only_when_the_full_label_fits() {
             let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
             group.kind = crate::store::snapshot::SidebarWorktreeKind::Root;
             group.label = "x".to_owned();
+            group.branch = None;
             group.label_qualifier = qualifier.map(str::to_owned);
             group.team = team.map(str::to_owned);
             group.inactive = (finished).then_some(crate::store::snapshot::SidebarInactive::Landed);
@@ -266,6 +302,7 @@ fn selected_header_seal_fill_thresholds() {
             pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
         let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
         group.label = "x".to_owned();
+        group.branch = None;
         if root {
             group.kind = crate::store::snapshot::SidebarWorktreeKind::Root;
         }
@@ -862,7 +899,7 @@ fn render_directory_room_root_pod_is_name_only() {
     let rendered = snapshot_to_screen(&snapshot, 44, 20);
 
     assert!(
-        rendered.contains("⑂ main"),
+        rendered.contains("⑂ query-engine · main"),
         "the git-backed row keeps the fork-glyph pod header:\n{rendered}"
     );
     assert!(
@@ -1287,6 +1324,8 @@ fn render_colliding_group_qualifiers_are_muted_and_ellipsize_with_the_label() {
         ),
     ]);
     for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        group.label = "main".to_owned();
+        group.branch = None;
         group.label_qualifier = group.key.rsplit('/').next().map(ToOwned::to_owned);
     }
 
@@ -2358,7 +2397,10 @@ fn render_trunk_worktree_skips_the_landed_marker() {
         !rendered.contains('≡') && !rendered.contains("✓ main"),
         "no landed marker on the trunk worktree:\n{rendered}"
     );
-    assert!(rendered.contains("⑂ main"), "header:\n{rendered}");
+    assert!(
+        rendered.contains("⑂ query-engine · main"),
+        "header:\n{rendered}"
+    );
 }
 
 #[test]

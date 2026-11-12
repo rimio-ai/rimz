@@ -178,7 +178,7 @@ fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_m
 }
 
 /// Project the cached git facts onto each worktree group: the diff stats shown
-/// on the header and the live branch label. Both are properties of the worktree
+/// on the header and the live branch shown beside its lane label. Both are properties of the worktree
 /// *path*, not of any one agent, so they belong to the group — which also
 /// settles the shared-worktree "whose branch?" ambiguity. The producer
 /// validates checkout paths before refreshing their entries and publishes
@@ -220,10 +220,8 @@ fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
             .filter(|branch| !branch.is_empty())
             .unwrap_or(&group.label)
             .to_owned();
-        if group.kind == SidebarWorktreeKind::Worktree
-            && let Some(branch) = entry.branch.as_ref().filter(|branch| !branch.is_empty())
-        {
-            group.label = branch.clone();
+        if let Some(branch) = entry.branch.as_ref().filter(|branch| !branch.is_empty()) {
+            group.branch = Some(branch.clone());
         }
         if let Some(clean) = entry.clean {
             group.clean = Some(clean);
@@ -236,7 +234,8 @@ fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
 }
 
 /// Qualify foreign places by folder, deepening colliding labels to the shortest
-/// distinguishing trailing checkout path.
+/// distinguishing trailing checkout path. A qualifier that would repeat its
+/// group's label is not set.
 fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
     let mut by_label = BTreeMap::<String, Vec<(usize, Vec<String>, usize)>>::new();
 
@@ -251,9 +250,7 @@ fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
         let Some(place) = &group.place else {
             continue;
         };
-        if place.foreign {
-            group.label_qualifier = Some(place.folder_name());
-        }
+        group.label_qualifier = place.foreign_qualifier(&group.label);
         let components = place
             .path
             .components()
@@ -305,7 +302,7 @@ fn disambiguate_group_labels(snapshot: &mut SidebarSnapshot) {
             }
             let suffix = trailing_path_suffix(&components, depth);
             let group = &mut Arc::make_mut(&mut snapshot.worktree_groups)[index];
-            if suffix != label || group.place.as_ref().is_some_and(|place| place.foreign) {
+            if suffix != label {
                 group.label_qualifier = Some(suffix);
             }
         }

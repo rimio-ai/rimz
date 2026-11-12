@@ -789,8 +789,10 @@ fn group_header(
         theme.styled(Component::WorktreeHeader, Modifier::BOLD)
     };
     let mut spans = vec![Span::styled(label_with_prefix, label_style)];
+    let branch = group.header_branch();
     spans.extend(
         [
+            (branch, Component::WorktreeBranchName),
             (
                 group.label_qualifier.as_deref(),
                 Component::WorktreeQualifier,

@@ -310,7 +310,7 @@ fn root_group_pins_calm_and_archived_agents_above_working_groups() {
         labels(&snapshot)
     });
 
-    assert_eq!(orders, std::array::from_fn(|_| vec!["repo", "working"]));
+    assert_eq!(orders, std::array::from_fn(|_| vec!["main", "working"]));
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn actionable_groups_lead_the_pin_and_hot_parks_follow_it() {
 
     assert_eq!(
         labels(&snapshot),
-        ["waiting", "failed", "repo", "paused", "working"]
+        ["waiting", "failed", "main", "paused", "working"]
     );
 }
 
@@ -360,7 +360,7 @@ fn native_child_attention_outranks_the_pinned_root_group() {
         None,
     );
 
-    assert_eq!(labels(&snapshot), ["child", "repo", "working"]);
+    assert_eq!(labels(&snapshot), ["child", "main", "working"]);
 }
 
 #[test]
@@ -393,8 +393,8 @@ fn process_only_root_group_is_pinned_and_never_folds() {
             snapshot.worktree_groups[0].inactive.is_some(),
         ),
         (
-            vec!["repo".to_owned(), "working".to_owned()],
-            vec!["repo".to_owned(), "working".to_owned()],
+            vec!["main".to_owned(), "working".to_owned()],
+            vec!["main".to_owned(), "working".to_owned()],
             true,
             false,
         )
@@ -432,7 +432,7 @@ fn root_group_with_an_agent_never_folds_on_a_landed_branch() {
 
     assert_eq!(
         results,
-        std::array::from_fn(|_| (vec!["repo".to_owned(), "working".to_owned()], false, false))
+        std::array::from_fn(|_| (vec!["main".to_owned(), "working".to_owned()], false, false))
     );
 }
 
@@ -450,7 +450,7 @@ fn root_group_with_own_attention_keeps_urgency_order() {
     assert_eq!(
         (labels(&snapshot), snapshot.worktree_groups[1].root_lane),
         (
-            vec!["failed".to_owned(), "repo".to_owned(), "waiting".to_owned()],
+            vec!["failed".to_owned(), "main".to_owned(), "waiting".to_owned()],
             true
         )
     );
@@ -478,8 +478,8 @@ fn root_pin_survives_snapshot_json_and_presentation_sort() {
     assert_eq!(
         (labels(&snapshot), labels(&restored), markers),
         (
-            vec!["repo".to_owned(), "working".to_owned()],
-            vec!["repo".to_owned(), "working".to_owned()],
+            vec!["main".to_owned(), "working".to_owned()],
+            vec!["main".to_owned(), "working".to_owned()],
             BTreeMap::from([
                 ("/repo", Some(&serde_json::Value::Bool(true))),
                 ("/repo/working", None),
@@ -984,7 +984,7 @@ fn landed_ask_keeps_urgency_ahead_of_unlanded_and_root_groups() {
     }
     snapshot.sort_groups_for_presentation();
 
-    assert_eq!(labels(&snapshot), ["landed", "fresh", "repo", "calm"]);
+    assert_eq!(labels(&snapshot), ["landed", "fresh", "main", "calm"]);
     assert!(snapshot.worktree_groups[2].root_lane);
 }
 

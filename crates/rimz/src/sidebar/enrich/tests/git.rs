@@ -725,11 +725,32 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
 
     let group = &snapshot.worktree_groups[0];
     assert_eq!(group.label, "codex-resets");
+    assert_eq!(group.branch.as_deref(), Some("main"));
     assert_eq!(group.pr_number, Some(69));
     assert_eq!(
         group.trunk_sync, None,
         "trunk detection uses the live branch, not the channel label"
     );
+}
+
+#[test]
+fn diff_projection_keeps_a_checkouts_lane_label_and_sets_its_live_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkout = dir.path().join("app");
+    std::fs::create_dir_all(&checkout).unwrap();
+    let (_, _, mut snapshot) = runtime();
+    snapshot.worktree_groups = vec![worktree_group(&checkout, Vec::new())].into();
+    let label = snapshot.worktree_groups[0].label.clone();
+    let mut cache = DiffStatsCache::default();
+    let mut entry = diff_entry(false, false, Some(true), 0, 0);
+    entry.branch = Some("feature".to_owned());
+    cache.entries.insert(checkout.display().to_string(), entry);
+
+    project_diff_stats(&mut snapshot, &cache);
+
+    let group = &snapshot.worktree_groups[0];
+    assert_eq!(group.label, label, "the lane label stays the header");
+    assert_eq!(group.branch.as_deref(), Some("feature"));
 }
 
 #[test]
@@ -818,7 +839,7 @@ fn cached_enrich_resorts_groups_after_git_projection() {
         snapshot
             .worktree_groups
             .iter()
-            .map(|group| group.label.as_str())
+            .map(|group| group.branch.as_deref().unwrap_or_default())
             .collect::<Vec<_>>(),
         vec!["dirty", "merged"],
         "cached git facts re-rank the already-built group spine"

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, ParkDemotion, WorkflowAttemptRole};
-use crate::ids::{AgentKind, AgentSessionId, WorkflowRunId};
+use crate::agents::{AgentState, ParkDemotion};
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::layout::{
@@ -85,17 +85,6 @@ impl<'a> AgentProjectionIndex<'a> {
             .iter()
             .map(|(key, children)| (key, children.as_slice()))
     }
-
-    /// The attempt seq of the run's step pinned on this row's root agent.
-    fn step_seq(&self, row: &SidebarRow, run: &WorkflowRunId) -> Option<u64> {
-        let agent = self.root(&(
-            AgentKind::new_unchecked(row.name.clone()),
-            AgentSessionId::from(row.id.as_str()),
-        ))?;
-        let pin = agent.workflow.as_ref()?;
-        (row.is_agent() && pin.run == *run && pin.role == WorkflowAttemptRole::Step)
-            .then_some(pin.seq)
-    }
 }
 
 type GroupSeed = (
@@ -106,25 +95,14 @@ type GroupSeed = (
     Option<SidebarPlace>,
 );
 
-/// A run on a branch-split path joins the split group holding its newest step
-/// root, else the one with the newest activity. `None` leaves the run to mint
-/// its own group: no row resolves to its scope.
-fn split_run_group(
-    by_group: &BTreeMap<String, GroupSeed>,
-    key: &str,
-    run: &WorkflowRunId,
-    agents: &AgentProjectionIndex<'_>,
-) -> Option<String> {
-    let split = format!("{key}\n");
-    by_group
-        .iter()
-        .filter(|(group, _)| group.as_str() == key || group.starts_with(&split))
-        .max_by_key(|(_, (_, _, _, rows, _))| {
-            rows.iter()
-                .map(|row| (agents.step_seq(row, run), row.last_activity))
-                .max()
-        })
-        .map(|(group, _)| group.clone())
+/// What the sidebar groups a row by.
+fn row_entry(row: &SidebarRow) -> GroupEntry<'_> {
+    GroupEntry {
+        lane: row.lane.as_ref(),
+        stamp: row.channel.as_deref(),
+        path: row.lane_path(),
+        branch: row.worktree_branch.as_deref(),
+    }
 }
 
 /// The per-machine attention timing windows the row fold reads, bundled so the
@@ -205,22 +183,11 @@ impl SidebarSnapshot {
         );
         stamp_attention(&mut rows, now, windows);
 
-        let resolver = GroupResolver::new(
-            self,
-            rows.iter().map(|row| GroupEntry {
-                channel: row.channel.as_deref(),
-                path: row.lane_path(),
-                branch: row.worktree_branch.as_deref(),
-            }),
-        );
+        let resolver = GroupResolver::new(self, rows.iter().map(row_entry));
 
         let mut by_group: BTreeMap<String, GroupSeed> = BTreeMap::new();
         for row in rows {
-            let identity = resolver.resolve(GroupEntry {
-                channel: row.channel.as_deref(),
-                path: row.lane_path(),
-                branch: row.worktree_branch.as_deref(),
-            });
+            let identity = resolver.resolve(row_entry(&row));
             by_group
                 .entry(identity.key)
                 .and_modify(|(_, _, _, rows, _)| rows.push(row.clone()))
@@ -238,15 +205,15 @@ impl SidebarSnapshot {
         let mut runs_by_group = BTreeMap::<_, &super::SidebarWorkflow>::new();
         for run in workflows.iter().filter(|run| !run.state.is_terminal()) {
             let identity = resolver.resolve(GroupEntry {
-                channel: None,
+                lane: None,
+                stamp: None,
                 path: Some(&run.scope_path),
                 branch: None,
             });
             if identity.kind == SidebarWorktreeKind::External {
                 continue;
             }
-            let key = split_run_group(&by_group, &identity.key, &run.run, &agent_index)
-                .unwrap_or(identity.key);
+            let key = identity.key;
             runs_by_group
                 .entry(key.clone())
                 .and_modify(|current| {
@@ -266,19 +233,15 @@ impl SidebarSnapshot {
             });
         }
 
-        // An open pull request holds its listed worktree's group without rows; a
-        // branch-split path keeps only its split groups, which carry the PR.
+        // An open pull request holds its listed worktree's group without rows.
         for root in open_pr_roots {
             let identity = resolver.resolve(GroupEntry {
-                channel: None,
+                lane: None,
+                stamp: None,
                 path: Some(root),
                 branch: None,
             });
             if identity.root_lane || identity.kind == SidebarWorktreeKind::External {
-                continue;
-            }
-            let split = format!("{}\n", identity.key);
-            if by_group.keys().any(|key| key.starts_with(&split)) {
                 continue;
             }
             by_group.entry(identity.key).or_insert_with(|| {
@@ -296,14 +259,11 @@ impl SidebarSnapshot {
             .into_iter()
             .map(|(key, (label, kind, root_lane, mut rows, place))| {
                 sort_rows(&mut rows);
-                // Prefer a branch label over the path-basename seed for worktree
-                // pods. Root pods keep the room name; external keeps its catch-all
-                // label even if a stray branch rode the row.
-                let label = if kind == SidebarWorktreeKind::Worktree {
-                    group_branch_label(&rows).unwrap_or(label)
-                } else {
-                    label
-                };
+                let branch = group_branch_label(
+                    kind,
+                    place.as_ref(),
+                    rows.iter().map(|row| row.worktree_branch.as_deref()),
+                );
                 let status_counts = status_counts(&rows);
                 let team = cohort_team(
                     rows.iter()
@@ -317,6 +277,7 @@ impl SidebarSnapshot {
                     key,
                     label,
                     label_qualifier: None,
+                    branch,
                     kind,
                     team,
                     cohort_effort: None,

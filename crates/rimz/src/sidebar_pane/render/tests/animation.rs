@@ -249,6 +249,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
+        branch: None,
         kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

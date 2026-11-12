@@ -1,10 +1,9 @@
 use super::*;
 
 #[test]
-fn agents_on_different_branches_in_one_path_form_two_groups() {
-    // Root cause 5: stale rows put two branches under one path, collapsing
-    // into a single mislabeled section. Keying on branch splits them into
-    // two correctly-labeled groups.
+fn agents_on_different_branches_in_one_path_form_one_group() {
+    // One checkout is one lane whatever branch each row last reported: the
+    // group is headed by the checkout and carries a branch beside it.
     let feature = agent("claude", "sess-a", AgentStatus::Idle, 1_000)
         .worktree("/repo/shared")
         .branch("feature");
@@ -16,17 +15,22 @@ fn agents_on_different_branches_in_one_path_form_two_groups() {
 
     assert_eq!(
         snapshot.worktree_groups.len(),
-        2,
-        "two branches under one path split into two groups"
+        1,
+        "two branches under one path share one group: {:?}",
+        snapshot.worktree_groups
     );
-    for group in snapshot.worktree_groups.iter() {
-        assert_eq!(group.rows.len(), 1);
-        assert_eq!(
-            group.rows[0].worktree_branch.as_deref(),
-            Some(group.label.as_str()),
-            "each group's label matches its branch"
-        );
-    }
+    let group = &snapshot.worktree_groups[0];
+    assert_eq!(group.key, "/repo/shared");
+    assert_eq!(
+        group.label, "shared",
+        "the checkout, not a branch, heads it"
+    );
+    assert_eq!(group.rows.len(), 2);
+    assert!(
+        matches!(group.branch.as_deref(), Some("feature" | "main")),
+        "a row's branch rides beside the label: {:?}",
+        group.branch
+    );
 }
 
 #[test]
@@ -53,6 +57,7 @@ fn one_branch_path_keeps_agent_and_shell_in_one_group() {
         snapshot.worktree_groups,
     );
     assert_eq!(snapshot.worktree_groups[0].label, "main");
+    assert_eq!(snapshot.worktree_groups[0].branch.as_deref(), Some("main"));
     let rows = &snapshot.worktree_groups[0].rows;
     assert!(rows.iter().any(|row| row.is_agent()));
     assert!(rows.iter().any(|row| row.is_process() && row.name == "zsh"));

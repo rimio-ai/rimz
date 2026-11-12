@@ -49,7 +49,7 @@ fn directory_room_groups_git_backed_rows_by_resolved_worktree() {
             (
                 SidebarWorktreeKind::Worktree,
                 "/srv/agents/query-engine",
-                "main",
+                "query-engine",
                 2
             ),
             (
@@ -156,7 +156,7 @@ fn deeply_nested_git_backed_row_gets_own_worktree_pod() {
             (
                 SidebarWorktreeKind::Worktree,
                 "/srv/agents/org/team/repo",
-                "feature/nested",
+                "repo",
                 1
             ),
         ],

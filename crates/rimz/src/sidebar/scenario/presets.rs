@@ -361,6 +361,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         key: spec.key.to_owned(),
         label: spec.label.to_owned(),
         label_qualifier: None,
+        branch: None,
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,

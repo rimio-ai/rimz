@@ -87,11 +87,12 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     // can appear from live-pane presence before the event-fresh model folds in.
     let screen = room.wait_for(|s| s.contains("○ coder") && s.contains("GPT 5.5"), SETTLE);
     // `session_start` roots the agent at `/work/query-engine-main`, outside the
-    // project, so the header carries that repo's folder as its qualifier.
+    // project: the header names that checkout's lane and its `main` branch,
+    // with no folder qualifier to repeat the lane's folder label.
     assert!(
         screen
             .lines()
-            .any(|line| line.trim() == "⑂ main · query-engine-main"),
+            .any(|line| line.trim() == "⑂ query-engine-main · main"),
         "the agent groups under its unsealed worktree header:\n{screen}"
     );
     assert!(
@@ -247,7 +248,7 @@ fn phase6_reattach_reconstructs_from_store() {
     assert!(
         screen
             .lines()
-            .any(|line| line.trim() == "⑂ main · query-engine-main"),
+            .any(|line| line.trim() == "⑂ query-engine-main · main"),
         "reattach reconstructs the unsealed worktree group:\n{screen}"
     );
     assert!(

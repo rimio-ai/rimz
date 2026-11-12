@@ -16,7 +16,7 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
  ──────────────────────────────────────────────────────
  ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: units by status
 
-▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: branch, commits, diff, PR state
+▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: lane, commits, diff, PR state
 ▌⢄ claude · Opus 4.8 · high · 200k                $1.27▐    ← status, handle, model, effort, window, cost
 ▌  store refactor                                      ▐    ← what the session is on
 ▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m▐    ← context meter and own quiet age
@@ -116,9 +116,9 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 
 | mark | meaning |
 |------|---------|
-| `⑂ name` | a checkout group named by its branch, or a channel named by a listed worktree's marker |
+| `⑂ name` | a lane with a home checkout, named by its label; a muted `· branch` follows when the checkout's branch differs from the label |
 | `↩ name` | a worktree group whose work has landed |
-| `# name` | a channel with no listed marker-backed checkout |
+| `# name` | a channel stamped on a row written before lanes were stored, with no listed marker-backed checkout |
 | `✓` `✕` `◌` beside the name | the trunk's HEAD-commit CI, or a branch's open or merged pull request's CI: passing, failing, running |
 | `#91` | the branch's pull request |
 | `#522→#530→#540,#541` | a same-repository PR stack, bottom first; comma-separated branches end the stack |
@@ -604,7 +604,7 @@ Each group starts with a header. Its left side names the work, and its right sid
 ▎↩ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
 ```
 
-On the left: `⑂` or `↩`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, each PR number opens its pull request. A same-repository stack on GitHub or Gitea replaces the single badge with its levels, bottom first: `#522→#530→#540,#541`. Commas join PRs branching from the same level, where the display stops. The stack appears only when the entire run fits beside the full name and CI; otherwise only the branch's own PR number remains. A group outside the project root and not among its listed worktrees always adds a muted `· repo` qualifier naming its repo folder, even when that repeats the label. Colliding branch labels use the shortest path suffix that tells the checkouts apart; foreign groups deepen their qualifier by the same rule. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
+On the left: `⑂` or `↩`, the lane's label (`main` for the trunk), a muted `· branch` when the checkout's branch differs from that label, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, each PR number opens its pull request. A same-repository stack on GitHub or Gitea replaces the single badge with its levels, bottom first: `#522→#530→#540,#541`. Commas join PRs branching from the same level, where the display stops. The stack appears only when the entire run fits beside the full name and CI; otherwise only the branch's own PR number remains. A group outside the project root and not among its listed worktrees adds a muted `· repo` qualifier naming its repo folder, unless that would repeat the label. Colliding labels use the shortest path suffix that tells the checkouts apart; foreign groups deepen their qualifier by the same rule. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
 
 On the right: commits ahead of and behind the trunk with zero counts left out, then lines added and removed, then the trunk marker. The line counts include committed, staged, unstaged, and untracked work, so work that `git diff` does not show still counts. The first marker that applies is shown:
 
@@ -663,12 +663,12 @@ No selection, compact cards:
    ▢ ──────────────────────────────────────  0.0%
 ```
 
-Panes with no channel or known containing place (scripts, CI, stray shells) collect under the dim `external` divider, after active project groups and before the inactive chip. An agent's git root can make a foreign place outside the project; shells beneath it join that group. The external divider keeps a `? n` or `! n` count so an untethered ask still shows.
+Panes with no channel or known containing place (scripts, CI, stray shells) collect under the dim `external` divider, after active project groups and before the inactive chip. An agent launched outside the project groups at its own checkout's root, or at its directory when no repository holds it. An agent's git root can make a foreign place outside the project; shells beneath it join that group. The external divider keeps a `? n` or `! n` count so an untethered ask still shows.
 
 A room opened on a plain directory groups git-backed agents by their checkout, each under a full header. The panes the directory itself holds sit under a bold header with the directory's name, with no glyph or git figures, because a plain directory has no trunk to compare against.
 
 ```
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
+▎⑂ query-engine · main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
 ▌⣾ claude                                              ▐
 ▌  db migrate                                          ▐
 ▌  ▢ ──────────────────────────────────────  0.0%      ▐

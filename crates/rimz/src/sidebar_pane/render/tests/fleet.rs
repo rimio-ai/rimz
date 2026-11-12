@@ -1284,7 +1284,7 @@ fn render_make_up_filter_narrows_the_body() {
     let mut snapshot = make_up_snapshot();
     let main_group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
         .iter_mut()
-        .find(|group| group.label == "main")
+        .find(|group| group.branch.as_deref() == Some("main"))
         .expect("the fixture groups by worktree");
     std::sync::Arc::make_mut(&mut main_group.rows).push(crate::store::snapshot::SidebarRow {
         checkout: None,

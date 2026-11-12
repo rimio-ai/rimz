@@ -740,7 +740,7 @@ fn hibernated_tier_sits_below_focus_and_hot_above_idle() {
 }
 
 #[test]
-fn hibernated_paths_require_all_split_group_rows_and_ignore_conditions() {
+fn hibernated_paths_require_every_row_sharing_the_place_and_ignore_conditions() {
     let dir = tempfile::tempdir().unwrap();
     let now = Timestamp::now();
     let mut held = root_agent("claude", "held", None);
@@ -771,9 +771,9 @@ fn hibernated_paths_require_all_split_group_rows_and_ignore_conditions() {
         first.id = "held".into();
         let mut second = activity_row(is_agent, Some(AgentStatus::Idle), now, dir.path());
         second.id = other.into();
-        let mut split = worktree_group(dir.path(), vec![second]);
-        split.key = format!("{path}\nother-branch");
-        snapshot.worktree_groups = vec![worktree_group(dir.path(), vec![first]), split].into();
+        let mut named_lane = worktree_group(dir.path(), vec![second]);
+        named_lane.key = "channel:other".to_owned();
+        snapshot.worktree_groups = vec![worktree_group(dir.path(), vec![first]), named_lane].into();
         let scopes = if demanded {
             only.clone()
         } else {
@@ -1290,6 +1290,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         key: format!("channel:{label}"),
         label: label.to_owned(),
         label_qualifier: None,
+        branch: None,
         kind: SidebarWorktreeKind::Channel,
         team: None,
         cohort_effort: None,

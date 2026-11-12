@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::ParkDemotion;
-use crate::store::snapshot::{SidebarInactive, SidebarWorkflow, SidebarWorktreeGroup};
+use crate::store::snapshot::{SidebarInactive, SidebarWorkflow};
 use crate::store::workflow::RunState;
 use std::sync::Arc;
 
@@ -124,7 +124,7 @@ fn step_launch_cwd_joins_the_run_group_and_newest_run_wins() {
 }
 
 #[test]
-fn a_run_on_a_branch_split_path_joins_a_split_group() {
+fn a_run_on_a_path_with_two_branches_joins_its_one_group() {
     let run = workflow("/repo/shared", RunState::Active);
     let mut feature = agent("codex", "fixer", AgentStatus::Running, 1_000)
         .worktree("/repo/shared")
@@ -134,46 +134,23 @@ fn a_run_on_a_branch_split_path_joins_a_split_group() {
         .worktree("/repo/shared")
         .branch("main");
     main.channel = None;
-    let groups_for = |agents: Vec<AgentState>| {
-        let rows = agents
-            .iter()
-            .map(|agent| row_from_agent(agent, epoch()))
-            .collect();
-        base_with(agents).build_worktree_groups(
-            rows,
-            &ParkDemotion::default(),
-            std::slice::from_ref(&run),
-            &[],
-        )
-    };
-    let run_group = |groups: &[SidebarWorktreeGroup]| {
-        assert_eq!(
-            groups
-                .iter()
-                .map(|group| group.key.as_str())
-                .collect::<std::collections::BTreeSet<_>>(),
-            ["/repo/shared\nfeature", "/repo/shared\nmain"].into(),
-            "the run mints no bare-path group beside the split ones"
-        );
-        let held = groups.iter().filter(|group| group.workflow.is_some());
-        held.map(|group| group.label.clone()).collect::<Vec<_>>()
-    };
+    let agents = vec![feature, main];
+    let rows = agents
+        .iter()
+        .map(|agent| row_from_agent(agent, epoch()))
+        .collect();
 
-    assert_eq!(
-        run_group(&groups_for(vec![feature.clone(), main.clone()])),
-        ["main"],
-        "without a step row the newest split group holds the run"
+    let groups = base_with(agents).build_worktree_groups(
+        rows,
+        &ParkDemotion::default(),
+        std::slice::from_ref(&run),
+        &[],
     );
-    feature.workflow = Some(crate::agents::WorkflowAttemptRef {
-        run: run.run.clone(),
-        seq: 1,
-        role: crate::agents::WorkflowAttemptRole::Step,
-    });
-    assert_eq!(
-        run_group(&groups_for(vec![feature, main])),
-        ["feature"],
-        "the step root's group holds the run"
-    );
+
+    assert_eq!(groups.len(), 1, "the run mints no group beside the path's");
+    assert_eq!(groups[0].key, "/repo/shared");
+    assert_eq!(groups[0].rows.len(), 2);
+    assert_eq!(groups[0].workflow.as_ref(), Some(&run));
 }
 
 #[test]
