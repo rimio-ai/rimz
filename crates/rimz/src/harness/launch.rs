@@ -1310,6 +1310,13 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
+    if reminders.disable_native_auto_continue {
+        adapter.disable_native_auto_continue_args(
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     if fast_settings {
         adapter.merge_fast_settings(
             (cwd, artifact_dir),

@@ -19,6 +19,8 @@ pub(super) struct LaunchReminders {
     pub runtime_env: bool,
     pub long_cache: bool,
     pub disable_native_idle_compaction: bool,
+    /// RimZ's `resume.auto_continue` owns the resume after a usage limit on this launch.
+    pub disable_native_auto_continue: bool,
     /// The configured `[agents] shell`, which the launch runs under in place
     /// of the user's own shell.
     pub agent_shell: Option<std::path::PathBuf>,
@@ -66,6 +68,7 @@ impl Default for LaunchReminders {
             runtime_env: false,
             long_cache: false,
             disable_native_idle_compaction: false,
+            disable_native_auto_continue: false,
             agent_shell: None,
             settings: None,
             routine_rimz: None,

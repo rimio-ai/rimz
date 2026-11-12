@@ -660,6 +660,17 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Disable the provider's own resume at a usage-limit reset unless launch settings explicitly
+    /// choose a value, so RimZ's auto-continue is the only one that resumes.
+    fn disable_native_auto_continue_args(
+        &self,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Take a fast switch that belongs inside the provider's settings document
     /// out of launch argv, reporting whether one was there. The process
     /// compiler merges it back through [`Self::merge_fast_settings`] after

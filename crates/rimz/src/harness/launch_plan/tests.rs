@@ -9,6 +9,9 @@ mod session_step;
 #[path = "idle_compact_tests.rs"]
 mod idle_compact;
 
+#[path = "auto_continue_tests.rs"]
+mod auto_continue;
+
 fn long_cache_env(
     project: &Path,
     machine: &crate::config::MachineConfig,
