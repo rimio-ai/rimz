@@ -2,63 +2,16 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agent_activity::ToolRepeat;
-use crate::agents::lifecycle::TurnPhase;
-use crate::agents::state::WaitingResolution;
-use crate::agents::{
-    AgentContext, AgentState, AgentStatus, AgentTurnError, ParkDemotion, TurnErrorClass,
-    TurnSettleOutcome, display_turn_error, effective_turn_error_class,
-};
+use crate::agents::state::project_display;
+use crate::agents::{AgentStatus, ParkDemotion};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::{AgentKey, AgentProjectionIndex};
 
-struct SettleFacts<'a> {
-    status: AgentStatus,
-    waiting_interrupted: bool,
-    budget_park_label: Option<String>,
-    turn_error: Option<(&'a AgentTurnError, TurnErrorClass)>,
-    source_agent: Option<&'a AgentState>,
-    demotion: &'a ParkDemotion,
-    delegated_park: Option<(AgentStatus, String)>,
-    has_live_child: bool,
-    window_spent: bool,
-    phase: TurnPhase,
-    context: Option<&'a AgentContext>,
-    last_activity: Timestamp,
-    effective_status: AgentStatus,
-    now: Timestamp,
-    stalled_after_secs: u32,
-    tool_repeat: Option<&'a ToolRepeat>,
-    tool_repeat_attention_after: u32,
-}
-
-struct Settled {
-    status: AgentStatus,
-    /// `None` leaves the label untouched; `Some(None)` clears it.
-    turn_error_label: Option<Option<String>>,
-}
-
-impl Settled {
-    fn status(status: AgentStatus) -> Self {
-        Self {
-            status,
-            turn_error_label: None,
-        }
-    }
-
-    fn with_label(status: AgentStatus, label: Option<String>) -> Self {
-        Self {
-            status,
-            turn_error_label: Some(label),
-        }
-    }
-}
-
-/// Project each agent row's *displayed* status from its raw lifecycle status,
-/// liveness, parked phase, live subagents, turn-error marker, and provider
-/// budget windows.
+/// Project each agent row's *displayed* status from its seeded card, its
+/// child-folded clock, its live subagents and delegated parks, and its source
+/// agent, through the rung order `agents::state::project_display` holds.
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
@@ -69,216 +22,39 @@ pub(super) fn project_display_status(
     tool_repeat_attention_after: u32,
 ) {
     for row in rows.iter_mut() {
-        let row_id = row.id.clone();
-        let row_name = row.name.clone();
         let last_activity = row.last_activity;
         let key: AgentKey = (
-            AgentKind::new_unchecked(row_name.clone()),
-            AgentSessionId::from(row_id.as_str()),
+            AgentKind::new_unchecked(row.name.clone()),
+            AgentSessionId::from(row.id.as_str()),
         );
         let source_agent = index.root(&key);
-        let turn_started_at = source_agent.and_then(|state| state.turn_started_at);
         let Some(agent) = row.as_agent_mut() else {
             continue;
         };
-        let (status, waiting_interrupted) = match WaitingResolution::resolve(
-            agent.status,
-            agent.context.as_ref(),
-            last_activity,
-            source_agent,
-            now,
-        ) {
-            WaitingResolution::NotWaiting => (agent.status, false),
-            WaitingResolution::Interrupted => (AgentStatus::Idle, true),
-            WaitingResolution::Held => continue,
-            WaitingResolution::TurnEnded
-            | WaitingResolution::Answered
-            | WaitingResolution::InReview => {
-                agent.phase = TurnPhase::Reasoning;
-                (AgentStatus::Running, false)
-            }
-        };
-        if matches!(
-            crate::agents::settled_outcome(status, agent.context.as_ref(), last_activity),
-            Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
-        ) {
-            agent.status = AgentStatus::Waiting;
-            agent.phase = TurnPhase::Idle;
-            continue;
-        }
-        // Keep the source agent's own activity clock for this fallback; the
-        // row clock above is child-folded and drives the other ladder rungs.
-        let effective_status = source_agent
-            .map(|state| state.rested_status(now))
-            .unwrap_or(status);
-        let budget_park_label = source_agent
-            .and_then(|state| state.budget_park.as_ref())
-            .map(|park| park.label());
         let has_live_child = agent
             .sub_agents
             .iter()
             .any(|child| child.holds_parent_turn());
-        let turn_error = display_turn_error(
-            status,
+        let delegated_park = delegated_parks
+            .get(&key)
+            .map(|(status, label)| (*status, label.as_str()));
+        project_display(
+            source_agent,
+            &mut agent.status,
+            &mut agent.phase,
+            &mut agent.turn_error_label,
+            &mut agent.overlay_raised_at,
+            &mut agent.ask_detail,
+            &mut agent.extra_questions,
             agent.context.as_ref(),
             last_activity,
-            turn_started_at,
-        )
-        .map(|error| (error, effective_turn_error_class(error)));
-        let window_spent =
-            source_agent.is_some_and(|state| demotion.window_spent(&state.login_key()));
-        let Settled {
-            status: projected,
-            turn_error_label,
-        } = settle(SettleFacts {
-            status,
-            waiting_interrupted,
-            budget_park_label,
-            turn_error,
-            source_agent,
-            demotion,
-            delegated_park: delegated_parks.get(&key).cloned(),
+            agent.tool_repeat.as_ref(),
             has_live_child,
-            window_spent,
-            phase: agent.phase,
-            context: agent.context.as_ref(),
-            last_activity,
-            effective_status,
+            delegated_park,
+            demotion,
             now,
             stalled_after_secs,
-            tool_repeat: agent.tool_repeat.as_ref(),
             tool_repeat_attention_after,
-        });
-        let mut projected =
-            source_agent.map_or(projected, |state| state.display_rest_status(projected));
-        if matches!(effective_status, AgentStatus::Idle | AgentStatus::Success)
-            && agent.phase != TurnPhase::Parked
-        {
-            agent.phase = TurnPhase::Idle;
-        }
-        if let Some(label) = turn_error_label {
-            agent.turn_error_label = label;
-        }
-        if let Some(alert) = source_agent.and_then(|state| state.alert.as_ref()) {
-            projected = AgentStatus::Failed;
-            agent.turn_error_label = Some(alert.text.clone());
-            agent.overlay_raised_at = Some(alert.raised_at);
-        } else if matches!(projected, AgentStatus::Idle | AgentStatus::Success)
-            && agent.phase != TurnPhase::Parked
-            && let Some(ask) = source_agent.and_then(|state| state.raised_ask.as_ref())
-        {
-            projected = AgentStatus::Waiting;
-            agent.ask_detail = ask.detail();
-            agent.extra_questions = 0;
-            let opened_at = ask.opened_at.unwrap_or(ask.raised_at);
-            let rested_at = source_agent.and_then(|state| {
-                let context = state.context.as_ref();
-                let marker =
-                    crate::agents::settled_outcome(state.status, context, state.last_activity)
-                        .and_then(|_| context?.settle)
-                        .map(|settle| settle.at);
-                state.turn_ended_at.max(marker)
-            });
-            agent.overlay_raised_at = Some(opened_at.max(rested_at.unwrap_or(opened_at)));
-        }
-        agent.status = projected;
-        if projected != AgentStatus::Running
-            && !(matches!(projected, AgentStatus::Success | AgentStatus::Sleeping)
-                && agent.phase == TurnPhase::Parked)
-        {
-            // Phase is a head on Running, plus the settled Success/Sleeping/Parked shape
-            // that keeps pending background work visible. Other projections to
-            // a resting or attention status drop it.
-            agent.phase = TurnPhase::Idle;
-        }
-    }
-}
-
-fn settle(facts: SettleFacts<'_>) -> Settled {
-    let SettleFacts {
-        status,
-        waiting_interrupted,
-        budget_park_label,
-        turn_error,
-        source_agent,
-        demotion,
-        delegated_park,
-        has_live_child,
-        window_spent,
-        phase,
-        context,
-        last_activity,
-        effective_status,
-        now,
-        stalled_after_secs,
-        tool_repeat,
-        tool_repeat_attention_after,
-    } = facts;
-
-    if !waiting_interrupted && let Some(label) = budget_park_label {
-        return Settled::with_label(AgentStatus::Paused, Some(label));
-    }
-    if let Some((error, class)) = turn_error.filter(|(_, class)| class.pauses_turn()) {
-        if source_agent.is_some_and(|agent| demotion.is_spent(agent, class)) {
-            return Settled::with_label(AgentStatus::Failed, error.label.clone());
-        }
-        return Settled::with_label(AgentStatus::Paused, error.label.clone());
-    }
-    if let Some((error, _class)) = turn_error.filter(|(_, class)| {
-        matches!(
-            class,
-            TurnErrorClass::Unknown | TurnErrorClass::Failed | TurnErrorClass::NotEntitled
-        )
-    }) {
-        return Settled::with_label(AgentStatus::Failed, error.label.clone());
-    }
-    if matches!(
-        status,
-        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Running
-    ) {
-        if let Some((status, label)) = delegated_park {
-            return Settled::with_label(status, Some(label));
-        }
-        if has_live_child {
-            return Settled::status(AgentStatus::Running);
-        }
-    }
-    match crate::agents::settled_outcome(status, context, last_activity) {
-        // A turn that finished without a `Stop` hook (Codex `/review` review
-        // mode) settles to success instead of spinning until the stall
-        // window misreads it as failed.
-        Some(TurnSettleOutcome::Complete) => return Settled::status(AgentStatus::Success),
-        // A turn or native ask interrupted without a `Stop` hook is at rest
-        // with no result, so settle to idle before the stall window can
-        // misread it as failed.
-        Some(TurnSettleOutcome::Interrupted) => return Settled::status(AgentStatus::Idle),
-        // Plan and native-wait markers raise `waiting` through
-        // `AgentState::rested_status`, which already fed `effective_status`.
-        Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {}
-    }
-
-    if status == AgentStatus::Running && phase == TurnPhase::Parked {
-        // A clean end parked on background work: the turn's verdict was
-        // earned; the chore hums on under the ⋯ bg marker. The wait's
-        // turn_started re-runs the row.
-        return Settled::status(AgentStatus::Success);
-    }
-
-    if let Some(repeat) = tool_repeat.filter(|repeat| {
-        crate::agents::is_tool_looping(status, Some(repeat), tool_repeat_attention_after)
-    }) {
-        return Settled::with_label(
-            AgentStatus::Failed,
-            Some(format!("loop: {} ×{}", repeat.tool, repeat.count)),
         );
-    }
-
-    let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);
-    if stalled && window_spent {
-        Settled::status(AgentStatus::Paused)
-    } else if stalled {
-        Settled::status(AgentStatus::Failed)
-    } else {
-        Settled::status(effective_status)
     }
 }

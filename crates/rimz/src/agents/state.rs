@@ -559,7 +559,7 @@ impl ContextSeverity {
 /// the following snapshot with no human action.
 ///
 /// A `running` agent that has merely delegated to subagents is *not* stalled — its work is the children's heartbeats, not its own — so the projection caller suppresses this while a child holds its delegated turn (see the sidebar's "waiting for subagents" derivation). A silent native or launched child no longer holds it; the child silence predicate also covers a prompted launched child whose first turn never started, without widening this root-row rule. A clean turn parked on background work settles to success in the sidebar projection before this predicate becomes relevant.
-pub fn is_stalled(
+fn is_stalled(
     status: AgentStatus,
     last_activity: Timestamp,
     now: Timestamp,
@@ -575,11 +575,7 @@ pub fn is_stalled(
 /// explicit progress-failure certificate. The next differing tool or other
 /// progress event clears the run, so the escalation self-heals without human
 /// action.
-pub fn is_tool_looping(
-    status: AgentStatus,
-    repeat: Option<&ToolRepeat>,
-    attention_after: u32,
-) -> bool {
+fn is_tool_looping(status: AgentStatus, repeat: Option<&ToolRepeat>, attention_after: u32) -> bool {
     status == AgentStatus::Running && repeat.is_some_and(|repeat| repeat.count >= attention_after)
 }
 
@@ -587,14 +583,14 @@ pub fn is_tool_looping(
 /// `Stop` hook to record it — the transcript-tail marker
 /// ([`AgentTurnError`], folded in via the context
 /// sidecar) postdates the agent's `last_activity`. The faster, more-specific
-/// sibling of [`is_stalled`]: the death certificate is explicit, so the sidebar
+/// sibling of `is_stalled`: the death certificate is explicit, so the sidebar
 /// escalates within a statusline push instead of waiting out the stall window.
 /// Only `Running` can be turn-dead — a hook-reported turn end already resolved
 /// every other status. Self-clearing: any newer hook event (a prompt, a resume,
 /// a rewind) advances `last_activity` past the stale marker. The two clocks
 /// (transcript wall-clock vs heartbeat) skew fail-safe — a suppressed real
 /// death still hits the stall window, and a stale error can never escalate a
-/// row whose activity moved past it. Like [`is_stalled`], a RimZ-derived
+/// row whose activity moved past it. Like `is_stalled`, a RimZ-derived
 /// projection over enrichment, never a status the agent reports.
 pub fn is_turn_dead(
     status: AgentStatus,
@@ -612,7 +608,7 @@ pub fn is_turn_dead(
 /// marker. Shared by the displayed-status projection and the rate-limit-park
 /// resume planner so the two never disagree about which error a row is parked
 /// on.
-pub(crate) fn display_turn_error(
+fn display_turn_error(
     status: AgentStatus,
     context: Option<&AgentContext>,
     last_activity: Timestamp,
@@ -716,7 +712,7 @@ pub fn settled_outcome(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WaitingResolution {
+enum WaitingResolution {
     NotWaiting,
     Interrupted,
     TurnEnded,
@@ -726,7 +722,7 @@ pub(crate) enum WaitingResolution {
 }
 
 impl WaitingResolution {
-    pub(crate) fn resolve(
+    fn resolve(
         status: AgentStatus,
         context: Option<&AgentContext>,
         last_activity: Timestamp,
@@ -760,6 +756,243 @@ impl WaitingResolution {
             return Self::InReview;
         }
         Self::Held
+    }
+}
+
+/// Facts only a sidebar row carries into the rung walk: its tool-repeat run,
+/// its subagents, and the room's attention windows.
+struct RowEvidence<'a> {
+    tool_repeat: Option<&'a ToolRepeat>,
+    has_live_child: bool,
+    delegated_park: Option<(AgentStatus, &'a str)>,
+    demotion: &'a super::ParkDemotion,
+    stalled_after_secs: u32,
+    tool_repeat_attention_after: u32,
+}
+
+/// Where the displayed-status rung walk stopped.
+enum Rung<'a> {
+    /// A native wait that still holds: no rung decides.
+    Held,
+    /// A fresh native-wait or plan marker raises `waiting`.
+    NativeWait,
+    /// A rung decided the status, with the turn-error label that rung writes.
+    Decided(AgentStatus, RungLabel<'a>),
+    /// No rung decided; the walked status is the open one.
+    Open,
+}
+
+/// The card label a deciding rung writes. Borrowed so the agent path, which
+/// writes no label, allocates nothing.
+enum RungLabel<'a> {
+    Keep,
+    Budget(&'a BudgetPark),
+    TurnError(&'a AgentTurnError),
+    Delegated(&'a str),
+    Loop(&'a ToolRepeat),
+}
+
+/// The one displayed-status rung order, shared by the agent's own
+/// `rested_status` (no `row`) and the sidebar row's `project_display`. It
+/// reads `status`, `phase`, `context`, and `last_activity` from its caller,
+/// which on the row path are the card's seeded fields and the child-folded
+/// clock, and the budget park, the turn start, and the waiting answer proof
+/// from `source`. It leaves `status` normalized past waiting resolution, and
+/// `phase` at `Reasoning` for a released wait.
+fn walk_rungs<'a>(
+    source: Option<&'a AgentState>,
+    status: &mut AgentStatus,
+    phase: &mut TurnPhase,
+    context: Option<&'a AgentContext>,
+    last_activity: Timestamp,
+    row: Option<&RowEvidence<'a>>,
+    now: Timestamp,
+) -> Rung<'a> {
+    use AgentStatus::{Failed, Idle, Paused, Running, Success};
+    let keep = |status| Rung::Decided(status, RungLabel::Keep);
+    let interrupted = match WaitingResolution::resolve(*status, context, last_activity, source, now)
+    {
+        WaitingResolution::NotWaiting => false,
+        WaitingResolution::Held => return Rung::Held,
+        WaitingResolution::Interrupted => {
+            *status = Idle;
+            true
+        }
+        WaitingResolution::TurnEnded
+        | WaitingResolution::Answered
+        | WaitingResolution::InReview => {
+            (*status, *phase) = (Running, TurnPhase::Reasoning);
+            false
+        }
+    };
+    let status = *status;
+    let settled = settled_outcome(status, context, last_activity);
+    if matches!(
+        settled,
+        Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
+    ) {
+        return Rung::NativeWait;
+    }
+    if !interrupted && let Some(park) = source.and_then(|agent| agent.budget_park.as_ref()) {
+        return Rung::Decided(Paused, RungLabel::Budget(park));
+    }
+    let turn_started_at = source.and_then(|agent| agent.turn_started_at);
+    if let Some(error) = display_turn_error(status, context, last_activity, turn_started_at) {
+        let class = effective_turn_error_class(error);
+        let status = match class {
+            TurnErrorClass::PausedRateLimit
+            | TurnErrorClass::PausedSpendLimit
+            | TurnErrorClass::PausedOverloaded => Paused,
+            TurnErrorClass::Unknown | TurnErrorClass::Failed | TurnErrorClass::NotEntitled => {
+                Failed
+            }
+        };
+        // Only the row path demotes a spent park to failed.
+        let demoted = status == Paused
+            && row
+                .zip(source)
+                .is_some_and(|(row, agent)| row.demotion.is_spent(agent, class));
+        let status = if demoted { Failed } else { status };
+        return Rung::Decided(status, RungLabel::TurnError(error));
+    }
+    if let Some(row) = row
+        && matches!(status, Idle | Success | Running)
+    {
+        if let Some((status, label)) = row.delegated_park {
+            return Rung::Decided(status, RungLabel::Delegated(label));
+        }
+        if row.has_live_child {
+            return keep(Running);
+        }
+    }
+    match settled {
+        // A turn that finished without a `Stop` hook (Codex `/review` review
+        // mode) settles to success instead of spinning until the stall
+        // window misreads it as failed.
+        Some(TurnSettleOutcome::Complete) => return keep(Success),
+        // A turn interrupted without a `Stop` hook is at rest with no result,
+        // so settle to idle before the stall window can misread it as failed.
+        Some(TurnSettleOutcome::Interrupted) => return keep(Idle),
+        Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed) | None => {}
+    }
+    // A clean end parked on background work: the turn's verdict was earned;
+    // the chore hums on under the ⋯ bg marker.
+    if status == Running && *phase == TurnPhase::Parked {
+        return keep(Success);
+    }
+    let Some(row) = row else {
+        return Rung::Open;
+    };
+    let looping = |repeat: &&ToolRepeat| {
+        is_tool_looping(status, Some(repeat), row.tool_repeat_attention_after)
+    };
+    if let Some(repeat) = row.tool_repeat.filter(looping) {
+        return Rung::Decided(Failed, RungLabel::Loop(repeat));
+    }
+    if is_stalled(status, last_activity, now, row.stalled_after_secs) {
+        let spent = source.is_some_and(|agent| row.demotion.window_spent(&agent.login_key()));
+        return keep(if spent { Paused } else { Failed });
+    }
+    Rung::Open
+}
+
+/// Project one sidebar card's displayed status through the rung order, in
+/// place. Each `&mut` slot is the card's own field: its seeded value is the
+/// input and the projection is written back there, and a slot no rung or
+/// overlay touches keeps its seed. A wait that still holds writes nothing,
+/// and a fresh native-wait or plan marker writes `waiting` before any label
+/// or overlay. `last_activity` is the row clock after the same-pane and
+/// child folds; the budget park, the turn start, the alert and the raised ask
+/// come from `source`, and the fallback when no rung decides is the source's
+/// own `rested_status` on its own clock, so a parent kept fresh by a finished
+/// child does not stall on its own silence. The stall rung runs before the
+/// display-only lift of wait and shell work.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each slot is a card field the projection writes in place, and the row facts \
+              are positional so no field of a request struct widens the surface"
+)]
+pub(crate) fn project_display(
+    source: Option<&AgentState>,
+    status: &mut AgentStatus,
+    phase: &mut TurnPhase,
+    turn_error_label: &mut Option<String>,
+    overlay_raised_at: &mut Option<Timestamp>,
+    ask_detail: &mut Option<String>,
+    extra_questions: &mut usize,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+    tool_repeat: Option<&ToolRepeat>,
+    has_live_child: bool,
+    delegated_park: Option<(AgentStatus, &str)>,
+    demotion: &super::ParkDemotion,
+    now: Timestamp,
+    stalled_after_secs: u32,
+    tool_repeat_attention_after: u32,
+) {
+    use AgentStatus::{Failed, Idle, Running, Sleeping, Success, Waiting};
+    let row = Some(&RowEvidence {
+        tool_repeat,
+        has_live_child,
+        delegated_park,
+        demotion,
+        stalled_after_secs,
+        tool_repeat_attention_after,
+    });
+    let mut open = *status;
+    let decided = match walk_rungs(source, &mut open, phase, context, last_activity, row, now) {
+        Rung::Held => return,
+        Rung::NativeWait => {
+            *status = Waiting;
+            *phase = TurnPhase::Idle;
+            return;
+        }
+        Rung::Decided(status, label) => Some((status, label)),
+        Rung::Open => None,
+    };
+    let rested = source.map_or(open, |agent| agent.rested_status(now));
+    let (projected, label) = decided.unwrap_or((rested, RungLabel::Keep));
+    let mut projected = source.map_or(projected, |agent| agent.display_rest_status(projected));
+    if matches!(rested, Idle | Success) && *phase != TurnPhase::Parked {
+        *phase = TurnPhase::Idle;
+    }
+    match label {
+        RungLabel::Keep => {}
+        RungLabel::Budget(park) => *turn_error_label = Some(park.label()),
+        RungLabel::TurnError(error) => turn_error_label.clone_from(&error.label),
+        RungLabel::Delegated(label) => *turn_error_label = Some(label.to_owned()),
+        RungLabel::Loop(repeat) => {
+            *turn_error_label = Some(format!("loop: {} ×{}", repeat.tool, repeat.count));
+        }
+    }
+    if let Some(alert) = source.and_then(|agent| agent.alert.as_ref()) {
+        projected = Failed;
+        *turn_error_label = Some(alert.text.clone());
+        *overlay_raised_at = Some(alert.raised_at);
+    } else if matches!(projected, Idle | Success)
+        && *phase != TurnPhase::Parked
+        && let Some(agent) = source
+        && let Some(ask) = agent.raised_ask.as_ref()
+    {
+        projected = Waiting;
+        *ask_detail = ask.detail();
+        *extra_questions = 0;
+        let opened_at = ask.opened_at.unwrap_or(ask.raised_at);
+        let context = agent.context.as_ref();
+        let marker = settled_outcome(agent.status, context, agent.last_activity)
+            .and_then(|_| context?.settle)
+            .map(|settle| settle.at);
+        let rested_at = agent.turn_ended_at.max(marker);
+        *overlay_raised_at = Some(opened_at.max(rested_at.unwrap_or(opened_at)));
+    }
+    *status = projected;
+    if projected != Running
+        && !(matches!(projected, Success | Sleeping) && *phase == TurnPhase::Parked)
+    {
+        // Phase is a head on Running, plus the settled Success/Sleeping/Parked shape
+        // that keeps pending background work visible. Other projections to
+        // a resting or attention status drop it.
+        *phase = TurnPhase::Idle;
     }
 }
 
@@ -2158,45 +2391,23 @@ impl AgentState {
         status
     }
 
-    pub(crate) fn rested_status(&self, now: Timestamp) -> AgentStatus {
-        let (status, phase) = self.resolved_status_phase(now);
-        let settled = settled_outcome(status, self.context.as_ref(), self.last_activity);
-        if matches!(
-            settled,
-            Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
+    /// The agent's displayed status on its own fields and clock, before the
+    /// sleep and rest lifts: the shared rung walk with no row evidence.
+    fn rested_status(&self, now: Timestamp) -> AgentStatus {
+        let (mut status, mut phase) = (self.status, self.phase);
+        let (context, activity) = (self.context.as_ref(), self.last_activity);
+        match walk_rungs(
+            Some(self),
+            &mut status,
+            &mut phase,
+            context,
+            activity,
+            None,
+            now,
         ) {
-            return AgentStatus::Waiting;
-        }
-        if self.budget_park.is_some() && status != AgentStatus::Waiting {
-            return AgentStatus::Paused;
-        }
-        if status == AgentStatus::Waiting && settled == Some(TurnSettleOutcome::Interrupted) {
-            return AgentStatus::Idle;
-        }
-        if let Some((class, _)) = self.displayed_turn_error(now) {
-            return if class.pauses_turn() {
-                AgentStatus::Paused
-            } else {
-                AgentStatus::Failed
-            };
-        }
-        if status != AgentStatus::Running {
-            return status;
-        }
-        match settled {
-            Some(TurnSettleOutcome::Complete) => AgentStatus::Success,
-            Some(TurnSettleOutcome::Interrupted) => AgentStatus::Idle,
-            // Input settles already returned above. A clean turn end parked on
-            // still-in-flight background work reads as success: the verdict
-            // was earned, only the chore hums on (mirrors the sidebar's parked
-            // settle).
-            Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {
-                if phase == TurnPhase::Parked {
-                    AgentStatus::Success
-                } else {
-                    status
-                }
-            }
+            Rung::Held | Rung::NativeWait => AgentStatus::Waiting,
+            Rung::Decided(decided, _) => decided,
+            Rung::Open => status,
         }
     }
 

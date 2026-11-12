@@ -39,7 +39,7 @@ impl ParkDemotion {
         resume_exhausted || reset_without_budget
     }
 
-    pub(crate) fn window_spent(&self, login: &LoginKey) -> bool {
+    pub(super) fn window_spent(&self, login: &LoginKey) -> bool {
         self.windows.spent.contains(login)
     }
 }

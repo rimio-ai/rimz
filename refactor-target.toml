@@ -296,8 +296,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
 # RaisedAsk, RaisedAskState and CardAlert share enrich-only attention vocabulary (+3).
 # LaunchCapability::has_native_sandbox declares whether sandbox isolation adds a provider flag (+1).
-# WaitingResolution and its resolver share answered-ask proof with the sidebar (+2).
-# PendingWaitClass (including its re-export), rested_status and display_rest_status replace sleeping_over (+3 net).
+# project_display carries the sidebar's row facts into the agents-owned status ladder.
+# PendingWaitClass (including its re-export) and display_rest_status replace sleeping_over.
 # InstallationCapability::hook_trust_choice adds main's provider hook-consent choice (+1).
 # LaunchCapability::allow_team_notes_args shares the archive run grant with the process compiler (+1).
 # TierUnbuildable, TierPass, TierStamp::moved and TierStamp::passes share move evidence with launch and CLI consumers (+4).
@@ -723,13 +723,8 @@ reason = "The CLI and sidebar card share one live-over-launch fast-mode decision
 
 [[verdict]]
 kind = "item"
-key = "agents::state::WaitingResolution"
-reason = "Agent and sidebar projections share held, answered, interrupted, and auto-review waiting verdicts."
-
-[[verdict]]
-kind = "item"
-key = "agents::state::WaitingResolution::resolve"
-reason = "The sidebar supplies its child-folded interruption clock while answer proof uses the source agent's own activity."
+key = "agents::state::project_display"
+reason = "The sidebar supplies a card's seeded slots, its child-folded clock and its subagent facts to the one agents-owned rung order; answer proof, budget, alert and the fallback read the source agent's own clock, and the stall rung runs before the display-only rest lift."
 
 [[verdict]]
 kind = "item"
@@ -740,11 +735,6 @@ reason = "Pending wakes carry one shared display-work class across harness, snap
 kind = "item"
 key = "agents::state::AgentState::display_rest_status"
 reason = "Rows and child summaries lift resting display status without changing operational delivery gates."
-
-[[verdict]]
-kind = "item"
-key = "agents::state::AgentState::rested_status"
-reason = "The sidebar runs stall checks before adding display-only wait and shell work to the rested status."
 
 [[verdict]]
 kind = "item"
@@ -7704,7 +7694,7 @@ reason = "Spent-child CLI parity applies the same retry/window predicate to root
 [[verdict]]
 kind = "item"
 key = "agents::park::ParkDemotion::window_spent"
-reason = "Spent-child CLI parity preserves the root status ladder's spent-window rung without exposing window sets."
+reason = "The agents-owned status ladder reads its spent-window stall rung without exposing window sets."
 
 [[verdict]]
 kind = "item"
