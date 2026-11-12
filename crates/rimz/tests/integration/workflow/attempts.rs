@@ -2219,6 +2219,39 @@ fn raised_question_is_listed_without_holding_a_workflow_attempt() {
 }
 
 #[test]
+fn blocking_question_holds_from_its_open_stamp_with_its_question_text() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    room.hook(
+        &id,
+        &run,
+        serde_json::from_str(&crate::common::codex_pre_tool_use_payload()).unwrap(),
+    );
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let value = show(&room.env, &id);
+    assert_eq!(value["record"]["state"], "active", "{value:#}");
+    let asking = &value["record"]["attempt"]["asking"];
+    let snapshot = room.env.store().snapshot_cached().unwrap();
+    let source = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name == run.agent_name)
+        .and_then(|agent| agent.open_ask.as_ref())
+        .unwrap();
+    assert_eq!(asking["since"], json!(source.since), "{value:#}");
+    assert_eq!(asking["kind"], "question", "{value:#}");
+    assert_eq!(asking["text"], "which fix shape?", "{value:#}");
+    assert_eq!(asking["handle"], "@codex#main", "{value:#}");
+    assert_eq!(value["record"]["attempt"]["held_since"], asking["since"]);
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+}
+
+#[test]
 fn permission_stays_live_and_explicit_question_routes_with_evidence() {
     for (extra, payload, held) in [
         (

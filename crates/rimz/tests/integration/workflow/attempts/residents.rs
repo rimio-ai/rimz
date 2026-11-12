@@ -623,3 +623,101 @@ fn turn_error_wakes_and_holds_the_live_attempt_on_provider_limits() {
         );
     }
 }
+
+#[test]
+fn stop_skips_an_ended_child_and_its_subtree_and_reads_a_seat_board_stage() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let root = room
+        .env
+        .store()
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|row| row.name == run.agent_name)
+        .unwrap()
+        .clone();
+    let parent = root.launch_id.as_ref().unwrap_or(&root.agent_id).clone();
+    let child = LaunchParams {
+        parent_agent_id: Some(parent.clone()),
+        parent_agent_kind: Some(root.kind.clone()),
+        launch_depth: Some(1),
+        ..Default::default()
+    };
+    seed(
+        &room,
+        "child",
+        72,
+        child.clone(),
+        LifecycleSignal::Registered,
+    );
+    seed(&room, "child", 72, child, LifecycleSignal::Ended);
+    seed(
+        &room,
+        "grandchild",
+        73,
+        LaunchParams {
+            parent_agent_id: Some("child".into()),
+            parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+            launch_depth: Some(2),
+            ..Default::default()
+        },
+        LifecycleSignal::Registered,
+    );
+    seed(
+        &room,
+        "seat",
+        75,
+        LaunchParams {
+            launched_by: Some(Box::new(LaunchedBy {
+                kind: root.kind.clone(),
+                agent_id: parent,
+            })),
+            team: Some("forge".into()),
+            role: Some("coder".into()),
+            channel: Some("feature".into()),
+            ..Default::default()
+        },
+        LifecycleSignal::Registered,
+    );
+    let board = rimz::harness::scratch::board_path(&room.env.project_root);
+    fs::create_dir_all(board.parent().unwrap()).unwrap();
+    fs::write(&board, "# Board\n\nStage: review (@seat)\n").unwrap();
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        serde_json::to_vec(
+            &[61, 73, 75].map(|id| json!({"id":id,"is_plugin":false,"tab_id":1,"title":"claude"})),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    let value = settled(&room.env, &id, "canceled");
+    let children = &value["record"]["prev_attempt"]["children"];
+    assert_eq!(
+        *children,
+        json!({
+            "stopped": [],
+            "live": [{
+                "handle": "@coder#feature",
+                "kind": "claude",
+                "team": {"name": "forge", "channel": "feature", "stage": "review"},
+            }],
+        }),
+        "an ended child's live grandchild is neither stopped nor reported"
+    );
+    let panes: Value =
+        serde_json::from_slice(&fs::read(room.env.project_root.join("panes.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        panes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pane| pane["id"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![73, 75]
+    );
+}

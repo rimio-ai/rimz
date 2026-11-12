@@ -269,3 +269,32 @@ fn clearing_a_workflow_pin_is_atomic_idempotent_and_survives_a_cold_fold() {
     assert_eq!(clears, 1);
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
+
+#[test]
+fn kept_settlement_reports_the_detached_companion_live() {
+    let room = Room::new("keep=true\n");
+    room.env.install_agent_hooks("claude");
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("agent = 'codex'", "agent = 'codex,claude'"),
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    register_companion(&room);
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let ended = settled(&room.env, &id, "done");
+    let children = &ended["record"]["prev_attempt"]["children"];
+    assert_eq!(children["stopped"], json!([]), "{children:#}");
+    let live = children["live"].as_array().unwrap();
+    assert_eq!(live.len(), 1, "{children:#}");
+    assert_eq!(live[0]["kind"], "claude", "{children:#}");
+    assert_ne!(
+        live[0]["handle"],
+        json!(format!("@{}", run.agent_name.as_deref().unwrap())),
+        "the leader is never its own child: {children:#}"
+    );
+}
