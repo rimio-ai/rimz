@@ -330,12 +330,12 @@ Claude and Codex also receive routine-command permissions by default, independen
 - `rimz message`, `rimz agents`, `rimz subagents`, `rimz teams`
 - `rimz asks`, `rimz answer`, `rimz wait`
 - `rimz pane list`, `rimz pane capture`, `rimz loop show`, `rimz loop logs`
-- `rimz workflow show`
+- `rimz workflow run`, `rimz workflow list`, `rimz workflow show`, `rimz workflow cancel`, `rimz workflow resume`, `rimz workflow restart`, `rimz workflow validate`, `rimz workflow schema`
 - `rimz packs list`, `rimz packs show`, `rimz packs diff`
 - `rimz lsp def`, `rimz lsp refs`, `rimz lsp hover`, `rimz lsp impl`, `rimz lsp callers`, `rimz lsp callees`, `rimz lsp symbols`, `rimz lsp find`, `rimz lsp show`, `rimz lsp check`, `rimz lsp list`, `rimz lsp status`
 - `rimz notes add`, `rimz notes list`
 
-There is no blanket RimZ grant. `pane send`, `loop add`, `events emit`, pack mutations, the bare `rimz packs` spelling, and `lsp shim`, `attach`, or `stop` are not added. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag. The `rimz teams` rule covers the whole scene: launching, stopping, and restarting cohorts, and resuming one with `--yolo`. `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)). Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands).
+There is no blanket RimZ grant. `pane send`, `loop add`, `events emit`, pack mutations, the bare `rimz packs` spelling, and `lsp shim`, `attach`, or `stop` are not added. The `rimz agents` and `rimz subagents` rules also allow launches with `--yolo` or a passthrough bypass flag. The `rimz teams` rule covers the whole scene: launching, stopping, and restarting cohorts, and resuming one with `--yolo`. The `rimz workflow` rules cover every public verb, `run`, `list`, `show`, `cancel`, `resume`, `restart`, `validate`, and `schema`: any agent may start, steer, extend with `resume --extend`, restart, and cancel runs of the workflows deployed under `~/.rimz/workflows` without asking, and a run it starts executes outside the agent's sandbox. They cannot edit those definitions, and the internal `rimz workflow advance` verb, which injects signals into active runs, is not granted. `rimz answer` allows answering another agent's prompt ([security](../guide/security.md#what-can-run-a-command)). Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands).
 
 Claude's settings also union the agent-visible scratch and shared directories into `permissions.additionalDirectories` and add an `autoMode.environment` entry that keeps `$defaults`. Profile entries remain. These are Claude permission settings, not permission hooks, so Claude's managed policy and explicit ask and deny rules still apply. Independently of the routine switch, Claude also gets one notes folder:
 
