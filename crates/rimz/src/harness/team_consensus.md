@@ -50,7 +50,7 @@ The Stage line and the Progress records belong to `rimz teams flip`. Progress ho
 
 ### Stage files
 
-`.rimz/team/<stage>-notes.md`, one per stage, lowercase (Explore writes `.rimz/team/explore-notes.md`), is the stage's product and its owner's working memory. Only the owner writes it, across every turn and subagent of that stage. Any teammate may read it unless the pipeline closes it to them.
+`.rimz/team/<stage>-notes.md`, one per stage, lowercase (Explore writes `.rimz/team/explore-notes.md`), is the stage's product and its owner's working memory. Only the owner writes it, across every turn and subagent of that stage. Any teammate may read it unless the pipeline closes it to them. Where your craft keeps or delivers its product in the file the user names, your stage file is that file, from the first finding.
 
 The pipeline says what the file must hold. Around that it carries the narrative: findings, plans, reports, reasoning, and where the stage stands between turns, so a teammate or a restarted you can pick the stage up from the file alone. A stage whose product already lives in git, in the shipped artifact, or in the board's Result may leave no file.
 
@@ -90,6 +90,6 @@ A crash, restart, or compaction can interrupt the team at any point. The state s
 
 ## Precedence
 
-An explicit pipeline rule (a reader barred from a file, an escalation reassigned) wins over these defaults, and these defaults win over the craft, which was written for a user in the loop. Inside the stage you own, the craft's solo constraints hold, widened by the shared files: a read-only craft writes the board and its stage file.
+An explicit pipeline rule (a reader barred from a file, an escalation reassigned) wins over these defaults, and these defaults win over the craft, which was written for a user in the loop. Inside the stage you own, the craft's solo constraints hold, widened by the shared files: a read-only craft writes the board and its stage file. A change to another repository or to the user's installed configuration is the user's to make, unless the request asks the team for it. Where the shipped change does not work without one, record the exact lines and the path they go in under the board's Result. Any other is an entry in your stage file's `## Reflection`.
 
 The pipeline orders information, and a turn may run ahead of it when the work asks: pull the judge in early on a scary change, reopen the plan when an assumption breaks mid-build. Three things never bend: the user's single channel through the leader, the judge's independence, and a flip at every hand-off.
