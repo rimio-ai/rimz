@@ -310,7 +310,7 @@ pub(super) fn discover(
 
 impl CursorDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+        let forced = self.catalog.refresh(key.clone(), now, |topology| {
             topology.record_kind_only_many(key.workspaces.iter().cloned());
             let mut catalog = Vec::new();
             for workspace in &key.workspaces {
@@ -333,7 +333,6 @@ impl CursorDiscoverySnapshot {
             }
             catalog
         });
-        let forced = scan.attempted();
         #[cfg(test)]
         if forced {
             self.work.full_scans += 1;

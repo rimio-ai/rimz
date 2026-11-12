@@ -288,10 +288,9 @@ pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
 
 impl AntigravityDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+        let forced = self.catalog.refresh(key.clone(), now, |topology| {
             enumerate_conversations(&key.home, topology)
         });
-        let forced = scan.attempted();
         #[cfg(test)]
         if forced {
             self.work.full_scans += 1;

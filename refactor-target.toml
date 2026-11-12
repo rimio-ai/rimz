@@ -10303,8 +10303,8 @@ reason = "Read by the binary's agent-command tests (cli/agents_cmd/tests.rs:362)
 
 [[verdict]]
 kind = "item"
-key = "agents::local_session_cache::CatalogRefresh"
-reason = "Return type of more-visible items read by held adapters (adapters/antigravity/session.rs, adapters/claude/local_sessions.rs, adapters/cursor/session.rs); private is refused by private_interfaces, so pub(super) is the floor. ValueRefresh is the same (atlas caveat 13) (pass 24b)."
+key = "agents::local_session_cache::ValueRefresh"
+reason = "Return type of StableValueCache::refresh, read by held adapters; private is refused by private_interfaces, so pub(super) is the floor (atlas caveat 13) (pass 24b)."
 
 [[verdict]]
 kind = "item"

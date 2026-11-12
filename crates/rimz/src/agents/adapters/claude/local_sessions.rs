@@ -263,7 +263,7 @@ impl ClaudePaneDiscovery {
             // written inside its window, and otherwise when the listing reruns.
             let due = |entry: &CatalogEntry| match self.candidates.get(entry) {
                 None => true,
-                Some(PaneCandidate::Pending(_)) if refresh.attempted() => true,
+                Some(PaneCandidate::Pending(_)) if refresh => true,
                 Some(candidate) => windows.iter().any(|(workspace, since)| {
                     *workspace == entry.workspace && candidate.pending_since(*since)
                 }),
@@ -400,7 +400,7 @@ pub(super) fn discover(
 
 impl ClaudeDiscoverySnapshot {
     fn refresh(&mut self, key: DiscoveryKey, now: Instant) -> Vec<LocalSessionObservation> {
-        let scan = self.catalog.refresh(key.clone(), now, |topology| {
+        let forced = self.catalog.refresh(key.clone(), now, |topology| {
             let mut catalog = Vec::new();
             for config_dir in &key.config_dirs {
                 for workspace in &key.workspaces {
@@ -420,7 +420,6 @@ impl ClaudeDiscoverySnapshot {
             }
             catalog
         });
-        let forced = scan.attempted();
         #[cfg(test)]
         if forced {
             self.work.full_scans += 1;
