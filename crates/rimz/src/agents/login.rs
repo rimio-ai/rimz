@@ -342,7 +342,7 @@ fn config_home_env_key(kind: &AgentKind) -> Option<&'static str> {
 /// Where RimZ puts an account home the user did not place itself:
 /// `<home>/accounts/<kind>/<name>`. It carries provider credentials and
 /// history, not RimZ data, so nothing in RimZ removes it.
-pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
+fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
     crate::disk::paths::accounts_dir()
         .join(kind.as_str())
         .join(name.as_str())
@@ -354,7 +354,6 @@ pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
 pub struct LoginCatalog {
     logins: BTreeMap<LoginKey, ProviderLogin>,
     account_kinds: BTreeSet<AgentKind>,
-    standalone: BTreeSet<LoginKey>,
 }
 
 impl LoginCatalog {
@@ -390,7 +389,6 @@ impl LoginCatalog {
                     .filter(|(key, _)| key.kind == kind),
             );
             result.account_kinds.extend(catalog.account_kinds);
-            result.standalone.extend(catalog.standalone);
         }
         (result, errors)
     }
@@ -408,7 +406,6 @@ impl LoginCatalog {
     ) -> Result<Self, LoginConfigErr> {
         let mut logins = BTreeMap::new();
         let mut account_kinds = BTreeSet::new();
-        let mut standalone = BTreeSet::new();
         for kind in crate::agents::known_kinds().map(AgentKind::new_unchecked) {
             let key = LoginKey::default_for(kind.clone());
             logins.insert(key, ProviderLogin::default_for(kind.clone()));
@@ -466,9 +463,9 @@ impl LoginCatalog {
                 // adapter declares one home override key.
                 let mut login = ProviderLogin::named(kind.clone(), name.clone(), declared_home)
                     .expect("named accounts are configurable only for kinds with a home override");
-                if account.history == AccountHistory::Standalone {
-                    standalone.insert(login.key());
-                } else if let Some(home) = &mut login.home {
+                if account.history != AccountHistory::Standalone
+                    && let Some(home) = &mut login.home
+                {
                     home.shared = true;
                 }
                 logins.insert(login.key(), login);
@@ -481,7 +478,6 @@ impl LoginCatalog {
         Ok(Self {
             logins,
             account_kinds,
-            standalone,
         })
     }
 
@@ -529,32 +525,6 @@ impl LoginCatalog {
             })
     }
 
-    /// Fold requested accounts over project, machine, then provider defaults.
-    pub fn birth_selection(
-        &self,
-        requested: &RoomLogins,
-        project: &RoomLogins,
-        machine: &RoomLogins,
-    ) -> Result<RoomLogins, BirthLoginErr> {
-        let chosen_project = project
-            .iter()
-            .filter(|(kind, _)| !requested.contains_key(*kind));
-        for (kind, name) in requested.iter().chain(chosen_project) {
-            self.select(kind, name)?;
-        }
-        for (kind, name) in machine
-            .iter()
-            .filter(|(kind, _)| !requested.contains_key(*kind) && !project.contains_key(*kind))
-        {
-            self.select_machine(kind, name)?;
-        }
-        Ok(self
-            .account_kinds
-            .iter()
-            .map(|kind| (kind.clone(), birth_name(kind, requested, project, machine)))
-            .collect())
-    }
-
     /// `ambient` as `kind`'s own home reads it: an exported home override
     /// that names a declared account's home is dropped, since a pane born on
     /// that account exports it by design and `default` is not that account.
@@ -573,11 +543,9 @@ impl LoginCatalog {
     /// and every shared account of the kind, the login's own key for a
     /// standalone account and for a name the config does not declare.
     pub fn pool(&self, login: &LoginKey) -> LoginKey {
-        if self.logins.contains_key(login) && !self.standalone.contains(login) {
-            LoginKey::default_for(login.kind.clone())
-        } else {
-            login.clone()
-        }
+        self.logins
+            .get(login)
+            .map_or_else(|| login.clone(), ProviderLogin::pool)
     }
 
     /// Every login, defaults included, in `<kind>@<name>` order.
@@ -593,22 +561,6 @@ impl LoginCatalog {
             .map(|login| login.name().clone())
             .collect()
     }
-}
-
-/// The account a fresh room launches `kind` under: the requested one, then
-/// the project's, then the machine's, then `default`.
-pub(crate) fn birth_name(
-    kind: &AgentKind,
-    requested: &RoomLogins,
-    project: &RoomLogins,
-    machine: &RoomLogins,
-) -> LoginName {
-    requested
-        .get(kind)
-        .or_else(|| project.get(kind))
-        .or_else(|| machine.get(kind))
-        .cloned()
-        .unwrap_or_default()
 }
 
 /// The command that repairs an account's home: `default` is the provider's
@@ -1041,29 +993,12 @@ impl RoomAccounts {
         self.account(kind).map(|account| account.source)
     }
 
-    pub fn pinned(&self, kind: &AgentKind) -> bool {
-        self.pins.contains_key(kind)
-    }
-
     pub fn pin(&self, kind: &AgentKind) -> Option<&LoginName> {
         self.pins.get(kind)
     }
 
     pub fn pinned_names(&self) -> RoomLogins {
         self.pins.clone()
-    }
-
-    /// Successful names only; absence means no account, not `default`.
-    pub fn names(&self) -> RoomLogins {
-        self.outcomes
-            .iter()
-            .filter_map(|(kind, account)| {
-                account
-                    .as_ref()
-                    .ok()
-                    .map(|account| (kind.clone(), account.name.clone()))
-            })
-            .collect()
     }
 
     pub fn login(
@@ -1170,24 +1105,17 @@ fn resolve_account_layers(
                 if let Some(error) = error {
                     return Err(RoomLoginErr::resolution(error.clone()));
                 }
-                let empty = RoomLogins::new();
-                let project = if pins.contains_key(&kind) {
-                    &empty
-                } else if let Ok(crate::trust::ProjectLogins::Apply(project)) = &project {
-                    project
+                let (name, source) = if let Some(name) = pins.get(&kind) {
+                    (name.clone(), LoginSource::Pinned)
+                } else if let Ok(crate::trust::ProjectLogins::Apply(project)) = &project
+                    && let Some(name) = project.get(&kind)
+                {
+                    (name.clone(), LoginSource::Project)
+                } else if let Some(name) = machine.accounts.use_accounts.get(&kind) {
+                    (name.clone(), LoginSource::Machine)
                 } else {
-                    &empty
+                    (LoginName::default_login(), LoginSource::Provider)
                 };
-                let source = if pins.contains_key(&kind) {
-                    LoginSource::Pinned
-                } else if project.contains_key(&kind) {
-                    LoginSource::Project
-                } else if machine.accounts.use_accounts.contains_key(&kind) {
-                    LoginSource::Machine
-                } else {
-                    LoginSource::Provider
-                };
-                let name = birth_name(&kind, pins, project, &machine.accounts.use_accounts);
                 if !name.is_default() {
                     let catalog = LoginCatalog::for_kind(&machine.accounts, &kind)?;
                     if source == LoginSource::Machine {

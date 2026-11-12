@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{AgentState, AgentStatus, LoginCatalog};
+use crate::agents::{AgentState, AgentStatus};
 use crate::trust::TrustState;
 
 fn kind(value: &str) -> AgentKind {
@@ -52,14 +52,7 @@ fn applied(project: &RoomLogins) -> ProjectLogins {
 }
 
 #[test]
-fn active_account_is_what_birth_selects_without_a_request() {
-    let catalog = LoginCatalog::from_config(
-        &toml::from_str(
-            "[claude.work]\nhome = \"/srv/claude-work\"\n[codex.team]\nhome = \"/srv/codex-team\"\n",
-        )
-        .unwrap(),
-    )
-    .unwrap();
+fn active_account_follows_recorded_then_project_then_machine() {
     let layers = [
         logins(&[]),
         logins(&[("claude", "work")]),
@@ -71,19 +64,20 @@ fn active_account_is_what_birth_selects_without_a_request() {
     for recorded in std::iter::once(None).chain(layers.iter().cloned().map(Some)) {
         for project in &layers {
             for machine in &layers {
-                let Ok(born) = catalog.birth_selection(
-                    &recorded.clone().unwrap_or_default(),
-                    project,
-                    machine,
-                ) else {
-                    continue;
-                };
                 let standing = standing(recorded.clone(), applied(project), machine.clone());
                 for kind_name in ["claude", "codex"] {
                     let kind = kind(kind_name);
                     assert_eq!(
                         standing.active(&kind),
-                        Some(born.get(&kind).cloned().unwrap_or_default()),
+                        Some(
+                            recorded
+                                .as_ref()
+                                .and_then(|recorded| recorded.get(&kind))
+                                .or_else(|| project.get(&kind))
+                                .or_else(|| machine.get(&kind))
+                                .cloned()
+                                .unwrap_or_default()
+                        ),
                         "{kind} under recorded {recorded:?}, project {project:?}, machine {machine:?}"
                     );
                     compared += 1;
