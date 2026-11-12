@@ -6053,16 +6053,6 @@ reason = "Supervised-run terminal classification kept beside the signal; the red
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::CheckTrip"
-reason = "CLI renders trip output and drives the spawn; bd89f8fcf, d80549907."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::runner::PreparedSpawn"
-reason = "CLI renders trip output and drives the spawn; bd89f8fcf, d80549907."
-
-[[verdict]]
-kind = "item"
 key = "harness::schedule::ScheduleErr"
 reason = "Reached by inference from the binary; narrowing is a private-interface lint."
 
