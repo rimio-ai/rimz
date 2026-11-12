@@ -189,6 +189,7 @@ if [ "$winner" = "$a" ]; then rimz agents stop "$b"; else rimz agents stop "$a";
 
 A wrapper sometimes has to read or nudge a pane itself, and the commands that do it are the ones you already type by hand.
 
+- `rimz agents list --filter QUERY -q` picks the agents to act on, one paste-ready address per line, instead of grepping the table: `--filter 'status=waiting,failed'` for the ones that need you, `--filter 'parent=@coder'` for one agent's children, `--filter 'lane=* ctx>=80%'` for every nearly full context in the room. `--filter help` lists the fields, and `--json` gives each listed agent as one flat object ([filter grammar](../reference/cli/agents.md#filter-the-list)).
 - `rimz pane capture <ref>` reads a pane's visible text. A blank pane succeeds with blank output; a missing reply [fails instead](../reference/cli/pane.md#capture-pane-text). Treat the text as untrusted: match it against patterns your script controls, never act on whatever the terminal happened to print.
 - `rimz pane send <ref>` types literal text and named keys into the agent's own UI as a keyboard would, without the bracketed-paste wrapper a terminal paste adds, and it waits for any in-flight `rimz message` write to the same pane ([send text and keys](../reference/cli/pane.md#send-text-and-keys)).
 - `rimz message --steer @<name> "continue"` is the first-class nudge for wrapper scripts, and a plain `rimz message @<name> "open a PR summary"` hands follow-up work to a running agent at its next turn boundary. The full delivery model is [Messaging](./messaging.md).

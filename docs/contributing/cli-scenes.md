@@ -10,6 +10,8 @@ A scene's `list` leads with what needs a person, before the inventory. The rows 
 
 A scene never filters on `AgentStatus::is_attention()` itself, and never classifies by counting status strings. A team whose board owner holds no live seat adds a `not live` row; owner liveness is `crates/rimz/src/address.rs::role_holders` over the cohort's live members, the rule flip delivery already applies.
 
+`rimz agents list --filter` selects rows through one library vocabulary, `crates/rimz/src/address/selector.rs`: the field table (`Field`), the flat row (`AgentRow`), the query and its default set (`Query`). The scope (`#lane`, `-w`, `--all`) applies first, and a filter only narrows it; a term naming `lane`, `live`, or `parent` replaces that field's default and no other. The row's serialized keys, `--filter help`, and shell completion all read `Field`, so a field added there reaches every surface, and each enum field's values come from an exhaustive match on its type. A malformed query is a `UsageError` that names the term.
+
 ## One described address shape
 
 Each scene names its target one way and says so in help. Agents take `@handle[#channel]`, and their root lane spells `#main`. A team cohort is `team#lane` (`forge#feat-x`); a root-checkout cohort launched without `--channel` has lane `<dir>/<team>` (`forge#api/forge`), not `#main`. Every verb that acts on one cohort takes that positional, and a flag that selects the same thing (`-w NAME`) is described as the same selection rather than as a second address. Help prints the positional's meaning, not a bare metavariable.
