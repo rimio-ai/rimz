@@ -468,6 +468,94 @@ fn supervised_run_parks_until_the_soft_compaction_continue_turn_finishes() {
 }
 
 #[test]
+fn supervised_run_keeps_waiting_while_a_spent_window_withholds_the_continue() {
+    use rimz::harness::run;
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let fixture = Fixture::new("claude");
+    let store = fixture.env.store();
+    let mut record = RunRecord::new(
+        fixture.env.workspace_id.clone(),
+        fixture.request.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "finish the task".into(),
+        fixture.env.project_root.clone(),
+    );
+    record.agent_id = Some(fixture.request.agent_id.clone());
+    record.status = RunStatus::Running;
+    record.subagent = true;
+    run::create(store.paths(), &record).unwrap();
+    let end = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    fixture.send(SoftCompactStep::WrapUp);
+    fixture.lifecycle(end.clone());
+    run::settle_lifecycle(
+        &store,
+        &record.run_id,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &AgentLifecycleObservation::new(record.agent_id.clone(), end),
+        Some("note before compaction".into()),
+    )
+    .unwrap();
+    let publish = |used: u8| {
+        fixture
+            .env
+            .publish_rate_limits(&rimz::agents::account::RateLimitsCache {
+                entries: [(
+                    rimz::ids::LoginKey::default_for(fixture.request.kind.clone()).into(),
+                    rimz::agents::account::RateLimitCacheEntry {
+                        limits: rimz::agents::AgentRateLimits {
+                            windows: vec![rimz::agents::RateLimitWindow {
+                                used_percentage: Some(used),
+                                duration_mins: Some(300),
+                                resets_at: Some(
+                                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                                ),
+                                ..Default::default()
+                            }],
+                        },
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            });
+    };
+    let continues = || {
+        fixture
+            .records()
+            .iter()
+            .filter(|message| message.soft_compact == Some(SoftCompactStep::Continue))
+            .count()
+    };
+    fixture.env.runtime_paths().ensure_dirs().unwrap();
+    publish(100);
+    fixture.send(SoftCompactStep::Continue);
+    assert_eq!(continues(), 0, "the helper withholds the continue");
+    let parked = run::load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(
+        parked.status,
+        RunStatus::Running,
+        "the run is not completed"
+    );
+    assert_eq!(
+        run::settle_stranded_park(&store, &parked, parked.parked_at).unwrap(),
+        run::ParkCheck::Live,
+        "the owed continue keeps the run waiting"
+    );
+    publish(40);
+    fixture.send(SoftCompactStep::Continue);
+    assert_eq!(
+        continues(),
+        1,
+        "the owed continue goes out once the window has room"
+    );
+}
+
+#[test]
 fn native_mid_turn_compaction_then_interrupt_never_queues_continue() {
     let fixture = Fixture::new("claude");
     fixture.send(SoftCompactStep::WrapUp);

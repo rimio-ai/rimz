@@ -13764,6 +13764,158 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
 }
 
 #[test]
+fn boundary_auto_compact_at_a_spent_window_writes_the_prompt_uncompacted() {
+    let usable = json!({"known": {"remaining_usd": 20.0}});
+    for (case, extra_credits, entitlement, compacts) in [
+        ("no paid extra usage", None, json!("ok"), false),
+        (
+            "paid extra usage disabled",
+            Some(json!("disabled")),
+            json!("ok"),
+            false,
+        ),
+        (
+            "a lapsed entitlement",
+            Some(usable.clone()),
+            json!({"lapsed": {"since_ms": 1}}),
+            false,
+        ),
+        (
+            "usable paid extra usage",
+            Some(usable.clone()),
+            json!("ok"),
+            true,
+        ),
+    ] {
+        assert_spent_window_compact_first(case, extra_credits, entitlement, compacts);
+    }
+}
+
+/// Sends a smart-compact message to a full agent whose 5-hour window is spent, with
+/// `extra_credits` on its login, and checks the compaction goes first only when `compacts`.
+fn assert_spent_window_compact_first(
+    case: &str,
+    extra_credits: Option<serde_json::Value>,
+    entitlement: serde_json::Value,
+    compacts: bool,
+) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-ac-spent",
+            "worktree_branch": "feature-ac-spent",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-ac-spent", 80);
+    env.runtime_paths().ensure_dirs().unwrap();
+    let login = rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude"));
+    env.publish_rate_limits(&rimz::agents::account::RateLimitsCache {
+        entries: [(
+            login.clone().into(),
+            rimz::agents::account::RateLimitCacheEntry {
+                limits: rimz::agents::AgentRateLimits {
+                    windows: vec![rimz::agents::RateLimitWindow {
+                        used_percentage: Some(100),
+                        duration_mins: Some(300),
+                        resets_at: Some(
+                            jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                        ),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+    if let Some(extra_credits) = extra_credits {
+        let now_ms = jiff::Timestamp::now().as_millisecond();
+        std::fs::write(
+            env.runtime_paths().shared_credits_path(),
+            serde_json::to_vec(&json!({
+                "refreshed_at_ms": now_ms,
+                "logins": {(login.to_string()): {
+                    "ok": true,
+                    "observed_at_ms": now_ms,
+                    "entitlement": entitlement,
+                    "extra_credits": extra_credits,
+                }}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    let trace_log = env.project_root.join("zellij-ac-spent-trace.log");
+    let out = run_success(
+        traced_rimz(&env, "zellij-ac-spent-trace.log")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args([
+                "message",
+                "@claude",
+                "--smart-compact",
+                "70%",
+                "--",
+                "go without compact",
+            ]),
+        "boundary smart compact at a spent window",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.contains("delivers when compaction completes"),
+        compacts,
+        "{case}: {stdout}"
+    );
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines.iter().filter(|line| is_compact_command(line)).count(),
+        usize::from(compacts),
+        "{case}: a compact command only when paid extra usage carries the window"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, &user_message("go without compact")))
+            .count(),
+        usize::from(!compacts),
+        "{case}: the prompt waits on the compaction, or is written in the same delivery"
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(
+        messages
+            .iter()
+            .any(|message| message.body == MessageBody::Command),
+        compacts,
+        "{case}: compaction claimed: {messages:?}"
+    );
+    if compacts {
+        return;
+    }
+    let prompt = messages
+        .iter()
+        .find(|message| message.body == MessageBody::Prompt)
+        .expect("sent prompt");
+    assert_eq!(prompt.status, MessageStatus::Sent, "{case}");
+    let stats = run_success(
+        env.rimz().args(["stats", "--assists", "--all", "--json"]),
+        "assist stats",
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert!(
+        stats["events"]
+            .as_array()
+            .is_none_or(|events| events.iter().all(|event| event["assist"] != "auto_compact")),
+        "{case}: {stats}"
+    );
+}
+
+#[test]
 fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
     let env = Env::new();
     env.record(&env.project_root);

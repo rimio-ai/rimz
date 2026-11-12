@@ -639,7 +639,16 @@ fn compact_message_for_target<'a>(
     if agent.holds_open_turn() || !threshold.triggered(agent) {
         return None;
     }
-    if agent.compaction_unprompted(jiff::Timestamp::now()) {
+    let now = jiff::Timestamp::now();
+    // RimZ compacts nothing while the login reads a spent usage window that no usable paid
+    // extra usage carries, so the prompt goes uncompacted.
+    if agent.compaction_unprompted(now)
+        || crate::agents::ProviderCapacity::login_compaction_blocked(
+            store.runtime_paths(),
+            agent,
+            now,
+        )
+    {
         return None;
     }
     let config = crate::config::MachineConfig::load_lenient();
