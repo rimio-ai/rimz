@@ -49,7 +49,7 @@ The body is copied byte for byte and never parsed: it may hold its own `---` hea
 
 A `--meta` key starts with a lowercase ASCII letter and holds only lowercase letters, digits, `_`, and `-`, so no key reads as a YAML number; its value is one line. Any other key, a value with a line break, or an argument with no `=` is a usage error and writes no note. A key that names one of RimZ's own header keys is dropped with one warning on stderr, even when RimZ has no value of its own for it. A key given twice keeps its last value, in the position of its first.
 
-`add` exits `0` with the path, `2` for a refused kind, title, or `--meta` argument, and `1` for an empty body, an unreadable `--file`, or a failed write. A refused add leaves nothing behind in the store.
+`add` exits `0` with the path, `2` for a refused kind, title, or `--meta` argument or a header past 1 MiB, and `1` for an empty body, an unreadable `--file`, or a failed write. A refused add leaves nothing behind in the store.
 
 ## The header
 
@@ -105,4 +105,4 @@ The table shows `WRITTEN`, `KIND`, `AUTHOR`, `TITLE`, and `PATH`, each value on 
 ]
 ```
 
-A `.md` file in the store that does not open with a RimZ header, whose header does not close within the file's first 1 MiB or is not UTF-8, or that has no readable `written` key is skipped with one warning on stderr naming it, and the listing goes on. Files without the `.md` extension, including a half-written temporary file left by an interrupted add, are skipped without a word.
+A `.md` file in the store that does not open with a RimZ header, whose header does not close within the file's first 1 MiB or is not UTF-8, or that has no readable `written` key is skipped with one warning on stderr naming it, and the listing goes on. `add` refuses a header that would not close within that 1 MiB, so every note it writes lists. Files without the `.md` extension, including a half-written temporary file left by an interrupted add, are skipped without a word.

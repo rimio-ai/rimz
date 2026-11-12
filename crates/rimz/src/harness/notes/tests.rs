@@ -269,12 +269,20 @@ fn refused_input_leaves_no_file_and_no_directory() {
             },
             "meta value lines",
         ),
+        (
+            AddRequest {
+                meta: vec![format!("big={}", "x".repeat(1024 * 1024))],
+                ..request("diary", "Title", b"x")
+            },
+            "header too large",
+        ),
     ];
     for (request, case) in refusals {
         let error = add_at(&root, &request, &[], &noon()).unwrap_err();
         let expected = match case {
             "empty" | "blank" | "unicode blank" => matches!(error, NotesErr::EmptyBody),
             "title" | "kind dots" | "kind slash" => matches!(error, NotesErr::NoSlug { .. }),
+            "header too large" => matches!(error, NotesErr::HeaderTooLarge { .. }),
             _ => matches!(error, NotesErr::BadMeta { .. }),
         };
         assert!(expected, "{case}: {error}");

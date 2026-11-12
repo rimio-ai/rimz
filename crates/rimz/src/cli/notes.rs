@@ -161,7 +161,7 @@ fn list(filter: ListFilter, json: bool) -> Result<()> {
 /// Input the command line got wrong exits 2; everything else is a failure.
 fn usage_or_error(error: NotesErr) -> anyhow::Error {
     match error {
-        NotesErr::NoSlug { .. } | NotesErr::BadMeta { .. } => {
+        NotesErr::NoSlug { .. } | NotesErr::BadMeta { .. } | NotesErr::HeaderTooLarge { .. } => {
             UsageError::new(error.to_string()).into()
         }
         error => error.into(),
