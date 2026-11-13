@@ -37,36 +37,44 @@ impl<'a> Host<'a> {
 
     /// Read the checkout again once the launch is prepared: a takeover stops its occupants,
     /// so a launch the preparation refuses (an untrusted folder, untrusted hooks) stops no one.
-    /// An occupant that arrived while the launch was prepared returns the checkout's occupancy,
-    /// which the step waits on as it would on the first read.
+    /// The checkout is free only by a read taken after the last stop issued: a read that finds
+    /// stoppable occupants stops them and reads again, up to `EVICT_STOP_ROUNDS` times. A read
+    /// that finds blockers, or occupants left once the rounds are spent, returns the checkout's
+    /// occupancy, which the step waits on as it would on the first read.
     fn evict(
         &self,
         eviction: &workflow::Eviction,
         stops: bool,
     ) -> Result<Option<workflow::Occupancy>> {
         let ctx = self.ctx()?;
-        let snapshot = workflow::without_excluded(ctx.alive_snapshot()?, &eviction.excluded);
-        let card_status = rimz::harness::CardStatus::new(&ctx.store);
-        let takeover = takeover::read(
-            &snapshot,
-            &card_status,
-            &eviction.checkout,
-            &eviction.project_root,
-        )?;
-        let peers = rimz::address::addressable_agents(&snapshot);
-        if let Takeover::Stop(agents) = &takeover
-            && stops
-        {
-            let results = agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, agents)?;
-            for (agent, stop) in agents.iter().zip(results) {
-                stop.into_result(&rimz::address::agent_handle(agent, &peers, true))?;
+        let mut rounds = 0;
+        loop {
+            let snapshot = workflow::without_excluded(ctx.alive_snapshot()?, &eviction.excluded);
+            let card_status = rimz::harness::CardStatus::new(&ctx.store);
+            let takeover = takeover::read(
+                &snapshot,
+                &card_status,
+                &eviction.checkout,
+                &eviction.project_root,
+            )?;
+            let peers = rimz::address::addressable_agents(&snapshot);
+            if let Takeover::Stop(agents) = &takeover
+                && !agents.is_empty()
+                && stops
+                && rounds < EVICT_STOP_ROUNDS
+            {
+                let results = agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, agents)?;
+                for (agent, stop) in agents.iter().zip(results) {
+                    stop.into_result(&rimz::address::agent_handle(agent, &peers, true))?;
+                }
+                rounds += 1;
+                continue;
             }
-            return Ok(None);
+            return Ok(match occupancy_of(takeover, &peers) {
+                workflow::Occupancy::Free => None,
+                taken => Some(taken),
+            });
         }
-        Ok(match occupancy_of(takeover, &peers) {
-            workflow::Occupancy::Free => None,
-            taken => Some(taken),
-        })
     }
 
     /// Retire the push-back the run's attempt queued, so no ending of the attempt (a stop or a
@@ -106,6 +114,10 @@ impl<'a> Host<'a> {
         }))
     }
 }
+
+/// How many times one eviction stops the occupants a fresh read finds before it returns them
+/// as the checkout's occupancy.
+const EVICT_STOP_ROUNDS: usize = 3;
 
 fn host_error(error: impl std::fmt::Display) -> WorkflowErr {
     WorkflowErr::Refused(error.to_string())
