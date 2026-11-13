@@ -523,16 +523,20 @@ pub(super) enum TerminalPayload {
 impl TargetOutcome {
     pub(super) fn entry(&self) -> WaitEntryJson {
         match &self.payload {
-            TerminalPayload::Run(record) => WaitEntryJson::new(
-                self.name.clone(),
-                record.status,
-                record.cost_usd,
-                record.transcript_path.clone(),
-                record.last_message.clone(),
-                (record.status == RunStatus::Failed)
-                    .then(|| record.failure_tail.clone())
-                    .flatten(),
-            ),
+            TerminalPayload::Run(record) => {
+                let mut entry = WaitEntryJson::new(
+                    self.name.clone(),
+                    record.status,
+                    record.cost_usd,
+                    record.transcript_path.clone(),
+                    record.last_message.clone(),
+                    (record.status == RunStatus::Failed)
+                        .then(|| record.failure_tail.clone())
+                        .flatten(),
+                );
+                entry.cancel_reason = record.cancel_reason;
+                entry
+            }
             TerminalPayload::Agent {
                 agent,
                 completion,
@@ -584,6 +588,8 @@ pub(super) struct WaitEntryJson {
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cancel_reason: Option<rimz::store::run::CancelReason>,
 }
 
 impl WaitEntryJson {
@@ -604,6 +610,7 @@ impl WaitEntryJson {
             last_message,
             error,
             reason: None,
+            cancel_reason: None,
         }
     }
 }
@@ -1348,5 +1355,29 @@ mod tests {
                 assert!(json.get("permission_review_until").is_none());
             }
         }
+    }
+
+    #[test]
+    fn a_run_canceled_because_its_parent_ended_carries_the_reason_in_json() {
+        let mut record = RunRecord::new(
+            rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            std::path::Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.status = RunStatus::Canceled;
+        let outcome = |record: &RunRecord| TargetOutcome {
+            reference: "@otter".to_owned(),
+            name: "otter".to_owned(),
+            payload: TerminalPayload::Run(Box::new(record.clone())),
+        };
+        let json = serde_json::to_value(outcome(&record).entry()).unwrap();
+        assert!(json.get("cancel_reason").is_none(), "{json}");
+
+        record.cancel_reason = Some(rimz::store::run::CancelReason::ParentEnded);
+        let json = serde_json::to_value(outcome(&record).entry()).unwrap();
+        assert_eq!(json["cancel_reason"], "parent_ended", "{json}");
+        assert_eq!(json["status"], "canceled", "{json}");
     }
 }

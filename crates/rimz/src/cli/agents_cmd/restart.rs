@@ -335,15 +335,18 @@ pub(in crate::cli) fn restart_resolved(
             jiff::Timestamp::now(),
         )?;
     }
-    let runs = match &restart {
-        Some(_) if agent.is_launched_child() => rimz::harness::run::list(store.paths())?,
-        _ => Vec::new(),
+    let child = restart.is_some() && agent.is_launched_child();
+    let runs = if child || agent.workflow.is_some() {
+        rimz::harness::run::list(store.paths())?
+    } else {
+        Vec::new()
     };
-    let (handover, failed_run) = open_run_fate(
-        newest_run_for_child(&runs, agent),
+    let (child_handover, failed_run) = open_run_fate(
+        child.then(|| newest_run_for_child(&runs, agent)).flatten(),
         fresh_reason.is_none(),
         skipped_continue.is_some(),
     );
+    let handover = child_handover.or_else(|| open_session_run(&runs, agent));
     rimz::harness::hibernate::wake_pane(store, &old_pane)?;
     let mut request = fresh_launch_request(agent, cell, posture.launch.mode)?;
     request.login = match (fresh_reason, flag_account) {
@@ -410,7 +413,7 @@ pub(in crate::cli) fn restart_resolved(
     }
     release_replaced(ctx, agent, &old_pane, fresh_reason.is_some());
     close_replaced(ctx, backend.as_ref(), &old_pane);
-    if let Some(run) = handover {
+    if let Some(run) = child_handover {
         let caller = restart.as_ref().and_then(|restart| restart.caller);
         if let Err(err) = notify_parent_restarted(ctx, agents, agent, run, &account, caller) {
             let _ = writeln!(
@@ -609,10 +612,11 @@ pub(super) fn settle_placement(
     let handle = handle(agent);
     match store.abort_agent_swap(identity, batch.scope()) {
         Ok(rimz::store::writer::SwapAbort::Bound) => {
-            writeln!(
+            // The swap carries on, so the caller's cleanup must still run.
+            let _ = writeln!(
                 crate::cli::render::err(),
                 "rimz: the replacement bound despite an error: {err:#}"
-            )?;
+            );
             Ok(())
         }
         aborted => {
@@ -694,8 +698,22 @@ pub(super) fn swap_briefing(
         .filter(|child| !child.session_over())
         .map(handle)
         .collect::<Vec<_>>();
-    let catalog = rimz::harness::schedule::catalog::TaskCatalog::load(Some(project_root))?;
+    let runs = rimz::harness::run::list(store.paths())?;
+    // Runtime drops a subagent's ended children, so the answers they owe are
+    // read over every retained row: each launch's holder, so a swapped
+    // child's replaced session never stands in for the live one.
     let audit = store.audit_rows()?;
+    let holders = rimz::agents::state::LaunchHolders::new(audit.iter());
+    let held = audit.iter().filter(|row| !holders.replaced(row));
+    let owed = rimz::harness::fleet::FleetRuns::of(held, &runs, agent)
+        .unreported()
+        .into_iter()
+        .filter(|(child, _)| child.is_launched_child() && child.session_over())
+        .map(|(child, _)| handle(child))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let catalog = rimz::harness::schedule::catalog::TaskCatalog::load(Some(project_root))?;
     let rows = audit.iter().collect::<Vec<_>>();
     let waits = rimz::harness::schedule::pending::session_deliveries(
         &catalog,
@@ -721,7 +739,7 @@ pub(super) fn swap_briefing(
     let queued = count(rimz::store::message::MessageStatus::Queued)
         + count(rimz::store::message::MessageStatus::Claimed);
     let unconfirmed = count(rimz::store::message::MessageStatus::Sent);
-    let section = briefing_section(&children, &waits, queued, unconfirmed);
+    let section = briefing_section(&children, &owed, &waits, queued, unconfirmed);
     Ok(match (note, section) {
         (None, None) => None,
         (Some(note), None) => Some(note.to_owned()),
@@ -732,6 +750,7 @@ pub(super) fn swap_briefing(
 
 fn briefing_section(
     children: &[String],
+    owed: &[String],
     waits: &[String],
     queued: usize,
     unconfirmed: usize,
@@ -749,6 +768,18 @@ fn briefing_section(
             "- {} still running ({}); their results come to you: `rimz subagents list`",
             plural(children.len(), "subagent", "subagents"),
             children.join(", ")
+        ));
+    }
+    if !owed.is_empty() {
+        lines.push(format!(
+            "- {} finished with {} still owed to you ({}): `rimz subagents list`",
+            plural(owed.len(), "subagent", "subagents"),
+            if owed.len() == 1 {
+                "its answer"
+            } else {
+                "their answers"
+            },
+            owed.join(", ")
         ));
     }
     if !waits.is_empty() {
@@ -936,6 +967,22 @@ pub(in crate::cli) fn newest_run_for_child<'a>(
                         .is_some_and(|(run, child)| run == child))
         })
         .max_by_key(|run| run.started_at)
+}
+
+/// The open workflow session run `agent` leads. A restart or molt hands it to the replacement,
+/// so only the agent's holder session settles it, and a replaced session's exit never does.
+pub(super) fn open_session_run<'a>(
+    runs: &'a [rimz::store::run::RunRecord],
+    agent: &AgentState,
+) -> Option<&'a rimz::store::run::RunRecord> {
+    let attempt = agent.workflow.as_ref()?;
+    runs.iter().find(|run| {
+        run.lifecycle == rimz::store::run::RunLifecycle::Session
+            && !run.status.is_terminal()
+            && run.workflow.as_ref() == Some(attempt)
+            && run.agent_name.is_some()
+            && run.agent_name == agent.name
+    })
 }
 
 /// What a restart does with a child's newest run, as `(handed over, failed)`: an open run goes
@@ -1284,7 +1331,7 @@ fn notify_parent_restarted(
 }
 
 fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result<()> {
-    if rimz::harness::run::fail_peer_run(store, agent, "peer restarted")?.is_some()
+    if rimz::harness::run::fail_peer_turn(store, agent, "peer restarted")?.is_some()
         && let Some((_, launcher)) = agent.launcher()
     {
         rimz::harness::orphan_sweep::spawn_digest_helper(store.runtime_paths(), launcher.clone());

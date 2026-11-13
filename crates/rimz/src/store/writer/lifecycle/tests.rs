@@ -120,7 +120,10 @@ fn snapshot_replay_and_cacheless_fold_agree_on_the_transition() {
             })
             .unwrap();
         let events = store.read_events().unwrap();
-        let replay = Store::recover_hook_lifecycle(events.last().unwrap()).unwrap();
+        let replay = store
+            .recover_hook_lifecycle(events.last().unwrap())
+            .unwrap()
+            .unwrap();
         let transition = receipt.transition.unwrap();
         let replay = replay.transition.unwrap();
         assert_eq!(
@@ -294,11 +297,23 @@ fn hook_replay_metadata_does_not_repeat_the_event_payload() {
         let without_replay = crate::store::event_log::encode_batch(&[without])
             .unwrap()
             .len();
-        recorded.push((name, envelope, receipt, with_replay, without_replay));
+        recorded.push((
+            name,
+            envelope,
+            receipt,
+            with_replay,
+            without_replay,
+            store,
+            _dir,
+        ));
     }
-    for (name, envelope, receipt, with_replay, without_replay) in recorded {
+    for (name, envelope, receipt, with_replay, without_replay, store, _dir) in recorded {
         assert_eq!(
-            Store::recover_hook_lifecycle(&envelope).unwrap().events,
+            store
+                .recover_hook_lifecycle(&envelope)
+                .unwrap()
+                .unwrap()
+                .events,
             receipt.events,
             "{name}: with replay {with_replay} bytes, without replay {without_replay} bytes"
         );
@@ -344,7 +359,7 @@ fn hook_recovery_preserves_the_keepalive_ping_transition() {
         }),
     );
     let envelope = store.read_events().unwrap().pop().unwrap();
-    let recovered = Store::recover_hook_lifecycle(&envelope).unwrap();
+    let recovered = store.recover_hook_lifecycle(&envelope).unwrap().unwrap();
     assert_eq!(
         recovered.transition.map(|transition| transition.ping),
         Some(Some(PingEdge::Close)),
@@ -1781,6 +1796,14 @@ fn receipts_mark_a_replaced_sessions_events_and_drop_a_stale_ones_effects() {
     let receipt = append("s1", 0, "tmux:%1", turn());
     assert!(receipt.replaced && !receipt.stale, "{receipt:?}");
     assert!(receipt.transition.is_some(), "{receipt:?}");
+    let recover_last = || {
+        store
+            .recover_hook_lifecycle(store.read_events().unwrap().last().unwrap())
+            .unwrap()
+            .unwrap()
+    };
+    let recovered = recover_last();
+    assert!(recovered.replaced && !recovered.stale, "{recovered:?}");
 
     // A resumed swap: the same session continues at the next epoch, and an
     // event its old process stamped with the epoch before is stale.
@@ -1801,6 +1824,14 @@ fn receipts_mark_a_replaced_sessions_events_and_drop_a_stale_ones_effects() {
         "{receipt:?}"
     );
     assert!(!receipt.waiting_cleared);
+    // A drainer replay of the same frame recovers the same verdict.
+    let recovered = recover_last();
+    assert!(recovered.stale, "{recovered:?}");
+    assert!(
+        recovered.transition.is_none() && recovered.events.is_empty(),
+        "{recovered:?}"
+    );
+
     // A stale frame keeps its own record and stages nothing derived from it:
     // no child stop, no compaction rebind, no rotation claim.
     let queued = crate::store::message::MessageRecord::new(

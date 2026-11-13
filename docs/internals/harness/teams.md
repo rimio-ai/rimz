@@ -14,7 +14,7 @@ A team is staged when it declares `stages` or any role `owns` a stage (`config::
 | `harness/scratch.rs` | Read side: link resolution (`run_dir`, `run_team`), board paths, the memory scan, `board_stage`, `board_section`, `board_run`, and `holding_team` |
 | `harness/board.rs` | Write side: `LockedBoard` (canonical worktree, board lock, owner check, read), stamping, section insertion, `Stage:` rewriting, atomic publication, and `record` |
 | `harness/team_stage.rs` | `flip`, the two re-wake producers (`rewake_resumed`, the registration branch of `react_lifecycle`), owner delivery, flip compaction, and `stage_flips` |
-| `harness/run/team.rs` | The team run: `create_team_run`, `reopen_team_run`, `settle_team_run`, `rekey_team_run` |
+| `harness/run/team.rs` | The team run: `create_team_run`, `reopen_team_run`, `settle_team_run` |
 | `cli/agents_cmd/team_report.rs` | `on_flip` and `settle_ended_teams`: composing, queueing, and settling the `TEAM_REPORT` |
 | `cli/teams/board_context.rs` | Worktree and caller resolution shared by `flip` and `record` |
 | `cli/teams/list.rs`, `cli/teams/show.rs`, `cli/teams/wait.rs` | The board's CLI readers |
@@ -136,7 +136,7 @@ A ledger line is `- <stamp> @<by>: <from> -> <to> — <note>`, or `opened <to>` 
 
 `flip` needs a live or held cohort. `record` with an address resolves it the same way. `record` without an address needs neither, only a linked run with a named owner: an unscoped human entry accepts that owner, and a member writes as its own team. A member whose cohort works in another worktree is refused.
 
-The caller is a member (`Flipper::Member`) when it belongs to the selected cohort, and the user (`Flipper::User`) otherwise. An agent from another cohort is refused. `flip` loads the team definition and checks its trust. `record` loads neither. A held cohort flips with no members, as the user. A flip to `Done` ends its board-stage hold (the receipt prints `checkout released`) without removing the checkout. Stop, restart, and the death backstop settle such a cohort's team run, so the report step usually finds nothing to send. A run the backstop has not yet reached still reports completed to a live launcher.
+The caller is a member (`Flipper::Member`) when it belongs to the selected cohort, and the user (`Flipper::User`) otherwise. An agent from another cohort is refused. `flip` loads the team definition and checks its trust. `record` loads neither. A held cohort flips with no members, as the user. A flip to `Done` ends its board-stage hold (the receipt prints `checkout released`) without removing the checkout. Stop and the death backstop settle such a cohort's team run, so the report step usually finds nothing to send. A run the backstop has not yet reached still reports completed to a live launcher.
 
 `team_stage::flip` then runs six steps:
 
@@ -172,7 +172,7 @@ The check reads the live queue and the message history together under the worksp
 
 An agent-launched team reports its leader to the launcher once per `Done`, with one `TEAM_REPORT` from `@rimz` (`HarnessNotice::TeamReport`). The report rides a team run: a `RunRecord` whose `team` field holds the leader's `launch_id` and the `<team>#<channel>` instance. [scripting.md](./scripting.md#completion-folding-lifecycle-observations) owns the record and its lifecycle fold.
 
-`run::create_peer_prompt` opens a team run for the seat that receives the launch prompt, the run's leader, when an agent launched it, the prompt is nonempty, and the leader's adapter has native root turn hooks. A user launch, a promptless launch, and a resume open none. While open, the run takes `fold_team_lifecycle`, which keeps the leader's newest final message at each turn end, follows the leader onto a new conversation row, and never settles the run. A molt keeps the leader's launch, and moves the open run to the replacement's kind once it binds (`rekey_team_run`). Team seats open no per-turn peer runs, so launcher messages to them report nothing.
+`run::create_peer_prompt` opens a team run for the seat that receives the launch prompt, the run's leader, when an agent launched it, the prompt is nonempty, and the leader's adapter has native root turn hooks. A user launch, a promptless launch, and a resume open none. While open, the run takes `fold_team_lifecycle`, which keeps the leader's newest final message at each turn end, follows the leader onto a new conversation row, and never settles the run. A molt keeps the leader's launch, so the run's hooks keep finding it by launch id (`open_team_run`), and the fold sets the run's kind to the replacement's when it rebinds the run to the replacement's session (`rebind_session`). Team seats open no per-turn peer runs, so launcher messages to them report nothing.
 
 ### Settlement
 
@@ -182,7 +182,8 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 | A flip out of `Done` | `reopen_team_run` opens a fresh run with the previous run's task, leader, reader, and report policy, but only when the cohort's newest run is terminal | None now. The next `Done` reports. |
 | The cohort ends: no live members, or every member's recorded process dead (`fleet::ended_team_runs`) | Completed when the board reads `Done`, otherwise failed with `cohort ended before Done` | `TEAM_REPORT` as a success or a failure |
 | `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/cli/agents_cmd/stop.rs::stop_run`) | None |
-| Restart or rebirth of the leader, or a failed leader launch | Failed (`run::fail_peer_run`, which falls back to the open team run) | None |
+| Rebirth of the leader, or a failed leader launch | Failed (`run::fail_peer_run`, which falls back to the open team run) | None |
+| Restart of the leader | Its open peer turn alone fails (`run::fail_peer_turn`); the team run stays open for the board's `Done` | None |
 | The launcher or the leader row is gone at settlement | Completed or failed by the board | None |
 
 Only one flip sees a transition into `Done`, because the board lock serializes flips. The report is queued before the terminal write, so a crash between the two re-reports at the next `Done` rather than losing this one. `settle_team_run` is a compare-and-set: a reporter that loses it cancels its own message, so the flip and the death backstop never both report.

@@ -452,6 +452,7 @@ fn limit_failure_round_trips_on_both_records_and_defaults_when_absent() {
             refill_at: None,
             label: None,
         }),
+        cancel_reason: None,
         opened_by: Vec::new(),
         report_message_id: None,
         joined_at: None,
@@ -481,6 +482,53 @@ fn limit_failure_round_trips_on_both_records_and_defaults_when_absent() {
     let decoded: RunRecord = serde_json::from_value(value).unwrap();
     assert_eq!(decoded.limit_failure, None);
     assert_eq!(decoded.earlier_answers[0].limit_failure, None);
+}
+
+#[test]
+fn cancel_reason_round_trips_on_both_records_and_defaults_when_absent() {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    assert!(
+        serde_json::to_value(&record)
+            .unwrap()
+            .get("cancel_reason")
+            .is_none()
+    );
+    record.status = RunStatus::Canceled;
+    record.cancel_reason = Some(CancelReason::ParentEnded);
+    record.earlier_answers.push(EarlierAnswer {
+        ordinal: 1,
+        status: RunStatus::Canceled,
+        started_at: record.started_at,
+        completed_at: None,
+        prompt: None,
+        failure_tail: None,
+        limit_failure: None,
+        cancel_reason: Some(CancelReason::ParentEnded),
+        opened_by: Vec::new(),
+        report_message_id: None,
+        joined_at: None,
+    });
+
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert_eq!(value["cancel_reason"], "parent_ended");
+    assert_eq!(value["earlier_answers"][0]["cancel_reason"], "parent_ended");
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded, record);
+
+    value.as_object_mut().unwrap().remove("cancel_reason");
+    value["earlier_answers"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("cancel_reason");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.cancel_reason, None);
+    assert_eq!(decoded.earlier_answers[0].cancel_reason, None);
 }
 
 #[test]

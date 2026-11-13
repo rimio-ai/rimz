@@ -5684,10 +5684,20 @@ fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
 fn orphan_repair_records_one_end_with_and_without_a_run() {
     use rimz::store::run::{RunRecord, RunStatus};
 
-    for with_run in [false, true] {
+    // The third case's parent row ended while its child still ran: the repair
+    // cancels the run for that reason. A missing parent row records none.
+    for (with_run, parent_ended) in [(false, false), (true, false), (true, true)] {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
+        if parent_ended {
+            for (event, signal) in [
+                ("SessionStart", LifecycleSignal::Registered),
+                ("SessionEnd", LifecycleSignal::Ended),
+            ] {
+                append_lifecycle(&env, "claude", event, "gone", signal, |_| {});
+            }
+        }
         append_lifecycle(
             &env,
             "claude",
@@ -5712,7 +5722,11 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
                 env.project_root.clone(),
             );
             run.agent_id = Some("child".into());
-            run.status = RunStatus::Completed;
+            run.status = if parent_ended {
+                RunStatus::Running
+            } else {
+                RunStatus::Completed
+            };
             run.subagent = true;
             rimz::harness::run::create(store.paths(), &run).unwrap();
         }
@@ -5745,17 +5759,36 @@ fn orphan_repair_records_one_end_with_and_without_a_run() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        if with_run {
+            let run = &rimz::harness::run::list(store.paths()).unwrap()[0];
+            assert_eq!(
+                (run.status, run.cancel_reason),
+                if parent_ended {
+                    (
+                        RunStatus::Canceled,
+                        Some(rimz::store::run::CancelReason::ParentEnded),
+                    )
+                } else {
+                    (RunStatus::Completed, None)
+                }
+            );
+        }
         let agents = store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .unwrap()
             .agents;
-        assert!(agents[0].ended_at.is_some(), "{agents:?}");
+        let child = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "child")
+            .unwrap();
+        assert!(child.ended_at.is_some(), "{agents:?}");
         let events = env.read_events();
         let ends = events
             .iter()
             .filter_map(|event| match event.kind() {
                 rimz::store::event::EventKind::AgentLifecycle(payload)
-                    if payload.observation.signal == LifecycleSignal::Ended =>
+                    if payload.observation.signal == LifecycleSignal::Ended
+                        && payload.observation.agent_id.as_deref() == Some("child") =>
                 {
                     Some(payload)
                 }

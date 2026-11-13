@@ -517,7 +517,7 @@ fn a_session_renders_with_you_or_asking_you_until_session_exit() {
             "{text}"
         );
     }
-    rimz::harness::run::settle_session_exit(&room.env.store(), &run.run_id, || None).unwrap();
+    rimz::harness::run::settle_session_exit(&room.env.store(), &run.run_id, None, || None).unwrap();
     success(
         room.command(&["workflow", "advance", &id])
             .output()

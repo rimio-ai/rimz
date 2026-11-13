@@ -4,12 +4,10 @@ mod peer;
 pub mod report;
 mod team;
 pub use peer::{
-    create_peer_prompt, describes_latest_turn, fail_peer_run, open_peer_run, peer_can_report,
-    record_run_delivery,
+    create_peer_prompt, describes_latest_turn, fail_peer_run, fail_peer_turn, open_peer_run,
+    peer_can_report, record_run_delivery,
 };
-pub use team::{
-    open_team_run, open_team_run_for, rekey_team_run, reopen_team_run, settle_team_run,
-};
+pub use team::{open_team_run, open_team_run_for, reopen_team_run, settle_team_run};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,8 +27,8 @@ use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{
-    EarlierAnswer, FollowUpTurn, ParkCause, ReportTo, RunLifecycle, RunRecord, RunSession,
-    RunStatus, RunStoreErr, RunVerify,
+    CancelReason, EarlierAnswer, FollowUpTurn, ParkCause, ReportTo, RunLifecycle, RunRecord,
+    RunSession, RunStatus, RunStoreErr, RunVerify,
 };
 use crate::store::{
     Store,
@@ -312,7 +310,11 @@ impl RunCancellation {
 /// Durably cancel a run and wake its waiter only for the newly-written
 /// terminal transition.
 pub fn cancel_and_wake(store: &Store, run_id: &RunId) -> Result<RunRecord> {
-    cancel_and_wake_paths(store.paths(), store.runtime_paths(), run_id)
+    let (record, wrote) = cancel(store.paths(), store.runtime_paths(), run_id)?;
+    if wrote {
+        crate::store::run::wake_run(store.runtime_paths(), &record);
+    }
+    Ok(record)
 }
 
 pub(super) fn cancel_unserved_workflow_run(store: &Store, run_id: &RunId) -> Result<()> {
@@ -393,13 +395,21 @@ pub fn release_workflow(
     Ok(released)
 }
 
-/// Cancel using only durable paths and the waiter's runtime socket.
+/// Cancel for `reason`, written with the Canceled status, using only durable
+/// paths and the waiter's runtime socket. A run already terminal keeps its record.
 pub fn cancel_and_wake_paths(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     run_id: &RunId,
+    reason: CancelReason,
 ) -> Result<RunRecord> {
-    let (record, wrote) = cancel(paths, runtime, run_id)?;
+    let (record, wrote) = settle_terminal(paths, runtime, run_id, |record, now| {
+        if !record.mark_terminal(RunStatus::Canceled, now) {
+            return false;
+        }
+        record.cancel_reason = Some(reason);
+        true
+    })?;
     if wrote {
         crate::store::run::wake_run(runtime, &record);
     }
@@ -1350,15 +1360,19 @@ fn record_lifecycle_at(
 /// Settle provider exit and cumulative spend together for a session run: completed when the
 /// registered session exited at rest, failed when it exited mid-turn, before its first turn,
 /// or before it registered. An existing terminal status wins; a conversation rebind retries
-/// the spend read.
+/// the spend read. The exit of a wrapper in `own_pane` that a restart or molt took the run
+/// from ([`RunRecord::superseded_in`]) settles nothing, checked under the lock, so the run
+/// waits for the agent's holder session whether the old session exits before or after the
+/// replacement binds.
 /// The failure-tail callback runs under the workspace lock only for a Pending run,
 /// so registration cannot race a failed-run-only pane read.
 pub fn settle_session_exit(
     store: &Store,
     run_id: &RunId,
+    own_pane: Option<&PaneId>,
     failure_tail: impl FnOnce() -> Option<String>,
 ) -> Result<Option<RunRecord>> {
-    settle_session_exit_with_spend(store, run_id, failure_tail, |record| {
+    settle_session_exit_with_spend(store, run_id, own_pane, failure_tail, |record| {
         read_run_spend(store.runtime_paths(), record)
     })
 }
@@ -1366,18 +1380,24 @@ pub fn settle_session_exit(
 fn settle_session_exit_with_spend(
     store: &Store,
     run_id: &RunId,
+    own_pane: Option<&PaneId>,
     failure_tail: impl FnOnce() -> Option<String>,
     mut spend: impl FnMut(&RunRecord) -> RunSpend,
 ) -> Result<Option<RunRecord>> {
+    let settles = |record: &RunRecord| {
+        record.lifecycle == RunLifecycle::Session
+            && !record.status.is_terminal()
+            && !own_pane.is_some_and(|pane| record.superseded_in(pane))
+    };
     let mut failure_tail = Some(failure_tail);
     loop {
         let before = load(store.paths(), run_id)?;
-        if before.lifecycle != RunLifecycle::Session || before.status.is_terminal() {
+        if !settles(&before) {
             return Ok(None);
         }
         let spend = spend(&before);
         let (record, wrote, _) = write_record(store.paths(), run_id, |record, now| {
-            if record.lifecycle != RunLifecycle::Session || record.status.is_terminal() {
+            if !settles(record) {
                 return Ok(RecordMutation::Keep(false));
             }
             if !same_binding(record, &before) {
@@ -1404,7 +1424,7 @@ fn settle_session_exit_with_spend(
             wake_workflow(store.paths(), &record);
             return Ok(Some(record));
         }
-        if record.lifecycle != RunLifecycle::Session || record.status.is_terminal() {
+        if !settles(&record) {
             return Ok(None);
         }
     }
@@ -1584,7 +1604,9 @@ fn fold_lifecycle(
         && record.status.is_terminal()
         && record.subagent
         && matches!(observation.signal, LifecycleSignal::TurnStarted { .. });
-    if record.kind.as_str() != kind
+    // A team or session run reached this fold by its launch id, which holds across kinds.
+    let follows_launch = record.team.is_some() || record.lifecycle == RunLifecycle::Session;
+    if (record.kind.as_str() != kind && !follows_launch && record.peer.is_none())
         || (record.status.is_terminal() && !reopen)
         || observation
             .pane_id
@@ -1593,8 +1615,15 @@ fn fold_lifecycle(
     {
         return LifecycleFold::Ignored;
     }
-    if record.team.is_some() || record.lifecycle == RunLifecycle::Session {
-        return fold_team_lifecycle(record, observation, last_message, now);
+    if follows_launch {
+        return fold_team_lifecycle(record, kind, observation, last_message, now);
+    }
+    // A peer turn reached this fold by its launch id too: it moves onto the holder's session
+    // and keeps turn semantics.
+    if record.peer.is_some()
+        && let Some(observed) = observation.agent_id.as_ref()
+    {
+        rebind_session(record, kind, observed);
     }
     match (&record.agent_id, &observation.agent_id) {
         (Some(bound), Some(observed)) if observed != bound => return LifecycleFold::Ignored,
@@ -1623,6 +1652,7 @@ fn fold_lifecycle(
                     .and_then(|turn| turn.prompt.clone()),
                 failure_tail: record.failure_tail.take(),
                 limit_failure: record.limit_failure.take(),
+                cancel_reason: record.cancel_reason.take(),
                 opened_by: std::mem::take(&mut record.opened_by),
                 report_message_id: record.report_message_id.take(),
                 joined_at: None,
@@ -1648,6 +1678,7 @@ fn fold_lifecycle(
         record.parked_answer = None;
         record.failure_tail = None;
         record.limit_failure = None;
+        record.cancel_reason = None;
     }
     let holds_interrupts = super::deadline::holds_interrupts(record);
     if holds_interrupts
@@ -1833,6 +1864,7 @@ fn end_limit_hold(record: &mut RunRecord, observed_at: Timestamp, now: Timestamp
 /// since `session_run_id` routed the observation here by launch id.
 fn fold_team_lifecycle(
     record: &mut RunRecord,
+    kind: &str,
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
     now: Timestamp,
@@ -1840,7 +1872,7 @@ fn fold_team_lifecycle(
     let Some(observed) = observation.agent_id.as_ref() else {
         return LifecycleFold::Ignored;
     };
-    let mut changed = rebind_session(record, observed);
+    let mut changed = rebind_session(record, kind, observed);
     changed |= fold_stopped_turn(record, &observation.signal, now);
     if let Some(name) = observation.agent_name.clone() {
         record.agent_name = Some(name);
@@ -1896,9 +1928,17 @@ fn fold_stopped_turn(record: &mut RunRecord, signal: &LifecycleSignal, now: Time
     changed
 }
 
-fn rebind_session(record: &mut RunRecord, agent_id: &AgentSessionId) -> bool {
-    if record.agent_id.as_ref() == Some(agent_id) {
+/// Move a team, session, or peer run onto its agent's observed row, whose kind a
+/// cross-kind molt may have changed.
+fn rebind_session(record: &mut RunRecord, kind: &str, agent_id: &AgentSessionId) -> bool {
+    if record.agent_id.as_ref() == Some(agent_id) && record.kind.as_str() == kind {
         return false;
+    }
+    if record.kind.as_str() != kind {
+        record.kind = crate::ids::AgentKind::new_unchecked(kind);
+    }
+    if record.agent_id.as_ref() == Some(agent_id) {
+        return true;
     }
     if record.lifecycle == RunLifecycle::Session && record.team.is_none() {
         if let Some(previous) = record.agent_id.take() {
@@ -1935,12 +1975,15 @@ pub fn record_assistant_message(
     message: String,
 ) -> Result<()> {
     update_record(paths, run_id, |record, _| {
-        if record.kind.as_str() != kind || record.status.is_terminal() {
+        let follows_launch = record.team.is_some() || record.lifecycle == RunLifecycle::Session;
+        if (record.kind.as_str() != kind && !follows_launch && record.peer.is_none())
+            || record.status.is_terminal()
+        {
             return Ok(RecordMutation::Keep(()));
         }
-        // Team and session runs follow their leader across conversation rows of one launch.
-        if record.team.is_some() || record.lifecycle == RunLifecycle::Session {
-            rebind_session(record, agent_id);
+        // Team, session, and peer runs follow their agent across conversation rows of one launch.
+        if follows_launch || record.peer.is_some() {
+            rebind_session(record, kind, agent_id);
         }
         match &record.agent_id {
             Some(bound) if bound != agent_id => return Ok(RecordMutation::Keep(())),

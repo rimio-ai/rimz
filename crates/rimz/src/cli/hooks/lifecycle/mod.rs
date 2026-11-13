@@ -74,7 +74,7 @@ pub(super) fn handle_lifecycle_frame(
             let rimz::store::event::EventKind::AgentLifecycle(payload) = envelope.kind() else {
                 continue;
             };
-            let Some(receipt) = Store::recover_hook_lifecycle(envelope) else {
+            let Some(receipt) = store.recover_hook_lifecycle(envelope)? else {
                 continue;
             };
             let recorded = RecordedLifecycle {

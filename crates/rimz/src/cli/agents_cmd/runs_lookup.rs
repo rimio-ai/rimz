@@ -103,11 +103,14 @@ mod tests {
                 .run_id,
             record.run_id
         );
+        // A molt to another kind keeps the agent's launch, and its peer turn
+        // with it.
         agent.kind = rimz::ids::AgentKind::new_unchecked("claude");
-        assert!(
+        assert_eq!(
             newest_run_by_ref(&store, "old-name", Some(&agent))
                 .unwrap()
-                .is_none()
+                .map(|run| run.run_id),
+            Some(record.run_id)
         );
     }
 

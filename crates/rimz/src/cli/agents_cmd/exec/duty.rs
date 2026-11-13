@@ -242,40 +242,85 @@ fn run_parent_probe(
     session_name: String,
     pane_strikes: bool,
 ) -> Result<(bool, WatchdogSeed)> {
+    let child = ParentProbeChild {
+        kind: child_kind,
+        launch_id: child_launch_id,
+        pane: child_pane,
+        session_name,
+    };
+    parent_probe(store, &child, pane_strikes, |seed, parent_pane| {
+        let backend = rimz::mux::backend_for(parent_pane.mux());
+        if backend
+            .cached_pane_roster(&seed.session_name, &store.paths().workspace_id)
+            .is_some_and(|roster| roster.pane_ids.contains(parent_pane))
+        {
+            return Ok(true);
+        }
+        let listing = backend.list_panes(rimz::mux::PaneListOptions {
+            session_name: Some(seed.session_name.clone()),
+            workspace_id: Some(store.paths().workspace_id.clone()),
+            consistency: rimz::mux::PaneReadConsistency::RequireAuthoritative,
+            command_timeout: Some(Duration::from_secs(5)),
+            ..rimz::mux::PaneListOptions::default()
+        })?;
+        Ok(listing
+            .panes
+            .iter()
+            .any(|pane| pane.pane_id == *parent_pane))
+    })
+}
+
+struct ParentProbeChild {
+    kind: AgentKind,
+    launch_id: AgentSessionId,
+    pane: Option<PaneId>,
+    session_name: String,
+}
+
+/// The parent has ended when its agent has (`agents::state::agent_end`). A
+/// pane-strike nomination also counts the parent's pane missing from a
+/// listing, but only when a read taken after that listing still names the
+/// pane as the parent's: a swap that lands meanwhile moves the parent to its
+/// replacement's pane.
+fn parent_probe(
+    store: &rimz::Store,
+    child: &ParentProbeChild,
+    pane_strikes: bool,
+    pane_present: impl FnOnce(&WatchdogSeed, &PaneId) -> Result<bool>,
+) -> Result<(bool, WatchdogSeed)> {
+    let (ended, seed) = read_parent(store, child)?;
+    if !pane_strikes || ended {
+        return Ok((ended, seed));
+    }
+    let Some(parent_pane) = seed.parent_pane.clone() else {
+        return Ok((ended, seed));
+    };
+    if pane_present(&seed, &parent_pane)? {
+        return Ok((false, seed));
+    }
+    let (ended, seed) = read_parent(store, child)?;
+    let pane_lost = seed.parent_pane.as_ref() == Some(&parent_pane);
+    Ok((ended || pane_lost, seed))
+}
+
+fn read_parent(store: &rimz::Store, child: &ParentProbeChild) -> Result<(bool, WatchdogSeed)> {
     let cursor = parent_cursor(store.paths())?;
     let projection = store.runtime_projection(rimz::store::runtime::RuntimeScope::Audit)?;
     let seed = rimz::harness::parent_watch::seed(
         &projection.agents,
-        child_kind,
-        child_launch_id,
-        child_pane,
-        session_name,
+        child.kind.clone(),
+        child.launch_id.clone(),
+        child.pane.clone(),
+        child.session_name.clone(),
         cursor,
     )
     .context("parent launch is not in the runtime projection")?;
-    let mut ended = seed.parent_ended();
-    if pane_strikes
-        && !ended
-        && let Some(parent_pane) = &seed.parent_pane
-    {
-        let backend = rimz::mux::backend_for(parent_pane.mux());
-        let cached_present = backend
-            .cached_pane_roster(&seed.session_name, &store.paths().workspace_id)
-            .is_some_and(|roster| roster.pane_ids.contains(parent_pane));
-        if !cached_present {
-            let listing = backend.list_panes(rimz::mux::PaneListOptions {
-                session_name: Some(seed.session_name.clone()),
-                workspace_id: Some(store.paths().workspace_id.clone()),
-                consistency: rimz::mux::PaneReadConsistency::RequireAuthoritative,
-                command_timeout: Some(Duration::from_secs(5)),
-                ..rimz::mux::PaneListOptions::default()
-            })?;
-            ended = !listing
-                .panes
-                .iter()
-                .any(|pane| pane.pane_id == *parent_pane);
-        }
-    }
+    let parent = seed
+        .parent_refs
+        .first()
+        .context("parent launch has no id")?;
+    let ended = rimz::agents::state::agent_end(&projection.agents, &seed.parent_kind, parent)
+        == rimz::agents::state::AgentEnd::Ended;
     Ok((ended, seed))
 }
 

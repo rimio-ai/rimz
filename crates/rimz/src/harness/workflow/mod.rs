@@ -289,18 +289,26 @@ fn leader_turn(
 /// parked turn, or background shell), an end stamped since aside. It leaves out the rest
 /// check's other gates in [`leader_turn`], an owed message or running child and a pending
 /// ingress frame, so a session that exits at a clean rest while it owes a message or a child's
-/// result ended cleanly. A session the snapshot has no row for ended at rest, since nothing
-/// shows it was not.
+/// result ended cleanly. The row read is the agent's holder: a run that still names a session
+/// a restart or molt replaced, which the snapshot drops, finds it through the retained rows. A
+/// session with no row in either ended at rest, since nothing shows it was not.
 pub(super) fn exited_at_rest(
     store: &Store,
     session: &crate::store::run::RunRecord,
     now: jiff::Timestamp,
 ) -> Result<bool, StoreErr> {
+    let rests = |leader: &AgentState| {
+        leader.turn_started_at.is_some() && super::idle_stop::rests(leader, now).is_ok()
+    };
     let snapshot = store.snapshot_cached()?;
-    let Some(leader) = observe::leader(&snapshot, session) else {
+    if let Some(leader) = observe::leader(&snapshot, session) {
+        return Ok(rests(leader));
+    }
+    let Some(id) = session.agent_id.as_ref() else {
         return Ok(true);
     };
-    Ok(leader.turn_started_at.is_some() && super::idle_stop::rests(leader, now).is_ok())
+    let rows = store.audit_rows()?;
+    Ok(crate::address::launch_row(rows.iter(), &session.kind, id).is_none_or(rests))
 }
 
 pub struct LaunchFailure {

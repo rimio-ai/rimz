@@ -6,6 +6,7 @@ use crate::agents::AgentState;
 use crate::agents::{LifecycleSignal, ToolEffect};
 use crate::ids::{AgentKind, MuxName, WorkspaceId};
 use crate::pane::PaneRef;
+use crate::store::run::CancelReason;
 use tempfile::tempdir;
 
 fn setup() -> (tempfile::TempDir, StatePaths, RunRecord) {
@@ -264,7 +265,7 @@ fn session_exit_settles_once_without_capturing_a_registered_run() {
         record.status = status;
         create(&paths, &record).unwrap();
         let mut captures = 0;
-        let settled = settle_session_exit(&store, &record.run_id, || {
+        let settled = settle_session_exit(&store, &record.run_id, None, || {
             captures += 1;
             Some("never registered".into())
         })
@@ -388,6 +389,7 @@ fn session_exit_fails_a_registered_session_that_was_not_at_rest() {
         let settled = settle_session_exit_with_spend(
             &store,
             &record.run_id,
+            None,
             || panic!("registered run capture"),
             |_| RunSpend::default(),
         )
@@ -409,6 +411,152 @@ fn session_exit_fails_a_registered_session_that_was_not_at_rest() {
             ("parked on background work", Failed),
             ("prompt into a parked row", Failed),
         ]
+    );
+}
+
+/// A workflow leader `old` registered on `%1` at epoch 0, mid-turn when `old_busy`, and a
+/// restart or molt's reservation at epoch 1, whose replacement `new` binds on `%2` when
+/// `bound` and then rests or stays mid-turn by `new_rests`.
+fn swapped_leader(store: &Store, old_busy: bool, bound: bool, new_rests: bool) {
+    let launch = |key: &str, state: &str, epoch: u32, pane: Option<&str>| {
+        let payload: crate::store::event::AgentLaunchPayload =
+            serde_json::from_value(serde_json::json!({
+                "agent_id": key, "agent_name": "lead", "launch_id": "launch_lead",
+                "state": state, "epoch": (epoch > 0).then_some(epoch), "pane_id": pane,
+            }))
+            .unwrap();
+        crate::EventEnvelope::agent_launched(
+            store.paths().workspace_id.clone(),
+            "exit-test",
+            &AgentKind::new_unchecked("claude"),
+            payload,
+        )
+    };
+    let hooks = |session: &str, epoch: u32, pane: &str, rests: bool| {
+        let mut signals = vec![LifecycleSignal::Registered, turn_started()];
+        if rests {
+            signals.push(LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            });
+        }
+        signals
+            .into_iter()
+            .map(|signal| {
+                let mut observation = AgentLifecycleObservation::new(Some(session.into()), signal);
+                observation.agent_name = Some("lead".into());
+                observation.launch_id = Some("launch_lead".into());
+                observation.launch.epoch = (epoch > 0).then_some(epoch);
+                observation.pane_id = Some(PaneId::parse(pane).unwrap());
+                crate::EventEnvelope::agent_lifecycle(
+                    store.paths().workspace_id.clone(),
+                    "exit-test",
+                    "claude",
+                    "test",
+                    &observation,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut events = vec![launch("launch_lead", "bound", 0, Some("tmux:%1"))];
+    events.extend(hooks("old", 0, "tmux:%1", !old_busy));
+    events.push(launch("launch_new", "starting", 1, None));
+    if bound {
+        events.push(launch("launch_new", "bound", 1, Some("tmux:%2")));
+        events.extend(hooks("new", 1, "tmux:%2", new_rests));
+    }
+    for event in events {
+        store.append_event(&event).unwrap();
+    }
+}
+
+#[test]
+fn a_swapped_leaders_replaced_session_exit_leaves_the_run_to_its_holder() {
+    use crate::store::run::RunLifecycle;
+
+    let old_pane = PaneId::parse("tmux:%1").unwrap();
+    let new_pane = PaneId::parse("tmux:%2").unwrap();
+    let mut actual = Vec::new();
+    for old_busy in [false, true] {
+        for bound in [false, true] {
+            let (dir, paths, mut record) = setup();
+            let runtime =
+                RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+            let store = Store::open(paths.clone(), runtime).unwrap();
+            record.lifecycle = RunLifecycle::Session;
+            record.status = RunStatus::Running;
+            record.agent_id = Some("old".into());
+            record.agent_name = Some("lead".into());
+            record.pane_id = Some(old_pane.clone());
+            create(&paths, &record).unwrap();
+            swapped_leader(&store, old_busy, bound, true);
+            assert!(hand_over(&paths, &record.run_id, Some(old_pane.clone())).unwrap());
+            if bound {
+                record_pane(&paths, &record.run_id, new_pane.clone()).unwrap();
+            }
+            let old_exit = settle_session_exit_with_spend(
+                &store,
+                &record.run_id,
+                Some(&old_pane),
+                || panic!("registered run capture"),
+                |_| RunSpend::default(),
+            )
+            .unwrap();
+            actual.push((
+                old_busy,
+                bound,
+                old_exit.is_some(),
+                load(&paths, &record.run_id).unwrap().status,
+            ));
+        }
+    }
+    let open = |old_busy, bound| (old_busy, bound, false, RunStatus::Running);
+    assert_eq!(
+        actual,
+        vec![
+            open(false, false),
+            open(false, true),
+            open(true, false),
+            open(true, true),
+        ],
+        "the replaced session's exit, before or after the bind, settles nothing"
+    );
+}
+
+#[test]
+fn a_swapped_leaders_exit_reads_its_rest_from_the_holder_row() {
+    use crate::store::run::RunLifecycle;
+
+    let mut actual = Vec::new();
+    for (old_busy, new_rests) in [(true, true), (false, false)] {
+        let (dir, paths, mut record) = setup();
+        let runtime =
+            RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        record.lifecycle = RunLifecycle::Session;
+        record.status = RunStatus::Running;
+        // The replacement's hooks have not reached the run, which still names the old session.
+        record.agent_id = Some("old".into());
+        record.agent_name = Some("lead".into());
+        record.pane_id = Some(PaneId::parse("tmux:%2").unwrap());
+        record.handed_over_from = Some(PaneId::parse("tmux:%1").unwrap());
+        create(&paths, &record).unwrap();
+        swapped_leader(&store, old_busy, true, new_rests);
+        let settled = settle_session_exit_with_spend(
+            &store,
+            &record.run_id,
+            Some(&PaneId::parse("tmux:%2").unwrap()),
+            || panic!("registered run capture"),
+            |_| RunSpend::default(),
+        )
+        .unwrap()
+        .expect("the holder's exit settles the run");
+        actual.push((new_rests, settled.status));
+    }
+    assert_eq!(
+        actual,
+        vec![(true, RunStatus::Completed), (false, RunStatus::Failed)]
     );
 }
 
@@ -462,6 +610,7 @@ fn session_exit_at_a_clean_rest_ends_cleanly_while_it_owes_a_message() {
     let settled = settle_session_exit_with_spend(
         &store,
         &record.run_id,
+        None,
         || panic!("registered run capture"),
         |_| RunSpend::default(),
     )
@@ -540,6 +689,7 @@ fn session_exit_at_a_clean_rest_ends_cleanly_while_it_owes_a_child_result() {
     let settled = settle_session_exit_with_spend(
         &store,
         &record.run_id,
+        None,
         || panic!("registered run capture"),
         |_| RunSpend::default(),
     )
@@ -600,10 +750,11 @@ fn session_exit_sums_every_binding_and_falls_back_to_transcript_cost() {
                 .unwrap();
             }
         }
-        let settled =
-            settle_session_exit(&store, &record.run_id, || panic!("registered run capture"))
-                .unwrap()
-                .unwrap();
+        let settled = settle_session_exit(&store, &record.run_id, None, || {
+            panic!("registered run capture")
+        })
+        .unwrap()
+        .unwrap();
         assert_eq!(
             settled.input_tokens,
             Some(300),
@@ -630,6 +781,7 @@ fn session_exit_publishes_spend_in_the_first_terminal_record() {
     let ended = settle_session_exit_with_spend(
         &store,
         &record.run_id,
+        None,
         || panic!("registered run capture"),
         |_| {
             during_read = Some(load(&paths, &record.run_id).unwrap());
@@ -669,6 +821,7 @@ fn session_exit_rechecks_binding_and_cancellation_after_reading_spend() {
         let ended = settle_session_exit_with_spend(
             &store,
             &record.run_id,
+            None,
             || None,
             |_| {
                 reads += 1;
@@ -2223,14 +2376,22 @@ fn paths_cancellation_wakes_only_the_first_terminal_transition() {
     socket
         .set_read_timeout(Some(Duration::from_millis(50)))
         .unwrap();
-    let canceled = cancel_and_wake_paths(&paths, &runtime, &record.run_id).unwrap();
+    let canceled =
+        cancel_and_wake_paths(&paths, &runtime, &record.run_id, CancelReason::ParentEnded).unwrap();
     assert_eq!(canceled.status, RunStatus::Canceled);
+    assert_eq!(canceled.cancel_reason, Some(CancelReason::ParentEnded));
+    assert_eq!(
+        load(&paths, &record.run_id).unwrap().cancel_reason,
+        Some(CancelReason::ParentEnded),
+        "the reason is written with the Canceled status"
+    );
     let mut frame = [0; 1024];
     assert!(
         socket.recv(&mut frame).is_ok(),
         "new cancellation wakes waiter"
     );
-    let unchanged = cancel_and_wake_paths(&paths, &runtime, &record.run_id).unwrap();
+    let unchanged =
+        cancel_and_wake_paths(&paths, &runtime, &record.run_id, CancelReason::ParentEnded).unwrap();
     assert_eq!(unchanged.updated_at, canceled.updated_at);
     assert!(
         socket.recv(&mut frame).is_err(),
@@ -2478,9 +2639,10 @@ fn assert_spend_before_workflow_wake(end: SpendWake) {
     let adapter = crate::agents::definition_by_kind("claude").unwrap();
     let settled = tracing::subscriber::with_default(subscriber, || match end {
         SpendWake::SessionExit => {
-            let settled =
-                settle_session_exit(&store, &record.run_id, || panic!("registered run capture"))
-                    .unwrap();
+            let settled = settle_session_exit(&store, &record.run_id, None, || {
+                panic!("registered run capture")
+            })
+            .unwrap();
             assert!(
                 settled.is_some(),
                 "provider exit must settle a registered session run"
@@ -2933,41 +3095,58 @@ fn turn_end(agent: &str) -> AgentLifecycleObservation {
 }
 
 #[test]
-fn molt_rekeys_the_leader_run_across_providers_and_back() {
+fn a_cross_kind_molt_keeps_the_leader_run_and_its_kind_follows_the_holder() {
     let (_dir, paths, _) = setup();
     let record = team_record(&paths, "forge#x");
     let mut predecessor = AgentState::stub("claude", "old", AgentStatus::Idle);
     predecessor.launch_id = Some("lead-launch".into());
     predecessor.name = Some("lead".into());
-    let mut successor = AgentState::stub("codex", "launch_new", AgentStatus::Running);
+    let mut successor = AgentState::stub("codex", "new", AgentStatus::Running);
     successor.launch_id = predecessor.launch_id.clone();
     successor.name = predecessor.name.clone();
     successor.epoch = 1;
-    let identity = |row: &AgentState| crate::store::writer::AgentLaunchIdentity {
-        launch_id: row.launch_id.clone(),
-        kind: row.kind.clone(),
-        agent_id: row.agent_id.clone(),
-        name: "lead".into(),
-        name_explicit: false,
-        launch: Default::default(),
-        run_id: None,
-        prompt: None,
-    };
-    rekey_team_run(&paths, &predecessor, &identity(&successor)).unwrap();
-    let moved = open_team_run(&paths, &successor)
+    let found = open_team_run(&paths, &successor)
         .unwrap()
-        .expect("successor owns the open team run");
-    assert_eq!(moved.run_id, record.run_id);
-    assert!(moved.matches_agent(&successor));
-    assert!(open_team_run(&paths, &predecessor).unwrap().is_none());
-    assert_eq!(moved.agent_name, successor.name);
+        .expect("the replacement's launch finds the open team run");
+    assert_eq!(found.run_id, record.run_id);
+    assert!(found.matches_agent(&successor));
+    record_lifecycle(
+        &paths,
+        &record.run_id,
+        "codex",
+        &turn_end("new"),
+        None,
+        || None,
+    )
+    .unwrap();
+    record_assistant_message(
+        &paths,
+        &record.run_id,
+        "codex",
+        &"new".into(),
+        "answer".into(),
+    )
+    .unwrap();
+    let moved = load(&paths, &record.run_id).unwrap();
+    assert_eq!(moved.kind.as_str(), "codex");
+    assert_eq!(moved.agent_id.as_ref().map(|id| id.as_str()), Some("new"));
+    assert_eq!(moved.last_message.as_deref(), Some("answer"));
     let mut back = predecessor.clone();
-    back.agent_id = "launch_back".into();
+    back.agent_id = "back".into();
     back.epoch = 2;
-    rekey_team_run(&paths, &successor, &identity(&back)).unwrap();
-    let moved = open_team_run(&paths, &back).unwrap().unwrap();
-    assert_eq!(moved.run_id, record.run_id);
     assert!(moved.matches_agent(&back));
+    record_lifecycle(
+        &paths,
+        &record.run_id,
+        "claude",
+        &turn_end("back"),
+        None,
+        || None,
+    )
+    .unwrap();
+    let moved = load(&paths, &record.run_id).unwrap();
+    assert_eq!(moved.kind.as_str(), "claude");
+    assert_eq!(moved.agent_id.as_ref().map(|id| id.as_str()), Some("back"));
 }
 
 #[test]
@@ -3971,6 +4150,7 @@ fn interruptible() -> (tempfile::TempDir, StatePaths, RunRecord) {
         prompt: None,
         failure_tail: None,
         limit_failure: None,
+        cancel_reason: None,
         opened_by: Vec::new(),
         report_message_id: None,
         joined_at: None,
@@ -5126,4 +5306,75 @@ fn releasing_a_workflow_frees_every_pin_of_that_run_and_nothing_else() {
         "a second release finds nothing to release"
     );
     assert_eq!(list(&paths).unwrap(), before, "and writes nothing");
+}
+
+#[test]
+fn a_peer_turn_stays_open_for_its_agent_after_a_molt_to_another_kind() {
+    let (_dir, paths, mut record) = setup_for("claude");
+    record.peer = Some(crate::store::run::PeerRun {
+        launch_id: "peer-launch".into(),
+        opened_by: Vec::new(),
+    });
+    crate::store::run::write(&paths.runs_dir, &record).unwrap();
+    let mut molted = crate::testkit::agent_state("codex", "peer", Timestamp::now());
+    molted.launch_id = Some("peer-launch".into());
+    molted.launched_by = Some(crate::agents::LaunchedBy {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: "launcher".into(),
+    });
+    let open = open_peer_run(&paths, &molted).unwrap();
+    assert_eq!(open.map(|open| open.run_id), Some(record.run_id));
+}
+
+#[test]
+fn a_peer_turn_completes_on_the_stop_of_its_agents_molted_session() {
+    let (_dir, paths, mut record) = setup_for("claude");
+    record.peer = Some(crate::store::run::PeerRun {
+        launch_id: "peer-launch".into(),
+        opened_by: Vec::new(),
+    });
+    record.agent_id = Some("old-session".into());
+    record.status = RunStatus::Running;
+    crate::store::run::write(&paths.runs_dir, &record).unwrap();
+    // The Stop alone reaches the run: nothing rebinds it to the new session
+    // first, so the fold's own peer rebind is what completes it.
+    let done = record_lifecycle(
+        &paths,
+        &record.run_id,
+        "codex",
+        &turn_end("new-session"),
+        Some("molted answer".into()),
+        || None,
+    )
+    .unwrap()
+    .expect("the holder's Stop completes the peer turn");
+    assert_eq!(done.status, RunStatus::Completed);
+    assert_eq!(done.kind.as_str(), "codex");
+    assert_eq!(
+        done.agent_id.as_ref().map(|id| id.as_str()),
+        Some("new-session")
+    );
+    assert_eq!(done.last_message.as_deref(), Some("molted answer"));
+    assert!(done.earlier_sessions.is_empty());
+}
+
+/// A restart fails only the seat's peer turn: the team run stays open for
+/// the session that holds the seat next, while a launch failure still fails it.
+#[test]
+fn a_restarted_seat_keeps_its_team_run_open() {
+    let (dir, paths, _) = setup();
+    let runtime = RuntimePaths::under(paths.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let record = team_record(&paths, "forge#x");
+    let mut seat = AgentState::stub("claude", "lead-session", AgentStatus::Idle);
+    seat.launch_id = Some("lead-launch".into());
+    seat.name = Some("lead".into());
+    assert!(
+        fail_peer_turn(&store, &seat, "peer restarted")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!load(&paths, &record.run_id).unwrap().status.is_terminal());
+    let failed = fail_peer_run(&store, &seat, "peer launch failed").unwrap();
+    assert_eq!(failed.map(|run| run.run_id), Some(record.run_id));
 }

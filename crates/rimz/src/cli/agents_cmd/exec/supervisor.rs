@@ -755,6 +755,7 @@ fn run_loop(
                             &context.paths,
                             &context.runtime,
                             &context.run_id,
+                            rimz::store::run::CancelReason::ParentEnded,
                         )
                     {
                         tracing::debug!(
@@ -1264,6 +1265,7 @@ fn supervise_child(
                     &monitor.paths,
                     &monitor.runtime,
                     &monitor.run_id,
+                    rimz::store::run::CancelReason::ParentEnded,
                 )
             {
                 tracing::debug!(

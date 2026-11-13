@@ -161,8 +161,14 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 Some(&identity.name),
             );
         }
+        // A run a restart or molt handed to this wrapper fails here only once the wrapper
+        // has taken it; before then it stays with the session that holds the agent.
         if let Some(context) = run_context.as_ref() {
-            fail_run_if_nonterminal(context, &crate::cli::render::error_line(err));
+            fail_run_if_owned(
+                context,
+                rimz::mux::ambient_pane_id().as_ref(),
+                &crate::cli::render::error_line(err),
+            );
         }
     }
     launched
@@ -375,9 +381,6 @@ fn launch_and_supervise(
     reset_cleanup_signal_flag();
     install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
     install_interrupt_signal_handler().context("installing interrupt signal handler")?;
-    if let Some(context) = run_context {
-        record_own_run_pane(context);
-    }
     if let Some(identity) = launch_identity.as_ref() {
         record_own_launch_pane(
             invocation,
@@ -388,9 +391,16 @@ fn launch_and_supervise(
             )
             .then_some(plan.system_prompt_digest.as_str()),
         )?;
-        if attach_target.is_none() {
-            attach_own_launch_pane(invocation, identity);
-        }
+    }
+    // A swap's replacement takes the run handed to it only once its bind stands, so a refused
+    // bind leaves the run with the session that still holds the agent.
+    if let Some(context) = run_context {
+        record_own_run_pane(context, launch_identity.as_ref());
+    }
+    if let Some(identity) = launch_identity.as_ref()
+        && attach_target.is_none()
+    {
+        attach_own_launch_pane(invocation, identity);
     }
     if let Some(target) = attach_target.as_ref() {
         let attached = record_own_resume_pane(
@@ -1516,6 +1526,20 @@ fn exec_attach_target(
     }
 }
 
+/// Whether a later swap of `launch` stood past `epoch`: the wrapper at
+/// `epoch` no longer holds its agent, so a delayed write of its own must
+/// leave the newer session's state alone.
+fn later_swap_stood<'a>(
+    agents: impl IntoIterator<Item = &'a rimz::agents::AgentState>,
+    launch: &AgentSessionId,
+    epoch: Option<u32>,
+) -> bool {
+    let epoch = epoch.unwrap_or(0);
+    agents.into_iter().any(|agent| {
+        agent.launch_id.as_ref() == Some(launch) && agent.epoch > epoch && agent.stands()
+    })
+}
+
 /// The card a resumed wrapper wakes its queued head for, keyed by the
 /// agent's launch so a record queued for the agent before a cross-kind molt
 /// still matches.
@@ -1527,10 +1551,18 @@ fn resume_queue_card<'a>(
     rimz::agents::AgentCardRef::new(&target.0, &target.1, name).with_launch(launch)
 }
 
-fn record_own_run_pane(context: &RunExecContext) {
+fn record_own_run_pane(context: &RunExecContext, identity: Option<&LaunchIdentity>) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
+    // A delayed write after a newer swap stood would clear its hand-over and
+    // take the run back from the session that now holds the agent.
+    if let Some(identity) = identity
+        && let Ok(agents) = context.store.audit_rows()
+        && later_swap_stood(agents.iter(), identity.launch_id(), identity.launch.epoch)
+    {
+        return;
+    }
     if let Err(err) =
         rimz::harness::run::record_pane(context.store.paths(), &context.run_id, pane_id.clone())
     {
@@ -2179,9 +2211,12 @@ fn fail_run_if_child_exited_first(
     if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
         && record.lifecycle == rimz::store::run::RunLifecycle::Session
     {
-        match rimz::harness::run::settle_session_exit(&context.store, &context.run_id, || {
-            capture_own_failure_tail(context, globals).map(|(_, tail)| tail)
-        }) {
+        match rimz::harness::run::settle_session_exit(
+            &context.store,
+            &context.run_id,
+            own_pane,
+            || capture_own_failure_tail(context, globals).map(|(_, tail)| tail),
+        ) {
             Ok(Some(record)) => rimz::store::run::wake_run(context.store.runtime_paths(), &record),
             Ok(None) => {}
             Err(error) => tracing::debug!(run_id = %context.run_id, %error,
@@ -2209,10 +2244,6 @@ fn fail_run_if_child_exited_first(
     // No reason: the evidence is the pane tail, which the waiter still
     // captures when the read above found none.
     fail_run_if_owned(context, own_pane, "");
-}
-
-fn fail_run_if_nonterminal(context: &RunExecContext, reason: &str) {
-    fail_run_if_owned(context, None, reason);
 }
 
 fn fail_run_if_owned(context: &RunExecContext, own_pane: Option<&rimz::ids::PaneId>, reason: &str) {

@@ -150,6 +150,12 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         prompt: request.prompt.clone(),
         extra_args: Vec::new(),
     };
+    let runs = if source.workflow.is_some() {
+        rimz::harness::run::list(store.paths())?
+    } else {
+        Vec::new()
+    };
+    let handover = restart::open_session_run(&runs, source);
     let batch = restart::reserve_swap(
         store,
         source,
@@ -163,7 +169,10 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         "molt",
     )?;
     let launch = batch.single_identity()?;
-    let invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
+    let mut invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
+    if let Some(run) = handover {
+        invocation = restart::with_run(invocation, run);
+    }
     let backend = rimz::mux::backend_for(old_pane.mux());
     let placed = restart::place_replacement(
         &ctx,
@@ -175,9 +184,13 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         &snapshot.agents,
         &cwd,
         LaunchFocus::Keep,
-        None,
+        handover,
     );
-    restart::settle_placement(store, &batch, launch, source, "molt", placed, || {})?;
+    restart::settle_placement(store, &batch, launch, source, "molt", placed, || {
+        if let Some(run) = handover {
+            let _ = rimz::harness::run::hand_over(store.paths(), &run.run_id, None);
+        }
+    })?;
     if args.agent.is_some() {
         rimz::harness::assist_log::record_tier_fallbacks(batch.identities());
     }
@@ -199,12 +212,6 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
             generation: source.launch_depth,
         },
     });
-    if let Err(err) = rimz::harness::run::rekey_team_run(store.paths(), source, launch) {
-        writeln!(
-            crate::cli::render::err(),
-            "rimz: {handle}'s team run could not follow it to the new provider: {err:#}"
-        )?;
-    }
     let mut out = crate::cli::render::out();
     // The replacement has bound, so a receipt that fails to print still lets
     // the replaced session go.
