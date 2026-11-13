@@ -2594,10 +2594,10 @@ fn warn_run_lock(name: &str, error: &anyhow::Error) {
 
 /// The one wording of a held run lock, as `list` and `watch` print it. The
 /// elapsed time needs the holder, which a held lock may lack.
-pub(super) fn running_text(holder: Option<RunLockInfo>, now: Timestamp) -> String {
-    match holder {
-        Some(info) => {
-            let elapsed = now.duration_since(info.started_at).as_secs().max(0) as u64;
+pub(super) fn running_text(since: Option<Timestamp>, now: Timestamp) -> String {
+    match since {
+        Some(since) => {
+            let elapsed = now.duration_since(since).as_secs().max(0) as u64;
             format!("▸ running {}", ui::age_label(elapsed))
         }
         None => "▸ running".to_owned(),
@@ -2638,9 +2638,11 @@ pub(super) fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -
 }
 
 /// List/watch NEXT: count self-clearing starts beside a genuinely running
-/// checkout, or in place of running when the holder itself is held.
+/// checkout, or in place of running when the holder itself is held. `since` is
+/// when the running run started: the holder's, or a lock-free newer run's.
 pub(super) fn in_flight_text(
     holder: Option<RunLockInfo>,
+    since: Option<Timestamp>,
     held: &[Held],
     count: usize,
     now: Timestamp,
@@ -2652,7 +2654,7 @@ pub(super) fn in_flight_text(
             held_run_text(own, now)
         };
     }
-    let running = running_text(holder, now);
+    let running = running_text(since, now);
     if count > 0 {
         format!("{running} · ○ {count} held")
     } else {
@@ -2688,7 +2690,7 @@ fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
     let (own, others) = split_held(in_flight.holder, &in_flight.held);
     let state = match own {
         Some(own) => held_run_text(own, now),
-        None => running_text(in_flight.holder, now),
+        None => running_text(in_flight.holder.map(|info| info.started_at), now),
     };
     let others = others_held_text(others)
         .map(|others| format!(" · {others}"))

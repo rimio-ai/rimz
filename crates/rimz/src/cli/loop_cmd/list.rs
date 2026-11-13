@@ -168,7 +168,7 @@ impl DoneEntry<'_> {
     }
 
     fn running(&self) -> bool {
-        matches!(self, Self::Task(row) if row.running.is_some())
+        matches!(self, Self::Task(row) if row.state == TaskState::Running)
     }
 }
 
@@ -392,6 +392,11 @@ pub(super) struct TaskRow {
     timing: Option<schedule::TaskTiming>,
     #[serde(skip)]
     running: Option<Option<RunLockInfo>>,
+    /// A run of the task in progress after its acting fire, by
+    /// [`attention::newer_run_in_progress`]: it holds back a failure, and reads as running when
+    /// it executes while no run lock is held.
+    #[serde(skip)]
+    newer_run: Option<attention::NewerRun>,
     #[serde(skip)]
     held: Vec<Held>,
     #[serde(skip)]
@@ -408,6 +413,9 @@ pub(super) struct TaskRow {
 
 struct RowContext<'a> {
     run_dir: &'a Path,
+    /// The room's project root and its workflow runs.
+    root: &'a Path,
+    runs: &'a [rimz::store::workflow::RunRecord],
     /// The room is open, or the loop timer fires its clocks while it is closed.
     clocks_kept: bool,
     stats: Option<&'a run_log::LoopRunStats>,
@@ -636,6 +644,8 @@ fn load(
                 running,
                 RowContext {
                     run_dir: &run_dir,
+                    root: &root,
+                    runs: &workflows,
                     clocks_kept,
                     stats: stats.get(name),
                     count,
@@ -764,6 +774,8 @@ impl TaskRow {
     ) -> Self {
         let RowContext {
             run_dir,
+            root,
+            runs,
             clocks_kept,
             stats,
             count,
@@ -772,7 +784,22 @@ impl TaskRow {
             now,
         } = context;
         let entry = task.entry();
-        let state = TaskState::observe(&timing, running.is_some(), clocks_kept);
+        let newer_run = stats
+            .and_then(|stats| stats.acting.as_ref())
+            .filter(|acting| since_wait_armed(Some(task), acting.record.at))
+            .and_then(|acting| {
+                attention::newer_run_in_progress(runs, name, root, acting.record.at)
+            });
+        // The run lock's holder decides; without one, an executing newer run reads running.
+        let running_since = match running {
+            Some(holder) => holder.map(|holder| holder.started_at),
+            None => newer_run.filter(|run| run.executing).map(|run| run.since),
+        };
+        let state = TaskState::observe(
+            &timing,
+            running.is_some() || running_since.is_some(),
+            clocks_kept,
+        );
         let (head, continuation) = trigger_text(entry, run_dir, &timing, state, now);
         let action = task.action().ok().map(|action| Action {
             kind: ActionKind::from(action),
@@ -816,7 +843,7 @@ impl TaskRow {
             you: false,
             booked_by: entry.booked_by.clone(),
             next_at: timing.next_timestamp(),
-            running_since: running.flatten().map(|holder| holder.started_at),
+            running_since,
             last: None,
             heard: None,
             newest: None,
@@ -834,6 +861,7 @@ impl TaskRow {
             task: Some(task.clone()),
             timing: Some(timing),
             running,
+            newer_run,
             held: Vec::new(),
             worktree_here: false,
             watcher_pid,
@@ -957,6 +985,7 @@ impl TaskRow {
             task: None,
             timing: None,
             running: Some(holder),
+            newer_run: None,
             held,
             worktree_here: false,
             watcher_pid: None,
@@ -996,7 +1025,13 @@ impl TaskRow {
     fn state_text(&self, now: Timestamp) -> String {
         let count = self.self_clearing_count();
         if self.state == TaskState::Running {
-            return render::in_flight_text(self.running.flatten(), &self.held, count, now);
+            return render::in_flight_text(
+                self.running.flatten(),
+                self.running_since,
+                &self.held,
+                count,
+                now,
+            );
         }
         if count > 0 {
             return format!("○ {count} held");
@@ -1040,7 +1075,6 @@ impl TaskRow {
 
     fn running_agents(&self) -> bool {
         self.state == TaskState::Running
-            && self.running.is_some()
             && render::split_held(self.running.flatten(), &self.held)
                 .0
                 .is_none()
@@ -1434,6 +1468,7 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             checkout: row.dir.as_deref(),
             fired: attention::fired(task, row.launch.as_ref()),
             running: row.running.is_some(),
+            newer_run: row.newer_run.is_some(),
             disabled: matches!(row.state, TaskState::Off | TaskState::NotEnabled),
             last_failed: row.last.as_ref().is_some_and(|last| !last.ok),
             exit: row.exit.as_deref(),

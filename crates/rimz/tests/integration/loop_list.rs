@@ -2150,15 +2150,29 @@ fn seed_room_run(
     park: Option<Timestamp>,
     wait: Option<serde_json::Value>,
 ) {
+    let state = if park.is_some() { "parked" } else { "active" };
+    seed_room_run_at(env, root, task, (state, Timestamp::now()), park, wait);
+}
+
+/// Seed a workflow run of loop task `task` in the room at `root`, in `state` since its
+/// creation at `created_at`.
+#[cfg(target_os = "linux")]
+fn seed_room_run_at(
+    env: &Env,
+    root: &Path,
+    task: &str,
+    (state, created_at): (&str, Timestamp),
+    park: Option<Timestamp>,
+    wait: Option<serde_json::Value>,
+) {
     let paths = env.state_path_for(root);
     let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
-    let now = Timestamp::now();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
         "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
         "scope":{"kind":"worktree","path":root}, "project_root":root,
-        "created_at":now, "entered_at":now, "node":"agent", "wait":wait,
-        "state":if park.is_some() { "parked" } else { "active" },
+        "created_at":created_at, "entered_at":created_at, "node":"agent", "wait":wait,
+        "state":state,
         "park":park.map(|at| json!({"reason":"user","text":"needs a look","at":at})),
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
     }))
@@ -2168,7 +2182,9 @@ fn seed_room_run(
 
 /// Every cause the D9 test leaves out, each in a room of its own, read by `loop list` and
 /// by the library reader: both name the same cause with the same reason, and a running
-/// task whose last fire failed has none on either. The reader runs in a re-exec of this
+/// task whose last fire failed has none on either, whether its run lock is held or a run
+/// it started after the failure is still active. A newer run that executes reads running in
+/// the list; one that waits keeps the failure in LAST. The reader runs in a re-exec of this
 /// test under the fixture's home, since the machine records it reads (strikes, arming, the
 /// start queue, the run log) resolve from the process's home.
 #[cfg(target_os = "linux")]
@@ -2205,6 +2221,11 @@ fn every_cause_reads_alike_in_list_and_reader() {
         "invalid",
         "running-failed",
         "running-each",
+        "retrying",
+        "retry-waiting",
+        "retried",
+        "retry-sibling",
+        "retry-struck",
     ]
     .into_iter()
     .map(|name| {
@@ -2250,7 +2271,11 @@ fn every_cause_reads_alike_in_list_and_reader() {
             serde_json::to_vec(&Tasks(BTreeMap::from([(name.clone(), entry)]))).unwrap(),
         )
         .unwrap();
-        if name.starts_with("failing") || name.starts_with("running") || name == "parked-failing" {
+        if name.starts_with("failing")
+            || name.starts_with("running")
+            || name.starts_with("retr")
+            || name == "parked-failing"
+        {
             let mut failed = record(name, root, LoopRunResult::Failed, 5);
             if name == "failing-exit" {
                 failed.check = Some(
@@ -2265,6 +2290,33 @@ fn every_cause_reads_alike_in_list_and_reader() {
         }
     }
     seed_room_run(&env, &rooms["parked-two"], "parked-two", Some(old), None);
+    let minutes_ago = |minutes| Timestamp::now() - SignedDuration::from_mins(minutes);
+    let mut created_at = BTreeMap::new();
+    for (name, state, created) in [
+        ("retrying", "active", 2),
+        ("retry-waiting", "active", 2),
+        ("retried", "failed", 3),
+        ("retry-sibling", "active", 7),
+        ("retry-struck", "active", 2),
+    ] {
+        let created = (state, minutes_ago(created));
+        created_at.insert(name, created.1);
+        // A deduping task's shell decline waits out its resident retry inside the run.
+        let wait = (name == "retry-waiting").then(|| {
+            json!({
+                "node":"recheck-check", "outcome":"sleeping", "first":created.1,
+                "last":created.1, "count":1, "recheck_at":null,
+            })
+        });
+        seed_room_run_at(&env, &rooms[name], name, created, None, wait);
+    }
+    // The retry that ended failed reported its own failure after the first.
+    runs.push(record(
+        "retried",
+        &rooms["retried"],
+        LoopRunResult::Failed,
+        1,
+    ));
     write_loop_run_records(&env, &runs);
     let key = |name: &str| project_task_key(&rooms[name], name);
     std::fs::create_dir_all(loop_strikes_path(&env).parent().unwrap()).unwrap();
@@ -2273,21 +2325,24 @@ fn every_cause_reads_alike_in_list_and_reader() {
         serde_json::to_vec(&BTreeMap::from([
             (key("failing-strikes"), 1_u32),
             (key("failing-exit"), 2),
+            (key("retrying"), 1),
+            (key("retried"), 2),
         ]))
         .unwrap(),
     )
     .unwrap();
+    let struck = || Arming {
+        enabled: false,
+        at: Some(old),
+        pause_until: None,
+        strikes: Some(3),
+    };
     std::fs::write(
         loop_arming_path(&env),
-        serde_json::to_vec(&BTreeMap::from([(
-            key("strikes"),
-            Arming {
-                enabled: false,
-                at: Some(old),
-                pause_until: None,
-                strikes: Some(3),
-            },
-        )]))
+        serde_json::to_vec(&BTreeMap::from([
+            (key("strikes"), struck()),
+            (key("retry-struck"), struck()),
+        ]))
         .unwrap(),
     )
     .unwrap();
@@ -2373,7 +2428,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
         text.push_str(&loop_ok(&env, args));
     }
 
-    let expected: [(&str, Option<&str>, Option<&str>); 15] = [
+    let expected: [(&str, Option<&str>, Option<&str>); 20] = [
         ("failing", Some("failing"), Some("✗ failing")),
         (
             "failing-strikes",
@@ -2409,6 +2464,19 @@ fn every_cause_reads_alike_in_list_and_reader() {
         ("invalid", Some("invalid"), None),
         ("running-failed", None, None),
         ("running-each", None, None),
+        ("retrying", None, None),
+        ("retry-waiting", None, None),
+        ("retried", Some("failing"), Some("✗ failing · 2/3 strikes")),
+        (
+            "retry-sibling",
+            Some("failing"),
+            Some("✗ failing · 0/3 strikes"),
+        ),
+        (
+            "retry-struck",
+            Some("strikes"),
+            Some("disabled after 3 strikes"),
+        ),
     ];
     for (name, cause, reason) in expected {
         let row = listed
@@ -2431,6 +2499,34 @@ fn every_cause_reads_alike_in_list_and_reader() {
                 line.trim_start().starts_with(&format!("{name} ")) && line.contains(read_reason)
             }),
             "{name}: list prints the reader's reason `{read_reason}`\n{text}"
+        );
+    }
+    // The executing retry reads as a lock-held run does, aged from the run's creation; the
+    // waiting one keeps the failure it follows.
+    for (name, running, last) in [
+        ("retrying", true, "▸ running 2m"),
+        ("retry-waiting", false, "✗ failed 5m ago"),
+    ] {
+        let row = &listed[name];
+        assert_eq!(
+            row["state"].as_str(),
+            Some(if running { "running" } else { "waits_for_room" }),
+            "{name}: {row}"
+        );
+        assert_eq!(
+            row["running_since"],
+            if running {
+                json!(created_at[name])
+            } else {
+                serde_json::Value::Null
+            },
+            "{name}: {row}"
+        );
+        assert!(
+            text.lines()
+                .any(|line| line.trim_start().starts_with(&format!("{name} "))
+                    && line.contains(last)),
+            "{name}: LAST reads `{last}`\n{text}"
         );
     }
     for (name, more) in [

@@ -89,7 +89,7 @@ fn heading(out: &mut impl Write, room: &Room, now: Timestamp, timer: bool) -> Re
         && let Some((row, next)) = room
             .tasks
             .iter()
-            .filter(|row| row.running.is_none())
+            .filter(|row| row.state != TaskState::Running)
             .filter_map(|row| row.next_at.map(|next| (row, next)))
             .min_by_key(|(_, next)| *next)
     {
@@ -489,7 +489,7 @@ fn done_rows(
         .into_iter()
         .map(|entry| match entry {
             DoneEntry::Task(row) => {
-                let fired = if row.running.is_some() {
+                let fired = if row.state == TaskState::Running {
                     row.state_text(now)
                 } else if let Some(launch) = &row.launch {
                     format!(
@@ -513,7 +513,7 @@ fn done_rows(
                     row.worktree.as_ref().map(|_| worktree_text(row)),
                     fired,
                     last_style(row),
-                    row.running.is_some(),
+                    row.state == TaskState::Running,
                 )
             }
             DoneEntry::Retired(row) => (

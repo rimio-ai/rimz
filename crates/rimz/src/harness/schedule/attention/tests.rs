@@ -349,3 +349,168 @@ fn a_fired_booking_with_a_gone_checkout_is_finished() {
     let fired = read_seeded(&room, name, true);
     assert_eq!((fired.attention, fired.fired), (None, true));
 }
+
+type Room = (PathBuf, StatePaths, RuntimePaths);
+
+/// A workflow run of `task` scoped to `project_root`, in `state` since `created_at`.
+fn run_record(task: &str, project_root: &Path, state: &str, created_at: Timestamp) -> RunRecord {
+    serde_json::from_value(serde_json::json!({
+        "version": crate::store::workflow::VERSION, "id": crate::ids::WorkflowRunId::new(),
+        "workflow": "review", "task": task, "spec_dir": "/definitions/review",
+        "spec_digest": "abc", "scope": {"kind": "worktree", "path": project_root},
+        "project_root": project_root, "created_at": created_at, "entered_at": created_at,
+        "state": state, "node": "check", "visits": {}, "visit_grant": 0,
+        "deadline_fired": false, "next_seq": 1,
+    }))
+    .unwrap()
+}
+
+/// A shell decline's resident retry, waiting inside its run.
+fn sleeping(mut run: RunRecord) -> RunRecord {
+    run.wait = Some(
+        serde_json::from_value(serde_json::json!({
+            "node": "recheck-check", "outcome": "sleeping", "first": run.created_at,
+            "last": run.created_at, "count": 1, "recheck_at": null,
+        }))
+        .unwrap(),
+    );
+    run
+}
+
+fn seed_run(room: &Room, run: RunRecord) {
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&room.1.workspace_lock).unwrap();
+    crate::store::workflow::initialize(&room.1, &run, b"spec", &guard).unwrap();
+}
+
+#[test]
+fn a_newer_run_in_progress_holds_back_only_the_failure_it_follows() {
+    let name = "retried-check";
+    let failed_at = Timestamp::now() - jiff::SignedDuration::from_mins(5);
+    let mut failed = super::super::run_log::LoopRunRecord::new(
+        name,
+        super::super::run_log::LoopRunResult::Failed,
+        super::super::run_log::LoopRunMode::Manual,
+        0,
+    );
+    failed.at = failed_at;
+    let stats = BTreeMap::from([(
+        name.to_owned(),
+        LoopRunStats {
+            runs: 1,
+            last: Some(failed.clone()),
+            last_kind: None,
+            spend_today_usd: 0.0,
+            acting: super::super::run_log::acting_run(&[failed]),
+            heard: None,
+        },
+    )]);
+    let cause = |seed: &dyn Fn(&Room)| {
+        let dir = tempfile::tempdir().unwrap();
+        let room = seeded_room(
+            dir.path(),
+            name,
+            |root| TaskEntry {
+                root: root.to_path_buf(),
+                check: Some("false".into()),
+                every: Some("1h".to_owned()),
+                max_strikes: Some(0),
+                ..TaskEntry::default()
+            },
+            serde_json::json!({}),
+        );
+        seed(&room);
+        let now = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+        read_room(
+            &room.0,
+            &room.1,
+            &room.2,
+            ReadContext {
+                open: false,
+                stats: &stats,
+                now: &now,
+            },
+        )
+        .remove(name)
+        .expect("the room's task")
+        .attention
+        .map(|(cause, _)| cause)
+    };
+    let later = failed_at + jiff::SignedDuration::from_mins(1);
+    let earlier = failed_at - jiff::SignedDuration::from_mins(1);
+    assert_eq!(
+        cause(&|room| seed_run(room, run_record(name, &room.0, "active", later))),
+        None,
+        "the retry is in progress"
+    );
+    assert_eq!(
+        cause(&|room| seed_run(room, sleeping(run_record(name, &room.0, "active", later)))),
+        None,
+        "the retry waits inside its run"
+    );
+    for (case, seed) in [
+        ("no run", Box::new(|_: &Room| {}) as Box<dyn Fn(&Room)>),
+        (
+            "the retry ended",
+            Box::new(|room: &Room| seed_run(room, run_record(name, &room.0, "failed", later))),
+        ),
+        (
+            "a sibling started before the failure",
+            Box::new(|room: &Room| seed_run(room, run_record(name, &room.0, "active", earlier))),
+        ),
+        (
+            "a run started at the failure's instant",
+            Box::new(|room: &Room| seed_run(room, run_record(name, &room.0, "active", failed_at))),
+        ),
+        (
+            "a parked run",
+            Box::new(|room: &Room| seed_run(room, run_record(name, &room.0, "parked", later))),
+        ),
+        (
+            "another task's run",
+            Box::new(|room: &Room| {
+                seed_run(room, run_record("other-task", &room.0, "active", later))
+            }),
+        ),
+        (
+            "a run under another root",
+            Box::new(|room: &Room| {
+                seed_run(
+                    room,
+                    run_record(name, &room.0.join("elsewhere"), "active", later),
+                )
+            }),
+        ),
+    ] {
+        assert_eq!(cause(&*seed), Some(Attention::Failing), "{case}");
+    }
+}
+
+#[test]
+fn the_newer_run_executes_only_without_a_wait() {
+    let root = Path::new("/repo");
+    let acting_at = Timestamp::now() - jiff::SignedDuration::from_mins(5);
+    let after = |minutes| acting_at + jiff::SignedDuration::from_mins(minutes);
+    let waiting = sleeping(run_record("task", root, "active", after(1)));
+    let executing = [
+        run_record("task", root, "active", after(3)),
+        run_record("task", root, "active", after(2)),
+    ];
+    assert_eq!(
+        newer_run_in_progress(std::slice::from_ref(&waiting), "task", root, acting_at),
+        Some(NewerRun {
+            since: after(1),
+            executing: false,
+        }),
+        "a run that only waits is in progress but not executing"
+    );
+    let runs = [&[waiting][..], &executing[..]].concat();
+    assert_eq!(
+        newer_run_in_progress(&runs, "task", root, acting_at),
+        Some(NewerRun {
+            since: after(2),
+            executing: true,
+        }),
+        "the earliest executing run outranks a waiting one"
+    );
+    assert_eq!(newer_run_in_progress(&runs, "task", root, after(3)), None);
+}

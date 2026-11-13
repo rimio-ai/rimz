@@ -15,7 +15,7 @@ pub(super) fn write(
         .tasks
         .iter()
         .filter(|row| {
-            row.running.is_some()
+            row.state == TaskState::Running
                 || (row.section != Section::Done
                     && (row.kind != TaskKind::WakeUp || row.section == Section::NeedsYou))
         })
@@ -293,7 +293,7 @@ fn fold_lines(room: &Room, now: Timestamp) -> Vec<String> {
         .filter(|row| {
             row.kind == TaskKind::WakeUp
                 && row.section != Section::NeedsYou
-                && row.running.is_none()
+                && row.state != TaskState::Running
         })
         .collect::<Vec<_>>();
     if !wakes.is_empty() {
@@ -352,7 +352,7 @@ fn layout<'a>(tasks: &[&'a TaskRow], now: Timestamp, cols: usize) -> (Columns, V
                 )
             } else {
                 (
-                    if task.running.is_some() {
+                    if task.state == TaskState::Running {
                         "—"
                     } else {
                         "never fired"

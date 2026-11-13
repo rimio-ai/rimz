@@ -642,6 +642,20 @@ fn running_clock_retains_scheduled_next_through_pause() {
 }
 
 #[test]
+fn a_lock_free_newer_run_reads_running_from_its_start() {
+    let mut row = clock("retrying", 5 * 60);
+    row.state = TaskState::Running;
+    row.running_since = Some(now() - SignedDuration::from_mins(3));
+    let output = frame(&room(vec![row]), 100, 24, true);
+    assert_eq!(
+        output.lines().next(),
+        Some("loop · ▸ 1 running · next: retrying in 5m"),
+        "{output}"
+    );
+    assert_eq!(output.matches("▸ running 3m").count(), 1, "{output}");
+}
+
+#[test]
 fn blocked_clocks_never_supply_next() {
     let mut tasks = vec![
         clock("gone", 1),

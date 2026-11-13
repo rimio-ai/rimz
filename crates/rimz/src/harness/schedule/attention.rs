@@ -89,6 +89,8 @@ pub struct TaskFacts<'a> {
     /// The task has fired, by [`fired`]: a gone checkout then means it is finished.
     pub fired: bool,
     pub running: bool,
+    /// A run of the task started after the acting fire, by [`newer_run_in_progress`].
+    pub newer_run: bool,
     /// Switched off, for any reason.
     pub disabled: bool,
     /// The acting fire since the row was armed failed.
@@ -143,7 +145,7 @@ pub fn decide(facts: &Facts<'_>, now: Timestamp) -> Option<(Attention, String)> 
             format!("disabled after {strikes} strikes"),
         ));
     }
-    if !row.running && !row.disabled && row.last_failed {
+    if !row.running && !row.newer_run && !row.disabled && row.last_failed {
         let strikes = strikes::threshold(task.entry())
             .map(|max| format!(" · {}/{max} strikes", row.strikes))
             .unwrap_or_default();
@@ -257,6 +259,41 @@ pub fn capacity_waits<'a>(
                 .filter(|wait| wait.outcome == "capacity")?;
             Some((run.scope.path.as_path(), wait))
         })
+}
+
+/// A run of a task in progress after its acting fire, by [`newer_run_in_progress`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NewerRun {
+    /// When the run was created: the start a row that reads it running counts from.
+    pub since: Timestamp,
+    /// The run carries no wait on its record (a capacity wait, a guard's decline held inside
+    /// the run): it is executing, not holding.
+    pub executing: bool,
+}
+
+/// The active run of `task` in `root` created after the acting fire recorded at `acting_at`:
+/// a retry in progress, which the older result no longer describes. A run's report stamps
+/// its record at the run's end, so a run created at or before that instant (an
+/// `each_worktree` sibling) is not newer; a parked run is not in progress. Of several, the
+/// earliest-created executing run, else the earliest waiting one.
+pub fn newer_run_in_progress(
+    runs: &[RunRecord],
+    task: &str,
+    root: &Path,
+    acting_at: Timestamp,
+) -> Option<NewerRun> {
+    runs.iter()
+        .filter(|run| {
+            run.ran_for(task)
+                && run.project_root == root
+                && run.state == RunState::Active
+                && run.created_at > acting_at
+        })
+        .map(|run| NewerRun {
+            since: run.created_at,
+            executing: run.wait.is_none(),
+        })
+        .min_by_key(|run| (!run.executing, run.since))
 }
 
 /// A room's condition readings, read once and shared by each task's observation.
@@ -489,6 +526,9 @@ pub fn read_room(
                     checkout: entry.dir.as_ref().map(|_| run_dir.as_path()),
                     fired,
                     running: running.contains(name.as_str()),
+                    newer_run: acting.is_some_and(|acting| {
+                        newer_run_in_progress(&workflows, name, root, acting.record.at).is_some()
+                    }),
                     disabled: matches!(timing.arm_state(), ArmState::Disabled(_)),
                     last_failed: acting.is_some_and(|acting| acting.polarity != RunPolarity::Good),
                     exit: exit.as_deref(),
