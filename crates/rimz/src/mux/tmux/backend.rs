@@ -25,9 +25,9 @@ use crate::mux::{
     PaneListOptions, PaneListing, ReconcileAddErr, ReconcileAddOutcome, ReconcilePane,
     ReconcilePaneRole, ReconcileScope, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed,
     SessionOptions, SidebarLiveness, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, ViewSidebars,
-    WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend, execute_close_plan,
-    execute_reconcile_plan, group_reconcile_panes, memoized_version,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, ViewShown,
+    ViewSidebars, WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend,
+    execute_close_plan, execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
@@ -1516,6 +1516,14 @@ impl MuxBackend for TmuxBackend {
                 .run()?;
         }
         Ok(())
+    }
+
+    fn show_view(&self, session: &str, name: &str) -> Result<ViewShown> {
+        let Some(window) = self.session_window_id(session, name)? else {
+            return Ok(ViewShown::Absent);
+        };
+        self.cmd().args(["select-window", "-t", &window]).run()?;
+        Ok(ViewShown::Shown)
     }
 
     fn rename_tab(

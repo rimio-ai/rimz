@@ -1045,6 +1045,22 @@ fn reopen_closed_daemon_view(
     machine_config: &MachineConfig,
     outcome: &mut ReloadOutcome,
 ) {
+    match reopen_dashboard(backend, opts, machine_config) {
+        crate::daemon_view::ReopenOutcome::Reopened => outcome.daemon_reopened = 1,
+        crate::daemon_view::ReopenOutcome::None => {}
+        crate::daemon_view::ReopenOutcome::Deferred => outcome.daemon_reopen_deferred = 1,
+        crate::daemon_view::ReopenOutcome::Busy => outcome.busy = 1,
+        crate::daemon_view::ReopenOutcome::Failed => outcome.daemon_reopen_failed = 1,
+    }
+}
+
+/// Reopen a wholly closed dashboard in `opts`' session on the room's recorded
+/// build, leaving focus where it was: repair's pass and the dashboard key's.
+pub(crate) fn reopen_dashboard(
+    backend: &dyn MuxBackend,
+    opts: &SidebarPaneOptions,
+    machine_config: &MachineConfig,
+) -> crate::daemon_view::ReopenOutcome {
     let resolve = || {
         let record = StatePaths::for_workspace(opts.workspace_id.clone())
             .map_err(record::WorkspaceRecordErr::from)
@@ -1063,13 +1079,7 @@ fn reopen_closed_daemon_view(
         })?;
         Some((record, rimz_bin))
     };
-    match crate::daemon_view::reopen_daemon_view(backend, opts, resolve, machine_config) {
-        crate::daemon_view::ReopenOutcome::Reopened => outcome.daemon_reopened = 1,
-        crate::daemon_view::ReopenOutcome::None => {}
-        crate::daemon_view::ReopenOutcome::Deferred => outcome.daemon_reopen_deferred = 1,
-        crate::daemon_view::ReopenOutcome::Busy => outcome.busy = 1,
-        crate::daemon_view::ReopenOutcome::Failed => outcome.daemon_reopen_failed = 1,
-    }
+    crate::daemon_view::reopen_daemon_view(backend, opts, resolve, machine_config)
 }
 
 const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);

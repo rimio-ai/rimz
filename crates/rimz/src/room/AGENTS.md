@@ -10,6 +10,7 @@ Local contract for `crates/rimz/src/room/` — managed room identity and lifecyc
 - A birth step whose failure leaves state every reader still accepts (the team-notes layout migration in [`birth.rs`](./birth.rs)) warns and continues; it never refuses birth.
 - Incompatible-room replacement requires an exclusive room claim before any teardown, taken before the prompt in reset; a fresh sidebar heartbeat never bypasses this claim.
 - `harness::rebirth` owns rebirth inspection, planning, and materialization.
+- Room owns showing the room's fixed views by name ([`views.rs`](./views.rs)): the dashboard, which it reopens through `reload` when closed, and the numbered terminals, which it opens under the session's sidebar reconcile lock. A view's name is its whole identity; nothing records a terminal.
 - `mux` owns backend commands and layout mechanics, the cross-backend live-session snapshot room inventory borrows, the guarded process sweep teardown calls, and the room-wide width target room adopts, resolves, and clears at birth.
 - `sidebar` owns launch election, its published caches, and the rebirth heartbeat purge. Store GC owns lifetime-class reclamation; teardown clears the runtime `sock/`, `live/`, and `lanes/` classes after the process sweep confirms exit or warns about survivors. A hard reset alone then ends the processes still inside the room's scoped views, selected by `mux`, and refuses before it opens the store when one survives.
 - `wakeup` owns the renderer heartbeat record and its TTL, which room reads to judge a session live.

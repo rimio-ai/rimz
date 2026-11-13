@@ -698,7 +698,7 @@ fn removed_top_level_command_rejects_before_global_help() {
         .is_err()
     );
     assert!(reject_removed_top_level_tokens_from([OsString::from("run")]).is_err());
-    assert!(reject_removed_top_level_tokens_from([OsString::from("tab")]).is_err());
+    assert!(reject_removed_top_level_tokens_from([OsString::from("tab")]).is_ok());
     for args in [
         vec!["channel", "new", "x"],
         vec!["--mux", "tmux", "channel", "list"],

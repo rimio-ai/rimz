@@ -30,6 +30,7 @@ mod session;
 mod sidebar;
 mod status;
 mod support;
+mod tab_commands;
 mod team_stage;
 mod title;
 

@@ -23,6 +23,7 @@ This page indexes every command and states the rules that hold across all of the
 | Save and list notes | `notes` | [Notes](./cli/notes.md) |
 | Read the sidebar | `sidebar frame` | [Sidebar frames](./cli/pane.md#render-a-sidebar-frame) |
 | Navigate and act on cards | `sidebar walk`, `slot`, `last`, `filter`, `close`, `reopen` | [Sidebar cards](./cli/sidebar.md) |
+| Show the dashboard or a numbered terminal | `tab dashboard`, `tab terminal` | [Tab](./cli/tab.md) |
 | Maintain and recover | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 Tab completion for commands, flags, and live room names is set up in the [shell completion guide](../guide/setup.md#shell-completion).

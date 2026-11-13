@@ -79,6 +79,9 @@ impl m::MuxBackend for Backend {
         }
         Ok(())
     }
+    fn show_view(&self, _session: &str, _name: &str) -> m::Result<m::ViewShown> {
+        panic!("unexpected show_view")
+    }
     fn ensure_session(&self, _opts: &m::SessionOptions) -> m::Result<()> {
         panic!("unexpected ensure_session")
     }
