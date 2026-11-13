@@ -272,7 +272,7 @@ pub(crate) struct AmbiguousAgents {
 
 #[derive(Debug)]
 enum AllMatches {
-    Stop,
+    Verb(&'static str),
     Message,
 }
 
@@ -349,8 +349,9 @@ impl AmbiguousAgents {
         }
     }
 
-    pub(crate) fn offer_stop_all(&mut self) {
-        self.all_matches = Some(AllMatches::Stop);
+    /// Close the refusal with the `rimz agents <verb> <target> --all` retry.
+    pub(crate) fn offer_all(&mut self, verb: &'static str) {
+        self.all_matches = Some(AllMatches::Verb(verb));
     }
 
     pub(crate) fn from_matches(
@@ -412,9 +413,12 @@ impl AmbiguousAgents {
                 self.rows.len() - AMBIGUITY_ROW_CAP
             )?;
         }
-        if matches!(self.all_matches, Some(AllMatches::Stop)) {
+        if let Some(AllMatches::Verb(verb)) = self.all_matches {
             if let Ok(target) = shlex::try_quote(&self.target) {
-                writeln!(w, "  or stop every match: rimz agents stop {target} --all")?;
+                writeln!(
+                    w,
+                    "  or {verb} every match: rimz agents {verb} {target} --all"
+                )?;
             }
         } else if matches!(self.all_matches, Some(AllMatches::Message)) {
             let mut args = argv.to_vec();

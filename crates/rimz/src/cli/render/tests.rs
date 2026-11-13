@@ -24,7 +24,7 @@ fn folded_span_names_only_positive_whole_seconds() {
 }
 
 #[test]
-fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
+fn ambiguity_rows_are_ranked_runnable_and_offer_all() {
     let now = Timestamp::now();
     let mut agents = Vec::new();
     for (id, state) in [
@@ -50,7 +50,7 @@ fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
     error
         .downcast_mut::<AmbiguousAgents>()
         .unwrap()
-        .offer_stop_all();
+        .offer_all("stop");
     let argv = ["rimz", "agents", "stop", "@coder"].map(str::to_owned);
     let output = strip(|out| write_report_with_args(out, &error, &argv));
     assert!(
@@ -67,6 +67,15 @@ fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
     );
     assert!(
         output.contains("or stop every match: rimz agents stop @coder --all"),
+        "{output}"
+    );
+    error
+        .downcast_mut::<AmbiguousAgents>()
+        .unwrap()
+        .offer_all("restart");
+    let output = strip(|out| write_report_with_args(out, &error, &argv));
+    assert!(
+        output.contains("or restart every match: rimz agents restart @coder --all"),
         "{output}"
     );
     let output = strip(|out| {
