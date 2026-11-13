@@ -52,8 +52,8 @@ macro_rules! lifetime_fields {
 
 lifetime_fields!(
     transcript_path; account_key;
-    role, team, loop_task, loop_booked_by, workflow, automation, channel, lane, profile, login, tier, record,
-    checkout, add_dirs, untrusted_checkout
+    role, team, loop_task, loop_booked_by, workflow, automation, channel, lane, profile, login,
+    tier, record, checkout, add_dirs, untrusted_checkout
 );
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
