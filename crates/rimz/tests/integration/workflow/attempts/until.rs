@@ -3,7 +3,11 @@ use std::io::Write as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 
 fn room() -> Room {
-    let room = Room::new("lifecycle='until'\n");
+    room_with("lifecycle='until'\n")
+}
+
+fn room_with(extra: &str) -> Room {
+    let room = Room::new(extra);
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
         &path,
@@ -245,6 +249,57 @@ fn a_cancel_retires_an_unacknowledged_push_back() {
     );
     wait_for_advances_to_exit(&room.env, &id);
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Canceled),
+    );
+}
+
+#[test]
+fn a_kept_session_ending_on_its_own_retires_its_unacknowledged_push_back() {
+    let room = room_with("lifecycle='until'\nkeep=true\n");
+    let (id, run) = room.launch();
+    let store = room.env.store();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().lane_path("workflow-tick.json"),
+        &BTreeMap::from([(
+            id.clone(),
+            jiff::Timestamp::now() + Duration::from_secs(3600),
+        )]),
+    )
+    .unwrap();
+    opened_turn(&room, &id, &run);
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let pushed = until(&room.env, &id, |value| {
+        value["record"]["attempt"]["push"]["queued"] == true
+    });
+    let message_id = pushed["record"]["attempt"]["push"]["message"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
+        Some(rimz::store::message::MessageStatus::Sent),
+    );
+    wait_for_advances_to_exit(&room.env, &id);
+    // The session exits with the push-back unread: a natural ending, which a kept step detaches.
+    rimz::harness::run::settle_session_exit(&store, &run.run_id, || None).unwrap();
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    wait_for_advances_to_exit(&room.env, &id);
+    let ended = show(&room.env, &id);
+    assert_eq!(
+        (
+            &ended["record"]["prev_attempt"]["seq"],
+            &ended["record"]["prev_attempt"]["outcome"]
+        ),
+        (&pushed["record"]["attempt"]["seq"], &json!("ended")),
+        "{ended:#}"
+    );
     assert_eq!(
         rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
         Some(rimz::store::message::MessageStatus::Canceled),
