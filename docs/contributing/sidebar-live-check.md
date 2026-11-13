@@ -1141,7 +1141,7 @@ Tear down the room with the isolated wrapper's `rimz --tmux reset --yes --no-sta
 
 ### Drive a workflow step with the stub
 
-A check of workflow routing that needs no real provider can run in a held sandbox room instead. The sandbox's `claude` stub never acts, so drive a workflow step agent by feeding its hooks with `cargo xtask sandbox in <root> --as @claude#probe`: the room handle, not the pet name `workflow show` prints. After an `until` push-back, the next `UserPromptSubmit` must carry the pushed message's exact text as `prompt` (read it with `rimz message show <msg>`). Delivery is confirmed by matching that text, and until then the pending message defers the step's judgment.
+A check of workflow routing that needs no real provider can run in a held sandbox room instead. The sandbox's `claude` stub never acts, so drive a workflow step agent by feeding its hooks with `cargo xtask sandbox in <root> --as @claude#probe`: the room handle, not the pet name `workflow show` prints. After a rest check's push-back, the next `UserPromptSubmit` must carry the pushed message's exact text as `prompt` (read it with `rimz message show <msg>`). Delivery is confirmed by matching that text, and until then the pending message defers the step's judgment.
 
 ## Probe a loop judge against a real provider
 

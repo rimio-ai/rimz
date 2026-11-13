@@ -33,7 +33,7 @@ The field table. A `*` marks a required field. Every node also takes `summary`, 
 | `[condition.<n>]` | `cases`* (`when`, `outcome`, `for`), `else`*, `timeout`*, `on.<outcome>`*, `on.unknown`*, `wake`, `provider`, `account` |
 | `[sleep.<n>]` | `sleep`*, `then`*, `when`, `for`, `provider`, `account` |
 
-Shipped fields with no place in the table, and where each goes: `on-break` and `workflow.on.deadline` (the fallback chain, R13); `on.cap` (`on.visits`); lifecycle values `stay` and `until` (`session`); a `then` list (`rest-check`). Already shipped as here: the eight kind tables, the `admission` table (`window`, `throttle`, `max-parallel`, `stagger`, `give-up`, and `occupancy` in place of `takeover` and `share`), and the removal of `max-visits-per-outcome` with `reset-on` (R40) and of route `delay` and `default`. `else` and `timeout` are required on a condition because R6 requires every outcome routed and R27 requires every wait without an agent pane to be bounded.
+Shipped fields with no place in the table, and where each goes: `on-break` and `workflow.on.deadline` (the fallback chain, R13); `on.cap` (`on.visits`). Already shipped as here: the eight kind tables, the two lifecycles with a session's `rest-check` in place of lifecycle values `stay` and `until` and a `then` list, the `admission` table (`window`, `throttle`, `max-parallel`, `stagger`, `give-up`, and `occupancy` in place of `takeover` and `share`), and the removal of `max-visits-per-outcome` with `reset-on` (R40) and of route `delay` and `default`. `else` and `timeout` are required on a condition because R6 requires every outcome routed and R27 requires every wait without an agent pane to be bounded.
 
 The shipped tables are `crates/rimz/src/harness/workflow/spec/kinds.rs::WorkflowFile` and the kind tables it holds, lowered into `crates/rimz/src/harness/workflow/spec.rs::Check` and `crates/rimz/src/harness/workflow/spec.rs::Step`. A judge check reads neither `account` nor `provider` today (only a condition or a sleep does, in `crates/rimz/src/harness/workflow/script/condition.rs::reading`), so `[judge.<n>]` takes neither.
 
@@ -404,8 +404,8 @@ Today's compiled shapes are built by `crates/rimz/src/harness/schedule/compile.r
 | Today's row | Compiled today | Target |
 | --- | --- | --- |
 | `--agent` | turn step `agent` | an inline `[tasks.<t>.agent]` with `lifecycle = "turn"` (example 7) |
-| `--agent --stay` | stay step, `share` unless `--takeover` | an inline agent with `lifecycle = "session"` and the occupancy the flags name |
-| `--agent --verify` | until step with check `verify` | a workflow (example 6) |
+| `--agent --stay` | session step, `share` unless `--takeover` | an inline agent with `lifecycle = "session"` and the occupancy the flags name |
+| `--agent --verify` | session step with rest check `verify` | a workflow (example 6) |
 | `--check` (a shell guard) | check `check` routed by polarity | a workflow with a `test` node (example 4) |
 | `--check` alone | check with `pass` to `@done`, `fail` to `@failed` | an inline `[tasks.<t>.command]` (example 7) |
 | `--judge` | checks `judge-<tier>` that run the agent anyway on failure | a workflow with a `judge` node (example 5) |
