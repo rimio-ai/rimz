@@ -1443,7 +1443,10 @@ esac
 
     let dir = PathBuf::from(std::env::var_os(CHILD).unwrap());
     for cross_tab in [true, false] {
-        let room = Room::new();
+        // A paint wait past every `SETTLE` poll, so only B's acknowledgement can release the
+        // click: the host's 500 ms bound would otherwise dispatch while a slow test polls.
+        let plane = DataPlane::detached().with_paint_wait(2 * SETTLE);
+        let room = Room::with_plane(MuxName::Zellij, Timing::default(), plane);
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_10");
         let first = PaneId::from_parts(MuxName::Zellij, "terminal_11");
         let target = PaneId::from_parts(MuxName::Zellij, "terminal_12");
@@ -1545,7 +1548,13 @@ esac
             );
             assert_eq!(push.anchor.pane_id, target);
             assert_eq!(load(&room.runtime), Some(push.anchor.clone()));
-            assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
+            // Hold B's acknowledgement long enough for a dispatch that skipped the wait to
+            // reach the shim.
+            let held = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < held {
+                assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
+                std::thread::sleep(Duration::from_millis(10));
+            }
             std::fs::write(dir.join("pushed"), b"").unwrap();
             push.finish(
                 crate::diag::focus_trace::PushVerdict::Painted,
