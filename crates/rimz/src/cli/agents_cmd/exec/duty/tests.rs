@@ -82,6 +82,50 @@ fn strand_duty_settles_stranded_park() {
     }
 }
 
+/// A park on a message that was withdrawn before it opened a turn completes
+/// with the parked turn's answer, and the launcher's digest reports it so.
+#[test]
+fn strand_duty_completes_a_withdrawn_message_park() {
+    let state = tempfile::tempdir().unwrap();
+    let workspace_id = rimz::WorkspaceId::from_project_root(state.path());
+    let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(workspace_id.clone(), &state.path().join("rt")).unwrap();
+    let store = rimz::Store::open(paths, runtime).unwrap();
+    let mut record = rimz::store::run::RunRecord::new(
+        workspace_id,
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "check".to_owned(),
+        state.path().to_owned(),
+    );
+    record.status = rimz::store::run::RunStatus::Running;
+    record.subagent = true;
+    record.agent_id = Some("session".into());
+    record.agent_name = Some("calm-fox".to_owned());
+    record.last_message = Some("the parked answer".to_owned());
+    record.parked_at = Some(jiff::Timestamp::now());
+    record.parked_on = Some(rimz::store::run::ParkCause::Message);
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let context = RunExecContext {
+        run_id: record.run_id.clone(),
+        store,
+        session_name: "room".to_owned(),
+        workspace: test_workspace(state.path()),
+    };
+    let mut previous = None;
+    assert!(!run_strand_once(&context, &mut previous).unwrap());
+    assert!(!run_strand_once(&context, &mut previous).unwrap());
+    let completed = context.load_record().unwrap();
+    assert_eq!(completed.status, rimz::store::run::RunStatus::Completed);
+    assert_eq!(completed.failure_tail, None);
+    assert_eq!(completed.last_message.as_deref(), Some("the parked answer"));
+    let mut child = rimz::testkit::agent_state("claude", "session", completed.started_at);
+    child.name = None;
+    let row = super::super::super::subagent_report::compose_digest_row(&child, &completed, None);
+    assert!(row.starts_with("- @calm-fox: completed in "), "{row}");
+}
+
 /// The one park nothing else can end is a settled fleet whose digest was
 /// lost: the child's reporter swallowed its error and the parent is at
 /// rest waiting for exactly that digest. The parked wrapper therefore

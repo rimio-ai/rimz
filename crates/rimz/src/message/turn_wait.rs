@@ -1,4 +1,4 @@
-//! The shared turn reader behind `rimz agents wait` and owed-report wakes.
+//! The shared turn reader behind `rimz agents wait` and owed wakes and prompts.
 //!
 //! [`TurnWaitView`] reads the rollup, the message queue and the loop catalog
 //! once per poll and answers whether an agent's turn has completed, and if not,
@@ -9,7 +9,9 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::{AgentState, AgentStatus, TurnCompletion};
 use crate::harness::auto_continue::CardStatus;
-use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, SoftCompactStep};
+use crate::store::message::{
+    HarnessNotice, MessageBody, MessageRecord, MessageSender, SoftCompactStep,
+};
 use crate::store::snapshot::SidebarSnapshot;
 
 /// One wait poll's read of whether agents have finished a turn.
@@ -31,6 +33,7 @@ pub enum TurnWaitReason {
     WaitingOnPerson(Option<crate::agents::OpenAsk>),
     Sleeping(Vec<crate::agents::PendingWait>),
     WakeInFlight,
+    MessageQueued,
     Paused,
     NoTurnStarted,
     Running,
@@ -48,6 +51,9 @@ impl TurnWaitView {
             }
             AgentStatus::Sleeping if self.wake_in_flight(agent, false) => {
                 TurnWaitReason::WakeInFlight
+            }
+            AgentStatus::Sleeping if self.rest_held_by_message(agent) => {
+                TurnWaitReason::MessageQueued
             }
             AgentStatus::Sleeping => TurnWaitReason::Sleeping(agent.pending_waits.clone()),
             AgentStatus::Paused => TurnWaitReason::Paused,
@@ -71,18 +77,31 @@ impl TurnWaitView {
     }
 
     /// Effective status, held at `sleeping` while a wake for the agent is
-    /// still between its consumed catalog row and its delivered turn. A
-    /// displayed provider pause the card counts as spent reads as `failed`,
-    /// unless a budget park takes precedence.
+    /// still between its consumed catalog row and its delivered turn, or while
+    /// a person's or an agent's prompt is on its way to it, so that rest is not
+    /// its finish. A displayed provider pause the card counts as spent reads as
+    /// `failed`, unless a budget park takes precedence.
     fn status(&self, agent: &AgentState) -> AgentStatus {
         let status = self
             .card_status
             .status(&self.snapshot, agent, self.snapshot.now);
-        let waking = self.wake_in_flight(agent, false);
-        if waking && matches!(status, AgentStatus::Idle | AgentStatus::Success) {
+        let held = self.wake_in_flight(agent, false) || self.message_in_flight(agent);
+        if held && Self::rested(status) {
             return AgentStatus::Sleeping;
         }
         status
+    }
+
+    fn rested(status: AgentStatus) -> bool {
+        matches!(status, AgentStatus::Idle | AgentStatus::Success)
+    }
+
+    /// Whether a prompt on its way, not the card's own status, holds it asleep.
+    fn rest_held_by_message(&self, agent: &AgentState) -> bool {
+        Self::rested(
+            self.card_status
+                .status(&self.snapshot, agent, self.snapshot.now),
+        ) && self.message_in_flight(agent)
     }
 
     pub fn completion(&self, agent: &AgentState) -> TurnCompletion {
@@ -107,6 +126,22 @@ impl TurnWaitView {
                 _ => false,
             };
             wake && !message.status.is_terminal()
+                && (!message.sent_hold_expired(self.now) || message.held_by_compaction(agent))
+                && message.same_agent_card(agent)
+        })
+    }
+
+    /// A prompt a person or an agent sent this card is on its way: queued and
+    /// deliverable now, or sent and inside its hold.
+    /// A `Sent` prompt counts inside its hold because the receiving turn's own
+    /// Stop can read the record already claimed and sent. Commands open no turn
+    /// and `System` text is RimZ's own, so neither counts.
+    pub(crate) fn message_in_flight(&self, agent: &AgentState) -> bool {
+        self.messages.iter().any(|message| {
+            message.sender.is_conversation()
+                && message.body == MessageBody::Prompt
+                && !message.status.is_terminal()
+                && message.is_deliverable(self.now)
                 && (!message.sent_hold_expired(self.now) || message.held_by_compaction(agent))
                 && message.same_agent_card(agent)
         })

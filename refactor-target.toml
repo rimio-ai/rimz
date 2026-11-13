@@ -5507,7 +5507,7 @@ reason = "Rebirth cancels rosterless workflow runs only after checking provider 
 [[verdict]]
 kind = "item"
 key = "harness::run::describes_latest_turn"
-reason = "`agents wait` reads a live peer's terminal run instead of its transcript while the peer rests and has closed no request since the run completed."
+reason = "`agents wait` reads a live peer's terminal run instead of its transcript while the peer rests with no person's or agent's prompt on its way and has closed no request since the run completed."
 
 [[verdict]]
 kind = "item"
@@ -12445,6 +12445,11 @@ reason = "Workflow-owned runs retain a non-clean turn stop as evidence rather th
 kind = "item"
 key = "store::run::StoppedTurnDisposition"
 reason = "Only failed and canceled turn dispositions can hold a workflow-owned run open."
+
+[[verdict]]
+kind = "item"
+key = "store::run::ParkCause"
+reason = "A park records what owed it, so a strand completes a run parked on a withdrawn prompt and fails every other."
 
 [[verdict]]
 kind = "item"

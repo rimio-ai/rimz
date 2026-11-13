@@ -4463,3 +4463,253 @@ fn a_run_reaching_a_terminal_status_withdraws_the_messages_about_it() {
         "a run that reads open again keeps the messages about it"
     );
 }
+
+#[test]
+fn a_message_park_rearms_the_deadline_at_its_unpark_and_joins_both_turns() {
+    for peer in [false, true] {
+        for owed in [OwedWake::Message, OwedWake::Wait] {
+            let (_dir, _paths, mut record) = setup();
+            if peer {
+                record.peer = Some(crate::store::run::PeerRun {
+                    launch_id: "peer-launch".into(),
+                    opened_by: Vec::new(),
+                });
+            } else {
+                record.subagent = true;
+            }
+            record.status = RunStatus::Running;
+            record.agent_id = Some("sess-1".into());
+            let start = record.started_at;
+            record.timeout = Some(Duration::from_secs(600));
+            record.deadline_at = Some(start + Duration::from_secs(600));
+            record.deadline_notice_at = Some(start + Duration::from_secs(500));
+            let label = format!("peer={peer} {owed:?}");
+            let parked = start + Duration::from_secs(300);
+            let mut observation = turn_end("sess-1");
+            assert_eq!(
+                fold_lifecycle(
+                    &mut record,
+                    "claude",
+                    &observation,
+                    Some("first".to_owned()),
+                    parked,
+                    parked,
+                    Some(owed),
+                ),
+                LifecycleFold::Updated,
+                "{label}"
+            );
+            assert_eq!(record.parked_at, Some(parked), "{label}");
+            assert_eq!(record.parked_on, Some(owed.park_cause()), "{label}");
+            assert_eq!(record.deadline_at, Some(start + Duration::from_secs(600)));
+
+            let resumed = start + Duration::from_secs(900);
+            observation.signal = turn_started();
+            fold_lifecycle(
+                &mut record,
+                "claude",
+                &observation,
+                None,
+                resumed,
+                resumed,
+                None,
+            );
+            assert_eq!(record.parked_at, None, "{label}");
+            assert_eq!(record.parked_on, None, "{label}");
+            if owed == OwedWake::Message {
+                assert_eq!(
+                    record.deadline_at,
+                    Some(resumed + Duration::from_secs(600)),
+                    "{label}"
+                );
+                assert_eq!(record.deadline_notice_at, None, "{label}");
+            } else {
+                assert_eq!(
+                    record.deadline_at,
+                    Some(start + Duration::from_secs(600)),
+                    "{label}"
+                );
+                assert_eq!(
+                    record.deadline_notice_at,
+                    Some(start + Duration::from_secs(500)),
+                    "{label}"
+                );
+            }
+            observation.signal = turn_end("sess-1").signal;
+            let done = resumed + Duration::from_secs(10);
+            assert_eq!(
+                fold_lifecycle(
+                    &mut record,
+                    "claude",
+                    &observation,
+                    Some("second".to_owned()),
+                    done,
+                    done,
+                    None,
+                ),
+                LifecycleFold::NewlyTerminal,
+                "{label}"
+            );
+            assert_eq!(record.status, RunStatus::Completed, "{label}");
+            assert_eq!(record.follow_ups, 0, "{label}");
+            assert_eq!(
+                record.last_message.as_deref(),
+                Some("first\n\n---\n\nsecond"),
+                "{label}"
+            );
+        }
+    }
+
+    // A plain run rearms from its stored launch span at every unpark, never
+    // from a span an earlier unpark grew, and a limit hold ending in the same
+    // fold leaves that rearm whole.
+    let (_dir, _paths, mut record) = setup();
+    record.status = RunStatus::Running;
+    record.agent_id = Some("sess-1".into());
+    let span = Duration::from_secs(600);
+    record.timeout = Some(span);
+    record.deadline_at = Some(record.started_at + span);
+    let mut observation = turn_end("sess-1");
+    let mut at = record.started_at;
+    for round in 0..2 {
+        at += Duration::from_secs(300);
+        observation.signal = turn_end("sess-1").signal;
+        assert_eq!(
+            fold_lifecycle(
+                &mut record,
+                "claude",
+                &observation,
+                Some(format!("turn {round}")),
+                at,
+                at,
+                Some(OwedWake::Message),
+            ),
+            LifecycleFold::Updated,
+            "round {round}"
+        );
+        assert_eq!(
+            record.parked_on,
+            Some(crate::store::run::ParkCause::Message),
+            "round {round}"
+        );
+        if round == 1 {
+            record.limit_hold = Some(crate::store::run::LimitHold {
+                activity: at,
+                since: at,
+                until: at + Duration::from_secs(3600),
+            });
+        }
+        at += Duration::from_secs(600);
+        observation.signal = turn_started();
+        fold_lifecycle(&mut record, "claude", &observation, None, at, at, None);
+        assert_eq!(record.parked_on, None, "round {round}");
+        assert_eq!(record.limit_hold, None, "round {round}");
+        assert_eq!(record.deadline_at, Some(at + span), "round {round}");
+    }
+}
+
+#[test]
+fn a_withdrawn_message_park_completes_with_the_parked_answer() {
+    use crate::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+
+    let (dir, paths, mut record) = setup();
+    let runtime =
+        crate::RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let socket = std::os::unix::net::UnixDatagram::bind(crate::store::run::run_socket_path(
+        store.runtime_paths(),
+        &record.run_id,
+    ))
+    .unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let mut frame = [0; 1024];
+    let mut registered =
+        AgentLifecycleObservation::new(Some("session".into()), LifecycleSignal::Registered);
+    registered.pane_id = Some(crate::ids::PaneId::from_parts(MuxName::Tmux, "%1"));
+    store
+        .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+            session_name: "park-test",
+            agent_kind: record.kind.clone(),
+            event_name: "test",
+            observation: &registered,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let agent = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "session")
+        .cloned()
+        .expect("the parked run's card");
+    let mut message = MessageRecord::new(
+        record.workspace_id.clone(),
+        &agent,
+        "rebase first".to_owned(),
+        DeliveryGate::Done,
+    );
+    let at = Timestamp::now();
+    record.status = RunStatus::Running;
+    record.subagent = true;
+    record.agent_id = Some("session".into());
+    record.agent_name = Some("calm-fox".to_owned());
+    record.last_message = Some("parked answer".to_owned());
+    record.parked_at = Some(at);
+    record.parked_on = Some(crate::store::run::ParkCause::Message);
+    for status in [
+        MessageStatus::Canceled,
+        MessageStatus::Expired,
+        MessageStatus::Archived,
+    ] {
+        create(store.paths(), &record).unwrap();
+        message.status = MessageStatus::Queued;
+        store.queue_message(&message, "park-test").unwrap();
+        for previous in [None, Some(at)] {
+            assert_eq!(
+                settle_stranded_park(&store, &record, previous).unwrap(),
+                ParkCheck::Live,
+                "{status:?}"
+            );
+        }
+        message.status = status;
+        store.queue_message(&message, "park-test").unwrap();
+        assert_eq!(
+            settle_stranded_park(&store, &record, None).unwrap(),
+            ParkCheck::Stranded(at)
+        );
+        assert_eq!(
+            settle_stranded_park(&store, &record, Some(at)).unwrap(),
+            ParkCheck::Settled
+        );
+        let completed = load(store.paths(), &record.run_id).unwrap();
+        assert_eq!(completed.status, RunStatus::Completed, "{status:?}");
+        assert_eq!(completed.failure_tail, None);
+        assert_eq!((completed.parked_at, completed.parked_on), (None, None));
+        assert_eq!(completed.last_message.as_deref(), Some("parked answer"));
+        let response = response_path(store.paths(), &completed).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&response).unwrap(),
+            "parked answer\n"
+        );
+        std::fs::remove_file(response).unwrap();
+        let count = socket.recv(&mut frame).unwrap();
+        let crate::store::run::WakeupFrame::RunCompleted { status, .. } =
+            serde_json::from_slice(&frame[..count]).unwrap();
+        assert_eq!(status, RunStatus::Completed);
+    }
+
+    // Any other cause, recorded or not, still fails as a lost wake.
+    for cause in [None, Some(crate::store::run::ParkCause::Wait)] {
+        record.parked_on = cause;
+        create(store.paths(), &record).unwrap();
+        assert_eq!(
+            settle_stranded_park(&store, &record, Some(at)).unwrap(),
+            ParkCheck::Settled
+        );
+        let failed = load(store.paths(), &record.run_id).unwrap();
+        assert_eq!(failed.status, RunStatus::Failed, "{cause:?}");
+        assert_eq!(failed.failure_tail.as_deref(), Some(STRANDED_PARK_REASON));
+        socket.recv(&mut frame).unwrap();
+    }
+}

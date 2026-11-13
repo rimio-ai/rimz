@@ -1,16 +1,17 @@
-//! Harness wakes still owed to a supervised agent session.
+//! Wakes and prompts still owed to a supervised agent session.
 
 use crate::Store;
 use crate::agents::state::SoftCompactProgress;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::turn_wait::TurnWaitView;
 use crate::store::StoreErr;
+use crate::store::run::ParkCause;
 use crate::store::snapshot::find_agent;
 
 use super::fleet::FleetRuns;
 
-/// Whether this session is still owed a harness wake. Each term is read
-/// before the writes that would hide it.
+/// Whether this session is still owed a harness wake, or a prompt a person or
+/// an agent sent it. Each term is read before the writes that would hide it.
 ///
 /// The fleet term goes first: the digest reporter stamps `report_message_id`
 /// on the child rows and only then queues the digest, so a reader that finds
@@ -30,7 +31,8 @@ use super::fleet::FleetRuns;
 /// The wait terms keep `TurnWaitView`'s order, catalog → queue → rollup: a
 /// wake publishes its message record before it consumes its catalog row, and a
 /// provider's turn start lands before the delivery ack settles that record, so
-/// every wake in flight shows in at least one of the three reads.
+/// every wake in flight shows in at least one of the three reads. The prompt
+/// term comes last, from the same queue read.
 ///
 /// Accepted gap, now bounded by the reporter's own two lock holds: it stamps
 /// and queues under separate locks, so a parent Stop landing between them can
@@ -90,12 +92,13 @@ pub fn owed_wake(
     if !agent.pending_waits.is_empty() {
         return Ok(Some(OwedWake::Wait));
     }
-    Ok(view
-        .wake_in_flight(agent, true)
-        .then_some(OwedWake::WakeInFlight))
+    if view.wake_in_flight(agent, true) {
+        return Ok(Some(OwedWake::WakeInFlight));
+    }
+    Ok(view.message_in_flight(agent).then_some(OwedWake::Message))
 }
 
-/// What still owes an agent session a harness wake, as the run fold sees it.
+/// What still owes an agent session a wake or a prompt, as the run fold sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwedWake {
     Wait,
@@ -103,6 +106,7 @@ pub enum OwedWake {
     Subagents,
     Team,
     SoftCompact,
+    Message,
 }
 
 impl OwedWake {
@@ -113,6 +117,19 @@ impl OwedWake {
             Self::Subagents => "subagents",
             Self::Team => "team",
             Self::SoftCompact => "soft compaction",
+            Self::Message => "message",
+        }
+    }
+
+    /// The park cause a run record stores for this term.
+    pub(super) const fn park_cause(self) -> ParkCause {
+        match self {
+            Self::Wait => ParkCause::Wait,
+            Self::WakeInFlight => ParkCause::WakeInFlight,
+            Self::Subagents => ParkCause::Subagents,
+            Self::Team => ParkCause::Team,
+            Self::SoftCompact => ParkCause::SoftCompact,
+            Self::Message => ParkCause::Message,
         }
     }
 }
@@ -322,7 +339,17 @@ mod tests {
 
     #[test]
     fn owed_messages_hold_only_their_card_until_terminal() {
-        for notice in [
+        use crate::store::message::MessageBody;
+
+        let peer = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: Some("peer".into()),
+            name: Some("peer".to_owned()),
+            profile: None,
+            role: None,
+            channel: None,
+        };
+        let senders = [
             HarnessNotice::Wait,
             HarnessNotice::Signal,
             HarnessNotice::SubagentReport,
@@ -333,7 +360,17 @@ mod tests {
             HarnessNotice::SubagentStalled,
             HarnessNotice::MessageUndelivered,
             HarnessNotice::MessageQueued,
-        ] {
+        ]
+        .map(|notice| (MessageSender::Harness { notice }, MessageBody::Prompt))
+        .into_iter()
+        .chain([
+            (MessageSender::Human, MessageBody::Prompt),
+            (peer.clone(), MessageBody::Prompt),
+            (MessageSender::Human, MessageBody::Command),
+            (peer, MessageBody::Command),
+            (MessageSender::System, MessageBody::Prompt),
+        ]);
+        for (sender, body) in senders {
             for status in [
                 MessageStatus::Queued,
                 MessageStatus::Claimed,
@@ -358,26 +395,30 @@ mod tests {
                     "wake".to_owned(),
                     DeliveryGate::Done,
                 )
-                .with_sender(MessageSender::Harness {
-                    notice: notice.clone(),
-                });
+                .with_sender(sender.clone());
+                message.body = body;
                 message.status = status;
                 store.queue_message(&message, "owed-test").unwrap();
-                let expected = (!status.is_terminal()
-                    && !matches!(
-                        notice,
-                        HarnessNotice::Stage
-                            | HarnessNotice::Deadline
-                            | HarnessNotice::SubagentRestarted
-                            | HarnessNotice::SubagentStalled
-                            | HarnessNotice::MessageUndelivered
-                            | HarnessNotice::MessageQueued
-                    ))
-                .then_some(OwedWake::WakeInFlight);
+                let expected = match &sender {
+                    _ if status.is_terminal() => None,
+                    MessageSender::Harness {
+                        notice:
+                            HarnessNotice::Wait
+                            | HarnessNotice::Signal
+                            | HarnessNotice::SubagentReport
+                            | HarnessNotice::TeamReport,
+                    } => Some(OwedWake::WakeInFlight),
+                    MessageSender::Human | MessageSender::Agent { .. }
+                        if body == MessageBody::Prompt =>
+                    {
+                        Some(OwedWake::Message)
+                    }
+                    _ => None,
+                };
                 assert_eq!(
                     owed_wake(&store, &agent.kind, &agent.agent_id).unwrap(),
                     expected,
-                    "{notice:?} {status:?}"
+                    "{sender:?} {body:?} {status:?}"
                 );
                 for id in ["other", "missing"] {
                     assert_eq!(owed_wake(&store, &agent.kind, &id.into()).unwrap(), None);
@@ -444,6 +485,38 @@ mod tests {
             message.updated_at = sent_at;
             message.last_sent_at = Some(sent_at);
             message.retry_after = retry_after;
+            store.queue_message(&message, "owed-test").unwrap();
+            assert_eq!(
+                owed_wake(&store, &agent.kind, &agent.agent_id).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn overdue_sent_prompt_is_not_owed_without_reconciliation() {
+        let (_dir, store) = fixture();
+        register(&store, "parent", None);
+        let agent = store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "parent")
+            .cloned()
+            .unwrap();
+        let now = jiff::Timestamp::now();
+        let mut message = MessageRecord::new(
+            store.paths().workspace_id.clone(),
+            &agent,
+            "rebase first".to_owned(),
+            DeliveryGate::Done,
+        );
+        message.status = MessageStatus::Sent;
+        let overdue = now - message.body.delivery_window() - std::time::Duration::from_secs(60);
+        for (sent_at, expected) in [(overdue, None), (now, Some(OwedWake::Message))] {
+            message.updated_at = sent_at;
+            message.last_sent_at = Some(sent_at);
             store.queue_message(&message, "owed-test").unwrap();
             assert_eq!(
                 owed_wake(&store, &agent.kind, &agent.agent_id).unwrap(),

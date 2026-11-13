@@ -427,7 +427,7 @@ Signal and watch tasks need no timekeeper: whatever emits the signal or runs the
 
 ### A scripted run never finishes
 
-A `rimz agents -p` run or a scheduled agent turn that sits at `running` is usually parked. RimZ holds a run open past a clean turn end while something is still owed to it: an armed `rimz wait`, a harness wake in flight, a child or team result, or a soft-compaction continuation. When nothing is owed any more, RimZ ends the run itself: it fails with `parked on a wake that never arrived` and exits `1`, a few seconds after the last thing it was holding for goes away.
+A `rimz agents -p` run or a scheduled agent turn that sits at `running` is usually parked. RimZ holds a run open past a clean turn end while something is still owed to it: an armed `rimz wait`, a harness wake in flight, a child or team result, a soft-compaction continuation, or a message you or another agent sent it that has not arrived yet. When nothing is owed any more, RimZ ends the run itself: it fails with `parked on a wake that never arrived` and exits `1`, a few seconds after the last thing it was holding for goes away. A run held only for a message that was then canceled completes with the answer it had instead.
 
 Kiro fires no hook for a cancelled or errored turn, so give every `rimz agents kiro -p` a `--timeout`, which turns a wedged turn into exit `124`. While a sidebar runs, cancelled and errored Kiro turns release `agents wait`. Supervised runs wait out their deadline on both cancel and error.
 

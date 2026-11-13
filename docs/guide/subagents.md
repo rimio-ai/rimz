@@ -119,7 +119,7 @@ The report carries status and a file path per answer, never the answers themselv
 
 While the parent rests waiting for that report, RimZ [keeps its prompt cache warm](./loops.md#wake-a-running-agent) with facts-only pings.
 
-For a follow-up, the parent sends [`rimz message @child "next question"`](../reference/cli/subagents.md#follow-up-messages). The child answers in a new turn of the same session, and that answer comes back in the next report like the first one. A [`rimz subagents wait <petname>`](../reference/cli/agents.md#wait) started before the child opens that turn can print its previous answer.
+For a follow-up, the parent sends [`rimz message @child "next question"`](../reference/cli/subagents.md#follow-up-messages). The child answers in a new turn of the same session, and that answer comes back in the next report like the first one. A message that reaches the child's queue before it ends its current turn keeps that turn's run open instead: the child answers it in the same run, and the report and a [`rimz subagents wait <petname>`](../reference/cli/agents.md#wait) carry both answers. A message sent after the child's run finished opens a new answer, and a wait started before the child opens that turn can print its previous answer.
 
 A parent that is itself a supervised run (`rimz agents -p`, or a scheduled task) can end its turn while its children work. Its run stays open and your script keeps blocking until the report arrives and the parent finishes.
 

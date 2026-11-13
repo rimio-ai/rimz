@@ -212,10 +212,11 @@ pub fn fail_peer_run(store: &Store, peer: &AgentState, reason: &str) -> Result<O
 }
 
 /// Whether a terminal peer run's answer is `peer`'s latest turn: the peer is at
-/// rest by `completion` (as `TurnWaitView::completion` reads it), and no request
-/// has closed on its row since the run completed. The row stamps a close at the
-/// hook's frame time, before the drainer settles the run under the lock, so a
-/// tie counts as covered.
+/// rest by `completion` (as `TurnWaitView::completion` reads it, which a prompt
+/// on its way to the peer holds open), and no request has closed on its row
+/// since the run completed. The row stamps a close at the hook's frame time,
+/// before the drainer settles the run under the lock, so a tie counts as
+/// covered.
 pub fn describes_latest_turn(
     record: &RunRecord,
     peer: &AgentState,

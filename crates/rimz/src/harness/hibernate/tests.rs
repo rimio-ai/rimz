@@ -670,7 +670,8 @@ fn messages_and_wakes_hold_only_until_terminal() {
             } else if wake {
                 Verdict::Hold(Hold::Owed(super::super::owed::OwedWake::WakeInFlight))
             } else {
-                Verdict::Hold(Hold::Message)
+                // A person's prompt on its way is owed before it is a bare message.
+                Verdict::Hold(Hold::Owed(super::super::owed::OwedWake::Message))
             };
             assert_eq!(decision(&store, &agent, &config, &scope, 1_180), expected);
         }

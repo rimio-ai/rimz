@@ -475,3 +475,37 @@ fn a_definition_timeout_reaches_the_subagent_run_record() {
         )
     );
 }
+
+#[test]
+fn every_run_with_a_deadline_records_its_timeout() {
+    let fixture = Fixture::new();
+    let mut leader = fixture.leader();
+    let ten = std::time::Duration::from_secs(10 * 60);
+    leader.timeout = Some(ten);
+    let backend = fake_backend::Backend::default();
+    let LaunchOutcome::Opened(opened) = open_fresh(
+        fixture.fresh.clone(),
+        Some(leader),
+        &mut Unattended,
+        &backend,
+    )
+    .unwrap() else {
+        panic!("launch did not open");
+    };
+    let run = opened.run.unwrap();
+    let record = crate::harness::run::load(run.store.paths(), &run.record.run_id).unwrap();
+    assert_eq!(
+        (
+            record.timeout,
+            record.warn,
+            record.grace,
+            record.deadline_at
+        ),
+        (
+            Some(ten),
+            Vec::new(),
+            None,
+            Some(record.started_at.checked_add(ten).unwrap()),
+        )
+    );
+}
