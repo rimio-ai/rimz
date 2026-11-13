@@ -2398,6 +2398,114 @@ fn launch_groups_separate_relaunched_processes_reusing_an_id() {
 }
 
 #[test]
+fn a_reused_roster_answers_every_lookup_as_a_fresh_one_does() {
+    let lead = agent("claude", "lead", Some("feat-x"), "terminal_1");
+    let twin = agent("claude", "twin", Some("feat-x"), "terminal_2");
+    let elsewhere = agent("claude", "elsewhere", Some("other"), "terminal_3");
+    let loose = agent("claude", "loose", None, "terminal_4");
+    let mut first = agent("codex", "first", Some("feat-x"), "terminal_5");
+    first.launch_id = Some("launch-codex".into());
+    let mut second = first.clone();
+    second.agent_id = "second".into();
+    second.launch_id = Some("launch-codex".into());
+    let mut adopted = agent("codex", "adopted", Some("feat-x"), "terminal_6");
+    adopted.parent_agent_id = Some("launch-codex".into());
+    adopted.parent_agent_kind = Some(first.kind.clone());
+    adopted.launch_depth = Some(1);
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        vec![lead, twin, elsewhere, loose, first, second, adopted],
+        Timestamp::now(),
+    );
+    let fixed = [
+        "@claude",
+        "@claude#feat-x",
+        "@claude#other",
+        "@codex",
+        "@first",
+    ];
+
+    for reader in [
+        context(Some("feat-x")),
+        context(Some("other")),
+        context(None),
+    ] {
+        let reused = Roster::of(&snapshot);
+        let mut addresses = fixed.map(str::to_owned).to_vec();
+        for agent in snapshot.agents.iter() {
+            let address = reused.paste_address(agent, &reader);
+            assert_eq!(address, Roster::of(&snapshot).paste_address(agent, &reader));
+            addresses.push(address);
+        }
+        for address in addresses {
+            let ids = |found: Result<Vec<&AgentState>, TargetErr>| {
+                found
+                    .map(|found| {
+                        found
+                            .iter()
+                            .map(|agent| agent.agent_id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .map_err(|err| err.to_string())
+            };
+            assert_eq!(
+                ids(reused.resolve_many(&address, None, &reader)),
+                ids(resolve_many(&snapshot, &address, None, &reader)),
+                "{address}"
+            );
+        }
+    }
+}
+
+#[test]
+fn launch_groups_join_the_first_matching_group_of_their_own_launch_in_order() {
+    let owned = |id: &str, launch: Option<&str>, owner: &str, pid: u32| {
+        let mut row = agent("codex", id, Some("auth"), "terminal_1");
+        row.launch_id = launch.map(AgentSessionId::from);
+        row.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            owner,
+            pid,
+            Some(format!("{owner}-start")),
+        ));
+        row
+    };
+    let mut provider = owned("provider", Some("launch_a"), "first", 41);
+    provider.parent_agent_id = Some("first".into());
+    let agents = [
+        owned("a-first", Some("launch_a"), "first", 41),
+        owned("b-only", Some("launch_b"), "other", 43),
+        owned("unstamped", None, "first", 41),
+        owned("a-relaunch", Some("launch_a"), "second", 42),
+        owned("a-first-again", Some("launch_a"), "first", 41),
+        provider,
+        owned("unstamped-twin", None, "first", 41),
+        owned("a-relaunch-again", Some("launch_a"), "second", 42),
+    ];
+
+    let groups = launch_groups(agents.iter())
+        .into_iter()
+        .map(|group| {
+            group
+                .into_iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        groups,
+        [
+            vec!["a-first", "a-first-again"],
+            vec!["b-only"],
+            vec!["unstamped"],
+            vec!["a-relaunch", "a-relaunch-again"],
+            vec!["unstamped-twin"],
+        ]
+    );
+}
+
+#[test]
 fn launched_children_matches_a_parent_that_adopted_its_provider_session() {
     let mut parent = agent("codex", "provider-parent", None, "terminal_1");
     parent.launch_id = Some("launch-parent".into());

@@ -31,7 +31,7 @@
 //! addressing the room from a bare directory workspace still reaches every
 //! agent.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::agents::AgentState;
@@ -500,16 +500,90 @@ pub fn resolve_many<'a>(
     worktree_flag: Option<&str>,
     current_channel: &AddressContext,
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
-    let candidates = addressable_agents(snapshot);
-    let launch_candidates = launch_occupants(candidates.iter().copied());
-    resolve_mentions_with_launch_candidates(
-        raw,
-        worktree_flag,
-        current_channel,
-        &candidates,
-        &launch_candidates,
-        snapshot.project_root.as_deref(),
-    )
+    Roster::of(snapshot).resolve_many(raw, worktree_flag, current_channel)
+}
+
+/// A snapshot's addressable agents and their launch occupants, built once for
+/// a caller that resolves or addresses many agents of one snapshot.
+struct Roster<'a> {
+    snapshot: &'a SidebarSnapshot,
+    candidates: Vec<&'a AgentState>,
+    launch_candidates: Vec<&'a AgentState>,
+    /// `candidates` and `launch_candidates` narrowed to each lane asked so far.
+    lanes: std::cell::RefCell<Vec<LaneCandidates<'a>>>,
+}
+
+type LaneCandidates<'a> = (
+    Option<LaneSelector>,
+    Vec<&'a AgentState>,
+    Vec<&'a AgentState>,
+);
+
+impl<'a> Roster<'a> {
+    fn of(snapshot: &'a SidebarSnapshot) -> Self {
+        let candidates = addressable_agents(snapshot);
+        let launch_candidates = launch_occupants(candidates.iter().copied());
+        Self {
+            snapshot,
+            candidates,
+            launch_candidates,
+            lanes: std::cell::RefCell::default(),
+        }
+    }
+
+    fn in_lane(&self, lane: Option<&LaneSelector>) -> (Vec<&'a AgentState>, Vec<&'a AgentState>) {
+        let mut lanes = self.lanes.borrow_mut();
+        if let Some((_, in_lane, launch_in_lane)) =
+            lanes.iter().find(|(known, ..)| known.as_ref() == lane)
+        {
+            return (in_lane.clone(), launch_in_lane.clone());
+        }
+        let in_lane = channel_candidates(&self.candidates, lane);
+        let launch_in_lane = channel_candidates(&self.launch_candidates, lane);
+        lanes.push((lane.cloned(), in_lane.clone(), launch_in_lane.clone()));
+        (in_lane, launch_in_lane)
+    }
+
+    /// [`resolve_many`] over this roster.
+    fn resolve_many(
+        &self,
+        raw: &str,
+        worktree_flag: Option<&str>,
+        current_channel: &AddressContext,
+    ) -> Result<Vec<&'a AgentState>, TargetErr> {
+        resolve_in_lanes(
+            raw,
+            worktree_flag,
+            current_channel,
+            &self.candidates,
+            &self.launch_candidates,
+            self.snapshot.project_root.as_deref(),
+            |lane| self.in_lane(lane),
+        )
+    }
+
+    /// [`paste_address`] over this roster.
+    fn paste_address(&self, agent: &AgentState, reader: &AddressContext) -> String {
+        let peers = &self.candidates;
+        let full = agent_handle(agent, peers, true);
+        if !peers.contains(&agent) {
+            return agent.session_id().map_or(full, |id| format!("@{id}"));
+        }
+        let forms = [
+            Some(handle_base(agent, peers, true)),
+            Some(full.clone()),
+            agent.session_id().map(|id| format!("@{id}")),
+            agent.pane_id().map(ToString::to_string),
+        ];
+        forms
+            .into_iter()
+            .flatten()
+            .find(|form| {
+                self.resolve_many(form, None, reader)
+                    .is_ok_and(|matches| matches.as_slice() == [agent])
+            })
+            .unwrap_or(full)
+    }
 }
 
 /// Resolve a target to every matching agent from a caller-supplied durable
@@ -715,6 +789,33 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
     launch_candidates: &[C],
     project_root: Option<&Path>,
 ) -> Result<Vec<C>, TargetErr> {
+    resolve_in_lanes(
+        raw,
+        worktree_flag,
+        current_channel,
+        candidates,
+        launch_candidates,
+        project_root,
+        |lane| {
+            (
+                channel_candidates(candidates, lane),
+                channel_candidates(launch_candidates, lane),
+            )
+        },
+    )
+}
+
+/// The resolution itself; `in_lane` gives `candidates` and `launch_candidates`
+/// narrowed to a lane, as [`channel_candidates`] narrows them.
+fn resolve_in_lanes<'a, C: Candidate<'a>>(
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: &AddressContext,
+    candidates: &[C],
+    launch_candidates: &[C],
+    project_root: Option<&Path>,
+    in_lane: impl FnOnce(Option<&LaneSelector>) -> (Vec<C>, Vec<C>),
+) -> Result<Vec<C>, TargetErr> {
     match parse_target(raw)? {
         Target::Pane(pane) => resolve_by_pane(raw, &pane, launch_candidates).map(|one| vec![one]),
         Target::Mention { selector, channel } => {
@@ -747,8 +848,7 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                     });
                 }
             }
-            let in_channel = channel_candidates(candidates, lane.as_ref());
-            let launch_in_channel = channel_candidates(launch_candidates, lane.as_ref());
+            let (in_channel, launch_in_channel) = in_lane(lane.as_ref());
             let matches = select_with_launch_candidates(&selector, &in_channel, &launch_in_channel);
             if !matches.is_empty() {
                 return Ok(matches);
@@ -1227,6 +1327,9 @@ impl TeamCohort<'_> {
 /// unstamped rows form singleton groups.
 fn launch_groups<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Vec<Vec<&'a AgentState>> {
     let mut groups: Vec<Vec<&AgentState>> = Vec::new();
+    // The groups each launch id opened, in opening order, so a row is
+    // compared only with the groups of its own launch id.
+    let mut by_launch: HashMap<&AgentSessionId, Vec<usize>> = HashMap::new();
     for agent in agents
         .into_iter()
         .filter(|agent| !agent.is_provider_subagent())
@@ -1235,17 +1338,18 @@ fn launch_groups<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Vec<Ve
             groups.push(vec![agent]);
             continue;
         };
-        let group = groups.iter_mut().find(|group| {
-            group.first().is_some_and(|member| {
-                member.launch_id.as_ref() == Some(launch_id)
-                    && group.iter().all(|member| {
-                        crate::store::session_death::same_agent_instance(member, agent)
-                    })
-            })
+        let opened = by_launch.entry(launch_id).or_default();
+        let joined = opened.iter().copied().find(|&index| {
+            groups[index]
+                .iter()
+                .all(|member| crate::store::session_death::same_agent_instance(member, agent))
         });
-        match group {
-            Some(group) => group.push(agent),
-            None => groups.push(vec![agent]),
+        match joined {
+            Some(index) => groups[index].push(agent),
+            None => {
+                opened.push(groups.len());
+                groups.push(vec![agent]);
+            }
         }
     }
     groups
@@ -1568,25 +1672,7 @@ pub fn paste_address(
     snapshot: &SidebarSnapshot,
     reader: &AddressContext,
 ) -> String {
-    let peers = addressable_agents(snapshot);
-    let full = agent_handle(agent, &peers, true);
-    if !peers.contains(&agent) {
-        return agent.session_id().map_or(full, |id| format!("@{id}"));
-    }
-    let forms = [
-        Some(handle_base(agent, &peers, true)),
-        Some(full.clone()),
-        agent.session_id().map(|id| format!("@{id}")),
-        agent.pane_id().map(ToString::to_string),
-    ];
-    forms
-        .into_iter()
-        .flatten()
-        .find(|form| {
-            resolve_many(snapshot, form, None, reader)
-                .is_ok_and(|matches| matches.as_slice() == [agent])
-        })
-        .unwrap_or(full)
+    Roster::of(snapshot).paste_address(agent, reader)
 }
 
 /// The structured header for a human-, agent-, subagent-, or harness-authored record.
