@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agents::AccountUsageIdentity;
-use crate::agents::account::AccountUsageKey;
+use crate::agents::account::{AccountUsageKey, WindowSpan};
 use crate::agents::context::{AgentRateLimits, ProviderAccountScope};
 use crate::ids::LoginKey;
 
@@ -573,6 +573,84 @@ pub struct ResetGrant {
     pub paused: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starts_at: Option<Timestamp>,
+    /// The grant the provider's next redemption claims. A record that predates
+    /// the field selects none, so nothing reads it as claimable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub selected: bool,
+    /// The account's claim cooldown, kept on the selected grant alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_until: Option<Timestamp>,
+    /// Whether the provider would accept this grant at the read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub usable_now: bool,
+    /// The provider accepts this grant only while the account is at its limit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_requires_limit: bool,
+}
+
+/// Why the provider would refuse a redemption, in the order its own checks
+/// run. The one rule the manual redemption's hold and the cached credits read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RedeemRefusal {
+    Cooldown(Timestamp),
+    NoGrantSelected,
+    Paused,
+    Empty,
+    NotStarted,
+    Expired,
+    /// Not usable now, and usable only while the account is at its limit.
+    LimitOnly,
+    NotUsable,
+}
+
+impl RedeemRefusal {
+    /// The refusal for redeeming `selected` at `now`, if any; `at_limit` says
+    /// whether the account is at its limit.
+    pub fn of(
+        cooldown_until: Option<Timestamp>,
+        selected: Option<&ResetGrant>,
+        at_limit: bool,
+        now: Timestamp,
+    ) -> Option<Self> {
+        if let Some(until) = cooldown_until.filter(|until| *until > now) {
+            return Some(Self::Cooldown(until));
+        }
+        let Some(grant) = selected else {
+            return Some(Self::NoGrantSelected);
+        };
+        Some(if grant.paused {
+            Self::Paused
+        } else if grant.count == 0 {
+            Self::Empty
+        } else if grant.starts_at.is_some_and(|start| start > now) {
+            Self::NotStarted
+        } else if grant.expiry.is_some_and(|end| end < now) {
+            Self::Expired
+        } else if !grant.usable_now {
+            if grant.use_requires_limit && !at_limit {
+                Self::LimitOnly
+            } else {
+                Self::NotUsable
+            }
+        } else {
+            return None;
+        })
+    }
+}
+
+impl ResetGrant {
+    /// Whether this grant refills the unscoped window lasting `duration_mins`,
+    /// by the provider's window tokens. A window no token names is not cleared.
+    pub fn clears_window(&self, duration_mins: u32) -> bool {
+        let token = if duration_mins == WindowSpan::FiveHour.minutes() {
+            "five_hour"
+        } else if duration_mins == WindowSpan::SevenDay.minutes() {
+            "seven_day"
+        } else {
+            return false;
+        };
+        self.clears.iter().any(|clear| clear == token)
+    }
 }
 
 /// What redeeming a reset credit does to the window's natural reset, as
@@ -661,6 +739,22 @@ impl ResetCredits {
         }
         sort_by_deadline(&mut grants);
         grants
+    }
+
+    /// The provider's refusal to redeem now by the cached grants, read as a
+    /// refusal when no grant is selected. `at_limit` as in [`RedeemRefusal::of`].
+    pub fn refusal(&self, at_limit: bool, now: Timestamp) -> Option<RedeemRefusal> {
+        let selected = self.selected_grant();
+        RedeemRefusal::of(
+            selected.and_then(|grant| grant.cooldown_until),
+            selected,
+            at_limit,
+            now,
+        )
+    }
+
+    fn selected_grant(&self) -> Option<&ResetGrant> {
+        self.grants.iter().find(|grant| grant.selected)
     }
 }
 
