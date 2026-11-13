@@ -4,9 +4,9 @@ use unicode_width::UnicodeWidthStr;
 #[test]
 fn held_starts_have_their_own_table_without_moving_the_task() {
     let now = Timestamp::from_second(100_000).unwrap();
-    let mut task = TaskRow::rowless("triage".into(), None, None);
+    let mut task = TaskRow::rowless("triage".into(), InProgress::Locked(None), None);
     task.section = Section::Routine;
-    task.running = None;
+    task.in_progress = None;
     task.state = TaskState::Live;
     task.worktree = Some("fold-rule".into());
     task.worktree_here = true;
@@ -39,7 +39,7 @@ fn held_starts_have_their_own_table_without_moving_the_task() {
         let task = &mut model.rooms[0].tasks[0];
         task.held[0].gives_up_ms = bounded.then_some(101_000_000);
         if running {
-            task.running = Some(None);
+            task.in_progress = Some(InProgress::Locked(None));
             task.state = TaskState::Running;
         }
         let mut output = Vec::new();
@@ -84,7 +84,7 @@ fn held_starts_have_their_own_table_without_moving_the_task() {
 #[test]
 fn needs_a_fix_tickets_use_the_oldest_reason_for_attention() {
     let now = Timestamp::from_second(100_000).unwrap();
-    let mut row = TaskRow::rowless("triage".into(), None, None);
+    let mut row = TaskRow::rowless("triage".into(), InProgress::Locked(None), None);
     let ticket = |hold, since_ms, reason: &str| Held {
         pid: 42,
         checkout: "/repo".into(),
@@ -213,7 +213,7 @@ fn done_keeps_running_rows_above_the_finished_cut() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut tasks = Vec::new();
     for i in 0..7 {
-        let mut row = TaskRow::rowless(format!("running-{i}"), None, None);
+        let mut row = TaskRow::rowless(format!("running-{i}"), InProgress::Locked(None), None);
         row.section = Section::Done;
         tasks.push(row);
     }
@@ -262,7 +262,7 @@ fn done_keeps_running_rows_above_the_finished_cut() {
 #[test]
 fn expanded_wake_ups_drop_the_unfold_hint() {
     let now = Timestamp::from_second(1_000).unwrap();
-    let mut row = TaskRow::rowless("wake".into(), None, None);
+    let mut row = TaskRow::rowless("wake".into(), InProgress::Locked(None), None);
     row.kind = TaskKind::WakeUp;
     row.section = Section::WakeUps;
     let model = ListModel {
@@ -293,9 +293,9 @@ fn expanded_wake_ups_drop_the_unfold_hint() {
 
 #[test]
 fn here_marks_only_rows_that_name_a_worktree() {
-    let mut bound = TaskRow::rowless("bound".into(), None, None);
+    let mut bound = TaskRow::rowless("bound".into(), InProgress::Locked(None), None);
     bound.worktree = Some("card-ux".into());
-    let mut unbound = TaskRow::rowless("unbound".into(), None, None);
+    let mut unbound = TaskRow::rowless("unbound".into(), InProgress::Locked(None), None);
     unbound.worktree_here = true;
     let mut tasks = vec![bound, unbound];
     for row in &mut tasks {
@@ -335,7 +335,7 @@ fn here_marks_only_rows_that_name_a_worktree() {
 #[test]
 fn shared_watch_state_keeps_strike_disabled_reason_out_of_next() {
     let now = Timestamp::from_second(1_000).unwrap();
-    let mut row = TaskRow::rowless("struck".into(), None, None);
+    let mut row = TaskRow::rowless("struck".into(), InProgress::Locked(None), None);
     row.state = TaskState::Off;
     row.attention = Some(Attention::Strikes);
     row.reason = "disabled after 3 strikes".into();
@@ -363,7 +363,7 @@ fn shared_watch_state_keeps_strike_disabled_reason_out_of_next() {
 #[test]
 fn needs_you_lists_parked_runs_under_a_stronger_attention() {
     let now = Timestamp::from_second(1_000).unwrap();
-    let mut row = TaskRow::rowless("babysit".into(), None, None);
+    let mut row = TaskRow::rowless("babysit".into(), InProgress::Locked(None), None);
     row.section = Section::NeedsYou;
     row.attention = Some(Attention::Strikes);
     row.reason = "disabled after 3 strikes".into();
@@ -387,7 +387,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
     row.workflow_runs = vec![run()];
     row.head = "every 5m".into();
     row.continuation = "each worktree".into();
-    let mut parked = TaskRow::rowless("parked".into(), None, None);
+    let mut parked = TaskRow::rowless("parked".into(), InProgress::Locked(None), None);
     parked.head = "every 5m".into();
     parked.attach_workflow_runs(vec![run()], now);
     let model = ListModel {
@@ -462,7 +462,7 @@ fn needs_you_prints_each_of_two_parked_summaries_once_with_park_age() {
         }))
         .unwrap()
     });
-    let mut row = TaskRow::rowless("babysit".into(), None, None);
+    let mut row = TaskRow::rowless("babysit".into(), InProgress::Locked(None), None);
     row.attach_workflow_runs(
         WorkflowRunRow::of_task(
             &records,
@@ -540,11 +540,11 @@ fn row_colors_follow_state_not_name_or_trigger_prefixes() {
     ]
     .map(|(name, result)| {
         let record = LoopRunRecord::new(name, result, run_log::LoopRunMode::Manual, 0);
-        let mut row = TaskRow::rowless(name.into(), None, None);
+        let mut row = TaskRow::rowless(name.into(), InProgress::Locked(None), None);
         row.state = TaskState::Live;
         row.kind = TaskKind::Routine;
         row.section = Section::Routine;
-        row.running = None;
+        row.in_progress = None;
         row.head = "off branch=main".into();
         row.last = Some(LastRun {
             at: now,

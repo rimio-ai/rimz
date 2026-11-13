@@ -172,7 +172,7 @@ fn show_view(each_worktree: bool) -> ShowView {
                 },
             ),
         ]),
-        in_flight: None,
+        in_progress: None,
         backlog: None,
         condition: "  pr=open   ✓ open\n  ci=passed   ? not checked yet\n".into(),
         subscriptions: vec![SubscriptionView {
@@ -556,11 +556,11 @@ fn show_header_leads_with_the_finished_verdict_before_waiting_fires() {
         view.records = vec![completed];
         view.entry.overlap = Some(policy);
         view.entry.overlap_limit = Some(10);
-        view.in_flight = Some(InFlightRun {
+        view.in_progress = Some(InProgress::Locked(InFlightRun {
             holder: None,
             run: None,
             held: Vec::new(),
-        });
+        }));
         let triggers = vec![
             serde_json::json!({
                 "arrived_at": "2026-01-01T00:00:00Z", "signal": null, "absorbed": absorbed
@@ -2744,17 +2744,29 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     );
     assert_eq!(style, ui::palette::alarm());
 
-    let (first, _) = verdict_line(&[completed.clone(), errored], false, now).unwrap();
+    let (first, _) = verdict_line(&[completed.clone(), errored.clone()], false, now).unwrap();
     assert_eq!(
         first,
         "✗ failing · last run 10s ago, error · first since a good run 10s ago"
     );
-    let (unbounded, _) = verdict_line(&[completed.clone(), completed], false, now).unwrap();
+    let (unbounded, _) = verdict_line(&[completed.clone(), completed.clone()], false, now).unwrap();
     assert_eq!(
         unbounded,
         "✓ healthy · last run 10s ago, completed in 5.0s · 2 runs in a row"
     );
     assert!(verdict_line(&[neutral], false, now).is_none());
+    // A run in progress takes `failing` back; a good result keeps `healthy`.
+    let (yielded, style) = verdict_line(&[completed.clone(), errored.clone()], true, now).unwrap();
+    assert_eq!(
+        yielded,
+        "✗ last finished run 10s ago, error · first since a good run 10s ago"
+    );
+    assert_eq!(style, ui::palette::alarm());
+    let (healthy, _) = verdict_line(&[errored, completed], true, now).unwrap();
+    assert_eq!(
+        healthy,
+        "✓ healthy · last finished run 10s ago, completed in 5.0s · first since a failure 10s ago"
+    );
 }
 
 #[test]
@@ -3288,7 +3300,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         &mut out,
         "task",
         &timing,
-        Some(&in_flight),
+        Some(&InProgress::Locked(in_flight)),
         now,
         &TaskEntry::default(),
         schedule::TaskKind::Routine,
@@ -3299,6 +3311,65 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         show.ends_with(" · ▸ running 3m · pid 4162080\n") && !show.contains("paused"),
         "{show}"
     );
+}
+
+/// A run in progress without the run lock reads as the lock does: an executing run takes the
+/// headline from its creation and offers the stop; a waiting one keeps the timing state. Either
+/// way, and under the lock, the verdict after a failure drops `failing`.
+#[test]
+fn a_run_in_progress_takes_the_headline_and_withholds_failing() {
+    let lines = |in_progress| {
+        let mut view = show_view(false);
+        view.in_progress = in_progress;
+        show_text(&view)
+            .lines()
+            .take_while(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let idle = lines(None);
+    assert!(
+        idle[1].starts_with("  ✗ failing · last run 1m ago, "),
+        "{idle:?}"
+    );
+    let yielded = idle[1].replace("✗ failing · last run", "✗ last finished run");
+    let since = Timestamp::from_second(70).unwrap();
+    let executing = lines(Some(InProgress::Run {
+        since,
+        executing: true,
+    }));
+    assert_eq!(
+        executing[0], "sweep · routine · ▸ running 30s",
+        "{executing:?}"
+    );
+    assert_eq!(executing[1], yielded, "{executing:?}");
+    assert!(
+        executing.contains(&"  stop with `rimz loop stop sweep`".to_owned()),
+        "{executing:?}"
+    );
+    let waiting = lines(Some(InProgress::Run {
+        since,
+        executing: false,
+    }));
+    assert_eq!(waiting[0], idle[0], "{waiting:?}");
+    assert_eq!(waiting[1], yielded, "{waiting:?}");
+    assert!(
+        !waiting.iter().any(|line| line.contains("stop with")),
+        "{waiting:?}"
+    );
+    let locked = lines(Some(InProgress::Locked(InFlightRun {
+        holder: Some(RunLockInfo {
+            pid: 42,
+            started_at: since,
+        }),
+        run: None,
+        held: Vec::new(),
+    })));
+    assert_eq!(
+        locked[0], "sweep · routine · ▸ running 30s · pid 42",
+        "{locked:?}"
+    );
+    assert_eq!(locked[1], yielded, "{locked:?}");
 }
 
 #[test]
@@ -4439,11 +4510,11 @@ fn trailing_at_lock_fires_take_no_row_and_keep_the_stale_verdict() {
         let mut view = show_view(false);
         view.records = records.clone();
         view.records.push(deferred(40));
-        view.in_flight = running.then_some(InFlightRun {
+        view.in_progress = running.then_some(InProgress::Locked(InFlightRun {
             holder: None,
             run: None,
             held: Vec::new(),
-        });
+        }));
         show_text(&view)
     });
     assert_eq!(

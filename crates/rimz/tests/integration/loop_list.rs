@@ -460,7 +460,9 @@ fn show_reads_a_consumed_one_shots_live_workflow_run_after_its_runner_exits() {
     write_loop_run_records(&env, &[fire]);
     let shown = loop_ok(&env, &["loop", "show", "once"]);
     assert!(
-        shown.starts_with("once — one-shot fired · active\n\n"),
+        shown.lines().next().is_some_and(|head| head
+            .starts_with("once — one-shot fired · ▸ running ")
+            && !head.contains("pid")),
         "{shown}"
     );
     assert!(
@@ -2226,6 +2228,8 @@ fn every_cause_reads_alike_in_list_and_reader() {
         "retried",
         "retry-sibling",
         "retry-struck",
+        "first-fire",
+        "first-wait",
     ]
     .into_iter()
     .map(|name| {
@@ -2288,6 +2292,12 @@ fn every_cause_reads_alike_in_list_and_reader() {
         if name.starts_with("parked") {
             seed_room_run(&env, root, name, Some(old), None);
         }
+        if name.starts_with("first") {
+            // A first fire's only row is its launch, which is no result.
+            let mut launched = record(name, root, LoopRunResult::Launched, 2);
+            launched.run_id = Some(rimz::ids::WorkflowRunId::new().to_string());
+            runs.push(launched);
+        }
     }
     seed_room_run(&env, &rooms["parked-two"], "parked-two", Some(old), None);
     let minutes_ago = |minutes| Timestamp::now() - SignedDuration::from_mins(minutes);
@@ -2298,11 +2308,13 @@ fn every_cause_reads_alike_in_list_and_reader() {
         ("retried", "failed", 3),
         ("retry-sibling", "active", 7),
         ("retry-struck", "active", 2),
+        ("first-fire", "active", 2),
+        ("first-wait", "active", 2),
     ] {
         let created = (state, minutes_ago(created));
         created_at.insert(name, created.1);
         // A deduping task's shell decline waits out its resident retry inside the run.
-        let wait = (name == "retry-waiting").then(|| {
+        let wait = matches!(name, "retry-waiting" | "first-wait").then(|| {
             json!({
                 "node":"recheck-check", "outcome":"sleeping", "first":created.1,
                 "last":created.1, "count":1, "recheck_at":null,
@@ -2428,7 +2440,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
         text.push_str(&loop_ok(&env, args));
     }
 
-    let expected: [(&str, Option<&str>, Option<&str>); 20] = [
+    let expected: [(&str, Option<&str>, Option<&str>); 22] = [
         ("failing", Some("failing"), Some("✗ failing")),
         (
             "failing-strikes",
@@ -2477,6 +2489,8 @@ fn every_cause_reads_alike_in_list_and_reader() {
             Some("strikes"),
             Some("disabled after 3 strikes"),
         ),
+        ("first-fire", None, None),
+        ("first-wait", None, None),
     ];
     for (name, cause, reason) in expected {
         let row = listed
@@ -2502,10 +2516,13 @@ fn every_cause_reads_alike_in_list_and_reader() {
         );
     }
     // The executing retry reads as a lock-held run does, aged from the run's creation; the
-    // waiting one keeps the failure it follows.
+    // waiting one keeps the failure it follows. A first fire's run reads the same, with no
+    // result before it.
     for (name, running, last) in [
         ("retrying", true, "▸ running 2m"),
         ("retry-waiting", false, "✗ failed 5m ago"),
+        ("first-fire", true, "▸ running 2m"),
+        ("first-wait", false, "launched 2m ago"),
     ] {
         let row = &listed[name];
         assert_eq!(
@@ -2552,6 +2569,199 @@ fn every_cause_reads_alike_in_list_and_reader() {
         read["invalid"].as_ref().unwrap().1.starts_with("invalid: "),
         "{:?}",
         read["invalid"]
+    );
+}
+
+/// `loop show` (text and `--json`), the rowless show, `loop logs` and `loop watch` answer
+/// whether a task has a run in progress as `loop list` does, with no run lock held: a retry
+/// or a first fire whose run executes reads running from the run's creation, one whose run
+/// waits keeps its timing state, and a run created before the result, or parked, is no run
+/// in progress. A consumed one-shot whose run executes reads running in DONE, in watch, and
+/// in its rowless show.
+#[cfg(target_os = "linux")]
+#[test]
+fn show_logs_and_watch_read_a_lock_free_run_as_list_does() {
+    let env = Env::new();
+    let root = env.project_root.clone();
+    env.record(&root);
+    seed_loop_watch_room(&env);
+    let names = ["retry", "first", "first-wait", "sibling", "first-parked"];
+    config(
+        &env,
+        names
+            .into_iter()
+            .map(|name| (name.to_owned(), task(&root)))
+            .collect(),
+    );
+    let minutes_ago = |minutes| Timestamp::now() - SignedDuration::from_mins(minutes);
+    let launched = |name: &str, minutes| {
+        let mut launched = record(name, &root, LoopRunResult::Launched, minutes);
+        launched.run_id = Some(rimz::ids::WorkflowRunId::new().to_string());
+        launched
+    };
+    let mut consumed = launched("consumed", 4);
+    consumed.kind = Some(TaskKind::OneOff);
+    let mut ended = launched("consumed-ended", 6);
+    ended.kind = Some(TaskKind::OneOff);
+    write_loop_run_records(
+        &env,
+        &[
+            record("retry", &root, LoopRunResult::Failed, 5),
+            record("sibling", &root, LoopRunResult::Failed, 5),
+            launched("first", 2),
+            launched("first-wait", 2),
+            launched("first-parked", 2),
+            consumed,
+            ended,
+        ],
+    );
+    let waiting = json!({
+        "node":"recheck-check", "outcome":"sleeping", "first":minutes_ago(2),
+        "last":minutes_ago(2), "count":1, "recheck_at":null,
+    });
+    let mut created_at = BTreeMap::new();
+    for (name, state, minutes, wait) in [
+        ("retry", "active", 2, None),
+        ("first", "active", 2, None),
+        ("first-wait", "active", 2, Some(waiting)),
+        ("sibling", "active", 7, None),
+        ("first-parked", "parked", 2, None),
+        ("consumed", "active", 4, None),
+        ("consumed-ended", "failed", 6, None),
+    ] {
+        let created = minutes_ago(minutes);
+        created_at.insert(name, created);
+        let park = (state == "parked").then_some(created);
+        seed_room_run_at(&env, &root, name, (state, created), park, wait);
+    }
+
+    let list: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--all", "--json"])).unwrap();
+    let listed = list["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|room| room["tasks"].as_array().unwrap())
+        .map(|row| (row["name"].as_str().unwrap().to_owned(), row.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
+    for name in [
+        "retry",
+        "first",
+        "first-wait",
+        "sibling",
+        "first-parked",
+        "consumed",
+    ] {
+        let running = matches!(name, "retry" | "first" | "consumed");
+        let row = listed
+            .get(name)
+            .unwrap_or_else(|| panic!("{name}: not listed\n{list:#}"));
+        assert_eq!(row["state"] == "running", running, "{name}: {row}");
+        let show: serde_json::Value = if name == "consumed" {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&loop_ok(&env, &["loop", "show", name, "--json"])).unwrap()
+        };
+        if running {
+            assert_eq!(
+                row["running_since"],
+                json!(created_at[name]),
+                "{name}: {row}"
+            );
+            if name != "consumed" {
+                assert_eq!(
+                    show["running"],
+                    json!({"pid": null, "started_at": row["running_since"], "run_id": null}),
+                    "{name}"
+                );
+            }
+        } else {
+            assert_eq!(
+                row["running_since"],
+                serde_json::Value::Null,
+                "{name}: {row}"
+            );
+            assert_eq!(show["running"], serde_json::Value::Null, "{name}");
+        }
+        if name == "consumed" {
+            continue;
+        }
+        let show = loop_ok(&env, &["loop", "show", name]);
+        let lines = show.lines().collect::<Vec<_>>();
+        assert_eq!(
+            lines[0].ends_with(" · ▸ running 2m"),
+            running,
+            "{name}:\n{show}"
+        );
+        assert!(!lines[0].contains("pid"), "{name}:\n{show}");
+        assert_eq!(
+            show.contains(&format!("stop with `rimz loop stop {name}`")),
+            running,
+            "{name}:\n{show}"
+        );
+        let verdict = match name {
+            "retry" => Some("  ✗ last finished run 5m ago, failed"),
+            "sibling" => Some("  ✗ failing · last run 5m ago, failed"),
+            _ => None,
+        };
+        match verdict {
+            Some(verdict) => assert!(lines[1].starts_with(verdict), "{name}:\n{show}"),
+            None => assert!(
+                !show.contains("healthy") && !show.contains("finished run"),
+                "{name}: a first fire has no verdict\n{show}"
+            ),
+        }
+        assert_eq!(
+            show.contains("failing"),
+            name == "sibling",
+            "{name}:\n{show}"
+        );
+        let logs = loop_ok(&env, &["loop", "logs", name]);
+        assert_eq!(
+            logs.trim_end().ends_with("▸ running 2m"),
+            running,
+            "{name}:\n{logs}"
+        );
+    }
+    // The consumed one-shot's executing run reads running in DONE and its rowless show; the
+    // one whose run ended reads as it always did.
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("consumed ") && line.contains("▸ running 4m")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            line.trim_start().starts_with("consumed-ended ") && !line.contains("▸ running")
+        }),
+        "{text}"
+    );
+    let show = loop_ok(&env, &["loop", "show", "consumed"]);
+    assert!(
+        show.starts_with(
+            "consumed — one-shot fired · ▸ running 4m\n  stop with `rimz loop stop consumed`\n\n"
+        ),
+        "{show}"
+    );
+    let show = loop_ok(&env, &["loop", "show", "consumed-ended"]);
+    assert!(
+        show.lines().next().is_some_and(|line| line
+            .starts_with("consumed-ended — one-shot fired · ")
+            && !line.contains("▸ running")),
+        "{show}"
+    );
+    // The row sits mid-frame, so the read can stop before the frame's closing clear that
+    // `loop_watch_frames` requires: read the painted screen instead.
+    let (output, _) = loop_watch_pty(&env, false, false, &["consumed", "▸ running 4m"]);
+    let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
+    terminal.process(output.as_bytes());
+    let watch = terminal.screen().contents();
+    assert!(
+        watch
+            .lines()
+            .any(|line| line.contains("consumed") && line.contains("▸ running 4m")),
+        "{watch}"
     );
 }
 

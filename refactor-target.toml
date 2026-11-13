@@ -2607,13 +2607,13 @@ reason = "A task's active runs waiting on capacity, for the verdict and the CLI'
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::attention::newer_run_in_progress"
-reason = "The retry rule that holds a failing verdict back while a run created after the failure is active, for the CLI's rows and the read-only reader; it also picks the run a list row reads as running."
+key = "harness::schedule::attention::run_in_progress"
+reason = "The one answer to whether a task has a run in progress: the run lock, or an Active workflow run created after the acting result (any, with none), for list, watch, show, logs, and the read-only reader."
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::attention::NewerRun"
-reason = "The newer run's start and whether it executes, so a list row reads running from the same run the verdict's retry rule picked."
+key = "harness::schedule::attention::InProgress"
+reason = "The lock holder or the run in progress with its start and whether it executes, so every reader dates running from the run the verdict's rule picked."
 
 [[verdict]]
 kind = "item"

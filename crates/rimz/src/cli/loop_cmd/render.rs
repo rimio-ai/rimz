@@ -1,6 +1,7 @@
 //! List, show, and log loop task state.
 
 use super::*;
+use rimz::harness::schedule::attention::{self, InProgress};
 use rimz::harness::when::{Verdict, WhenExpr};
 use schedule::fanout::{CheckoutCondition, CheckoutState};
 
@@ -294,7 +295,8 @@ struct ShowView {
     heard: Option<run_log::HeardSummary>,
     launches: BTreeMap<PathBuf, ResidentLaunch>,
     capacity: BTreeMap<PathBuf, list::CapacityWaitView>,
-    in_flight: Option<InFlightRun>,
+    /// The task's run in progress: its held run lock, or an active workflow run of the task.
+    in_progress: Option<InProgress<InFlightRun>>,
     backlog: Option<schedule::backlog::TaskBacklog>,
     condition: String,
     subscriptions: Vec<SubscriptionView>,
@@ -1057,7 +1059,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         out,
         &view.name,
         &view.timing,
-        view.in_flight.as_ref(),
+        view.in_progress.as_ref(),
         now,
         &view.entry,
         view.kind,
@@ -1070,7 +1072,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         out,
         &view.records,
         &attribution,
-        view.in_flight.is_some(),
+        view.in_progress.is_some(),
         now,
     )?;
     let expr = worktree_expr(view);
@@ -1140,7 +1142,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             )
         )?;
     }
-    if view.in_flight.is_some() {
+    if view.in_progress.as_ref().is_some_and(InProgress::executing) {
         writeln!(out, "  stop with `rimz loop stop {}`", view.name)?;
     }
     if !view.entry.each_worktree && !view.launches.is_empty() {
@@ -1481,18 +1483,31 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             if let Some(in_flight) = &view.in_flight {
                 return show_in_flight(&args, &view.root, in_flight);
             }
-            let runs = workflow_log_runs(&view.root, &view.history.fires, globals)?;
-            let state = runs
-                .iter()
-                .filter(|run| run.live)
-                .max_by_key(|run| run.since)
-                .map_or("finished", |run| run.state);
+            let (paths, records) = workflow_records(&view.root)?;
+            let acting_at = run_log::acting_run(&view.history.fires).map(|acting| acting.record.at);
+            let running =
+                attention::run_in_progress(None, &records, &args.name, &view.root, acting_at)
+                    .and_then(|run| in_progress_text(&run, Timestamp::now()));
+            let runs = workflow_log_runs(&paths, records, &view.history.fires, globals);
+            let state = match &running {
+                Some(running) => ui::paint(ui::palette::cool(), running),
+                None => runs
+                    .iter()
+                    .filter(|run| run.live)
+                    .max_by_key(|run| run.since)
+                    .map_or("finished", |run| run.state)
+                    .to_owned(),
+            };
             let mut out = ui::out();
             writeln!(
                 out,
-                "{} — one-shot fired · {state}\n",
+                "{} — one-shot fired · {state}",
                 ui::paint(ui::palette::header(), &args.name)
             )?;
+            if running.is_some() {
+                writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
+            }
+            writeln!(out)?;
             let attribution = refused_fire_attribution(&view.history.fires);
             write_log_records(
                 &mut out,
@@ -1657,9 +1672,8 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ShowThrottle::Off
     };
     let runs_workflows = runs_workflows(&task);
-    let (workflow_runs, capacity) = if runs_workflows {
-        let paths = StatePaths::for_project_root(&root)?;
-        let records = rimz::store::workflow::list(&paths)?;
+    let (workflow_runs, capacity, records) = if runs_workflows {
+        let (paths, records) = workflow_records(&root)?;
         let capacity = list::capacity_waits(&records, &args.name, &root)
             .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
             .collect();
@@ -1687,10 +1701,12 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 row.read_evidence(&paths, record);
             }
         }
-        (rows, capacity)
+        (rows, capacity, records)
     } else {
-        (Vec::new(), BTreeMap::new())
+        (Vec::new(), BTreeMap::new(), Vec::new())
     };
+    let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
+    let in_progress = attention::run_in_progress(in_flight, &records, &args.name, &root, acting_at);
     let view = ShowView {
         kept_worktrees: if entry.fresh_worktree.is_some() {
             kept_worktrees(&entry.resolved_root(), &args.name)
@@ -1710,7 +1726,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         records: history.fires,
         heard: history.heard,
         launches,
-        in_flight,
+        in_progress,
         backlog,
         condition: String::from_utf8(condition)?,
         subscriptions,
@@ -1726,20 +1742,25 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         all: args.all,
     };
     if args.json {
-        let running = view.in_flight.as_ref().map(|in_flight| {
-            serde_json::json!({
+        let running = view.in_progress.as_ref().and_then(|run| match run {
+            InProgress::Locked(in_flight) => Some(serde_json::json!({
                 "pid": in_flight.holder.map(|info| info.pid),
                 "started_at": in_flight.holder.map(|info| info.started_at),
                 "run_id": in_flight.run.as_ref().map(|run| &run.run_id),
-            })
+            })),
+            InProgress::Run {
+                since,
+                executing: true,
+            } => Some(serde_json::json!({ "pid": null, "started_at": since, "run_id": null })),
+            InProgress::Run { .. } => None,
         });
-        let (held, waiting) = view
-            .in_flight
-            .as_ref()
-            .map_or((None, Vec::new()), |in_flight| {
+        let (held, waiting) = match &view.in_progress {
+            Some(InProgress::Locked(in_flight)) => {
                 let (own, others) = split_held(in_flight.holder, &in_flight.held);
                 (own.map(held_json), others.map(held_json).collect())
-            });
+            }
+            _ => (None, Vec::new()),
+        };
         let backlog = view.backlog.as_ref().map(|backlog| {
             serde_json::json!({
                 "policy": view.entry.overlap.unwrap_or_default(),
@@ -2335,19 +2356,23 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     if entry.is_none() && history.records.is_empty() && in_flight.is_none() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
-    let in_flight = in_flight.filter(|_| !args.failed);
-    let workflow_runs = match &task {
-        Some(task) if runs_workflows(task) => Some(workflow_log_runs(
-            &task.entry().resolved_root(),
-            &history.fires,
-            globals,
-        )?),
-        Some(_) => None,
-        None => root
-            .as_deref()
-            .map(|root| workflow_log_runs(root, &history.fires, globals))
-            .transpose()?,
+    let workflow_root = match &task {
+        Some(task) => runs_workflows(task).then(|| task.entry().resolved_root()),
+        None => root.clone(),
     };
+    let records = workflow_root.as_deref().map(workflow_records).transpose()?;
+    let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
+    let running = attention::run_in_progress(
+        in_flight,
+        records.as_ref().map_or(&[][..], |(_, records)| records),
+        &args.name,
+        workflow_root.as_deref().unwrap_or(Path::new("")),
+        acting_at,
+    )
+    .filter(|_| !args.failed)
+    .and_then(|run| in_progress_text(&run, Timestamp::now()));
+    let workflow_runs =
+        records.map(|(paths, records)| workflow_log_runs(&paths, records, &history.fires, globals));
     let mut out = ui::out();
     let attribution = refused_fire_attribution(&history.fires);
     let shown = write_log_records(
@@ -2360,7 +2385,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         args.runs,
         args.failed,
     )?;
-    if shown == 0 && in_flight.is_none() {
+    if shown == 0 && running.is_none() {
         if args.failed {
             writeln!(out, "no failed runs recorded")?;
         } else if entry.is_none() && !history.records.is_empty() {
@@ -2374,18 +2399,11 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     }
-    if let Some(in_flight) = &in_flight {
+    if let Some(running) = &running {
         if shown > 0 {
             writeln!(out)?;
         }
-        writeln!(
-            out,
-            "{}",
-            ui::paint(
-                ui::palette::cool(),
-                &running_text_full(in_flight, Timestamp::now())
-            )
-        )?;
+        writeln!(out, "{}", ui::paint(ui::palette::cool(), running))?;
     }
     Ok(())
 }
@@ -2430,11 +2448,11 @@ fn name_workflow_runs(
 /// The runs a workflow task's log blocks name, live or finished, whichever task started them.
 /// The workflow runs a task's history names, found by the run ids its fires recorded.
 fn workflow_log_runs(
-    root: &Path,
+    paths: &StatePaths,
+    mut records: Vec<rimz::store::workflow::RunRecord>,
     fires: &[LoopRunRecord],
     globals: &GlobalFlags,
-) -> Result<Vec<list::WorkflowRunRow>> {
-    let paths = StatePaths::for_project_root(root)?;
+) -> Vec<list::WorkflowRunRow> {
     let blockers = fires
         .iter()
         .filter_map(|fire| fire.blocking_run.as_ref())
@@ -2444,20 +2462,26 @@ fn workflow_log_runs(
         .filter_map(|fire| fire.run_id.as_deref())
         .chain(blockers)
         .collect::<std::collections::BTreeSet<_>>();
-    let mut records = rimz::store::workflow::list(&paths)?;
     records.retain(|record| named.contains(record.id.as_str()));
-    let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
+    let specs = crate::cli::workflow_view::sealed_specs(paths, &records);
     let mut rows = records
         .iter()
         .map(|record| {
             let mut row =
                 list::WorkflowRunRow::of_record(record, specs.get(&record.id), Timestamp::now());
-            row.read_evidence(&paths, record);
+            row.read_evidence(paths, record);
             row
         })
         .collect::<Vec<_>>();
     name_workflow_runs(&mut rows, &records, globals);
-    Ok(rows)
+    rows
+}
+
+/// The workflow runs of the room at `root`, listed once for every reader of the command.
+fn workflow_records(root: &Path) -> Result<(StatePaths, Vec<rimz::store::workflow::RunRecord>)> {
+    let paths = StatePaths::for_project_root(root)?;
+    let records = rimz::store::workflow::list(&paths)?;
+    Ok((paths, records))
 }
 
 /// History blocks oldest first, limited from the newest after folding and filtering.
@@ -2635,7 +2659,7 @@ pub(super) fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -
 
 /// List/watch NEXT: count self-clearing starts beside a genuinely running
 /// checkout, or in place of running when the holder itself is held. `since` is
-/// when the running run started: the holder's, or a lock-free newer run's.
+/// when the running run started: the holder's, or a lock-free run's.
 pub(super) fn in_flight_text(
     holder: Option<RunLockInfo>,
     since: Option<Timestamp>,
@@ -2694,11 +2718,24 @@ fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
     format!("{state}{pid}{run}{others}")
 }
 
+/// The running state of a run in progress, for `show` and `logs`: the held lock's wording, or
+/// an executing lock-free run's age from its creation; `None` for a run that only waits.
+fn in_progress_text(in_progress: &InProgress<InFlightRun>, now: Timestamp) -> Option<String> {
+    match in_progress {
+        InProgress::Locked(in_flight) => Some(running_text_full(in_flight, now)),
+        InProgress::Run {
+            since,
+            executing: true,
+        } => Some(running_text(Some(*since), now)),
+        InProgress::Run { .. } => None,
+    }
+}
+
 fn write_show_headline(
     out: &mut impl Write,
     name: &str,
     timing: &schedule::TaskTiming,
-    in_flight: Option<&InFlightRun>,
+    in_progress: Option<&InProgress<InFlightRun>>,
     now: Timestamp,
     entry: &TaskEntry,
     kind: schedule::TaskKind,
@@ -2733,12 +2770,8 @@ fn write_show_headline(
     if each_worktree {
         write!(out, " · each worktree")?;
     }
-    if let Some(in_flight) = in_flight {
-        return writeln!(
-            out,
-            " · {}",
-            ui::paint(ui::palette::cool(), &running_text_full(in_flight, now))
-        );
+    if let Some(running) = in_progress.and_then(|run| in_progress_text(run, now)) {
+        return writeln!(out, " · {}", ui::paint(ui::palette::cool(), &running));
     }
     match timing.state() {
         schedule::TaskTimingState::Blocked(state) => write!(
@@ -2947,10 +2980,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
         );
     }
     if (!view.config.throttle.is_empty()
-        || view
-            .in_flight
-            .as_ref()
-            .is_some_and(|run| !run.held.is_empty()))
+        || matches!(&view.in_progress, Some(InProgress::Locked(run)) if !run.held.is_empty()))
         && let Some(switch) = entry.throttle
     {
         kv.push(
@@ -3537,10 +3567,15 @@ fn verdict_line(
     } else {
         "last run"
     };
+    // A run in progress holds a failure back, so the verdict names only the finished run.
+    let word = match (healthy, is_running) {
+        (true, _) => "healthy · ",
+        (false, false) => "failing · ",
+        (false, true) => "",
+    };
     let mut line = format!(
-        "{} {} · {last} {}, {}",
+        "{} {word}{last} {}, {}",
         status.glyph,
-        if healthy { "healthy" } else { "failing" },
         ui::rel_age(newest.at, now),
         status.label
     );

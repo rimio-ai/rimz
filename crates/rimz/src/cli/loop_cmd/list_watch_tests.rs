@@ -7,11 +7,11 @@ fn now() -> Timestamp {
 }
 
 fn row(name: &str) -> TaskRow {
-    let mut row = TaskRow::rowless(name.into(), None, None);
+    let mut row = TaskRow::rowless(name.into(), InProgress::Locked(None), None);
     row.section = Section::Routine;
     row.kind = TaskKind::Routine;
     row.state = TaskState::Live;
-    row.running = None;
+    row.in_progress = None;
     row
 }
 
@@ -63,10 +63,10 @@ fn history(row: &mut TaskRow, age: i64, ok: bool) {
 fn running(name: &str) -> TaskRow {
     TaskRow::rowless(
         name.into(),
-        Some(RunLockInfo {
+        InProgress::Locked(Some(RunLockInfo {
             pid: 42,
             started_at: now() - SignedDuration::from_mins(3),
-        }),
+        })),
         None,
     )
 }
@@ -633,7 +633,7 @@ fn running_clock_retains_scheduled_next_through_pause() {
         Some(now() - SignedDuration::from_mins(55)),
     );
     row.state = TaskState::Running;
-    row.running = Some(None);
+    row.in_progress = Some(InProgress::Locked(None));
     let output = frame(&room(vec![row]), 100, 24, true);
     assert_eq!(
         output.lines().next(),
@@ -642,7 +642,7 @@ fn running_clock_retains_scheduled_next_through_pause() {
 }
 
 #[test]
-fn a_lock_free_newer_run_reads_running_from_its_start() {
+fn a_lock_free_run_reads_running_from_its_start() {
     let mut row = clock("retrying", 5 * 60);
     row.state = TaskState::Running;
     row.running_since = Some(now() - SignedDuration::from_mins(3));
