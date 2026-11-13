@@ -40,7 +40,7 @@ The shipped tables are `crates/rimz/src/harness/workflow/spec/kinds.rs::Workflow
 ## Failures
 
 - R13. A failure takes its own `on.<cause>` route if the node sets one, else the node's `on.failed`, else the workflow's `on.failed`, else the run fails.
-- R14. The causes are `died` (the node's process could not start or ended abnormally), `invalid` (an answer the node cannot use), `timeout` (R26), `limited` (a budget or provider refusal that ends the node), `undelivered` (a message found no single living agent), `visits` (the entry would exceed `max-visits`), `capacity` (the start gave up waiting for capacity, or can never fit) and `deadline` (the run's deadline passed), and they occur at: agent `died`, `timeout`, `limited`, `visits`, `capacity`, `deadline`; command `died`, `timeout`, `visits`, `deadline`; message `undelivered`, `visits`, `deadline`; test `died`, `timeout`, `deadline`; script `died`, `invalid`, `timeout`, `deadline`; judge `died`, `invalid`, `timeout`, `limited`, `deadline`; condition `timeout`, `deadline`; sleep `deadline`.
+- R14. The causes are `died` (the node's process could not start or ended abnormally), `invalid` (an answer the node cannot use), `timeout` (R26), `limited` (a budget or provider refusal that ends the node), `undelivered` (a message found no single living agent), `visits` (the entry would exceed `max-visits`), `capacity` (the start gave up waiting for capacity, or can never fit) and `deadline` (the run's deadline passed), and they occur at: agent `died`, `timeout`, `limited`, `visits`, `capacity`, `deadline`; command `died`, `timeout`, `visits`, `deadline`; message `undelivered`, `visits`, `deadline`; test `died`, `timeout`, `deadline`; script `died`, `invalid`, `timeout`, `deadline`; judge `died`, `invalid`, `timeout`, `limited`, `deadline`; condition `timeout`, `deadline`; sleep `deadline`. A sleep's evaluation error and a condition's reading error are engine faults, not failures of the node: the run ends failed with the error as its reason and takes no route.
 - R15. A dead agent never follows `then`: a turn agent died when its process exits before a clean turn end, a session agent died when its process exits while a turn is open or before its first turn, and a session that exits at rest ended cleanly.
 - R16. A blocking question takes `on.asked` when the node sets it, on either lifecycle, and otherwise stays open in the agent's pane with the node's clock paused.
 - R17. Every failure route hands the next node the input `{ outcome: "failed", cause, node, reason, detail }` with the run's `key` inherited, where `detail` holds the cause's own facts (a limit's `reset_at`, a command's exit code and log path, the time waited, the cap).
@@ -48,20 +48,9 @@ The shipped tables are `crates/rimz/src/harness/workflow/spec/kinds.rs::Workflow
 - R19. A judge that fails runs once more before its failure is raised, and an agent launch that failed before it started anything is tried once more.
 - R20. `rimz workflow resume <run> --at <node>` moves a live run to a node, which is what lets an author's handler node send the run on.
 
-R15 rests on a premise no build has run: that a session's death is detectable at exit, from the supervised run's turn stamps, which `crates/rimz/src/harness/run.rs::settle_session_exit_with_spend` does not read today. If the premise holds, the failures link builds this definition; if it fails, the definition goes back to the owner.
+R15 reads a session's exit from the agent snapshot, by the same reading that decides a session's rest (`crates/rimz/src/harness/workflow/mod.rs::leader_turn`), since the supervised run record carries no session turn stamps (`crates/rimz/src/store/run.rs::RunRecord`). `crates/rimz/src/harness/workflow/mod.rs::exited_at_rest` holds the reading at the exit's settlement, under the lock that settlement takes: a registered session that exits while it is not at rest, or before its first turn, is `died`, and one that exits at rest ended cleanly. One definition of rest serves both the rest check and the death.
 
-R20 differs from shipped: today `crates/rimz/src/harness/workflow/engine.rs::resume` takes `--at` on any parked run, and an active run only while it is at the generated handler.
-
-Differs from shipped, for R13 to R19:
-
-- A command's non-zero exit, signal or lost host is `died` and does not follow `then`. Today `crates/rimz/src/harness/workflow/engine.rs::command_step` ends a non-zero exit or a signal `died`, `crates/rimz/src/harness/workflow/engine.rs::prepare` reclaims a lost host as `canceled`, and `crates/rimz/src/harness/workflow/graph.rs::Definition::target` sends a step's `ended`, `died`, `canceled`, `limited` and `timeout` through `then` unless `on.failed` is set and the ending is `died`, `timeout` or `limited`.
-- An agent launch failure is `died`. Today the engine routes it to the step's `invalid` edge (the launch failure branch in `crates/rimz/src/harness/workflow/engine/agent.rs`).
-- A script's non-zero exit is `died`. Today `crates/rimz/src/harness/workflow/script.rs::evaluate` turns it into an unusable answer, `invalid`.
-- A judge's budget refusal is `limited` and routable. Today `Definition::target` sends a check's `budget` outcome to `@failed`, hardwired.
-- A start too large for its cap is `capacity` and routable. Today `crates/rimz/src/harness/workflow/engine.rs::prepare` ends the attempt `died` with a route to `@failed`.
-- An expired capacity wait takes the whole chain. Today `capacity` is not among the edges that fall back to `on-break` (`crates/rimz/src/harness/workflow/graph.rs::FAILURE_EDGES`).
-- A session that crashes mid-turn is `died`. Today `settle_session_exit_with_spend` settles any non-pending session as completed, without reading the exit.
-- A run with no failure route fails without an `on-break` line.
+R13 to R15 and R17 to R20 are what RimZ ships (R16's `on.asked` on a session waits on the lifecycles below): the [workflows reference](../../reference/cli/workflow.md#failures) owns the behaviour, and [the engine page](./workflow.md#edges-and-the-graph) the mechanism.
 
 ## Lifecycles
 
