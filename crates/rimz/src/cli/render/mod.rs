@@ -413,26 +413,35 @@ impl AmbiguousAgents {
                 self.rows.len() - AMBIGUITY_ROW_CAP
             )?;
         }
-        if let Some(AllMatches::Verb(verb)) = self.all_matches {
-            if let Ok(target) = shlex::try_quote(&self.target) {
-                writeln!(
-                    w,
-                    "  or {verb} every match: rimz agents {verb} {target} --all"
-                )?;
+        let (verb, command) = match self.all_matches {
+            Some(AllMatches::Verb(verb)) => (verb, retry_with_all(argv, |_| false)),
+            // The text follows the target, so `--all` goes before it.
+            Some(AllMatches::Message) => {
+                ("message", retry_with_all(argv, |arg| arg == self.target))
             }
-        } else if matches!(self.all_matches, Some(AllMatches::Message)) {
-            let mut args = argv.to_vec();
-            let index = args
-                .iter()
-                .position(|arg| arg == "--" || arg == &self.target)
-                .unwrap_or(args.len());
-            args.insert(index, "--all".into());
-            if let Ok(command) = shlex::try_join(args.iter().map(String::as_str)) {
-                writeln!(w, "  or message every match: {command}")?;
-            }
+            None => return Ok(()),
+        };
+        if let Some(command) = command {
+            writeln!(w, "  or {verb} every match: {command}")?;
         }
         Ok(())
     }
+}
+
+/// The invocation `argv` again under the name `rimz`, with `--all` inserted
+/// before the first `--` or the first argument `before` picks, else appended.
+pub(crate) fn retry_with_all(argv: &[String], before: impl Fn(&str) -> bool) -> Option<String> {
+    let mut retry = argv.to_vec();
+    if let Some(program) = retry.first_mut() {
+        "rimz".clone_into(program);
+    }
+    let at = retry
+        .iter()
+        .skip(1)
+        .position(|arg| arg == "--" || before(arg))
+        .map_or(retry.len(), |index| index + 1);
+    retry.insert(at, "--all".to_owned());
+    shlex::try_join(retry.iter().map(String::as_str)).ok()
 }
 
 fn corrected_command(

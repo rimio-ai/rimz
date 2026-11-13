@@ -14,7 +14,7 @@ use super::{
     parse_selector, resolve_many,
 };
 use crate::agents::{AgentState, AgentStatus, ParkDemotion, TurnErrorClass, TurnPhase};
-use crate::ids::AgentKind;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::{
     AgentCard, SidebarRow, SidebarSnapshot, SidebarSubAgent, agent_idle_since, card_status,
 };
@@ -915,6 +915,50 @@ fn parent_matches(row: &AgentRow<'_>, text: &str, reader: &AddressContext) -> bo
             .iter()
             .any(|agent| agent.kind == parent.kind && agent.agent_id == parent.agent_id)
     })
+}
+
+/// One selected agent: the address an action resolves at act time and, for a
+/// filter row or a pinned stdin line, the agent that address named at
+/// selection, so the act-time read can tell that agent apart from one that has
+/// since taken the address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selected {
+    pub address: String,
+    pub agent: Option<(AgentKind, AgentSessionId)>,
+}
+
+/// Why a selected address no longer names the agent selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SelectionMoved {
+    #[error("now names another agent than the one selected")]
+    Another,
+    #[error("has ended")]
+    Ended,
+}
+
+impl Selected {
+    /// Whether `agent`, what the address resolves to now, is still the agent
+    /// selected and still live. `None` is a target with no agent, such as a
+    /// bare pane: an unpinned address may name one, while for a pinned one it
+    /// means the agent selected has gone from behind the address.
+    pub fn check(&self, agent: Option<&AgentState>) -> Result<(), SelectionMoved> {
+        let Some((kind, id)) = &self.agent else {
+            return match agent {
+                Some(agent) if agent.ended_at.is_some() => Err(SelectionMoved::Ended),
+                _ => Ok(()),
+            };
+        };
+        let Some(agent) = agent else {
+            return Err(SelectionMoved::Ended);
+        };
+        if (kind, id) != (&agent.kind, &agent.agent_id) {
+            return Err(SelectionMoved::Another);
+        }
+        if agent.ended_at.is_some() {
+            return Err(SelectionMoved::Ended);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

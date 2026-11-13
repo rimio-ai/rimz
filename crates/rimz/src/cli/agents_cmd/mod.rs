@@ -126,6 +126,7 @@ use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
 use tune::{BudgetArgs, TuneArgs, run_tune};
 pub(in crate::cli) use wait::wait_agent;
+use wait::wait_references;
 
 fn read_heartbeat_agents(
     ctx: &Ctx,
@@ -793,13 +794,25 @@ enum AgentsSubcmd {
     Molt(MoltArgs),
     /// Wait for supervised runs or interactive agents; several references join.
     Wait {
-        /// Agents or runs to wait for: @handle, @handle#lane, pet name, pane id (tmux:%12), or run id.
+        /// Agents or runs to wait for: @handle, @handle#lane, pet name, pane id (tmux:%12), or
+        /// run id; `-` reads one address per line from stdin.
         #[arg(
-            required = true,
+            required_unless_present = "filters",
             num_args = 1..,
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs)
         )]
         references: Vec<String>,
+        /// Select the agents to wait for with `field=value` terms, as `agents list --filter`
+        /// reads them; repeatable, `--filter help` lists fields.
+        #[arg(
+            long = "filter",
+            value_name = "QUERY",
+            add = clap_complete::ArgValueCompleter::new(crate::cli::complete::filter_terms)
+        )]
+        filters: Vec<String>,
+        /// Wait for every agent `--filter` or stdin selects.
+        #[arg(long)]
+        all: bool,
         /// Return when the first target finishes; print its result block, or a one-entry map with `--json`.
         #[arg(long, conflicts_with = "stream")]
         any: bool,
@@ -818,12 +831,21 @@ enum AgentsSubcmd {
     },
     /// Stop a supervised run or close an agent pane.
     Stop {
-        /// Agent or run to stop: @handle, @handle#lane, pet name, pane id (tmux:%12), or run id.
+        /// Agent or run to stop: @handle, @handle#lane, pet name, pane id (tmux:%12), or run
+        /// id; `-` reads one address per line from stdin.
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::agent_refs
         ))]
         reference: Option<String>,
-        /// Stop every agent the address matches.
+        /// Select the agents to stop with `field=value` terms, as `agents list --filter`
+        /// reads them; repeatable, `--filter help` lists fields.
+        #[arg(
+            long = "filter",
+            value_name = "QUERY",
+            add = clap_complete::ArgValueCompleter::new(crate::cli::complete::filter_terms)
+        )]
+        filters: Vec<String>,
+        /// Stop every agent the address, `--filter`, or stdin selects.
         #[arg(long)]
         all: bool,
         /// Stop the agent once it has rested this long with nothing owed
@@ -834,15 +856,30 @@ enum AgentsSubcmd {
             num_args = 0..=1,
             default_missing_value = stop::WHEN_IDLE_DEFAULT,
             value_parser = parse_when_idle,
-            conflicts_with = "all"
+            conflicts_with_all = ["all", "filters"]
         )]
         when_idle: Option<WhenIdle>,
     },
     /// Stop an agent and relaunch it in place, resuming its session; an agent stopped mid-turn
     /// gets one continue.
     Restart {
-        /// Agent to restart: @handle, @handle#lane, pet name, or pane id (tmux:%12).
-        reference: String,
+        /// Agent to restart: @handle, @handle#lane, pet name, or pane id (tmux:%12);
+        /// `-` reads one address per line from stdin.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::agent_refs
+        ))]
+        reference: Option<String>,
+        /// Select the agents to restart with `field=value` terms, as `agents list --filter`
+        /// reads them; repeatable, `--filter help` lists fields.
+        #[arg(
+            long = "filter",
+            value_name = "QUERY",
+            add = clap_complete::ArgValueCompleter::new(crate::cli::complete::filter_terms)
+        )]
+        filters: Vec<String>,
+        /// Restart every agent the address, `--filter`, or stdin selects.
+        #[arg(long)]
+        all: bool,
         /// Run this agent on another account of its provider; the room's selection is unchanged.
         #[arg(long, value_name = "NAME")]
         account: Option<rimz::ids::LoginName>,
@@ -1149,12 +1186,17 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Molt(args)) => return run_molt(args, globals),
         Some(AgentsSubcmd::Wait {
             references,
+            filters,
+            all,
             any,
             timeout,
             stream,
             from_start,
             json,
         }) => {
+            let Some(references) = wait_references(references, &filters, all, globals)? else {
+                return Ok(());
+            };
             let references = references
                 .into_iter()
                 .map(|reference| (reference.clone(), reference))
@@ -1163,14 +1205,17 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(AgentsSubcmd::Stop {
             reference,
+            filters,
             all,
             when_idle,
-        }) => return stop_agent(reference, all, when_idle, globals),
+        }) => return stop_agent(reference, filters, all, when_idle, globals),
         Some(AgentsSubcmd::Restart {
             reference,
+            filters,
+            all,
             account,
             no_continue,
-        }) => return restart_agent(reference, account, no_continue, globals),
+        }) => return restart_agent(reference, filters, all, account, no_continue, globals),
         Some(AgentsSubcmd::Compact {
             reference,
             instruction,

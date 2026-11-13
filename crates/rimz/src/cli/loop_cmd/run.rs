@@ -518,6 +518,7 @@ fn execute_prepared_delivery(
         &store,
         rimz::message::dispatch::DispatchRequest {
             about_run: None,
+            selected: Vec::new(),
             reply_wanted: false,
             premises: rimz::store::message::Premise::NONE,
             resuming_recipient: None,

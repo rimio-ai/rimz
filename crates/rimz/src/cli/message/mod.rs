@@ -12,6 +12,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub(super) use super::Ctx;
 use super::GlobalFlags;
 use super::address;
+use super::select;
 use super::send::{self, SendFlags, resolve_message};
 use super::usage::{UsageError, shell_command};
 use crate::cli::render;
@@ -47,7 +48,8 @@ const LONG_ABOUT: &str = r#"Send text to an agent, and manage what you have sent
 pub struct MessageArgs {
     #[command(subcommand)]
     command: Option<MessageSubcmd>,
-    /// Agent mention for the bare message form.
+    /// Agent mention for the bare message form, or `-` to read one address per line from
+    /// stdin; with `--filter`, the message instead.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::message_targets
     ))]
@@ -84,6 +86,14 @@ pub struct MessageArgs {
     /// before it is delivered.
     #[arg(long, conflicts_with_all = ["steer", "interrupt"])]
     unless_prompted: bool,
+    /// Send to the agents matching `field=value` terms, as `agents list --filter` reads
+    /// them; repeatable, `--filter help` lists fields.
+    #[arg(
+        long = "filter",
+        value_name = "QUERY",
+        add = clap_complete::ArgValueCompleter::new(crate::cli::complete::filter_terms)
+    )]
+    filters: Vec<String>,
     #[command(flatten)]
     send: SendFlags,
 }
@@ -264,6 +274,17 @@ struct EditFlags {
 }
 
 pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
+    let references = Vec::from_iter(args.target.clone());
+    if select::selects(&references, &args.filters) {
+        if args.command.is_some() {
+            // Clap read the text as a subcommand's name: after `--` it reads none.
+            return Err(UsageError::new(
+                "a selection takes no subcommand; to send text that starts with `-` or names one, put it after `--`: rimz message --filter <QUERY> -- <TEXT>".to_owned(),
+            )
+            .into());
+        }
+        return send_selected(args, globals);
+    }
     if args.target.is_none() {
         targetless_send(&args)?;
     }
@@ -350,11 +371,91 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
 
 const DEFAULT_MESSAGE_LIST_LIMIT: usize = 200;
 
+/// A send to the agents `--filter` or stdin selects: with `--filter` the one
+/// positional is the text; with `-` the body comes inline or from `--file`,
+/// since stdin carries the addresses.
+fn send_selected(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
+    if select::filter_help(&args.filters)? {
+        return Ok(());
+    }
+    let from_stdin = args.filters.is_empty();
+    let (references, text) = if from_stdin {
+        (Vec::from_iter(args.target), args.text)
+    } else {
+        if args.text.is_some() {
+            return Err(UsageError::new(
+                "--filter names the recipients, so message takes only the text: rimz message --filter <QUERY> <TEXT>".to_owned(),
+            )
+            .into());
+        }
+        (Vec::new(), args.target)
+    };
+    if from_stdin && args.send.stdin {
+        return Err(UsageError::new(
+            "`-` reads the recipients' addresses from stdin, so the body cannot come from --stdin too; pass it inline or with --file".to_owned(),
+        )
+        .into());
+    }
+    if from_stdin && text.is_none() && args.send.file.is_none() {
+        return Err(UsageError::new(
+            "`-` reads the recipients' addresses from stdin; pass the body inline or with --file"
+                .to_owned(),
+        )
+        .into());
+    }
+    if args.send.create {
+        return Err(UsageError::new(
+            "--create launches an agent for an address that matches none; it does not apply to --filter or `-`".to_owned(),
+        )
+        .into());
+    }
+    let piped = if args.send.stdin {
+        send::read_stdin_prompt()?
+    } else {
+        None
+    };
+    let ctx = Ctx::open(globals)?;
+    let flags = select::TargetFlags {
+        references: &references,
+        filters: &args.filters,
+        all: args.send.all,
+        room: false,
+    };
+    let select::Targets::Selected(selected) = select::select_targets(&ctx, "message", flags)?
+    else {
+        return Ok(());
+    };
+    let mode = if args.interrupt {
+        SendKind::Interrupt
+    } else if args.steer {
+        SendKind::Steer
+    } else {
+        SendKind::Boundary {
+            gate: args.on.unwrap_or(DeliveryGate::Done),
+            schedule: args.schedule,
+            after: args.after,
+            when: args.when,
+            ttl: args.ttl,
+            unless_prompted: args.unless_prompted,
+        }
+    };
+    let text = text.into_iter().collect();
+    send_message_to(
+        Recipients::Selected(selected),
+        mode,
+        args.send,
+        text,
+        piped,
+        globals,
+    )
+}
+
 fn targetless_send(args: &MessageArgs) -> Result<()> {
     let MessageArgs {
         command: _,
         target: _,
         text: _,
+        filters: _,
         on,
         steer,
         interrupt,

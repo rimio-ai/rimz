@@ -939,6 +939,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
         opening.store,
         DispatchRequest {
             about_run: None,
+            selected: Vec::new(),
             reply_wanted: false,
             resuming_recipient: None,
             target: format!("@{}", member.agent_id),

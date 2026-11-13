@@ -97,6 +97,7 @@ pub(super) fn reconcile_cohort_launch(
                     store,
                     DispatchRequest {
                         about_run: None,
+                        selected: Vec::new(),
                         reply_wanted: false,
                         premises: crate::store::message::Premise::NONE,
                         resuming_recipient: None,

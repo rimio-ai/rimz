@@ -54,6 +54,7 @@ fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
     }];
     let mut request = DispatchRequest {
         about_run: None,
+        selected: Vec::new(),
         reply_wanted: false,
         premises: crate::store::message::Premise::NONE,
         target: "@session".into(),
@@ -128,6 +129,7 @@ fn dispatch_copies_only_live_rows_and_the_resuming_child() {
         &frame,
         DispatchRequest {
             about_run: None,
+            selected: Vec::new(),
             reply_wanted: false,
             premises: crate::store::message::Premise::NONE,
             target: "@ended".into(),

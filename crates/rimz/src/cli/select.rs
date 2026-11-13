@@ -10,9 +10,9 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 
 use rimz::address::LaneSelector;
+pub(crate) use rimz::address::selector::Selected;
 use rimz::address::selector::{self, LaneScope, Query};
 use rimz::agents::{AgentState, ParkDemotion};
-use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
@@ -28,6 +28,8 @@ pub(crate) struct TargetFlags<'a> {
     pub(crate) filters: &'a [String],
     /// Consent to act on every agent `--filter` or stdin selects.
     pub(crate) all: bool,
+    /// Read the filter over every lane of the room, as `refresh --all` scopes.
+    pub(crate) room: bool,
 }
 
 /// What an action command acts on.
@@ -37,18 +39,9 @@ pub(crate) enum Targets {
     /// The agents `--filter` or stdin selected, in order, with any consent the
     /// count needs given. Never empty.
     Selected(Vec<Selected>),
-    /// Nothing to act on, and the command exits 0: `--filter help` printed its
-    /// table, or nothing was selected and a stderr line said so.
+    /// Nothing to act on, and the command exits 0: nothing was selected, and
+    /// a stderr line said so.
     Done,
-}
-
-/// One selected agent: the address to resolve at act time and, for a filter
-/// row, the agent that address named at selection, so a re-read can tell
-/// that agent apart from one that has since taken the address.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Selected {
-    pub(crate) address: String,
-    pub(crate) agent: Option<(AgentKind, AgentSessionId)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -58,13 +51,19 @@ enum Source {
     Stdin,
 }
 
+/// `--filter help`: print the field table, and say whether the command is
+/// done. Checked before the command opens its room, which the table needs none of.
+pub(crate) fn filter_help(filters: &[String]) -> Result<bool> {
+    if !is_filter_help(filters) {
+        return Ok(false);
+    }
+    render::filter_help(&mut render::out(), FILTER_DEFAULTS)?;
+    Ok(true)
+}
+
 /// Resolve `flags` to the command's targets. `verb` names the command in the
 /// consent refusal.
 pub(crate) fn select_targets(ctx: &Ctx, verb: &str, flags: TargetFlags<'_>) -> Result<Targets> {
-    if is_filter_help(flags.filters) {
-        render::filter_help(&mut render::out(), FILTER_DEFAULTS)?;
-        return Ok(Targets::Done);
-    }
     let source = source(&flags)?;
     let (selected, miss) = match source {
         Source::References => return Ok(Targets::References(flags.references.to_vec())),
@@ -73,12 +72,15 @@ pub(crate) fn select_targets(ctx: &Ctx, verb: &str, flags: TargetFlags<'_>) -> R
                 Query::parse(flags.filters).map_err(|err| UsageError::new(err.to_string()))?;
             let scope = ctx
                 .channel()
+                .filter(|_| !flags.room)
                 .map_or(LaneScope::Room, |lane| LaneScope::Current(lane.as_str()));
             let rows = filter_rows(ctx, &query, scope)?;
             (rows, no_match_line(scope.lane(&query)))
         }
         Source::Stdin => {
-            let lines = read_addresses(std::io::stdin().lock())?;
+            let mut lines = read_addresses(std::io::stdin().lock())?;
+            let mut seen = std::collections::HashSet::new();
+            lines.retain(|address| seen.insert(address.clone()));
             let addresses = lines
                 .into_iter()
                 .map(|address| Selected {
@@ -97,7 +99,62 @@ pub(crate) fn select_targets(ctx: &Ctx, verb: &str, flags: TargetFlags<'_>) -> R
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     require_consent(&selected, flags.all, verb, &argv)?;
+    #[cfg(feature = "testkit")]
+    rimz::testkit::rendezvous("RIMZ_TEST_SELECT_AFTER_SELECTION");
     Ok(Targets::Selected(selected))
+}
+
+/// Whether `references` and `filters` select through this module rather than
+/// naming targets the command resolves itself.
+pub(crate) fn selects(references: &[String], filters: &[String]) -> bool {
+    !filters.is_empty() || references.iter().any(|reference| reference == STDIN)
+}
+
+/// Fill in the agent each stdin address names in `snapshot`, so a later
+/// re-read can tell that agent apart from one that takes the address after it.
+/// An address that names no single agent stays unpinned and fails its re-read.
+pub(crate) fn identify(ctx: &Ctx, snapshot: &SidebarSnapshot, selected: &mut [Selected]) {
+    let reader = ctx.address_context();
+    for target in selected.iter_mut().filter(|target| target.agent.is_none()) {
+        target.agent =
+            super::resolve_agent_one(&ctx.store, snapshot, &target.address, None, &reader)
+                .ok()
+                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()));
+    }
+}
+
+/// The act-time read of one selected agent: its address resolved in
+/// `snapshot`, read just before the command acts on it, through the command's
+/// single-target resolver. Refused when the address now names another agent
+/// than the one selected, or an agent that has ended.
+pub(crate) fn reread<'a>(
+    ctx: &Ctx,
+    snapshot: &'a SidebarSnapshot,
+    selected: &Selected,
+) -> Result<&'a AgentState> {
+    let agent = super::resolve_agent_one(
+        &ctx.store,
+        snapshot,
+        &selected.address,
+        None,
+        &ctx.address_context(),
+    )?;
+    selected.check(Some(agent))?;
+    Ok(agent)
+}
+
+/// The result of a batch that printed one receipt line per agent: exit 1,
+/// with nothing more printed, when any agent failed.
+pub(crate) fn batch_result(failed: usize) -> Result<()> {
+    if failed == 0 {
+        return Ok(());
+    }
+    Err(
+        anyhow::Error::new(render::AlreadyReported).context(super::ExitCodeError {
+            code: 1,
+            message: format!("{failed} selected agents failed"),
+        }),
+    )
 }
 
 /// Whether the filters ask for the field table instead of a selection.
@@ -217,14 +274,6 @@ fn require_consent(
     if all || selected.len() < 2 {
         return Ok(());
     }
-    let mut retry = argv.to_vec();
-    let at = retry
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or(retry.len());
-    retry.insert(at, "--all".to_owned());
-    let retry =
-        shlex::try_join(retry.iter().map(String::as_str)).unwrap_or_else(|_| retry.join(" "));
     let mut message = format!(
         "{} agents selected; {verb} acts on more than one only with --all:",
         selected.len()
@@ -233,7 +282,9 @@ fn require_consent(
         message.push('\n');
         message.push_str(&agent.address);
     }
-    message.push_str(&format!("\nor {verb} every match: {retry}"));
+    if let Some(retry) = render::retry_with_all(argv, |_| false) {
+        message.push_str(&format!("\nor {verb} every match: {retry}"));
+    }
     Err(UsageError::new(message))
 }
 
@@ -251,6 +302,7 @@ mod tests {
             references,
             filters,
             all: false,
+            room: false,
         }
     }
 
@@ -266,6 +318,19 @@ mod tests {
                 agent: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_failed_batch_exits_1_without_another_line() {
+        batch_result(0).unwrap();
+        let err = batch_result(2).unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<super::super::ExitCodeError>()
+                .unwrap()
+                .code,
+            1
+        );
+        assert!(err.downcast_ref::<render::AlreadyReported>().is_some());
     }
 
     #[test]
@@ -326,12 +391,20 @@ mod tests {
         );
         require_consent(&two, true, "restart", &argv).unwrap();
         require_consent(&two[..1], false, "restart", &argv).unwrap();
-        let argv = strings(&["rimz", "agents", "stop", "-", "--", "x"]);
+        let argv = strings(&[
+            "/home/x/target/debug/rimz",
+            "--tmux",
+            "agents",
+            "stop",
+            "-",
+            "--",
+            "x",
+        ]);
         let message = require_consent(&two, false, "stop", &argv)
             .unwrap_err()
             .to_string();
         assert!(
-            message.contains("or stop every match: rimz agents stop - --all -- x"),
+            message.contains("or stop every match: rimz --tmux agents stop - --all -- x"),
             "{message}"
         );
     }

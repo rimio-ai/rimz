@@ -237,6 +237,7 @@ fn answer_raised(
         &ctx.store,
         DispatchRequest {
             about_run: None,
+            selected: Vec::new(),
             reply_wanted: false,
             premises: rimz::store::message::Premise::NONE,
             target: handle.to_owned(),

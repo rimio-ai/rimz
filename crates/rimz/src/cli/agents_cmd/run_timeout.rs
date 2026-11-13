@@ -143,6 +143,7 @@ fn deadline_stop_request(
 ) -> rimz::message::dispatch::DispatchRequest {
     rimz::message::dispatch::DispatchRequest {
         about_run: Some(run_id.clone()),
+        selected: Vec::new(),
         reply_wanted: false,
         premises: rimz::store::message::Premise::NONE,
         resuming_recipient: None,

@@ -26,9 +26,37 @@ pub(super) enum SendKind {
     },
 }
 
+/// Who a send goes to: an address dispatch resolves, or recipients selected
+/// one by one.
+pub(super) enum Recipients {
+    Target(String),
+    Selected(Vec<crate::cli::select::Selected>),
+}
+
 /// Resolve command-side flags and dispatch a steer or turn-boundary message.
 pub(super) fn send_message(
     target: String,
+    mode: SendKind,
+    flags: SendFlags,
+    text: Vec<String>,
+    piped: Option<String>,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    send_message_to(
+        Recipients::Target(target),
+        mode,
+        flags,
+        text,
+        piped,
+        globals,
+    )
+}
+
+/// [`send_message`] to either kind of recipients. A selection prints one
+/// error line for each address that named no single agent, and exits 1
+/// after the others are sent.
+pub(super) fn send_message_to(
+    recipients: Recipients,
     mode: SendKind,
     flags: SendFlags,
     text: Vec<String>,
@@ -56,7 +84,18 @@ pub(super) fn send_message(
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     let premises = user_premises(&mode)?;
     let mode = dispatch_mode(mode, create)?;
-    rimz::address::require_mention(&target)?;
+    let (target, selected) = match recipients {
+        Recipients::Target(target) => {
+            rimz::address::require_mention(&target)?;
+            (target, Vec::new())
+        }
+        Recipients::Selected(selected) => (String::new(), selected),
+    };
+    let selecting = !selected.is_empty();
+    let selected = selected
+        .into_iter()
+        .map(|target| self_address(&ctx, target))
+        .collect::<Result<Vec<_>>>()?;
     let target = if target == "@me" {
         let snapshot = ctx.cached_snapshot()?;
         let agent = crate::cli::resolve_agent_one(
@@ -84,6 +123,7 @@ pub(super) fn send_message(
         reply_wanted,
         premises: premises.clone(),
         resuming_recipient: None,
+        selected: selected.clone(),
         target: target.clone(),
         text: text.clone(),
         target_scope: worktree.clone().or_else(|| channel_flag.clone()),
@@ -107,6 +147,24 @@ pub(super) fn send_message(
         current_channel: current_channel.as_ref(),
         create,
     };
+    if selecting {
+        let result = rimz::message::dispatch::dispatch(workspace, store, request())
+            .map_err(|err| map_dispatch_err(err, &ctx))?;
+        // A reporter can refuse on a skip, so it runs after the misses print.
+        let mut out = crate::cli::render::out();
+        for (address, reason) in &result.missed {
+            writeln!(out, "error {address}: {reason}")?;
+        }
+        if !result.outcomes.is_empty() {
+            send::report_dispatch(
+                kind,
+                "the selected agents",
+                &result.outcomes,
+                &result.compacted,
+            )?;
+        }
+        return crate::cli::select::batch_result(result.missed.len());
+    }
     let result = match rimz::message::dispatch::dispatch(workspace, store, request()) {
         Ok(result) => result,
         Err(DispatchErr::Recipient(err)) => {
@@ -128,6 +186,24 @@ pub(super) fn send_message(
         Err(err) => return Err(map_dispatch_err(err, &ctx)),
     };
     send::report_dispatch(kind, &target, &result.outcomes, &result.compacted)
+}
+
+/// A stdin `@me` line as the caller's own address, which the library resolver
+/// cannot read, pinned to the caller; any other line as it came.
+fn self_address(
+    ctx: &Ctx,
+    target: crate::cli::select::Selected,
+) -> Result<crate::cli::select::Selected> {
+    if target.address != "@me" {
+        return Ok(target);
+    }
+    let snapshot = ctx.cached_snapshot()?;
+    let agent =
+        crate::cli::resolve_agent_one(&ctx.store, &snapshot, "@me", None, &ctx.address_context())?;
+    Ok(crate::cli::select::Selected {
+        address: format!("@{}", agent.agent_id),
+        agent: Some((agent.kind.clone(), agent.agent_id.clone())),
+    })
 }
 
 /// Refuse `--reply-wanted` where no header would carry the mark: `--create` may

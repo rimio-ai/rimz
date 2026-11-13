@@ -624,3 +624,35 @@ fn a_closed_provisional_row_never_prints_a_live_agents_name() {
         );
     }
 }
+
+/// Selection pins the agent; an act-time read that finds the address taken by
+/// another agent, or the agent ended or gone since, refuses it, and the reason
+/// names no address, which the caller prints beside it.
+#[test]
+fn a_selected_address_holds_only_while_it_names_the_live_agent_selected() {
+    let pinned = Selected {
+        address: "@otter".to_owned(),
+        agent: Some((AgentKind::new_unchecked("codex"), "otter".into())),
+    };
+    let otter = agent("otter", "%1");
+    pinned.check(Some(&otter)).unwrap();
+    let mut ended = otter.clone();
+    ended.ended_at = Some(now());
+    assert_eq!(pinned.check(Some(&ended)), Err(SelectionMoved::Ended));
+    let fox = agent("fox", "%2");
+    assert_eq!(pinned.check(Some(&fox)), Err(SelectionMoved::Another));
+    assert_eq!(pinned.check(None), Err(SelectionMoved::Ended));
+    assert_eq!(
+        SelectionMoved::Another.to_string(),
+        "now names another agent than the one selected"
+    );
+    assert_eq!(SelectionMoved::Ended.to_string(), "has ended");
+
+    let line = Selected {
+        address: "@otter".to_owned(),
+        agent: None,
+    };
+    line.check(Some(&fox)).unwrap();
+    line.check(None).unwrap();
+    assert_eq!(line.check(Some(&ended)), Err(SelectionMoved::Ended));
+}

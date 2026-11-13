@@ -89,7 +89,7 @@ pub static WORK_COUNTERS: std::sync::LazyLock<WorkCounters> =
     std::sync::LazyLock::new(WorkCounters::default);
 
 /// Stop a test subprocess at an I/O boundary until its controller releases it.
-pub(crate) fn rendezvous(env: &str) {
+pub fn rendezvous(env: &str) {
     use std::io::Read as _;
     use std::os::unix::net::UnixStream;
 
