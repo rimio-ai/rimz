@@ -43,10 +43,6 @@ mod remote;
 mod render;
 mod reset;
 mod room;
-#[expect(
-    dead_code,
-    reason = "the agent action commands select their targets through it next"
-)]
 mod select;
 mod send;
 mod sessions;

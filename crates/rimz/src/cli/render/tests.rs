@@ -73,11 +73,27 @@ fn ambiguity_rows_are_ranked_runnable_and_offer_all() {
         .downcast_mut::<AmbiguousAgents>()
         .unwrap()
         .offer_all("restart");
-    let output = strip(|out| write_report_with_args(out, &error, &argv));
+    // The retry is the invocation again, flags kept, under the name `rimz`.
+    let restart = [
+        "/home/x/target/debug/rimz",
+        "agents",
+        "restart",
+        "@coder",
+        "--account",
+        "x",
+        "--no-continue",
+    ]
+    .map(str::to_owned);
+    let output = strip(|out| write_report_with_args(out, &error, &restart));
     assert!(
-        output.contains("or restart every match: rimz agents restart @coder --all"),
+        output.contains(
+            "or restart every match: rimz agents restart @coder --account x --no-continue --all"
+        ),
         "{output}"
     );
+    // `show` offers no `--all`: its rows stand alone.
+    let error = crate::cli::resolve_agent_one_unhinted(None, &snapshot, "@coder", None, &context)
+        .unwrap_err();
     let output = strip(|out| {
         write_report_with_args(
             out,

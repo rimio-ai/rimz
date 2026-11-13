@@ -80,6 +80,8 @@ impl DispatchMode {
 }
 
 pub struct DispatchRequest {
+    /// The address the dispatch resolves; unread when `selected` names the
+    /// recipients.
     pub target: String,
     pub text: String,
     pub target_scope: Option<String>,
@@ -104,11 +106,18 @@ pub struct DispatchRequest {
     pub premises: Vec<Premise>,
     /// The run the text is about; delivery withdraws it once that run ends.
     pub about_run: Option<crate::ids::RunId>,
+    /// Recipients chosen one by one (`message --filter`, or addresses on
+    /// stdin), each resolved here to exactly one agent and sent as one send:
+    /// no fan-out consent, no group prefix. Empty for a send to `target`.
+    pub selected: Vec<crate::address::selector::Selected>,
 }
 
 pub struct DispatchResult {
     pub outcomes: Vec<DispatchOutcome>,
     pub compacted: Vec<String>,
+    /// Each selected recipient that resolved to no single agent it named,
+    /// with why: its address and the reason.
+    pub missed: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,20 +290,23 @@ pub fn dispatch(
     let agent_context =
         needs_context.then(|| crate::store::agent_context::read_all(store.runtime_paths()));
 
+    let selecting = !request.selected.is_empty();
     let cached_snapshot = boundary.then(|| store.snapshot_cached()).transpose()?;
+    // A selection resolves each address on its own, over the live read.
     let rollup_only = resuming
-        || cached_snapshot.as_ref().is_some_and(|snapshot| {
-            targets_all_park_without_live(
-                snapshot,
-                &request.target,
-                request.target_scope.as_deref(),
-                &request.current_channel,
-                &pending,
-                request.mode.gate(),
-                request.force,
-                &CardStatus::new(store),
-            )
-        });
+        || !selecting
+            && cached_snapshot.as_ref().is_some_and(|snapshot| {
+                targets_all_park_without_live(
+                    snapshot,
+                    &request.target,
+                    request.target_scope.as_deref(),
+                    &request.current_channel,
+                    &pending,
+                    request.mode.gate(),
+                    request.force,
+                    &CardStatus::new(store),
+                )
+            });
     let mut snapshot = if rollup_only {
         // Both rollup-only paths require the boundary snapshot above.
         cached_snapshot.expect("rollup-only proof requires cached snapshot")
@@ -326,6 +338,7 @@ pub fn dispatch(
         channel: &request.current_channel,
         rollup_only,
     };
+    let mut missed = Vec::new();
     let (mut targets, recorded) = match request.resuming_recipient.as_ref() {
         Some(child) => (
             vec![ResolvedTarget {
@@ -334,8 +347,19 @@ pub fn dispatch(
             }],
             true,
         ),
+        None if selecting => (
+            resolution.resolve_selected(&request.selected, &mut missed),
+            false,
+        ),
         None => resolution.resolve(&request.target)?,
     };
+    if selecting && targets.is_empty() {
+        return Ok(DispatchResult {
+            outcomes: Vec::new(),
+            compacted: Vec::new(),
+            missed,
+        });
+    }
     let caller_lane = request
         .target_scope
         .as_deref()
@@ -352,7 +376,10 @@ pub fn dispatch(
         request.caller.as_ref(),
         caller_lane.as_deref(),
     )?;
-    if targets.len() > 1 && !request.allow_fanout && !crate::address::is_broadcast(&request.target)
+    if !selecting
+        && targets.len() > 1
+        && !request.allow_fanout
+        && !crate::address::is_broadcast(&request.target)
     {
         return Err(DispatchErr::Fanout {
             target: request.target,
@@ -369,7 +396,8 @@ pub fn dispatch(
         .is_none()
         .then(|| CompactDefaults::load(&workspace.project_root, &snapshot, &targets));
     let mode = prepare_mode(&request, &resolution, &targets, &pending)?;
-    let text = if targets.len() > 1 || crate::address::is_broadcast(&request.target) {
+    let text = if !selecting && (targets.len() > 1 || crate::address::is_broadcast(&request.target))
+    {
         crate::address::group_prefixed(&request.target, &request.text)
     } else {
         request.text
@@ -389,6 +417,7 @@ pub fn dispatch(
     Ok(DispatchResult {
         outcomes,
         compacted,
+        missed,
     })
 }
 
@@ -569,6 +598,51 @@ impl ResolutionView<'_> {
                 .durable_targets(raw)
                 .map(|agents| (self.combine_targets(agents, Vec::new()), true)),
         }
+    }
+
+    /// Resolve each selected address to exactly one target, the agent it was
+    /// selected as when one was named, once per agent; every other address
+    /// lands in `missed` with why.
+    fn resolve_selected(
+        &self,
+        selected: &[crate::address::selector::Selected],
+        missed: &mut Vec<(String, String)>,
+    ) -> Vec<ResolvedTarget> {
+        let mut targets: Vec<ResolvedTarget> = Vec::new();
+        for recipient in selected {
+            let address = &recipient.address;
+            let resolved = match self.resolve(address) {
+                Ok((resolved, _)) => resolved,
+                Err(err) => {
+                    missed.push((address.clone(), err.to_string()));
+                    continue;
+                }
+            };
+            let [target] = resolved.as_slice() else {
+                let reason = format!("names {} agents, not one", resolved.len());
+                missed.push((address.clone(), reason));
+                continue;
+            };
+            if let Err(moved) = recipient.check(target.agent.as_ref()) {
+                missed.push((address.clone(), moved.to_string()));
+                continue;
+            }
+            let key = target
+                .agent
+                .as_ref()
+                .map(|agent| (&agent.kind, &agent.agent_id));
+            let seen = targets.iter().any(|seen| {
+                seen.agent
+                    .as_ref()
+                    .map(|agent| (&agent.kind, &agent.agent_id))
+                    == key
+                    && (key.is_some() || seen.pane == target.pane)
+            });
+            if !seen {
+                targets.push(target.clone());
+            }
+        }
+        targets
     }
 
     fn durable_targets<'a>(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::cli::{render, select};
 use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::launch::{ExecAction, ExecRequest};
@@ -28,21 +29,102 @@ pub(in crate::cli) struct AgentRestart<'a> {
 }
 
 pub(super) fn restart_agent(
-    reference: String,
+    reference: Option<String>,
+    filters: Vec<String>,
+    all: bool,
     account: Option<rimz::ids::LoginName>,
     no_continue: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    if select::filter_help(&filters)? {
+        return Ok(());
+    }
     let ctx = Ctx::open(globals)?;
-    let snapshot = ctx.fold_agent_context(ctx.alive_snapshot()?);
-    let agent = crate::cli::resolve_agent_one(
-        &ctx.store,
-        &snapshot,
-        &reference,
-        None,
-        &ctx.address_context(),
-    )?
-    .clone();
+    let references = Vec::from_iter(reference);
+    let flags = select::TargetFlags {
+        references: &references,
+        filters: &filters,
+        all,
+        room: false,
+    };
+    let selected = match select::select_targets(&ctx, "restart", flags)? {
+        select::Targets::Done => return Ok(()),
+        select::Targets::Selected(selected) => selected,
+        select::Targets::References(references) => {
+            let [reference] = references.as_slice() else {
+                return Err(UsageError::new(
+                    "name one reference: rimz agents restart <ref>, or select with --filter"
+                        .to_owned(),
+                )
+                .into());
+            };
+            if !all {
+                let snapshot = ctx.fold_agent_context(ctx.alive_snapshot()?);
+                let agent = crate::cli::resolve_agent_one(
+                    &ctx.store,
+                    &snapshot,
+                    reference,
+                    None,
+                    &ctx.address_context(),
+                )
+                .map_err(|mut err| {
+                    if let Some(ambiguity) = err.downcast_mut::<render::AmbiguousAgents>() {
+                        ambiguity.offer_all("restart");
+                    }
+                    err
+                })?
+                .clone();
+                return restart_one(&ctx, &snapshot, agent, None, account, no_continue, globals);
+            }
+            let snapshot = ctx.alive_snapshot()?;
+            let reader = ctx.address_context();
+            rimz::address::resolve_many(&snapshot, reference, None, &reader)?
+                .into_iter()
+                .map(|agent| select::Selected {
+                    address: rimz::address::paste_address(agent, &snapshot, &reader),
+                    agent: Some((agent.kind.clone(), agent.agent_id.clone())),
+                })
+                .collect()
+        }
+    };
+    let mut selected = selected;
+    select::identify(&ctx, &ctx.alive_snapshot()?, &mut selected);
+    let mut failed = 0;
+    for target in &selected {
+        // Each restart relaunches a pane, so the next agent is read again after it.
+        let snapshot = ctx.fold_agent_context(ctx.alive_snapshot()?);
+        let restarted = select::reread(&ctx, &snapshot, target).and_then(|agent| {
+            let agent = agent.clone();
+            restart_one(
+                &ctx,
+                &snapshot,
+                agent,
+                Some(&target.address),
+                account.clone(),
+                no_continue,
+                globals,
+            )
+        });
+        if let Err(err) = restarted {
+            writeln!(render::out(), "error {}: {err:#}", target.address)?;
+            failed += 1;
+        }
+    }
+    select::batch_result(failed)
+}
+
+/// Restart one agent, read just before: a workflow step through its run, any
+/// other agent in place, printing its receipt. A batch passes the selected
+/// address, which starts the receipt, since a fresh restart names a new handle.
+fn restart_one(
+    ctx: &Ctx,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    agent: AgentState,
+    selected: Option<&str>,
+    account: Option<rimz::ids::LoginName>,
+    no_continue: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let ownership = workflow_pin(&ctx.store, &agent)?;
     if let WorkflowPin::Current {
         run,
@@ -59,12 +141,13 @@ pub(super) fn restart_agent(
         }
         writeln!(
             crate::cli::render::out(),
-            "restarting step {step} of run {run} via rimz workflow restart {run} --continue"
+            "{}restarting step {step} of run {run} via rimz workflow restart {run} --continue",
+            receipt_prefix(selected)
         )?;
         return crate::cli::workflow::restart(run.as_str(), true, globals);
     }
     let former_workflow = ownership.former()?;
-    let peers = rimz::address::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(snapshot);
     let caller = resolve_caller(&snapshot.agents);
     let focus = LaunchFocus::resolve(false, caller.as_ref());
     let restart = AgentRestart {
@@ -74,7 +157,7 @@ pub(super) fn restart_agent(
         caller: rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents).ok(),
     };
     let message = restart_resolved(
-        &ctx,
+        ctx,
         &agent,
         &peers,
         &snapshot.agents,
@@ -88,10 +171,18 @@ pub(super) fn restart_agent(
         Some(restart),
     )?;
     if let Some(pin) = former_workflow {
-        clear_former_workflow_pin(&ctx, &agent, &pin)?;
+        clear_former_workflow_pin(ctx, &agent, &pin)?;
     }
-    writeln!(crate::cli::render::out(), "{message}")?;
+    writeln!(
+        crate::cli::render::out(),
+        "{}{message}",
+        receipt_prefix(selected)
+    )?;
     Ok(())
+}
+
+fn receipt_prefix(selected: Option<&str>) -> String {
+    selected.map_or_else(String::new, |address| format!("{address}: "))
 }
 
 #[expect(

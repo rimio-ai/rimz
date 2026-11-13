@@ -713,6 +713,7 @@ fn stop_when_idle_takes_an_optional_duration_or_off() {
             reference,
             all,
             when_idle,
+            ..
         }) = parse_agents(&argv).command
         else {
             panic!("stop")
@@ -1348,7 +1349,6 @@ mod parse {
                 &["rimz", "show", "swift-otter", "--ansi"],
                 MissingRequiredArgument,
             ),
-            (&["rimz", "refresh", "@codex", "--all"], ArgumentConflict),
             (
                 &["rimz", "claude", "hi", "--output-format", "json"],
                 MissingRequiredArgument,
@@ -3137,4 +3137,19 @@ fn agent_with_status(id: &str, status: AgentStatus, phase: TurnPhase, activity: 
         worktree_branch: Some("main".to_owned()),
         ..rimz::testkit::agent_state("claude", id, at)
     }
+}
+
+#[test]
+fn mark_completes_its_three_marks() {
+    let mut command = crate::cli::Cli::command();
+    let args = ["rimz", "agents", "mark", "@otter", ""]
+        .map(std::ffi::OsString::from)
+        .to_vec();
+    let candidates = clap_complete::engine::complete(&mut command, args, 4, None).unwrap();
+    let values = candidates
+        .iter()
+        .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+        .filter(|value| !value.starts_with('-'))
+        .collect::<Vec<_>>();
+    assert_eq!(values, ["read", "unread", "alert"]);
 }

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::runs_lookup::{newest_run_by_ref, newest_run_for_agent};
-use crate::cli::render;
+use crate::cli::{render, select};
 use rimz::ids::PaneId;
 use rimz::sidebar::produce::hosting::{Hosting, HostingRead, read_hosting};
 use rimz::store::runtime::{AgentLiveness, OWNER_EXIT_BOUND, agent_liveness};
@@ -20,6 +20,9 @@ pub(in crate::cli) struct TreeStop {
     root_stopped: bool,
     child_receipts: Vec<String>,
     failures: Vec<String>,
+    /// Each row this tree closed or stopped, under the key it was asked for and the key
+    /// it is now; a batch skips them when a later line names one.
+    reached: Vec<AgentKey>,
 }
 
 impl TreeStop {
@@ -175,10 +178,35 @@ pub(in crate::cli) fn resume_command(
 
 pub(super) fn stop_agent(
     reference: Option<String>,
+    filters: Vec<String>,
     all: bool,
     when_idle: Option<WhenIdle>,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    if select::filter_help(&filters)? {
+        return Ok(());
+    }
+    let references = Vec::from_iter(reference.clone());
+    if select::selects(&references, &filters) {
+        if when_idle.is_some() {
+            return Err(crate::cli::usage::UsageError::new(
+                "--when-idle takes one reference: rimz agents stop <ref> --when-idle <duration>"
+                    .to_owned(),
+            )
+            .into());
+        }
+        let ctx = Ctx::open(globals)?;
+        let flags = select::TargetFlags {
+            references: &references,
+            filters: &filters,
+            all,
+            room: false,
+        };
+        return match select::select_targets(&ctx, "stop", flags)? {
+            select::Targets::Selected(selected) => stop_selected(&ctx, globals, selected),
+            select::Targets::References(_) | select::Targets::Done => Ok(()),
+        };
+    }
     let (reference, when_idle) = normalize_stop(reference, when_idle)?;
     if let Some(when_idle) = when_idle {
         return request_idle_stop(&reference, when_idle, globals);
@@ -188,18 +216,14 @@ pub(super) fn stop_agent(
     let snapshot = ctx.cached_snapshot()?;
     let current_channel = &ctx.address_context();
     if all && reference != "@me" {
-        let agents = rimz::address::resolve_many(&snapshot, &reference, None, current_channel)?;
-        let stops = stop_resolved(&ctx, globals, &snapshot, &agents)?;
-        let mut failed = false;
-        let mut out = render::out();
-        for (agent, stop) in agents.into_iter().zip(stops) {
-            let label = rimz::address::paste_address(agent, &snapshot, current_channel);
-            failed |= stop.report(&mut out, &label)?;
-        }
-        if failed {
-            std::process::exit(1);
-        }
-        return Ok(());
+        let selected = rimz::address::resolve_many(&snapshot, &reference, None, current_channel)?
+            .into_iter()
+            .map(|agent| select::Selected {
+                address: rimz::address::paste_address(agent, &snapshot, current_channel),
+                agent: Some((agent.kind.clone(), agent.agent_id.clone())),
+            })
+            .collect();
+        return stop_selected(&ctx, globals, selected);
     }
     let live_agent_result =
         crate::cli::resolve_agent_one(store, &snapshot, &reference, None, current_channel).map_err(
@@ -250,6 +274,71 @@ pub(super) fn stop_agent(
         return Ok(());
     }
     live_agent_result.map(|_| ())
+}
+
+/// Stop the run a stdin line names, as a positional reference falls back to
+/// one. `Err(None)` when it names no run either; `Err(Some(_))` when the lookup
+/// or the stop failed.
+fn stop_run_line(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    address: &str,
+) -> std::result::Result<(), Option<anyhow::Error>> {
+    let run = newest_run_by_ref(&ctx.store, address, None)
+        .map_err(Some)?
+        .filter(|run| run.peer.is_none())
+        .ok_or(None)?;
+    supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, &run)
+        .map_err(|err| Some(err.into()))
+}
+
+/// Stop each selected agent in turn, reading it again just before its stop,
+/// with one receipt line per agent labelled by its selected address. An agent
+/// an earlier tree in the batch already closed is skipped; a stdin line that
+/// names no agent falls back to a run, as a positional reference does.
+fn stop_selected(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    mut selected: Vec<select::Selected>,
+) -> Result<()> {
+    select::identify(ctx, &ctx.cached_snapshot()?, &mut selected);
+    let mut closed = HashSet::new();
+    let mut failed = 0;
+    let mut out = render::out();
+    for target in &selected {
+        if target
+            .agent
+            .as_ref()
+            .is_some_and(|key| closed.contains(key))
+        {
+            continue;
+        }
+        let snapshot = ctx.cached_snapshot()?;
+        let agent = match select::reread(ctx, &snapshot, target) {
+            Ok(agent) => agent,
+            Err(err) => {
+                let stopped = match target.agent {
+                    Some(_) => Err(err),
+                    None => stop_run_line(ctx, globals, &target.address)
+                        .map_err(|run_err| run_err.unwrap_or(err)),
+                };
+                match stopped {
+                    Ok(()) => writeln!(out, "stopped {} (run)", target.address)?,
+                    Err(err) => {
+                        writeln!(out, "error {}: {err:#}", target.address)?;
+                        failed += 1;
+                    }
+                }
+                continue;
+            }
+        };
+        let stop = stop_resolved(ctx, globals, &snapshot, &[agent])?.remove(0);
+        closed.extend(stop.reached.iter().cloned());
+        if stop.report(&mut out, &target.address)? {
+            failed += 1;
+        }
+    }
+    select::batch_result(failed)
 }
 
 /// Arm, replace, or withdraw the agent's soft stop; the room host and
@@ -850,6 +939,10 @@ impl Stopper<'_> {
                     .push(format!("stopped {} (subagent of {parent})", ending.label)),
                 (None, Ok(())) => stop.root_stopped = true,
                 (_, Err(reason)) => stop.failures.push(format!("{}: {reason}", ending.label)),
+            }
+            if ending.closed || outcome.is_ok() {
+                stop.reached.push(ending.asked.clone());
+                stop.reached.push(ending.key.clone());
             }
             if outcome.is_err() && !(ending.closed && !ending.still_hosted) {
                 continue;

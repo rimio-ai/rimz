@@ -4955,7 +4955,8 @@ fn stop_non_resumable_agent_omits_resume_clause() {
 
 /// A stop says which pane stays open: a root whose close fails was not stopped, is not
 /// signalled, and keeps its idle-stop request; a root that closed while its child failed
-/// was stopped and retired, and the command still fails naming the child.
+/// was stopped and retired, and the command still fails naming the child; a stdin batch
+/// that names the stopped root still stops the rest and exits 1.
 #[test]
 fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
     let env = Env::new();
@@ -5052,6 +5053,26 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
         "a root that closed retires its subscriptions"
     );
     assert!(process.try_wait().unwrap().is_some(), "SIGTERM ended it");
+
+    // `late` has its own pane and owner, so its stop can confirm its process is gone.
+    let late = dummy_agent_process();
+    register_stop_agent(&env, "late", "terminal_4", Some(agent_owner("late", &late)));
+    reap_later(late);
+    let panes = list_stop_panes(&env, &[4]);
+    let mut command = stop_command(&env, &panes, 1000);
+    command
+        .args(["agents", "stop", "-", "--all"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("agents stop -");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"@parent\n@late\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("error @parent: "), "{text}");
+    assert!(text.contains("stopped @late"), "the batch goes on: {text}");
 }
 
 /// A failed close counts as a stop once a fresh read finds the agent's process dead, the

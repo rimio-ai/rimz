@@ -1,8 +1,8 @@
 use super::*;
 
 use super::runs_lookup::{agent_name, newest_run_by_ref};
-use crate::cli::render;
 use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
+use crate::cli::{render, select};
 use rimz::agents::TurnCompletion;
 use rimz::message::announce::WaitCaller;
 use rimz::message::turn_wait::{TurnWaitReason, TurnWaitView};
@@ -69,6 +69,37 @@ fn wait_reason_text(reason: &TurnWaitReason, now: jiff::Timestamp) -> Option<Str
         TurnWaitReason::MessageQueued => "message queued; this rest is not its finish".to_owned(),
         TurnWaitReason::Paused => "paused".to_owned(),
         TurnWaitReason::NoTurnStarted => "no turn started".to_owned(),
+    })
+}
+
+/// What `agents wait` waits on: its positional references, or each agent
+/// `--filter` or stdin selects by the address `agents list -q` prints, which
+/// the wait resolves again on every poll. `None` when nothing was selected.
+pub(super) fn wait_references(
+    references: Vec<String>,
+    filters: &[String],
+    all: bool,
+    globals: &GlobalFlags,
+) -> Result<Option<Vec<String>>> {
+    if !select::selects(&references, filters) {
+        return Ok(Some(references));
+    }
+    if select::filter_help(filters)? {
+        return Ok(None);
+    }
+    let ctx = Ctx::open(globals)?;
+    let flags = select::TargetFlags {
+        references: &references,
+        filters,
+        all,
+        room: false,
+    };
+    Ok(match select::select_targets(&ctx, "wait", flags)? {
+        select::Targets::References(references) => Some(references),
+        select::Targets::Selected(selected) => {
+            Some(selected.into_iter().map(|target| target.address).collect())
+        }
+        select::Targets::Done => None,
     })
 }
 
