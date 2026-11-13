@@ -621,7 +621,7 @@ impl Node {
 }
 
 impl Definition {
-    /// Compile cleaned authored tables, `@break` step included.
+    /// Compile the lowered kind tables, `@break` step included.
     pub(super) fn compile(authored: WorkflowSpec) -> Self {
         let checks = authored
             .checks

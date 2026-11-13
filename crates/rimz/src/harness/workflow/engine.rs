@@ -72,7 +72,7 @@ pub enum DefinitionSource<'a> {
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
     /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
     /// the project root, where the task fired. `capacity_until` is the fire's default capacity
-    /// give-up, for an agent step that sets no `capacity-wait`.
+    /// give-up, for an agent step that sets no `admission.give-up`.
     Inline {
         task: String,
         definition: InlineDefinition,
