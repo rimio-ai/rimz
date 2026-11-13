@@ -23,7 +23,7 @@ pub(super) fn report_wait_reason(
     if changed && let Some(text) = text {
         let prefix = match previous {
             Some(TurnWaitReason::NoTurnStarted) => "",
-            Some(TurnWaitReason::WakeInFlight) => "it has a ",
+            Some(TurnWaitReason::WakeInFlight | TurnWaitReason::MessageQueued) => "it has a ",
             _ => "it is ",
         };
         write!(err, "waiting on {address}: {prefix}{text}")?;
@@ -64,6 +64,7 @@ fn wait_reason_text(reason: &TurnWaitReason, now: jiff::Timestamp) -> Option<Str
         ),
         TurnWaitReason::Sleeping(_) => "sleeping".to_owned(),
         TurnWaitReason::WakeInFlight => "wake in flight".to_owned(),
+        TurnWaitReason::MessageQueued => "message queued; this rest is not its finish".to_owned(),
         TurnWaitReason::Paused => "paused".to_owned(),
         TurnWaitReason::NoTurnStarted => "no turn started".to_owned(),
     })

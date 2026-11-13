@@ -29,8 +29,8 @@ use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{
-    EarlierAnswer, FollowUpTurn, ReportTo, RunLifecycle, RunRecord, RunSession, RunStatus,
-    RunStoreErr, RunVerify,
+    EarlierAnswer, FollowUpTurn, ParkCause, ReportTo, RunLifecycle, RunRecord, RunSession,
+    RunStatus, RunStoreErr, RunVerify,
 };
 use crate::store::{
     Store,
@@ -369,7 +369,7 @@ pub struct RunLiveStatus {
     pub pane_id: Option<PaneId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
-    /// Set while the run is open only because its session is owed a wake.
+    /// Set while the run is open only because its session is owed a wake or a prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -405,11 +405,15 @@ pub enum ParkCheck {
     Live,
     /// Nothing owed under this `parked_at`; an identical second check settles.
     Stranded(Timestamp),
-    /// This check failed the run.
+    /// This check settled the run: completed a park on a withdrawn message,
+    /// or failed any other park.
     Settled,
 }
 
 /// Settle only after two nothing-owed checks under the same park timestamp.
+/// A park on a message completes with the parked turn's answer, since the
+/// prompt it waited for was withdrawn before opening a turn; any other park,
+/// or one an older binary took with no cause, fails as a lost wake.
 ///
 /// The CAS protects work resuming between the read and lock: the first
 /// in-turn signal (`TurnStarted`, `ToolUsed`, or `AwaitingInput`) clears
@@ -446,8 +450,14 @@ pub fn settle_stranded_park(
         store.runtime_paths(),
         &record.run_id,
         |record, now| {
-            if record.parked_at != Some(parked_at) || !record.mark_terminal(RunStatus::Failed, now)
-            {
+            if record.parked_at != Some(parked_at) {
+                return false;
+            }
+            // A withdrawn message leaves the parked turn's answer as the finish.
+            if record.parked_on == Some(ParkCause::Message) {
+                return record.mark_terminal(RunStatus::Completed, now);
+            }
+            if !record.mark_terminal(RunStatus::Failed, now) {
                 return false;
             }
             if record.failure_tail.is_none() {
@@ -1550,11 +1560,7 @@ fn fold_lifecycle(
                 joined_at: None,
             });
         }
-        record.deadline_at = record.timeout.map(|timeout| now + timeout).or_else(|| {
-            record
-                .deadline_at
-                .map(|deadline| now + (deadline - started_at))
-        });
+        rearm_deadline(record, started_at, now);
         record.report_to = ReportTo::Launcher;
         record.follow_ups += 1;
         record.follow_up = Some(FollowUpTurn {
@@ -1562,12 +1568,12 @@ fn fold_lifecycle(
             prompt: None,
         });
         record.opened_by.clear();
-        record.deadline_notice_at = None;
         record.limit_hold = None;
         record.interrupted_at = None;
         record.status = RunStatus::Running;
         record.completed_at = None;
         record.parked_at = None;
+        record.parked_on = None;
         record.joined_at = None;
         record.report_message_id = None;
         record.last_message = None;
@@ -1599,6 +1605,7 @@ fn fold_lifecycle(
         {
             record.status = RunStatus::Running;
             record.parked_at = Some(now);
+            record.parked_on = Some(owed.park_cause());
             // The turn ended cleanly: the park, not the window, now holds the run.
             record.interrupted_at = None;
             tracing::info!(
@@ -1623,6 +1630,7 @@ fn fold_lifecycle(
         };
         record.completed_at = Some(now);
         record.parked_at = None;
+        record.parked_on = None;
         return LifecycleFold::NewlyTerminal;
     }
     // The first in-turn signal resumes work: a keepalive's turn start is a
@@ -1633,16 +1641,24 @@ fn fold_lifecycle(
             | LifecycleSignal::ToolUsed { .. }
             | LifecycleSignal::AwaitingInput { .. }
     );
+    // A hold ends before a message rearm, so its unused span cannot shorten
+    // the rearmed deadline.
+    let unheld = in_turn && end_limit_hold(record, observed_at, now);
     let unparked = record.parked_at.is_some() && in_turn;
     if unparked {
         record.parked_at = None;
+        // A message park stands in for the reopen its prompt's turn would
+        // otherwise be, so that turn gets the reopen's fresh deadline.
+        if record.parked_on.take() == Some(ParkCause::Message) {
+            let started_at = record.answer_started_at();
+            rearm_deadline(record, started_at, now);
+        }
         // Sealed here, not at park, so a replayed Stop of the parked turn
         // still replaces its own text rather than adding a copy.
         if let Some(answer) = record.last_message.as_ref().filter(|text| !text.is_empty()) {
             record.parked_answer = Some(answer.clone());
         }
     }
-    let unheld = in_turn && end_limit_hold(record, observed_at, now);
     let turn_opened = holds_interrupts
         && matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
         && stamp_turn_start(record, observed_at);
@@ -1665,6 +1681,18 @@ fn fold_lifecycle(
             .clone_from(&observation.transcript_path);
     }
     LifecycleFold::Updated
+}
+
+/// Give the turn opening at `now` the run's whole timeout again: `deadline_at`
+/// from `timeout`, else the span the old deadline allowed from `started_at`,
+/// with any claimed stop rung cleared.
+fn rearm_deadline(record: &mut RunRecord, started_at: Timestamp, now: Timestamp) {
+    record.deadline_at = record.timeout.map(|timeout| now + timeout).or_else(|| {
+        record
+            .deadline_at
+            .map(|deadline| now + (deadline - started_at))
+    });
+    record.deadline_notice_at = None;
 }
 
 /// Hold an interrupted subagent turn open for a new turn rather than settle it:
@@ -1793,6 +1821,7 @@ fn fold_stopped_turn(record: &mut RunRecord, signal: &LifecycleSignal, now: Time
     });
     if stopped.is_some() {
         record.parked_at = None;
+        record.parked_on = None;
     }
     let changed = record.stopped_turn != stopped;
     record.stopped_turn = stopped;

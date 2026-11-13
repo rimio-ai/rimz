@@ -79,6 +79,110 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
 }
 
 #[test]
+fn a_prompt_on_its_way_keeps_a_rested_agent_open() {
+    use crate::store::message::{AfterCondition, MessageBody};
+
+    let mut agent = crate::testkit::agent_state("claude", "sess-message", Timestamp::UNIX_EPOCH);
+    agent.status = AgentStatus::Success;
+    agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let now = Timestamp::now();
+    let peer = MessageSender::Agent {
+        kind: crate::ids::AgentKind::new_unchecked("codex"),
+        agent_id: Some("sess-peer".into()),
+        name: Some("peer".to_owned()),
+        profile: None,
+        role: None,
+        channel: None,
+    };
+    let record = |sender: MessageSender, status| {
+        let mut message = MessageRecord::new(
+            workspace.clone(),
+            &agent,
+            "rebase first".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(sender);
+        message.status = status;
+        message.updated_at = now;
+        message
+    };
+    let view = |message: MessageRecord| TurnWaitView {
+        snapshot: SidebarSnapshot::build_with_agents(workspace.clone(), vec![agent.clone()], now),
+        messages: vec![message],
+        now,
+        card_status: CardStatus::from_demotion(ParkDemotion::default()),
+    };
+    for sender in [MessageSender::Human, peer.clone()] {
+        for status in [
+            MessageStatus::Queued,
+            MessageStatus::Claimed,
+            MessageStatus::Sent,
+        ] {
+            let view = view(record(sender.clone(), status));
+            assert!(view.message_in_flight(&agent), "{sender:?} {status:?}");
+            assert_eq!(view.completion(&agent), TurnCompletion::Open);
+            assert_eq!(view.reason(&agent), Some(TurnWaitReason::MessageQueued));
+            let mut idle = agent.clone();
+            idle.status = AgentStatus::Idle;
+            assert_eq!(view.reason(&idle), Some(TurnWaitReason::MessageQueued));
+        }
+    }
+    let mut overdue = record(MessageSender::Human, MessageStatus::Sent);
+    overdue.updated_at = now - overdue.body.delivery_window() - std::time::Duration::from_secs(60);
+    overdue.last_sent_at = Some(overdue.updated_at);
+    let mut command = record(peer.clone(), MessageStatus::Queued);
+    command.body = MessageBody::Command;
+    let mut scheduled = record(MessageSender::Human, MessageStatus::Queued);
+    scheduled.not_before = Some(now + std::time::Duration::from_secs(600));
+    let mut unlatched = record(MessageSender::Human, MessageStatus::Queued);
+    unlatched.after.push(AfterCondition {
+        kind: crate::ids::AgentKind::new_unchecked("codex"),
+        agent_id: "sess-peer".into(),
+        agent_name: None,
+        address: "@peer".to_owned(),
+        met_at: None,
+    });
+    let mut other = record(MessageSender::Human, MessageStatus::Queued);
+    other.agent_id = "sess-other".into();
+    other.agent_name = None;
+    for (label, message) in [
+        (
+            "delivered",
+            record(MessageSender::Human, MessageStatus::Delivered),
+        ),
+        ("timed out", record(peer.clone(), MessageStatus::TimedOut)),
+        (
+            "system",
+            record(MessageSender::System, MessageStatus::Queued),
+        ),
+        (
+            "harness",
+            record(
+                MessageSender::Harness {
+                    notice: HarnessNotice::Stage,
+                },
+                MessageStatus::Queued,
+            ),
+        ),
+        ("sent past its hold", overdue),
+        ("command", command),
+        ("scheduled", scheduled),
+        ("unlatched", unlatched),
+        ("another card", other),
+    ] {
+        let view = view(message);
+        assert!(!view.message_in_flight(&agent), "{label}");
+        assert_eq!(
+            view.completion(&agent),
+            TurnCompletion::Completed,
+            "{label}"
+        );
+        assert_eq!(view.reason(&agent), None, "{label}");
+    }
+}
+
+#[test]
 fn turn_wait_reason_projects_each_open_status() {
     let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
     let view = TurnWaitView {

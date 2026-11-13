@@ -280,8 +280,8 @@ fn open_fresh(
                 .map(|timeout| record.started_at.checked_add(timeout))
                 .transpose()
                 .context("computing supervised run deadline")?;
+            record.timeout = leader.timeout;
             if leader.subagent {
-                record.timeout = leader.timeout;
                 record.warn.clone_from(&leader.warn);
                 record.grace = leader.grace.filter(|grace| !grace.is_zero());
             }

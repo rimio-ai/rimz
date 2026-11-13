@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context as _;
+use jiff::Timestamp;
 use tracing::debug;
 
 use crate::disk::paths::RuntimePaths;
@@ -126,7 +127,7 @@ impl RunWaiter {
     ) -> anyhow::Result<RunRecord> {
         let sock = adopt(self.sock.try_clone().context("cloning run wait socket")?)
             .context("adopting run wait socket")?;
-        let deadline = timeout.map(|duration| std::time::Instant::now() + duration);
+        let local_deadline = timeout.map(|duration| std::time::Instant::now() + duration);
         loop {
             let record = crate::harness::run::load(store.paths(), &self.expected.run_id)?;
             if let Some(observer) = observer.as_deref_mut() {
@@ -142,7 +143,7 @@ impl RunWaiter {
                 }
                 return Ok(record);
             }
-            let Some(wait) = next_wait(deadline) else {
+            let Some(wait) = next_wait(record_deadline(&record).or(local_deadline)) else {
                 let record = crate::harness::run::timeout(
                     store.paths(),
                     store.runtime_paths(),
@@ -156,6 +157,18 @@ impl RunWaiter {
             let _ = wait_for_run_completion(&sock, &self.expected, Some(wait)).await?;
         }
     }
+}
+
+/// The record's `deadline_at` on the waiter's clock, converted at the present
+/// so a deadline the fold moves since the last poll moves the wait with it.
+fn record_deadline(record: &RunRecord) -> Option<std::time::Instant> {
+    let deadline = record.deadline_at?;
+    let now = std::time::Instant::now();
+    let left = Timestamp::now().duration_until(deadline);
+    Some(match Duration::try_from(left) {
+        Ok(left) => now + left,
+        Err(_) => now,
+    })
 }
 
 fn next_wait(deadline: Option<std::time::Instant>) -> Option<Duration> {
@@ -476,5 +489,30 @@ mod tests {
 
         assert_eq!(first.status, RunStatus::Canceled);
         assert_eq!(second.updated_at, first.updated_at, "cancel writes once");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiter_times_out_by_the_records_deadline_as_it_moves() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let mut record = fixture.record.clone();
+        record.deadline_at = Some(Timestamp::now() + Duration::from_secs(1));
+        crate::harness::run::create(fixture.store.paths(), &record).expect("arm deadline");
+        let waiter = fixture.waiter(RunCancellation::new());
+        let paths = fixture.store.paths().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            record.deadline_at = Some(Timestamp::now() + Duration::from_secs(30));
+            crate::harness::run::create(&paths, &record).expect("rearm deadline");
+            tokio::time::sleep(Duration::from_millis(1300)).await;
+            record.status = RunStatus::Completed;
+            crate::harness::run::create(&paths, &record).expect("complete run");
+        });
+
+        let record = waiter
+            .wait_terminal(&fixture.store, Some(Duration::from_secs(1)), None)
+            .await
+            .expect("waited past the original deadline");
+
+        assert_eq!(record.status, RunStatus::Completed);
     }
 }

@@ -798,9 +798,9 @@ The keepalive is cache retention, never durable correctness. The activity heartb
 
 ## The shared turn reader
 
-[`message/turn_wait.rs`](../../../crates/rimz/src/message/turn_wait.rs) answers whether an agent's turn has completed, and if not, why. `rimz agents wait` reads it on every poll, and the supervised-run owed predicate (`harness::owed`) reads its wake and soft-compaction terms.
+[`message/turn_wait.rs`](../../../crates/rimz/src/message/turn_wait.rs) answers whether an agent's turn has completed, and if not, why. `rimz agents wait` reads it on every poll, and the supervised-run owed predicate (`harness::owed`) reads its wake, prompt and soft-compaction terms.
 
-`TurnWaitView` loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, reads as `Sleeping`. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. The shared `harness::auto_continue::CardStatus` reader makes a displayed provider pause read as `Failed` once the card's `ParkDemotion` counts it as spent; budget parks stay `Paused`. It builds that evidence lazily, at most once per reader, only for a status read of a provider pause without a budget park, using the snapshot's read instant. The turn settles through `TurnCompletion`:
+`TurnWaitView` loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, or with a person's or an agent's prompt on its way (`message_in_flight`, below), reads as `Sleeping`, so that rest is not its finish. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. The shared `harness::auto_continue::CardStatus` reader makes a displayed provider pause read as `Failed` once the card's `ParkDemotion` counts it as spent; budget parks stay `Paused`. It builds that evidence lazily, at most once per reader, only for a status read of a provider pause without a budget park, using the snapshot's read instant. The turn settles through `TurnCompletion`:
 
 | Observed | Turn |
 | --- | --- |
@@ -808,9 +808,11 @@ The keepalive is cache retention, never durable correctness. The activity heartb
 | `Failed` (including a non-pausing provider error or a provider pause the card counts as spent) | Failed |
 | `Running`, `Waiting`, a recoverable provider pause or budget park (`Paused`), or `Sleeping` | Open |
 
-`TurnWaitView::reason` names the blocker of an open turn from the same view: a person's ask, pending waits, a wake in flight, a pause, no turn yet, or a running turn.
+`TurnWaitView::reason` names the blocker of an open turn from the same view: a person's ask, pending waits, a wake in flight, a message queued (`MessageQueued`), a pause, no turn yet, or a running turn.
 
-`TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. The view captures one clock beside its queue read and excludes a `Sent` record past its hold deadline, deferrals included, without reconciliation. Every reader counts `Wait` and `Signal`; the supervised-run owed predicate passes `true` to also count `SubagentReport`.
+`TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. The view captures one clock beside its queue read and excludes a `Sent` record past its hold deadline, deferrals included, without reconciliation. Every reader counts `Wait` and `Signal`; the supervised-run owed predicate passes `true` to also count every fleet digest (`SubagentReport`, `AgentReport`) and `TeamReport`.
+
+`TurnWaitView::message_in_flight(agent)` is the one prompt test, read by the rest hold above and by the owed predicate's last term: a record for the card from a person or an agent (`MessageSender::is_conversation`), with a `Prompt` body, non-terminal, deliverable now (`is_deliverable`), and, if `Sent`, inside its hold or held by compaction as a `Sent` wake is. A command opens no turn, so a manual `rimz agents compact` never counts; a `--no-from` send is stored as `System` text and never counts; a record scheduled for later or with an unlatched `--after` or `--when` counts once it is due or latched. A `Sent` prompt counts because one lifecycle frame folds the supervised run before it acknowledges delivery, so the Stop's owed read can find the record already claimed and sent by an independent sweep.
 
 ## Scheduling and wakeups
 

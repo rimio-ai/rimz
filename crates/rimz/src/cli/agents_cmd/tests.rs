@@ -2755,6 +2755,7 @@ fn wait_reason_reports_only_changes_and_resets_after_running() {
         TurnWaitReason::Running,
         TurnWaitReason::Paused,
         TurnWaitReason::NoTurnStarted,
+        TurnWaitReason::MessageQueued,
     ] {
         wait::report_wait_reason(&mut err, &mut previous, Some(reason), "@coder#a").unwrap();
     }
@@ -2764,6 +2765,7 @@ fn wait_reason_reports_only_changes_and_resets_after_running() {
             "waiting on @coder#a: it is paused\n",
             "waiting on @coder#a: it is paused\n",
             "waiting on @coder#a: no turn started\n",
+            "waiting on @coder#a: it has a message queued; this rest is not its finish\n",
         )
     );
 }
