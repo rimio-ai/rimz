@@ -36,8 +36,8 @@ enum Action {
 
 pub(super) const WATCH_LOST_GRACE_SECS: i64 = 30;
 pub(super) const RESIDENT_RETRY_SECS: i64 = 5 * 60;
-/// How long a stamped `fire-at` row's runner may hold no lock and record
-/// nothing before the pass dispatches the row again.
+/// How long a stamped `fire-at` row's runner, or a fired one-shot condition's,
+/// may hold no lock and record nothing before the pass dispatches the row again.
 const FIRE_AT_RETRY_SECS: i64 = 5 * 60;
 const WORKFLOW_TICK_SECS: i64 = 60;
 const REPORT_RETRY_MAX_SECS: i64 = 60 * 60;
@@ -341,6 +341,23 @@ fn fire_tasks(
         .collect();
     let when_states = last_when_states(runtime);
     let windows = when::WindowReadings::new(Some(runtime), now.timestamp());
+    let lost_runners: BTreeSet<String> = tasks
+        .iter()
+        .filter(|(name, task)| {
+            state.get(*name).is_some_and(|stamp| {
+                (fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
+                    || (once_condition_retry_due(task, *stamp, now.timestamp())
+                        && latched(task, when_states.get(*name))))
+                    && ArmState::resolve(
+                        arming.get(&task.key(name)),
+                        task.source(),
+                        now.timestamp(),
+                    ) == ArmState::Live
+                    && runner_lost(runtime, name, task, *stamp)
+            })
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
     let verdicts = tasks
         .iter()
         .filter_map(|(name, task)| {
@@ -351,18 +368,17 @@ fn fire_tasks(
                 return None;
             }
             match &task.trigger().as_ref().ok()?.trigger {
-                Trigger::Condition { expr, hold } => {
+                Trigger::Condition { expr, .. } => {
                     let scope = scoped[name]
                         .checkout
                         .clone()
                         .unwrap_or_else(|| task.entry().run_dir());
                     // A task fired on a true reading cannot fire again without a retry, so
                     // fenced and true plan alike there and the fence's git reads are skipped.
+                    // A lost one-shot runner's retry is a fire, so it reads the fence.
                     let refire_blocked = !task.entry().dedupes_checkout()
-                        && when_states.get(name).is_some_and(|state| {
-                            state.fired
-                                && state.matches_condition(expr, *hold, &task.entry().run_dir())
-                        });
+                        && latched(task, when_states.get(name))
+                        && !lost_runners.contains(name);
                     let verdict = when::evaluate(
                         expr,
                         &scope,
@@ -384,21 +400,6 @@ fn fire_tasks(
                 Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Watch(_) => None,
             }
         })
-        .collect();
-    let lost_runners = tasks
-        .iter()
-        .filter(|(name, task)| {
-            state.get(*name).is_some_and(|stamp| {
-                fire_at_retry_due(fire_at(task), *stamp, now.timestamp())
-                    && ArmState::resolve(
-                        arming.get(&task.key(name)),
-                        task.source(),
-                        now.timestamp(),
-                    ) == ArmState::Live
-                    && runner_lost(runtime, name, task, *stamp)
-            })
-        })
-        .map(|(name, _)| name.clone())
         .collect();
     let (mut actions, next_state, next_when) = plan(
         &tasks,
@@ -662,8 +663,12 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                let retry_due = task.entry().dedupes_checkout()
-                    && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
+                let retry_due = if task.entry().dedupes_checkout() {
+                    now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS
+                } else {
+                    once_condition_retry_due(task, last_fire, now.timestamp())
+                        && lost_runners.contains(name)
+                };
                 if (!state.fired || retry_due)
                     && elapsed >= hold.map_or(0, |duration| duration.as_millis())
                 {
@@ -726,9 +731,35 @@ fn fire_at_retry_due(instant: Option<Timestamp>, last_fire: Timestamp, now: Time
         && now.duration_since(last_fire).as_secs() >= FIRE_AT_RETRY_SECS
 }
 
+/// Whether a one-shot condition row was dispatched at least the retry grace ago.
+/// A deduping row keeps its own resident retry, and a fan-out row locks and
+/// keys its state per checkout, which `runner_lost` does not read.
+fn once_condition_retry_due(task: &LoadedTask, last_fire: Timestamp, now: Timestamp) -> bool {
+    task.trigger()
+        .as_ref()
+        .is_ok_and(|parsed| parsed.once && matches!(parsed.trigger, Trigger::Condition { .. }))
+        && !task.entry().dedupes_checkout()
+        && !task.entry().each_worktree
+        && now.duration_since(last_fire).as_secs() >= FIRE_AT_RETRY_SECS
+}
+
+/// Whether a condition row's latch is fired for its current condition.
+fn latched(task: &LoadedTask, state: Option<&WhenState>) -> bool {
+    let Ok(parsed) = task.trigger() else {
+        return false;
+    };
+    let Trigger::Condition { expr, hold } = &parsed.trigger else {
+        return false;
+    };
+    state.is_some_and(|state| {
+        state.fired && state.matches_condition(expr, *hold, &task.entry().run_dir())
+    })
+}
+
 /// Whether the runner dispatched at `stamp` is gone without a record: nothing
-/// holds the task's run lock and no attempt was recorded since. A `fire-at`
-/// row never fans out, so its runner locks under the bare name.
+/// holds the task's run lock and no attempt was recorded since. Neither a
+/// `fire-at` row nor a retried one-shot condition fans out, so its runner locks
+/// under the bare name.
 fn runner_lost(runtime: &RuntimePaths, name: &str, task: &LoadedTask, stamp: Timestamp) -> bool {
     let root = task.entry().resolved_root();
     super::run_lock::held(runtime, name).is_ok_and(|held| !held)

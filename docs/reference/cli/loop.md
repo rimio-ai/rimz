@@ -87,7 +87,7 @@ With `--each-worktree`, each RimZ-owned checkout has its own condition and `--fo
 | Raw cron | `--cron "<expression>"` | Per the expression. |
 | Poll-until | Stored rows only: `loop add` refuses `--until` | One run per cadence fire, until a run reaches its action or the deadline passes; a fire past the deadline records `expired`. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
-| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire. |
+| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire, and a `--once` fire that left no run behind fires again five minutes later while the condition still reads true. |
 
 The trigger values follow these rules:
 
@@ -508,7 +508,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `skipped`, whatever its guard answered, or a sibling signal | Neutral. |
 | `overlapped` by a fire whose scope already has an active or parked run, or `skipped` in older history (`workflow_skipped` in JSON); condition tasks with a recorded launch are silent instead | Neutral. |
 | `budget skipped`, `surplus skipped`, `account skipped`, `throttle skipped`, `capacity held`, `takeover blocked`, `overlapped`, `deferred`, `canceled`, `replaced`, `expired`, `target gone` | Neutral. |
-| `start failed`: the fire left no run behind, either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`, `--after-reset`) stays and is dispatched again five minutes later | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
+| `start failed`: the fire left no run behind, either the runner was never spawned, or it exited before it could record anything. An interval, calendar, or cron occurrence is spent without a run; a one-shot (`--in`, `--at`, `--after-reset`) stays and is dispatched again five minutes later, as is a `--once` condition (and `rimz wait --when`) that still reads true | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 ### Timeouts
 
