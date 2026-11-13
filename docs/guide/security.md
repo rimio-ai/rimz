@@ -68,7 +68,7 @@ The hash covers every field that can cause a process to run:
 - `[[agents]]`: `name`, `launch_command`, `env`
 - `[profiles.<name>]`: `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args`
 - `[subagents.profiles.<name>]`: the same command-running profile fields, for supervised children
-- `[agents.teams.<name>]`: `layout`, `consensus-file`, `append-system-prompt-files`, and each role's profile, signal bindings, and launch fields
+- `[agents.teams.<name>]`: `layout`, `consensus-file`, `consensus`, `append-system-prompt-files`, and each role's profile, signal bindings, and launch fields
 - `[tasks.<name>]`: the loop `agent`, `workflow`, `prompt`, `prompt-file`, `check` (a shell command), each `judge` (its `agent`, `prompt`, `prompt-file`, `recheck`, `timeout`), `verify`, `system-prompt-file`, and the run and schedule options. A task runs as a workflow, and every command its compiled graph runs comes from these fields
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value

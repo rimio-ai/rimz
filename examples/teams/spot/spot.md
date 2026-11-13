@@ -3,6 +3,7 @@ name: spot
 leader: coder
 layout: coder,reviewer
 stages: ["Implement","Review","Submit","Reflect"]
+consensus: [reflect]
 roles:
   - agent: spot-coder
     role: coder
