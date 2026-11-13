@@ -1708,11 +1708,13 @@ const PACKAGED_BUILD_INPUTS: &[&str] = &[
     "/presence/rimz-presence-zellij.wasm",
     "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/pricing/litellm-pricing.json",
+    "/logos",
 ];
 
 /// The crate `include` allowlist packages only its entries, so build.rs inputs
-/// must be force-listed or the published crate drops them and falls back at
-/// build time.
+/// and the files `include_str!` embeds from outside `src/` (the shipped
+/// provider logos) must be force-listed, or the published crate drops them and
+/// either falls back at build time or fails to compile.
 fn ensure_include_covers_build_inputs(manifest_toml: &str) -> Result<()> {
     let manifest: toml::Value =
         toml::from_str(manifest_toml).context("parsing crates/rimz/Cargo.toml")?;
