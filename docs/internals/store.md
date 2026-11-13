@@ -108,6 +108,7 @@ The directory is named by a `WorkspaceDirName`, never by the id. The name is `<b
 log/events.log.jsonl                          framed event log
 log/hook-ingress.log.jsonl                    pending raw hook frames
 log/hook-drainer.log                          drainer diagnostics
+log/wait-watch.log                            wait watcher diagnostics
 log/archive/events.<uuidv7>.jsonl             rotated logs
 records/hook-drain.json                       applied/claimed cursor with boot-aware write classes, frame ids, claim extent
 records/agents-carryover.json                 agent rollup carried across rotation

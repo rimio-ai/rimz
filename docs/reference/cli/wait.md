@@ -107,7 +107,7 @@ The watcher sees only whether the PID exists:
 
 - The process's exit status is unavailable. The verdict is `met after <ELAPSED>`, and `--on` is refused. A check-in reads `still not met after <ELAPSED>`.
 - An unreaped zombie, or another process that reuses the PID, keeps the wait open.
-- No output is captured. The output file stays empty unless the watcher itself fails.
+- No output is captured. The output file stays empty.
 - Canceling stops the watcher only. The process keeps running.
 
 The receipt, the list, and the sidebar read `pid <PID>`. The delivered message starts with `waited on pid <PID>`.
@@ -195,7 +195,7 @@ Another check-in: rimz wait --in 30m
 | `still not met after <ELAPSED>` | A PID, check, or file check-in. |
 | `watcher died after <ELAPSED>; the command may still be running or may have died with it` | The watcher vanished without reporting. |
 
-A command watch with an empty output file reads `· no output` after its verdict and names no file. A PID, check, or file watch with an empty file shows no output segment. A `--pid` wait captures no output of its process, so its file is empty unless the watcher itself wrote an error.
+A command watch with an empty output file reads `· no output` after its verdict and names no file. A PID, check, or file watch with an empty file shows no output segment. A `--pid` wait captures no output of its process, so its file is empty.
 
 The token count is an estimate from OpenAI's public `o200k_base` tokenizer, shown as `<1k`, `~1.2k`, `~22k`, or `~1.2M`. Claude's tokenizer is not published and typically counts somewhat higher. Past the first 1 MiB, the count is scaled from that sample.
 
@@ -203,7 +203,7 @@ A command longer than 120 characters is shortened in the middle in the message, 
 
 ### The output file
 
-The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, along with its own startup errors. `<reader>` is the name of the agent that armed the wait (a petname for a launched child). A check truncates the file before each run. A file pattern watch writes its matched line. The message shows this host path in every isolation level.
+The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, and nothing else: the watcher process's own errors and log lines go to the room's `~/.rimz/ws/<workspace-dir>/log/wait-watch.log`. `<reader>` is the name of the agent that armed the wait (a petname for a launched child). A check truncates the file before each run. A file pattern watch writes its matched line. The message shows this host path in every isolation level.
 
 Closing the room keeps the file. `rimz gc` removes it once no watcher runs and the file has not been written for 7 days. `rimz reset --hard` removes it at once, and so does a new agent that later takes the same handle. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
 

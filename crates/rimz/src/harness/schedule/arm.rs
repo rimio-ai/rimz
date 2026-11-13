@@ -182,11 +182,21 @@ pub fn arm_delivery(
                 crate::disk::paths::ensure_private_runtime_dir(dir)
                     .map_err(std::io::Error::other)?;
             }
-            let output = OpenOptions::new()
+            OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .open(path)?;
+            // The output file holds only what the watch writes; the watcher's
+            // own diagnostics go to the room's shared watcher log.
+            let log_path = paths.wait_watch_log();
+            if let Some(parent) = log_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let log = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)?;
             let mut command = Command::new(crate::proc::rimz_exe());
             command
                 .arg("--root")
@@ -195,7 +205,7 @@ pub fn arm_delivery(
                 .current_dir(&workspace.project_root)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::from(output))
+                .stderr(Stdio::from(log))
                 .process_group(0);
             // The watcher runs the agent's own command, which writes where the
             // agent was told its temp files live.

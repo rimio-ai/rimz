@@ -569,6 +569,12 @@ impl StatePaths {
         Class::Log.path_under(&self.root).join("hook-drainer.log")
     }
 
+    /// Where every watched wait's watcher process writes its own stderr, so
+    /// none of it reaches the wait's output file.
+    pub fn wait_watch_log(&self) -> PathBuf {
+        Class::Log.path_under(&self.root).join("wait-watch.log")
+    }
+
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.runs_dir)?;
         mkdir_p(&self.cache_dir)?;
