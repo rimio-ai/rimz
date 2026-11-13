@@ -161,7 +161,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
                 .unwrap();
             assert_eq!(
                 (edge.target.as_str(), edge.source),
-                (next, EdgeSource::Default)
+                (next, EdgeSource::Explicit)
             );
         }
     }

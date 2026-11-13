@@ -538,44 +538,6 @@ fn then_lists_validate_every_entry_and_direct_link() {
 }
 
 #[test]
-fn delays_between_listed_checks_are_ignored_but_closing_delays_remain() {
-    let (_home, dir) = fixture();
-    let text = VALID
-        .replace("lifecycle = \"turn\"", "lifecycle = 'until'")
-        .replace("then = \"pick\"", "then = ['pick', 'review']")
-        .replace("done = \"@done\"", "done = {to='review',delay='1m'}")
-        + "[checks.review]\nrun='true'\non.ok={to='@done',delay='30m'}\n";
-    fs::write(dir.join("workflow.toml"), &text).unwrap();
-    let spec = load(&dir).unwrap();
-    assert!(spec.authored().checks["pick"].on["done"].delay().is_none());
-    assert_eq!(
-        spec.authored().checks["review"].on["ok"].delay(),
-        Some("30m")
-    );
-    assert!(
-        spec.ignored()
-            .iter()
-            .any(|issue| issue.path == "checks.pick.on.done.delay"
-                && issue.message.contains("closes the held session")),
-        "{:?}",
-        spec.ignored()
-    );
-    let land = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nthen=['ruled','ruled-read']\n[checks.ruled]\nrun='true'\non={read='ruled-read',settled={to='@done',delay='30m'}}\n[checks.ruled-read]\nrun='true'\non.settled={to='@done',delay='30m'}\n";
-    fs::write(dir.join("workflow.toml"), land).unwrap();
-    let report = validate(&dir, &LoadedDefinitions::default(), None);
-    assert!(report.errors.is_empty(), "{report:?}");
-    let spec = load(&dir).unwrap();
-    assert_eq!(
-        spec.authored().checks["ruled"].on["settled"].delay(),
-        Some("30m")
-    );
-    assert_eq!(
-        spec.authored().checks["ruled-read"].on["settled"].delay(),
-        Some("30m")
-    );
-}
-
-#[test]
 fn validation_carries_check_and_step_summaries() {
     let (_home, dir) = fixture();
     let text = VALID

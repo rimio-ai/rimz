@@ -250,9 +250,7 @@ pub(super) fn prepare(
         persist(t, guard)?;
         return Ok(Some(Decision::Again));
     }
-    if super::super::close_after(t.spec, &t.record).is_some_and(|(at, _)| t.now < at)
-        || eligible(&observed).is_none()
-    {
+    if eligible(&observed).is_none() {
         if hold_changed {
             persist(t, guard)?;
         }

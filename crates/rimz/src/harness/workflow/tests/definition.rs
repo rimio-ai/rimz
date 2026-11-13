@@ -7,12 +7,6 @@ fn loaded(text: &str) -> Definition {
     load(&dir).unwrap()
 }
 
-fn delay(spec: &Definition, node: &str, outcome: &str) -> Option<String> {
-    let edges = spec.resolved_edges(node).unwrap();
-    let edge = edges.iter().find(|edge| edge.outcome == outcome).unwrap();
-    edge.delay.as_ref().map(|delay| delay.text().to_owned())
-}
-
 #[test]
 fn values_admission_refuses_load_with_their_text_and_failure() {
     let spec = loaded(
@@ -35,7 +29,7 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
         "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n\
          [steps.build]\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
          window='window.5h.bogus>=x'\nbudget='lots'\nsubscribe=['agent.stop']\nthen='pick'\n\
-         [checks.pick]\nrun='true'\nwake=['agent.stop']\non.ok={to='@done',delay='later'}\n",
+         [checks.pick]\nrun='true'\nwake=['agent.stop']\non.ok='@done'\n",
     )
     .unwrap();
     let build = spec.step("build").unwrap();
@@ -72,7 +66,6 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
         spec.limit().unwrap().stagger.as_ref().unwrap().text(),
         "soon"
     );
-    assert_eq!(delay(&spec, "pick", "ok").as_deref(), Some("later"));
     let overrides = build
         .launch_overrides(std::path::Path::new("/definition"))
         .unwrap();
@@ -117,16 +110,14 @@ fn the_bare_window_shorthand_compiles_like_the_dotted_term() {
 }
 
 #[test]
-fn a_delay_on_a_step_with_a_misplaced_lifecycle_compiles_to_what_cleanup_left() {
-    const DELAY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok={to='@done',delay='30m'}\non.pending='build'\n";
-    assert_eq!(delay(&loaded(DELAY), "pick", "ok").as_deref(), Some("30m"));
-    let command = loaded(&DELAY.replace(
+fn a_misplaced_lifecycle_compiles_to_what_cleanup_left() {
+    const MISPLACED: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
+    let command = loaded(&MISPLACED.replace(
         "agent='claude'\nprompt-file='prompts/build.md'",
         "run='true'\ntimeout='1m'",
     ));
-    assert_eq!(delay(&command, "pick", "ok"), None);
     assert_eq!(command.target("pick", "ok"), Some(Target::Done));
-    let unset = loaded(&DELAY.replace("lifecycle='until'\n", "").replace(
+    let unset = loaded(&MISPLACED.replace("lifecycle='until'\n", "").replace(
         "agent='claude'\nprompt-file='prompts/build.md'",
         "run='true'\ntimeout='1m'",
     ));

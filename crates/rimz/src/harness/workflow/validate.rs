@@ -209,8 +209,8 @@ pub(super) fn validate_spec(
             );
         }
         for (outcome, route) in &check.on {
-            report.target(spec, &format!("{path}.on.{outcome}"), route.target());
-            if outcome == "timeout" && route.target() == "@wait" {
+            report.target(spec, &format!("{path}.on.{outcome}"), route);
+            if outcome == "timeout" && route == "@wait" {
                 report.error(
                     &format!("{path}.on.timeout"),
                     "a timed-out check cannot wait on its expired timeout clock",
@@ -455,7 +455,6 @@ pub(super) fn validate_spec(
                 .filter(|edge| {
                     edge.fires == super::Fireability::Yes
                         && edge.source == EdgeSource::Default
-                        && !spec.declared_default(&row.node, &edge.outcome)
                         && matches!(
                             edge.outcome.as_str(),
                             "timeout" | "invalid" | "undelivered" | "cap" | "deadline"

@@ -148,82 +148,8 @@ pub struct Check {
     #[schemars(with = "Option<String>")]
     pub account: Option<crate::ids::LoginName>,
     #[serde(default)]
-    pub on: BTreeMap<String, Route>,
+    pub on: BTreeMap<String, String>,
     pub timeout: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, JsonSchema)]
-#[serde(untagged)]
-#[schemars(deny_unknown_fields)]
-pub enum Route {
-    Target(String),
-    Delayed {
-        to: String,
-        delay: Option<String>,
-        /// Labels the route as a default the definition's author left in place.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        default: bool,
-    },
-}
-
-impl<'de> Deserialize<'de> for Route {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = Route;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a route target or a table with to, optional delay, and default")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Route, E> {
-                Ok(Route::Target(value.into()))
-            }
-
-            fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Route, M::Error> {
-                #[derive(Deserialize)]
-                struct Delayed {
-                    to: String,
-                    delay: Option<String>,
-                    #[serde(default)]
-                    default: bool,
-                }
-                let route =
-                    Delayed::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                Ok(Route::Delayed {
-                    to: route.to,
-                    delay: route.delay,
-                    default: route.default,
-                })
-            }
-        }
-        deserializer.deserialize_any(Visitor)
-    }
-}
-
-impl From<&str> for Route {
-    fn from(target: &str) -> Self {
-        Self::Target(target.into())
-    }
-}
-
-impl Route {
-    pub(super) fn target(&self) -> &str {
-        match self {
-            Self::Target(target) | Self::Delayed { to: target, .. } => target,
-        }
-    }
-
-    pub(super) fn delay(&self) -> Option<&str> {
-        match self {
-            Self::Target(_) => None,
-            Self::Delayed { delay, .. } => delay.as_deref(),
-        }
-    }
-
-    pub(super) fn is_default(&self) -> bool {
-        matches!(self, Self::Delayed { default: true, .. })
-    }
 }
 
 #[derive(Clone, Debug, JsonSchema)]

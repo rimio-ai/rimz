@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::definition::{BREAK, Definition, Kind, Parsed, Target};
+use super::definition::{BREAK, Definition, Kind, Target};
 use super::spec::{Check, OnBreak, Step};
 use crate::config::CapacityWait;
 
@@ -73,8 +73,6 @@ pub struct Edge {
     pub fires: Fireability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub because: Option<NeverReason>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delay: Option<Parsed<std::time::Duration, crate::utils::time::TimeInputErr>>,
 }
 
 impl Edge {
@@ -322,17 +320,9 @@ impl Definition {
                     let (target, explicit) = edges.remove(&outcome)?;
                     let (fires, because) = self.fireability(node, &outcome);
                     Some(Edge {
-                        delay: authored
-                            .checks
-                            .get(node)
-                            .and_then(|check| check.on.get(&outcome))
-                            .and_then(|route| route.delay())
-                            .map(super::definition::duration),
                         target,
-                        source: if explicit && !self.declared_default(node, &outcome) {
+                        source: if explicit {
                             EdgeSource::Explicit
-                        } else if explicit {
-                            EdgeSource::Default
                         } else if !self.is_break(node)
                             && authored.workflow.on_break.is_some()
                             && FAILURE_EDGES.contains(&outcome.as_str())
@@ -348,15 +338,6 @@ impl Definition {
                 })
                 .collect(),
         )
-    }
-
-    /// Whether the check's route for `outcome` is written and marked `default = true`.
-    pub fn declared_default(&self, node: &str, outcome: &str) -> bool {
-        self.authored()
-            .checks
-            .get(node)
-            .and_then(|check| check.on.get(outcome))
-            .is_some_and(super::spec::Route::is_default)
     }
 
     fn fireability(&self, node: &str, outcome: &str) -> (Fireability, Option<NeverReason>) {
@@ -411,7 +392,7 @@ impl Definition {
                         .get(&outcome)
                         .filter(|_| !sleep || outcome == "invalid");
                     let explicit = route.is_some() || (outcome == "then" && sleep);
-                    let target = route.map_or(target, |route| Target::parse(route.target()));
+                    let target = route.map_or(target, |route| Target::parse(route));
                     (outcome, (target, explicit))
                 })
                 .collect()
@@ -482,7 +463,7 @@ impl Check {
         let mut edges = self
             .on
             .iter()
-            .map(|(outcome, route)| (outcome.clone(), Target::parse(route.target())))
+            .map(|(outcome, route)| (outcome.clone(), Target::parse(route)))
             .collect::<BTreeMap<_, _>>();
         for outcome in ["timeout", "invalid"] {
             edges.entry(outcome.into()).or_insert(Target::User);

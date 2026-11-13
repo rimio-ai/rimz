@@ -258,11 +258,7 @@ pub(super) fn with_you_suffix(
     spec: Option<&Definition>,
     now: Timestamp,
 ) -> String {
-    let phrase = spec
-        .and_then(|spec| rimz::harness::workflow::close_after(spec, record))
-        .filter(|(at, _)| *at > now)
-        .map(|(at, target)| format!("closing {} → {target}", render::rel_until(at, now)))
-        .or_else(|| wait(record, spec, now));
+    let phrase = wait(record, spec, now);
     if record.held.is_some() {
         let wait = phrase.map_or_else(String::new, |phrase| format!(": {phrase}"));
         return format!(" · checking {}{wait}", record.node);
@@ -415,44 +411,6 @@ mod tests {
             detail(&record, None, Timestamp::UNIX_EPOCH, agent)
         });
         assert_eq!(actual, cases.map(|(_, _, _, expected)| expected.to_owned()));
-    }
-
-    #[test]
-    fn a_delayed_close_names_its_remaining_time_until_it_is_due() {
-        let mut record = record();
-        session(&mut record, true);
-        record.held.as_mut().unwrap().verdict = Some(
-            serde_json::from_value(json!({
-                "node":"ruled", "entered_at":Timestamp::UNIX_EPOCH,
-                "at":Timestamp::UNIX_EPOCH, "target":"@done",
-                "object":{"outcome":"settled"}, "reason":"user",
-            }))
-            .unwrap(),
-        );
-        let spec = toml::from_str(
-            "[workflow]\nscope='worktree'\nstart='triage'\n\
-             [steps.triage]\nagent='claude'\nlifecycle='until'\nthen='ruled'\n\
-             [checks.ruled]\nrun='true'\non.settled={to='@done',delay='30m'}\n",
-        )
-        .unwrap();
-        assert_eq!(
-            detail(
-                &record,
-                Some(&spec),
-                Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(7),
-                None
-            ),
-            "with you · checking ruled: closing in 23m → @done"
-        );
-        assert_eq!(
-            detail(
-                &record,
-                Some(&spec),
-                Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(30),
-                None
-            ),
-            "with you · checking ruled"
-        );
     }
 
     #[test]

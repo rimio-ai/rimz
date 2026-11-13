@@ -31,8 +31,8 @@ pub use engine::{
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
 pub use inspect::{
-    Hop, HopKind, close_after, evaluation_target, hold_until, hops, next_bound, reached,
-    repeats_evaluation, routing_hop, timeout_at,
+    Hop, HopKind, evaluation_target, hold_until, hops, next_bound, reached, repeats_evaluation,
+    routing_hop, timeout_at,
 };
 pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};

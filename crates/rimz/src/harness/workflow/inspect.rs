@@ -396,34 +396,6 @@ fn attempt_superseded(
     }
 }
 
-/// A held closing verdict's delayed instant and saved target, read from its sealed route.
-pub fn close_after<'a>(spec: &Definition, record: &'a RunRecord) -> Option<(Timestamp, &'a str)> {
-    let held = record.held.as_ref()?;
-    let verdict = held.verdict.as_ref()?;
-    let target = Target::parse(&verdict.target);
-    if target == Target::Wait
-        || target.node() == Some(held.attempt.node.as_str())
-        || spec
-            .step(&held.attempt.node)
-            .is_some_and(|step| step.then().contains(&target))
-    {
-        return None;
-    }
-    let outcome = verdict.object.get("outcome")?.as_str()?;
-    let delay = spec
-        .check(&verdict.node)?
-        .resolved_edges()
-        .iter()
-        .find(|edge| edge.outcome == outcome)?
-        .delay
-        .as_ref()?;
-    let at = verdict
-        .at
-        .checked_add(*delay.value().ok()?)
-        .unwrap_or(Timestamp::MAX);
-    Some((at, &verdict.target))
-}
-
 /// The first bound's instant and target, for inspection: `first_bound` routed by the spec.
 pub fn next_bound(
     spec: &Definition,

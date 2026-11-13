@@ -397,91 +397,75 @@ fn on_break_pending_held_failure_is_not_a_taken_hop() {
 }
 
 #[test]
-fn on_break_held_judge_failure_uses_invalid_for_delay_and_one_departure() {
-    for delayed in [false, true] {
-        let mut text = until::UNTIL
-            .replace("start='build'", "start='build'\non-break={agent='claude'}")
-            .replace(
-                "run='sh check.sh'",
-                "agent='claude'\nprompt-file='prompt.md'",
-            );
-        if delayed {
-            text.push_str(
-                "on.invalid={to='repair',delay='30m'}\n[checks.repair]\nsleep='1h'\nthen='@done'\n",
-            );
-        }
-        let (_dir, state, record) = setup(&text);
-        let host = FakeHost::new();
-        let live = advance_ok(&state, &record.id, &host);
-        let paths = state.workflow(&record.id);
-        let spec = spec::load(&paths.home).unwrap();
-        let mut t = super::super::state::Transition {
-            now: live.entered_at,
-            record: until::held(&live, false),
-            spec: &spec,
-            paths: &paths,
-            entries: Vec::new(),
-        };
-        for seq in 2..=3 {
-            t.record.attempt = Some(
-                serde_json::from_value(json!({
-                    "kind":"judge", "seq":seq, "node":"pr", "started_at":t.now,
-                    "host":{"pid":0,"start":null}
-                }))
-                .unwrap(),
-            );
-            t.record.next_seq = seq + 1;
-            t.finish_judge(seq, evaluation(Err("judge exited 7".into()), "died"))
-                .unwrap();
-        }
-        let verdict = t.record.held.as_ref().unwrap().verdict.as_ref().unwrap();
-        assert_eq!(
-            verdict.object["outcome"], "invalid",
-            "route lookup must use the invalid edge"
+fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
+    let text = until::UNTIL
+        .replace("start='build'", "start='build'\non-break={agent='claude'}")
+        .replace(
+            "run='sh check.sh'",
+            "agent='claude'\nprompt-file='prompt.md'",
         );
-        assert_eq!(verdict.object["failure"], "died");
-        if delayed {
-            let (at, target) =
-                close_after(&spec, &t.record).expect("the judge invalid delay must apply");
-            assert_eq!(target, "repair");
-            assert_eq!(at, t.now + std::time::Duration::from_secs(1800));
-        }
-        assert!(
-            hops(&spec, &t.entries, t.record.held.as_ref()).is_empty(),
-            "pending verdicts must not depart"
+    let (_dir, state, record) = setup(&text);
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    let paths = state.workflow(&record.id);
+    let spec = spec::load(&paths.home).unwrap();
+    let mut t = super::super::state::Transition {
+        now: live.entered_at,
+        record: until::held(&live, false),
+        spec: &spec,
+        paths: &paths,
+        entries: Vec::new(),
+    };
+    for seq in 2..=3 {
+        t.record.attempt = Some(
+            serde_json::from_value(json!({
+                "kind":"judge", "seq":seq, "node":"pr", "started_at":t.now,
+                "host":{"pid":0,"start":null}
+            }))
+            .unwrap(),
         );
-        t.record.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Timestamp::UNIX_EPOCH;
-        {
-            let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-            for entry in &t.entries {
-                records::append(&paths, entry, &guard).unwrap();
-            }
-            records::write(&paths, &t.record, &guard).unwrap();
-        }
-        host.observed.borrow_mut().turn = Some(until::turn());
-        let applied = advance_ok(&state, &record.id, &host);
-        let journal = records::journal(&paths).unwrap();
-        let hops = hops(&spec, &journal, applied.held.as_ref());
-        assert_eq!(
-            hops.iter()
-                .filter(|hop| hop.node == "pr"
-                    && hop.target.as_ref().map(|target| target.as_str())
-                        == Some(if delayed { "repair" } else { "@break" }))
-                .count(),
-            1,
-            "{hops:?}"
-        );
-        if !delayed {
-            let launches = host.launched.borrow();
-            let prompt = &launches.last().unwrap().prompt;
-            assert!(prompt.contains("judge failure"), "{prompt}");
-            assert!(
-                prompt.contains("3.check.json"),
-                "judges write check.json: {prompt}"
-            );
-            assert!(!prompt.contains("3.check.log"), "{prompt}");
-        }
+        t.record.next_seq = seq + 1;
+        t.finish_judge(seq, evaluation(Err("judge exited 7".into()), "died"))
+            .unwrap();
     }
+    let verdict = t.record.held.as_ref().unwrap().verdict.as_ref().unwrap();
+    assert_eq!(
+        verdict.object["outcome"], "invalid",
+        "route lookup must use the invalid edge"
+    );
+    assert_eq!(verdict.object["failure"], "died");
+    assert!(
+        hops(&spec, &t.entries, t.record.held.as_ref()).is_empty(),
+        "pending verdicts must not depart"
+    );
+    t.record.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Timestamp::UNIX_EPOCH;
+    {
+        let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        for entry in &t.entries {
+            records::append(&paths, entry, &guard).unwrap();
+        }
+        records::write(&paths, &t.record, &guard).unwrap();
+    }
+    host.observed.borrow_mut().turn = Some(until::turn());
+    let applied = advance_ok(&state, &record.id, &host);
+    let journal = records::journal(&paths).unwrap();
+    let hops = hops(&spec, &journal, applied.held.as_ref());
+    assert_eq!(
+        hops.iter()
+            .filter(|hop| hop.node == "pr"
+                && hop.target.as_ref().map(|target| target.as_str()) == Some("@break"))
+            .count(),
+        1,
+        "{hops:?}"
+    );
+    let launches = host.launched.borrow();
+    let prompt = &launches.last().unwrap().prompt;
+    assert!(prompt.contains("judge failure"), "{prompt}");
+    assert!(
+        prompt.contains("3.check.json"),
+        "judges write check.json: {prompt}"
+    );
+    assert!(!prompt.contains("3.check.log"), "{prompt}");
 }
 
 #[test]
