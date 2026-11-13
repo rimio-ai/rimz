@@ -121,9 +121,9 @@ The ramps reach the screen through five accessors, and nothing else reads them:
 | --- | --- | --- |
 | `Palette::budget_tone` | a remaining percent and the `[theme.display.budget_bar]` zones | the sidebar's provider budget bar and its window label, and the window percentages of `rimz accounts` |
 | `Palette::pace_tone` | a `PaceReading` and the `[theme.display.budget_bar.burn_rate]` bands | the sidebar reset marker and the CLI pace reading: the heat ramp's warm tail for overburn, the calm ramp for underspend once 40% of the window has elapsed (`COOL_PACE_MIN_ELAPSED`), and no tone at rest |
-| `Theme::heat_tone` | an amount from 0 to 1 | the context meter, the remote link badge, and the Codex reset-credit expiry while auto-redeem is off |
+| `Theme::heat_tone` | an amount from 0 to 1 | the context meter, the remote link badge, and a reset-credit expiry within a week where redeeming is the user's (`▬`) |
 | `Theme::warm_heat_tone` | an amount from 0 to 1, mapped into the warm tail | the child quiet clock, and the card age clock's `warn → caution → alarm` cache warning band ([band width](./sidebar/sidebar.md#the-line-template)). An unknown TTL keeps an un-held clock muted, and a no-cache card has no pin and keeps its stale-line digits muted. |
-| `Theme::calm_tone` | an amount from 0 to 1 | the Codex reset-credit expiry while auto-redeem is armed or holding |
+| `Theme::calm_tone` | an amount from 0 to 1 | a reset-credit expiry within a week where RimZ redeems (`⟳`), and the redeem-now glyph's breath between the body tone and `good` |
 
 The two `Palette` accessors serve the CLI and the sidebar, and the three `Theme` accessors live in `sidebar_pane/render/theme.rs`. `ramp_tone(ramp, amount)` interpolates piecewise across any number of stops in OKLab, so a ramp can gain or lose stops without touching the math. The warm tail is the span `[HEAT_RAMP_WARM_START, 1.0]`, from `warn` onward. It is for readers whose low end should rest warm instead of healthy green: an idle agent is stale, not optimal.
 
@@ -141,6 +141,7 @@ Several sidebar cues are lightness shifts smaller than one step of the 256-color
 | --- | --- | --- | --- |
 | breathing pulse (`Theme::breathe`) | `lift_lightness` of the tone | base tone plus the sample's `DIM` or `BOLD` modifier | the modifier alone |
 | unread blink and shimmer beam (`Theme::pulse`, `Theme::shimmer_cell`, through `Theme::lifted`) | lifted tone, held bold | base tone, bold toggled by pole or under the beam | the bold toggle alone |
+| redeem-now breath (`Theme::calm_tone` at `animation::redeem_breath_amount`) | the calm ramp from `good` to the body tone, held bold | the same ramp, quantized to the nearest cube cell | held still, bold alone (`ResolvedAnimations::without_color`) |
 | selected-card band and unread wash (`Theme::selection_band`, `Theme::unread_wash`) | `selection_bg` lightness stepped down by `highlight_steps.band` or up by `.wash` | the same directions, both stepped by `highlight_steps.indexed`, sized to move one cube cell | no fill |
 | soft brand tone (`Theme::body_brand`): a calm card's name and lead glyph through `emphasize`, subagent type names, finished-roster names, and the off-screen focus marker's agent name | brand dimmed by `SOFT_BRAND_DIM` (0.05) | full brand | `Theme::body`, which is the `DIM` weight alone |
 

@@ -206,6 +206,15 @@ The moving signal is reserved for the one row that most needs you, the oldest un
 
 An unread card also rests on a soft wash, the selection blue lifted a step, the way a mail inbox shades an unread line. The wash never moves and it survives every color depth, dropping only under `NO_COLOR`. Setting `effect = "static"` on `waiting`, `failed`, or `success` overrides the `unread` choice for that role and holds the row at a constant bold tone.
 
+### Reset-credit breath
+
+`theme.animations.redeem_breath` switches the reset-credit marker's breath. It is on by default; `false` holds the redeem-now marker still, green and bold, so bold alone carries the state, as it does on a terminal without colour.
+
+```toml
+[theme.animations]
+redeem_breath = false
+```
+
 ## Display
 
 `[theme.display]` tunes the sidebar's sizing, render cadence, dashboard layout, and card detail, and its `popup` table sizes the palette popup.
