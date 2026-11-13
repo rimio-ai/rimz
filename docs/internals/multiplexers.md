@@ -701,7 +701,7 @@ The crate splits along the wasm boundary, which makes it testable.
 
 `engine`, `policy`, and `wire` use no `zellij-tile` type, so they compile and unit-test on the host target in the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, because its shims call extern functions that exist only inside Zellij's plugin host.
 
-The engine returns effects instead of performing them: `RunCommand`, `RunKeyCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
+The engine returns effects instead of performing them: `RunCommand`, `RunKeyCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `ClosePane`, `MovePane`, `SplitPane`, `CloseSelf`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
 
 ### What it publishes
 
@@ -733,17 +733,20 @@ An announced topology with neither `clients` nor the `focused_pane` field of plu
 
 The first manifest after load names every pre-existing pane, so the host accepts it as a baseline, and an announced baseline emits only one topology nudge.
 
-Five named pipes reach the plugin from the host or its runtime keybindings:
+Six named pipes reach the plugin from the host or its runtime keybindings:
 
 | Pipe | Effect |
 | --- | --- |
 | `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives a muted same-id copy with its current manifest and clients withheld until a post-dump client query replies. |
 | `rimz:key` | Fork the command selected by its validated keymap index when granted, independently of topology muting. |
 | `rimz:palette` | Fork `rimz palette --popup --mode <mode>` with the pressing client's focused pane as `--from-pane` when known. Payloads `cards`, `commands`, and `new` select the mode; absent or unknown payloads select `cards`. |
+| `rimz:guard` | Perform a guarded split, close, or swap for the pressing client's focused pane, or nothing when that pane is or would partner the sidebar, or for a close when the replica cannot place it (`Engine::on_guard_pipe`). |
 | `rimz:toggle_fullscreen` | Toggle fullscreen on the host-selected pane id (`ZellijBackend::toggle_fullscreen`). |
 | `rimz:retire` | Retire this instance if the payload's writer identity outranks it ([retirement](#retirement)). |
 
 The palette pipe reads `get_focused_pane_info` in the pressing client's plugin instance. The shell only projects that pane, the engine gates permissions, gates muting for a pipe that is not a private keybind pipe (`Engine::on_palette_pipe`), and selects the mode, and `wire::palette_argv` supplies the launcher argv with the session and `--mux zellij`. A failed focus query omits `--from-pane`; the launcher never receives `--client` on Zellij. The pipe adds no permission, subscribed event, or keybinding.
+
+RimZ style's `pane.split.*`, `pane.close` and `pane.swap.*` keys render as guard steps, `MessagePluginId` to the pressing replica with `rimz:guard` and a payload of the action words plus, for a split, the index of its `sidebar split <dir> --session-name S` command (`NewPane Down 16`). The wire's top-level `sidebar` names the sidebar's pane title (`pane::SIDEBAR_CHROME_TITLE`), so the role stays the host's. The guard reads `get_focused_pane_info` like the palette, and ignores muting as `rimz:key` does. A focused non-floating terminal pane with that title runs only the indexed command, with `--from-pane zellij:terminal_N` appended; close and swap there have no command and do nothing. A left swap from a non-floating pane whose left edge meets the right edge of a same-tab sidebar does nothing, since the sidebar docks left at full height and only a left swap can reach it. A close on a focused pane the replica cannot place does nothing, since the pane may be the sidebar: one with no manifest yet, or any pane before the keymap names the sidebar title. A split or swap there keeps the native action. Otherwise the plugin closes the focused pane by id, moves it, or opens a pane in the pressed direction through `run_action`. An ungranted replica, a failed focus query, or a payload that does not decode does nothing.
 
 ### Poke discipline
 
@@ -783,7 +786,8 @@ RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin before spawn
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
 | `RunCommands` | `rimz sidebar wake`, `rimz palette --popup`, and indexed room-key commands, including machine-only user bindings. |
 | `Reconfigure` | The resolved session option list and allowlisted room keymap, applied without writing `config.kdl`. |
-| `ChangeApplicationState` | The fullscreen toggle for the host-selected pane id. |
+| `ChangeApplicationState` | The fullscreen toggle for the host-selected pane id, and a guarded close or swap of the focused pane. |
+| `RunActionsAsUser` | A guarded split's `NewPane` in the pressed direction, the one guarded action with no direct plugin command. |
 | `InterceptInput` | `UserAction` observations for the per-client input clock; no action payload is stored or forwarded. Requested even with `typing_hold = "off"`. |
 
 The artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).

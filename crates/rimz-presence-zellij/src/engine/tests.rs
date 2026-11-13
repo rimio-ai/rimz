@@ -377,6 +377,219 @@ fn fullscreen_pipe_only_projects_a_valid_host_selected_pane_after_permission() {
     );
 }
 
+fn guarded_engine(host: &FakeHost) -> Engine {
+    let mut config = config();
+    config.keymap = Some(
+        serde_json::from_value(serde_json::json!({
+            "report_modes":false,
+            "commands":[["sidebar","split","down","--session-name","session-1"]],
+            "modes":[],
+            "sidebar":"rimz-sidebar"
+        }))
+        .unwrap(),
+    );
+    let mut engine = Engine::new(0, config);
+    let at = |id, x, columns| PaneFields {
+        pane_x: Some(x),
+        pane_columns: Some(columns),
+        ..pane(id)
+    };
+    let sidebar = PaneFields {
+        title: "rimz-sidebar".to_owned(),
+        ..at(1, 0, 30)
+    };
+    let floating = PaneFields {
+        title: "rimz-sidebar".to_owned(),
+        is_floating: true,
+        ..at(4, 30, 20)
+    };
+    let other_tab = PaneFields {
+        pane_columns: Some(30),
+        ..pane_in_tab(5, 1)
+    };
+    let beside_other_tab = PaneFields {
+        pane_x: Some(30),
+        ..pane_in_tab(6, 1)
+    };
+    seed_manifest(
+        &mut engine,
+        tabs_by_index(vec![
+            (
+                0,
+                vec![
+                    sidebar,
+                    at(2, 30, 50),
+                    at(3, 80, 40),
+                    floating,
+                    plugin_pane(8),
+                ],
+            ),
+            (1, vec![other_tab, beside_other_tab]),
+        ]),
+        1,
+        host,
+    );
+    grant(&mut engine, 2, host);
+    engine
+}
+
+#[test]
+fn guard_on_the_sidebar_runs_only_its_command_with_the_pressed_pane() {
+    let host = FakeHost::default();
+    let mut engine = guarded_engine(&host);
+    let sidebar = Some(ProjectedPaneId::Terminal(1));
+    assert_eq!(
+        engine.on_guard_pipe(Some("NewPane Down 0"), sidebar),
+        vec![Effect::RunKeyCommand {
+            argv: strings(&[
+                "/bin/rimz",
+                "sidebar",
+                "split",
+                "down",
+                "--session-name",
+                "session-1",
+                "--from-pane",
+                "zellij:terminal_1",
+            ]),
+        }]
+    );
+    for payload in [
+        "CloseFocus",
+        "MovePane Left",
+        "MovePane Right",
+        "NewPane Right",
+    ] {
+        assert!(
+            engine.on_guard_pipe(Some(payload), sidebar).is_empty(),
+            "{payload}"
+        );
+    }
+    engine.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#));
+    assert!(engine.muted);
+    assert_eq!(
+        engine.on_guard_pipe(Some("NewPane Down 0"), sidebar).len(),
+        1,
+        "topology retirement must not drop this client's guarded key"
+    );
+}
+
+#[test]
+fn guard_on_a_work_pane_performs_the_native_action_unless_its_partner_is_the_sidebar() {
+    let host = FakeHost::default();
+    let mut engine = guarded_engine(&host);
+    let beside = Some(ProjectedPaneId::Terminal(2));
+    let rightmost = Some(ProjectedPaneId::Terminal(3));
+    assert_eq!(
+        engine.on_guard_pipe(Some("CloseFocus"), beside),
+        vec![Effect::ClosePane(ProjectedPaneId::Terminal(2))]
+    );
+    assert_eq!(
+        engine.on_guard_pipe(Some("NewPane Down 0"), beside),
+        vec![Effect::SplitPane(wire::Direction::Down)]
+    );
+    assert_eq!(
+        engine.on_guard_pipe(Some("NewPane Right"), rightmost),
+        vec![Effect::SplitPane(wire::Direction::Right)]
+    );
+    assert!(
+        engine
+            .on_guard_pipe(Some("MovePane Left"), beside)
+            .is_empty()
+    );
+    for (payload, focus, direction) in [
+        ("MovePane Right", beside, wire::Direction::Right),
+        ("MovePane Up", beside, wire::Direction::Up),
+        ("MovePane Down", beside, wire::Direction::Down),
+        ("MovePane Left", rightmost, wire::Direction::Left),
+        ("MovePane Right", rightmost, wire::Direction::Right),
+    ] {
+        assert_eq!(
+            engine.on_guard_pipe(Some(payload), focus),
+            vec![Effect::MovePane(direction)],
+            "{payload} {focus:?}"
+        );
+    }
+}
+
+#[test]
+fn guard_treats_floating_and_plugin_panes_as_work_panes() {
+    let host = FakeHost::default();
+    let mut engine = guarded_engine(&host);
+    for pane in [ProjectedPaneId::Terminal(4), ProjectedPaneId::Plugin(8)] {
+        assert_eq!(
+            engine.on_guard_pipe(Some("CloseFocus"), Some(pane)),
+            vec![Effect::ClosePane(pane)],
+            "{pane:?}"
+        );
+        assert_eq!(
+            engine.on_guard_pipe(Some("MovePane Left"), Some(pane)),
+            vec![Effect::MovePane(wire::Direction::Left)],
+            "{pane:?}"
+        );
+    }
+    assert_eq!(
+        engine.on_guard_pipe(Some("MovePane Left"), Some(ProjectedPaneId::Terminal(6))),
+        vec![Effect::MovePane(wire::Direction::Left)],
+        "a sidebar in another tab is not the partner"
+    );
+}
+
+#[test]
+fn guard_closes_nothing_it_cannot_place_but_still_splits_and_swaps() {
+    let host = FakeHost::default();
+    let mut engine = guarded_engine(&host);
+    let unknown = [ProjectedPaneId::Terminal(77), ProjectedPaneId::Plugin(1)];
+    let mut unnamed = guarded_engine(&host);
+    unnamed.config.keymap.as_mut().unwrap().sidebar = None;
+    let check = |engine: &mut Engine, pane: ProjectedPaneId, why: &str| {
+        assert!(
+            engine
+                .on_guard_pipe(Some("CloseFocus"), Some(pane))
+                .is_empty(),
+            "{pane:?}: {why}"
+        );
+        assert_eq!(
+            engine.on_guard_pipe(Some("NewPane Down 0"), Some(pane)),
+            vec![Effect::SplitPane(wire::Direction::Down)],
+            "{pane:?}: {why}"
+        );
+        assert_eq!(
+            engine.on_guard_pipe(Some("MovePane Left"), Some(pane)),
+            vec![Effect::MovePane(wire::Direction::Left)],
+            "{pane:?}: {why}"
+        );
+    };
+    for pane in unknown {
+        check(&mut engine, pane, "no manifest");
+    }
+    check(
+        &mut unnamed,
+        ProjectedPaneId::Terminal(2),
+        "no sidebar named yet",
+    );
+}
+
+#[test]
+fn guard_does_nothing_without_focus_a_valid_payload_or_permission() {
+    let host = FakeHost::default();
+    let mut engine = guarded_engine(&host);
+    for payload in ["CloseFocus", "MovePane Right", "NewPane Down 0"] {
+        assert!(
+            engine.on_guard_pipe(Some(payload), None).is_empty(),
+            "{payload}"
+        );
+    }
+    let work = Some(ProjectedPaneId::Terminal(2));
+    for payload in [None, Some("Detach"), Some("NewPane Down 3")] {
+        assert!(
+            engine.on_guard_pipe(payload, work).is_empty(),
+            "{payload:?}"
+        );
+    }
+    engine.on_permission_denied(3, &host);
+    assert!(engine.on_guard_pipe(Some("CloseFocus"), work).is_empty());
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }

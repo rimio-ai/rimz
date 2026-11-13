@@ -35,6 +35,7 @@ mod resume;
 mod run_command;
 mod self_close;
 mod shared_view;
+mod sidebar_keys;
 mod stack_winsize;
 mod support;
 mod tab_ownership;

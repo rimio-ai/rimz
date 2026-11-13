@@ -414,7 +414,8 @@ pub(in crate::backend::zellij) fn seed_presence_permissions(xdg: &Path, wasm: &P
         format!(
             concat!(
                 "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n",
-                "    Reconfigure\n    ChangeApplicationState\n    InterceptInput\n}}\n",
+                "    Reconfigure\n    ChangeApplicationState\n    InterceptInput\n",
+                "    RunActionsAsUser\n}}\n",
             ),
             wasm.display(),
         ),
@@ -464,7 +465,7 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
     rimz_shim
 }
 
-fn sh_quote(value: &str) -> String {
+pub(in crate::backend::zellij) fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 

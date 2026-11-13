@@ -32,10 +32,15 @@ pub(super) fn encode(keymap: &RoomKeymap, session: &str, root: &Path) -> String 
         Some(KeyScrollback::Native) => modes.extend(native_scroll_modes()),
         None => {}
     }
-    json!({"report_modes":rimz, "commands":commands, "modes":modes})
-        .to_string()
-        .replace('%', "%25")
-        .replace(',', "%2C")
+    json!({
+        "report_modes": rimz,
+        "commands": commands,
+        "modes": modes,
+        "sidebar": crate::pane::SIDEBAR_CHROME_TITLE,
+    })
+    .to_string()
+    .replace('%', "%25")
+    .replace(',', "%2C")
 }
 
 /// Prefix mode is one-shot; pane, tab, resize, and move stay entered only after
@@ -125,14 +130,18 @@ fn step(
         }
         KeyActionName::PaneFocus(direction) => &["MoveFocus", direction_word(direction)],
         KeyActionName::PaneFocusNext => &["FocusNextPane"],
-        KeyActionName::PaneSwap(direction) => &["MovePane", direction_word(direction)],
-        KeyActionName::PaneSplit(direction) => &[
-            "NewPane",
-            match direction {
-                KeySplitDirection::Right => "Right",
-                KeySplitDirection::Down => "Down",
-            },
-        ],
+        KeyActionName::PaneSwap(direction) => {
+            return json!({"guard":{"action":["MovePane", direction_word(direction)]}});
+        }
+        KeyActionName::PaneSplit(direction) => {
+            let (side, word) = match direction {
+                KeySplitDirection::Right => ("right", "Right"),
+                KeySplitDirection::Down => ("down", "Down"),
+            };
+            let args = ["sidebar", "split", side, "--session-name", session].map(str::to_owned);
+            let run = command_step(commands, args.to_vec(), "run", root)["run"].clone();
+            return json!({"guard":{"action":["NewPane", word], "run": run}});
+        }
         KeyActionName::PaneResize(direction) => &[
             "Resize",
             match direction {
@@ -142,7 +151,7 @@ fn step(
                 KeyDirection::Down => "Increase Down",
             },
         ],
-        KeyActionName::PaneClose => &["CloseFocus"],
+        KeyActionName::PaneClose => return json!({"guard":{"action":["CloseFocus"]}}),
         KeyActionName::TabNew => &["NewTab"],
         KeyActionName::TabNext => &["GoToNextTab"],
         KeyActionName::TabPrev => &["GoToPreviousTab"],
@@ -361,7 +370,7 @@ mod tests {
         );
         assert_eq!(
             steps(&wire, "move", "h"),
-            json!([{"action":["MovePane","Left"]}])
+            json!([{"guard":{"action":["MovePane","Left"]}}])
         );
         assert_eq!(
             steps(&wire, "tab", "c"),
@@ -380,6 +389,45 @@ mod tests {
             steps(&wire, "tmux", "h"),
             json!([{"action":["MoveFocus","Left"]},{"mode":"locked"}])
         );
+    }
+
+    #[test]
+    fn split_close_and_swap_compile_to_guarded_steps_naming_the_sidebar() {
+        let wire = wire(
+            "[room]\nstyle='rimz'\n[keys.bind.pane]\nx='pane.close'\nd='pane.split.down'\n\
+             r='pane.split.right'\n[keys.bind.move]\nl='pane.swap.right'\n",
+        );
+        assert_eq!(wire["sidebar"], crate::pane::SIDEBAR_CHROME_TITLE);
+        assert_eq!(
+            steps(&wire, "pane", "x"),
+            json!([{"guard":{"action":["CloseFocus"]}},{"mode":"locked"}])
+        );
+        assert_eq!(
+            steps(&wire, "move", "l"),
+            json!([{"guard":{"action":["MovePane","Right"]}}])
+        );
+        for (key, side, word) in [("d", "down", "Down"), ("r", "right", "Right")] {
+            let steps = steps(&wire, "pane", key);
+            let index = steps[0]["guard"]["run"].as_u64().unwrap() as usize;
+            assert_eq!(
+                steps[0]["guard"],
+                json!({"action":["NewPane", word],"run":index})
+            );
+            assert_eq!(
+                wire["commands"][index],
+                json!([
+                    "--mux",
+                    "zellij",
+                    "--root",
+                    "/project,=%2C",
+                    "sidebar",
+                    "split",
+                    side,
+                    "--session-name",
+                    "room"
+                ])
+            );
+        }
     }
 
     #[test]

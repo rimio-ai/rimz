@@ -176,6 +176,7 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
     RunCommands
     Reconfigure
     ChangeApplicationState
+    InterceptInput
 }
 "#
     .parse()
@@ -199,6 +200,7 @@ fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
             "Reconfigure",
             "ChangeApplicationState",
             "InterceptInput",
+            "RunActionsAsUser",
         ]
     );
 }

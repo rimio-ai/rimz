@@ -285,7 +285,7 @@ The updater clears the skew by itself. Its next successful hourly pass restarts 
 
 ### Zellij pane discovery stopped
 
-On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its five-permission grant is seeded before load, including `InterceptInput` for input timestamps rather than action contents. `rimz doctor` names the seeded grant. Revoking it in Zellij's plugin manager stops pane discovery and new input timestamps until restored. Run `rimz reload` to re-seed the complete grant and load the current plugin; room start and reattach seed it again too. The plugin ships no pane content anywhere; [the Zellij presence plugin](./security.md#the-zellij-presence-plugin) has the full model.
+On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its six-permission grant is seeded before load, including `InterceptInput` for input timestamps rather than action contents. `rimz doctor` names the seeded grant. Revoking it in Zellij's plugin manager stops pane discovery and new input timestamps until restored. Run `rimz reload` to re-seed the complete grant and load the current plugin; room start and reattach seed it again too. The plugin ships no pane content anywhere; [the Zellij presence plugin](./security.md#the-zellij-presence-plugin) has the full model.
 
 Doctor's `presence plugin` row says what each loaded plugin is doing for the sidebar: writing pane topology, superseded by another writer, or loaded and idle. When wakes are failing it names the cause the plugin host itself reported, drawn from the same window as the counts beside it. A stale writer, a second loaded plugin, and an outdated build all point at the same fix:
 

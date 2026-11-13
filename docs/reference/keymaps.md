@@ -51,11 +51,11 @@ A binding value is an action name, `"none"` (removes the bundled key), or `{ run
 | --- | --- | --- |
 | `pane.focus.left` / `right` / `up` / `down` | `select-pane -L` / `-R` / `-U` / `-D` | `MoveFocus` |
 | `pane.focus.next` | `select-pane -t :.+` | `FocusNextPane` |
-| `pane.swap.left` / `right` / `up` / `down` | `swap-pane` with the neighbour in that direction, unless either is the sidebar | `MovePane` |
-| `pane.split.right` / `down` | `split-window -h` / `-v` in the pane's directory; on the sidebar, [`rimz sidebar split`](./cli/sidebar.md#split-from-the-sidebar) | `NewPane Right` / `Down` |
+| `pane.swap.left` / `right` / `up` / `down` | `swap-pane` with the neighbour in that direction, unless either is the sidebar | `MovePane`, unless the pane or its partner is the sidebar |
+| `pane.split.right` / `down` | `split-window -h` / `-v` in the pane's directory; on the sidebar, [`rimz sidebar split`](./cli/sidebar.md#split-from-the-sidebar) | `NewPane Right` / `Down`; on the sidebar, `rimz sidebar split` |
 | `pane.resize.left` / `right` / `up` / `down` | `resize-pane -L` / `-R` / `-U` / `-D` | `Resize Increase <direction>` |
 | `pane.zoom` | `rimz pane zoom` | `rimz pane zoom` |
-| `pane.close` | `kill-pane`, except on the sidebar | `CloseFocus` |
+| `pane.close` | `kill-pane`, except on the sidebar | `CloseFocus`, except on the sidebar |
 | `pane.send_prefix` | `send-keys` of the prefix | `Write` of the prefix's bytes |
 | `tab.new` | `new-window` in the pane's directory | `NewTab` |
 | `tab.next` / `tab.prev` | `next-window` / `previous-window` | `GoToNextTab` / `GoToPreviousTab` |
@@ -73,7 +73,7 @@ A binding value is an action name, `"none"` (removes the bundled key), or `{ run
 | `card.close` / `card.reopen` | `rimz sidebar close` / `reopen` | same |
 | `sidebar.focus` | `rimz sidebar focus --toggle` | same |
 
-On tmux, split, close and swap never act on the sidebar. A split pressed on the sidebar splits the work pane behind it instead: the tab's last focused work pane while it is still open there, else the first, with focus in the new pane, in that pane's directory; with no work pane beside the sidebar it does nothing. Close and swap pressed on the sidebar do nothing, and a swap whose neighbour is the sidebar does nothing; a swap pressed in move mode stays in it. Pressed on a work pane, each key runs the plain tmux command and starts no `rimz` process.
+On both backends, split, close and swap never act on the sidebar. A split pressed on the sidebar splits the work pane behind it instead: the tab's last focused work pane while it is still open there, else the first, with focus in the new pane, in that pane's directory; with no work pane beside the sidebar it does nothing. Two cases differ. On Zellij 0.44.x, split pressed on the sidebar can make no pane. On tmux, when the work pane is a member of a collapsed stack with other members, the new pane opens beside the whole stack, where the split key pressed in that member splits the member alone. Close and swap pressed on the sidebar do nothing, and a swap whose neighbour is the sidebar does nothing; a swap pressed in move mode stays in it. Pressed on a work pane, each key starts no `rimz` process: on tmux it runs the plain tmux command, and on Zellij the [presence plugin](../guide/security.md#the-zellij-presence-plugin) performs the native action, a split through its `RunActionsAsUser` permission.
 
 `card.close` closes the highlighted card's pane, which a reopen can bring back ([close and reopen](./cli/sidebar.md)). `pane.send_prefix` sends the resolved prefix chord: `Ctrl+<c>` is one byte, the letter's code AND `0x1f` (`Ctrl+b` is byte 2), and `Alt+<c>` is `27` followed by the character (`Alt+w` is `27 119`).
 

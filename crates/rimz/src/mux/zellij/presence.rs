@@ -28,12 +28,13 @@ use crate::utils::time::unix_now_ms;
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
 const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
-const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 5] = [
+const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 6] = [
     "ReadApplicationState",
     "RunCommands",
     "Reconfigure",
     "ChangeApplicationState",
     "InterceptInput",
+    "RunActionsAsUser",
 ];
 static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
     LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));

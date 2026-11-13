@@ -190,6 +190,17 @@
       "zellij",
       "--root",
       "/project,=%2C",
+      "sidebar",
+      "split",
+      "down",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
       "pane",
       "zoom",
       "--session-name",
@@ -221,7 +232,29 @@
       "--root",
       "/project,=%2C",
       "sidebar",
+      "split",
+      "down",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
       "reopen",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "split",
+      "right",
       "--session-name",
       "room"
     ]
@@ -408,10 +441,12 @@
           "key": "H",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Left"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Left"
+                ]
+              }
             },
             {
               "mode": "locked"
@@ -422,10 +457,12 @@
           "key": "J",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Down"
+                ]
+              }
             },
             {
               "mode": "locked"
@@ -436,10 +473,12 @@
           "key": "K",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Up"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Up"
+                ]
+              }
             },
             {
               "mode": "locked"
@@ -450,10 +489,12 @@
           "key": "L",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Right"
+                ]
+              }
             },
             {
               "mode": "locked"
@@ -578,10 +619,13 @@
           "key": "n",
           "steps": [
             {
-              "action": [
-                "NewPane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "NewPane",
+                  "Down"
+                ],
+                "run": 17
+              }
             },
             {
               "mode": "locked"
@@ -592,7 +636,7 @@
           "key": "o",
           "steps": [
             {
-              "run": 17
+              "run": 18
             },
             {
               "mode": "locked"
@@ -603,7 +647,7 @@
           "key": "p",
           "steps": [
             {
-              "run": 18
+              "run": 19
             },
             {
               "mode": "locked"
@@ -614,7 +658,7 @@
           "key": "q",
           "steps": [
             {
-              "run": 19
+              "run": 20
             },
             {
               "mode": "locked"
@@ -633,10 +677,13 @@
           "key": "s",
           "steps": [
             {
-              "action": [
-                "NewPane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "NewPane",
+                  "Down"
+                ],
+                "run": 21
+              }
             },
             {
               "mode": "locked"
@@ -660,7 +707,7 @@
           "key": "u",
           "steps": [
             {
-              "run": 20
+              "run": 22
             },
             {
               "mode": "locked"
@@ -671,10 +718,13 @@
           "key": "v",
           "steps": [
             {
-              "action": [
-                "NewPane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "NewPane",
+                  "Right"
+                ],
+                "run": 23
+              }
             },
             {
               "mode": "locked"
@@ -945,10 +995,12 @@
           "key": "h",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Left"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Left"
+                ]
+              }
             }
           ]
         },
@@ -956,10 +1008,12 @@
           "key": "j",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Down"
+                ]
+              }
             }
           ]
         },
@@ -967,10 +1021,12 @@
           "key": "k",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Up"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Up"
+                ]
+              }
             }
           ]
         },
@@ -978,10 +1034,12 @@
           "key": "l",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Right"
+                ]
+              }
             }
           ]
         },
@@ -1005,10 +1063,12 @@
           "key": "Left",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Left"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Left"
+                ]
+              }
             }
           ]
         },
@@ -1016,10 +1076,12 @@
           "key": "Right",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Right"
+                ]
+              }
             }
           ]
         },
@@ -1027,10 +1089,12 @@
           "key": "Up",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Up"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Up"
+                ]
+              }
             }
           ]
         },
@@ -1038,10 +1102,12 @@
           "key": "Down",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Down"
+                ]
+              }
             }
           ]
         }
@@ -1245,5 +1311,6 @@
       "mode": "search"
     }
   ],
-  "report_modes": true
+  "report_modes": true,
+  "sidebar": "rimz-sidebar"
 }

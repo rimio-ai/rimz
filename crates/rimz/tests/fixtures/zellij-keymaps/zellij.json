@@ -200,8 +200,41 @@
       "zellij",
       "--root",
       "/project,=%2C",
+      "sidebar",
+      "split",
+      "down",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
       "pane",
       "zoom",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "split",
+      "right",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "sidebar",
+      "split",
+      "right",
       "--session-name",
       "room"
     ],
@@ -624,9 +657,11 @@
           "key": "X",
           "steps": [
             {
-              "action": [
-                "CloseFocus"
-              ]
+              "guard": {
+                "action": [
+                  "CloseFocus"
+                ]
+              }
             },
             {
               "mode": "locked"
@@ -637,10 +672,13 @@
           "key": "d",
           "steps": [
             {
-              "action": [
-                "NewPane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "NewPane",
+                  "Down"
+                ],
+                "run": 18
+              }
             },
             {
               "mode": "locked"
@@ -651,7 +689,7 @@
           "key": "f",
           "steps": [
             {
-              "run": 18
+              "run": 19
             },
             {
               "mode": "locked"
@@ -706,10 +744,13 @@
           "key": "n",
           "steps": [
             {
-              "action": [
-                "NewPane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "NewPane",
+                  "Right"
+                ],
+                "run": 20
+              }
             },
             {
               "mode": "locked"
@@ -730,10 +771,13 @@
           "key": "r",
           "steps": [
             {
-              "action": [
-                "NewPane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "NewPane",
+                  "Right"
+                ],
+                "run": 21
+              }
             },
             {
               "mode": "locked"
@@ -744,7 +788,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 19
+              "run": 22
             },
             {
               "mode": "locked"
@@ -821,7 +865,7 @@
           "key": "1",
           "steps": [
             {
-              "run": 20
+              "run": 23
             },
             {
               "mode": "locked"
@@ -832,7 +876,7 @@
           "key": "2",
           "steps": [
             {
-              "run": 21
+              "run": 24
             },
             {
               "mode": "locked"
@@ -843,7 +887,7 @@
           "key": "3",
           "steps": [
             {
-              "run": 22
+              "run": 25
             },
             {
               "mode": "locked"
@@ -854,7 +898,7 @@
           "key": "4",
           "steps": [
             {
-              "run": 23
+              "run": 26
             },
             {
               "mode": "locked"
@@ -865,7 +909,7 @@
           "key": "5",
           "steps": [
             {
-              "run": 24
+              "run": 27
             },
             {
               "mode": "locked"
@@ -876,7 +920,7 @@
           "key": "6",
           "steps": [
             {
-              "run": 25
+              "run": 28
             },
             {
               "mode": "locked"
@@ -887,7 +931,7 @@
           "key": "7",
           "steps": [
             {
-              "run": 26
+              "run": 29
             },
             {
               "mode": "locked"
@@ -898,7 +942,7 @@
           "key": "8",
           "steps": [
             {
-              "run": 27
+              "run": 30
             },
             {
               "mode": "locked"
@@ -909,7 +953,7 @@
           "key": "9",
           "steps": [
             {
-              "run": 28
+              "run": 31
             },
             {
               "mode": "locked"
@@ -1145,10 +1189,12 @@
           "key": "h",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Left"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Left"
+                ]
+              }
             }
           ]
         },
@@ -1156,10 +1202,12 @@
           "key": "j",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Down"
+                ]
+              }
             }
           ]
         },
@@ -1167,10 +1215,12 @@
           "key": "k",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Up"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Up"
+                ]
+              }
             }
           ]
         },
@@ -1178,10 +1228,12 @@
           "key": "l",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Right"
+                ]
+              }
             }
           ]
         },
@@ -1205,10 +1257,12 @@
           "key": "Left",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Left"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Left"
+                ]
+              }
             }
           ]
         },
@@ -1216,10 +1270,12 @@
           "key": "Right",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Right"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Right"
+                ]
+              }
             }
           ]
         },
@@ -1227,10 +1283,12 @@
           "key": "Up",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Up"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Up"
+                ]
+              }
             }
           ]
         },
@@ -1238,10 +1296,12 @@
           "key": "Down",
           "steps": [
             {
-              "action": [
-                "MovePane",
-                "Down"
-              ]
+              "guard": {
+                "action": [
+                  "MovePane",
+                  "Down"
+                ]
+              }
             }
           ]
         }
@@ -1732,5 +1792,6 @@
       "mode": "search"
     }
   ],
-  "report_modes": true
+  "report_modes": true,
+  "sidebar": "rimz-sidebar"
 }

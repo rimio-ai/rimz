@@ -1559,7 +1559,8 @@ fn push_presence_plugins(
         "plugin permissions",
         cell(concat!(
             "seeded grant: ReadApplicationState, RunCommands, Reconfigure, ",
-            "ChangeApplicationState, InterceptInput (input timestamps only)"
+            "ChangeApplicationState, InterceptInput (input timestamps only), ",
+            "RunActionsAsUser (directional splits only)"
         )),
     );
     if plugins.rows.is_empty() {
