@@ -72,8 +72,9 @@ fn fixed_now() -> Timestamp {
 /// fixed clock, default budget zones, a 54-cell pane, and no pet or fleet tally
 /// — so a call site spells out only the axis under test. No test varies the
 /// clock or the zones, which is why neither is a knob here. The folded footer
-/// is likewise absent: it reaches the dashboard only through `compose_lines`,
-/// and `pets_provider_dashboard_folds_footer_left_of_pet` covers it there.
+/// is absent unless a test asks for one; it otherwise reaches the dashboard
+/// through `compose_lines`, and `pets_provider_dashboard_folds_footer_left_of_pet`
+/// covers it there.
 struct Dashboard<'a> {
     theme: &'a Theme,
     providers: &'a [SidebarProviderPanel],
@@ -82,6 +83,8 @@ struct Dashboard<'a> {
     fleet: Option<&'a crate::SpendTally>,
     pet: Option<&'a crate::sidebar_pane::pets::PetView>,
     width: usize,
+    folded_footer: Option<super::chrome::FooterParts>,
+    logo_reserve: Option<crate::sidebar_pane::pixel::logo::LogoReserve>,
 }
 
 impl<'a> Dashboard<'a> {
@@ -94,6 +97,8 @@ impl<'a> Dashboard<'a> {
             fleet: None,
             pet: None,
             width: 54,
+            folded_footer: None,
+            logo_reserve: None,
         }
     }
 
@@ -131,6 +136,19 @@ impl<'a> Dashboard<'a> {
         self
     }
 
+    fn folded_footer(mut self) -> Self {
+        self.folded_footer = Some(super::chrome::footer_parts(
+            &tabbed_provider_snapshot(),
+            self.theme,
+        ));
+        self
+    }
+
+    fn logo_reserve(mut self, reserve: crate::sidebar_pane::pixel::logo::LogoReserve) -> Self {
+        self.logo_reserve = Some(reserve);
+        self
+    }
+
     fn block(&self) -> RenderedBlock {
         self.block_with(None)
     }
@@ -148,12 +166,12 @@ impl<'a> Dashboard<'a> {
             mode: self.mode,
             fleet_tally: self.fleet,
             pet: self.pet,
-            folded_footer: None,
+            folded_footer: self.folded_footer.clone(),
             width: self.width,
             zones: &crate::config::BudgetBarConfig::default(),
             now: fixed_now(),
             pixels,
-            logo_reserve: None,
+            logo_reserve: self.logo_reserve,
         })
     }
 
