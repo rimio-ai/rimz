@@ -9,7 +9,7 @@ use rimz::ids::{MuxName, PaneId};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::common::{Env, trace_lines, write_path_shim, zellij_trace_shim};
+use crate::common::{Env, ScrubSessionEnvExt, trace_lines, write_path_shim, zellij_trace_shim};
 
 fn closed_path(env: &Env) -> PathBuf {
     env.runtime_paths().lanes_dir.join("closed-cards.json")
@@ -28,6 +28,12 @@ fn command(env: &Env, args: &[&str]) -> Command {
         .args(["--mux", "zellij", "sidebar"])
         .args(args)
         .args(["--session-name", &session(env)]);
+    let panes = env.home_root.join("panes.json");
+    if !panes.exists() {
+        let rows = [7, 8, 9].map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1}));
+        std::fs::write(&panes, serde_json::to_vec(&rows).unwrap()).unwrap();
+    }
+    command.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", panes);
     command
 }
 
@@ -89,6 +95,17 @@ fn seed(env: &Env, id: &str, configure: impl FnOnce(&mut AgentLifecycleObservati
     observation.worktree_path = Some(env.project_root.display().to_string());
     observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_7"));
     observation.transcript_path = Some(transcript.display().to_string());
+    let process = Command::new("sleep")
+        .scrub_session_env()
+        .arg("30")
+        .spawn()
+        .unwrap();
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        id,
+        process.id(),
+    ));
+    reap_later(process);
     configure(&mut observation);
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -99,6 +116,10 @@ fn seed(env: &Env, id: &str, configure: impl FnOnce(&mut AgentLifecycleObservati
             &observation,
         ))
         .unwrap();
+}
+
+fn reap_later(mut child: std::process::Child) {
+    std::thread::spawn(move || child.wait());
 }
 
 fn entry(id: &str) -> Value {

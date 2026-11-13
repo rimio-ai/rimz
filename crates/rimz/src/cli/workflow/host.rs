@@ -553,13 +553,19 @@ impl workflow::AttemptHost for Host<'_> {
                 return Ok(Children::default());
             };
             let peers = rimz::address::addressable_agents(&snapshot);
-            supervised::cancel_supervised_run(&ctx.store, &run)?;
-            for (root, stop) in cohort.agents.iter().zip(agents_cmd::stop_resolved(
+            let terms = agents_cmd::StopTerms {
+                run: Some(&run),
+                still_due: None,
+            };
+            let stops = agents_cmd::stop_resolved_with(
                 &ctx,
                 self.globals,
                 &snapshot,
                 &cohort.agents,
-            )?) {
+                terms,
+            )?
+            .unwrap_or_default();
+            for (root, stop) in cohort.agents.iter().zip(stops) {
                 let handle = rimz::address::agent_handle(root, &peers, true);
                 stop.into_result(&handle)
                     .context("stopping workflow attempt")?;

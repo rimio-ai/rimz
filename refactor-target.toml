@@ -4466,7 +4466,8 @@ path = "crates/rimz/src/store"
 # workflow::remove_refused clears a run home whose record another RimZ version wrote, for `workflow cancel` (+1).
 # Premise, MessageRecord::with_premises and the row-only premise checks broken_row_premise and ended_stage_visit share the premise model with message and harness (+4).
 # HarnessNotice::awaits_join and MessageRecord::outlived_original let owners and the write check judge a team result and a still-queued warning; AfterCondition::expiry_reason words an unmet `--after` archive (+3).
-surface-budget = 611
+# Store::cancel_unbound_agent_launch cancels a never-bound stop reservation under the lock (+1).
+surface-budget = 612
 
 [[verdict]]
 kind = "item"
@@ -4903,7 +4904,8 @@ path = "crates/rimz/src/cli/supervised"
 # PaneBindWait carries run identity and open timing from both CLI doorways (+1).
 # Placement, binding and selection now belong to the library launcher (-7).
 # The run_exit_policy re-export moves to harness::plan (-1).
-surface-budget = 31
+# STOP_BACKSTOP_GRACE and stamp_stopped_subagent_end serve the agent stop's live lookup (+2).
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
@@ -4917,7 +4919,9 @@ path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # subagent resume doorway shares (+2).
 # relaunch_identity_env states the relaunch's carried lane in the subagent resume pane's
 # env, as restart and molt do (+1).
-surface-budget = 29
+# The workflow attempt stop passes its run, and the idle stop its re-check, through
+# StopTerms and stop_resolved_with (+2).
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

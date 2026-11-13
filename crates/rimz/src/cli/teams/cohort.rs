@@ -77,16 +77,24 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     let cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
     let peers = rimz::address::addressable_agents(&snapshot);
     let stops = agents_cmd::stop_resolved(&ctx, globals, &snapshot, &cohort.members)?;
-    let still_running = stops.iter().any(|stop| stop.root_still_running());
-    let mut failed = false;
     let mut out = render::out();
-    writeln!(
-        out,
-        "stopped {} ({} member{})",
-        cohort.instance,
-        cohort.members.len(),
-        if cohort.members.len() == 1 { "" } else { "s" }
-    )?;
+    let members = cohort.members.len();
+    let plural = if members == 1 { "" } else { "s" };
+    let stopped = stops.iter().filter(|stop| stop.root_stopped()).count();
+    if stops.iter().all(|stop| stop.error().is_none()) {
+        writeln!(
+            out,
+            "stopped {} ({members} member{plural})",
+            cohort.instance
+        )?;
+    } else {
+        writeln!(
+            out,
+            "{}: {stopped} of {members} member{plural} stopped",
+            cohort.instance
+        )?;
+    }
+    let mut failed = false;
     for (agent, stop) in cohort.members.iter().copied().zip(stops) {
         let label = rimz::address::agent_handle(agent, &peers, true);
         failed |= stop.report(&mut out, &label)?;
@@ -106,12 +114,8 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
         && stage.name != rimz::config::DONE_STAGE
     {
         let target = cohort.instance.to_string();
-        let resume = if still_running {
-            String::new()
-        } else {
-            let command = super::super::usage::shell_command(["rimz", "teams", "resume", &target]);
-            format!(" Resume: {command} ·")
-        };
+        let command = super::super::usage::shell_command(["rimz", "teams", "resume", &target]);
+        let resume = format!(" Resume: {command} ·");
         let release = super::super::usage::shell_command([
             "rimz", "teams", "flip", &target, "Done", "<note>",
         ]);

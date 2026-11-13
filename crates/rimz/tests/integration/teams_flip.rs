@@ -17,7 +17,7 @@ use rimz::store::message::{
 };
 use serde_json::json;
 
-use crate::common::{DeliveryRendezvous, Env, wait_for_text_then_enter};
+use crate::common::{DeliveryRendezvous, Env, ScrubSessionEnvExt, wait_for_text_then_enter};
 
 const BOARD: &str = "# Work\nStage: Build (@coder)\n\n## Progress log\n- existing entry\n\n## Evidence\nKeep this section.\n";
 const CONFIG: &str = r#"leader: coder
@@ -294,11 +294,34 @@ fn stop_receipt_names_the_cohort_and_held_board() {
             .runtime_projection(rimz::RuntimeScope::Audit)
             .unwrap();
         let owner = audit.agents[0].runtime_owner.as_ref().unwrap().pid;
+        let failed = fixture
+            .command()
+            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "100")
+            .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+            .args(["teams", "stop", "forge#feature-team"])
+            .output()
+            .unwrap();
+        assert_eq!(failed.status.code(), Some(1), "{failed:?}");
+        let receipt = String::from_utf8_lossy(&failed.stdout);
+        assert!(
+            receipt.starts_with("forge#feature-team: 0 of 1 member stopped\n"),
+            "{receipt}"
+        );
+        assert!(
+            receipt.contains(
+                "error @coder#feature-team: @coder#feature-team: a pane still hosts it: \
+                 zellij:terminal_3"
+            ),
+            "{receipt}"
+        );
+        assert!(!receipt.contains("board at"), "{receipt}");
+        assert!(rimz::proc::process_is_live(owner, None), "{receipt}");
+
         let started = Instant::now();
         let receipt = success(
             fixture
                 .command()
-                .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "100")
+                .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "1000")
                 .args(["teams", "stop", "forge#feature-team"])
                 .output()
                 .unwrap(),
@@ -308,19 +331,16 @@ fn stop_receipt_names_the_cohort_and_held_board() {
             "{receipt}"
         );
         assert!(receipt.contains("stopped @coder"), "{receipt}");
-        assert!(started.elapsed() >= Duration::from_millis(100));
-        assert!(
-            receipt.contains(&format!(
-                "@coder#feature-team: pane closed, but its process {owner} is still running; \
-                 a resume refuses until it exits"
-            )),
-            "{receipt}"
-        );
+        assert!(started.elapsed() >= Duration::from_millis(1000));
+        assert!(!receipt.contains("still running"), "{receipt}");
         assert!(
             receipt.contains("board at Build; the checkout stays held"),
             "{receipt}"
         );
-        assert!(!receipt.contains("rimz teams resume"), "{receipt}");
+        assert!(
+            receipt.contains("Resume: rimz teams resume 'forge#feature-team'"),
+            "{receipt}"
+        );
         assert!(
             receipt.contains("rimz teams flip 'forge#feature-team' Done"),
             "{receipt}"
@@ -1214,15 +1234,39 @@ impl Fixture {
             let snapshot = self.env.store().snapshot().unwrap();
             assert!(rimz::address::team_cohorts(snapshot.agents.iter()).is_empty());
         } else {
+            // The bound card's owner stands in for the launch's own process, which a stop
+            // may signal; a bind from this process would make the test runner that owner.
+            let mut owner = std::process::Command::new("sleep");
+            let owner = owner.scrub_session_env().arg("30").spawn().unwrap();
+            let runtime_owner = rimz::store::runtime::process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                launch.agent_id.as_str(),
+                owner.id(),
+            );
+            std::thread::spawn(move || owner.wait_with_output());
             self.env
                 .store()
-                .bind_agent_launch(
-                    &launch,
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id,
                     &workspace.session_name,
-                    &self.env.project_root,
-                    &PaneId::from_parts(MuxName::Zellij, "terminal_3"),
-                    None,
-                )
+                    &launch.kind,
+                    AgentLaunchPayload {
+                        system_prompt_digest: None,
+                        agent_id: launch.agent_id.clone(),
+                        launch_id: Some(launch.agent_id.clone()),
+                        agent_name: launch.name.clone(),
+                        agent_name_explicit: true,
+                        launch: launch.launch,
+                        state: AgentLaunchState::Bound,
+                        run_id: None,
+                        pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_3")),
+                        runtime_owner: Some(runtime_owner),
+                        worktree_path: Some(self.env.project_root.display().to_string()),
+                        worktree_branch: None,
+                        prompt: None,
+                        description: None,
+                    },
+                ))
                 .unwrap();
         }
     }

@@ -116,8 +116,11 @@ use resume::resume_lane;
 use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
+pub(in crate::cli) use stop::{
+    StopTerms, offers_resume, resume_command, resume_worktree_name, stop_resolved,
+    stop_resolved_with,
+};
 use stop::{WhenIdle, parse_when_idle, stop_agent};
-pub(in crate::cli) use stop::{offers_resume, resume_command, resume_worktree_name, stop_resolved};
 use supervised::OutputFormat;
 use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};

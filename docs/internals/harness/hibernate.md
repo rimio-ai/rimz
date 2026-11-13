@@ -187,7 +187,7 @@ A later successful wake withdraws the entry and its `wake_error` together, so a 
 | `rimz agents focus`, `rimz teams focus` | `crates/rimz/src/cli/agents_cmd/show.rs::focus_resolved` | focuses the pane |
 | A resume that finds the agent live | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane`, `crates/rimz/src/launcher/reconcile.rs::focus_existing` | focuses the pane |
 | `rimz agents restart` | `crates/rimz/src/cli/agents_cmd/restart.rs::restart_resolved` | closes the old pane |
-| `rimz agents stop` | `crates/rimz/src/cli/agents_cmd/stop.rs::close_agent_pane` | closes the pane |
+| `rimz agents stop` | `crates/rimz/src/cli/agents_cmd/stop.rs::Stopper::close` | re-reads hosting after the wake, then closes the pane |
 | Supervised run cleanup | `crates/rimz/src/cli/supervised/pane.rs::close_run_pane` | closes the run's pane |
 | Orphaned subagent repair | `crates/rimz/src/cli/agents_cmd/orphan_subagent.rs::repair_orphan` | closes the pane |
 | Daemon view | `crates/rimz/src/daemon_view.rs::close_surplus_panes`, `repair_daemon_shape` | closes the pane. A failed wake ends the pass with `Retry`. |

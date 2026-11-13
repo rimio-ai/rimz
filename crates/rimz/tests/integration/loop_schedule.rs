@@ -2021,7 +2021,17 @@ fn named_resident_case(case: NamedResident) {
     std::fs::write(provider_config, toml::to_string(&provider_table).unwrap()).unwrap();
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
+    // Each seat owns a process its stop can end, in a pane the listing holds until closed.
+    let owners = std::cell::RefCell::new(BTreeMap::<String, u32>::new());
+    let panes = env.home_root.join("named-panes.json");
+    std::fs::write(&panes, "[]").unwrap();
     let seed = |name: &str, path: &Path, pane: &str, team: Option<&str>| {
+        let owner = dummy_agent_process();
+        owners.borrow_mut().insert(name.to_owned(), owner.id());
+        let mut listed: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&panes).unwrap()).unwrap();
+        listed.push(json!({"id": pane.parse::<u64>().unwrap(), "is_plugin": false, "tab_id": 1}));
+        std::fs::write(&panes, serde_json::to_vec(&listed).unwrap()).unwrap();
         seed_agent_launch(
             &env,
             path,
@@ -2038,6 +2048,7 @@ fn named_resident_case(case: NamedResident) {
         command
             .current_dir(path)
             .env(rimz::harness::launch::ENV_AGENT_NAME, name)
+            .env("RIMZ_AGENT_PID", owner.id().to_string())
             .env("ZELLIJ", "1")
             .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
             .env("ZELLIJ_PANE_ID", pane);
@@ -2049,6 +2060,7 @@ fn named_resident_case(case: NamedResident) {
             )
             .wait_with_output()
             .unwrap();
+        reap_later(owner);
         assert!(output.status.success(), "{output:?}");
         env.drain_hooks();
     };
@@ -2128,14 +2140,21 @@ done
                 crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
             )
             .env("RIMZ_TEST_RIMZ", env.rimz().get_program())
-            .env("RIMZ_TEST_AGENT_OWNER_PID", env.agent_owner_pid().to_string())
+            .env(
+                "RIMZ_TEST_AGENT_OWNER_PID",
+                owners
+                    .borrow()
+                    .get("old-leader")
+                    .map_or_else(|| env.agent_owner_pid(), |pid| *pid)
+                    .to_string(),
+            )
             .env("RIMZ_TEST_SCOPE", &env.project_root)
             .env(
                 "RIMZ_TEST_ENDED_PAYLOAD",
                 json!({"hook_event_name":"SessionEnd", "session_id":"old-leader", "cwd":destination}).to_string(),
             )
             .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", &panes)
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                 format!("{} [Created 1s ago]\n", workspace.session_name),
@@ -3005,6 +3024,8 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = env.resolve_workspace(&env.project_root);
     let trace = env.home_root.join("resident-mux.log");
+    let pane_fixture = env.home_root.join("resident-agent-panes.json");
+    std::fs::write(&pane_fixture, "[]").unwrap();
     let _room = if each_worktree {
         Some(crate::common::room::ShimRoom::watch(&env, &trace))
     } else {
@@ -3026,6 +3047,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
                 crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
             )
             .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_PANES",
                 if each_worktree {
@@ -3225,6 +3247,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     let owner_pid = owner.id();
     reap_later(owner);
     let transcript = env.home_root.join("resident-transcript.jsonl");
+    write_stoppable_pane(&env, &pane_fixture, 51, "codex", owner_pid);
     std::fs::write(&transcript, "{}\n").unwrap();
     let hook = |event: &str| {
         let mut command = env.hook_command("codex");
@@ -3451,14 +3474,29 @@ fn resident_takeover_case(case: Takeover) {
     reap_later(child_owner);
     let closed_owner = (case == Takeover::ClosedPane).then(dummy_agent_process);
     let closed_pid = closed_owner.as_ref().map(std::process::Child::id);
+    // Each occupant owns a process a takeover's SIGTERM can end.
+    let owners = std::cell::RefCell::new(BTreeMap::<String, u32>::new());
     let owner_pid = |session: &str| {
         if session.ends_with("-child") {
-            child_pid
-        } else if session == "old-coder" {
-            closed_pid.unwrap_or_else(std::process::id)
-        } else {
-            std::process::id()
+            return child_pid;
         }
+        if let Some(pid) = closed_pid.filter(|_| session == "old-coder") {
+            return pid;
+        }
+        *owners
+            .borrow_mut()
+            .entry(session.to_owned())
+            .or_insert_with(|| {
+                // A failed stop keeps failing on the retry: the occupant outlives its SIGTERM.
+                let owner = if case == Takeover::FailedStop && session == "old-coder" {
+                    term_ignoring_process(&env)
+                } else {
+                    dummy_agent_process()
+                };
+                let pid = owner.id();
+                reap_later(owner);
+                pid
+            })
     };
     let hook = |session: &str, checkout: &Path, pane: Option<&str>, event: &str| {
         let mut hook = env.hook_command("claude");
@@ -3512,6 +3550,13 @@ fn resident_takeover_case(case: Takeover) {
         occupants.push(("paneless-child", &cwd, None, child_of_old_coder()));
     }
     let seeded = occupants.len();
+    let listed = occupants
+        .iter()
+        .filter_map(|(_, _, pane, _)| *pane)
+        .map(|pane| json!({"id": pane.parse::<u64>().unwrap(), "is_plugin": false, "tab_id": 1}))
+        .collect::<Vec<_>>();
+    let panes = env.home_root.join("takeover-panes.json");
+    std::fs::write(&panes, serde_json::to_vec(&listed).unwrap()).unwrap();
     for (session, checkout, pane, launch) in occupants {
         seed_agent_launch(&env, checkout, session, launch, None);
         hook(session, checkout, pane, "SessionStart");
@@ -3578,11 +3623,13 @@ fn resident_takeover_case(case: Takeover) {
                 crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
             )
             .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                 format!("{} [Created 1s ago]\n", workspace.session_name),
             );
+        if !open_run_pane && !matches!(case, Takeover::ClosedPane | Takeover::OmittedTab) {
+            command.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", &panes);
+        }
         if open_run_pane {
             command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
                 "RIMZ_TEST_ZELLIJ_LIST_PANES",
@@ -3757,8 +3804,8 @@ fn resident_takeover_case(case: Takeover) {
         let error = report.error.as_deref().unwrap_or_default();
         let reasons: &[&str] = match case {
             Takeover::Restricted => &["saved untrusted", "Open restricted"],
-            Takeover::OpenRunPane => &["terminal_51 is still open"],
-            _ => &["no bound pane"],
+            Takeover::OpenRunPane => &["a pane still hosts it: zellij:terminal_51"],
+            _ => &["RimZ found no pane for it in this room"],
         };
         for reason in reasons {
             assert!(error.contains(reason), "{error}");
@@ -11161,6 +11208,10 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
     );
     let pane_fixture = env.project_root.join("panes.json");
     std::fs::write(&pane_fixture, "[]").unwrap();
+    let owner = dummy_agent_process();
+    let owner_pid = owner.id();
+    reap_later(owner);
+    write_stoppable_pane(&env, &pane_fixture, 51, "codex", owner_pid);
     let command = || {
         let mut command = env.rimz();
         command
@@ -11203,7 +11254,9 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
             // The trace mux opens no provider process, so supply its startup hook.
             if record.status == RunStatus::Pending {
                 let mut hook = env.hook_command("codex");
-                hook.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
+                hook.env("RIMZ_AGENT_PID", owner_pid.to_string())
+                    .env("ZELLIJ_PANE_ID", "51")
+                    .env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
                     .env(
                         rimz::harness::launch::ENV_AGENT_NAME,
                         record.agent_name.as_ref().unwrap().as_str(),
@@ -11354,6 +11407,19 @@ struct ConsumedSpawn {
 }
 
 #[cfg(unix)]
+fn write_stoppable_pane(env: &Env, path: &Path, pane: u32, kind: &str, owner: u32) {
+    let mut listed = rimz::pane::PaneRef::from_id(rimz::ids::PaneId::from_parts(
+        MuxName::Zellij,
+        format!("terminal_{pane}"),
+    ));
+    listed.session_name = env.resolve_workspace(&env.project_root).session_name;
+    listed.command = Some(kind.to_owned());
+    listed.pane_pid = Some(owner);
+    listed.hosted_agent_kind = Some(AgentKind::new_unchecked(kind));
+    std::fs::write(path, serde_json::to_vec(&[listed]).unwrap()).unwrap();
+}
+
+#[cfg(unix)]
 impl ConsumedSpawn {
     fn command(&self, env: &Env) -> Command {
         let mut command = env.rimz();
@@ -11384,7 +11450,10 @@ fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, RunRecord) {
     trust_codex_preflight_hooks(env);
     trust_codex_project(env, &env.project_root);
     let pane_fixture = env.project_root.join("panes.json");
-    std::fs::write(&pane_fixture, "[]").unwrap();
+    let owner = dummy_agent_process();
+    let owner_pid = owner.id();
+    reap_later(owner);
+    write_stoppable_pane(env, &pane_fixture, 1, "codex", owner_pid);
     let workspace = env.resolve_workspace(&env.project_root);
     crate::common::room::seed_live_zellij_room(
         &env.runtime_paths(),
@@ -11421,7 +11490,9 @@ fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, RunRecord) {
             // The trace mux opens no provider process, so supply its startup hook.
             if record.status == RunStatus::Pending {
                 let mut hook = env.hook_command("codex");
-                hook.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
+                hook.env("RIMZ_AGENT_PID", owner_pid.to_string())
+                    .env("ZELLIJ_PANE_ID", "1")
+                    .env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
                     .env(
                         rimz::harness::launch::ENV_AGENT_NAME,
                         record.agent_name.as_ref().unwrap().as_str(),
@@ -13034,6 +13105,26 @@ fn dummy_agent_process() -> std::process::Child {
     // ponytail: bounded sleeper keeps hook-owned agents live for test snapshots;
     // add a per-test owner guard if tests start lasting longer than this window.
     cmd.arg("30").spawn().expect("spawn dummy agent process")
+}
+
+/// A sleeper that ignores SIGTERM, ready once it returns.
+fn term_ignoring_process(env: &Env) -> std::process::Child {
+    let ready = env.home_root.join("term-ignoring.ready");
+    let child = Command::new("sh")
+        .scrub_session_env()
+        .args(["-c", "trap '' TERM; : > \"$0\"; exec sleep 30"])
+        .arg(&ready)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the sleeper never trapped SIGTERM"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    child
 }
 
 fn reap_later(mut child: std::process::Child) {

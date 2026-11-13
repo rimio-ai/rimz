@@ -819,17 +819,47 @@ impl Store {
         session_name: &str,
         cwd: &Path,
     ) -> Result<bool> {
+        self.cancel_unbound_launch(kind, launch_id, session_name, cwd, |agent| {
+            agent.molted_from.is_some() && agent.pane.is_none()
+        })
+    }
+
+    /// Cancel a launch that no wrapper has bound, or accept its existing failure.
+    /// The caller first confirms that no pane hosts it and waits the stop bound;
+    /// this transaction refuses a row that gained a process or a session meanwhile.
+    #[must_use = "durability barrier; check the result"]
+    pub fn cancel_unbound_agent_launch(
+        &self,
+        kind: &crate::ids::AgentKind,
+        launch_id: &AgentSessionId,
+        session_name: &str,
+        cwd: &Path,
+    ) -> Result<bool> {
+        self.cancel_unbound_launch(kind, launch_id, session_name, cwd, |_| true)
+    }
+
+    fn cancel_unbound_launch(
+        &self,
+        kind: &crate::ids::AgentKind,
+        launch_id: &AgentSessionId,
+        session_name: &str,
+        cwd: &Path,
+        eligible: impl Fn(&AgentState) -> bool,
+    ) -> Result<bool> {
         self.commit(|txn| {
             let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
             let Some(agent) = agents.iter().find(|agent| {
                 agent.kind == *kind
                     && agent.agent_id == *launch_id
                     && agent.agent_id.is_provisional()
-                    && agent.molted_from.is_some()
-                    && agent.pane.is_none()
+                    && agent.runtime_owner.is_none()
+                    && eligible(agent)
             }) else {
                 return Ok(false);
             };
+            if agent.status == crate::agents::AgentStatus::Failed {
+                return Ok(true);
+            }
             let identity = AgentLaunchIdentity {
                 kind: kind.clone(),
                 agent_id: launch_id.clone(),

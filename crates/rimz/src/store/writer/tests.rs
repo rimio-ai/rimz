@@ -894,6 +894,93 @@ fn molt_reservation_refuses_without_appending_and_failed_startup_frees_it() {
 }
 
 #[test]
+fn cancelling_a_never_bound_launch_is_idempotent_and_refuses_a_bound_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        StatePaths::under(id.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let batch = store
+        .begin_agent_launch_batch(
+            &[launch_request("launch_never_bound", AgentLaunchName::Mint)],
+            scope.clone(),
+        )
+        .unwrap();
+    let identity = batch.single_identity().unwrap();
+    let cancel = || {
+        store
+            .cancel_unbound_agent_launch(&identity.kind, &identity.agent_id, "session", dir.path())
+            .unwrap()
+    };
+    assert!(cancel());
+    let after = store.read_events().unwrap();
+    assert!(cancel());
+    assert_eq!(store.read_events().unwrap(), after);
+    let row = store.snapshot().unwrap().agents[0].clone();
+    assert_eq!(row.status, crate::agents::AgentStatus::Failed);
+    assert!(
+        row.ended_at.is_none(),
+        "a cancelled reservation is not a session end"
+    );
+
+    let pane = crate::ids::PaneId::parse("tmux:%1").unwrap();
+    store
+        .bind_agent_launch(identity, "session", dir.path(), &pane, None)
+        .unwrap();
+    let before = store.read_events().unwrap();
+    assert!(!cancel(), "binding records the wrapper's owner");
+    assert_eq!(store.read_events().unwrap(), before);
+
+    let observation = crate::agents::AgentLifecycleObservation::new(
+        Some("provider-session".into()),
+        crate::agents::LifecycleSignal::Registered,
+    );
+    let mut observation = observation;
+    observation.agent_name = Some(identity.name.clone());
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            store.paths().workspace_id.clone(),
+            "session",
+            identity.kind.as_str(),
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let before = store.read_events().unwrap();
+    assert!(
+        !cancel(),
+        "a provider session must never be cancelled as a reservation"
+    );
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .agents
+            .iter()
+            .any(|row| row.agent_id == "provider-session")
+    );
+    assert!(
+        !store
+            .cancel_unbound_agent_launch(
+                &identity.kind,
+                &"provider-session".into(),
+                "session",
+                dir.path(),
+            )
+            .unwrap()
+    );
+    assert_eq!(store.read_events().unwrap(), before);
+}
+
+#[test]
 fn cancelled_unbound_molts_free_the_slot_and_cannot_bind_late() {
     let dir = tempfile::tempdir().unwrap();
     let id = WorkspaceId::from_project_root(dir.path());

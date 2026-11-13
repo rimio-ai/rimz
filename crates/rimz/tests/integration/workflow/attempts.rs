@@ -11,6 +11,7 @@ struct Room {
     env: Env,
     shell: PathBuf,
     bin: PathBuf,
+    owners: std::cell::RefCell<BTreeMap<String, std::process::Child>>,
 }
 
 mod add;
@@ -120,8 +121,8 @@ fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
             observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
                 rimz::pane::RuntimeOwnerKind::Agent,
                 name,
-                room.env.agent_owner_pid(),
-                rimz::proc::process_start_token(room.env.agent_owner_pid()),
+                room.owner(name),
+                rimz::proc::process_start_token(room.owner(name)),
             ));
             let workspace = room.env.resolve_workspace(&room.env.project_root);
             room.env
@@ -138,10 +139,10 @@ fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
         }
         fs::write(
             room.env.project_root.join("panes.json"),
-            serde_json::to_vec(
-                &[61, 62, 63]
-                    .map(|pane| json!({"id":pane,"is_plugin":false,"tab_id":1,"title":"codex"})),
-            )
+            serde_json::to_vec(&[61, 62, 63].map(|pane| {
+                json!({"id":pane,"is_plugin":false,"tab_id":1,
+                            "title":"codex","pane_command":"codex"})
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -472,8 +473,8 @@ fn stop_includes_a_cleared_companion() {
         observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
             rimz::pane::RuntimeOwnerKind::Agent,
             session,
-            room.env.agent_owner_pid(),
-            rimz::proc::process_start_token(room.env.agent_owner_pid()),
+            room.owner("companion"),
+            rimz::proc::process_start_token(room.owner("companion")),
         ));
         store
             .append_event(&rimz::EventEnvelope::agent_lifecycle(
@@ -496,7 +497,7 @@ fn stop_includes_a_cleared_companion() {
         1,
         "the cleared companion must be stopped even without a registered leader: {value:#}"
     );
-    let snapshot = store.snapshot().unwrap();
+    let snapshot = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
     let rows = &snapshot.agents;
     assert_eq!(
         rows.iter()
@@ -845,7 +846,7 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
         fs::write(&note, item).unwrap();
         fs::write(
             room.env.project_root.join("panes.json"),
-            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
         )
         .unwrap();
         let mut owner = dummy_agent_process();
@@ -901,7 +902,7 @@ fn hook_woken_attempt_keeps_the_emitting_shell() {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let mut owner = dummy_agent_process();
@@ -1735,6 +1736,42 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
     );
 }
 
+/// A canceled attempt's leader gets the backstop grace: its pane leaving within the grace
+/// is the stop, and nothing closes it.
+#[test]
+fn a_canceled_attempt_whose_leader_leaves_within_the_grace_is_never_closed() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let panes = room.env.project_root.join("panes.json");
+    let state = room.env.state_path_for(&room.env.project_root);
+    let run_id = run.run_id.clone();
+    let leaver = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !rimz::harness::run::load(&state, &run_id)
+            .unwrap()
+            .status
+            .is_terminal()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the run was never canceled"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // The canceled wrapper leaves well inside the grace, but after a stop that
+        // skipped the grace would already have closed its pane.
+        std::thread::sleep(Duration::from_millis(500));
+        fs::write(&panes, "[]").unwrap();
+    });
+    let cancel = room.command(&["workflow", "cancel", &id]).output().unwrap();
+    leaver.join().unwrap();
+    success(cancel);
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+    settled(&room.env, &id, "canceled");
+}
+
 impl Room {
     fn new(extra: &str) -> Self {
         Self::with_kind(extra, "codex")
@@ -1769,7 +1806,13 @@ impl Room {
             &workspace.session_name,
             Vec::new(),
         );
-        Self { env, shell, bin }
+        fs::write(env.project_root.join("panes.json"), "[]").unwrap();
+        Self {
+            env,
+            shell,
+            bin,
+            owners: Default::default(),
+        }
     }
 
     fn command(&self, args: &[&str]) -> std::process::Command {
@@ -1829,6 +1872,31 @@ impl Room {
         self.hook_with_owner(id, run, self.env.agent_owner_pid(), payload);
     }
 
+    fn owner(&self, key: &str) -> u32 {
+        self.owners
+            .borrow_mut()
+            .entry(key.to_owned())
+            .or_insert_with(|| {
+                let mut command = std::process::Command::new("sleep");
+                command.scrub_session_env().arg("600").spawn().unwrap()
+            })
+            .id()
+    }
+
+    fn list_pane(&self, id: u64, kind: &str) {
+        let path = self.env.project_root.join("panes.json");
+        let mut panes: Vec<Value> = fs::read(&path)
+            .ok()
+            .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+            .unwrap_or_default();
+        if !panes.iter().any(|pane| pane["id"] == id) {
+            panes.push(json!({
+                "id":id,"is_plugin":false,"tab_id":1,"title":kind,"pane_command":kind
+            }));
+            fs::write(path, serde_json::to_vec(&panes).unwrap()).unwrap();
+        }
+    }
+
     fn expire_permission_review(&self, run: &RunRecord) {
         let snapshot = self.env.store().snapshot_cached().unwrap();
         let source = snapshot
@@ -1883,6 +1951,16 @@ impl Room {
         mut payload: Value,
         variables: &[(&str, &std::path::Path)],
     ) {
+        // A real wrapper binds its own owner and pane. The shim launches no wrapper,
+        // so default hooks supply a separate owner for each attempt and list its pane.
+        if payload["hook_event_name"] == "SessionStart" {
+            self.list_pane(61, run.kind.as_str());
+        }
+        let owner_pid = if owner_pid == self.env.agent_owner_pid() {
+            self.owner(run.run_id.as_str())
+        } else {
+            owner_pid
+        };
         payload["session_id"] = json!(session);
         payload["cwd"] = json!(self.env.project_root);
         let mut cmd = self.hook_command(run.kind.as_str());
@@ -1913,6 +1991,15 @@ impl Room {
             .stderr(std::process::Stdio::piped())
             .env("RIMZ_AGENT_PID", self.env.agent_owner_pid().to_string());
         cmd
+    }
+}
+
+impl Drop for Room {
+    fn drop(&mut self) {
+        for child in self.owners.get_mut().values_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -2479,6 +2566,7 @@ fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
         crate::common::room::ShimRoom::watch(&room.env, &room.env.project_root.join("spawn.log"));
     let start = room
         .command(&["start", "--no-attach", "--no-resume"])
+        .env_remove("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE")
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",

@@ -83,9 +83,10 @@ fn close(ctx: &Ctx, globals: &GlobalFlags, session: &str, target: CardTarget) ->
         return Ok(());
     };
     let stop = agents_cmd::stop_resolved(ctx, globals, &snapshot, &[agent])?.remove(0);
-    let offers_resume = agents_cmd::offers_resume(&ctx.workspace, agent, &stop);
     stop.into_result(agent.agent_id.as_str())?;
-    if !offers_resume || !rimz::harness::resume::resume_session_present(agent) {
+    if !agents_cmd::offers_resume(&ctx.workspace, agent)
+        || !rimz::harness::resume::resume_session_present(agent)
+    {
         return Ok(());
     }
     let mut entries = read_closed(ctx);

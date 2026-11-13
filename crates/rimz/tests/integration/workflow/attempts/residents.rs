@@ -6,6 +6,11 @@ fn seed(room: &Room, name: &str, pane: u32, launch: LaunchParams, signal: Lifecy
     let workspace = room.env.resolve_workspace(&room.env.project_root);
     let mut observation = AgentLifecycleObservation::new(Some(name.into()), signal);
     observation.agent_name = Some(name.into());
+    observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        name,
+        room.owner(name),
+    ));
     observation.launch = launch;
     observation.pane_id = Some(PaneId::from_parts(
         MuxName::Zellij,
@@ -197,7 +202,7 @@ fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
 #[test]
 fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     let room = Room::new("admission.occupancy='takeover'");
-    fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
+    room.list_pane(71, "claude");
     let mut owner = dummy_agent_process();
     let pid = owner.id();
     let workspace = room.env.resolve_workspace(&room.env.project_root);
@@ -317,7 +322,7 @@ fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
     let (id, run) = room.launch();
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let mut owner = dummy_agent_process();
@@ -392,7 +397,12 @@ fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
     let panes: Value =
         serde_json::from_slice(&fs::read(room.env.project_root.join("panes.json")).unwrap())
             .unwrap();
-    assert_eq!(panes, json!([]));
+    assert_eq!(
+        panes,
+        json!([{"id":61,"is_plugin":false,"tab_id":1,
+            "title":"codex","pane_command":"codex"}]),
+        "a pane whose agent is already dead belongs to its shell and is not closed"
+    );
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
@@ -462,10 +472,11 @@ fn stop_records_recursive_children_and_leaves_peers_and_cohorts_live() {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        serde_json::to_vec(
-            &[61, 72, 73, 74, 75]
-                .map(|id| json!({"id":id,"is_plugin":false,"tab_id":1,"title":"claude"})),
-        )
+        serde_json::to_vec(&[61, 72, 73, 74, 75].map(|id| {
+            let kind = if id == 61 { "codex" } else { "claude" };
+            json!({"id":id,"is_plugin":false,"tab_id":1,
+                        "title":kind,"pane_command":kind})
+        }))
         .unwrap(),
     )
     .unwrap();
@@ -550,6 +561,7 @@ fn turn_error_wakes_and_holds_the_live_attempt_on_provider_limits() {
                 },
                 LifecycleSignal::Registered,
             );
+            room.list_pane(76, "claude");
             seed(
                 &room,
                 "limited-child",
@@ -561,6 +573,7 @@ fn turn_error_wakes_and_holds_the_live_attempt_on_provider_limits() {
             payload["cwd"] = json!(room.env.project_root);
             let mut cmd = room.hook_command("claude");
             cmd.env("ZELLIJ", "1")
+                .env("RIMZ_AGENT_PID", room.owner("limited-child").to_string())
                 .env("ZELLIJ_PANE_ID", "76")
                 .env("RIMZ_AGENT_NAME", "limited-child");
             success(
@@ -694,9 +707,11 @@ fn stop_skips_an_ended_child_and_its_subtree_and_reads_a_seat_board_stage() {
     fs::write(&board, "# Board\n\nStage: review (@seat)\n").unwrap();
     fs::write(
         room.env.project_root.join("panes.json"),
-        serde_json::to_vec(
-            &[61, 73, 75].map(|id| json!({"id":id,"is_plugin":false,"tab_id":1,"title":"claude"})),
-        )
+        serde_json::to_vec(&[61, 73, 75].map(|id| {
+            let kind = if id == 61 { "codex" } else { "claude" };
+            json!({"id":id,"is_plugin":false,"tab_id":1,
+                    "title":kind,"pane_command":kind})
+        }))
         .unwrap(),
     )
     .unwrap();

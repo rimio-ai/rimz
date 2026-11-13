@@ -145,6 +145,23 @@ fn main() {
         panes.retain(|pane| pane["id"].as_u64() != Some(id));
         std::fs::write(path, serde_json::to_vec(&panes).unwrap()).expect("close traced pane");
     }
+    if has_pair(cli, "action", "close-pane")
+        && let Some(path) = env::var_os("RIMZ_TEST_PANE_LIST").filter(|path| !path.is_empty())
+    {
+        // The suite's `RIMZ_TEST_PANE_LIST` fixture stands in for the multiplexer, so a
+        // closed pane leaves it too.
+        let raw = &cli.windows(2).find(|pair| pair[0] == "--pane-id").unwrap()[1];
+        let closed = format!("zellij:{raw}");
+        if let Ok(bytes) = std::fs::read(&path) {
+            let mut panes: Vec<serde_json::Value> =
+                serde_json::from_slice(&bytes).expect("pane fixture rows");
+            panes.retain(|pane| pane["pane_id"].as_str() != Some(closed.as_str()));
+            let tmp = Path::new(&path).with_extension("close.tmp");
+            std::fs::write(&tmp, serde_json::to_vec_pretty(&panes).unwrap())
+                .expect("write pane fixture");
+            std::fs::rename(&tmp, &path).expect("close fixture pane");
+        }
+    }
     match classify_invocation(cli) {
         Invocation::Version => write_stdout(&format!(
             "zellij {}",
