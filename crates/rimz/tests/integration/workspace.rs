@@ -38,7 +38,7 @@ fn loop_read_commands_without_a_room_are_quiet_and_create_nothing() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.probe]\nroot = {:?}\nevery = \"1h\"\ncheck = \"true\"\n",
+            "[tasks.probe]\nroot = {:?}\nevery = \"1h\"\ncommand = [\"true\"]\ntimeout = \"1m\"\n",
             env.project_root
         ),
     )
@@ -63,7 +63,7 @@ fn loop_read_commands_without_a_room_are_quiet_and_create_nothing() {
 fn machine_loop_edits_without_a_room_create_no_state() {
     let env = Env::new();
     for command in [
-        vec!["loop", "add", "probe", "--every", "1h", "--check", "true"],
+        vec!["loop", "add", "probe", "--every", "1h", "--", "true"],
         vec!["loop", "rename", "probe", "renamed"],
         vec!["loop", "remove", "renamed"],
     ] {
@@ -97,7 +97,7 @@ fn transcript_without_a_room_refuses() {
 
 #[test]
 fn ephemeral_loop_add_without_a_room_refuses_on_entry() {
-    assert_room_view_refuses(&["loop", "add", "probe", "--at", "07:00", "--check", "true"]);
+    assert_room_view_refuses(&["loop", "add", "probe", "--at", "07:00", "--", "true"]);
 }
 
 #[test]

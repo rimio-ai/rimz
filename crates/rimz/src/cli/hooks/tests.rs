@@ -180,10 +180,6 @@ fn raised_attention_replay_does_not_stamp_human_turns_but_still_opens_armed_asks
 #[test]
 fn opencode_snapshot_frames_leave_edge_consumers_untouched_on_apply_and_replay() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
-    use rimz::harness::schedule::arm::{
-        DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec, DeliveryTrigger,
-        SubscriptionLifetime, arm_delivery,
-    };
     use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
     let mut actual = Vec::new();
     for event in ["client_idle", "client_running"] {
@@ -230,34 +226,28 @@ fn opencode_snapshot_frames_leave_edge_consumers_untouched_on_apply_and_replay()
                 store
                     .queue_message(&message, &workspace.session_name)
                     .unwrap();
-                arm_delivery(
-                    &workspace,
-                    DeliverySpec {
-                        name: DeliveryName::Named("arrival".parse().unwrap()),
-                        label: None,
-                        target: rimz::config::TaskTarget {
-                            kind: rimz::ids::AgentKind::new_unchecked("opencode"),
-                            session: "recipient".into(),
-                            handle: "@recipient".into(),
-                        },
-                        trigger: DeliveryTrigger::Signal {
-                            selector: "agent.started".parse().unwrap(),
-                            matches: std::collections::BTreeMap::from([(
-                                "session".into(),
-                                "session".into(),
-                            )]),
-                            lifetime: SubscriptionLifetime::Once,
-                        },
-                        prompt: DeliveryPrompt::None,
-                        provenance: DeliveryProvenance::Loop,
-                        check: None,
-                        deadline: None,
-                        max_strikes: None,
-                        surplus: None,
-                    },
-                )
-                .unwrap();
+                // A one-shot signal delivery row, as an older `loop add --wait` stored it.
                 let subscriptions = store.paths().root.join("records/loop-instances.json");
+                let row = rimz::config::TaskEntry {
+                    root: workspace.project_root.clone(),
+                    signal: Some("agent.started".into()),
+                    matches: Some(std::collections::BTreeMap::from([(
+                        "session".into(),
+                        "session".into(),
+                    )])),
+                    wait: Some(rimz::config::TaskTarget {
+                        kind: rimz::ids::AgentKind::new_unchecked("opencode"),
+                        session: "recipient".into(),
+                        handle: "@recipient".into(),
+                    }),
+                    ..rimz::config::TaskEntry::default()
+                };
+                let rows = rimz::config::Tasks(std::collections::BTreeMap::from([(
+                    "arrival".to_owned(),
+                    row,
+                )]));
+                std::fs::create_dir_all(subscriptions.parent().unwrap()).unwrap();
+                std::fs::write(&subscriptions, serde_json::to_vec(&rows).unwrap()).unwrap();
                 let subscriptions_before = std::fs::read(&subscriptions).unwrap();
                 let payload = serde_json::json!({"session_id": "session", "on_screen": true,
                     "session_name": "screen title", "model": "gpt-5.5"});

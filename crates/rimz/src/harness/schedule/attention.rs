@@ -236,9 +236,9 @@ pub fn since_wait_armed(entry: Option<&TaskEntry>, at: Timestamp) -> bool {
         .is_none_or(|meta| at >= meta.armed_at)
 }
 
-/// Whether a staying one-off has launched: the rule that puts it under DONE.
+/// Whether a one-off has launched into its checkout: the rule that puts it under DONE.
 pub fn fired(task: &LoadedTask, launch: Option<&WorkflowLaunchRecord>) -> bool {
-    task.kind() == TaskKind::OneOff && task.entry().stay && launch.is_some()
+    task.kind() == TaskKind::OneOff && launch.is_some()
 }
 
 /// The active runs of `task` in `root` waiting on capacity, by the checkout each is scoped to.
@@ -561,8 +561,7 @@ pub fn read_catalog(
                 .and_then(|stats| stats.acting.as_ref())
                 .filter(|acting| since_wait_armed(Some(entry), acting.record.at));
             let exit = acting.and_then(|acting| acting.record.exit_label());
-            let launch =
-                launch_ledger::launched(entry, name, &run_dir, &ledger).filter(|_| entry.stay);
+            let launch = launch_ledger::launched(entry, name, &run_dir, &ledger);
             let fired = fired(task, launch);
             let held = tickets
                 .get(name.as_str())

@@ -36,7 +36,7 @@ pub fn repair_orphan(request: OrphanSubagentRequest, globals: &super::GlobalFlag
                     ctx.store.paths(),
                     ctx.store.runtime_paths(),
                     &run.run_id,
-                    rimz::store::run::CancelReason::ParentEnded,
+                    Some(rimz::store::run::CancelReason::ParentEnded),
                 )
                 .context("canceling orphaned subagent run")?;
             }

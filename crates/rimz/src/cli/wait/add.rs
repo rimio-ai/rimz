@@ -92,7 +92,6 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             span,
             Some(agent.kind.as_str()),
             login.as_ref(),
-            false,
             &ctx.workspace.worktree_root,
             &runtime,
             Timestamp::now(),
@@ -121,7 +120,6 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         condition = Some(expr);
         one_shot_trigger(TaskEntry {
             when: Some(args.when.clone()),
-            once: Some(true),
             provider,
             ..TaskEntry::default()
         })?
@@ -185,10 +183,8 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             provenance: DeliveryProvenance::SelfWait {
                 reader: agent.name.clone(),
             },
-            check: None,
             deadline: None,
             max_strikes: None,
-            surplus: None,
         },
     )
     .map_err(|error| home_write_hint(error.into(), Some("armed")))?;

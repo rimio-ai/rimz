@@ -12,12 +12,10 @@ fn catalog_wait_classes_follow_the_kind_of_work() {
         },
         TaskEntry {
             signal: Some("pr.merged".into()),
-            once: Some(true),
             ..TaskEntry::default()
         },
         TaskEntry {
             when: Some(vec!["pr=merged".into()]),
-            once: Some(true),
             ..TaskEntry::default()
         },
         TaskEntry {
@@ -563,6 +561,7 @@ fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
     for entry in [
         TaskEntry {
             signal: Some("pr.merged".into()),
+            repeat: true,
             ..TaskEntry::default()
         },
         TaskEntry {
@@ -582,7 +581,6 @@ fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
         "signal",
         TaskEntry {
             signal: Some("pr.merged".into()),
-            once: Some(true),
             ..TaskEntry::default()
         },
         TaskSource::Instance,

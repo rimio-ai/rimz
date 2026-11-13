@@ -221,9 +221,9 @@ fn worktree_tasks(
     }
     let tasks = one(loaded(TaskEntry {
         root: root.path().to_owned(),
-        agent: Some("claude".into()),
-        prompt: Some("repair".into()),
-        stay: true,
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        once_per_checkout: Some(true),
         each_worktree: true,
         when: Some(vec!["team.stage=Done".into()]),
         hold: hold.map(str::to_owned),
@@ -266,9 +266,7 @@ fn resident_memory_holds_a_checkout_only_for_a_remembering_task() {
     );
     let mut entry = tasks[NAME].entry().clone();
     let stay = scoped_tasks(&one(loaded(entry.clone())), &workflows, &owned).len();
-    entry.agent = None;
-    entry.stay = false;
-    entry.workflow = Some("review".into());
+    entry.once_per_checkout = None;
     entry.when = None;
     entry.every = Some("1h".into());
     let scheduled = scoped_tasks(&one(loaded(entry)), &workflows, &owned).len();
@@ -290,17 +288,15 @@ fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_
         destination: None,
     };
     let mut results = Vec::new();
-    for (stay, condition, each_worktree, project) in [
-        (false, true, true, false),
-        (false, true, false, false),
-        (false, true, true, true),
-        (false, false, true, false),
+    for (remember, condition, each_worktree, project) in [
         (true, true, true, false),
+        (true, true, false, false),
+        (true, true, true, true),
+        (false, false, true, false),
+        (true, false, true, false),
     ] {
         let entry = TaskEntry {
-            stay,
-            agent: stay.then(|| "claude".into()),
-            workflow: (!stay).then(|| "review".into()),
+            once_per_checkout: remember.then_some(true),
             when: condition.then(|| vec!["team.stage=Done".into()]),
             every: (!condition).then(|| "1h".into()),
             each_worktree,
@@ -327,7 +323,7 @@ fn condition_workflow_scopes_use_only_workflow_memory_and_project_entries_cover_
         );
         results.push(scoped_tasks(&one(loaded(entry)), &workflows, &owned).len());
     }
-    // A stay task runs as a workflow, so its run's memory holds its checkout too.
+    // Only a `once-per-checkout` row reads launch memory, whatever its trigger.
     assert_eq!(results, vec![1, 0, 0, 2, 1]);
 }
 
@@ -347,10 +343,9 @@ fn malformed_launch_memory_suppresses_every_remembering_task() {
             name.into(),
             loaded(TaskEntry {
                 root: root.path().to_owned(),
-                agent: (!workflow).then(|| "claude".into()),
-                prompt: Some("repair".into()),
-                stay,
-                workflow: workflow.then(|| "review".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
+                once_per_checkout: (stay || workflow).then_some(true),
                 when: Some(vec!["team.stage=Done".into()]),
                 ..Default::default()
             }),
@@ -409,7 +404,9 @@ fn workflow_launch_memory_accepts_a_silent_scope_handoff() {
     .unwrap();
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        workflow: Some("review".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        once_per_checkout: Some(true),
         when: Some(vec!["pr=open".into()]),
         ..Default::default()
     };
@@ -649,7 +646,8 @@ fn condition_write_failure_preserves_clock_fires() {
     .unwrap();
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
     let tasks = BTreeMap::from([
@@ -737,7 +735,8 @@ fn window_condition_reads_the_provider_window_under_the_elder() {
     .unwrap();
     let tasks = one(loaded(TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["window.5h.left>=40".to_owned()]),
         provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
         ..TaskEntry::default()
@@ -789,8 +788,8 @@ fn window_conditions_read_each_tasks_own_account_in_one_pass() {
     let task = |account: Option<&str>| {
         loaded(TaskEntry {
             root: root.path().to_owned(),
-            agent: Some("claude".to_owned()),
-            prompt: Some("do it".to_owned()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             when: Some(vec!["window.5h.left>=40".to_owned()]),
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
             account: account.map(|name| name.parse().unwrap()),
@@ -848,7 +847,8 @@ fn condition_replacement_resets_fired_and_hold_state() {
         let (_, _, old) = condition_tick(hold, Some(prior), None, Some(true), false, &now);
         for change in ["expression", "hold", "scope", "legacy"] {
             let mut entry = TaskEntry {
-                check: Some("true".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 when: Some(vec!["team.stage=Done".to_owned()]),
                 hold: hold.map(str::to_owned),
                 ..TaskEntry::default()
@@ -897,7 +897,8 @@ fn condition_tick(
     now: &Zoned,
 ) -> PlannedTasks {
     let task = loaded(TaskEntry {
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["team.stage=Done".to_owned()]),
         hold: hold.map(str::to_owned),
         ..TaskEntry::default()
@@ -930,19 +931,16 @@ fn condition_tick(
 fn resident_conditions_retry_at_five_minutes_until_ledgered() {
     let root = tempfile::tempdir().unwrap();
     let now = zdt(2026, 6, 24, 8, 0, 0);
-    for (stay, workflow) in [(true, false), (false, false), (false, true)] {
-        let workflow_entry: TaskEntry = toml::from_str("workflow='review'").unwrap();
+    for stay in [true, false] {
         let tasks = one(loaded(TaskEntry {
             root: root.path().to_owned(),
-            agent: (!workflow).then(|| "claude".into()),
-            prompt: Some("repair".into()),
-            stay,
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            once_per_checkout: stay.then_some(true),
+            // A one-shot named lost retries as a fire; the repeating row keeps the tick's timing.
+            repeat: !stay,
             when: Some(vec!["team.stage=Done".into()]),
-            ..if workflow {
-                workflow_entry
-            } else {
-                Default::default()
-            }
+            ..Default::default()
         }));
         let verdicts = one(Verdict {
             truth: Some(true),
@@ -961,9 +959,9 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         for (minute, second, expected) in [
             (0, 0, true),
             (4, 59, false),
-            (5, 0, stay || workflow),
+            (5, 0, stay),
             (9, 59, false),
-            (10, 0, stay || workflow),
+            (10, 0, stay),
         ] {
             let tick = zdt(2026, 6, 24, 8, minute, second);
             // Named lost, a resident row keeps its own retry timing.
@@ -1135,9 +1133,9 @@ fn lost_once_condition_retries_past_the_grace_on_a_true_reading() {
     let tick = |once: bool, age: i64, truth: Option<bool>| {
         plan(
             &one(loaded(TaskEntry {
-                check: Some("true".into()),
+                command: vec!["true".to_owned()],
                 when: Some(vec!["team.stage=Done".to_owned()]),
-                once: once.then_some(true),
+                repeat: !once,
                 ..TaskEntry::default()
             })),
             &one(seconds_before(now.timestamp(), age)),
@@ -1210,7 +1208,8 @@ fn condition_unknown_of_any_cause_holds_the_stamp_and_clock_and_false_drops_them
     let prior = seconds_before(now.timestamp(), 60);
     let state = condition_state(None, seconds_before(now.timestamp(), 120), false);
     let tasks = one(loaded(TaskEntry {
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["team.stage=Done".to_owned()]),
         ..TaskEntry::default()
     }));
@@ -1267,7 +1266,8 @@ fn forge_conditions_hold_until_a_successful_probe_at_or_after_the_fire_stamp() {
     let stamp = seconds_before(now.timestamp(), 60);
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["!ci=failed".to_owned()]),
         ..TaskEntry::default()
     };
@@ -1369,7 +1369,8 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
     let stamp = seconds_before(now, 60);
     let task = loaded(TaskEntry {
         root: repo.clone(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["ci=none".to_owned()]),
         each_worktree: true,
         ..TaskEntry::default()
@@ -1432,7 +1433,8 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
     let stamp = seconds_before(now.timestamp(), 60);
     let entry = TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["!ci=failed".to_owned()]),
         ..TaskEntry::default()
     };
@@ -1492,9 +1494,8 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
     // A fired one-shot whose runner is lost retries as a fire, so the fence holds it.
     let once = loaded(TaskEntry {
         root: root.path().to_owned(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
         when: Some(vec!["ci=passed".to_owned()]),
-        once: Some(true),
         ..TaskEntry::default()
     });
     let lost = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
@@ -1754,8 +1755,8 @@ fn loaded_from(entry: TaskEntry, source: TaskSource) -> LoadedTask {
 
 fn task(root: &str, every: &str) -> LoadedTask {
     loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("do it".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: PathBuf::from(root),
         every: Some(every.to_owned()),
         ..TaskEntry::default()
@@ -1860,7 +1861,8 @@ fn plan_arms_fires_and_carries_each_task_state() {
     let every_5m = &task("/repo", "5m");
     // `every` and `at` together are a time conflict, so this row never parses.
     let malformed = &loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("5m".to_owned()),
         at: Some("07:00".to_owned()),
         ..TaskEntry::default()
@@ -1908,7 +1910,8 @@ fn plan_arms_fires_and_carries_each_task_state() {
 fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let signal = loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         signal: Some("ci.failed".to_owned()),
         ..TaskEntry::default()
     });
@@ -1918,7 +1921,8 @@ fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
 
     let root = tempfile::tempdir().unwrap();
     let watch = loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: root.path().to_path_buf(),
         watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
         ..TaskEntry::default()
@@ -1998,7 +2002,8 @@ fn invalid_renamed_watcher_signal_does_not_stop_elder_fire() {
         LoadedTask::new(
             name,
             TaskEntry {
-                agent: Some("claude".to_owned()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 root: root.path().to_path_buf(),
                 watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
                 ..TaskEntry::default()
@@ -2047,8 +2052,8 @@ fn ended_pause_sets_the_effective_fire_edge() {
     );
 
     let daily = &loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("do it".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: PathBuf::from("/repo"),
         every: Some("day".to_owned()),
         at: Some("07:00".to_owned()),
@@ -2073,8 +2078,8 @@ fn ended_pause_sets_the_effective_fire_edge() {
 fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
     let at = zdt(2026, 6, 24, 8, 0, 0);
     let instant = &loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("do it".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: PathBuf::from("/repo"),
         fire_at: Some(at.timestamp()),
         ..TaskEntry::default()
@@ -2187,8 +2192,8 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
     let task = LoadedTask::new(
         STRANDED,
         TaskEntry {
-            agent: Some("claude".to_owned()),
-            prompt: Some("do it".to_owned()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             root: root.path().to_path_buf(),
             fire_at: Some(seconds_before(stamp, 60)),
             ..TaskEntry::default()
@@ -2263,11 +2268,9 @@ fn stranded_once_condition_retries_only_when_its_runner_is_lost() {
     let now = zdt(2026, 6, 24, 9, 0, 0);
     let stamp = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
     let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("do it".to_owned()),
+        command: vec!["true".to_owned()],
         root: root.path().to_path_buf(),
         when: Some(vec!["team.stage=Done".to_owned()]),
-        once: Some(true),
         ..TaskEntry::default()
     };
     let latch = BTreeMap::from([(
@@ -2365,10 +2368,10 @@ fn ledgered_resident_fire_at_waits_unstamped_and_fires_once_cleared() {
     let now = zdt(2026, 6, 24, 9, 0, 0);
     let stamp = seconds_before(now.timestamp(), 600);
     let tasks = one(loaded(TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("do it".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: root.path().to_path_buf(),
-        stay: true,
+        once_per_checkout: Some(true),
         fire_at: Some(seconds_before(stamp, 60)),
         ..TaskEntry::default()
     }));
@@ -2416,8 +2419,8 @@ fn project_task_stays_held_until_enable_and_does_not_replay() {
     let prior = seconds_before(now.timestamp(), 600);
     let task = loaded_from(
         TaskEntry {
-            agent: Some("claude".to_owned()),
-            prompt: Some("do it".to_owned()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             root: PathBuf::from("/repo"),
             every: Some("5m".to_owned()),
             ..TaskEntry::default()

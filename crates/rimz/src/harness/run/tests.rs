@@ -2376,8 +2376,13 @@ fn paths_cancellation_wakes_only_the_first_terminal_transition() {
     socket
         .set_read_timeout(Some(Duration::from_millis(50)))
         .unwrap();
-    let canceled =
-        cancel_and_wake_paths(&paths, &runtime, &record.run_id, CancelReason::ParentEnded).unwrap();
+    let canceled = cancel_and_wake_paths(
+        &paths,
+        &runtime,
+        &record.run_id,
+        Some(CancelReason::ParentEnded),
+    )
+    .unwrap();
     assert_eq!(canceled.status, RunStatus::Canceled);
     assert_eq!(canceled.cancel_reason, Some(CancelReason::ParentEnded));
     assert_eq!(
@@ -2390,8 +2395,13 @@ fn paths_cancellation_wakes_only_the_first_terminal_transition() {
         socket.recv(&mut frame).is_ok(),
         "new cancellation wakes waiter"
     );
-    let unchanged =
-        cancel_and_wake_paths(&paths, &runtime, &record.run_id, CancelReason::ParentEnded).unwrap();
+    let unchanged = cancel_and_wake_paths(
+        &paths,
+        &runtime,
+        &record.run_id,
+        Some(CancelReason::ParentEnded),
+    )
+    .unwrap();
     assert_eq!(unchanged.updated_at, canceled.updated_at);
     assert!(
         socket.recv(&mut frame).is_err(),

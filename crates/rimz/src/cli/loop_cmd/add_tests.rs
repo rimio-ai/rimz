@@ -1,634 +1,212 @@
 use super::*;
 use clap::FromArgMatches;
 
-#[test]
-fn resident_named_worktree_accepts_scope_independent_triggers() {
-    for trigger in [
-        vec!["--when", "pr[topic]=merged"],
-        vec!["--when", "window.5h.left<50"],
-        vec!["--every", "1h"],
-        vec!["--cron", "0 * * * *"],
-    ] {
-        let argv = ["--agent", "claude", "--stay", "--worktree", "lane"]
-            .into_iter()
-            .chain(trigger)
-            .collect::<Vec<_>>();
-        let result = validate_add_args(&args(&argv));
-        assert!(result.is_ok(), "{argv:?}: {result:?}");
-    }
-}
-
-#[test]
-fn resident_named_worktree_refuses_fanout_and_scope_reading_conditions() {
-    for (flags, key) in [
-        (
-            vec!["--each-worktree", "--when", "pr[topic]=merged"],
-            "--each-worktree",
-        ),
-        (vec!["--when", "pr=open"], "pr"),
-        (vec!["--when", "!ci=failed"], "ci"),
-        (
-            vec!["--when", "pr[topic]=merged && pr.queue=queued"],
-            "pr.queue",
-        ),
-        (
-            vec!["--when", "pr[topic]=merged || team.stage=Done"],
-            "team.stage",
-        ),
-    ] {
-        let argv = ["--agent", "claude", "--stay", "--worktree", "lane"]
-            .into_iter()
-            .chain(flags)
-            .collect::<Vec<_>>();
-        let error = validate_add_args(&args(&argv)).unwrap_err().to_string();
-        assert!(
-            error.contains("--worktree") && error.contains(key),
-            "{error}"
-        );
-        if key != "--each-worktree" {
-            assert!(
-                error.contains("project root") && error.contains("pr[<branch>]"),
-                "{error}"
-            );
-        }
-    }
-}
-
-fn judge_args(extra: &[&str]) -> AddArgs {
+fn parse(argv: &[&str]) -> Result<AddArgs, clap::Error> {
     let matches = AddArgs::augment_args(clap::Command::new("add"))
-        .try_get_matches_from(["add", "resident"].into_iter().chain(extra.iter().copied()));
-    assert!(
-        matches.is_ok(),
-        "judge flags must be recognized: {matches:?}"
-    );
-    AddArgs::from_arg_matches(&matches.unwrap()).unwrap()
+        .try_get_matches_from(["add"].into_iter().chain(argv.iter().copied()))?;
+    AddArgs::from_arg_matches(&matches)
+}
+
+fn args(argv: &[&str]) -> AddArgs {
+    parse(argv).unwrap()
 }
 
 #[test]
-fn shell_and_judge_flags_validate_caps_and_polarity() {
-    {
-        let flags = ["--agent", "codex"]
-            .into_iter()
-            .chain([
-                "--check",
-                "cargo test",
-                "--check-timeout",
-                "10m",
-                "--judge",
-                "claude",
-                "--judge-prompt",
-                "q",
-                "--judge-timeout",
-                "2m",
-                "--on",
-                "fail",
-                "--every",
-                "15m",
-            ])
-            .collect::<Vec<_>>();
-        assert!(validate_add_args(&judge_args(&flags)).is_ok(), "{flags:?}");
+fn repeat_with_every_refuses_and_repeat_needs_a_signal_or_condition() {
+    for clock in [["--every", "1h"], ["--cron", "0 * * * *"]] {
+        let argv = [&["--repeat"][..], &clock, &["--", "true"]].concat();
+        assert_eq!(
+            validate_add_args(&args(&argv)).unwrap_err().to_string(),
+            "--repeat cannot be used with --every or --cron; they repeat already"
+        );
+    }
+    assert_eq!(
+        validate_add_args(&args(&["--repeat", "--in", "5m", "--", "true"]))
+            .unwrap_err()
+            .to_string(),
+        "--repeat requires --signal or --when"
+    );
+    for trigger in [["--signal", "pr.merged"], ["--when", "pr=open"]] {
+        let argv = [&["--repeat"][..], &trigger, &["--", "true"]].concat();
+        assert!(validate_add_args(&args(&argv)).is_ok(), "{argv:?}");
+    }
+}
+
+#[test]
+fn removed_flags_and_wait_are_unknown_to_loop_add() {
+    for flag in [
+        "--wait",
+        "--agent",
+        "--prompt",
+        "--stay",
+        "--takeover",
+        "--subscribe",
+        "--worktree",
+        "--check",
+        "--judge",
+        "--verify",
+        "--on",
+        "--throttle",
+        "--capacity-wait",
+        "--budget",
+        "--once",
+    ] {
+        let error = parse(&[flag, "x", "--every", "1h", "--", "true"]).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::UnknownArgument,
+            "{flag}: {error}"
+        );
+    }
+}
+
+#[test]
+fn the_command_is_required_and_kept_word_for_word() {
+    let error = parse(&["--every", "1h"]).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    let words = ["sh", "-c", "echo 'a b' \"$HOME\" *.rs", "--every"];
+    let argv = [&["nightly", "--every", "1h", "--"][..], &words].concat();
+    let parsed = args(&argv);
+    assert_eq!(parsed.name.as_deref(), Some("nightly"));
+    assert_eq!(parsed.command, words);
+}
+
+#[test]
+fn an_added_row_stores_the_trigger_command_timeout_and_root_only() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let argv = [
+        "--when",
+        "pr[x]=merged",
+        "--timeout",
+        "45m",
+        "--",
+        "rimz",
+        "teams",
+        "launch",
+        "forge",
+        "-w",
+        "y",
+        "--detach",
+        "p",
+    ];
+    let entry = build_task_entry(&args(&argv), "loop-test", &workspace).unwrap();
+    assert_eq!(
+        entry,
+        TaskEntry {
+            root: workspace.project_root.clone(),
+            when: Some(vec!["pr[x]=merged".into()]),
+            command: argv[5..].iter().map(|word| (*word).to_owned()).collect(),
+            timeout: Some("45m".into()),
+            ..TaskEntry::default()
+        }
+    );
+    assert_eq!(
+        task_timeout(Some("0s")).unwrap_err().to_string(),
+        "--timeout must be greater than zero"
+    );
+}
+
+#[test]
+fn project_rows_must_repeat_and_account_needs_a_provider() {
+    for argv in [
+        vec!["--project", "--in", "5m", "--", "true"],
+        vec!["--project", "--signal", "pr.merged", "--", "true"],
+    ] {
+        assert_eq!(
+            validate_add_args(&args(&argv)).unwrap_err().to_string(),
+            "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
+            "{argv:?}"
+        );
     }
     assert!(
-        validate_add_args(&judge_args(&[
-            "--agent",
-            "codex",
-            "--stay",
-            "--check",
-            "true",
-            "--check-timeout",
-            "10m"
+        validate_add_args(&args(&[
+            "--project",
+            "--signal",
+            "pr.merged",
+            "--repeat",
+            "--",
+            "true"
         ]))
         .is_ok()
     );
-}
-
-#[test]
-fn judge_modifiers_require_judge_action_and_explicit_polarity() {
-    for (flags, expected) in [
-        (
-            vec![
-                "--agent",
-                "codex",
-                "--judge",
-                "claude",
-                "--judge-prompt",
-                "q",
-            ],
-            "--on",
-        ),
-        (
-            vec!["--judge", "claude", "--judge-prompt", "q", "--on", "fail"],
-            "--agent or --wait",
-        ),
-        (
-            vec!["--agent", "codex", "--judge-prompt", "q"],
-            "requires --judge",
-        ),
-        (
-            vec!["--agent", "codex", "--judge-prompt-file", "q.md"],
-            "requires --judge",
-        ),
-        (
-            vec!["--agent", "codex", "--judge-recheck", "1h"],
-            "requires --judge",
-        ),
-        (
-            vec!["--agent", "codex", "--judge-timeout", "1m"],
-            "--check-timeout",
-        ),
-        (
-            vec!["--agent", "codex", "--check-timeout", "1m"],
-            "requires --check",
-        ),
-        (
-            vec![
-                "--agent",
-                "codex",
-                "--judge",
-                "claude",
-                "--judge-prompt",
-                "q",
-                "--judge-recheck",
-                "1h",
-                "--on",
-                "fail",
-            ],
-            "requires --stay",
-        ),
-    ] {
-        let result = validate_add_args(&judge_args(&flags));
-        assert!(result.is_err(), "{flags:?} must be refused");
-        assert!(
-            result.unwrap_err().to_string().contains(expected),
-            "{flags:?}: expected {expected}"
-        );
-    }
-}
-
-#[test]
-fn both_entry_builders_preserve_the_same_guard() {
-    if std::env::var_os("RIMZ_TEST_GUARD_BUILDERS").is_none() {
-        let home = tempfile::tempdir().unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "cli::loop_cmd::add::tests::both_entry_builders_preserve_the_same_guard",
-                "--nocapture",
-            ])
-            .env("RIMZ_TEST_GUARD_BUILDERS", "1")
-            .env("RIMZ_HOME", home.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
-    let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
-    let state = StatePaths::for_project_root(root.path()).unwrap();
-    let runtime = RuntimePaths::for_state(&state).unwrap();
-    rimz::Store::open(state, runtime)
-        .unwrap()
-        .record_workspace(&workspace)
-        .unwrap();
-    let flags = [
-        "--check",
-        "cargo test",
-        "--check-timeout",
-        "10m",
-        "--judge",
-        "claude",
-        "--judge-prompt",
-        "q",
-        "--judge-timeout",
-        "2m",
-        "--on",
-        "fail",
-        "--every",
-        "15m",
-        "--prompt",
-        "fix",
-    ];
-    let spawn_args = judge_args(&[vec!["--agent", "codex"], flags.to_vec()].concat());
-    let action = resolve_add_action(&spawn_args, &workspace, TaskActionKind::Spawn, None).unwrap();
-    let (spawn, _) = build_task_entry(
-        &spawn_args,
-        action,
-        &workspace,
-        resolve_add_check(&spawn_args, &workspace).unwrap(),
-    )
-    .unwrap();
-    let wait_args = judge_args(&[vec!["--wait"], flags.to_vec()].concat());
-    add_delivery(
-        &wait_args,
-        &workspace,
-        TaskTarget {
-            kind: rimz::ids::AgentKind::new_unchecked("codex"),
-            session: "session".into(),
-            handle: "@coder".into(),
-        },
-        None,
-        BTreeMap::new(),
-        resolve_add_check(&wait_args, &workspace).unwrap(),
-    )
-    .unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let delivered = catalog.visible()["resident"].entry().clone();
-    assert_eq!(spawn.guard().shell_timeout, Some("10m"));
-    assert_eq!(spawn.guard().judges.len(), 1);
-    assert_eq!(delivered.guard().shell, spawn.guard().shell);
-    assert_eq!(delivered.guard().shell_timeout, spawn.guard().shell_timeout);
-    assert_eq!(delivered.guard().judges, spawn.guard().judges);
-    assert_eq!(delivered.on, spawn.on);
-}
-
-#[test]
-fn approved_watchdog_receipt_names_the_whole_guard() {
-    let entry: TaskEntry = toml::from_str("agent='codex'\nprompt='fix the failing test'\nevery='15m'\ncheck='cargo test'\ncheck-timeout='10m'\non='fail'\n[judge]\nagent='haiku'\nprompt='Are these failures flakes or already fixed on main?'\n").unwrap();
-    let shape = schedule::TaskShape::compile("watchdog", &entry);
-    let mut out = Vec::new();
-    write_add_feedback(
-        &mut out,
-        &entry,
-        shape.trigger().as_ref().unwrap(),
-        shape.action().unwrap(),
-        Some("codex"),
-        None,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no answer after one retry counting as a fail"), "{text}");
-}
-
-#[test]
-fn check_only_worktree_is_a_fresh_prefix_and_receipts_name_the_fire_tree() {
-    let argv = ["--check", "true", "--every", "1h", "--worktree", "nightly"];
-    let check_args = args(&argv);
     assert_eq!(
-        validate_add_args(&check_args).unwrap(),
-        TaskActionKind::CheckOnly
+        validate_add_args(&args(&["--every", "1h", "--account", "work", "--", "true"]))
+            .unwrap_err()
+            .to_string(),
+        "--account requires --provider; it picks the account whose windows a condition reads"
     );
-    reject_unsupported_action_flags(&check_args, TaskActionKind::CheckOnly).unwrap();
+}
+
+#[test]
+fn fresh_worktree_takes_a_name_prefix_and_receipts_name_the_fire_tree() {
     let root = tempfile::tempdir().unwrap();
     let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
-    let (entry, _) =
-        build_task_entry(&check_args, AddTaskAction::CheckOnly, &workspace, None).unwrap();
+    let argv = ["--every", "1h", "--fresh-worktree", "nightly", "--", "true"];
+    let entry = build_task_entry(&args(&argv), "task", &workspace).unwrap();
     assert_eq!(entry.fresh_worktree.as_deref(), Some("nightly"));
-    assert_eq!(entry.worktree, None);
     assert_eq!(entry.dir, None);
     for prefix in ["", "v1.2"] {
-        let bad = args(&["--check", "true", "--every", "1h", "--worktree", prefix]);
-        let error = build_task_entry(&bad, AddTaskAction::CheckOnly, &workspace, None)
-            .unwrap_err()
-            .to_string();
+        let bad = args(&["--every", "1h", "--fresh-worktree", prefix, "--", "true"]);
         assert_eq!(
-            error,
+            validate_add_args(&bad).unwrap_err().to_string(),
             format!(
-                "--worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
+                "--fresh-worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
             )
         );
     }
 
     for (toml, expected) in [
         (
-            "check='true'\nevery='1h'\nfresh-worktree='nightly'",
-            "action: runs check in a fresh worktree `nightly-<time>` per fire, branched from trunk",
+            "command=['true']\ntimeout='2h'\nevery='1h'\nfresh-worktree='nightly'",
+            "action: runs `true` in a fresh worktree `nightly-<time>` per fire, branched from trunk · timeout 2h",
         ),
         (
-            "agent='codex'\nprompt='fix'\nevery='1h'\nfresh-worktree='nightly'\naccount='work'",
-            "action: launches a fresh codex pane on account `work` in a fresh worktree `nightly-<time>` per fire, branched from trunk",
+            "command=['cargo', 'test']\ntimeout='10m'\nevery='1h'\nroot='/repo'",
+            "action: runs `cargo test` in /repo · timeout 10m",
         ),
         (
-            "check='true'\nevery='1h'\nroot='/repo'",
-            "action: runs check in /repo",
+            "command=['true']\ntimeout='1h'\nevery='1h'\neach-worktree=true",
+            "action: runs `true` in each RimZ-owned worktree where the trigger holds · timeout 1h",
+        ),
+        (
+            "command=['true']\ntimeout='1h'\nsignal='deploy.done'\nrepeat=true",
+            "trigger: fires on deploy.done; repeats after each fire",
         ),
     ] {
         let entry: TaskEntry = toml::from_str(toml).unwrap();
         let shape = schedule::TaskShape::compile("task", &entry);
         let mut out = Vec::new();
-        write_add_feedback(
-            &mut out,
-            &entry,
-            shape.trigger().as_ref().unwrap(),
-            shape.action().unwrap(),
-            None,
-            None,
-        )
-        .unwrap();
+        write_add_feedback(&mut out, &entry, shape.trigger().as_ref().unwrap(), None).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.lines().any(|line| line == expected), "{text}");
     }
 }
 
-fn args(extra: &[&str]) -> AddArgs {
-    let matches = AddArgs::augment_args(clap::Command::new("add"))
-        .try_get_matches_from(["add", "resident"].into_iter().chain(extra.iter().copied()))
-        .unwrap();
-    AddArgs::from_arg_matches(&matches).unwrap()
-}
-
 #[test]
-fn resident_subscriptions_reject_one_shot_triggers() {
-    for trigger in [["--in", "5m"], ["--at", "12:00"], ["--after-reset", "5h"]] {
-        let argv = ["--agent", "claude", "--stay"]
-            .into_iter()
-            .chain(trigger)
-            .collect::<Vec<_>>();
-        assert!(validate_add_args(&args(&argv)).is_ok());
-        let argv = argv
-            .into_iter()
-            .chain(["--subscribe", "ci.failed"])
-            .collect::<Vec<_>>();
-        let error =
-            validate_add_args(&args(&argv)).expect_err("one-shot cannot retain subscriptions");
-        assert!(error.to_string().contains("--subscribe"), "{error}");
-    }
-}
-
-#[test]
-fn resident_flags_require_their_launch_and_trigger() {
-    for (argv, flag) in [
-        (vec!["--stay", "--wait"], "--wait"),
-        (vec!["--stay", "--check", "true"], "--agent"),
-        (
-            vec!["--agent", "claude", "--each-worktree", "--when", "pr=open"],
-            "--stay",
-        ),
-        (
-            vec![
-                "--agent",
-                "claude",
-                "--stay",
-                "--each-worktree",
-                "--signal",
-                "pr.merged",
-            ],
+fn each_worktree_with_when_needs_repeat() {
+    assert_eq!(
+        validate_add_args(&args(&[
+            "--each-worktree",
             "--when",
-        ),
-        (
-            vec!["--agent", "claude", "--subscribe", "ci.failed"],
-            "--stay",
-        ),
-        (vec!["--agent", "claude", "--takeover"], "--stay"),
-    ] {
-        let error = validate_add_args(&args(&argv)).expect_err("invalid resident flags");
-        assert!(error.to_string().contains(flag), "{error}");
-    }
-    let removed = AddArgs::augment_args(clap::Command::new("add"))
-        .try_get_matches_from([
-            "add",
-            "resident",
-            "--agent",
-            "claude",
-            "--stay",
-            "--stop-team",
-        ])
-        .expect_err("--stop-team is gone");
-    assert_eq!(removed.kind(), clap::error::ErrorKind::UnknownArgument);
-}
-
-#[test]
-fn throttle_flag_takes_on_or_off_and_needs_an_agent() {
-    let parse = |flags: &[&str]| {
-        AddArgs::augment_args(clap::Command::new("add")).try_get_matches_from(
-            ["add", "nightly", "--every", "1h"]
-                .into_iter()
-                .chain(flags.iter().copied()),
-        )
-    };
-    assert_eq!(
-        throttle_switch(&args(&["--agent", "claude", "--throttle", "off"])),
-        Some(rimz::config::ThrottleSwitch::Off)
+            "pr=merged",
+            "--",
+            "true"
+        ]))
+        .unwrap_err()
+        .to_string(),
+        "--each-worktree with --when needs --repeat; a one-shot would remove the task after its \
+         first checkout"
     );
-    assert_eq!(
-        throttle_switch(&args(&["--agent", "claude", "--throttle", "on"])),
-        Some(rimz::config::ThrottleSwitch::On)
-    );
-    assert_eq!(throttle_switch(&args(&["--agent", "claude"])), None);
-    parse(&["--agent", "claude", "--throttle", "maybe"]).expect_err("only on and off");
-    for flags in [
-        ["--throttle", "off"],
-        ["--capacity-wait", "1h"],
-        ["--verify", "true"],
+    for trigger in [
+        &["--when", "pr=merged", "--repeat"][..],
+        &["--every", "1h"],
+        &["--cron", "0 * * * *"],
     ] {
-        let argv = [&["--check", "true"][..], &flags].concat();
-        let error = validate_add_args(&args(&argv)).expect_err("needs an agent task");
-        assert_eq!(error.to_string(), format!("{} requires --agent", flags[0]));
-    }
-}
-
-#[test]
-fn attempts_and_daily_budget_need_the_flag_they_bound() {
-    for (flags, error) in [
-        (["--max-attempts", "2"], "--max-attempts requires --verify"),
-        (
-            ["--budget-per-day", "$4"],
-            "--budget-per-day requires --budget",
-        ),
-    ] {
-        let argv = [&["--agent", "claude", "--prompt", "x"][..], &flags].concat();
-        let refusal = validate_add_args(&args(&argv)).expect_err(error);
-        assert_eq!(refusal.to_string(), error);
-    }
-}
-
-#[test]
-fn resident_launch_rejects_supervised_and_one_shot_options() {
-    for flags in [
-        vec!["--verify", "true"],
-        vec!["--max-attempts", "2", "--verify", "true"],
-        vec!["--budget", "$2"],
-        vec!["--budget-per-day", "$4", "--budget", "$2"],
-        vec!["--surplus", "1.5x"],
-        vec!["--surplus-after", "3d"],
-        vec!["--timeout", "1h"],
-        vec!["--system-prompt-file", "/prompt"],
-        vec!["--worktree", "lane"],
-        vec!["--once"],
-        vec!["--project"],
-    ] {
-        let argv = ["--agent", "claude", "--stay", "--when", "pr=open"]
-            .into_iter()
-            .chain(flags.iter().copied())
-            .collect::<Vec<_>>();
-        let error = validate_add_args(&args(&argv)).expect_err("unsupported resident option");
-        assert!(error.to_string().contains(flags[0]), "{error}");
-        assert!(error.to_string().contains("--stay"), "{error}");
-    }
-}
-
-const UNTIL_REFUSAL: &str = "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check";
-const GUARDED_WAIT_REFUSAL: &str = "--check and --judge no longer guard a --wait delivery; fire on a condition with --when, or deliver from a workflow message step";
-
-#[test]
-fn until_and_guarded_waits_refuse_with_their_replacements() {
-    let judge = ["--judge", "haiku", "--judge-prompt", "q", "--on", "fail"];
-    let cases: [(Vec<&str>, &str); 5] = [
-        (
-            vec![
-                "--agent", "claude", "--stay", "--every", "1m", "--until", "1h", "--check", "true",
-            ],
-            UNTIL_REFUSAL,
-        ),
-        (
-            ["--agent", "claude", "--until", "1h", "--every", "1m"]
-                .into_iter()
-                .chain(judge)
-                .collect(),
-            UNTIL_REFUSAL,
-        ),
-        (
-            vec!["--wait", "--check", "true", "--every", "15m"],
-            GUARDED_WAIT_REFUSAL,
-        ),
-        (
-            ["--wait", "--every", "15m"]
-                .into_iter()
-                .chain(judge)
-                .collect(),
-            GUARDED_WAIT_REFUSAL,
-        ),
-        (
-            vec![
-                "--wait",
-                "--judge",
-                "haiku",
-                "--judge-prompt-file",
-                "q.md",
-                "--on",
-                "any",
-            ],
-            GUARDED_WAIT_REFUSAL,
-        ),
-    ];
-    for (argv, refusal) in cases {
-        let error = validate_add_args(&judge_args(&argv)).expect_err("refused at add");
-        assert_eq!(error.to_string(), refusal, "{argv:?}");
-    }
-}
-
-#[test]
-fn agent_check_flags_require_a_profile_prompt_and_action() {
-    for (flags, message) in [
-        (vec!["--judge", "haiku"], "--judge-prompt"),
-        (
-            vec![
-                "--judge",
-                "haiku",
-                "--judge-prompt",
-                "q",
-                "--judge-prompt-file",
-                "q.md",
-            ],
-            "exactly one",
-        ),
-        (vec!["--judge-prompt", "q"], "--judge"),
-        (vec!["--judge-prompt-file", "q.md"], "--judge"),
-        (vec!["--judge-recheck", "6h"], "--judge"),
-        (vec!["--judge-timeout", "5m"], "--judge"),
-        (
-            vec![
-                "--judge",
-                "haiku",
-                "--judge-prompt",
-                "q",
-                "--judge-recheck",
-                "6h",
-                "--on",
-                "success",
-            ],
-            "--stay",
-        ),
-    ] {
-        let argv = ["--agent", "claude"]
-            .into_iter()
-            .chain(flags)
-            .collect::<Vec<_>>();
-        let result = validate_add_args(&args(&argv));
-        assert!(
-            result.is_err(),
-            "invalid judge flags must be rejected: {argv:?}"
-        );
-        assert!(
-            result.unwrap_err().to_string().contains(message),
-            "{argv:?}"
-        );
-    }
-    let result = validate_add_args(&args(&["--judge", "haiku", "--judge-prompt", "q"]));
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("--agent or --wait")
-    );
-}
-
-#[test]
-fn resident_checks_and_agent_check_polarity_are_accepted() {
-    for flags in [
-        vec!["--stay", "--check", "true", "--on", "success"],
-        vec![
-            "--stay",
-            "--judge",
-            "haiku",
-            "--judge-prompt",
-            "q",
-            "--judge-recheck",
-            "6h",
-            "--judge-timeout",
-            "5m",
-            "--on",
-            "success",
-        ],
-    ] {
-        let argv = ["--agent", "claude"]
-            .into_iter()
-            .chain(flags)
-            .collect::<Vec<_>>();
+        let argv = [&["--each-worktree"][..], trigger, &["--", "true"]].concat();
         assert!(validate_add_args(&args(&argv)).is_ok(), "{argv:?}");
     }
-}
-
-#[test]
-fn zero_recheck_reasks_without_accepting_a_zero_timeout() {
-    let flags = [
-        "--agent",
-        "claude",
-        "--stay",
-        "--judge",
-        "haiku",
-        "--judge-prompt",
-        "q",
-        "--judge-recheck",
-        "0",
-        "--on",
-        "success",
-    ];
-    assert!(
-        validate_add_args(&args(&flags)).is_ok(),
-        "zero recheck must be accepted"
-    );
-    let timeout = [
-        "--agent",
-        "claude",
-        "--stay",
-        "--judge",
-        "haiku",
-        "--judge-prompt",
-        "q",
-        "--judge-timeout",
-        "0",
-        "--on",
-        "success",
-    ];
-    assert!(
-        validate_add_args(&args(&timeout)).is_err(),
-        "zero timeout must remain refused"
-    );
 }

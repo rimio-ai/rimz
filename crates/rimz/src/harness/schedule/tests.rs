@@ -5,25 +5,6 @@ use jiff::civil::date;
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
 #[test]
-fn workflow_tasks_refuse_capacity_policy_owned_by_steps() {
-    let errors: Vec<_> = ["throttle = 'off'", "capacity-wait = '1h'"]
-        .into_iter()
-        .map(|key| {
-            let entry: TaskEntry = toml::from_str(&format!("workflow = 'review'\n{key}")).unwrap();
-            TaskAction::from_entry("review", &entry)
-                .err()
-                .map(|error| error.to_string())
-        })
-        .collect();
-    assert!(
-        errors.iter().all(|error| error
-            .as_ref()
-            .is_some_and(|error| error.contains("agent.<name>.admission"))),
-        "{errors:?}"
-    );
-}
-
-#[test]
 fn delivery_owners_follow_provenance_and_precedence() {
     let meta = crate::config::WaitMeta {
         armed_at: Timestamp::UNIX_EPOCH,
@@ -111,12 +92,13 @@ fn lifecycle_kind_follows_the_stored_row() {
             },
             TaskKind::OneOff,
         ),
+        (signal.clone(), TaskKind::OneOff),
         (
             TaskEntry {
-                once: Some(true),
-                ..recurring.clone()
+                repeat: true,
+                ..signal.clone()
             },
-            TaskKind::OneOff,
+            TaskKind::Routine,
         ),
         (
             TaskEntry {
@@ -127,14 +109,7 @@ fn lifecycle_kind_follows_the_stored_row() {
         ),
         (
             TaskEntry {
-                stay: true,
-                ..signal.clone()
-            },
-            TaskKind::OneOff,
-        ),
-        (
-            TaskEntry {
-                stay: true,
+                repeat: true,
                 each_worktree: true,
                 ..signal.clone()
             },
@@ -302,6 +277,7 @@ fn condition_rows_validate_describe_and_have_standing_lifetimes() {
     let mut entry = TaskEntry {
         when: Some(vec!["team.stage=Done".to_owned(), "ci=passed".to_owned()]),
         hold: Some("30m".to_owned()),
+        repeat: true,
         ..spawn_entry()
     };
     assert_eq!(
@@ -309,7 +285,7 @@ fn condition_rows_validate_describe_and_have_standing_lifetimes() {
         "when team.stage=Done && ci=passed, for 30m"
     );
     assert!(!ephemeral_lifetime(&entry));
-    entry.once = Some(true);
+    entry.repeat = false;
     assert!(parse_trigger("ship", &entry).unwrap().once);
     assert!(ephemeral_lifetime(&entry));
     for field in ["at", "every", "cron", "signal", "watch", "deadline"] {
@@ -341,7 +317,6 @@ fn condition_rows_validate_describe_and_have_standing_lifetimes() {
         );
     }
     entry.when = None;
-    entry.once = None;
     assert!(
         parse_trigger("ship", &entry)
             .unwrap_err()
@@ -477,8 +452,8 @@ fn after(now: &Zoned, seconds: i64) -> Timestamp {
 
 fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry {
     TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("do it".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         at: at.map(ToOwned::to_owned),
         every: every.map(ToOwned::to_owned),
         cron: cron.map(ToOwned::to_owned),
@@ -488,7 +463,8 @@ fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry
 
 fn spawn_entry() -> TaskEntry {
     TaskEntry {
-        agent: Some("claude".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     }
 }
@@ -538,40 +514,18 @@ fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
 /// action fields contradict each other and the message that names the fix.
 #[test]
 fn task_action_from_entry_maps_field_combinations() {
-    let workflow: TaskEntry = toml::from_str("workflow = 'review'").unwrap();
-    let action = TaskAction::from_entry("task", &workflow);
-    assert!(action.is_ok(), "workflow is an action: {action:?}");
-    let action = action.unwrap();
-    assert_eq!(action.subject(), "review");
-    assert!(action.kind().has_effect());
-    assert!(!action.kind().is_spawn());
-    // (entry, kind, (has_effect, is_spawn, is_check_only))
-    for (entry, kind, predicates) in [
-        (spawn_entry(), TaskActionKind::Spawn, (true, true, false)),
+    for (entry, kind) in [
+        (spawn_entry(), TaskActionKind::Command),
         (
             TaskEntry {
                 wait: Some(wait_target()),
                 ..TaskEntry::default()
             },
             TaskActionKind::Deliver,
-            (true, false, false),
-        ),
-        (
-            TaskEntry {
-                check: Some("true".into()),
-                ..TaskEntry::default()
-            },
-            TaskActionKind::CheckOnly,
-            (false, false, true),
         ),
     ] {
         let action = TaskAction::from_entry("task", &entry).expect("valid action");
         assert_eq!(action.kind(), kind, "{entry:?}");
-        assert_eq!(
-            (kind.has_effect(), kind.is_spawn(), kind.is_check_only()),
-            predicates,
-            "{entry:?}"
-        );
     }
 
     for (entry, message) in [
@@ -580,50 +534,18 @@ fn task_action_from_entry_maps_field_combinations() {
                 wait: Some(wait_target()),
                 ..spawn_entry()
             },
-            "loop task `task` sets both `agent` and `wait`; keep exactly one",
+            "loop task `task` sets both `command` and `wait`; keep exactly one",
         ),
         (
             TaskEntry {
-                verify: Some("true".to_owned()),
-                check: Some("true".into()),
-                ..TaskEntry::default()
-            },
-            "loop task `task` sets `verify` without `agent`; verification needs a supervised agent run",
-        ),
-        (
-            TaskEntry {
-                max_attempts: Some(2),
+                timeout: None,
                 ..spawn_entry()
             },
-            "loop task `task` sets `max-attempts` without `verify`",
-        ),
-        (
-            TaskEntry {
-                verify: Some("true".to_owned()),
-                max_attempts: Some(0),
-                ..spawn_entry()
-            },
-            "loop task `task` sets `max-attempts` to 0; use at least 1",
-        ),
-        (
-            TaskEntry {
-                account: Some("work".parse().expect("login name")),
-                check: Some("true".into()),
-                ..TaskEntry::default()
-            },
-            "loop task `task` sets `account` without `agent`; an account pin needs a supervised agent run",
-        ),
-        (
-            TaskEntry {
-                account: Some("work".parse().expect("login name")),
-                wait: Some(wait_target()),
-                ..TaskEntry::default()
-            },
-            "loop task `task` sets `account` without `agent`; an account pin needs a supervised agent run",
+            "loop task `task` has a `command` without `timeout`; set `timeout = \"2h\"`, or delete the task and re-add it with `rimz loop add`",
         ),
         (
             TaskEntry::default(),
-            "loop task `task` needs `agent`, `wait`, or `check`",
+            "loop task `task` has no `command`; delete the task and re-add it with `rimz loop add`",
         ),
     ] {
         let err = TaskAction::from_entry("task", &entry).expect_err("invalid action");
@@ -632,41 +554,49 @@ fn task_action_from_entry_maps_field_combinations() {
 }
 
 #[test]
-fn workflow_rejects_action_and_node_owned_fields() {
-    for (field, hint) in [
-        ("agent = 'codex'", "keep exactly one"),
-        (
-            "wait = {kind='codex', session='s', handle='@x'}",
-            "keep exactly one",
-        ),
-        ("stay = true", "not a resident agent"),
-        (
-            "takeover = true",
-            "(`[agent.<name>.admission] occupancy = \"takeover\"`)",
-        ),
-        (
-            "subscribe = [{signal='ready', stage='Done'}]",
-            "check names what it waits for",
-        ),
-        ("check = 'true'", "[test.<name>]"),
-        ("judge = [{agent='codex', prompt='judge'}]", "[test.<name>]"),
+fn a_row_with_a_key_outside_the_row_refuses_with_the_re_add_message() {
+    let entry: TaskEntry = toml::from_str("agent = 'codex'\nprompt = 'fix'\nevery = '1h'").unwrap();
+    let err = TaskAction::from_entry("old", &entry).expect_err("old row refuses");
+    let message = err.to_string();
+    assert!(
+        message.starts_with("loop task `old` is not a row this RimZ takes (unknown field `agent`")
+            && message.ends_with("; delete the task and re-add it with `rimz loop add`"),
+        "{message}"
+    );
+    // The row keeps none of its fields, so every trigger reader reads the refusal, never a
+    // missing firing time.
+    assert_eq!(
+        parse_trigger("old", &entry).map_err(|error| error.to_string()),
+        Err(message)
+    );
+}
+
+#[test]
+fn on_belongs_to_a_watch_and_refuses_on_a_command_or_signal_delivery_row() {
+    for row in [
+        "command=['true']\ntimeout='1m'\nevery='1h'\non='success'",
+        "wait={kind='codex', session='s', handle='@x'}\nsignal='deploy.done'\non='success'",
     ] {
-        let entry: TaskEntry = toml::from_str(&format!("workflow='review'\n{field}")).unwrap();
-        let error = TaskAction::from_entry("task", &entry)
-            .err()
-            .map(|e| e.to_string());
-        assert!(
-            error.as_deref().is_some_and(|e| e.contains(hint)),
-            "{field}: {error:?}"
+        let entry: TaskEntry = toml::from_str(row).unwrap();
+        assert_eq!(
+            TaskAction::from_entry("task", &entry)
+                .unwrap_err()
+                .to_string(),
+            "loop task `task` is not a row this RimZ takes (`on` belongs to a watch); delete the task and re-add it with `rimz loop add`",
+            "{row}"
         );
     }
+    let mut watch: TaskEntry =
+        toml::from_str("wait={kind='codex', session='s', handle='@x'}\non='success'").unwrap();
+    watch.watch = Some(WatchSpec::Command("true".to_owned()));
+    assert!(TaskAction::from_entry("task", &watch).is_ok());
 }
 
 #[test]
 fn fresh_worktree_prefix_must_be_a_worktree_name() {
     for prefix in ["", "v1.2", "a b"] {
         let entry: TaskEntry = toml::from_str(&format!(
-            "fresh-worktree={prefix:?}\nroot='/r'\nagent='claude'"
+            "fresh-worktree={prefix:?}\nroot='/r'\ncommand=['true']\ntimeout='1m'"
         ))
         .unwrap();
         let error = TaskAction::from_entry("task", &entry).unwrap_err();
@@ -685,20 +615,23 @@ fn fresh_worktree_prefix_must_be_a_worktree_name() {
         );
     }
     let entry: TaskEntry =
-        toml::from_str("fresh-worktree='night/fix_1'\nroot='/r'\nagent='claude'").unwrap();
+        toml::from_str("fresh-worktree='night/fix_1'\nroot='/r'\ncommand=['true']\ntimeout='1m'")
+            .unwrap();
     assert!(TaskAction::from_entry("task", &entry).is_ok());
 }
 
 #[test]
 fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
     for (fields, field) in [
-        ("agent='claude'\nstay=true", "stay"),
-        ("agent='claude'\nstay=true\neach-worktree=true", "stay"),
-        ("agent='claude'\neach-worktree=true", "each-worktree"),
+        (
+            "command=['true']\ntimeout='1m'\neach-worktree=true",
+            "each-worktree",
+        ),
         ("wait={kind='codex', session='s', handle='@x'}", "wait"),
-        ("workflow='review'", "workflow"),
-        ("agent='claude'\nworktree='lane'", "worktree"),
-        ("check='true'\ndir='/tmp/elsewhere'", "dir"),
+        (
+            "command=['true']\ntimeout='1m'\ndir='/tmp/elsewhere'",
+            "dir",
+        ),
     ] {
         let entry: TaskEntry =
             toml::from_str(&format!("fresh-worktree='p'\nroot='/r'\n{fields}")).unwrap();
@@ -716,57 +649,24 @@ fn fresh_worktree_is_refused_beside_each_placement_it_replaces() {
     }
     let error = TaskAction::from_entry(
         "task",
-        &toml::from_str("fresh-worktree='p'\ncheck='true'\ndir='/d'").unwrap(),
+        &toml::from_str("fresh-worktree='p'\ncommand=['true']\ntimeout='1m'\ndir='/d'").unwrap(),
     )
     .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "loop task `task` sets `fresh-worktree` with `dir`; remove `dir`; a fresh-worktree task runs its guard and turn in the fire's tree"
+        "loop task `task` sets `fresh-worktree` with `dir`; remove `dir`; a fresh-worktree task runs its command in the fire's tree"
     );
-    for fields in ["agent='claude'", "check='true'"] {
-        let entry: TaskEntry =
-            toml::from_str(&format!("fresh-worktree='p'\nroot='/r'\n{fields}")).unwrap();
-        assert!(TaskAction::from_entry("task", &entry).is_ok(), "{fields}");
-    }
-}
-
-#[test]
-fn judges_require_explicit_polarity_and_an_action() {
     let entry: TaskEntry =
-        toml::from_str("agent = 'claude'\njudge = { agent = 'haiku', prompt = 'q' }").unwrap();
-    let result = TaskAction::from_entry("task", &entry);
-    assert!(result.is_err(), "judge needs an explicit on: {entry:?}");
-    let message = result.unwrap_err().to_string();
-    for word in ["fail", "success", "any"] {
-        assert!(message.contains(word), "{message}");
-    }
-    let entry: TaskEntry =
-        toml::from_str("on = 'fail'\njudge = { agent = 'haiku', prompt = 'q' }").unwrap();
-    assert!(
-        TaskAction::from_entry("task", &entry).is_err(),
-        "judge is not a check-only action"
-    );
-}
-
-#[test]
-fn watch_refuses_a_judge_guard() {
-    let entry: TaskEntry = toml::from_str(
-        "agent = 'claude'\non = 'fail'\nwatch = 'true'\njudge = { agent = 'haiku', prompt = 'q' }",
-    )
-    .unwrap();
-    assert!(matches!(
-        parse_trigger("task", &entry),
-        Err(ScheduleErr::WatchWithCheck { .. })
-    ));
+        toml::from_str("fresh-worktree='p'\nroot='/r'\ncommand=['true']\ntimeout='1m'").unwrap();
+    assert!(TaskAction::from_entry("task", &entry).is_ok());
 }
 
 #[test]
 fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
-    // Stay, condition and workflow tasks overlap on their live run.
+    // Repeating clock and condition tasks overlap on their live run.
     for fields in [
-        "agent='claude'\nstay=true\nevery='1h'",
-        "check='true'\nwhen=['team.stage=Done']",
-        "workflow='review'\nevery='1h'",
+        "command=['true']\ntimeout='1m'\nevery='1h'",
+        "command=['true']\ntimeout='1m'\nwhen=['team.stage=Done']\nrepeat=true",
     ] {
         let entry: crate::config::TaskEntry =
             toml::from_str(&format!("overlap='coalesce'\n{fields}")).unwrap();
@@ -777,23 +677,25 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
         );
     }
     for (fields, reason) in [
-        ("check='true'\nat='07:00'", "one-shot"),
-        ("check='true'\nevery='1h'\nonce=true", "one-shot"),
+        ("command=['true']\ntimeout='1m'\nat='07:00'", "one-shot"),
         (
-            "check='true'\nevery='1h'\ndeadline='2030-01-01T00:00:00Z'",
+            "command=['true']\ntimeout='1m'\nwhen=['team.stage=Done']",
+            "one-shot",
+        ),
+        (
+            "command=['true']\ntimeout='1m'\nevery='1h'\ndeadline='2030-01-01T00:00:00Z'",
             "one-shot",
         ),
         (
             "wait={kind='claude',session='s',handle='@a'}\nsignal='deploy.done'",
             "no run to overlap",
         ),
-        ("check='true'\nevery='1h'\noverlap-limit=2", "queue"),
         (
-            "agent='claude'\nstay=true\neach-worktree=true\nwhen=['team.stage=Done']",
-            "per checkout",
+            "command=['true']\ntimeout='1m'\nevery='1h'\noverlap-limit=2",
+            "queue",
         ),
         (
-            "workflow='review'\neach-worktree=true\nevery='1h'",
+            "command=['true']\ntimeout='1m'\neach-worktree=true\nwhen=['team.stage=Done']\nrepeat=true",
             "per checkout",
         ),
     ] {
@@ -804,8 +706,10 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
         assert!(shape.action().unwrap_err().to_string().contains(reason));
     }
     for fields in ["overlap-limit=2", "overlap='queue'\noverlap-limit=0"] {
-        let entry: crate::config::TaskEntry =
-            toml::from_str(&format!("check='true'\nevery='1h'\n{fields}")).unwrap();
+        let entry: crate::config::TaskEntry = toml::from_str(&format!(
+            "command=['true']\ntimeout='1m'\nevery='1h'\n{fields}"
+        ))
+        .unwrap();
         assert!(
             TaskShape::compile("busy", &entry).action().is_err(),
             "invalid overlap-limit must be refused: {fields}"
@@ -822,11 +726,15 @@ fn task_shape_compiles_action_and_timing_independently() {
         &TaskEntry {
             cron: Some("0 7 * * *".to_owned()),
             every: Some("weekday".to_owned()),
-            agent: Some("claude".to_owned()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
         },
     );
-    assert_eq!(shape.action(), Ok(&TaskAction::Spawn("claude".to_owned())));
+    assert_eq!(
+        shape.action(),
+        Ok(&TaskAction::Command(vec!["true".to_owned()]))
+    );
     assert!(matches!(
         shape.trigger(),
         Err(ScheduleErr::TimeConflict { .. })
@@ -962,7 +870,6 @@ fn parse_trigger_accepts_signal_and_watch_forms() {
             ("result".to_owned(), "failure".to_owned()),
             ("attempt".to_owned(), "2".to_owned()),
         ])),
-        once: Some(true),
         ..spawn_entry()
     };
     assert_eq!(
@@ -1016,21 +923,11 @@ fn parse_trigger_rejects_conflicting_fields() {
         ),
         (
             TaskEntry {
-                once: Some(true),
                 every: Some("5m".to_owned()),
+                repeat: true,
                 ..spawn_entry()
             },
-            ScheduleErr::OnceWithoutSignal {
-                name: "task".to_owned(),
-            },
-        ),
-        (
-            TaskEntry {
-                watch: Some(WatchSpec::Command("true".to_owned())),
-                check: Some("true".into()),
-                ..spawn_entry()
-            },
-            ScheduleErr::WatchWithCheck {
+            ScheduleErr::RepeatWithoutSignal {
                 name: "task".to_owned(),
             },
         ),
@@ -1917,45 +1814,10 @@ fn cron_next_after_matches_a_minute_walk_across_zone_shifts() {
 }
 
 #[test]
-fn judge_prompt_file_uses_the_task_rows_origin() {
-    let root = tempfile::tempdir().unwrap();
-    let path = std::path::Path::new("questions/check.md");
-    let task = |source| {
-        catalog::LoadedTask::new(
-            "guard",
-            TaskEntry {
-                root: root.path().to_owned(),
-                ..TaskEntry::default()
-            },
-            source,
-        )
-    };
-    let machine = task(catalog::TaskSource::Config);
-    assert_eq!(
-        compile::judge_prompt_path(path, &machine).unwrap(),
-        crate::config::MachineConfig::loop_path()
-            .parent()
-            .unwrap()
-            .join(path)
-    );
-    let project = task(catalog::TaskSource::Project {
-        state: crate::trust::TrustState::Trusted,
-    });
-    assert_eq!(
-        compile::judge_prompt_path(path, &project).unwrap(),
-        root.path().join(".rimz").join(path)
-    );
-    assert_eq!(
-        compile::judge_prompt_path(root.path(), &project).unwrap(),
-        root.path()
-    );
-}
-
-#[test]
 fn trigger_clauses_word_each_trigger_as_a_runs_brief_names_it() {
     let clause = |row: &str| {
         let entry: TaskEntry =
-            toml::from_str(&format!("agent='claude'\nprompt='go'\n{row}")).unwrap();
+            toml::from_str(&format!("command=['true']\ntimeout='1m'\n{row}")).unwrap();
         trigger_clause(&catalog::LoadedTask::new(
             "land",
             entry,
@@ -2090,4 +1952,38 @@ pub(super) fn swapped_store_with(
     register("s2", 1);
     assert_eq!(row("s2").launch_id.as_deref(), Some("launch_a"));
     (paths, store)
+}
+
+#[test]
+fn an_each_worktree_row_that_fires_once_is_refused_with_the_fix() {
+    let entry: TaskEntry =
+        toml::from_str("command=['true']\ntimeout='1m'\neach-worktree=true\nwhen=['pr=merged']")
+            .unwrap();
+    let error = TaskAction::from_entry("yagni", &entry).unwrap_err();
+    assert_eq!(
+        error,
+        TaskActionErr::OneShotFanOut {
+            name: "yagni".to_owned()
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "loop task `yagni` sets `each-worktree` on a trigger that fires once, which would remove \
+         the task after its first checkout; set `repeat = true` beside `when`, or fire on `every` \
+         or `cron`"
+    );
+    for fields in [
+        "when=['pr=merged']\nrepeat=true",
+        "every='1h'",
+        "cron='0 * * * *'",
+    ] {
+        let entry: TaskEntry = toml::from_str(&format!(
+            "command=['true']\ntimeout='1m'\neach-worktree=true\n{fields}"
+        ))
+        .unwrap();
+        assert!(
+            TaskAction::from_entry("yagni", &entry).is_ok(),
+            "{fields} repeats"
+        );
+    }
 }

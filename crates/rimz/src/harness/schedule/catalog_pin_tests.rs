@@ -37,56 +37,15 @@ fn plain_tasks_pin_root_and_run_directory_even_with_invalid_actions() {
 }
 
 #[test]
-fn fanout_and_bare_worktree_spawns_pin_only_root() {
-    for task in [
-        TaskEntry {
-            each_worktree: true,
-            ..entry()
-        },
-        TaskEntry {
-            worktree: Some("new".into()),
-            ..entry()
-        },
-    ] {
-        assert_eq!(
-            paths(task, TaskSource::Config, None),
-            vec![PathBuf::from("/repo")]
-        );
-    }
-}
-
-#[test]
-fn worktree_guards_conditions_and_watches_need_run_directory() {
-    let spawn = TaskEntry {
-        worktree: Some("new".into()),
+fn fanout_tasks_pin_only_root() {
+    let task = TaskEntry {
+        each_worktree: true,
         ..entry()
     };
-    for task in [
-        TaskEntry {
-            check: Some(crate::config::TaskCheck("true".into())),
-            ..spawn.clone()
-        },
-        TaskEntry {
-            judge: vec![crate::config::Judge {
-                agent: "claude".into(),
-                prompt: None,
-                prompt_file: None,
-                recheck: None,
-                timeout: None,
-            }],
-            ..spawn.clone()
-        },
-        TaskEntry {
-            when: Some(vec!["ci=passed".into()]),
-            ..spawn.clone()
-        },
-        TaskEntry {
-            watch: Some(crate::config::WatchSpec::Command("true".into())),
-            ..spawn
-        },
-    ] {
-        assert_eq!(paths(task, TaskSource::Instance, None).len(), 2);
-    }
+    assert_eq!(
+        paths(task, TaskSource::Config, None),
+        vec![PathBuf::from("/repo")]
+    );
 }
 
 #[test]

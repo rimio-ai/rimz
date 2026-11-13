@@ -824,7 +824,7 @@ fn doctor_throttle_holds_include_trusted_project_tasks_in_other_rooms_without_re
     env.record(&other);
     env.write_config(
         &other,
-        "[tasks.project-only]\nagent='codex'\nprompt='review'\nsignal='ci.done'\n",
+        "[tasks.project-only]\ncommand=['true']\ntimeout='1m'\nsignal='ci.done'\nrepeat=true\n",
     );
     write_throttle_config(&env, "[throttle]\nmin-disk='20GB'\n").unwrap();
     let paths = env.state_path_for(&other);
@@ -924,8 +924,8 @@ fn doctor_throttle_disk_floors_sample_each_fanout_checkout() {
         format!(
             concat!(
                 "[throttle]\nmin-disk='20GB'\n[tasks.fanout]\nroot={:?}\n",
-                "agent='codex'\nprompt='review'\nstay=true\neach-worktree=true\n",
-                "when=['pr=open']\n",
+                "command=['true']\ntimeout='1m'\neach-worktree=true\n",
+                "when=['pr=open']\nrepeat=true\n",
             ),
             env.project_root,
         ),
@@ -984,7 +984,7 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.context-only]\ncheck = 'true'\nroot = '{}'\nsignal = 'ci.done'\n",
+            "[tasks.context-only]\ncommand = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nsignal = 'ci.done'\n",
             env.project_root.display()
         ),
     )
@@ -1001,7 +1001,7 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
         "started_at_ms": 0, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
     })).unwrap()).unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
-    assert_eq!(report["loop_tasks"]["tasks"][0]["spec"], "check");
+    assert_eq!(report["loop_tasks"]["tasks"][0]["spec"], "true");
     for (args, expanded) in [(vec!["doctor"], false), (vec!["doctor", "--audit"], true)] {
         let output = env.rimz().args(args).output().unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -1042,7 +1042,7 @@ fn doctor_keeps_same_named_cross_root_instance_and_its_worktree_hold() {
     std::fs::create_dir(&other).unwrap();
     std::fs::write(
         env.rimz_home().join("loop.toml"),
-        format!("[tasks.same]\nroot={other:?}\ncheck='true'\nevery='1h'\n"),
+        format!("[tasks.same]\nroot={other:?}\ncommand=['true']\ntimeout='1m'\nevery='1h'\n"),
     )
     .unwrap();
     let instances = env
@@ -1053,7 +1053,7 @@ fn doctor_keeps_same_named_cross_root_instance_and_its_worktree_hold() {
     std::fs::write(
         instances,
         serde_json::to_vec(&json!({"same": {
-            "root": env.project_root, "dir": worktree, "check": "true", "signal": "ci.failed", "once": true
+            "root": env.project_root, "dir": worktree, "command": ["true"], "timeout": "1m", "signal": "ci.failed"
         }}))
         .unwrap(),
     )
@@ -1095,7 +1095,7 @@ fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
     let path = env.home_root.join("project-worktrees/followup");
     let subdir = path.join("src");
     std::fs::create_dir(&subdir).unwrap();
-    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.nightly]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n[tasks.project]\nagent = 'claude'\nroot = '{}'\nsignal = 'ci.failed'\n", path.display(), subdir.display(), env.project_root.display())).unwrap();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.nightly]\ncommand = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n[tasks.project]\ncommand = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nsignal = 'ci.failed'\n", path.display(), subdir.display(), env.project_root.display())).unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
     assert_eq!(
         report["loop_tasks"]["tasks"][0]["holds_worktrees"],
@@ -1108,7 +1108,7 @@ fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n",
+            "[tasks.nightly]\ncommand = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n",
             env.project_root.display(),
             subdir.join("not-created-yet").display()
         ),
@@ -1131,7 +1131,7 @@ fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
 fn doctor_flags_clock_tasks_without_a_scheduler() {
     let env = Env::new();
     std::fs::write(env.rimz_home().join("loop.toml"), format!(
-        "[tasks.morning]\nagent = 'claude'\nroot = '{}'\nevery = '1m'\n[tasks.signal]\nagent = 'claude'\nroot = '{}'\nsignal = 'ci.failed'\n", env.project_root.display(), env.project_root.display()
+        "[tasks.morning]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\nevery = '1m'\n[tasks.signal]\ncommand = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nsignal = 'ci.failed'\n", env.project_root.display(), env.project_root.display()
     )).unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
     assert_eq!(report["loop_tasks"]["timer"]["state"], "not_installed");
@@ -1694,7 +1694,7 @@ fn doctor_reports_machine_task_root_problem() {
     let env = Env::new();
     std::fs::write(
         env.rimz_home().join("loop.toml"),
-        "[tasks.one]\ncheck='true'\nevery='1h'\n",
+        "[tasks.one]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
     )
     .unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());

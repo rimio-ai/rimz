@@ -57,9 +57,9 @@ type Result<T> = std::result::Result<T, WorkflowErr>;
 
 mod agent;
 
-/// Where a new run's definition comes from. A loop fire passes its task row's `surplus` and
-/// `surplus-after` values as written, which the run's judges read in place of the live row, and
-/// the `fire` its briefs name.
+/// Where a new run's definition comes from, with the surplus gate its judges read (`surplus`,
+/// `surplus-after`), which no caller sets since a loop row carries neither, and the `fire` its
+/// briefs name.
 pub enum DefinitionSource<'a> {
     /// A deployed workflow directory; its basename names the run.
     Deployed {

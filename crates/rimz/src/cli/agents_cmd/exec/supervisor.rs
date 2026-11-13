@@ -755,7 +755,7 @@ fn run_loop(
                             &context.paths,
                             &context.runtime,
                             &context.run_id,
-                            rimz::store::run::CancelReason::ParentEnded,
+                            Some(rimz::store::run::CancelReason::ParentEnded),
                         )
                     {
                         tracing::debug!(
@@ -1064,7 +1064,7 @@ impl RunMonitor {
             }
         }
         if !self.self_cleanup {
-            return false;
+            return kept_run_stopped(&record);
         }
         if matches!(self.stop_policy, StopPolicy::RunTerminal) {
             return record.status.is_terminal() && run_ready(context);
@@ -1169,6 +1169,16 @@ impl RunMonitor {
     }
 }
 
+/// Whether a run kept by `--keep` was stopped, so its provider ends while the wrapper holds
+/// the pane: `--keep` holds the pane, never the turn. Two cancels leave the provider running:
+/// a workflow attempt's, since its step's `keep` detaches the agent by canceling the run, and
+/// an interrupt hold's expiry, since the person who interrupted the turn in the pane keeps it.
+pub(super) fn kept_run_stopped(record: &rimz::store::run::RunRecord) -> bool {
+    record.status == rimz::store::run::RunStatus::Canceled
+        && record.workflow.is_none()
+        && record.interrupted_at.is_none()
+}
+
 fn run_ready(context: &RunPaths) -> bool {
     match rimz::store::run::run_waiter_is_live(&context.runtime, &context.run_id) {
         Ok(live) => !live,
@@ -1265,7 +1275,7 @@ fn supervise_child(
                     &monitor.paths,
                     &monitor.runtime,
                     &monitor.run_id,
-                    rimz::store::run::CancelReason::ParentEnded,
+                    Some(rimz::store::run::CancelReason::ParentEnded),
                 )
             {
                 tracing::debug!(

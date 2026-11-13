@@ -1039,7 +1039,7 @@ fn record_start_failed(
         payload: signal.payload.clone(),
     });
     record.condition = condition.cloned();
-    if task.entry().stay || task.entry().each_worktree {
+    if task.entry().each_worktree {
         record.checkout = Some(
             checkout
                 .map(Path::to_path_buf)

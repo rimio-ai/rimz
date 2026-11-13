@@ -466,9 +466,7 @@ fn action(row: &TaskRow) -> String {
     };
     let kind = match spec.kind {
         ActionKind::Wake => TaskActionKind::Deliver,
-        ActionKind::Start => TaskActionKind::Spawn,
-        ActionKind::Check => TaskActionKind::CheckOnly,
-        ActionKind::Workflow => TaskActionKind::Workflow,
+        ActionKind::Command => TaskActionKind::Command,
     };
     crate::cli::wake_view::action_text(
         kind,

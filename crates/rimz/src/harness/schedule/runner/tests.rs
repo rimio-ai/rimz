@@ -15,7 +15,8 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
             "pending",
             TaskEntry {
                 root: root.to_owned(),
-                check: Some("true".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 every: Some("1h".into()),
                 overlap: Some(crate::config::OverlapPolicy::Coalesce),
                 ..Default::default()
@@ -24,7 +25,6 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
         ),
         catalog,
         LoopRunMode::Scheduled,
-        false,
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
@@ -107,8 +107,8 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                         name,
                         TaskEntry {
                             root: root.path().to_owned(),
-                            agent: Some("claude".into()),
-                            prompt: Some("work".into()),
+                            command: vec!["true".to_owned()],
+                            timeout: Some("1m".to_owned()),
                             every: Some("1h".into()),
                             overlap,
                             ..Default::default()
@@ -117,7 +117,6 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                     ),
                     &catalog,
                     mode,
-                    false,
                     Timestamp::now(),
                     Arc::new(MachineConfig::default()),
                     None,
@@ -437,7 +436,9 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
                 "land",
                 TaskEntry {
                     root: root.path().to_owned(),
-                    workflow: Some("review".into()),
+                    command: vec!["true".to_owned()],
+                    timeout: Some("1m".to_owned()),
+                    once_per_checkout: Some(true),
                     when: Some(vec!["pr=open".into()]),
                     ..Default::default()
                 },
@@ -445,7 +446,6 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
             ),
             &catalog,
             LoopRunMode::Scheduled,
-            false,
             Timestamp::now(),
             Arc::new(MachineConfig::default()),
             None,
@@ -470,66 +470,6 @@ fn scheduled_workflow_rechecks_launch_memory_under_early_and_late_run_locks() {
     }
     // Launch memory is read before the lease, then again under it after the room is born.
     assert_eq!(outcomes, vec![(true, 0, false), (true, 1, true)]);
-}
-
-#[test]
-fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
-    let root = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
-    let runtime = RuntimePaths::for_project_root(root.path()).unwrap();
-    crate::agents::spending::write_workspace_spending_cache(
-        &runtime.workspace_spending_path("resident"),
-        &crate::agents::spending::WorkspaceSpendingCache {
-            scope_hash: "resident".into(),
-            day: crate::agents::spending::SpendWindow {
-                usd: 6.0,
-                ..Default::default()
-            },
-            day_cutoff_secs: "2026-06-02T00:00:00Z"
-                .parse::<Timestamp>()
-                .unwrap()
-                .as_second() as u64,
-            ..Default::default()
-        },
-    );
-    for (config, deadline, expected) in [
-        (
-            toml::from_str("timezone = \"UTC\"\n[harness]\nbudget = \"5/day\"\n").unwrap(),
-            None,
-            LoopRunResult::BudgetSkipped,
-        ),
-        (
-            MachineConfig::default(),
-            Some(Timestamp::UNIX_EPOCH),
-            LoopRunResult::Expired,
-        ),
-    ] {
-        let entry = TaskEntry {
-            root: root.path().to_owned(),
-            agent: Some("claude,codex".into()),
-            prompt: Some("repair".into()),
-            stay: true,
-            deadline,
-            ..Default::default()
-        };
-        let mut fire = TaskFire::new(
-            "resident-gates",
-            LoadedTask::new("resident-gates", entry, catalog::TaskSource::Config),
-            &catalog,
-            LoopRunMode::Manual,
-            false,
-            now,
-            Arc::new(config),
-            None,
-            Instant::now(),
-        )
-        .unwrap();
-        let plan = fire
-            .prepare(&mut |_| panic!("gate must precede room birth"))
-            .unwrap();
-        assert!(matches!(plan, TaskFirePlan::Done(done) if done.record.result == expected));
-    }
 }
 
 #[test]
@@ -803,104 +743,6 @@ fn deadline_expiry_uses_injected_time() {
     assert!(deadline_expired_at(&expired, now));
 }
 
-fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntry {
-    TaskEntry {
-        surplus: surplus.map(ToOwned::to_owned),
-        surplus_after: surplus_after.map(ToOwned::to_owned),
-        ..TaskEntry::default()
-    }
-}
-
-#[test]
-fn surplus_reads_each_cell_of_a_multi_cell_step_instead_of_refusing_it() {
-    let root = tempfile::tempdir().unwrap();
-    record_room(root.path()).unwrap();
-    let workflow = format!("cells-{}", crate::ids::WorkflowRunId::new());
-    let dir = crate::disk::paths::workflows_dir().join(&workflow);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        crate::disk::paths::workflow_spec_file(&dir),
-        "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude,codex'\nthen='@done'\n",
-    )
-    .unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        workflow: Some(workflow),
-        surplus: Some("1.5x".into()),
-        ..Default::default()
-    };
-    let mut fire = TaskFire::new(
-        "cells",
-        LoadedTask::new("cells", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Manual,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        Instant::now(),
-    )
-    .unwrap();
-    let plan = fire.prepare(&mut |_| Ok(()));
-    std::fs::remove_dir_all(&dir).unwrap();
-    let reason = match &plan {
-        Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::SurplusSkipped => {
-            done.record.error.clone()
-        }
-        _ => None,
-    };
-    assert_eq!(
-        reason.as_deref(),
-        Some("no claude budget-window reading; surplus gate stays closed"),
-        "{:?}",
-        plan.err()
-    );
-}
-
-#[test]
-fn an_over_cap_workflow_fire_records_its_skip_before_birthing_a_room() {
-    let root = tempfile::tempdir().unwrap();
-    let workflow = format!("over-cap-{}", crate::ids::WorkflowRunId::new());
-    let dir = crate::disk::paths::workflows_dir().join(&workflow);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        crate::disk::paths::workflow_spec_file(&dir),
-        "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nbudget='$6'\nthen='@done'\n",
-    )
-    .unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        workflow: Some(workflow),
-        budget_per_day: Some("$5".into()),
-        ..Default::default()
-    };
-    let mut fire = TaskFire::new(
-        "over-cap",
-        LoadedTask::new("over-cap", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        Instant::now(),
-    )
-    .unwrap();
-    let mut births = 0;
-    let plan = fire.prepare(&mut |_| {
-        births += 1;
-        Ok(())
-    });
-    std::fs::remove_dir_all(&dir).unwrap();
-    let skipped = matches!(
-        &plan,
-        Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::BudgetSkipped
-    );
-    assert_eq!((skipped, births), (true, 0), "{:?}", plan.err());
-}
-
 #[test]
 fn run_lock_probes_never_defeat_a_starting_run() {
     let dir = tempfile::tempdir().unwrap();
@@ -1062,7 +904,8 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
         ),
     ] {
         let entry = TaskEntry {
-            check: Some("true".into()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             root: dir.path().to_path_buf(),
             at: (!fire_at).then(|| "07:00".to_owned()),
             fire_at: fire_at.then_some(Timestamp::UNIX_EPOCH),
@@ -1100,7 +943,6 @@ fn skipped_fire<'a>(
         task,
         catalog,
         LoopRunMode::Scheduled,
-        false,
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         signal,
@@ -1120,7 +962,8 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
     let worktree = tempfile::tempdir().unwrap();
     let worktree_root = worktree.path().canonicalize().unwrap();
     let entry = TaskEntry {
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: project_root.clone(),
         dir: Some(worktree_root.clone()),
         every: Some("1m".to_owned()),
@@ -1131,7 +974,6 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
         LoadedTask::new("room-check", entry, catalog::TaskSource::Config),
         &catalog,
         LoopRunMode::Scheduled,
-        false,
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
@@ -1165,76 +1007,12 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
 }
 
 #[test]
-fn a_fired_run_keeps_its_rows_surplus_gate_for_inline_and_named_workflows() {
-    let workflow = format!("surplus-{}", crate::ids::WorkflowRunId::new());
-    let dir = crate::disk::paths::workflows_dir().join(&workflow);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        crate::disk::paths::workflow_spec_file(&dir),
-        "[workflow]\nscope='worktree'\nstart='check'\n[test.check]\ntimeout='365d'\nshell='true'\n\
-         on={pass='@done',fail='@failed',died='@failed'}\n",
-    )
-    .unwrap();
-    let mut kept = Vec::new();
-    for named in [false, true] {
-        for gated in [true, false] {
-            let root = tempfile::tempdir().unwrap();
-            let project_root = root.path().canonicalize().unwrap();
-            record_room(&project_root).unwrap();
-            let catalog = TaskCatalog::load(Some(&project_root)).unwrap();
-            let entry = TaskEntry {
-                root: project_root.clone(),
-                check: (!named).then(|| "true".into()),
-                workflow: named.then(|| workflow.clone()),
-                every: Some("1m".to_owned()),
-                surplus: gated.then(|| "1.5x".to_owned()),
-                surplus_after: gated.then(|| "2h".to_owned()),
-                ..TaskEntry::default()
-            };
-            let mut fire = TaskFire::new(
-                "gated",
-                LoadedTask::new("gated", entry, catalog::TaskSource::Config),
-                &catalog,
-                LoopRunMode::Scheduled,
-                false,
-                Timestamp::now(),
-                Arc::new(MachineConfig::default()),
-                None,
-                Instant::now(),
-            )
-            .unwrap();
-            let plan = fire.prepare(&mut |_| Ok(()));
-            let Ok(TaskFirePlan::Done(done)) = plan else {
-                panic!("named={named}: {:?}", plan.err());
-            };
-            let state = StatePaths::for_project_root(&project_root).unwrap();
-            let run = crate::store::workflow::live_runs(&state)
-                .unwrap()
-                .into_iter()
-                .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
-                .unwrap_or_else(|| panic!("named={named}: {:?}", done.record));
-            kept.push((named, run.surplus, run.surplus_after));
-        }
-    }
-    std::fs::remove_dir_all(&dir).unwrap();
-    let (surplus, after) = (Some("1.5x".to_owned()), Some("2h".to_owned()));
-    assert_eq!(
-        kept,
-        [
-            (false, surplus.clone(), after.clone()),
-            (false, None, None),
-            (true, surplus, after),
-            (true, None, None),
-        ]
-    );
-}
-
-#[test]
 fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let entry = TaskEntry {
-        check: Some("touch check-ran".into()),
+        command: vec!["touch".to_owned(), "check-ran".to_owned()],
+        timeout: Some("1m".to_owned()),
         root: dir.path().to_path_buf(),
         every: Some("1m".to_owned()),
         ..TaskEntry::default()
@@ -1245,7 +1023,6 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
             LoadedTask::new("room-gates", entry, catalog::TaskSource::Config),
             &catalog,
             LoopRunMode::Manual,
-            false,
             Timestamp::now(),
             Arc::new(MachineConfig::default()),
             None,
@@ -1303,32 +1080,12 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
 }
 
 #[test]
-fn wait_prompt_is_optional_but_spawn_prompt_is_required() {
-    let mut entry = TaskEntry {
-        wait: Some(TaskTarget {
-            kind: crate::ids::AgentKind::new_unchecked("claude"),
-            session: "session".into(),
-            handle: "@coder".to_owned(),
-        }),
-        ..TaskEntry::default()
-    };
-    assert_eq!(resolve_task_prompt("wait-test", &entry).unwrap(), "");
-    entry.wait = None;
-    entry.agent = Some("claude".to_owned());
-    assert!(
-        resolve_task_prompt("spawn-test", &entry)
-            .unwrap_err()
-            .to_string()
-            .contains("loop task `spawn-test` has no prompt")
-    );
-}
-
-#[test]
 fn condition_evidence_reaches_prompt_and_terminal_record() {
     let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["team.stage=Done".to_owned()]),
-        prompt: Some("Inspect {{branch}}".to_owned()),
+        repeat: true,
         ..TaskEntry::default()
     };
     let catalog = TaskCatalog::load(None).unwrap();
@@ -1348,7 +1105,6 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         LoadedTask::new("ship", entry, catalog::TaskSource::Config),
         &catalog,
         LoopRunMode::Scheduled,
-        false,
         Timestamp::now(),
         Arc::new(MachineConfig::default()),
         None,
@@ -1358,7 +1114,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     .with_condition(Some(evidence.clone()));
     assert_eq!(
         fire.resolve_effect_prompt().unwrap(),
-        "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done\n\nInspect {{branch}}"
+        "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done"
     );
     let record = fire.terminal_record(LoopRunResult::Completed);
     assert_eq!(
@@ -1370,7 +1126,11 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         serde_json::to_value(&evidence).unwrap()
     );
     fire.condition = None;
-    assert_eq!(fire.resolve_effect_prompt().unwrap(), "Inspect {{branch}}");
+    assert_eq!(
+        fire.resolve_effect_prompt().unwrap(),
+        "",
+        "no evidence, no trigger text"
+    );
 }
 
 #[test]
@@ -1519,19 +1279,6 @@ fn window_triggers_refuse_at_add_in_order() {
             .window,
         window(Some(55), 3_600, five)
     );
-    // So does its surplus gate at fire time.
-    let claude = AgentKind::new_unchecked("claude");
-    let accounts = toml::from_str("[claude.work]\nhome = \"/srv/work\"\n").unwrap();
-    let surplus_gate = |name: &str| {
-        let login =
-            crate::agents::session_login(&claude, Some(&name.parse().unwrap()), &accounts).unwrap();
-        let state = StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap();
-        FireScope::new(claude.clone(), runtime.clone(), state, Some(login))
-            .surplus_gate(&surplus_entry(Some("1.5x"), None), now)
-    };
-    let no_reading = "no claude budget-window reading; surplus gate stays closed";
-    assert_eq!(surplus_gate("default").as_deref(), Some(no_reading));
-    assert_ne!(surplus_gate("work").as_deref(), Some(no_reading));
 }
 
 #[test]
@@ -1553,19 +1300,18 @@ fn after_reset_fires_at_the_reset_or_now_and_refuses_what_has_none() {
         duration_mins: Some(span.minutes()),
         ..RateLimitWindow::default()
     };
-    let resolve = |span, surplus| {
+    let resolve = |span| {
         after_reset(
             span,
             Some("claude"),
             Some(&native),
-            surplus,
             dir.path(),
             &runtime,
             now,
         )
     };
     assert_eq!(
-        after_reset(five, None, None, false, dir.path(), &runtime, now),
+        after_reset(five, None, None, dir.path(), &runtime, now),
         Err(WindowRefusal::NoProvider)
     );
     let week = window(Some(10), Some(86_400), seven);
@@ -1574,25 +1320,17 @@ fn after_reset_fires_at_the_reset_or_now_and_refuses_what_has_none() {
         "claude",
         vec![window(Some(30), Some(3_600), five), week.clone()],
     );
-    let started = resolve(five, true).unwrap();
+    let started = resolve(five).unwrap();
     assert_eq!(
         started.fire_at,
         now + jiff::SignedDuration::from_secs(3_600)
     );
     assert_eq!((started.left, started.started), (Some(70), true));
-    let refusal = resolve(seven, true).unwrap_err();
-    assert!(
-        matches!(refusal, WindowRefusal::SurplusAtLongestReset { .. }),
-        "{refusal}"
-    );
-    assert_eq!(
-        resolve(seven, false).unwrap().fire_at,
-        week.resets_at.unwrap()
-    );
+    assert_eq!(resolve(seven).unwrap().fire_at, week.resets_at.unwrap());
 
     let fresh = window(Some(0), Some(i64::from(five.minutes()) * 60), five);
     publish_windows(&runtime, "claude", vec![fresh.clone(), week.clone()]);
-    let not_started = resolve(five, false).unwrap();
+    let not_started = resolve(five).unwrap();
     assert_eq!((not_started.fire_at, not_started.started), (now, false));
     assert_eq!(not_started.resets_at, fresh.resets_at.unwrap());
 
@@ -1601,14 +1339,14 @@ fn after_reset_fires_at_the_reset_or_now_and_refuses_what_has_none() {
         ..window(None, None, five)
     };
     publish_windows(&runtime, "claude", vec![lifted, week.clone()]);
-    let refusal = resolve(five, false).unwrap_err();
+    let refusal = resolve(five).unwrap_err();
     assert!(
         refusal.to_string().contains("--after-reset 7d"),
         "{refusal}"
     );
     publish_windows(&runtime, "claude", vec![window(Some(30), None, five)]);
     assert!(matches!(
-        resolve(five, false),
+        resolve(five),
         Err(WindowRefusal::NoReading { .. })
     ));
 }
@@ -1668,320 +1406,6 @@ fn window_conditions_record_the_provider_their_terms_read() {
     );
 }
 
-#[test]
-fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("work");
-    std::fs::create_dir(&home).unwrap();
-    let accounts: crate::config::AccountsConfig = toml::from_str(&format!(
-        "[codex.work]\nhome = {home:?}\n[codex.gone]\nhome = {:?}\n",
-        dir.path().join("gone")
-    ))
-    .unwrap();
-    let ambient = BTreeMap::new();
-    let gate = |kind: &str, name: &str, statuses: &crate::agents::account::AccountsCache| {
-        pinned_login(
-            &AgentKind::new_unchecked(kind),
-            &name.parse().unwrap(),
-            &accounts,
-            &ambient,
-            statuses,
-        )
-        .expect("account config loads")
-    };
-    let work =
-        crate::ids::LoginKey::new(AgentKind::new_unchecked("codex"), "work".parse().unwrap());
-    let record = |ok| crate::agents::account::ProviderRecord {
-        consecutive_failures: 0,
-        version_probed_at_ms: None,
-        inputs_stamp: None,
-        profile: None,
-        probe_error: None,
-        login: None,
-        probed_at_ms: 1,
-        ok,
-        account: None,
-    };
-    let no_record = crate::agents::account::AccountsCache::default();
-    let mut logged_out = no_record.clone();
-    logged_out.logins.insert(work.clone(), record(true));
-    let mut failed_probe = no_record.clone();
-    failed_probe.logins.insert(work.clone(), record(false));
-
-    // A home without hooks is the hooks preflight's error, not this gate's skip.
-    for statuses in [&no_record, &failed_probe] {
-        assert_eq!(gate("codex", "work", statuses).unwrap().key(), work);
-    }
-    assert!(gate("codex", "default", &no_record).unwrap().is_default());
-    assert_eq!(
-        gate("codex", "ghost", &no_record).unwrap_err(),
-        "unknown codex account `ghost`; configured: default, gone, work; run `rimz accounts add codex ghost`"
-    );
-    assert_eq!(
-        gate("grok", "work", &no_record).unwrap_err(),
-        "grok has no named accounts; only `default` is available; remove `account = \"work\"` from the task"
-    );
-    let gone = gate("codex", "gone", &no_record).unwrap_err();
-    assert!(
-        gone.starts_with("codex account `gone` home ")
-            && gone.contains("is not a directory; run `"),
-        "{gone}"
-    );
-    let skipped = format!(
-        "codex account `work` is logged out; log in with `CODEX_HOME={} codex`",
-        home.display()
-    );
-    assert_eq!(gate("codex", "work", &logged_out).unwrap_err(), skipped);
-
-    // A logout that kept the CLI version skips by its recorded outcome; the
-    // same account without one is unknown and launches.
-    use crate::agents::account::RecordedLogin;
-    let version_only = |login| {
-        let mut cache = no_record.clone();
-        cache.logins.insert(
-            work.clone(),
-            crate::agents::account::ProviderRecord {
-                consecutive_failures: 0,
-                version_probed_at_ms: None,
-                inputs_stamp: None,
-                profile: None,
-                probe_error: None,
-                login,
-                probed_at_ms: 1,
-                ok: true,
-                account: Some(crate::agents::AgentAccount {
-                    version: Some("1.0.0".to_owned()),
-                    ..Default::default()
-                }),
-            },
-        );
-        cache
-    };
-    assert_eq!(
-        gate(
-            "codex",
-            "work",
-            &version_only(Some(RecordedLogin::LoggedOut))
-        )
-        .unwrap_err(),
-        skipped
-    );
-    for login in [Some(RecordedLogin::LoggedIn), None] {
-        assert_eq!(
-            gate("codex", "work", &version_only(login)).unwrap().key(),
-            work
-        );
-    }
-}
-
-#[test]
-fn the_account_daily_cap_reads_the_pinned_account_not_the_rooms() {
-    use crate::agents::spending::{
-        ProviderSpendingCache, SpendWindow, write_provider_spending_cache,
-    };
-
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(dir.path());
-    record_room(dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    let config: MachineConfig = toml::from_str(
-        "timezone = \"UTC\"\n[accounts.budget]\nclaude = \"10/day\"\n[accounts.claude.solo]\nhome = \"/srv/loop-test-solo\"\nhistory = \"standalone\"\n",
-    )
-    .unwrap();
-    let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
-    let claude = AgentKind::new_unchecked("claude");
-    let entry = TaskEntry {
-        check: Some("true".into()),
-        root: dir.path().to_path_buf(),
-        at: Some("07:00".to_owned()),
-        ..TaskEntry::default()
-    };
-    crate::harness::schedule::instances::insert(&state, "capped", &entry).unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-    let mut fire = skipped_fire("capped", &catalog, None);
-    fire.now = now;
-    let refusal = |fire: &TaskFire<'_>, account: &str| {
-        let login = crate::agents::session_login(
-            &claude,
-            Some(&account.parse().unwrap()),
-            &config.accounts,
-        )
-        .unwrap();
-        let scope = FireScope::new(claude.clone(), runtime.clone(), state.clone(), Some(login));
-        fire.scope_refusal(&scope, true).map(|(result, _)| result)
-    };
-    fire.config = Arc::new(config.clone());
-    for (solo_usd, room_usd, solo, room) in [
-        (12.0, 2.0, Some(LoopRunResult::BudgetSkipped), None),
-        (2.0, 12.0, None, Some(LoopRunResult::BudgetSkipped)),
-    ] {
-        let spent = |name: &str, usd| {
-            (
-                crate::ids::LoginKey::new(claude.clone(), name.parse().unwrap()),
-                SpendWindow {
-                    usd,
-                    ..Default::default()
-                },
-            )
-        };
-        write_provider_spending_cache(
-            &runtime.shared_provider_spending_path(),
-            &ProviderSpendingCache {
-                day_cutoff_secs: jiff::civil::date(2026, 6, 2)
-                    .to_zoned(jiff::tz::TimeZone::UTC)
-                    .unwrap()
-                    .timestamp()
-                    .as_second() as u64,
-                day_by_login: BTreeMap::from([spent("solo", solo_usd), spent("default", room_usd)]),
-                ..Default::default()
-            },
-        );
-        assert_eq!(refusal(&fire, "solo"), solo, "pinned, solo at {solo_usd}");
-        assert_eq!(
-            refusal(&fire, "default"),
-            room,
-            "room, default at {room_usd}"
-        );
-    }
-}
-
-#[test]
-fn a_pin_that_stops_resolving_at_launch_skips_and_every_other_error_strikes() {
-    use crate::harness::schedule::strikes::{Signal, classify};
-
-    let dir = tempfile::tempdir().unwrap();
-    record_room(dir.path()).unwrap();
-    let state = StatePaths::for_project_root(dir.path()).unwrap();
-    let unresolved = |kind: &str| {
-        let err = crate::agents::session_login(
-            &AgentKind::new_unchecked(kind),
-            Some(&"ghost".parse().unwrap()),
-            &crate::config::AccountsConfig::default(),
-        )
-        .unwrap_err();
-        anyhow::Error::from(err).context("launch codex")
-    };
-    let unknown =
-        "unknown codex account `ghost`; configured: default; run `rimz accounts add codex ghost`";
-    let unsupported = "grok has no named accounts; only `default` is available; remove `account = \"ghost\"` from the task";
-    for (name, pinned, error, skip) in [
-        ("unknown", true, unresolved("codex"), Some(unknown)),
-        ("unsupported", true, unresolved("grok"), Some(unsupported)),
-        ("other", true, anyhow::anyhow!("pane refused"), None),
-        ("unpinned", false, unresolved("codex"), None),
-    ] {
-        let entry = TaskEntry {
-            agent: Some("codex".to_owned()),
-            prompt: Some("work".to_owned()),
-            account: pinned.then(|| "ghost".parse().unwrap()),
-            root: dir.path().to_path_buf(),
-            fire_at: Some(Timestamp::UNIX_EPOCH),
-            ..TaskEntry::default()
-        };
-        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
-        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
-        let finished = skipped_fire(name, &catalog, None).finish_error(&error);
-        match skip {
-            Some(reason) => {
-                assert_eq!(
-                    finished.record.result,
-                    LoopRunResult::AccountSkipped,
-                    "{name}"
-                );
-                assert_eq!(finished.record.error.as_deref(), Some(reason), "{name}");
-                assert!(
-                    matches!(&finished.notice, TaskFireNotice::Gate { reason: told } if told == reason),
-                    "{name}"
-                );
-                assert_eq!(classify(&finished.record), Signal::Neutral, "{name}");
-            }
-            None => {
-                assert_eq!(finished.record.result, LoopRunResult::Errored, "{name}");
-                assert_eq!(classify(&finished.record), Signal::Strike, "{name}");
-            }
-        }
-        assert!(
-            !crate::harness::schedule::instances::load_from(&state.root)
-                .0
-                .contains_key(name),
-            "{name}: the one-shot row is consumed"
-        );
-    }
-}
-
-fn scheduled_fire<'a>(name: &str, entry: TaskEntry, catalog: &'a TaskCatalog) -> TaskFire<'a> {
-    let mut fire = TaskFire::new(
-        name,
-        LoadedTask::new(name, entry, catalog::TaskSource::Config),
-        catalog,
-        LoopRunMode::Scheduled,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        Instant::now(),
-    )
-    .expect("construct task fire");
-    fire.run_lock_path = |file, entry| Ok(entry.root.join(file));
-    fire
-}
-
-fn resident_entry(root: &Path) -> TaskEntry {
-    TaskEntry {
-        root: root.to_owned(),
-        agent: Some("claude".into()),
-        prompt: Some("repair".into()),
-        stay: true,
-        ..Default::default()
-    }
-}
-
-#[test]
-fn resident_saved_modes_refuse_invalid_values_before_room_birth_and_record_strikes() {
-    use crate::harness::schedule::strikes::{Signal, classify};
-
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for mode in [LoopRunMode::Manual, LoopRunMode::Scheduled] {
-        for raw in ["plan", "yollo", "ASK", " plan "] {
-            let root = tempfile::tempdir().unwrap();
-            record_room(root.path()).unwrap();
-            let paths = StatePaths::for_project_root(root.path()).unwrap();
-            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-            let entry = TaskEntry {
-                mode: Some(raw.to_owned()),
-                ..resident_entry(root.path())
-            };
-            let mut fire = scheduled_fire("bad-mode", entry, &catalog);
-            fire.mode = mode;
-            let error = fire
-                .prepare(&mut |_| panic!("invalid saved mode must not birth a room"))
-                .unwrap_err();
-            let message = format!("unknown loop mode `{}`; use auto, ask, or yolo", raw.trim());
-            actual.push(format!("{error:#}"));
-            expected.push(message.clone());
-            assert!(fire.pending.is_none(), "{mode:?}, {raw:?}");
-            let finished = fire.finish_error(&error);
-            assert_eq!(finished.record.result, LoopRunResult::Errored);
-            assert_eq!(finished.record.error.as_deref(), Some(message.as_str()));
-            assert_eq!(classify(&finished.record), Signal::Strike);
-            let records = run_log::task_records(&logs_dir(), "bad-mode", Some(root.path()));
-            assert_eq!(records.len(), 1);
-            assert_eq!(records[0].result, LoopRunResult::Errored);
-            assert_eq!(records[0].error.as_deref(), Some(message.as_str()));
-            assert!(
-                super::super::launch_ledger::load_workflows(&paths)
-                    .unwrap()
-                    .tasks
-                    .is_empty()
-            );
-        }
-    }
-    assert_eq!(actual, expected);
-}
-
 fn git_in(dir: &Path, args: &[&str]) {
     assert!(
         std::process::Command::new("git")
@@ -2007,7 +1431,8 @@ fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
     git_in(&root, &["commit", "-q", "--allow-empty", "-m", "base"]);
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
     let entry = TaskEntry {
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("1h".to_owned()),
         root: root.clone(),
         fresh_worktree: Some("night".to_owned()),
@@ -2020,7 +1445,6 @@ fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
             LoadedTask::new("nightly", entry.clone(), catalog::TaskSource::Config),
             &catalog,
             LoopRunMode::Scheduled,
-            false,
             "2026-01-02T03:04:05Z".parse().unwrap(),
             Arc::new(MachineConfig::default()),
             None,
@@ -2047,124 +1471,9 @@ fn a_fresh_tree_no_run_took_over_is_removed_with_the_fire() {
     assert_eq!(marker.loop_task.as_deref(), Some("nightly"));
 }
 
-#[test]
-fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
-    let root = tempfile::tempdir().unwrap();
-    let source = tempfile::tempdir().unwrap();
-    let step = |budget: &str| {
-        format!(
-            "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nbudget='{budget}'\nthen='@done'\n"
-        )
-    };
-    std::fs::write(
-        crate::disk::paths::workflow_spec_file(source.path()),
-        step("$3"),
-    )
-    .unwrap();
-    let state = StatePaths::for_project_root(root.path()).unwrap();
-    let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-        "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"review", "task":"sweep",
-        "spec_dir":source.path(), "spec_digest":"abc",
-        "scope":{"kind":"worktree","path":root.path()}, "project_root":root.path(),
-        "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
-        "entered_at":"2000-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
-        "deadline_fired":false, "next_seq":1
-    }))
-    .unwrap();
-    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    crate::store::workflow::initialize(&state, &record, step("$8").as_bytes(), &guard).unwrap();
-    drop(guard);
-    assert_eq!(live_reservation(root.path(), "sweep").unwrap(), 8.0);
-    std::fs::remove_file(crate::disk::paths::workflow_spec_file(
-        &state.workflow(&record.id).home,
-    ))
-    .unwrap();
-    let error = live_reservation(root.path(), "sweep").unwrap_err();
-    assert!(
-        format!("{error:#}").contains(&format!("reading run {}'s sealed definition", record.id)),
-        "{error:#}"
-    );
-}
-
-const SIX_DOLLAR_STEP: &str = "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nbudget='$6'\nthen='@done'\n";
-
-#[test]
-fn a_capped_fire_reads_the_budget_only_after_a_concurrent_fire_publishes_its_run() {
-    let root = tempfile::tempdir().unwrap();
-    record_room(root.path()).unwrap();
-    let state = StatePaths::for_project_root(root.path()).unwrap();
-    let held = super::super::launch_ledger_store::hold_budget(&state, "capped").unwrap();
-    let (root_path, publisher_state) = (root.path().to_owned(), state.clone());
-    // The concurrent fire: it read the budget under the lock, and publishes its $6 run before
-    // it lets go.
-    let publisher = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
-        let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
-            "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"capped",
-            "task":"capped", "spec_dir":root_path, "spec_digest":"abc",
-            "scope":{"kind":"worktree","path":root_path}, "project_root":root_path,
-            "created_at":"2000-01-01T00:00:00Z", "state":"active", "node":"fix",
-            "entered_at":"2000-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
-            "deadline_fired":false, "next_seq":1
-        }))
-        .unwrap();
-        let guard =
-            crate::disk::lock::WorkspaceLock::acquire(&publisher_state.workspace_lock).unwrap();
-        crate::store::workflow::initialize(
-            &publisher_state,
-            &record,
-            SIX_DOLLAR_STEP.as_bytes(),
-            &guard,
-        )
-        .unwrap();
-        drop(guard);
-        drop(held);
-    });
-    let workflow = format!("capped-{}", crate::ids::WorkflowRunId::new());
-    let dir = crate::disk::paths::workflows_dir().join(&workflow);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        crate::disk::paths::workflow_spec_file(&dir),
-        SIX_DOLLAR_STEP,
-    )
-    .unwrap();
-    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        workflow: Some(workflow),
-        budget_per_day: Some("$10".into()),
-        ..Default::default()
-    };
-    let mut fire = TaskFire::new(
-        "capped",
-        LoadedTask::new("capped", entry, catalog::TaskSource::Config),
-        &catalog,
-        LoopRunMode::Manual,
-        false,
-        Timestamp::now(),
-        Arc::new(MachineConfig::default()),
-        None,
-        Instant::now(),
-    )
-    .unwrap();
-    let plan = fire.prepare(&mut |_| Ok(()));
-    publisher.join().unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
-    // An admitted fire goes on to `create`, which refuses this stub definition.
-    let skipped = matches!(
-        &plan,
-        Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::BudgetSkipped
-    );
-    assert!(
-        skipped,
-        "the second fire must count the first fire's $6 run against the $10 cap: {:?}",
-        plan.err()
-    );
-}
-
-/// Takes a fire to a created run only in a re-exec of `name` with private homes: the agent
-/// row's scope gate preflights Claude hooks against this process's environment, and every
-/// test process shares the unit-test home. Returns whether this is the parent, done.
+/// Takes a fire to a created run only in a re-exec of `name` with private homes: a created run
+/// writes the room and the machine's loop state, and every test process shares the unit-test
+/// home. Returns whether this is the parent, done.
 fn reexec_with_private_homes(name: &str) -> bool {
     const CHILD: &str = "RIMZ_TEST_FIRE_PROMPT_CHILD";
     if std::env::var_os(CHILD).is_some() {
@@ -2227,15 +1536,10 @@ enum TriggerSwitch {
     Reconcile,
 }
 
-/// Fires an inline agent row on a `deploy.done {"env":"b"}` arrival and checks that the run's
-/// sealed prompt names the trigger its record names: `env` is the payload the fire serves.
+/// Fires a command row on a `deploy.done {"env":"b"}` arrival and checks that the run's prompt,
+/// which its command reads as `RIMZ_LOOP_TRIGGER`, names the trigger its record names: `env` is
+/// the payload the fire serves.
 fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwitch, env: &str) {
-    let adapter = find_definition("claude").unwrap();
-    let login_env = ambient_env();
-    adapter
-        .install_hooks(&login_env, Default::default())
-        .unwrap();
-    assert!(adapter.hooks_installed(&login_env));
     let root = tempfile::tempdir().unwrap();
     record_room(root.path()).unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
@@ -2250,9 +1554,10 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
             name,
             TaskEntry {
                 root: root.path().to_owned(),
-                agent: Some("claude".into()),
-                prompt: Some("Check the deployment.".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 signal: Some("deploy.done".into()),
+                repeat: true,
                 overlap: Some(overlap),
                 ..Default::default()
             },
@@ -2260,7 +1565,6 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
         ),
         &catalog,
         LoopRunMode::Scheduled,
-        false,
         now,
         Arc::new(MachineConfig::default()),
         Some(
@@ -2299,7 +1603,7 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
         .into_iter()
         .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
         .expect("created workflow run");
-    let prompt = std::fs::read_to_string(run.spec_dir.join("prompts/prompt.md")).unwrap();
+    let prompt = run.prompt.clone().unwrap_or_default();
     let signal = done.record.signal.as_ref().unwrap();
     let shown = format!("sealed prompt:\n{prompt}\nrecord signal: {signal:?}");
     assert_eq!(signal.payload["env"], env, "{shown}");
@@ -2308,13 +1612,11 @@ fn assert_sealed_prompt_names_the_served_trigger(name: &str, switch: TriggerSwit
         u64::from(switch == TriggerSwitch::Reconcile),
         "{shown}"
     );
-    assert!(
-        prompt.starts_with(&format!(
-            "Rule `{name}` fired here. deploy.done · env: {env}\n"
-        )),
+    assert_eq!(
+        prompt,
+        format!("Rule `{name}` fired here. deploy.done · env: {env}"),
         "{shown}"
     );
-    assert!(prompt.contains("Check the deployment."), "{shown}");
 }
 
 #[test]
@@ -2344,96 +1646,107 @@ fn a_fire_with_nothing_waiting_seals_the_prompt_of_its_arrival() {
     assert_sealed_prompt_names_the_served_trigger("arrival", TriggerSwitch::None, "b");
 }
 
+/// A booked one-off launch command's fire is remembered, so the sidebar's bookings lane can
+/// rebuild its fired entry once the fire consumed the row; a row that is no booking, or one
+/// that repeats, remembers none unless it dedupes its checkout.
 #[test]
-fn a_runs_trigger_sentence_stays_as_fired_when_its_task_is_edited_renamed_or_removed() {
-    let name = "harness::schedule::runner::tests::a_runs_trigger_sentence_stays_as_fired_when_its_task_is_edited_renamed_or_removed";
-    if reexec_with_private_homes(name) {
-        return;
-    }
-    let adapter = find_definition("claude").unwrap();
-    let login_env = ambient_env();
-    adapter
-        .install_hooks(&login_env, Default::default())
-        .unwrap();
-    let row = "agent='claude'\nprompt='Land it.'\nthrottle='off'\n";
-    for (mode, sentence) in [
+fn a_booked_one_off_launch_command_remembers_its_run() {
+    let launch = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
+    let booker = crate::agents::LaunchedBy {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        agent_id: "booker".into(),
+    };
+    let cases: [(&str, TaskEntry, bool); 4] = [
         (
+            "booked",
+            TaskEntry {
+                command: launch(&["rimz", "agents", "coder", "--detach"]),
+                booked_by: vec![booker.clone()],
+                ..TaskEntry::default()
+            },
+            true,
+        ),
+        (
+            "unbooked",
+            TaskEntry {
+                command: launch(&["rimz", "agents", "coder", "--detach"]),
+                ..TaskEntry::default()
+            },
+            false,
+        ),
+        (
+            "not-a-launch",
+            TaskEntry {
+                command: launch(&["true"]),
+                booked_by: vec![booker.clone()],
+                ..TaskEntry::default()
+            },
+            false,
+        ),
+        (
+            "repeating",
+            TaskEntry {
+                command: launch(&["rimz", "teams", "forge"]),
+                booked_by: vec![booker],
+                when: Some(vec!["pr=open".to_owned()]),
+                repeat: true,
+                ..TaskEntry::default()
+            },
+            false,
+        ),
+    ];
+    for (name, entry, remembered) in cases {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        record_room(&root).unwrap();
+        let catalog = TaskCatalog::load(Some(&root)).unwrap();
+        let entry = TaskEntry {
+            root: root.clone(),
+            timeout: Some("1m".to_owned()),
+            fire_at: entry.when.is_none().then(Timestamp::now),
+            ..entry
+        };
+        let fire = TaskFire::new(
+            name,
+            LoadedTask::new(name, entry, catalog::TaskSource::Instance),
+            &catalog,
             LoopRunMode::Scheduled,
-            "RimZ started this run automatically, on the cron schedule `0 * * * *` \
-             (loop task `land`).",
-        ),
-        (
-            LoopRunMode::Manual,
-            "The user started this run by hand with `rimz loop fire land`.",
-        ),
-    ] {
-        for change in ["edited", "renamed", "removed"] {
-            let root = tempfile::tempdir().unwrap();
-            record_room(root.path()).unwrap();
-            let config = root.path().join(".rimz/config.toml");
-            std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-            std::fs::write(&config, format!("[tasks.land]\n{row}cron='0 * * * *'\n")).unwrap();
-            crate::trust::grant(root.path()).unwrap();
-            let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-            let task = catalog.visible()["land"].clone();
-            let mut fire = TaskFire::new(
-                "land",
-                task,
-                &catalog,
-                mode,
-                false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            Instant::now(),
+        )
+        .unwrap();
+        let state = StatePaths::for_project_root(&root).unwrap();
+        let run = crate::ids::WorkflowRunId::new();
+        // A live run, so the launcher's recheck finds nothing collected to forget.
+        let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+            "version":crate::store::workflow::VERSION, "id":run, "workflow":name,
+            "origin":"inline", "task":name, "spec_dir":"/spec", "spec_digest":"abc",
+            "scope":{"kind":"worktree","path":root}, "project_root":root,
+            "created_at":"2026-01-01T00:00:00Z", "state":"active", "node":"command",
+            "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
+            "deadline_fired":false, "next_seq":1, "loop_report":"owed"
+        }))
+        .unwrap();
+        let paths = state.workflow(&run);
+        std::fs::create_dir_all(paths.record.parent().unwrap()).unwrap();
+        let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        crate::store::workflow::write(&paths, &record, &guard).unwrap();
+        drop(guard);
+        assert_eq!(
+            fire.record_workflow_launch(
+                &state,
+                &run,
+                crate::store::workflow::ScopeKind::Worktree,
                 Timestamp::now(),
-                Arc::new(MachineConfig::default()),
-                None,
-                Instant::now(),
-            )
-            .unwrap();
-            let plan = fire
-                .prepare(&mut |_| Ok(()))
-                .unwrap_or_else(|error| panic!("TaskFire::prepare: {error:#}"));
-            let TaskFirePlan::Done(done) = plan else {
-                panic!("expected TaskFirePlan::Done")
-            };
-            assert_eq!(done.record.result, LoopRunResult::Launched, "{change}");
-            drop(fire);
-            let state = StatePaths::for_project_root(root.path()).unwrap();
-            let run = crate::store::workflow::live_runs(&state)
-                .unwrap()
-                .into_iter()
-                .find(|run| done.record.run_id.as_deref() == Some(run.id.as_str()))
-                .expect("created workflow run");
-            let host = crate::harness::workflow::tests::FakeHost::new();
-            crate::harness::workflow::advance(&state, &run.id, &host).unwrap();
-            let fired = host.launched.borrow()[0].workflow_note.clone();
-            assert!(fired.contains(sentence), "{mode:?} at its fire: {fired}");
-
-            match change {
-                "edited" => {
-                    std::fs::write(&config, format!("[tasks.land]\n{row}cron='30 * * * *'\n"))
-                        .unwrap();
-                    crate::trust::grant(root.path()).unwrap();
-                }
-                "renamed" => {
-                    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-                    assert!(catalog.rename("land", "shipped").unwrap().changed());
-                }
-                _ => {
-                    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
-                    assert!(catalog.remove("land").unwrap().changed());
-                }
-            }
-            crate::harness::workflow::restart(&state, &run.id, None, &host)
-                .unwrap_or_else(|error| panic!("{mode:?} {change}: restart: {error}"));
-            crate::harness::workflow::advance(&state, &run.id, &host).unwrap();
-            let launched = host.launched.borrow();
-            assert_eq!(
-                launched.len(),
-                2,
-                "{mode:?} {change}: the restart relaunches"
-            );
-            let next = launched[1].workflow_note.clone();
-            assert!(next.contains(sentence), "{mode:?} {change}: {next}");
-        }
+                false,
+            ),
+            None,
+            "{name}"
+        );
+        let ledger = super::super::launch_ledger::load_workflows(&state).unwrap();
+        assert_eq!(ledger.tasks.contains_key(name), remembered, "{name}");
     }
 }
 

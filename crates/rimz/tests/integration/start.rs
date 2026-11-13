@@ -1060,7 +1060,7 @@ fn detached_birth_warns_and_waives_a_blocked_host_again() {
     std::os::unix::fs::symlink("/bin/sh", &shell).unwrap();
     let added = env
         .rimz()
-        .args(["loop", "add", "probe", "--check", "true", "--every", "1h"])
+        .args(["loop", "add", "probe", "--every", "1h", "--", "true"])
         .output()
         .expect("add loop");
     assert!(

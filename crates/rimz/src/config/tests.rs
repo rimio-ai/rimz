@@ -337,7 +337,6 @@ fn set_modified_time(path: &Path, modified: std::time::SystemTime) {
 enum ExpectedErr {
     Parse,
     Notifications,
-    Loop,
     AccountBudget,
 }
 
@@ -350,7 +349,6 @@ fn assert_config_err(err: ConfigErr, expected: ExpectedErr) {
     match (&err, expected) {
         (ConfigErr::Parse { .. }, ExpectedErr::Parse)
         | (ConfigErr::Notifications { .. }, ExpectedErr::Notifications) => {}
-        (ConfigErr::Loop { .. }, ExpectedErr::Loop) => {}
         (ConfigErr::AccountBudget { .. }, ExpectedErr::AccountBudget) => {}
         _ => panic!("expected {expected:?}, got {err:?}"),
     }
@@ -699,12 +697,12 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
     );
     write_named(&dir, THEME_FILE, "[theme.glyphs]\nfuture = true\n");
     let theme_path = dir.path().join(THEME_FILE);
+    // A loop row is strict: an unknown key refuses that row, so it is no unknown-key notice.
     write_named(
         &dir,
         LOOP_FILE,
-        "[tasks.nightly]\nagent = \"claude\"\nroot = \"/tmp\"\nfuture = true\n",
+        "[tasks.nightly]\ncommand = [\"true\"]\nroot = \"/tmp\"\nfuture = true\n",
     );
-    let loop_path = dir.path().join(LOOP_FILE);
 
     let config = MachineConfig::load_from(&config_path, agents_home.path()).expect("load");
 
@@ -718,10 +716,6 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
             UnknownConfigKey {
                 path: theme_path,
                 key: "theme.glyphs.future".to_owned(),
-            },
-            UnknownConfigKey {
-                path: loop_path,
-                key: "tasks.nightly.future".to_owned(),
             },
         ]
     );
@@ -1677,21 +1671,12 @@ fn loop_tasks_parse_and_default_empty() {
         &dir,
         "loop.toml",
         "[tasks.morning]\n\
-             agent = \"claude\"\n\
-             prompt = \"triage\"\n\
+             command = [\"rimz\", \"agents\", \"claude\", \"triage\"]\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
              every = \"weekdays\"\n\
-             worktree = \"main\"\n\
-             mode = \"auto\"\n\
-             effort = \"low\"\n\
-             system-prompt-file = \"/prompts/triage.md\"\n\
+             fresh-worktree = \"main\"\n\
              timeout = \"5m\"\n\
-             [tasks.pr_watch]\n\
-             agent = \"codex\"\n\
-             prompt-file = \"prompts/pr-watch.md\"\n\
-             root = \"/home/me/app\"\n\
-             every = \"15m\"\n\
              [tasks.self_wait]\n\
              wait = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
              prompt = \"pick up the review\"\n\
@@ -1700,32 +1685,18 @@ fn loop_tasks_parse_and_default_empty() {
     ))
     .expect("load");
     let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
-    assert_eq!(entry.agent.as_deref(), Some("claude"));
+    assert_eq!(entry.command, ["rimz", "agents", "claude", "triage"]);
     assert_eq!(entry.wait, None);
-    assert_eq!(entry.prompt.as_deref(), Some("triage"));
+    assert_eq!(entry.refused, None);
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
     assert_eq!(entry.every.as_deref(), Some("weekdays"));
-    assert_eq!(entry.worktree.as_deref(), Some("main"));
-    assert_eq!(entry.mode.as_deref(), Some("auto"));
-    assert_eq!(entry.effort.as_deref(), Some("low"));
-    assert_eq!(
-        entry.system_prompt_file.as_deref(),
-        Some(std::path::Path::new("/prompts/triage.md"))
-    );
+    assert_eq!(entry.fresh_worktree.as_deref(), Some("main"));
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
     assert_eq!(entry.cron, None);
 
-    let general = config.r#loop.tasks.0.get("pr_watch").expect("general task");
-    assert_eq!(general.agent.as_deref(), Some("codex"));
-    assert_eq!(
-        general.prompt_file.as_deref(),
-        Some(std::path::Path::new("prompts/pr-watch.md"))
-    );
-    assert_eq!(general.every.as_deref(), Some("15m"));
-
     let bound = config.r#loop.tasks.0.get("self_wait").expect("bind task");
-    assert_eq!(bound.agent, None);
+    assert!(bound.command.is_empty());
     let target = bound.wait.as_ref().expect("target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
@@ -1738,12 +1709,12 @@ fn loop_loads_skip_machine_tasks_without_absolute_roots() {
     let path = write_named(
         &dir,
         LOOP_FILE,
-        "[tasks.missing]\ncheck='true'\nevery='1h'\n\
-         [tasks.empty]\nroot=''\ncheck='true'\nevery='1h'\n\
-         [tasks.relative]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n\
-         [tasks.dot]\nroot='.'\ncheck='true'\nevery='1h'\n\
-         [tasks.home]\nroot='~/x'\ncheck='true'\nevery='1h'\n\
-         [tasks.absolute]\nroot='/repo'\ncheck='true'\nevery='1h'\n",
+        "[tasks.missing]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.empty]\nroot=''\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.relative]\nroot='nowhere/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.dot]\nroot='.'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.home]\nroot='~/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.absolute]\nroot='/repo'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
     );
     let configs = [
         load_no_fragments(&path).unwrap(),
@@ -1818,21 +1789,6 @@ fn loop_loads_skip_machine_tasks_without_absolute_roots() {
     let errors =
         broken_machine_files_in(&MachineConfigFiles::from_paths(&path, no_fragments(&path)));
     assert!(errors.is_empty(), "{errors:?}");
-}
-
-#[test]
-fn loop_task_budgets_validate_during_config_load() {
-    let err = expect_err(
-        "loop.toml",
-        "[tasks.nightly]\nagent = \"codex\"\nprompt = \"work\"\nroot = \"/repo\"\nevery = \"day\"\nbudget-per-day = \"$20.00\"\n",
-    );
-    assert_config_err(err, ExpectedErr::Loop);
-
-    let err = expect_err(
-        "loop.toml",
-        "[tasks.nightly]\nagent = \"codex\"\nprompt = \"work\"\nroot = \"/repo\"\nevery = \"day\"\nbudget = \"many dollars\"\n",
-    );
-    assert_config_err(err, ExpectedErr::Loop);
 }
 
 #[test]

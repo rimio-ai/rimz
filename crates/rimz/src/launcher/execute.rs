@@ -38,6 +38,8 @@ pub struct LeaderRun {
     pub warn: Vec<Duration>,
     pub grace: Option<Duration>,
     pub loop_task: Option<String>,
+    /// The workflow run of the loop fire that owns this blocking launch, stamped on its run.
+    pub loop_fire: Option<crate::ids::WorkflowRunId>,
     /// The booking chain of the loop fire behind a workflow step's launch, stamped on every
     /// cell.
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
@@ -85,6 +87,8 @@ pub(super) struct FreshLaunch {
     pub(super) pick_session: bool,
     pub(super) reminder_section: Option<crate::harness::launch::ReminderSection>,
     pub(super) loop_task: Option<String>,
+    /// The booking chain of the loop fire behind a launch no run of the fire owns.
+    pub(super) loop_booked_by: Vec<crate::agents::LaunchedBy>,
     pub(super) description: Option<String>,
     pub(super) report_to: ReportTo,
     pub(super) cleanup_worktree: bool,
@@ -287,6 +291,7 @@ fn open_fresh(
             }
             record.retry_of.clone_from(&leader.retry_of);
             record.loop_task.clone_from(&leader.loop_task);
+            record.loop_fire.clone_from(&leader.loop_fire);
             record.workflow.clone_from(&leader.workflow);
             record.reader.clone_from(&leader.reader);
             Ok::<_, anyhow::Error>(record)
@@ -308,12 +313,13 @@ fn open_fresh(
     for (index, (request, login)) in requests.iter_mut().zip(&fresh.logins).enumerate() {
         request.login = LaunchLogin::Pinned(login.clone());
         request.launch.checkout.clone_from(&fresh.checkout);
+        request.launch.loop_booked_by.clone_from(
+            leader
+                .as_ref()
+                .map_or(&fresh.loop_booked_by, |leader| &leader.loop_booked_by),
+        );
         if let Some(leader) = &leader {
             request.launch.workflow.clone_from(&leader.workflow);
-            request
-                .launch
-                .loop_booked_by
-                .clone_from(&leader.loop_booked_by);
             if fresh.soft_name
                 && let AgentLaunchName::Explicit(name) = &request.name
             {
@@ -325,13 +331,11 @@ fn open_fresh(
         }
     }
     if let Some(index) = fresh.prompt_index {
-        // A task's workflow step launches its leader as that task's agent.
+        // A task's workflow step, and a blocking launch its fire's command makes, launch their
+        // leader as that task's agent; a taskless workflow step's leader carries none.
         let task = match &leader {
             None => fresh.loop_task.clone(),
-            Some(leader) => leader
-                .loop_task
-                .clone()
-                .filter(|_| leader.workflow.is_some()),
+            Some(leader) => leader.loop_task.clone(),
         };
         if leader.is_none() || task.is_some() {
             requests[index].launch.loop_task = task;

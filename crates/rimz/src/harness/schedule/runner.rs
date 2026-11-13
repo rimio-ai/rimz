@@ -6,7 +6,6 @@
 
 mod prompt;
 
-use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -27,29 +26,23 @@ use super::{
     run_lock::{file_name as run_lock_file_name, is_run_lock_of},
 };
 use crate::agents::PermissionMode;
-use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
-use crate::agents::login::LoginErr;
 use crate::agents::{
-    BirthLoginErr, HookPreflightErr, ManagedLaunchState, ProviderCapacity, ProviderLogin,
-    RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, ambient_env, find_definition,
-    preflight_hooks,
+    ManagedLaunchState, ProviderCapacity, ProviderLogin, RateLimitWindow, WindowSpan,
+    find_definition,
 };
 use crate::config::{CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::check_run::{CheckOutcome, CheckSignalGuard};
-use crate::harness::loop_task::{LOOP_BOOKED_BY_ENV, LOOP_TASK_ENV};
-use crate::harness::plan::ResolvedSingleAgentLaunch;
+use crate::harness::loop_task::{LOOP_BOOKED_BY_ENV, LOOP_TASK_ENV, read_fire_launch};
 use crate::harness::run::SupervisedRunRequest;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
-use crate::harness::schedule::compile::{CompiledAction, TaskWorkflow};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition, SignalRecord,
 };
 use crate::harness::schedule::{TaskAction, TaskActionKind, TaskKind, Trigger};
 use crate::harness::signal::{Signal as TriggerSignal, WatchOutcome};
-use crate::harness::surplus::surplus_refusal;
 use crate::harness::task_login::task_login;
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};
@@ -79,8 +72,25 @@ pub fn loop_check_task() -> Option<String> {
     )
 }
 
+/// What fired the run whose command is running, for a launch under it to append to its
+/// prompt; outside a fire's command, nothing.
+pub fn loop_trigger() -> Option<String> {
+    loop_check_task()?;
+    std::env::var(crate::harness::loop_task::LOOP_TRIGGER_ENV)
+        .ok()
+        .filter(|text| !text.trim().is_empty())
+}
+
 fn check_task_from_identity(task: Option<String>, has_agent: bool) -> Option<String> {
     task.filter(|task| !has_agent && !task.is_empty())
+}
+
+/// The booking chain of the fire whose command is running, for a launch under it to carry;
+/// outside a fire's command, nothing.
+pub fn loop_check_booked_by() -> Vec<crate::agents::LaunchedBy> {
+    loop_check_task()
+        .map(|_| check_booked_by(std::env::var(LOOP_BOOKED_BY_ENV).ok()))
+        .unwrap_or_default()
 }
 
 /// The firing task's booking chain from a check's environment; an absent or unreadable
@@ -91,7 +101,7 @@ fn check_booked_by(raw: Option<String>) -> Vec<crate::agents::LaunchedBy> {
 }
 
 /// Apply loop-owned deadline, cleanup, and scheduled-tab placement policy, and stamp the
-/// firing task's booking chain from the check's environment.
+/// firing task's booking chain and the fire's workflow run from the check's environment.
 pub fn shape_loop_owned(
     request: &mut SupervisedRunRequest,
     task: &str,
@@ -101,7 +111,10 @@ pub fn shape_loop_owned(
     request.timeout = effective_spawn_timeout(mode, request.timeout, configured_timeout(config)?);
     request.force_new_tab |= mode == LoopRunMode::Scheduled;
     request.loop_task = Some(task.to_owned());
-    request.loop_booked_by = check_booked_by(std::env::var(LOOP_BOOKED_BY_ENV).ok());
+    request.loop_booked_by = loop_check_booked_by();
+    request.loop_fire = loop_check_task()
+        .and_then(|_| std::env::var("RIMZ_WORKFLOW_RUN").ok())
+        .and_then(|raw| crate::ids::WorkflowRunId::parse(&raw).ok());
     request.self_cleanup_on_completion = !request.keep;
     Ok(())
 }
@@ -171,135 +184,50 @@ pub enum TaskFireEffect {
     TargetGone,
 }
 
-/// Where a fire's run reads its definition.
-enum WorkflowSource {
-    Deployed(PathBuf),
-    Inline(crate::harness::workflow::InlineDefinition),
-}
-
 struct FireContext {
     root: PathBuf,
     scope: Option<FireScope>,
 }
 
 struct FireScope {
-    kind: crate::ids::AgentKind,
     scope_runtime: RuntimePaths,
     scope_state: StatePaths,
     managed_launch: ManagedLaunchState,
-    /// The task's [`task_login`] for `kind`.
+    /// The room's [`task_login`] for `kind`.
     login: Option<ProviderLogin>,
-    /// Why the task's pinned account cannot run this fire.
-    account_skip: Option<String>,
-    capacity: OnceCell<Option<ProviderCapacity>>,
 }
 
 impl FireScope {
     fn new(
-        kind: crate::ids::AgentKind,
         scope_runtime: RuntimePaths,
         scope_state: StatePaths,
         login: Option<ProviderLogin>,
     ) -> Self {
         Self {
             login,
-            account_skip: None,
-            kind,
             scope_runtime,
             scope_state,
             managed_launch: ManagedLaunchState::Unsupported,
-            capacity: OnceCell::new(),
         }
-    }
-
-    /// The scope of one resolved agent launch on the task's account, or the room's.
-    fn spawn(
-        entry: &TaskEntry,
-        workspace: &ResolvedWorkspace,
-        resolved: &ResolvedSingleAgentLaunch,
-    ) -> Result<Self> {
-        let launch = LaunchLogin::from(entry.account.clone());
-        let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-        let managed_launch = resolve_managed_spawn_state(entry, workspace, resolved)?;
-        let kind = AgentKind::new_unchecked(resolved.kind.clone());
-        let (login, account_skip) = match &entry.account {
-            None => (task_login(&launch, &resolved.kind, &runtime)?, None),
-            Some(name) => match pinned_login(
-                &kind,
-                name,
-                &MachineConfig::load_lenient().accounts,
-                &ambient_env(),
-                &read_accounts_cache(&runtime.shared_accounts_path()),
-            )? {
-                Ok(login) => (Some(login), None),
-                Err(reason) => (None, Some(reason)),
-            },
-        };
-        let mut scope = Self::new(
-            kind,
-            runtime,
-            StatePaths::for_project_root(&workspace.project_root)?,
-            login,
-        );
-        scope.account_skip = account_skip;
-        scope.managed_launch = managed_launch;
-        Ok(scope)
     }
 
     fn login_key(&self) -> Option<crate::ids::LoginKey> {
         self.login.as_ref().map(ProviderLogin::key)
-    }
-
-    fn capacity(&self) -> Option<&ProviderCapacity> {
-        self.capacity
-            .get_or_init(|| {
-                self.managed_launch
-                    .capacity(&self.scope_runtime, &self.login_key()?)
-            })
-            .as_ref()
-    }
-
-    fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Option<String> {
-        let (surplus, after) = (entry.surplus.as_deref(), entry.surplus_after.as_deref());
-        surplus_refusal(surplus, after, self.kind.as_str(), || {
-            self.capacity()
-                .and_then(|capacity| capacity.longest_window_surplus(now))
-        })
     }
 }
 
 impl FireContext {
     fn resolve(entry: &TaskEntry, action: TaskAction) -> Result<Self> {
         let root = entry.resolved_root();
-        if matches!(action, TaskAction::CheckOnly | TaskAction::Workflow(_)) {
+        let TaskAction::Deliver(target) = action else {
             return Ok(Self { root, scope: None });
-        }
-        let launch = LaunchLogin::from(entry.account.clone());
-        let scope = match &action {
-            TaskAction::Spawn(spec) => {
-                let workspace = WorkspaceResolver::resolve(&root, None)?;
-                let resolved =
-                    crate::harness::plan::resolve_single_agent_launch(spec, &workspace, &launch)?;
-                FireScope::spawn(entry, &workspace, &resolved)?
-            }
-            TaskAction::Deliver(target) => {
-                let project_root = WorkspaceResolver::persisted_project_root(&root)?;
-                let runtime = RuntimePaths::for_project_root(&project_root)?;
-                let login = task_login(&launch, target.kind.as_str(), &runtime)?;
-                let mut scope = FireScope::new(
-                    target.kind.clone(),
-                    runtime,
-                    StatePaths::for_project_root(&project_root)?,
-                    login,
-                );
-                scope.managed_launch =
-                    unresolved_managed_state(&entry.resolved_root(), &target.kind);
-                scope
-            }
-            TaskAction::CheckOnly | TaskAction::Workflow(_) => {
-                unreachable!("action without provider scope returned above")
-            }
         };
+        let project_root = WorkspaceResolver::persisted_project_root(&root)?;
+        let runtime = RuntimePaths::for_project_root(&project_root)?;
+        let login = task_login(&LaunchLogin::RoomDefault, target.kind.as_str(), &runtime)?;
+        let mut scope =
+            FireScope::new(runtime, StatePaths::for_project_root(&project_root)?, login);
+        scope.managed_launch = unresolved_managed_state(&root, &target.kind);
         Ok(Self {
             root,
             scope: Some(scope),
@@ -379,34 +307,30 @@ fn remove_fire_tree(
 }
 
 /// Settle the fresh tree a reported run worked in, through a detached `rimz`: collection reports
-/// under the workspace lock, which the removal's store writes take. A run that never acted only
-/// ran its guards there, so `worktree remove --force` takes the tree. An acted run's agent may
-/// have left work or still hold the pane, so `worktree cleanup` keeps the tree for either and
-/// removes it otherwise: the agent's own wrapper cleanup ran while the live run protected it.
-pub(super) fn settle_fire_tree(run: &crate::store::workflow::RunRecord, acted: bool) {
+/// under the workspace lock, which the removal's store writes take. Whatever the command did,
+/// `worktree cleanup` keeps a tree that holds work or an agent its command launched there, and
+/// removes it otherwise.
+pub(super) fn settle_fire_tree(run: &crate::store::workflow::RunRecord) {
     let Some(task) = run.task.as_deref().filter(|_| run.fire_tree) else {
         return;
     };
     let path = &run.scope.path;
-    let marker = match crate::worktree::read_marker_for_worktree(path) {
-        Ok(Some(marker)) => marker,
+    match crate::worktree::read_marker_for_worktree(path) {
+        Ok(Some(_)) => {}
         Ok(None) => return,
         Err(error) => {
             tracing::warn!(task, worktree = %path.display(), %error, "fire tree marker unreadable; tree kept");
             return;
         }
-    };
-    let mut args: Vec<std::ffi::OsString> = vec![
+    }
+    let args: Vec<std::ffi::OsString> = vec![
         "--root".into(),
         run.project_root.clone().into_os_string(),
         "worktree".into(),
+        "cleanup".into(),
+        path.clone().into_os_string(),
+        "--non-interactive".into(),
     ];
-    if acted {
-        args.extend(["cleanup".into(), path.clone().into_os_string()]);
-        args.push("--non-interactive".into());
-    } else {
-        args.extend(["remove".into(), marker.name.into(), "--force".into()]);
-    }
     let spawned = StatePaths::for_project_root(&run.project_root)
         .and_then(|paths| RuntimePaths::for_state(&paths))
         .map_err(anyhow::Error::from)
@@ -429,7 +353,6 @@ pub struct TaskFire<'a> {
     ephemeral: bool,
     context: Option<FireContext>,
     mode: LoopRunMode,
-    keep: bool,
     now: Timestamp,
     config: Arc<MachineConfig>,
     signal: Option<TriggerSignal>,
@@ -472,7 +395,6 @@ impl<'a> TaskFire<'a> {
         task: LoadedTask,
         catalog: &'a TaskCatalog,
         mode: LoopRunMode,
-        keep: bool,
         now: Timestamp,
         config: Arc<MachineConfig>,
         signal: Option<TriggerSignal>,
@@ -496,7 +418,6 @@ impl<'a> TaskFire<'a> {
             ephemeral,
             context: None,
             mode,
-            keep,
             now,
             config,
             signal,
@@ -719,9 +640,9 @@ impl<'a> TaskFire<'a> {
     }
 
     /// Cut a `fresh-worktree` fire's tree from trunk and announce it when the room's
-    /// store exists; a scheduled check-only fire births no room.
+    /// store exists.
     fn prepare_fire_tree(&mut self) -> Result<()> {
-        let Some(crate::config::TaskWorktree::Fresh { prefix }) = self.entry.task_worktree() else {
+        let Some(prefix) = self.entry.fresh_worktree.as_deref() else {
             return Ok(());
         };
         if self.fire_tree.is_some() {
@@ -778,9 +699,9 @@ impl<'a> TaskFire<'a> {
         &mut self,
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
-        match self.task.compiled().map_err(Clone::clone)?.clone() {
-            CompiledAction::Workflow(workflow) => self.prepare_workflow(workflow, before_launch),
-            CompiledAction::Deliver(target) => self.prepare_wait(target),
+        match self.task.action().map_err(Clone::clone)?.clone() {
+            TaskAction::Command(argv) => self.prepare_command(&argv, before_launch),
+            TaskAction::Deliver(target) => self.prepare_wait(target),
         }
     }
 
@@ -843,21 +764,15 @@ impl<'a> TaskFire<'a> {
         )))
     }
 
-    /// Every fire but an unguarded wait starts a workflow run, behind the ladder: scope gates,
-    /// deadline and memory, the admission lease, budget and surplus, then overlap against the
-    /// live run, which `create` refuses.
-    fn prepare_workflow(
+    /// A command fire starts the workflow run of its one command check, behind the ladder:
+    /// deadline and memory, the admission lease, then overlap against the live run, which
+    /// `create` refuses.
+    fn prepare_command(
         &mut self,
-        workflow: TaskWorkflow,
+        argv: &[String],
         before_launch: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
-        if let TaskWorkflow::Named(name) = &workflow {
-            crate::harness::name::validate_name(name)?;
-        }
         if let Some(done) = self.prepare_watch()? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        if let Some(done) = self.prepare_agent_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
         }
         if let Some(done) = self.prepare_deadline()? {
@@ -867,25 +782,8 @@ impl<'a> TaskFire<'a> {
             self.finished = true;
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
-        // A definition the row cannot compile refuses before the fire births a room. Its prompt
-        // carries the arrival's evidence until the prompt is filled again below.
-        let mut inline = match &workflow {
-            TaskWorkflow::Inline(_) => Some(self.workflow_source(&workflow)?),
-            TaskWorkflow::Named(_) => None,
-        };
+        let definition = self.command_definition(argv)?;
         if let Some(done) = self.prepare_run_lock()? {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        // A fire the cap or surplus would skip records it without birthing a room; the check
-        // repeats under the budget lock below, where it decides. A deployed workflow that does
-        // not resolve here refuses there, after the room.
-        let deployed = match &workflow {
-            TaskWorkflow::Named(_) => self.workflow_source(&workflow).ok(),
-            TaskWorkflow::Inline(_) => None,
-        };
-        if let Some(source) = inline.as_ref().or(deployed.as_ref())
-            && let Some(done) = self.prepare_workflow_admission(source)?
-        {
             return Ok(TaskFirePlan::Done(done));
         }
         let root = self.entry.resolved_root();
@@ -896,71 +794,27 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
         let state = StatePaths::for_project_root(&root)?;
-        let mut source = match inline.take() {
-            Some(source) => source,
-            None => self.workflow_source(&workflow)?,
-        };
-        // Each checkout of an each-worktree task fires under its own lease, so a capped task's
-        // fires also hold its budget lock from the budget read until `create` publishes the run
-        // the next read counts. A root with no state has no live run and `create` refuses it.
-        let _budget = (self.entry.budget_per_day.is_some() && state.root.exists())
-            .then(|| super::launch_ledger_store::hold_budget(&state, &self.name))
-            .transpose()?;
-        if let Some(done) = self.prepare_workflow_admission(&source)? {
-            return Ok(TaskFirePlan::Done(done));
-        }
         if let Some(done) = self.reconcile_backlog()? {
             return Ok(TaskFirePlan::Done(done));
         }
-        // The run lock and the reconcile may have switched the trigger this fire serves; the
-        // run's prompt carries the one its record will name.
-        if let WorkflowSource::Inline(definition) = &mut source {
-            self.fill_prompt(definition)?;
-        }
-        let fresh = matches!(
-            self.entry.task_worktree(),
-            Some(crate::config::TaskWorktree::Fresh { .. })
-        );
-        if self.mode == LoopRunMode::Manual {
-            self.supersede_held_decline(&state)?;
-        }
+        let fresh = self.entry.fresh_worktree.is_some();
         if fresh && let Some(blocker) = self.live_task_run(&state)? {
             return self.prepare_overlap(&blocker.id, None);
         }
         // The last rung: a fresh task's run works in a tree cut for this fire alone.
         self.prepare_fire_tree()?;
-        let fire_facts = Some(self.fire_facts());
-        let prompt = || match &source {
-            WorkflowSource::Deployed(_) => self.run_prompt().map_err(|error| format!("{error:#}")),
-            WorkflowSource::Inline(_) => Ok(None),
-        };
-        let give_up = match &source {
-            WorkflowSource::Deployed(_) => None,
-            WorkflowSource::Inline(_) => self.default_capacity_cutoff()?,
-        };
-        let definition = match &source {
-            WorkflowSource::Deployed(dir) => crate::harness::workflow::DefinitionSource::Deployed {
-                dir,
-                task: Some(self.name.clone()),
-                surplus: self.entry.surplus.clone(),
-                surplus_after: self.entry.surplus_after.clone(),
-                fire: Some(self.run_fire()),
-                fire_facts,
-            },
-            WorkflowSource::Inline(definition) => {
-                crate::harness::workflow::DefinitionSource::Inline {
-                    task: self.name.clone(),
-                    definition: crate::harness::workflow::InlineDefinition {
-                        text: definition.text.clone(),
-                        assets: definition.assets.clone(),
-                    },
-                    fire_tree: fresh,
-                    surplus: self.entry.surplus.clone(),
-                    surplus_after: self.entry.surplus_after.clone(),
-                    fire: Some(self.run_fire()),
-                    fire_facts,
-                }
-            }
+        // The run lock and the reconcile may have switched the trigger this fire serves; the
+        // run's prompt, which its command reads as `RIMZ_LOOP_TRIGGER`, names the one served.
+        let trigger = self.effect_prompt(String::new());
+        let prompt = || Ok((!trigger.is_empty()).then(|| trigger.clone()));
+        let definition = crate::harness::workflow::DefinitionSource::Inline {
+            task: self.name.clone(),
+            definition,
+            fire_tree: fresh,
+            surplus: None,
+            surplus_after: None,
+            fire: Some(self.run_fire()),
+            fire_facts: Some(self.fire_facts()),
         };
         let checkout = self.fire_dir();
         std::fs::metadata(&checkout)
@@ -974,10 +828,7 @@ impl<'a> TaskFire<'a> {
             },
             prompt,
             self.mode == LoopRunMode::Manual,
-            crate::harness::workflow::StartArgs {
-                give_up,
-                capacity: crate::store::workflow::StartCapacity::Wait,
-            },
+            crate::harness::workflow::StartArgs::default(),
         );
         let run = match created {
             Ok((run, advance)) => {
@@ -1073,38 +924,6 @@ impl<'a> TaskFire<'a> {
         Ok(crate::store::workflow::live_runs(state)?
             .into_iter()
             .find(|run| run.started_by(&self.name) && run.firing_checkout() == checkout))
-    }
-
-    /// A manual fire supersedes the task's run holding a judge decline on its checkout, which
-    /// would otherwise refuse it as an overlap: it cancels that run as `rimz workflow cancel`
-    /// does and waits for the cancel, so `create` finds the checkout free.
-    fn supersede_held_decline(&self, state: &StatePaths) -> Result<()> {
-        // A checkout that is gone holds no run; the fire's own checkout read names it.
-        if !self.launch_checkout().exists() {
-            return Ok(());
-        }
-        let Some(run) = self.live_task_run(state)? else {
-            return Ok(());
-        };
-        if !run.node.starts_with(super::compile::DECLINE_HOLD) {
-            return Ok(());
-        }
-        let output = std::process::Command::new(crate::proc::rimz_exe())
-            .arg("--root")
-            .arg(self.entry.resolved_root())
-            .args(crate::harness::workflow::cancel_args(
-                &run.id,
-                "superseded by a manual fire",
-            ))
-            .stdin(std::process::Stdio::null())
-            .output()?;
-        anyhow::ensure!(
-            output.status.success(),
-            "cannot cancel run {} holding a judge decline: {}",
-            run.id,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-        Ok(())
     }
 
     /// The live run `create` refused on: `skip` records an overlap naming it; `coalesce`,
@@ -1213,164 +1032,15 @@ impl<'a> TaskFire<'a> {
 
     /// The definition a fire starts: a deployed directory, or the task's compiled graph with
     /// its assets read now and the evidence of the trigger the fire serves now in its prompt.
-    fn workflow_source(&self, workflow: &TaskWorkflow) -> Result<WorkflowSource> {
-        let inline = match workflow {
-            TaskWorkflow::Named(name) => {
-                let home = crate::disk::paths::workflows_dir().canonicalize()?;
-                let dir = home.join(name).canonicalize()?;
-                anyhow::ensure!(
-                    dir.starts_with(&home),
-                    "workflow must exist inside {}",
-                    home.display()
-                );
-                return Ok(WorkflowSource::Deployed(dir));
-            }
-            TaskWorkflow::Inline(inline) => inline,
-        };
-        self.inline_definition(inline).map(WorkflowSource::Inline)
-    }
-
-    /// The inline graph this fire runs, its prompt asset carrying the evidence of the trigger the
-    /// fire serves now.
-    pub(in crate::harness) fn inline_definition(
+    /// The one-check workflow a fire of `argv` runs: the command exits 0 and the run is done,
+    /// else it fails. `sh` only execs the argv, every word single-quoted, so each reaches the
+    /// process as written; a `command` step would confine every word holding `/` to the
+    /// definition's directory.
+    pub(in crate::harness) fn command_definition(
         &self,
-        inline: &super::compile::InlineTask,
+        argv: &[String],
     ) -> Result<crate::harness::workflow::InlineDefinition> {
-        let mut definition = inline.definition(&self.name, &self.task, &self.config)?;
-        self.fill_prompt(&mut definition)?;
-        if self.keep {
-            definition.text = super::compile::keep_agent(&definition.text)?;
-        }
-        Ok(definition)
-    }
-
-    /// Sets a graph's prompt asset, where it has one, to the row's prompt with the evidence of
-    /// the trigger the fire serves now.
-    fn fill_prompt(
-        &self,
-        definition: &mut crate::harness::workflow::InlineDefinition,
-    ) -> Result<()> {
-        if let Some(prompt) = definition.assets.get_mut(super::compile::PROMPT) {
-            *prompt = self.resolve_effect_prompt()?.into_bytes();
-        }
-        Ok(())
-    }
-
-    /// When a scheduled fire's agent gives up waiting for capacity when its row sets no
-    /// `capacity-wait`: a second before the task's next clock fire and never past its
-    /// deadline, or never for a task no clock fires again. The run carries the instant, so a
-    /// guard that runs first does not move it.
-    pub(in crate::harness) fn default_capacity_cutoff(&self) -> Result<Option<Timestamp>> {
-        if self.mode != LoopRunMode::Scheduled || self.entry.capacity_wait.is_some() {
-            return Ok(None);
-        }
-        let next = match self
-            .task
-            .trigger()
-            .as_ref()
-            .ok()
-            .map(|parsed| &parsed.trigger)
-        {
-            Some(Trigger::Schedule(schedule)) if !schedule.once => {
-                let runtime = RuntimePaths::for_project_root(&self.entry.resolved_root())?;
-                let key = self
-                    .checkout
-                    .as_ref()
-                    .filter(|_| self.entry.each_worktree)
-                    .map_or_else(
-                        || self.name.clone(),
-                        |checkout| super::fire::scope_key(&self.name, checkout),
-                    );
-                let stamp = super::fire::last_stamps(&runtime)
-                    .get(&key)
-                    .copied()
-                    .unwrap_or(self.now);
-                schedule
-                    .schedule
-                    .next_after(stamp, &self.now.to_zoned(self.config.time_zone()))
-                    .and_then(|at| at.checked_sub(Duration::from_secs(1)).ok())
-            }
-            _ => None,
-        };
-        Ok(match (next, self.entry.deadline) {
-            (Some(next), Some(deadline)) => Some(next.min(deadline)),
-            (next, deadline) => next.or(deadline),
-        })
-    }
-
-    /// The run prompt a deployed workflow's run starts with, which each agent step's prompt
-    /// ends with: the row's prompt with the fire's evidence, or the evidence alone for a row
-    /// whose prompt lives in the workflow, as an ejected task's does.
-    pub(in crate::harness) fn run_prompt(&self) -> Result<Option<String>> {
-        let prompt = if self.entry.prompt.is_none() && self.entry.prompt_file.is_none() {
-            self.effect_prompt(String::new())
-        } else {
-            self.resolve_effect_prompt()?
-        };
-        Ok((!prompt.is_empty()).then_some(prompt))
-    }
-
-    /// A task's daily cap and surplus gate admit each run its workflow starts. The cap counts
-    /// finished runs' reported cost plus what each live run of the task reserves, and the next
-    /// run reserves its graph's agent-step budgets; surplus reads every agent's account.
-    fn prepare_workflow_admission(
-        &mut self,
-        source: &WorkflowSource,
-    ) -> Result<Option<TaskFireFinished>> {
-        let surplus = self.entry.surplus.is_some() || self.entry.surplus_after.is_some();
-        if self.entry.budget_per_day.is_none() && !surplus {
-            return Ok(None);
-        }
-        let spec = match source {
-            WorkflowSource::Deployed(dir) => crate::harness::workflow::load(dir)?,
-            WorkflowSource::Inline(definition) => {
-                crate::harness::workflow::parse(&definition.text)?
-            }
-        };
-        if self.entry.budget_per_day.is_some() {
-            let zoned_now = self.now.to_zoned(self.config.time_zone());
-            let live = live_reservation(&self.entry.resolved_root(), &self.name)?;
-            if let Some(gate) = run_log::reserved_budget_gate(
-                &logs_dir(),
-                &self.name,
-                &self.entry,
-                &zoned_now,
-                spec.reserved_usd(),
-                live,
-            )
-            .map_err(anyhow::Error::msg)?
-            {
-                return Ok(Some(
-                    self.record_gate(LoopRunResult::BudgetSkipped, gate.reason()),
-                ));
-            }
-        }
-        if !surplus {
-            return Ok(None);
-        }
-        let workspace = WorkspaceResolver::resolve(self.entry.resolved_root(), None)?;
-        for (agent, account) in spec.agent_launches() {
-            let launch = LaunchLogin::from(account.cloned());
-            // A team or multi-cell step launches every cell, each on the step's account or its
-            // own, as the engine's start groups count them.
-            for (resolved, pinned) in
-                crate::harness::plan::resolve_agent_cells(agent, &workspace, &launch)?
-            {
-                let entry = TaskEntry {
-                    agent: Some(agent.to_owned()),
-                    account: account.or(pinned.as_ref()).cloned(),
-                    workflow: None,
-                    ..self.entry.clone()
-                };
-                let scope = FireScope::spawn(&entry, &workspace, &resolved)?;
-                if let Some(reason) = scope.surplus_gate(&self.entry, self.now) {
-                    return Ok(Some(
-                        self.record_gate(LoopRunResult::SurplusSkipped, reason),
-                    ));
-                }
-            }
-        }
-        Ok(None)
+        command_definition(&self.name, &self.entry, argv)
     }
 
     fn workflow_already_launched(&self) -> Result<bool> {
@@ -1388,6 +1058,16 @@ impl<'a> TaskFire<'a> {
         .is_some())
     }
 
+    /// A booked one-off agent or team launch, whose consumed sidebar entry the bookings lane
+    /// rebuilds from this launch memory once its row is gone.
+    fn is_booked_launch(&self) -> bool {
+        self.mode == LoopRunMode::Scheduled
+            && self.task.kind() == TaskKind::OneOff
+            && self.entry.wait.is_none()
+            && !self.entry.booked_by.is_empty()
+            && read_fire_launch(&self.entry.command).is_some()
+    }
+
     fn record_workflow_launch(
         &self,
         paths: &StatePaths,
@@ -1396,7 +1076,7 @@ impl<'a> TaskFire<'a> {
         at: Timestamp,
         replace_project: bool,
     ) -> Option<String> {
-        if !self.entry.dedupes_checkout() {
+        if !self.entry.dedupes_checkout() && !self.is_booked_launch() {
             return None;
         }
         let checkout = match scope {
@@ -1451,82 +1131,7 @@ impl<'a> TaskFire<'a> {
         )))
     }
 
-    /// The provider gates an agent row reads before its run starts: the pinned account, the
-    /// fleet budget and the provider budget, for each cell a staying layout launches. Surplus
-    /// waits for admission, under the lease.
-    fn prepare_agent_scope_gates(&mut self) -> Result<Option<TaskFireFinished>> {
-        let Ok(TaskAction::Spawn(agent)) = self.task.action() else {
-            return Ok(None);
-        };
-        if self.entry.stay {
-            return self.prepare_layout_scope_gates(&self.launch_checkout());
-        }
-        let context = FireContext::resolve(&self.entry, TaskAction::Spawn(agent.clone()))?;
-        let Some(scope) = context.scope.as_ref() else {
-            return Ok(None);
-        };
-        if let Some((result, reason)) = self.scope_refusal(scope, false) {
-            return Ok(Some(self.record_gate(result, reason)));
-        }
-        // The run's turn reports completion through the kind's hooks; refuse before it starts.
-        preflight_kind(scope.kind.as_str(), scope.login.as_ref())?;
-        Ok(None)
-    }
-
-    fn prepare_layout_scope_gates(&mut self, cwd: &Path) -> Result<Option<TaskFireFinished>> {
-        let workspace = WorkspaceResolver::resolve(cwd, Some(self.entry.resolved_root()))?;
-        let state = StatePaths::for_project_root(&workspace.project_root)?;
-        let runtime = RuntimePaths::for_state(&state)?;
-        let mut effective = crate::config::effective::load(&self.config, &workspace.project_root)?;
-        let availability = crate::harness::plan::LaunchAvailability::read(
-            &runtime,
-            &state,
-            &self.config,
-            self.now,
-        );
-        effective.route(
-            &self.config.tiers,
-            crate::config::effective::ProfileScope::Agents,
-            self.entry.agent.as_deref(),
-            None,
-            None,
-            None,
-            |kind, model| availability.unavailable(kind, model),
-        )?;
-        let layout = crate::harness::plan::resolve_launch(
-            &effective,
-            crate::config::effective::ProfileScope::Agents,
-            &self.config.agents.commands,
-            self.entry.agent.as_deref(),
-            None,
-        )?;
-        for cell in layout.layout.agent_cells() {
-            let resolved = ResolvedSingleAgentLaunch {
-                kind: cell.kind.as_str().to_owned(),
-                args: cell.args.clone(),
-                model: cell.launch.model.clone(),
-            };
-            let login = task_login(&LaunchLogin::RoomDefault, &cell.kind, &runtime)?;
-            let mut scope =
-                FireScope::new(cell.kind.clone(), runtime.clone(), state.clone(), login);
-            scope.managed_launch = resolve_managed_spawn_state(&self.entry, &workspace, &resolved)?;
-            if let Some((result, reason)) = self.scope_refusal(&scope, false) {
-                return Ok(Some(self.record_gate(result, reason)));
-            }
-        }
-        Ok(None)
-    }
-
     fn prepare_scope_gates(&mut self) -> Result<Option<TaskFireFinished>> {
-        let zoned_now = self.now.to_zoned(self.config.time_zone());
-        if let Some(gate) =
-            run_log::daily_budget_gate(&logs_dir(), &self.name, &self.entry, &zoned_now)
-                .map_err(anyhow::Error::msg)?
-        {
-            return Ok(Some(
-                self.record_gate(LoopRunResult::BudgetSkipped, gate.reason()),
-            ));
-        }
         let action = self
             .action
             .take()
@@ -1535,7 +1140,7 @@ impl<'a> TaskFire<'a> {
         if let Some((result, reason)) = context
             .scope
             .as_ref()
-            .and_then(|scope| self.scope_refusal(scope, true))
+            .and_then(|scope| self.scope_refusal(scope))
         {
             return Ok(Some(self.record_gate(result, reason)));
         }
@@ -1543,12 +1148,9 @@ impl<'a> TaskFire<'a> {
         Ok(None)
     }
 
-    /// The first scope gate that refuses this fire, in ladder order; every
-    /// one reads the task's login. A run's admission reads surplus itself.
-    fn scope_refusal(&self, scope: &FireScope, surplus: bool) -> Option<(LoopRunResult, String)> {
-        if let Some(reason) = scope.account_skip.clone() {
-            return Some((LoopRunResult::AccountSkipped, reason));
-        }
+    /// The first scope gate that refuses a delivery, in ladder order; every one reads the
+    /// room's login.
+    fn scope_refusal(&self, scope: &FireScope) -> Option<(LoopRunResult, String)> {
         let key = scope.login_key();
         if let Some(reason) = crate::harness::budget::scope_gate(
             &scope.scope_runtime,
@@ -1566,10 +1168,7 @@ impl<'a> TaskFire<'a> {
         {
             return Some((LoopRunResult::BudgetSkipped, reason));
         }
-        scope
-            .surplus_gate(&self.entry, self.now)
-            .filter(|_| surplus)
-            .map(|reason| (LoopRunResult::SurplusSkipped, reason))
+        None
     }
 
     /// The admission lease: it serializes fires of one task, while the live run is what a
@@ -1734,18 +1333,6 @@ impl<'a> TaskFire<'a> {
         {
             tracing::warn!(task = %self.name, error = %format!("{consume:#}"), "failed to consume errored one-shot delivery");
         }
-        // The launch resolves the pin again for the declared provider.
-        let unresolved =
-            self.entry
-                .account
-                .as_ref()
-                .and_then(|name| match err.downcast_ref::<RoomLoginErr>() {
-                    Some(RoomLoginErr::Login(login)) => Some(unresolved_pin(login, name)),
-                    _ => None,
-                });
-        if let Some(reason) = unresolved {
-            return self.record_gate(LoopRunResult::AccountSkipped, reason);
-        }
         let error = format!("{err:#}");
         self.record_terminal_with(
             LoopRunResult::Errored,
@@ -1864,7 +1451,7 @@ impl<'a> TaskFire<'a> {
     }
 
     fn resolve_effect_prompt(&self) -> Result<String> {
-        Ok(self.effect_prompt(resolve_task_prompt(&self.name, &self.entry)?))
+        Ok(self.effect_prompt(self.entry.prompt.clone().unwrap_or_default()))
     }
 
     /// `body` with the evidence of what fired this run.
@@ -1880,8 +1467,7 @@ impl<'a> TaskFire<'a> {
         } else {
             prompt::Evidence::Scheduled
         };
-        let launches = self.entry.agent.is_some() || self.entry.workflow.is_some();
-        if launches && self.entry.watch.is_none() {
+        if !self.entry.command.is_empty() && self.entry.watch.is_none() {
             body = prompt::compose_launch(&self.name, &evidence, &body);
         } else if self.entry.wait.is_some()
             || signal_trigger
@@ -1913,7 +1499,7 @@ impl<'a> TaskFire<'a> {
         record.absorbed = self.absorbed;
         record.check.clone_from(&self.watch_check);
         record.late_ms = self.late_ms;
-        if self.entry.stay || self.entry.each_worktree {
+        if self.entry.each_worktree {
             record.checkout = Some(self.launch_checkout());
         }
         record
@@ -2069,104 +1655,10 @@ fn overlap_detail(info: Option<RunLockInfo>, suffix: &str) -> String {
     format!("{holder} — {suffix}")
 }
 
-/// The account gate for a task pinned to `name`: the login its fire runs on,
-/// or the reason the fire is skipped, ending in the fix. A fire never falls
-/// back to the room's account. A home without trusted hooks passes here and
-/// fails the hooks preflight as an error.
-fn pinned_login(
-    kind: &AgentKind,
-    name: &crate::ids::LoginName,
-    accounts: &crate::config::AccountsConfig,
-    ambient: &BTreeMap<String, String>,
-    statuses: &AccountsCache,
-) -> Result<Result<ProviderLogin, String>, RoomLoginErr> {
-    let login = match crate::agents::session_login(kind, Some(name), accounts) {
-        Ok(login) => login,
-        Err(RoomLoginErr::Login(err)) => return Ok(Err(unresolved_pin(&err, name))),
-        Err(err) => return Err(err),
-    };
-    if let Err(err @ BirthLoginErr::MissingHome { .. }) = login.preflight(ambient) {
-        return Ok(Err(err.to_string()));
-    }
-    if ProviderStatus::from_record(statuses.logins.get(&login.key())) == ProviderStatus::LoggedOut {
-        let start: String = login
-            .overrides(ambient)
-            .into_iter()
-            .map(|(key, value)| {
-                let value = shlex::try_quote(&value).unwrap_or(value.as_str().into());
-                format!("{key}={value} ")
-            })
-            .collect();
-        return Ok(Err(format!(
-            "{kind} account `{name}` is logged out; log in with `{start}{kind}`"
-        )));
-    }
-    Ok(Ok(login))
-}
-
-/// Why a pin that does not resolve skips the fire, ending in the fix.
-fn unresolved_pin(err: &LoginErr, name: &crate::ids::LoginName) -> String {
-    match err {
-        LoginErr::Unknown { .. } => err.to_string(),
-        LoginErr::Unsupported { .. } => {
-            format!("{err}; remove `account = \"{name}\"` from the task")
-        }
-    }
-}
-
-/// Hooks preflight for the action's kind under `login`, its [`task_login`].
-pub fn preflight_entry(
-    action: &TaskAction,
-    resolved: Option<&ResolvedSingleAgentLaunch>,
-    login: Option<&ProviderLogin>,
-) -> Result<()> {
-    match action {
-        TaskAction::Spawn(spec) => {
-            let resolved = resolved
-                .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
-            preflight_kind(&resolved.kind, login)?;
-        }
-        TaskAction::Deliver(target) => preflight_kind(&target.kind, login)?,
-        TaskAction::CheckOnly | TaskAction::Workflow(_) => {}
-    }
-    Ok(())
-}
-
-fn preflight_kind(kind: &str, login: Option<&ProviderLogin>) -> Result<()> {
-    let adapter =
-        find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    let login = login.with_context(|| {
-        format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
-    })?;
-    match preflight_hooks(
-        adapter,
-        &login.env(&ambient_env()),
-        TurnLifecycleNeed::NotUnsupported,
-    ) {
-        Ok(()) => Ok(()),
-        Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => anyhow::bail!(
-            "{kind} cannot run as a scheduled turn: a verified executable turn-lifecycle signal is required; {reason}"
-        ),
-        Err(HookPreflightErr::HooksMissing) => anyhow::bail!(
-            "{kind} hooks are not installed, so a scheduled turn cannot report completion\ninstall them with `rimz hooks install {kind}`"
-        ),
-        Err(HookPreflightErr::HooksUntrusted { hooks, fix }) => anyhow::bail!(
-            "{kind} hooks are installed but not trusted ({}), so a scheduled turn cannot report completion\n{}",
-            hooks,
-            fix
-        ),
-        Err(HookPreflightErr::HooksDisabled { reason, fix }) => {
-            anyhow::bail!("{kind} cannot run as a scheduled turn: {reason}\n{fix}")
-        }
-    }
-}
-
 /// Why `rimz loop add` refuses a window trigger; each display carries its fix.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum WindowRefusal {
-    #[error(
-        "a window trigger reads the task's provider, and a --check-only task has none; add --agent or --wait"
-    )]
+    #[error("a window trigger reads a provider's windows; name it with --provider <kind>")]
     NoProvider,
     #[error(
         "{kind} selects an exact managed account at launch, so its windows cannot be read before the run; window triggers do not support {kind}"
@@ -2184,14 +1676,6 @@ pub enum WindowRefusal {
         "{kind} is not enforcing its {span} window, so it has no reset to wait for; use --after-reset {other}"
     )]
     Lifted {
-        kind: String,
-        span: WindowSpan,
-        other: WindowSpan,
-    },
-    #[error(
-        "the {span} window is {kind}'s longest, so at its reset the window has not started and --surplus would always skip; drop --surplus and --surplus-after, or use --after-reset {other}"
-    )]
-    SurplusAtLongestReset {
         kind: String,
         span: WindowSpan,
         other: WindowSpan,
@@ -2216,8 +1700,6 @@ struct WindowAtAdd {
     pub kind: AgentKind,
     pub span: WindowSpan,
     pub window: RateLimitWindow,
-    /// The span is the provider's longest window, the one `--surplus` reads.
-    pub longest: bool,
 }
 
 /// The provider a task's `window.*` terms read, once add can read each window
@@ -2286,30 +1768,20 @@ fn window_at_add(
         kind: AgentKind::new_unchecked(kind),
         span,
         window,
-        longest: capacity
-            .longest_window_observation(now)
-            .is_some_and(|longest| longest.duration_mins == Some(span.minutes())),
     })
 }
 
 /// Resolve `--after-reset <span>`: refused as a window term is, then for a
-/// lifted window, a window without a reset, and a surplus gate that the reset
-/// would always close.
+/// lifted window and a window without a reset.
 pub fn after_reset(
     span: WindowSpan,
     kind: Option<&str>,
     login: Option<&crate::ids::LoginKey>,
-    surplus: bool,
     root: &Path,
     runtime: &RuntimePaths,
     now: Timestamp,
 ) -> Result<AfterReset, WindowRefusal> {
-    let WindowAtAdd {
-        kind,
-        span,
-        window,
-        longest,
-    } = window_at_add(kind, span, login, root, runtime, now)?;
+    let WindowAtAdd { kind, span, window } = window_at_add(kind, span, login, root, runtime, now)?;
     let other = match span {
         WindowSpan::FiveHour => WindowSpan::SevenDay,
         WindowSpan::SevenDay => WindowSpan::FiveHour,
@@ -2326,13 +1798,6 @@ pub fn after_reset(
         kind: refused_kind(),
         span,
     })?;
-    if surplus && longest {
-        return Err(WindowRefusal::SurplusAtLongestReset {
-            kind: refused_kind(),
-            span,
-            other,
-        });
-    }
     let started = !window.not_started(now);
     Ok(AfterReset {
         left: crate::harness::when::percent_left(&window),
@@ -2346,15 +1811,6 @@ pub fn after_reset(
 
 pub fn parse_mode(raw: &str) -> Result<String> {
     Ok(mode_name(parse_mode_value(raw)?).to_owned())
-}
-
-pub(super) fn task_permission_mode(entry: &TaskEntry) -> Result<Option<PermissionMode>> {
-    entry
-        .mode
-        .as_deref()
-        .filter(|mode| !mode.trim().is_empty())
-        .map(parse_mode_value)
-        .transpose()
 }
 
 fn parse_mode_value(raw: &str) -> Result<PermissionMode> {
@@ -2378,97 +1834,6 @@ fn mode_name(mode: PermissionMode) -> &'static str {
 
 pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
     parse_duration_units(raw, TASK_TIMEOUT_UNITS).map_err(|err| err.to_string())
-}
-
-pub(super) fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
-    if let Some(prompt) = entry
-        .prompt
-        .as_deref()
-        .filter(|prompt| entry.wait.is_some() || !prompt.trim().is_empty())
-    {
-        return Ok(prompt.to_owned());
-    }
-    let Some(path) = entry.prompt_file.as_deref() else {
-        if entry.wait.is_some() {
-            return Ok(String::new());
-        }
-        anyhow::bail!("loop task `{name}` has no prompt; set `prompt` or `prompt-file`");
-    };
-    let path = resolve_config_path(path)?;
-    let prompt = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading prompt-file `{}`", path.display()))?;
-    if prompt.trim().is_empty() {
-        anyhow::bail!("prompt-file `{}` is empty", path.display());
-    }
-    Ok(prompt)
-}
-
-pub(super) fn resolve_config_path(path: &Path) -> Result<PathBuf> {
-    let expanded = expand_tilde(path);
-    if expanded.is_absolute() {
-        return Ok(expanded);
-    }
-    let loop_path = MachineConfig::loop_path();
-    let config_dir = loop_path.parent().unwrap_or_else(|| Path::new("."));
-    Ok(config_dir.join(expanded))
-}
-
-pub(super) fn expand_tilde(path: &Path) -> PathBuf {
-    let raw = path.to_string_lossy();
-    if raw == "~" {
-        return home_dir();
-    }
-    if let Some(rest) = raw.strip_prefix("~/") {
-        return home_dir().join(rest);
-    }
-    path.to_path_buf()
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
-}
-
-fn resolve_managed_spawn_state(
-    entry: &TaskEntry,
-    workspace: &crate::workspace::ResolvedWorkspace,
-    resolved: &ResolvedSingleAgentLaunch,
-) -> Result<ManagedLaunchState> {
-    let adapter = find_definition(&resolved.kind)
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", resolved.kind))?;
-    if entry.task_worktree().is_some() {
-        let applicability = adapter.resolve_managed_launch(
-            &workspace.worktree_root,
-            &std::collections::BTreeMap::new(),
-            resolved.model.as_deref(),
-            &resolved.args,
-        );
-        return Ok(
-            if matches!(applicability, ManagedLaunchState::Unsupported) {
-                ManagedLaunchState::Unsupported
-            } else {
-                ManagedLaunchState::Unresolved
-            },
-        );
-    }
-    let launch = crate::agents::LaunchParams {
-        model: resolved.model.clone(),
-        ..crate::agents::LaunchParams::default()
-    };
-    let mut invocation = crate::harness::launch::ExecRequest::bare_launch(
-        crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
-        resolved.args.clone(),
-    );
-    invocation.identity.params = launch;
-    let (_, managed_launch) = crate::harness::launch::compile_managed_agent_process(
-        &workspace.project_root,
-        &invocation,
-        &workspace.worktree_root,
-        &ManagedLaunchState::PendingResolution,
-        None,
-    )?;
-    Ok(managed_launch)
 }
 
 /// Newest durable supervised run still active for one loop task.
@@ -2565,10 +1930,6 @@ pub fn stop_task(
         .and_then(|bytes| serde_json::from_slice::<RunLockMetadata>(&bytes).ok())
         .filter(|metadata| Some(metadata.holder) == holder);
     let kind = metadata.as_ref().and_then(|metadata| metadata.kind);
-    let check_only = metadata
-        .as_ref()
-        .and_then(|metadata| metadata.action_kind)
-        .is_some_and(TaskActionKind::is_check_only);
 
     let waiting = backlog.record.tasks.entry(name.to_owned()).or_default();
     if expected.is_none()
@@ -2594,7 +1955,7 @@ pub fn stop_task(
     )?;
     let run = run?;
 
-    if !check_only && wait_for_run_lock_release_path(&lock, holder, STOP_GRACE)? {
+    if wait_for_run_lock_release_path(&lock, holder, STOP_GRACE)? {
         let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
         let transition = append_stopped_record(name, root, info, run.as_ref(), kind, &mut backlog)?;
         return Ok((
@@ -2990,6 +2351,56 @@ fn read_run_lock_info(body: &[u8]) -> Option<RunLockInfo> {
     serde_json::from_slice(body).ok()
 }
 
+/// The node a command fire's run starts at and ends on.
+pub const COMMAND_NODE: &str = "command";
+
+/// The inline definition one fire of task `name` runs: a `test` check whose script execs `argv`
+/// under the row's `timeout`, routing a zero exit to `@done` and anything else to `@failed`.
+pub fn command_definition(
+    name: &str,
+    entry: &TaskEntry,
+    argv: &[String],
+) -> Result<crate::harness::workflow::InlineDefinition> {
+    let timeout = entry
+        .timeout
+        .as_deref()
+        .with_context(|| format!("loop task `{name}` has a command without `timeout`"))?;
+    let on = toml::Table::from_iter(
+        [
+            ("pass", "@done"),
+            ("fail", "@failed"),
+            ("timeout", "@failed"),
+            ("died", "@failed"),
+        ]
+        .map(|(outcome, target)| (outcome.to_owned(), toml::Value::from(target))),
+    );
+    let check = toml::Table::from_iter([
+        ("summary".to_owned(), "the task's command".into()),
+        (
+            "shell".to_owned(),
+            format!("exec {}", super::command_line(argv)).into(),
+        ),
+        ("timeout".to_owned(), timeout.into()),
+        ("on".to_owned(), on.into()),
+    ]);
+    let workflow = toml::Table::from_iter([
+        ("summary".to_owned(), format!("loop task {name}").into()),
+        ("scope".to_owned(), "worktree".into()),
+        ("start".to_owned(), COMMAND_NODE.into()),
+    ]);
+    let spec = toml::Table::from_iter([
+        ("workflow".to_owned(), workflow.into()),
+        (
+            "test".to_owned(),
+            toml::Table::from_iter([(COMMAND_NODE.to_owned(), check.into())]).into(),
+        ),
+    ]);
+    Ok(crate::harness::workflow::InlineDefinition {
+        text: toml::to_string(&spec)?,
+        assets: BTreeMap::new(),
+    })
+}
+
 pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
     CheckRecord {
         code: outcome.code(),
@@ -3038,26 +2449,6 @@ fn unresolved_managed_state(root: &Path, kind: &str) -> ManagedLaunchState {
     } else {
         ManagedLaunchState::Unresolved
     }
-}
-
-/// What the task's live workflow runs reserve against its daily cap until they report.
-fn live_reservation(root: &Path, task: &str) -> Result<f64> {
-    let state = StatePaths::for_project_root(root)?;
-    if !state.root.exists() {
-        return Ok(0.0);
-    }
-    let mut reserved = 0.0;
-    for record in crate::store::workflow::live_runs(&state)? {
-        // A finished run whose report is owed has no history row yet, so its cost counts here.
-        if !record.started_by(task) && !(record.ran_for(task) && record.owes_loop_report()) {
-            continue;
-        }
-        // The sealed copy is what the run spends by; a deployed source may have changed since.
-        let spec = crate::harness::workflow::load(&state.workflow(&record.id).home)
-            .with_context(|| format!("reading run {}'s sealed definition", record.id))?;
-        reserved += spec.reserved_usd();
-    }
-    Ok(reserved)
 }
 
 #[cfg(test)]

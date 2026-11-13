@@ -13,7 +13,7 @@ fn fixture(policy: &str, limit: Option<usize>) -> Env {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.busy]\nroot={:?}\ncheck='true'\nsignal='trunk.moved'\noverlap={policy:?}\n{}",
+            "[tasks.busy]\nroot={:?}\ncommand=['true']\ntimeout='1m'\nsignal='trunk.moved'\nrepeat=true\noverlap={policy:?}\n{}",
             env.project_root,
             limit
                 .map(|limit| format!("overlap-limit={limit}\n"))
@@ -57,7 +57,10 @@ while ! test -e allow-exit; do sleep 0.025; done
     let config = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         path,
-        config.replace("check='true'", &format!("check={check:?}")),
+        config.replace(
+            "command=['true']\ntimeout='1m'",
+            &format!("command=['sh', '-c', {check:?}]\ntimeout='1m'"),
+        ),
     )
     .unwrap();
 }
@@ -518,7 +521,7 @@ fn drain_drops_a_task_broken_by_hand_edit_without_a_row() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.busy]\nroot={:?}\ncheck='true'\nat='07:00'\noverlap='coalesce'\n",
+            "[tasks.busy]\nroot={:?}\ncommand=['true']\ntimeout='1m'\nat='07:00'\noverlap='coalesce'\n",
             env.project_root
         ),
     );
@@ -528,13 +531,13 @@ fn drain_drops_a_task_broken_by_hand_edit_without_a_row() {
 #[test]
 fn drain_drops_definitions_that_cannot_enqueue_without_a_row() {
     for definition in [
-        "check='true'\nevery='1h'",
-        "check='true'\nevery='1h'\noverlap='skip'",
+        "command=['true']\ntimeout='1m'\nevery='1h'",
+        "command=['true']\ntimeout='1m'\nevery='1h'\noverlap='skip'",
         "agent='claude'\nprompt='work'\nevery='1h'\nstay=true\neach-worktree=true",
-        "check='true'\nwhen=['pr=merged']",
+        "command=['true']\ntimeout='1m'\nwhen=['pr=merged']",
         "wait={kind='claude',session='s',handle='@claude'}\nevery='1h'\nprompt='work'",
         "workflow='missing'\nevery='1h'",
-        "check='true'",
+        "command=['true']\ntimeout='1m'",
     ] {
         let env = fixture("coalesce", None);
         write_loop_config(
@@ -639,12 +642,12 @@ fn catalog_rename_moves_backlog_and_redefinition_and_removal_clear_it() {
                         "loop",
                         "add",
                         "busy",
-                        "--check",
-                        "true",
                         "--every",
                         "1h",
                         "--overlap",
                         "coalesce",
+                        "--",
+                        "true",
                     ],
                 );
                 assert!(
@@ -677,14 +680,14 @@ fn overlap_flags_persist_for_machine_and_project_tasks() {
             "loop",
             "add",
             "busy",
-            "--check",
-            "true",
             "--every",
             "1h",
             "--overlap",
             "queue",
             "--overlap-limit",
             "3",
+            "--",
+            "true",
         ];
         if project {
             flags.push("--project");
@@ -703,39 +706,42 @@ fn overlap_flags_persist_for_machine_and_project_tasks() {
 #[test]
 fn add_refuses_overlap_on_unsupported_shapes_and_invalid_limits() {
     let env = Env::new();
-    // Stay and condition tasks overlap on their live run.
-    for (name, flags) in [
-        (
-            "stay",
-            vec![
-                "--agent", "claude", "--prompt", "fix", "--stay", "--every", "1h",
-            ],
-        ),
-        ("when", vec!["--check", "true", "--when", "team.stage=Done"]),
-    ] {
-        loop_ok(
-            &env,
-            &[vec!["loop", "add", name, "--overlap", "coalesce"], flags].concat(),
-        );
-    }
-    for (flags, reason) in [
-        (vec!["--check", "true", "--at", "07:00"], "one-shot"),
-        (
-            vec!["--wait", "--signal", "deploy.done"],
-            "no run to overlap",
-        ),
-    ] {
-        let output = env
-            .rimz()
-            .args([vec!["loop", "add", "busy", "--overlap", "coalesce"], flags].concat())
-            .output()
-            .unwrap();
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success() && error.contains("--overlap") && error.contains(reason),
-            "{error}"
-        );
-    }
+    // A repeating condition task overlaps on its live run.
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "when",
+            "--overlap",
+            "coalesce",
+            "--when",
+            "team.stage=Done",
+            "--repeat",
+            "--",
+            "true",
+        ],
+    );
+    let output = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "busy",
+            "--overlap",
+            "coalesce",
+            "--at",
+            "07:00",
+            "--",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() && error.contains("--overlap") && error.contains("one-shot"),
+        "{error}"
+    );
     for (flags, reason) in [
         (vec!["--overlap-limit", "2"], "queue"),
         (
@@ -747,8 +753,9 @@ fn add_refuses_overlap_on_unsupported_shapes_and_invalid_limits() {
             .rimz()
             .args(
                 [
-                    vec!["loop", "add", "busy", "--check", "true", "--every", "1h"],
+                    vec!["loop", "add", "busy", "--every", "1h"],
                     flags,
+                    vec!["--", "true"],
                 ]
                 .concat(),
             )
@@ -767,8 +774,7 @@ fn loaded_machine_and_project_tasks_refuse_invalid_overlap_fields() {
     for project in [false, true] {
         let env = Env::new();
         env.record(&env.project_root);
-        let fields =
-            "[tasks.busy]\ncheck='true'\nevery='1h'\noverlap='coalesce'\noverlap-limit=2\n";
+        let fields = "[tasks.busy]\ncommand=['true']\ntimeout='1m'\nevery='1h'\noverlap='coalesce'\noverlap-limit=2\n";
         if project {
             std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
             std::fs::write(env.project_root.join(".rimz/config.toml"), fields).unwrap();
@@ -792,7 +798,7 @@ fn drain_rechecks_project_trust_and_records_its_refusal() {
     std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
     std::fs::write(
         env.project_root.join(".rimz/config.toml"),
-        "[tasks.busy]\ncheck='true'\nsignal='trunk.moved'\noverlap='coalesce'\n",
+        "[tasks.busy]\ncommand=['true']\ntimeout='1m'\nsignal='trunk.moved'\nrepeat=true\noverlap='coalesce'\n",
     )
     .unwrap();
     loop_ok(&env, &["loop", "enable", "busy"]);

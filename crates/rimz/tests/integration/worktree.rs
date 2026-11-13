@@ -939,7 +939,7 @@ fn loop_tasks_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nevery = '1h'\n",
+            "[tasks.nightly]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\nevery = '1h'\n",
             env.project_root.display(),
             path.display()
         ),
@@ -1028,7 +1028,7 @@ fn a_fire_tree_holds_sweep_only_while_its_task_run_lock_is_held() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\ncheck = 'true'\nroot = '{}'\nfresh-worktree = 'night'\nevery = '1h'\n",
+            "[tasks.nightly]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\nfresh-worktree = 'night'\nevery = '1h'\n",
             env.project_root.display(),
         ),
     )

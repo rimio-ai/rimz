@@ -452,8 +452,9 @@ fn resume_hint_handle<'a>(
     }
 }
 
-/// `instance` is the cohort as its `team.idle` signal names it; `channel` is
-/// the lane's label, which the addresses print.
+/// `instance` is the team cohort, which gets no `Wait:` line since no command
+/// waits on a cohort without a board; `channel` is the lane's label, which the
+/// addresses print.
 fn write_launch_hints(
     w: &mut impl Write,
     instance: Option<&rimz::ids::TeamInstanceId>,
@@ -470,12 +471,6 @@ fn write_launch_hints(
         if instance.is_none() {
             writeln!(w, "Wait:  rimz agents wait @{handle}{lane}")?;
         }
-    }
-    if let Some(instance) = instance {
-        writeln!(
-            w,
-            "Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance={instance} --once"
-        )?;
     }
     Ok(())
 }

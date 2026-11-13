@@ -164,7 +164,7 @@ mod tests {
             )]),
         );
         let entry = crate::config::TaskEntry {
-            stay: true,
+            once_per_checkout: Some(true),
             each_worktree: true,
             when: Some(vec!["pr=merged".into()]),
             ..Default::default()
@@ -193,7 +193,7 @@ mod tests {
             BTreeMap::from([("/alias/one".into(), record.clone())]),
         );
         let entry = crate::config::TaskEntry {
-            workflow: Some("review".into()),
+            once_per_checkout: Some(true),
             each_worktree: true,
             when: Some(vec!["pr=open".into()]),
             ..Default::default()

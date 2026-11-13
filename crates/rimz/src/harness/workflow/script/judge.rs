@@ -60,7 +60,7 @@ fn run(
     )
     .map_err(|e| e.to_string())?;
     let managed = managed_launch(&profile, record)?;
-    // The surplus gate the run's fire started it with; an edit to the row moves the next fire.
+    // The surplus gate the run's record carries; a loop fire's run carries none.
     if let Some(reason) = budget_refusal(
         &config,
         &profile,
@@ -183,9 +183,9 @@ fn managed_launch(
 
 /// Why the judge's account may not spend now: the fleet's or the account's daily cap is spent,
 /// the account is parked, its bound provider quota is exhausted until a reset, or the window
-/// lacks the surplus that `surplus` and `surplus_after` ask for: the gate the run's loop task
-/// had when the run started, kept on its record. A refused judge never spawns, as a refused
-/// agent launch never does.
+/// lacks the surplus that `surplus` and `surplus_after` ask for, as kept on the run's record. A
+/// loop fire's command row sets no surplus gate, so its run's record carries none. A refused
+/// judge never spawns, as a refused agent launch never does.
 #[expect(
     clippy::too_many_arguments,
     reason = "the gates read the judge's account, its stores, and the run's two surplus values"
@@ -223,8 +223,8 @@ pub(in super::super) fn budget_refusal(
     )
 }
 
-/// A fresh answer from a loop task's judge that holds the task's act back is one assist,
-/// as a loop guard's decline was; a replayed answer never reaches here.
+/// A fresh answer from a judge in a loop-started run that holds the run's act back is one
+/// assist; a replayed answer never reaches here. A loop fire's command row compiles no judge.
 fn record_decline(
     spec: &Definition,
     record: &RunRecord,
@@ -253,7 +253,7 @@ fn record_decline(
 }
 
 /// Whether a judge's verdict routes away from every step and agent check while its opposite
-/// verdict leads into one: the compiled decline of a loop task's guard.
+/// verdict leads into one: a judge that guards the run's act.
 pub(in super::super) fn declines(spec: &Definition, node: &str, outcome: &str) -> bool {
     let opposite = match outcome {
         "pass" => "fail",

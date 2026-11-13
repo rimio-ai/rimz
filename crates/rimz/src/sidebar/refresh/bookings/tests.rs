@@ -15,15 +15,26 @@ fn link(id: &str) -> LaunchedBy {
     }
 }
 
+fn argv(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
 fn booked(root: &Path) -> TaskEntry {
     TaskEntry {
-        agent: Some("coder".to_owned()),
-        prompt: Some("go".to_owned()),
-        stay: true,
+        command: argv(&["rimz", "agents", "coder", "go"]),
+        timeout: Some("1h".to_owned()),
         when: Some(vec!["pr[feature]=merged".to_owned()]),
         root: root.to_path_buf(),
         booked_by: vec![link("booker"), link("root")],
         ..TaskEntry::default()
+    }
+}
+
+/// A booked row whose command is `words`.
+fn launching(words: &[&str], root: &Path) -> TaskEntry {
+    TaskEntry {
+        command: argv(words),
+        ..booked(root)
     }
 }
 
@@ -47,16 +58,18 @@ fn records(runtime: &RuntimePaths) -> RoomRecords<'static> {
         source: CiSource::read(runtime),
         workflows: Vec::new(),
         runs: Vec::new(),
-        agents: BTreeMap::new(),
+        commands: BTreeMap::new(),
         rows: &[],
         worktrees: worktrees(),
     }
 }
 
-fn step(agent: &str, worktree: Option<&str>) -> BookedStep {
-    BookedStep {
-        agent: agent.to_owned(),
-        worktree: worktree.map(str::to_owned),
+fn launch(target: &str, worktree: Option<&str>) -> FireLaunch {
+    FireLaunch {
+        team: false,
+        target: target.to_owned(),
+        worktree: worktree.map(|name| LaunchTree::Named(name.to_owned())),
+        detach: false,
     }
 }
 
@@ -69,7 +82,7 @@ fn room(dir: &Path) -> (PathBuf, RuntimePaths) {
 }
 
 #[test]
-fn only_agent_booked_staying_one_off_launches_are_bookings() {
+fn only_agent_booked_one_off_launch_commands_are_bookings() {
     let dir = tempfile::tempdir().unwrap();
     let (root, runtime) = room(dir.path());
     let config = |entry: TaskEntry| (entry, TaskSource::Config);
@@ -93,26 +106,41 @@ fn only_agent_booked_staying_one_off_launches_are_bookings() {
         (
             "invalid-action",
             config(TaskEntry {
-                prompt: None,
+                timeout: None,
                 ..booked(&root)
             }),
+        ),
+        (
+            "detached",
+            config(launching(
+                &["rimz", "agents", "coder", "--detach", "go"],
+                &root,
+            )),
         ),
         (
             "recurring",
             config(TaskEntry {
                 when: None,
                 every: Some("1h".to_owned()),
-                // A staying task is a one-off unless it fires in each worktree.
                 each_worktree: true,
                 ..booked(&root)
             }),
         ),
+        // A command that is no launch a person would type reads as no booking.
         (
-            "leaves",
-            config(TaskEntry {
-                stay: false,
-                ..booked(&root)
-            }),
+            "in-a-shell",
+            config(launching(&["sh", "-c", "rimz agents coder go"], &root)),
+        ),
+        (
+            "a-listing",
+            config(launching(&["rimz", "agents", "list"], &root)),
+        ),
+        (
+            "unknown-flag",
+            config(launching(
+                &["rimz", "agents", "coder", "--wat", "go"],
+                &root,
+            )),
         ),
         (
             "from-a-shell",
@@ -136,8 +164,10 @@ fn only_agent_booked_staying_one_off_launches_are_bookings() {
                 TaskEntry {
                     when: None,
                     fire_at: Some("2026-11-13T18:00:00Z".parse().unwrap()),
-                    worktree: Some("booked-launch".to_owned()),
-                    ..booked(&root)
+                    ..launching(
+                        &["rimz", "agents", "coder", "-w", "booked-launch", "go"],
+                        &root,
+                    )
                 },
                 TaskSource::Instance,
             ),
@@ -216,6 +246,7 @@ fn only_agent_booked_staying_one_off_launches_are_bookings() {
         named,
         [
             ("booked", None, false),
+            ("detached", None, false),
             ("invalid-action", Some("invalid: invalid-action"), false),
             ("invalid-trigger", Some("invalid: invalid-trigger"), false),
             ("room-condition", None, false),
@@ -245,11 +276,7 @@ fn only_agent_booked_staying_one_off_launches_are_bookings() {
 fn facts_name_the_team_branch_fire_and_end() {
     let dir = tempfile::tempdir().unwrap();
     let (root, runtime) = room(dir.path());
-    let entry = TaskEntry {
-        agent: Some("forge".to_owned()),
-        worktree: Some("feat/lang".to_owned()),
-        ..booked(&root)
-    };
+    let entry = launching(&["rimz", "teams", "forge", "-w", "feat/lang", "go"], &root);
     let tasks = BTreeMap::from([(
         "lang".to_owned(),
         LoadedTask::new("lang", entry, TaskSource::Config),
@@ -277,30 +304,47 @@ fn facts_name_the_team_branch_fire_and_end() {
             ..reading()
         },
     )]);
-    let supervised =
-        |completed: Option<&str>, pinned: bool, loop_task: Option<&str>, agent: &str| {
-            let mut record = crate::store::run::RunRecord::new(
-                WorkspaceId::from_project_root(&root),
-                AgentKind::new_unchecked("claude"),
-                PermissionMode::Auto,
-                "task".into(),
-                root.clone(),
-            );
-            record.completed_at = completed.map(|at| at.parse().unwrap());
-            record.workflow = pinned.then(|| WorkflowAttemptRef {
-                run: run.clone(),
-                seq: 1,
-                role: WorkflowAttemptRole::Step,
-            });
-            record.loop_task = loop_task.map(str::to_owned);
-            record.agent_id = Some(agent.into());
-            record
-        };
+    let supervised = |started: &str, completed: &str, loop_task: Option<&str>, agent: &str| {
+        let mut record = crate::store::run::RunRecord::new(
+            WorkspaceId::from_project_root(&root),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "task".into(),
+            root.clone(),
+        );
+        record.started_at = started.parse().unwrap();
+        record.completed_at = Some(completed.parse().unwrap());
+        record.loop_task = loop_task.map(str::to_owned);
+        record.agent_id = Some(agent.into());
+        record
+    };
+    // A blocking launch runs as a supervised run the task owns.
     let records = RoomRecords {
         runs: vec![
-            supervised(Some("2026-11-13T11:00:00Z"), true, None, "leader-a"),
-            supervised(Some("2026-11-13T11:30:00Z"), true, None, "leader-b"),
-            supervised(Some("2026-11-13T12:00:00Z"), false, None, "unrelated"),
+            supervised(
+                "2026-11-13T10:01:00Z",
+                "2026-11-13T11:00:00Z",
+                Some("lang"),
+                "a",
+            ),
+            supervised(
+                "2026-11-13T10:02:00Z",
+                "2026-11-13T11:30:00Z",
+                Some("lang"),
+                "b",
+            ),
+            supervised(
+                "2026-11-13T09:00:00Z",
+                "2026-11-13T12:30:00Z",
+                Some("lang"),
+                "earlier",
+            ),
+            supervised(
+                "2026-11-13T10:03:00Z",
+                "2026-11-13T12:00:00Z",
+                None,
+                "unrelated",
+            ),
         ],
         ..records(&runtime)
     };
@@ -328,7 +372,7 @@ fn facts_name_the_team_branch_fire_and_end() {
             team_done: None,
             launches: Vec::new(),
         }),
-        "the latest end of the runs pinned to the launch; an unprobed branch is unread"
+        "the latest end of the runs the task owned since the fire; an unprobed branch is unread"
     );
     assert_eq!(
         facts
@@ -342,21 +386,23 @@ fn facts_name_the_team_branch_fire_and_end() {
 #[test]
 fn destination_branch_reads_a_named_tree_only() {
     assert_eq!(
-        destination_branch(Some(TaskWorktree::Named("lang-typed"))).as_deref(),
+        destination_branch(Some("lang-typed")).as_deref(),
         Some("lang-typed")
     );
     assert_eq!(
-        destination_branch(Some(TaskWorktree::Named("feat/x"))).as_deref(),
+        destination_branch(Some("feat/x")).as_deref(),
         Some("feat/x")
     );
-    assert_eq!(
-        destination_branch(Some(TaskWorktree::Fresh { prefix: "spike" })),
-        None
-    );
-    assert_eq!(
-        destination_branch(Some(TaskWorktree::Named("bad name"))),
-        None
-    );
+    assert_eq!(destination_branch(Some("bad name")), None);
+    // A bare `-w`, `--from-pr` or a fresh tree per fire names none.
+    for words in [
+        &["rimz", "agents", "coder", "go", "-w"][..],
+        &["rimz", "agents", "coder", "--from-pr", "7", "go"],
+    ] {
+        let launch = read_fire_launch(&argv(words)).unwrap();
+        assert_eq!(launch.worktree, Some(LaunchTree::Unnamed), "{words:?}");
+        assert_eq!(destination_branch(named(&launch)), None, "{words:?}");
+    }
     assert_eq!(destination_branch(None), None);
 }
 
@@ -675,7 +721,7 @@ fn a_consumed_one_shot_keeps_its_fired_entry_for_its_lifetime() {
         let run = fire_run("timed", &root, &root, false, terminal_at);
         let ledger = ledger_of("timed", &run);
         let records = RoomRecords {
-            agents: BTreeMap::from([(run.id.clone(), step("coder", None))]),
+            commands: BTreeMap::from([(run.id.clone(), launch("coder", None))]),
             workflows: vec![run],
             ..records(&runtime)
         };
@@ -836,11 +882,7 @@ fn a_named_worktree_teams_done_is_read_in_that_worktree() {
     let dir = tempfile::tempdir().unwrap();
     let (root, runtime) = room(dir.path());
     let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), Team::default())]));
-    let entry = TaskEntry {
-        agent: Some("forge".to_owned()),
-        worktree: Some("lang-tree".to_owned()),
-        ..booked(&root)
-    };
+    let entry = launching(&["rimz", "teams", "forge#lang-tree", "go"], &root);
     let tree = crate::worktree::worktree_path(&root, worktrees(), "lang-tree").unwrap();
     let run = fire_run("lang", &root, &root, false, None);
     let (tasks, readings) = team_fire("lang", entry, &run);
@@ -896,9 +938,8 @@ fn a_board_reopened_out_of_done_unfinishes_its_entry() {
     let tree = marked_tree(dir.path(), "spike-1", "spike-20261113-100000", &root);
     let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), Team::default())]));
     let entry = TaskEntry {
-        agent: Some("forge".to_owned()),
         fresh_worktree: Some("spike".to_owned()),
-        ..booked(&root)
+        ..launching(&["rimz", "teams", "launch", "forge", "go"], &root)
     };
     let run = fire_run("spike", &root, &tree, true, None);
     let (tasks, readings) = team_fire("spike", entry, &run);
@@ -946,10 +987,7 @@ fn a_board_reopened_out_of_done_unfinishes_its_entry() {
 fn a_fire_records_the_launches_of_its_rows_and_keeps_them() {
     let dir = tempfile::tempdir().unwrap();
     let (root, runtime) = room(dir.path());
-    let entry = TaskEntry {
-        agent: Some("forge".to_owned()),
-        ..booked(&root)
-    };
+    let entry = launching(&["rimz", "agents", "forge", "go"], &root);
     let run = fire_run("lang", &root, &root, false, None);
     let (tasks, readings) = team_fire("lang", entry, &run);
     let row = |id: &str, team: Option<&str>, task: Option<&str>, pin: Option<&WorkflowRunId>| {
@@ -1001,41 +1039,33 @@ fn a_fire_records_the_launches_of_its_rows_and_keeps_them() {
     );
 }
 
-/// The latest end is the agent step's: a guard's end, or a judge's supervised run, while
-/// the agent step has no attempt yet is no end, so the entry is still starting.
+/// A blocking launch's command returns when its agent ends, so its run's end ends the fire.
+/// A detached launch's run ends once the launch is made: the rows it launched end the fire,
+/// once every one of them has ended, unless its run failed.
 #[test]
-fn only_the_agent_steps_attempt_ends_a_fire() {
+fn a_detached_launch_ends_with_its_rows_not_its_run() {
     let dir = tempfile::tempdir().unwrap();
     let (root, runtime) = room(dir.path());
-    let previous = |step: &str| -> crate::store::workflow::PreviousAttempt {
-        serde_json::from_value(serde_json::json!({
-            "step": step, "outcome": "ended", "seq": 1, "visit": 1, "key": null,
-            "started_at": "2026-11-13T10:00:00Z", "ended_at": "2026-11-13T10:05:00Z",
-            "handle": null, "run_id": null, "claim_path": "/claim",
-            "head_start": null, "head_end": null, "children": null
-        }))
-        .unwrap()
-    };
-    let mut run = fire_run("lang", &root, &root, false, None);
-    run.prev_attempt = Some(previous("judge-1"));
-    let mut judge = crate::store::run::RunRecord::new(
-        WorkspaceId::from_project_root(&root),
-        AgentKind::new_unchecked("claude"),
-        PermissionMode::Auto,
-        "judge".into(),
-        root.clone(),
-    );
-    judge.completed_at = Some("2026-11-13T10:04:00Z".parse().unwrap());
-    judge.workflow = Some(WorkflowAttemptRef {
-        run: run.id.clone(),
-        seq: 1,
-        role: WorkflowAttemptRole::Judge,
+    let at = |time: &str| -> Timestamp { format!("2026-11-13T{time}:00Z").parse().unwrap() };
+    let mut run = fire_run("lang", &root, &root, false, Some(at("10:05")));
+    run.outcome = Some(crate::store::workflow::RunOutcome {
+        ending: RunEnding::Done,
+        cost_usd: None,
+        acted: false,
+        reason: None,
+        quiet: false,
     });
-    let (tasks, readings) = team_fire("lang", booked(&root), &run);
-    let ended = |run: crate::store::workflow::RunRecord| {
+    let row = |id: &str, ended: Option<&str>| AgentState {
+        loop_task: Some("lang".to_owned()),
+        registered_at: Some(at("10:01")),
+        ended_at: ended.map(at),
+        ..crate::sidebar::test_support::root_agent("claude", id, None)
+    };
+    let ended = |words: &[&str], run: &crate::store::workflow::RunRecord, rows: &[AgentState]| {
+        let (tasks, readings) = team_fire("lang", launching(words, &root), run);
         let records = RoomRecords {
-            workflows: vec![run],
-            runs: vec![judge.clone()],
+            workflows: vec![run.clone()],
+            rows,
             ..records(&runtime)
         };
         collect(&tasks, &readings, &TeamsConfig::default(), &records, &root)[0]
@@ -1044,17 +1074,33 @@ fn only_the_agent_steps_attempt_ends_a_fire() {
             .unwrap()
             .ended_at
     };
+    let blocking = ["rimz", "agents", "coder", "go"];
+    let detached = ["rimz", "agents", "coder", "--detach", "go"];
+
+    assert_eq!(ended(&blocking, &run, &[]), Some(at("10:05")));
     assert_eq!(
-        ended(run.clone()),
+        ended(&detached, &run, &[]),
         None,
-        "the guard ended; the agent step has not"
+        "launched, nothing registered yet: still starting"
     );
-    run.prev_attempt = Some(previous("agent"));
-    assert_eq!(ended(run), Some("2026-11-13T10:05:00Z".parse().unwrap()));
+    let one_lives = [row("lead", None), row("member", Some("10:20"))];
+    assert_eq!(
+        ended(&detached, &run, &one_lives),
+        None,
+        "a launched row lives"
+    );
+    let all_ended = [row("lead", Some("10:30")), row("member", Some("10:20"))];
+    assert_eq!(ended(&detached, &run, &all_ended), Some(at("10:30")));
+    run.outcome.as_mut().unwrap().ending = RunEnding::Failed;
+    assert_eq!(
+        ended(&detached, &run, &[]),
+        Some(at("10:05")),
+        "a detached launch whose command failed ended with its run"
+    );
 }
 
 /// A consumed booking into a named worktree: the runner's scope is the firing checkout,
-/// and its branch and worktree flag come from the agent step's worktree.
+/// and its branch and worktree flag come from the worktree its command names.
 #[test]
 fn a_consumed_named_worktree_fire_keeps_its_branch_and_worktree() {
     let dir = tempfile::tempdir().unwrap();
@@ -1062,7 +1108,7 @@ fn a_consumed_named_worktree_fire_keeps_its_branch_and_worktree() {
     let run = fire_run("timed", &root, &root, false, None);
     let ledger = ledger_of("timed", &run);
     let records = RoomRecords {
-        agents: BTreeMap::from([(run.id.clone(), step("coder", Some("feat/lang")))]),
+        commands: BTreeMap::from([(run.id.clone(), launch("coder", Some("feat/lang")))]),
         workflows: vec![run],
         ..records(&runtime)
     };
@@ -1112,7 +1158,7 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
     ];
     let mut ledger = WorkflowLedger::default();
     let mut workflows = Vec::new();
-    let mut agents = BTreeMap::new();
+    let mut commands = BTreeMap::new();
     let mut prior = BookingsCache {
         version: BOOKINGS_CACHE_VERSION,
         bookings: Vec::new(),
@@ -1123,7 +1169,7 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
             None => fire_run(task, &root, &root, false, Some(past)),
         };
         ledger.tasks.extend(ledger_of(task, &run).tasks);
-        agents.insert(run.id.clone(), step("coder", worktree));
+        commands.insert(run.id.clone(), launch("coder", worktree));
         if task == "merged" {
             prior.bookings.push(BookingFacts {
                 task: task.to_owned(),
@@ -1150,7 +1196,7 @@ fn a_consumed_entry_with_a_worktree_stays_until_merged_or_its_checkout_is_gone()
     }
     let records = RoomRecords {
         workflows,
-        agents,
+        commands,
         ..records(&runtime)
     };
     let (kept, gone) = consumed(
@@ -1230,11 +1276,10 @@ fn a_consumed_entrys_pull_request_reading_gates_only_on_merged() {
     }
 }
 
-/// A run compiled from an inline staying row is rebuilt; a deployed workflow whose
-/// definition has a step named `agent`, an inline row that does not stay, or a verify row,
-/// whose session carries a rest check, is not.
+/// A scheduled, booked fire of a loop row's command is rebuilt from the launch its sealed
+/// command types; a deployed workflow, or a command that is no launch, is not.
 #[test]
-fn only_a_run_compiled_from_an_inline_staying_row_is_rebuilt() {
+fn only_a_scheduled_launch_command_is_rebuilt() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     std::fs::create_dir(&root).unwrap();
@@ -1251,20 +1296,11 @@ fn only_a_run_compiled_from_an_inline_staying_row_is_rebuilt() {
         std::fs::write(&paths.record, serde_json::to_vec(run).unwrap()).unwrap();
         std::fs::write(crate::disk::paths::workflow_spec_file(&paths.home), text).unwrap();
     };
-    let compiled = |name: &str, entry: TaskEntry| {
-        let task = LoadedTask::new(name, entry, TaskSource::Instance);
-        match task.compiled() {
-            Ok(crate::harness::schedule::compile::CompiledAction::Workflow(
-                crate::harness::schedule::compile::TaskWorkflow::Inline(inline),
-            )) => inline.text().to_owned(),
-            other => panic!("{name}: {other:?}"),
-        }
-    };
-    let timed = TaskEntry {
-        when: None,
-        fire_at: Some("2026-11-13T10:00:00Z".parse().unwrap()),
-        worktree: Some("lang-tree".to_owned()),
-        ..booked(&root)
+    let sealed = |name: &str, words: &[&str]| {
+        let entry = launching(words, &root);
+        crate::harness::schedule::runner::command_definition(name, &entry, &entry.command)
+            .unwrap()
+            .text
     };
     let staying = fire_run(
         "staying",
@@ -1273,41 +1309,36 @@ fn only_a_run_compiled_from_an_inline_staying_row_is_rebuilt() {
         false,
         Some("2026-11-13T11:00:00Z".parse().unwrap()),
     );
-    seal(&staying, &compiled("staying", timed.clone()));
-    let leaving = fire_run("leaving", &root, &root, false, None);
     seal(
-        &leaving,
-        &compiled(
-            "leaving",
-            TaskEntry {
-                stay: false,
-                ..timed.clone()
-            },
+        &staying,
+        &sealed(
+            "staying",
+            &["rimz", "agents", "coder", "-w", "lang-tree", "go"],
         ),
     );
-    let verifying = fire_run("verifying", &root, &root, false, None);
+    let team = fire_run("team", &root, &root, false, None);
     seal(
-        &verifying,
-        &compiled(
-            "verifying",
-            TaskEntry {
-                stay: false,
-                verify: Some("true".to_owned()),
-                ..timed
-            },
+        &team,
+        &sealed(
+            "team",
+            &["rimz", "teams", "forge#lane", "--detach", "it's go"],
         ),
+    );
+    let shell = fire_run("shell", &root, &root, false, None);
+    seal(
+        &shell,
+        &sealed("shell", &["sh", "-c", "rimz agents coder go"]),
     );
     let mut deployed = fire_run("deployed", &root, &root, false, None);
     deployed.origin = crate::store::workflow::RunOrigin::Deployed;
     seal(
         &deployed,
-        "[workflow]\nsummary = \"deployed\"\nscope = \"worktree\"\nstart = \"agent\"\n\n\
-         [agent.agent]\nagent = \"coder\"\nprompt-file = \"prompt.md\"\nlifecycle = \"session\"\n",
+        &sealed("deployed", &["rimz", "agents", "coder", "go"]),
     );
     let workflows = [
         staying.clone(),
-        leaving.clone(),
-        verifying.clone(),
+        team.clone(),
+        shell.clone(),
         deployed.clone(),
     ];
     let candidates: Vec<_> = workflows
@@ -1318,15 +1349,26 @@ fn only_a_run_compiled_from_an_inline_staying_row_is_rebuilt() {
     let homes = run_homes(&state, candidates.iter().map(|(_, run)| run));
     assert_eq!(homes.len(), 4);
 
-    let (booked, rejected) = booked_agents(&homes, &candidates);
+    let (booked, rejected) = booked_commands(&homes, &candidates);
 
     assert_eq!(
         booked,
-        BTreeMap::from([(staying.id.clone(), step("coder", Some("lang-tree")))])
+        BTreeMap::from([
+            (staying.id.clone(), launch("coder", Some("lang-tree"))),
+            (
+                team.id.clone(),
+                FireLaunch {
+                    team: true,
+                    target: "forge".to_owned(),
+                    worktree: Some(LaunchTree::Named("lane".to_owned())),
+                    detach: true,
+                }
+            ),
+        ])
     );
     let mut rejected: Vec<_> = rejected.into_iter().map(|(task, _)| task).collect();
     rejected.sort();
-    assert_eq!(rejected, ["deployed", "leaving", "verifying"]);
+    assert_eq!(rejected, ["deployed", "shell"]);
 }
 
 /// A merged reading is final for its fire: once the lane stops demanding the branch and its
@@ -1412,4 +1454,69 @@ fn fired_unfinished_bookings_demand_their_branch() {
         branch_demand(&cache).into_iter().collect::<Vec<_>>(),
         ["none", "open", "reopened", "unread"]
     );
+}
+
+/// A launch into an unnamed worktree (a bare `-w`, `--from-pr`) lives in the tree its agent
+/// got, never the firing checkout: once a joined agent's tree is gone the entry ends, and with
+/// no joined agent it ends like a treeless one, past its window.
+#[test]
+fn an_unnamed_tree_booking_reads_its_agents_tree_and_ends_once_it_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, runtime) = room(dir.path());
+    let now: Timestamp = "2026-11-13T12:00:00Z".parse().unwrap();
+    let past = now - jiff::SignedDuration::from_secs(7_200);
+    let kept_tree = dir.path().join("generated-kept");
+    std::fs::create_dir_all(&kept_tree).unwrap();
+    let removed_tree = dir.path().join("generated-removed");
+    let mut ledger = WorkflowLedger::default();
+    let mut workflows = Vec::new();
+    let mut commands = BTreeMap::new();
+    let mut rows = Vec::new();
+    for (task, tree) in [
+        ("tree-kept", Some(&kept_tree)),
+        ("tree-removed", Some(&removed_tree)),
+        ("no-agent", None),
+    ] {
+        let run = fire_run(task, &root, &root, false, Some(past));
+        ledger.tasks.extend(ledger_of(task, &run).tasks);
+        commands.insert(
+            run.id.clone(),
+            FireLaunch {
+                worktree: Some(LaunchTree::Unnamed),
+                ..launch("coder", None)
+            },
+        );
+        if let Some(tree) = tree {
+            rows.push(AgentState {
+                launch_id: Some(format!("{task}-launch").as_str().into()),
+                loop_task: Some(task.to_owned()),
+                registered_at: Some(run.created_at),
+                ended_at: Some(past),
+                worktree_path: Some(tree.display().to_string()),
+                ..crate::sidebar::test_support::root_agent("claude", task, None)
+            });
+        }
+        workflows.push(run);
+    }
+    let records = RoomRecords {
+        workflows,
+        commands,
+        rows: &rows,
+        ..records(&runtime)
+    };
+    let (kept, gone) = consumed(
+        &ledger,
+        &BTreeMap::new(),
+        &TeamsConfig::default(),
+        &records,
+        &BookingsCache::default(),
+        &root,
+        now,
+        3_600,
+    );
+    let kept: Vec<_> = kept.iter().map(|facts| facts.task.as_str()).collect();
+    assert_eq!(kept, ["tree-kept"]);
+    let mut gone: Vec<_> = gone.into_iter().map(|(task, _)| task).collect();
+    gone.sort();
+    assert_eq!(gone, ["no-agent", "tree-removed"]);
 }

@@ -1,6 +1,7 @@
 //! List, show, and log loop task state.
 
 use super::*;
+use rimz::config::CheckOn;
 use rimz::harness::schedule::attention::{self, InProgress};
 use rimz::harness::when::{Verdict, WhenExpr};
 use schedule::fanout::{CheckoutCondition, CheckoutState};
@@ -33,148 +34,40 @@ fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
 struct ActionWords {
     subject: String,
     base: &'static str,
-    third_person: &'static str,
     untouched: &'static str,
 }
 
-fn action_words(action: &TaskAction) -> Option<ActionWords> {
+fn action_words(action: &TaskAction) -> ActionWords {
     match action {
-        TaskAction::Spawn(subject) | TaskAction::Workflow(subject) => Some(ActionWords {
-            subject: subject.clone(),
-            base: "start",
-            third_person: "starts",
-            untouched: "not started",
-        }),
-        TaskAction::Deliver(target) => Some(ActionWords {
+        TaskAction::Command(argv) => ActionWords {
+            subject: format!("`{}`", schedule::command_line(argv)),
+            base: "run",
+            untouched: "not run",
+        },
+        TaskAction::Deliver(target) => ActionWords {
             subject: target.handle.clone(),
             base: "wake",
-            third_person: "wakes",
             untouched: "not woken",
-        }),
-        TaskAction::CheckOnly => None,
+        },
     }
 }
 
-fn check_summary(entry: &TaskEntry, action: Option<&TaskAction>) -> Option<String> {
-    let guard = entry.guard();
-    if !guard.judges.is_empty() {
-        return Some(guard_value(entry));
-    }
-    let check = guard.shell?;
-    if let Some(action) = action.and_then(action_words) {
-        Some(format!(
-            "{} ({} {} on {})",
-            check,
-            action.third_person,
-            action.subject,
-            check_on_label(entry.on.unwrap_or_default())
-        ))
-    } else {
-        Some(check.to_owned())
-    }
-}
-
-/// The ordered stages and polarity beside a `guard:` label.
-pub(super) fn guard_value(entry: &TaskEntry) -> String {
-    let guard = entry.guard();
-    let mut stages = guard
-        .shell
-        .map(|command| {
-            format!(
-                "runs {command} (cap {})",
-                guard.shell_timeout.unwrap_or("5m")
-            )
-        })
-        .into_iter()
-        .collect::<Vec<_>>();
-    stages.extend(guard.judges.iter().map(|judge| {
-        format!(
-            "asks {} (cap {})",
-            judge.agent,
-            judge.timeout.as_deref().unwrap_or("5m")
-        )
-    }));
-    let condition = match (entry.on.unwrap_or_default(), stages.len()) {
-        (CheckOn::Any, _) => "whatever the outcome",
-        (CheckOn::Fail, 1) => "when it fails",
-        (CheckOn::Success, 1) => "when it passes",
-        (CheckOn::Fail, 2) => "when both fail",
-        (CheckOn::Success, 2) => "when both pass",
-        (CheckOn::Fail, _) => "when all fail",
-        (CheckOn::Success, _) => "when all pass",
-    };
-    let no_verdict = match (
-        guard.judges.is_empty(),
-        entry.on.unwrap_or_default(),
-        stages.len(),
-    ) {
-        (true, _, _) | (_, CheckOn::Any, _) => "",
-        (_, _, 1) => " or gives no answer after one retry",
-        (_, CheckOn::Fail, _) => ", a judge with no answer after one retry counting as a fail",
-        (_, CheckOn::Success, _) => ", a judge with no answer after one retry counting as a pass",
-    };
-    format!("{}; acts {condition}{no_verdict}", stages.join(", then "))
-}
-
-pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> String {
-    let action = action_words(task_action).map(|words| format!("{} {}", words.base, words.subject));
-    let guard = entry.guard();
-    let stages = guard
-        .shell
-        .map(|_| "check".to_owned())
-        .into_iter()
-        .chain(
-            guard
-                .judges
-                .iter()
-                .map(|judge| format!("judge `{}`", judge.agent)),
-        )
-        .collect::<Vec<_>>();
-    let check = (!stages.is_empty()).then(|| stages.join(", then "));
-    let mut rule = match (check, action) {
-        (Some(check), Some(action)) => format!(
-            "{check}, then {action} on {}",
-            check_on_label(entry.on.unwrap_or_default())
-        ),
-        (Some(check), None) => check,
-        (None, Some(action)) => action,
-        (None, None) => "run".to_owned(),
-    };
-    if let Some(cmd) = entry.verify.as_deref() {
-        let attempts = entry
-            .max_attempts
-            .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT);
-        rule.push_str(&format!(", verify `{cmd}` (up to {attempts} attempts)"));
-    }
-    rule
+pub(super) fn task_run_rule(task_action: &TaskAction) -> String {
+    let words = action_words(task_action);
+    format!("{} {}", words.base, words.subject)
 }
 
 pub(super) fn check_skip_decision(entry: &TaskEntry, task_action: &TaskAction) -> String {
-    let Some(action) = action_words(task_action) else {
-        return "<invalid> unchanged".to_owned();
-    };
+    let words = action_words(task_action);
     let condition = match entry.on.unwrap_or_default() {
         CheckOn::Fail => "fails",
         CheckOn::Success => "passes",
         CheckOn::Any => "finishes",
     };
-    let guard = if entry.guard().judges.is_empty() {
-        "check"
-    } else {
-        "guard"
-    };
     format!(
-        "{} {}; fires when the {guard} {condition}",
-        action.subject, action.untouched
+        "{} {}; fires when the check {condition}",
+        words.subject, words.untouched
     )
-}
-
-fn check_on_label(on: CheckOn) -> &'static str {
-    match on {
-        CheckOn::Fail => "fail",
-        CheckOn::Success => "success",
-        CheckOn::Any => "any outcome",
-    }
 }
 
 fn source_description(source: TaskSource, entry: &TaskEntry) -> String {
@@ -190,73 +83,20 @@ fn source_description(source: TaskSource, entry: &TaskEntry) -> String {
     }
 }
 
-fn budget_amount(raw: &str) -> String {
-    raw.parse::<rimz::harness::budget::BudgetSpec>()
-        .map(|spec| format_budget_cap(spec.cap_usd))
-        .unwrap_or_else(|_| raw.to_owned())
-}
-
-pub(super) fn format_budget_cap(cap_usd: f64) -> String {
-    if cap_usd.fract() == 0.0 {
-        format!("${cap_usd:.0}")
-    } else {
-        format!("${cap_usd:.2}")
-    }
-}
-
-fn budget_label(entry: &TaskEntry) -> Option<String> {
-    let mut segments = Vec::new();
-    if let Some(raw) = entry.budget.as_deref() {
-        segments.push(format!("{} per run", budget_amount(raw)));
-    }
-    if let Some(raw) = entry.budget_per_day.as_deref() {
-        segments.push(format!("{} per day", budget_amount(raw)));
-    }
-    (!segments.is_empty()).then(|| segments.join(" · "))
-}
-
-fn surplus_label(entry: &TaskEntry) -> Option<String> {
-    let mut segments = Vec::new();
-    if entry.surplus.is_some() || entry.surplus_after.is_some() {
-        let threshold = entry
-            .surplus
-            .as_deref()
-            .and_then(|raw| rimz::harness::surplus::parse_surplus(raw).ok())
-            .unwrap_or(1.0);
-        segments.push(format!("surplus ≥ {threshold:.1}x"));
-    }
-    if let Some(after) = entry.surplus_after.as_deref() {
-        segments.push(format!("after {after} of window"));
-    }
-    (!segments.is_empty()).then(|| segments.join(" · "))
-}
-
-fn spend_label(
-    entry: &TaskEntry,
-    records: &[LoopRunRecord],
-    now: &jiff::Zoned,
-    full: bool,
-) -> Option<String> {
+fn spend_label(records: &[LoopRunRecord], now: &jiff::Zoned) -> Option<String> {
     let spend_today_usd = run_log::spend_on_local_day(records, now);
     let mut segments = Vec::new();
-    if entry.budget_per_day.is_some() || run_log::has_cost_on_local_day(records, now) {
-        let mut today = format!("${spend_today_usd:.2} today");
-        if let Some(raw) = entry.budget_per_day.as_deref() {
-            today.push_str(" of ");
-            today.push_str(&budget_amount(raw));
-        }
-        segments.push(today);
+    if run_log::has_cost_on_local_day(records, now) {
+        segments.push(format!("${spend_today_usd:.2} today"));
     }
-    if full {
-        let summary = run_log::cost_summary(records);
-        if let Some(last_usd) = summary.last_usd {
-            segments.push(format!("${last_usd:.2} last"));
-        }
-        if summary.costed_runs >= 2
-            && let Some(avg_usd) = summary.avg_usd
-        {
-            segments.push(format!("ø ${avg_usd:.2} over {} runs", summary.costed_runs));
-        }
+    let summary = run_log::cost_summary(records);
+    if let Some(last_usd) = summary.last_usd {
+        segments.push(format!("${last_usd:.2} last"));
+    }
+    if summary.costed_runs >= 2
+        && let Some(avg_usd) = summary.avg_usd
+    {
+        segments.push(format!("ø ${avg_usd:.2} over {} runs", summary.costed_runs));
     }
     (!segments.is_empty()).then(|| segments.join(" · "))
 }
@@ -275,13 +115,6 @@ fn source_path(source: TaskSource, entry: &TaskEntry) -> PathBuf {
 
 fn display_path(path: &Path) -> String {
     ui::home_relative(path.to_string_lossy().as_ref())
-}
-
-fn has_agent_runs_section(entry: &TaskEntry, action: Option<&TaskAction>) -> bool {
-    let guard = entry.guard();
-    !entry.stay
-        && (guard.shell.is_some() || !guard.judges.is_empty())
-        && action.and_then(action_words).is_some()
 }
 
 struct ShowView {
@@ -308,14 +141,9 @@ struct ShowView {
     you: bool,
     /// The agent that booked the task: its handle while the room's rows resolve it, else its id.
     booker: Option<String>,
-    config: std::sync::Arc<MachineConfig>,
-    throttle: ShowThrottle,
-    show_agent_runs: bool,
     worktrees: Vec<schedule::fanout::CheckoutCondition>,
     worktrees_error: Option<String>,
     workflow_runs: Vec<list::WorkflowRunRow>,
-    /// The task's runs whose records say they started an agent, team, message or judge attempt.
-    engaged_runs: std::collections::BTreeSet<String>,
     /// The task's per-fire trees a fire kept, newest first.
     kept_worktrees: Vec<rimz::worktree::ManagedWorktree>,
     /// The task's fires start workflow runs, named or compiled from its row.
@@ -395,11 +223,6 @@ struct SubscriptionView {
     signal: Option<String>,
     last: String,
     last_style: anstyle::Style,
-}
-
-enum ShowThrottle {
-    Off,
-    Full(Vec<(&'static str, String)>),
 }
 
 fn leader_statuses(
@@ -816,13 +639,7 @@ fn write_worktrees(
             } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
                 row.leader_status.map_or_else(
                     || format!("@{leader} ended"),
-                    |status| {
-                        let mut text = format!("@{leader}  {}", status.as_str());
-                        if !view.entry.subscribe.is_empty() {
-                            text.push_str(&format!(" · {} armed", row.armed));
-                        }
-                        text
-                    },
+                    |status| format!("@{leader}  {}", status.as_str()),
                 )
             } else {
                 String::new()
@@ -1199,16 +1016,6 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             write_quiet_fires(out, view, quiet, now)?;
         }
         let rows = collapsed_run_rows(&view.records, &attribution, true);
-        if view.show_agent_runs {
-            write_agent_runs(
-                out,
-                &view.records,
-                view.quiet.as_ref().map_or(0, |quiet| quiet.count),
-                &rows,
-                &view.engaged_runs,
-                now,
-            )?;
-        }
         let repeats_detail = rows.len() == 1
             && rows[0].count == 1
             && rows[0].skipped == 0
@@ -1227,9 +1034,6 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     writeln!(out)?;
     write_show_facts(out, view)?;
     write_workflow_runs(out, view, now, runs)?;
-    if let ShowThrottle::Full(readings) = &view.throttle {
-        write_throttle_readings(out, readings)?;
-    }
     Ok(())
 }
 
@@ -1589,7 +1393,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let launches = workflow_ledger
         .tasks
         .get(&args.name)
-        .filter(|_| entry.stay)
         .map(ResidentLaunch::of)
         .unwrap_or_default();
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
@@ -1681,31 +1484,13 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .first()
         .filter(|_| !args.json)
         .map(|link| booker_label(store.as_ref(), link));
-    let config = MachineConfig::load_lenient();
-    let throttle = if args.json || entry.agent.is_none() {
-        ShowThrottle::Off
-    } else if !config.throttle.is_empty()
-        || in_flight.as_ref().is_some_and(|run| !run.held.is_empty())
-    {
-        ShowThrottle::Full(rimz::harness::throttle::readings(
-            &config, &args.name, entry,
-        ))
-    } else {
-        ShowThrottle::Off
-    };
     let runs_workflows = runs_workflows(&task);
     // Every row reads the room's runs, as `loop list` does: a row edited mid-run may no longer
     // compile to a workflow while the run it started still goes.
-    let mut engaged_runs = std::collections::BTreeSet::new();
     let (workflow_runs, capacity, records) = if runs_workflows {
         let paths = StatePaths::for_project_root(&root)?;
         let TaskRuns { records, ended } =
             task_runs(&paths, &args.name, workflow_ledger.tasks.get(&args.name))?;
-        engaged_runs = records
-            .iter()
-            .filter(|record| record.engaged == Some(true))
-            .map(|record| record.id.to_string())
-            .collect();
         let capacity = list::capacity_waits(&records, &args.name, &root)
             .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
             .collect();
@@ -1750,7 +1535,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         capacity,
         strike_count: strikes::load().get(&key).copied().unwrap_or(0),
         room_is_open,
-        show_agent_runs: has_agent_runs_section(task.entry(), task.action().ok()),
         name: args.name,
         kind: task.kind(),
         entry: entry.clone(),
@@ -1768,12 +1552,9 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         leader_statuses,
         you,
         booker,
-        config,
-        throttle,
         worktrees,
         worktrees_error,
         workflow_runs,
-        engaged_runs,
         runs_workflows,
         all: args.all,
     };
@@ -2026,22 +1807,6 @@ fn write_subscriptions(out: &mut impl Write, subscriptions: &[SubscriptionView])
     }
     table.render(out)?;
     Ok(())
-}
-
-/// What the start throttle reads on this machine now, beside any limit set.
-fn write_throttle_readings(
-    out: &mut impl Write,
-    readings: &[(&'static str, String)],
-) -> std::io::Result<()> {
-    if readings.is_empty() {
-        return Ok(());
-    }
-    writeln!(out, "\nTHROTTLE")?;
-    let mut kv = ui::KeyVals::new().indent(2);
-    for (label, text) in readings {
-        kv.push(*label, ui::cell(text));
-    }
-    kv.render(out)
 }
 
 /// The answer under the headline: the verdict and any fires nothing has answered.
@@ -2334,6 +2099,9 @@ fn write_last_run(
     )
 }
 
+/// What holds for every quiet fire, printed under its row.
+const QUIET_FIRE_NOTE: &str = "command exited 0 · no row of its own kept";
+
 /// Whether LAST RUN is the task's last quiet fire: the newest conclusive run once quiet fires
 /// join the rows.
 fn shows_quiet_last(records: &[LoopRunRecord], quiet: &run_log::QuietFires) -> bool {
@@ -2367,7 +2135,7 @@ fn write_quiet_detail(
     writeln!(
         out,
         "  {}",
-        ui::paint(ui::palette::muted(), "completed without starting an agent")
+        ui::paint(ui::palette::muted(), QUIET_FIRE_NOTE)
     )
 }
 
@@ -2530,12 +2298,9 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// Whether a task's fires start workflow runs: a named workflow or the graph its row compiles to.
+/// Whether a task's fires start workflow runs: a command row's one-node run.
 fn runs_workflows(task: &LoadedTask) -> bool {
-    matches!(
-        task.compiled(),
-        Ok(schedule::compile::CompiledAction::Workflow(_))
-    )
+    matches!(task.action(), Ok(TaskAction::Command(_)))
 }
 
 fn launched_run_failed(record: &LoopRunRecord, runs: &[list::WorkflowRunRow]) -> bool {
@@ -2865,7 +2630,7 @@ fn write_quiet_block(
     writeln!(
         out,
         "  {}",
-        ui::paint(ui::palette::muted(), "completed without starting an agent")
+        ui::paint(ui::palette::muted(), QUIET_FIRE_NOTE)
     )
 }
 
@@ -3148,84 +2913,19 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
     let source = view.source;
     let root = entry.resolved_root();
     let blocked_state = source.blocked_state();
-    let timeout = entry.timeout.clone().or_else(|| {
-        entry.agent.as_ref().map(|_| {
-            format!(
-                "{} (default)",
-                view.config
-                    .r#loop
-                    .default_timeout
-                    .clone()
-                    .unwrap_or_else(|| { SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned() })
-            )
-        })
-    });
     let mut kv = ui::KeyVals::new().indent(2);
     let shape = schedule::TaskShape::compile(&view.name, entry);
-    let action = shape.action().ok();
-    let mut action_text = shape.action().map_or_else(
+    let action_text = shape.action().map_or_else(
         |error| match error {
+            // A refused row's headline states the refusal, so its action names none.
             schedule::TaskActionErr::OverlapField { .. } => format!("<invalid> · {error}"),
             _ => "<invalid>".to_owned(),
         },
-        |action| list::action(action.kind(), action.subject(), Some(entry), view.you),
+        |action| list::action(action.kind(), &action.subject(), Some(entry), view.you),
     );
-    let check = check_summary(entry, action);
-    if matches!(action, Some(TaskAction::CheckOnly))
-        && let Some(check) = &check
-    {
-        action_text.push_str(&format!(" · {check}"));
-    }
-    if entry.stay {
-        action_text.push_str(" · pane stays open");
-    }
-    if entry.takeover {
-        action_text.push_str(" · stops idle agents in the checkout first");
-    }
     kv.push("action", ui::cell(action_text));
-    if !matches!(action, Some(TaskAction::CheckOnly))
-        && let Some(check) = check
-    {
-        kv.push(
-            if entry.guard().judges.is_empty() {
-                "check"
-            } else {
-                "guard"
-            },
-            ui::cell(check),
-        );
-    }
-    if !entry.subscribe.is_empty() {
-        let signals = entry
-            .subscribe
-            .iter()
-            .map(|binding| binding.signal.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let armed = view.subscriptions.len();
-        let no_leader = if armed == 0 && view.leader_statuses.is_empty() {
-            ", no live leader"
-        } else {
-            ""
-        };
-        kv.push(
-            "wakes",
-            ui::cell(format!("leader on {signals} · {armed} armed{no_leader}")),
-        );
-    }
     if let Some(label) = entry.label.as_deref() {
         kv.push("label", ui::cell(label));
-    }
-    if let Some(verify) = entry.verify.as_deref() {
-        kv.push(
-            "verify",
-            ui::cell(format!(
-                "{verify} (up to {} attempts)",
-                entry
-                    .max_attempts
-                    .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT)
-            )),
-        );
     }
     kv.push("root", ui::cell(root_with_room(&root, view.room_is_open)));
     if let Some(dir) = entry.dir.as_deref() {
@@ -3235,9 +2935,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
     if let Some(booker) = view.booker.as_deref() {
         kv.push("booked by", ui::cell(booker));
     }
-    if !entry.stay
-        && let Some(timeout) = timeout
-    {
+    if let Some(timeout) = entry.timeout.clone() {
         kv.push(
             if entry.watch.is_some() {
                 "check-in"
@@ -3253,27 +2951,7 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
             ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
         );
     }
-    if (!view.config.throttle.is_empty()
-        || matches!(&view.in_progress, Some(InProgress::Locked(run)) if !run.held.is_empty()))
-        && let Some(switch) = entry.throttle
-    {
-        kv.push(
-            "throttle",
-            ui::cell(match switch {
-                rimz::config::ThrottleSwitch::On => "on",
-                rimz::config::ThrottleSwitch::Off => {
-                    "off (skips machine stagger, resource limits and capacity check, not caps)"
-                }
-            }),
-        );
-    }
-    if let Some(budget) = budget_label(entry) {
-        kv.push("budget", ui::cell(budget));
-    }
-    if let Some(surplus) = surplus_label(entry) {
-        kv.push("surplus", ui::cell(surplus));
-    }
-    if let Some(spend) = spend_label(entry, &view.records, &view.now_zoned, !view.show_agent_runs) {
+    if let Some(spend) = spend_label(&view.records, &view.now_zoned) {
         kv.push("spend", ui::cell(spend));
     }
     if view.timing.arm_state() == ArmState::Live
@@ -3286,74 +2964,6 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
         );
     }
     kv.render(out)
-}
-
-fn write_agent_runs(
-    out: &mut impl Write,
-    records: &[LoopRunRecord],
-    quiet_fires: u64,
-    rows: &[CollapsedRunRow<'_>],
-    engaged: &std::collections::BTreeSet<String>,
-    now: Timestamp,
-) -> std::io::Result<()> {
-    let agent_runs = records
-        .iter()
-        .filter(|record| is_agent_run(record, engaged))
-        .collect::<Vec<_>>();
-    let fired = records.len() + usize::try_from(quiet_fires).unwrap_or(usize::MAX);
-    writeln!(out)?;
-    let heading = if agent_runs.is_empty() {
-        format!("AGENT RUNS — none in {}", fires(fired))
-    } else {
-        let costs = agent_runs
-            .iter()
-            .filter_map(|record| valid_cost(record))
-            .collect::<Vec<_>>();
-        let mut heading = format!("AGENT RUNS — {} of {}", agent_runs.len(), fires(fired));
-        if !costs.is_empty() {
-            let total = costs.iter().sum::<f64>();
-            let average = total / costs.len() as f64;
-            heading.push_str(&format!(" · ${total:.2} total · ø ${average:.2}"));
-        }
-        heading
-    };
-    writeln!(out, "{}", ui::paint(ui::palette::header(), &heading))?;
-    if agent_runs.is_empty() {
-        return Ok(());
-    }
-
-    let mut folded = Vec::<CollapsedRunRow<'_>>::new();
-    for row in rows
-        .iter()
-        .rev()
-        .filter(|row| row.kind == RunRowKind::Recorded && is_agent_run(row.latest, engaged))
-    {
-        if let Some(newer) = folded.last_mut().filter(|newer| newer.key == row.key) {
-            newer.merge(row.clone());
-        } else {
-            folded.push(row.clone());
-        }
-    }
-    let visible = folded.iter().take(5).collect::<Vec<_>>();
-    let show_note = visible.iter().any(|row| row.note(now).is_some());
-    let mut headers = vec!["WHEN", "STATUS", "TOOK", "COST"];
-    if show_note {
-        headers.push("NOTE");
-    }
-    let mut table = ui::Table::new(headers).right(&[2, 3]).indent(2);
-    for row in visible {
-        let mut cells = vec![
-            ui::cell(ui::rel_age(row.latest.at, now)),
-            run_status_cell(row.latest, row.count),
-            ui::cell(row.took().as_deref().unwrap_or("-")).dash(),
-            ui::cell(row.cost_usd.map(run_cost).as_deref().unwrap_or("-")).dash(),
-        ];
-        if show_note {
-            cells.push(ui::cell(row.note(now).as_deref().unwrap_or("-")).dash());
-        }
-        table.row(cells);
-    }
-    table.render(out)
 }
 
 fn write_runs_table(
@@ -4056,22 +3666,6 @@ fn truncate_note(text: &str, max: usize) -> String {
 
 pub(super) fn record_is_failure(record: &LoopRunRecord) -> bool {
     record.polarity() == Some(run_log::RunPolarity::Failure)
-}
-
-/// Whether a row is a fire that reached an agent. A run still in flight counts only once its
-/// record says it engaged, in `engaged`, since until then it may end quiet.
-fn is_agent_run(record: &LoopRunRecord, engaged: &std::collections::BTreeSet<String>) -> bool {
-    if record.result == LoopRunResult::Launched {
-        return record
-            .run_id
-            .as_ref()
-            .is_some_and(|run| engaged.contains(run));
-    }
-    record.acted != Some(false) && record.run_id.is_some()
-        || matches!(
-            record.result,
-            LoopRunResult::Delivered | LoopRunResult::TargetGone
-        )
 }
 
 /// The row LAST RUN details: none when the newest conclusive run is a quiet fire, which has no row.

@@ -1287,19 +1287,27 @@ fn dispatch_launch(
     globals: &GlobalFlags,
     bare: bool,
 ) -> Result<()> {
-    let args = AgentsArgs {
+    let mut args = AgentsArgs {
         command: None,
         launch,
         all: false,
         json,
     };
-    let loop_task = rimz::harness::schedule::runner::loop_check_task();
+    let fire_task = rimz::harness::schedule::runner::loop_check_task();
+    let loop_task = fire_launch(
+        &mut args.launch,
+        fire_task.clone(),
+        rimz::harness::schedule::runner::loop_trigger(),
+    );
     validate_detach(&args.launch, args.launch.print || loop_task.is_some())?;
     if args.launch.print || loop_task.is_some() {
         let (request, presentation) = if let Some(task) = loop_task {
             into_loop_check_request(args, &task, &rimz::config::MachineConfig::load_lenient())?
         } else {
-            into_supervised_request(args)?
+            let (mut request, presentation) = into_supervised_request(args)?;
+            // A detached `-p` run carries the chain only: its task field would make it the fire's.
+            request.loop_booked_by = rimz::harness::schedule::runner::loop_check_booked_by();
+            (request, presentation)
         };
         return match run_print(request, presentation, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
@@ -1312,8 +1320,29 @@ fn dispatch_launch(
             "--json is only supported with `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
-    launch_layout(args, globals, true)
+    launch_layout(args, globals, true, fire_task)
         .map_err(|error| crate::cli::render::launch_suggestions::agents_error(error, bare))
+}
+
+/// Shape a launch made by a loop fire's command: a prompted launch gets what fired the run
+/// appended to its prompt, and the fire owns the launch (the task returned) unless it detaches,
+/// when it launches as it does from a shell.
+fn fire_launch(
+    launch: &mut AgentLaunchArgs,
+    task: Option<String>,
+    trigger: Option<String>,
+) -> Option<String> {
+    let task = task?;
+    if let Some(trigger) = trigger
+        && let Some(prompt) = launch
+            .prompt
+            .as_mut()
+            .filter(|prompt| !prompt.trim().is_empty())
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(&trigger);
+    }
+    (!launch.cohort.detach).then_some(task)
 }
 
 /// `--detach` drops the report a launch task owes; refuse it where no such report exists.
@@ -1355,10 +1384,14 @@ fn into_loop_check_request(
     supervised::SupervisedPresentation,
 )> {
     if args.launch.prompt.is_none() {
-        bail!("a loop check launches an agent with a prompt: `rimz agents <cell> \"<prompt>\"`");
+        bail!(
+            "a loop fire's command launches an agent with a prompt: `rimz agents <cell> \"<prompt>\"`"
+        );
     }
     if args.launch.cohort.bg {
-        bail!("a loop check waits for its agent; remove `--bg` to capture the completed run");
+        bail!(
+            "a loop fire waits for the agent its command launches; remove `--bg`, or add `--detach` to launch it apart from the fire"
+        );
     }
     args.launch.print = true;
     let (mut request, presentation) = into_supervised_request(args)?;
@@ -1726,6 +1759,7 @@ pub(super) fn create_on_miss(
         ),
         globals,
         false,
+        None,
     )
 }
 

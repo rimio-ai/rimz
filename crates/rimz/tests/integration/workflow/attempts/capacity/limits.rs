@@ -219,14 +219,7 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
         let room = Room::new(&format!(
             "{edge}[agent.build.admission]\nthrottle='off'\ngive-up='1h'\nmax-parallel=1\n"
         ));
-        fs::write(
-            room.env.rimz_home().join("loop.toml"),
-            format!(
-                "[tasks.nightly]\nworkflow='review'\nroot={:?}\nevery='1h'\n",
-                room.env.project_root,
-            ),
-        )
-        .unwrap();
+        // A task-owned run as an older RimZ's loop fire wrote it: an automated start, held.
         let record = pending(&room, Some("nightly"));
         fill_limit(&room, &record);
         let mut value = advance(&room, &record);
@@ -236,18 +229,13 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
             "step build: 1 of 1 agents open (@codex)"
         );
         assert_eq!(value["record"]["visits"], json!({}));
-        for args in [&["workflow", "list"][..], &["loop", "list"][..]] {
-            let listed = success(room.command(args).output().unwrap());
-            assert!(
-                listed.contains(if args[0] == "workflow" {
-                    " · 1 held"
-                } else {
-                    "HELD"
-                }) && listed.contains("step build: 1 of 1 agents open (@codex)"),
-                "{listed}"
-            );
-            assert!(!listed.contains("NEEDS YOU"), "{listed}");
-        }
+        let listed = success(room.command(&["workflow", "list"]).output().unwrap());
+        assert!(
+            listed.contains(" · 1 held")
+                && listed.contains("step build: 1 of 1 agents open (@codex)"),
+            "{listed}"
+        );
+        assert!(!listed.contains("NEEDS YOU"), "{listed}");
         let now = jiff::Timestamp::now();
         value["record"]["wait"]["first"] = json!(now - jiff::SignedDuration::from_hours(2));
         value["record"]["wait"]["gives_up_at"] = json!(now - jiff::SignedDuration::from_hours(1));

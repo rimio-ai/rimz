@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use super::catalog::{LoadedTask, TaskSource};
 use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
-use crate::config::{CheckOn, Judge, TaskCheck, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
+use crate::config::{CheckOn, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
 use crate::harness::signal::{SignalSelector, default_signal_match_key};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
@@ -71,7 +71,6 @@ pub enum DeliveryTrigger {
 pub enum DeliveryPrompt {
     None,
     Inline(String),
-    File(PathBuf),
 }
 
 pub enum DeliveryProvenance {
@@ -80,21 +79,7 @@ pub enum DeliveryProvenance {
     SelfWait {
         reader: Option<String>,
     },
-    Loop,
     Team(TeamInstanceId),
-}
-
-pub struct DeliveryCheck {
-    pub check: Option<TaskCheck>,
-    pub check_timeout: Option<String>,
-    pub judge: Vec<Judge>,
-    pub on: Option<CheckOn>,
-    pub timeout: Option<String>,
-}
-
-pub struct DeliverySurplus {
-    pub ratio: Option<String>,
-    pub after: Option<String>,
 }
 
 pub struct DeliverySpec {
@@ -104,10 +89,8 @@ pub struct DeliverySpec {
     pub trigger: DeliveryTrigger,
     pub prompt: DeliveryPrompt,
     pub provenance: DeliveryProvenance,
-    pub check: Option<DeliveryCheck>,
     pub deadline: Option<Timestamp>,
     pub max_strikes: Option<u32>,
-    pub surplus: Option<DeliverySurplus>,
 }
 
 pub enum ArmOutcome {
@@ -260,7 +243,7 @@ impl RetireFailure {
 /// rows included, and clear each one's watcher, arming and strike overlays.
 ///
 /// Returns how many of the removed rows nothing arms again: self waits and
-/// `loop add --wait` rows. Team and resident-loop bindings, restored at the
+/// other delivery rows. Team and resident-loop bindings, restored at the
 /// member's next registration, stay out of that count.
 /// Overlay cleanup is best-effort and warns instead of failing, so the count is
 /// reported whatever the overlays do; `Err` means the durable map could not be
@@ -649,15 +632,11 @@ fn build_entry(
         DeliveryTrigger::Signal { .. } => false,
     };
     if self_wait
-        && (!one_shot
-            || !matches!(spec.prompt, DeliveryPrompt::None)
-            || spec.check.is_some()
-            || spec.surplus.is_some()
-            || spec.deadline.is_some())
+        && (!one_shot || !matches!(spec.prompt, DeliveryPrompt::None) || spec.deadline.is_some())
     {
         return Err(ArmFailure::InvalidProvenance(
             "self waits require a delay, a one-shot time, a once condition without a hold, or a \
-             watched command, without a prompt or guard",
+             watched command, without a prompt",
         ));
     }
     if matches!(spec.provenance, DeliveryProvenance::Team(_))
@@ -689,23 +668,10 @@ fn build_entry(
             None
         }
         DeliveryProvenance::SelfWait { reader } => reader,
-        DeliveryProvenance::Loop => None,
     };
     match spec.prompt {
         DeliveryPrompt::None => {}
         DeliveryPrompt::Inline(prompt) => entry.prompt = Some(prompt),
-        DeliveryPrompt::File(path) => entry.prompt_file = Some(path),
-    }
-    if let Some(check) = spec.check {
-        entry.check = check.check;
-        entry.check_timeout = check.check_timeout;
-        entry.judge = check.judge;
-        entry.on = check.on;
-        entry.timeout = check.timeout;
-    }
-    if let Some(surplus) = spec.surplus {
-        entry.surplus = surplus.ratio;
-        entry.surplus_after = surplus.after;
     }
     let delay = match spec.trigger {
         DeliveryTrigger::Condition {
@@ -718,7 +684,7 @@ fn build_entry(
             }
             entry.when = Some(vec![expr.to_string()]);
             entry.hold = hold.map(duration_label);
-            entry.once = matches!(lifetime, SubscriptionLifetime::Once).then_some(true);
+            entry.repeat = matches!(lifetime, SubscriptionLifetime::Standing);
             None
         }
         DeliveryTrigger::Delay(delay) => {
@@ -733,10 +699,9 @@ fn build_entry(
             entry.timeout = timeout.map(duration_label);
             None
         }
+        // Only a team binding arms a signal, and its `team` makes the row standing.
         DeliveryTrigger::Signal {
-            selector,
-            matches,
-            lifetime,
+            selector, matches, ..
         } => {
             validate_self_signal(
                 &selector,
@@ -746,7 +711,6 @@ fn build_entry(
             )?;
             entry.signal = Some(selector.to_string());
             entry.matches = (!matches.is_empty()).then_some(matches);
-            entry.once = matches!(lifetime, SubscriptionLifetime::Once).then_some(true);
             None
         }
         DeliveryTrigger::Clock(parsed) => {

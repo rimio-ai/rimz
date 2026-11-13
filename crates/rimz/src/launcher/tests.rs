@@ -946,6 +946,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         verify: None,
         max_attempts: None,
         loop_task: None,
+        loop_fire: None,
         loop_booked_by: Vec::new(),
         workflow: None,
         reminder_section: None,

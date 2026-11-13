@@ -90,6 +90,7 @@ impl Fixture {
                 pick_session: false,
                 reminder_section: None,
                 loop_task: None,
+                loop_booked_by: Vec::new(),
                 description: None,
                 report_to: ReportTo::Launcher,
                 cleanup_worktree: false,
@@ -118,6 +119,7 @@ impl Fixture {
             warn: vec![],
             grace: None,
             loop_task: None,
+            loop_fire: None,
             loop_booked_by: Vec::new(),
             workflow: None,
             reminder_section: None,
@@ -213,6 +215,106 @@ fn resumed_workflow_leader_keeps_supervision_and_companions_start_fresh() {
             .iter()
             .all(|request| request.identity.params.loop_booked_by == leader.loop_booked_by),
         "every cell of a fired launch carries the booking chain"
+    );
+}
+
+/// A fire's blocking launch is the task's agent: its row carries the task (`launched_by` joins
+/// on it) and its run the fire's id. A workflow step's leader outside any loop task still
+/// carries none.
+#[test]
+fn a_fires_blocking_launch_carries_its_task_and_fire_and_a_taskless_step_none() {
+    let request_of = |leader: LeaderRun| {
+        let fixture = Fixture::new();
+        let backend = fake_backend::Backend::default();
+        let LaunchOutcome::Opened(opened) =
+            open_fresh(fixture.fresh, Some(leader), &mut Unattended, &backend).unwrap()
+        else {
+            panic!("launch did not open")
+        };
+        let tabs = backend.tabs.lock().unwrap();
+        let pane = &tabs[0].panes.columns[0].panes[0];
+        let payload = std::fs::read_to_string(pane.argv.last().unwrap()).unwrap();
+        let request =
+            crate::harness::launch::decode_exec_request("claude", None, &payload).unwrap();
+        (request, opened.run.unwrap().record)
+    };
+    let fire = crate::ids::WorkflowRunId::new();
+    let mut blocking = Fixture::new().leader();
+    blocking.loop_task = Some("nightly".into());
+    blocking.loop_fire = Some(fire.clone());
+    let (request, record) = request_of(blocking);
+    assert_eq!(
+        request.identity.params.loop_task.as_deref(),
+        Some("nightly")
+    );
+    assert_eq!(record.loop_task.as_deref(), Some("nightly"));
+    assert_eq!(record.loop_fire, Some(fire));
+
+    let mut step = Fixture::new().leader();
+    step.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    });
+    step.completion = RunCompletion::Detached;
+    let (request, record) = request_of(step);
+    assert_eq!(request.identity.params.loop_task, None);
+    assert_eq!(record.loop_fire, None);
+}
+
+#[test]
+fn a_launch_no_fire_owns_carries_its_chain_on_every_cell_and_its_task_on_the_leader() {
+    let mut fixture = Fixture::new();
+    fixture.fresh.layout = crate::harness::spec::parse_layout_spec(
+        "claude,claude",
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    fixture.fresh.logins.push("default".parse().unwrap());
+    fixture
+        .fresh
+        .managed_launches
+        .push(crate::agents::ManagedLaunchState::Unsupported);
+    fixture.fresh.report_to = ReportTo::Nobody;
+    fixture.fresh.loop_task = Some("nightly".into());
+    fixture.fresh.loop_booked_by = vec![crate::agents::LaunchedBy {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        agent_id: "booker".into(),
+    }];
+    let backend = fake_backend::Backend::default();
+    let LaunchOutcome::Opened(opened) =
+        open_fresh(fixture.fresh.clone(), None, &mut Unattended, &backend).unwrap()
+    else {
+        panic!("launch did not open")
+    };
+    assert!(opened.run.is_none(), "no run of the fire owns the launch");
+    let tabs = backend.tabs.lock().unwrap();
+    let requests: Vec<_> = tabs[0]
+        .panes
+        .columns
+        .iter()
+        .flat_map(|column| &column.panes)
+        .map(|pane| {
+            let payload = std::fs::read_to_string(pane.argv.last().unwrap()).unwrap();
+            crate::harness::launch::decode_exec_request("claude", None, &payload).unwrap()
+        })
+        .collect();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.identity.params.loop_task.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("nightly"), None]
+    );
+    assert!(
+        requests
+            .iter()
+            .all(
+                |request| request.identity.params.loop_booked_by == fixture.fresh.loop_booked_by
+                    && request.run_id.is_none()
+            ),
+        "every cell carries the booking chain"
     );
 }
 

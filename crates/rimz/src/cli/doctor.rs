@@ -504,14 +504,12 @@ fn collect_loop() -> model::LoopTasks {
             model::LoopTaskRow {
                 name: name.clone(),
                 spec: match task.action() {
-                    Ok(
-                        rimz::harness::schedule::TaskAction::Spawn(spec)
-                        | rimz::harness::schedule::TaskAction::Workflow(spec),
-                    ) => spec.clone(),
+                    Ok(rimz::harness::schedule::TaskAction::Command(argv)) => {
+                        rimz::harness::schedule::command_line(argv)
+                    }
                     Ok(rimz::harness::schedule::TaskAction::Deliver(target)) => {
                         target.handle.clone()
                     }
-                    Ok(rimz::harness::schedule::TaskAction::CheckOnly) => "check".to_owned(),
                     Err(_) => "<invalid>".to_owned(),
                 },
                 when,

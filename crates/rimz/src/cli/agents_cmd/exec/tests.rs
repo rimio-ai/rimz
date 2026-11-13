@@ -875,25 +875,27 @@ mod pane_exec {
     use super::*;
 
     #[test]
-    fn hold_requires_a_kept_subagent_with_a_live_watch_and_no_exit_signal() {
-        for bits in 0..64 {
+    fn hold_requires_a_kept_subagent_with_a_live_watch_or_a_stopped_kept_run() {
+        for bits in 0..128 {
             let subagent = bits & 1 != 0;
             let keep = bits & 2 != 0;
             let live_watch = bits & 4 != 0;
             let parent_ended = bits & 8 != 0;
             let cleanup = bits & 16 != 0;
             let interrupted = bits & 32 != 0;
+            let run_stopped = bits & 64 != 0;
             assert_eq!(
-                should_linger_subagent(
+                should_hold_kept_pane(
                     subagent,
                     keep,
                     live_watch,
                     parent_ended,
+                    run_stopped,
                     cleanup,
                     interrupted
                 ),
-                bits == 7,
-                "subagent={subagent} keep={keep} watch={live_watch} parent_ended={parent_ended} cleanup={cleanup} interrupted={interrupted}"
+                matches!(bits, 7 | 71 | 66 | 70),
+                "subagent={subagent} keep={keep} watch={live_watch} parent_ended={parent_ended} run_stopped={run_stopped} cleanup={cleanup} interrupted={interrupted}"
             );
         }
     }

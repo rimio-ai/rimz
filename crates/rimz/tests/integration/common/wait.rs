@@ -2,7 +2,7 @@
 
 use super::Env;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
-use rimz::config::Tasks;
+use rimz::config::{TaskEntry, TaskTarget, Tasks};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::pane::RuntimeOwner;
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
@@ -30,6 +30,33 @@ pub fn loop_instances_path(env: &Env) -> std::path::PathBuf {
 pub fn wait_instances(env: &Env) -> Tasks {
     let path = loop_instances_path(env);
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// Writes the delivery row that wakes the calling agent on `signal`, the shape a team
+/// binding stores; `loop add` no longer arms one.
+pub fn seed_signal_wait(env: &Env, name: &str, signal: &str, repeat: bool) {
+    let path = loop_instances_path(env);
+    let mut tasks = if path.exists() {
+        wait_instances(env)
+    } else {
+        Tasks::default()
+    };
+    tasks.0.insert(
+        name.to_owned(),
+        TaskEntry {
+            root: env.project_root.clone(),
+            signal: Some(signal.to_owned()),
+            repeat,
+            wait: Some(TaskTarget {
+                kind: AgentKind::new_unchecked("claude"),
+                session: AgentSessionId::from("provider-session"),
+                handle: "@planner#main".to_owned(),
+            }),
+            ..TaskEntry::default()
+        },
+    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
 }
 
 pub fn register_calling_agent(env: &Env) {

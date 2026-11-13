@@ -271,9 +271,9 @@ fn catalog_moves_capacity_on_rename_and_never_reads_the_obsolete_decline_file() 
         .unwrap();
         let entry = crate::config::TaskEntry {
             root: root.path().to_owned(),
-            stay: true,
-            once: Some(true),
-            agent: Some("codex".into()),
+            once_per_checkout: Some(true),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             every: Some("1h".into()),
             ..Default::default()
         };
@@ -329,8 +329,9 @@ fn resident_rename_preserves_launched_task_identity() {
     .unwrap();
     let entry = crate::config::TaskEntry {
         root: home.path().to_owned(),
-        stay: true,
-        agent: Some("codex".into()),
+        once_per_checkout: Some(true),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("1h".into()),
         ..Default::default()
     };
@@ -344,16 +345,20 @@ fn resident_rename_preserves_launched_task_identity() {
         serde_json::json!({"fixer": {home.path().to_str().unwrap():
             {"at": "2026-06-01T00:00:00Z", "leader": "otter"}}}),
     );
-    let before = launch_ledger::load_workflows(&paths).unwrap();
-    let error = TaskCatalog::load(Some(home.path()))
+    let before = launch_ledger::load_workflows(&paths).unwrap().tasks["fixer"].clone();
+    TaskCatalog::load(Some(home.path()))
         .unwrap()
         .rename("fixer", "renamed")
-        .unwrap_err();
-    assert!(error.to_string().contains("resident leaders"), "{error}");
+        .unwrap();
     let catalog = TaskCatalog::load(Some(home.path())).unwrap();
-    assert!(catalog.visible().contains_key("fixer"));
-    assert!(!catalog.visible().contains_key("renamed"));
-    assert_eq!(launch_ledger::load_workflows(&paths).unwrap(), before);
+    assert!(!catalog.visible().contains_key("fixer"));
+    assert!(catalog.visible().contains_key("renamed"));
+    let after = launch_ledger::load_workflows(&paths).unwrap();
+    assert!(!after.tasks.contains_key("fixer"));
+    assert_eq!(
+        after.tasks["renamed"], before,
+        "the checkout's launch moves with the name"
+    );
 }
 
 #[test]
@@ -372,7 +377,8 @@ fn nonresident_removal_ignores_malformed_launch_ledger() {
         "check",
         &crate::config::TaskEntry {
             root: home.path().to_owned(),
-            check: Some("true".into()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             every: Some("1h".into()),
             ..Default::default()
         },
@@ -416,10 +422,9 @@ fn catalog_routes_workflow_memory_through_rename_remove_and_replacement() {
         .unwrap();
         let entry = crate::config::TaskEntry {
             root: home.path().to_owned(),
-            workflow: (kind == "workflow").then(|| "review".into()),
-            agent: (kind == "stay").then(|| "claude".into()),
-            prompt: (kind == "stay").then(|| "fix".into()),
-            stay: kind == "stay",
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            once_per_checkout: (kind == "workflow" || kind == "stay").then_some(true),
             every: Some("1h".into()),
             ..Default::default()
         };
@@ -447,11 +452,7 @@ fn catalog_routes_workflow_memory_through_rename_remove_and_replacement() {
                     .replace_machine(
                         "land",
                         &crate::config::TaskEntry {
-                            workflow: None,
-                            agent: None,
-                            prompt: None,
-                            stay: false,
-                            check: Some("true".into()),
+                            once_per_checkout: None,
                             ..entry
                         },
                     )
@@ -514,9 +515,9 @@ fn redefinition_forgets_only_checkouts_whose_runs_have_not_reached_an_agent() {
         .unwrap();
         let entry = crate::config::TaskEntry {
             root: home.path().to_owned(),
-            agent: Some("claude".into()),
-            prompt: Some("fix".into()),
-            stay: true,
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            once_per_checkout: Some(true),
             each_worktree: true,
             when: Some(vec!["pr=open".into()]),
             ..Default::default()
@@ -611,11 +612,9 @@ fn malformed_workflow_memory_blocks_edits_of_tasks_that_record_there() {
             "land",
             &crate::config::TaskEntry {
                 root: home.path().to_owned(),
-                workflow: (kind == "workflow").then(|| "review".into()),
-                check: (kind == "check").then(|| "true".into()),
-                agent: (kind == "stay").then(|| "claude".into()),
-                prompt: (kind == "stay").then(|| "fix".into()),
-                stay: kind == "stay",
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
+                once_per_checkout: (kind == "workflow" || kind == "stay").then_some(true),
                 every: Some("1h".into()),
                 ..Default::default()
             },

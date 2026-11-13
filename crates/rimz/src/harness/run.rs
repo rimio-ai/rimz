@@ -194,6 +194,8 @@ pub struct SupervisedRunRequest {
     pub verify: Option<String>,
     pub max_attempts: Option<u32>,
     pub loop_task: Option<String>,
+    /// The workflow run of the loop fire whose command made this blocking launch.
+    pub loop_fire: Option<crate::ids::WorkflowRunId>,
     /// The booking chain of the loop task whose check launched this run, stamped on its agent.
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
@@ -255,6 +257,7 @@ impl SupervisedRunRequest {
             verify: None,
             max_attempts: None,
             loop_task: None,
+            loop_fire: None,
             loop_booked_by: Vec::new(),
             workflow: None,
             reminder_section: None,
@@ -395,19 +398,20 @@ pub fn release_workflow(
     Ok(released)
 }
 
-/// Cancel for `reason`, written with the Canceled status, using only durable
-/// paths and the waiter's runtime socket. A run already terminal keeps its record.
+/// Cancel, recording `reason` when there is one, written with the Canceled status,
+/// using only durable paths and the waiter's runtime socket. A run already terminal
+/// keeps its record.
 pub fn cancel_and_wake_paths(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     run_id: &RunId,
-    reason: CancelReason,
+    reason: Option<CancelReason>,
 ) -> Result<RunRecord> {
     let (record, wrote) = settle_terminal(paths, runtime, run_id, |record, now| {
         if !record.mark_terminal(RunStatus::Canceled, now) {
             return false;
         }
-        record.cancel_reason = Some(reason);
+        record.cancel_reason = reason;
         true
     })?;
     if wrote {

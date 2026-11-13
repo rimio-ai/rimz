@@ -1602,9 +1602,8 @@ fn fixture_room_starts_no_codex_process_and_no_broker_pane() {
         "ready",
         "--when",
         "team.stage=Done",
-        "--check",
+        "--",
         "true",
-        "--once",
     ]);
     rimz(&["loop", "tick"]);
     std::fs::write(&board, "Stage: Done\n").expect("flip board");

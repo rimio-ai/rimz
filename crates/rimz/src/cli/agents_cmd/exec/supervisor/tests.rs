@@ -208,6 +208,37 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
     );
 }
 
+/// `--keep` holds the pane and not the turn: a kept run's provider ends when the run is
+/// canceled, except by a workflow step's detach or an interrupt hold's expiry.
+#[test]
+fn a_kept_run_ends_its_provider_only_when_stopped() {
+    use rimz::store::run::RunStatus;
+
+    let mut record = rimz::store::run::RunRecord::new(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "check".to_owned(),
+        "/repo".into(),
+    );
+    record.keep = true;
+    for status in [RunStatus::Running, RunStatus::Completed, RunStatus::Failed] {
+        record.status = status;
+        assert!(!kept_run_stopped(&record), "{status:?}");
+    }
+    record.status = RunStatus::Canceled;
+    assert!(kept_run_stopped(&record));
+    let mut held = record.clone();
+    held.interrupted_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    assert!(!kept_run_stopped(&held), "an expired interrupt hold");
+    record.workflow = Some(rimz::agents::WorkflowAttemptRef {
+        run: rimz::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: rimz::agents::WorkflowAttemptRole::Step,
+    });
+    assert!(!kept_run_stopped(&record), "a workflow step's detach");
+}
+
 /// A cleanup-enabled workflow agent whose stranded run is released keeps its pane through the
 /// next clean turn end, which the hook settles through the production lifecycle entry; the same
 /// turn end on an unreleased run is the wrapper's cleanup cue, so the control proves the path.

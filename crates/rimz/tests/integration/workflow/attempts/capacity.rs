@@ -262,55 +262,36 @@ fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
 }
 
 #[test]
-fn capacity_hand_manual_and_scheduled_workflows_all_wait() {
-    let mut actual = Vec::new();
-    for verb in ["workflow", "fire", "run"] {
-        let room = Room::new("");
-        write_capacity_config(
-            &room,
-            format!(
-                concat!(
-                    "[throttle]\ncheck='exit 75'\n[tasks.nightly]\n",
-                    "workflow='review'\nroot={:?}\nevery='1h'\n"
-                ),
-                room.env.project_root
-            ),
-        )
-        .unwrap();
-        let start = match verb {
-            "workflow" => ["workflow", "run", "review"],
-            verb => ["loop", verb, "nightly"],
-        };
-        success(room.command(&start).output().unwrap());
-        let state = room.env.state_path_for(&room.env.project_root);
-        let record = records::live_runs(&state).unwrap().pop().unwrap();
-        let value = until(&room.env, record.id.as_str(), |value| {
-            value["record"]["visits"]["build"] == 1
-                || value["record"]["wait"]["outcome"] == "capacity"
-        });
-        actual.push((
+fn capacity_a_hand_started_workflow_waits() {
+    let room = Room::new("");
+    write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
+    success(
+        room.command(&["workflow", "run", "review"])
+            .output()
+            .unwrap(),
+    );
+    let state = room.env.state_path_for(&room.env.project_root);
+    let record = records::live_runs(&state).unwrap().pop().unwrap();
+    let value = until(&room.env, record.id.as_str(), |value| {
+        value["record"]["visits"]["build"] == 1 || value["record"]["wait"]["outcome"] == "capacity"
+    });
+    assert_eq!(
+        (
             value["record"]["visits"]["build"] == 1,
             value["record"]["manual"] == true,
             value["record"]["wait"]["outcome"] == "capacity",
-        ));
-        success(
-            room.command(&["workflow", "cancel", record.id.as_str()])
-                .output()
-                .unwrap(),
-        );
-    }
-    assert_eq!(
-        actual,
-        [
-            (false, false, true),
-            (false, true, true),
-            (false, false, true)
-        ]
+        ),
+        (false, false, true)
+    );
+    success(
+        room.command(&["workflow", "cancel", record.id.as_str()])
+            .output()
+            .unwrap(),
     );
 }
 
 #[test]
-fn capacity_receipts_of_run_fire_and_restart_say_the_start_is_held() {
+fn capacity_receipts_of_run_and_restart_say_the_start_is_held() {
     let room = Room::new("");
     let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
@@ -320,17 +301,7 @@ fn capacity_receipts_of_run_fire_and_restart_say_the_start_is_held() {
             .replace("start = 'pr'", "start = 'build'"),
     )
     .unwrap();
-    write_capacity_config(
-        &room,
-        format!(
-            concat!(
-                "[throttle]\ncheck='exit 75'\n[tasks.nightly]\n",
-                "workflow='review'\nroot={:?}\nevery='1h'\n"
-            ),
-            room.env.project_root
-        ),
-    )
-    .unwrap();
+    write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
     let held = |line: &str, indent: &str| {
         line.strip_prefix(indent).is_some_and(|line| {
             line.starts_with("build held ")
@@ -359,12 +330,6 @@ fn capacity_receipts_of_run_fire_and_restart_say_the_start_is_held() {
         "{restart}"
     );
     let cancel = |id: &str| success(room.command(&["workflow", "cancel", id]).output().unwrap());
-    cancel(id);
-    let fire = success(room.command(&["loop", "fire", "nightly"]).output().unwrap());
-    assert!(
-        fire.lines().last().is_some_and(|line| held(line, "  ")),
-        "{fire}"
-    );
     let state = room.env.state_path_for(&room.env.project_root);
     for record in records::live_runs(&state).unwrap() {
         assert_eq!(record.visits.get("build"), None, "{record:#?}");
@@ -436,50 +401,6 @@ fn capacity_give_up_takes_an_instant_and_ends_a_hand_run_there() {
             (true, "active".into(), true, false, true),
             (true, "failed".into(), false, true, true)
         ]
-    );
-}
-
-#[test]
-fn capacity_workflow_wait_reaches_the_human_loop_list() {
-    let room = Room::new("");
-    write_capacity_config(
-        &room,
-        format!(
-            concat!(
-                "[throttle]\ncheck='exit 75'\n[tasks.nightly]\n",
-                "workflow='review'\nroot={:?}\nevery='1h'\n"
-            ),
-            room.env.project_root
-        ),
-    )
-    .unwrap();
-    let record = pending(&room, Some("nightly"));
-    let mut value = advance(&room, &record);
-    let text = success(room.command(&["loop", "list"]).output().unwrap());
-    assert!(
-        text.contains("HELD  starts waiting for capacity")
-            && text.contains("○ 1 held")
-            && text.contains(value["record"]["wait"]["detail"].as_str().unwrap())
-            && !text.contains("NEEDS YOU"),
-        "{text}"
-    );
-    let listed: Value = serde_json::from_str(&success(
-        room.command(&["loop", "list", "--json"]).output().unwrap(),
-    ))
-    .unwrap();
-    assert_eq!(
-        listed["rooms"][0]["tasks"][0]["capacity_wait"]["hold"],
-        "capacity"
-    );
-    value["record"]["wait"]["hold"] = json!("check_failed");
-    value["record"]["wait"]["detail"] = json!("capacity check failing: codex exit 2");
-    save(&room, &value["record"]);
-    let text = success(room.command(&["loop", "list"]).output().unwrap());
-    assert!(
-        text.contains("NEEDS YOU")
-            && text.contains("capacity check failing: codex exit 2")
-            && text.contains("→ rimz doctor"),
-        "{text}"
     );
 }
 

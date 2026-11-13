@@ -64,12 +64,12 @@ fn refresh_case(count: usize, test: &str) {
         "marker-demand".to_owned(),
         TaskEntry {
             root: env.project_root.clone(),
-            agent: Some("codex".to_owned()),
-            prompt: Some("inspect CI".to_owned()),
-            stay: true,
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            once_per_checkout: Some(true),
             each_worktree: true,
             when: Some(vec!["ci=passed".to_owned()]),
-            check: Some("true".into()),
+            repeat: true,
             ..Default::default()
         },
     )]));

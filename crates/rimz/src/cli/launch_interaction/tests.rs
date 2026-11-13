@@ -671,30 +671,16 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("\n\nCheck: rimz teams show forge#feat-x"));
     assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
-    assert!(
-        output.contains("Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-x --once")
-    );
-    let wait = output
-        .lines()
-        .find_map(|line| line.strip_prefix("Wait:  "))
-        .unwrap();
-    <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
+    // No command subscribes a caller to the cohort's `team.idle`, so the receipt offers none.
+    assert!(!output.contains("Wait:"), "{output}");
 
     let trunk = lane(serde_json::json!({"home": "trunk", "path": "/repo/checkout"}));
     let design =
         lane(serde_json::json!({"home": "trunk", "path": "/repo/checkout", "name": "design"}));
     for lane in [trunk, design, feat] {
-        let mut seat = test_agent("sess-seat");
-        seat.team = Some("forge".to_owned());
-        seat.lane = Some(lane.clone());
-        let signalled = seat.team_instance().unwrap().to_string();
         let mut output = Vec::new();
         write_resume_receipt(&mut output, &plan, Some("forge"), &lane, &[], None).unwrap();
         let output = String::from_utf8(output).unwrap();
-        assert!(
-            output.contains(&format!("--match instance={signalled} --once")),
-            "{output}"
-        );
         assert!(output.contains(&format!(
             "Check: rimz teams show forge#{}",
             lane.routing_name()

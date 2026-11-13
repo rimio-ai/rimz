@@ -525,7 +525,7 @@ The sweep archives a queued message whose child has ended, including ends stampe
 
 ## Signals are not the settlement path
 
-A child's lifecycle transitions also fire `agent.*` signals ([loops.md](./loops.md#the-signal-vocabulary)) carrying `session`, `handle`, and, when recorded, the child's `parent_agent_id` in `parent`: the parent's launch id, or its session id for a parent without one. A parent could arm `rimz loop add child-ended --signal agent.ended --match session=<child> --wait --once`, but the digest and `wait` carry the child's text and run identity, while a signal carries only the transition. The self-wait guard refuses a subscription that does not name another agent, so `--match parent=<own id>` alone is rejected.
+A child's lifecycle transitions also fire `agent.*` signals ([loops.md](./loops.md#the-signal-vocabulary)) carrying `session`, `handle`, and, when recorded, the child's `parent_agent_id` in `parent`: the parent's launch id, or its session id for a parent without one. A parent learns of its children through the digest and `wait`, which carry the child's text and run identity; a signal carries only the transition, and no command arms one for a parent to wait on.
 
 ## What is left out
 

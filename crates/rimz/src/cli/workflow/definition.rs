@@ -1,13 +1,12 @@
 use std::path::Path;
 
 use rimz::harness::schedule::catalog::TaskCatalog;
-use rimz::harness::schedule::compile::{CompiledAction, TaskWorkflow};
 use rimz::harness::workflow::ScopeKind;
 
 use super::*;
 
 /// A definition `show` and `validate` read by name: a deployed workflow, or a loop task's
-/// compiled graph materialized into a scratch directory named for the task.
+/// one-node command graph materialized into a scratch directory named for the task.
 pub(super) struct Definition {
     name: String,
     raw: String,
@@ -57,11 +56,11 @@ impl Definition {
         let task = catalog
             .as_ref()
             .and_then(|catalog| catalog.visible().get(name))
-            .and_then(|task| match task.compiled() {
-                Ok(CompiledAction::Workflow(TaskWorkflow::Inline(inline))) => Some((task, inline)),
+            .and_then(|task| match task.action() {
+                Ok(rimz::harness::schedule::TaskAction::Command(argv)) => Some((task, argv)),
                 _ => None,
             });
-        let (task, inline) = match (deployed, task) {
+        let (task, argv) = match (deployed, task) {
             (true, Some(_)) if selector.is_none() => {
                 return Err(super::super::usage::UsageError::new(format!(
                     "{name} names a deployed workflow and a loop task; use workflow:{name} or task:{name}"
@@ -69,7 +68,7 @@ impl Definition {
                 .into());
             }
             (_, Some(task)) if !deployed => task,
-            _ if selector == Some("task") => bail!("no loop task {name} compiles to a workflow"),
+            _ if selector == Some("task") => bail!("no loop task {name} runs a command"),
             _ => {
                 return Ok(Some(Self {
                     name: name.into(),
@@ -80,7 +79,7 @@ impl Definition {
             }
         };
         let definition =
-            inline.definition(name, task, &rimz::config::MachineConfig::load_lenient())?;
+            rimz::harness::schedule::runner::command_definition(name, task.entry(), argv)?;
         let scratch = Scratch(std::env::temp_dir().join(format!(
             "rimz-task-{}-{}",
             std::process::id(),
@@ -176,12 +175,7 @@ fn header(
         .visible()
         .iter()
         .filter_map(|(task_name, task)| {
-            let started = if definition.task.is_some() {
-                task_name == name
-            } else {
-                task.entry().workflow.as_deref() == Some(name)
-            };
-            if !started {
+            if definition.task.is_none() || task_name != name {
                 return None;
             }
             Some(format!(
@@ -195,11 +189,11 @@ fn header(
         let flags: &[&str] = if worktree { &["-w", "<worktree>"] } else { &[] };
         let root = globals.root.as_deref();
         let command = resolve::command("run", &[name], root, None, &[], flags);
+        let rimz = resolve::rimz_prefix(root);
         let task = format!(
-            "{} loop add '<task>' --workflow={}{} --every '<duration>'",
-            resolve::rimz_prefix(root),
-            crate::cli::usage::shell_command([name]),
+            "{rimz} loop add '<task>'{} --every '<duration>' -- {rimz} workflow run {}",
             if worktree { " --each-worktree" } else { "" },
+            crate::cli::usage::shell_command([name]),
         );
         writeln!(
             out,

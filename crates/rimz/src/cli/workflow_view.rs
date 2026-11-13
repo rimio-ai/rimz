@@ -34,8 +34,8 @@ pub(super) fn definition_dir(name: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-/// The deployed definition a run starts from, refused with every validation error; warnings
-/// print to stderr. `workflow run` and `loop add --workflow` share this check.
+/// The deployed definition a `workflow run` starts from, refused with every validation error;
+/// warnings print to stderr.
 pub(super) fn deployed_definition(
     name: &std::path::Path,
     project_root: Option<&std::path::Path>,

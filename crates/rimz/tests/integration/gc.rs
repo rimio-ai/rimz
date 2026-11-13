@@ -758,7 +758,6 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
         "team-forge-a-coder-ci-failed": team_row("a"),
         "team-forge-b-coder-ci-failed": team_row("b"),
         "legacy-wake": {
-            "wake": { "kind": "claude", "session": "sess-gone", "handle": "@coder" },
             "prompt": "wake up",
             "root": root,
             "at": "07:00",
@@ -1339,8 +1338,8 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
         &config_path,
         format!(
             "[tasks.spawn]\n\
-             agent = \"claude\"\n\
-             prompt = \"spawn wait\"\n\
+             command = [\"true\"]\n\
+             timeout = \"1m\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n\
              \n\
@@ -1387,7 +1386,7 @@ fn gc_keeps_loop_root_until_task_is_removed() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\nagent = 'claude'\nroot = '{}'\nevery = '1h'\n",
+            "[tasks.nightly]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\nevery = '1h'\n",
             worktree.display()
         ),
     )
@@ -1429,7 +1428,7 @@ fn gc_fanout_does_not_pin_its_arming_directory() {
         .assert()
         .success();
     let worktree = env.home_root.join("project-worktrees/followup");
-    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nevery = '1h'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\ncommand = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\nevery = '1h'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
     env.rimz()
         .arg("gc")
         .assert()
