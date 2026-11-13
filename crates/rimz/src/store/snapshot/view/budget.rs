@@ -182,8 +182,17 @@ fn select_provider_bars<'a>(
         }
         if !std::ptr::eq(first, longest_spent) {
             // A spent longer window forces every shorter one spent with no
-            // countdown, so their rows would only repeat it.
-            return vec![bar(longest_spent)];
+            // countdown, so their rows would only repeat it. A window with no
+            // known length gates nothing and is gated by nothing.
+            let gates_first = first
+                .duration_mins
+                .filter(|mins| *mins > 0)
+                .zip(longest_spent.duration_mins)
+                .is_some_and(|(short, long)| long > short);
+            if gates_first {
+                return vec![bar(longest_spent)];
+            }
+            return provider_window_pair(first, longest_spent, bar);
         }
     }
     provider_window_pair(first, second, bar)
