@@ -2252,6 +2252,7 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
             layout: None,
             scratch_files: None,
             consensus_file: None,
+            consensus: Vec::new(),
             append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
@@ -2352,6 +2353,65 @@ fn repo_team_prompt_bases_are_checked_on_the_merged_launch_table() {
 }
 
 #[test]
+fn repo_teams_compose_consensus_pieces_from_the_machine_trait_claims() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("traits")).unwrap();
+    std::fs::write(config.path().join("traits/house.md"), "House.").unwrap();
+    let machine =
+        MachineConfig::load_from(&config.path().join("config.toml"), config.path()).unwrap();
+    let crew = |extra: &str| {
+        format!(
+            "[profiles.worker]\nagent = 'claude'\n\
+             [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
+             append-system-prompt-files = ['pipeline.md']\n{extra}\n\
+             roles = [{{role = 'lead', profile = 'worker', owns = ['Plan', 'Reflect']}}]\n"
+        )
+    };
+    write_project_config(&project, &crew("consensus = ['reflect', 'house']"));
+    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+    let launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
+    let team = &launch.teams.0["crew"];
+    assert_eq!(
+        team.consensus_file.as_deref(),
+        Some(project.path().join(".rimz/consensus.md").as_path())
+    );
+    assert_eq!(
+        team.append_system_prompt_files,
+        [
+            crate::config::PromptSource::Text {
+                origin: crate::harness::team_prompt::reflect_copy_path(config.path()),
+                text: crate::harness::team_prompt::SHIPPED_REFLECT
+                    .trim()
+                    .to_owned(),
+            },
+            crate::config::PromptSource::Text {
+                origin: config.path().join("traits/house.md"),
+                text: "House.".to_owned(),
+            },
+            crate::config::PromptSource::File(project.path().join(".rimz/pipeline.md")),
+        ]
+    );
+    write_project_config(
+        &project,
+        &crew("consensus = ['reflect']").replace(", 'Reflect'", ""),
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+    let Err(refused) = load_with_roots(&machine, project.path(), config.path()) else {
+        panic!("a shipped reflect piece without a Reflect stage loaded");
+    };
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "invalid project agents config at {}: team 'crew' lists the shipped `reflect` \
+             consensus piece but declares no `Reflect` stage; add a `Reflect` stage, or drop \
+             `reflect` from `consensus`",
+            project.path().join(".rimz/config.toml").display()
+        )
+    );
+}
+
+#[test]
 fn repo_team_roles_require_repo_profiles_even_for_builtin_kinds() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
@@ -2436,6 +2496,7 @@ fn untrusted_repo_profile_inside_machine_team_layout_is_blocked() {
             layout: Some("coder,planner".to_owned()),
             scratch_files: None,
             consensus_file: None,
+            consensus: Vec::new(),
             append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },

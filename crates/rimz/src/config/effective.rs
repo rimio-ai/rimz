@@ -46,6 +46,8 @@ pub enum EffectiveConfigErr {
         #[source]
         source: LayoutErr,
     },
+    #[error("invalid project agents config at {path}: {message}")]
+    TeamConsensus { path: PathBuf, message: String },
     #[error("invalid project tasks config at {path}: {source}")]
     Tasks {
         path: PathBuf,
@@ -377,6 +379,7 @@ pub fn load_with_roots(
     let machine_subagent_profiles = &machine.subagents.profiles;
     let mut lsp_servers = machine.lsp.servers.clone();
     let native_auto_compact = machine.harness.auto_compact;
+    let consensus_pieces = &machine.consensus_pieces;
     let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
     let config_path = project_root.join(PROJECT_CONFIG_REL);
@@ -456,6 +459,14 @@ pub fn load_with_roots(
     lsp_servers.extend(std::mem::take(&mut repo.lsp_servers));
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
+    for (name, team) in &mut repo.teams.0 {
+        consensus_pieces.compose(name, team).map_err(|message| {
+            EffectiveConfigErr::TeamConsensus {
+                path: config_path.clone(),
+                message,
+            }
+        })?;
+    }
     agents_spec::resolve_profile_prompt_paths(&mut repo.subagent_profiles, config_dir);
     for profiles in [&mut repo.profiles, &mut repo.subagent_profiles] {
         // A profile chained to another repo profile inherits through `fill_missing`.

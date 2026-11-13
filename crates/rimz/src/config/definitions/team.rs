@@ -11,7 +11,7 @@ use crate::store::message::AutoCompact;
 use super::frontmatter::{RoleFrontmatter, SignalFrontmatter, TeamFrontmatter};
 use super::{
     Definition, DefinitionCause, DefinitionErr, LoadScope, LoadedDefinitions, Namespace, agent,
-    catalog, frontmatter,
+    catalog, frontmatter, traits,
 };
 
 struct SeatLoader<'a> {
@@ -62,8 +62,8 @@ pub(super) fn load(
                     format!("unsafe team name {name:?}"),
                 ));
             }
-            let roster = roster(&path, &name, &fm, body);
-            if let Ok(team) = &roster {
+            let roster = roster(scope, &path, &name, &fm, body);
+            if let Ok((team, _)) = &roster {
                 role_names.extend(team.roles.iter().map(|binding| binding.profile.clone()));
             }
             if let Some(previous) = names.insert(name.clone(), path.clone()) {
@@ -92,11 +92,11 @@ pub(super) fn load(
                     format!("team '{name}' is declared twice"),
                 ));
             }
-            let team = roster?;
+            let (team, reflects) = roster?;
             let mut profiles = Vec::new();
             let mut errors = Vec::new();
             for (role, binding) in fm.roles.iter().zip(&team.roles) {
-                match seats.load(&path, &name, role, &fm, loaded) {
+                match seats.load(&path, &name, role, &fm, reflects, loaded) {
                     Ok(profile) => profiles.push((binding, profile)),
                     Err(error) => errors.push(error),
                 }
@@ -153,12 +153,14 @@ pub(super) fn load(
     }
 }
 
+/// The team, and whether it lists the shipped `reflect` piece.
 fn roster(
+    scope: LoadScope<'_>,
     path: &Path,
     name: &str,
     fm: &TeamFrontmatter,
     body: &str,
-) -> Result<Team, DefinitionErr> {
+) -> Result<(Team, bool), DefinitionErr> {
     let fail = |message: String| DefinitionErr::new(path, format!("team '{name}' {message}"));
     if body.trim().is_empty() {
         return Err(fail("has no body; its pipeline is the body".to_owned()));
@@ -239,7 +241,30 @@ fn roster(
             "seats Implement and Review on '{owner}'; the producer of a stage never referees it"
         )));
     }
-    for text in [BUILT_IN_CONSENSUS, body] {
+    let consensus = fm.consensus.clone().unwrap_or_default();
+    let pieces = traits::consensus(
+        scope.home,
+        scope.traits,
+        name,
+        &consensus,
+        &stages,
+        |path| {
+            scope
+                .skills
+                .read_text(path)
+                .map(|text| text.to_string())
+                .map_err(|error| error.to_string())
+        },
+    )
+    .map_err(|message| DefinitionErr::new(path, message))?;
+    let texts = pieces.sources.iter().filter_map(|source| match source {
+        PromptSource::Text { text, .. } => Some(text.as_str()),
+        PromptSource::File(_) => None,
+    });
+    for text in std::iter::once(BUILT_IN_CONSENSUS)
+        .chain(texts)
+        .chain([body])
+    {
         for tail in text.split('@').skip(1) {
             if !tail.starts_with(|c: char| c.is_ascii_alphabetic()) {
                 continue;
@@ -256,7 +281,12 @@ fn roster(
             }
         }
     }
-    Ok(Team {
+    let mut files = pieces.sources;
+    files.push(PromptSource::Text {
+        origin: path.to_owned(),
+        text: body.trim().to_owned(),
+    });
+    let team = Team {
         keep_warm: fm.keep_warm.clone(),
         roles,
         leader: Some(leader.to_owned()),
@@ -264,11 +294,10 @@ fn roster(
         stages,
         scratch_files: None,
         consensus_file: None,
-        append_system_prompt_files: vec![PromptSource::Text {
-            origin: path.to_owned(),
-            text: body.trim().to_owned(),
-        }],
-    })
+        consensus,
+        append_system_prompt_files: files,
+    };
+    Ok((team, pieces.shipped_reflect))
 }
 
 impl SeatLoader<'_> {
@@ -278,6 +307,7 @@ impl SeatLoader<'_> {
         name: &str,
         role: &RoleFrontmatter,
         team: &TeamFrontmatter,
+        reflects: bool,
         loaded: &LoadedDefinitions,
     ) -> Result<Profile, DefinitionErr> {
         let definition = self.agents.lookup(&role.agent, path)?
@@ -359,11 +389,12 @@ impl SeatLoader<'_> {
                     != "AskUserQuestion"
             });
         }
-        if let Some(skills) = &mut fm.skills
+        if reflects
+            && let Some(skills) = &mut fm.skills
             && !skills.is_empty()
-            && !skills.iter().any(|skill| skill.trim() == "reflect")
+            && !skills.iter().any(|skill| skill.trim() == "rimz-reflect")
         {
-            skills.push("reflect".to_owned());
+            skills.push("rimz-reflect".to_owned());
         }
         // Resolve the overlaid leaf through the standalone checks/defaults, then restore its already-rendered ancestor crafts unchanged.
         let tree = Namespace {

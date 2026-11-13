@@ -347,6 +347,7 @@ fn default_machine_teams() -> TeamsConfig {
             scratch_files: None,
             stages: Vec::new(),
             consensus_file: None,
+            consensus: Vec::new(),
             append_system_prompt_files: Vec::new(),
         },
     )]))
@@ -642,6 +643,10 @@ pub struct Team {
         skip_serializing_if = "Option::is_none"
     )]
     pub consensus_file: Option<PathBuf>,
+    /// Trait names whose text follows the consensus, in order, ahead of the
+    /// team's other prompt files; resolved once where the team loads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consensus: Vec<String>,
     /// Ordered prompt files composed after the consensus for every role of a staged team.
     #[serde(
         default,

@@ -936,8 +936,8 @@ fn lane_split_rejected_team_prompt_keeps_the_solo_profile() {
     assert_eq!(
         warnings,
         [format!(
-            "cannot restore team `forge` in #lane: team `forge` sets consensus-file or \
-         append-system-prompt-files but role `planner` (claude) has no base system prompt to \
+            "cannot restore team `forge` in #lane: team `forge` sets consensus-file, consensus, \
+         or append-system-prompt-files but role `planner` (claude) has no base system prompt to \
          compose them onto; add system-prompt-file to role planner or its profile, or write {} \
          with a nonempty body as the claude kind base (run `rimz agents validate` if it did not \
          load); members @planner#lane resume as individual sessions \

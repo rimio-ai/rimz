@@ -793,7 +793,8 @@ fn restart_posture_refuses_undeliverable_team_prompt_layers() {
         actual,
         [
             Some(format!(
-                "team `forge` sets consensus-file or append-system-prompt-files but role \
+                "team `forge` sets consensus-file, consensus, or \
+                     append-system-prompt-files but role \
                      `reviewer` (claude) has no base system prompt to compose them onto; add \
                      system-prompt-file to role reviewer or its profile, or write {} with a \
                      nonempty body as the claude kind base \
@@ -803,7 +804,8 @@ fn restart_posture_refuses_undeliverable_team_prompt_layers() {
                     .display()
             )),
             Some(
-                "team `forge` sets consensus-file or append-system-prompt-files but declares no \
+                "team `forge` sets consensus-file, consensus, or \
+                 append-system-prompt-files but declares no \
                  stages; add stages (or owns) or remove the team prompt fields"
                     .into()
             ),

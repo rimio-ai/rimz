@@ -102,6 +102,8 @@ pub(super) struct TeamFrontmatter {
     pub stages: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
+    pub consensus: Option<Vec<String>>,
     #[serde(default, deserialize_with = "blank_as_empty")]
     pub roles: Vec<RoleFrontmatter>,
 }

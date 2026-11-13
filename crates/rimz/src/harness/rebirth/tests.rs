@@ -2902,6 +2902,7 @@ fn team_machine() -> MachineConfig {
             layout: Some("planner,coder".to_owned()),
             scratch_files: None,
             consensus_file: None,
+            consensus: Vec::new(),
             append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },

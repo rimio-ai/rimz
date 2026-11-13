@@ -987,6 +987,9 @@ struct ExecutableTeam<'a> {
     // their pinned hash; `scratch-files` is neither a prompt nor a command.
     #[serde(skip_serializing_if = "Option::is_none")]
     consensus_file: Option<String>,
+    // Trait names, not repo files; skipped when empty so pinned hashes hold.
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    consensus: &'a [String],
     #[serde(skip_serializing_if = "Vec::is_empty")]
     append_system_prompt_files: Vec<String>,
 }
@@ -1160,6 +1163,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                         .consensus_file
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
+                    consensus: &team.consensus,
                     append_system_prompt_files: team
                         .append_system_prompt_files
                         .iter()

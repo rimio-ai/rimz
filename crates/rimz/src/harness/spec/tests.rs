@@ -665,6 +665,7 @@ fn team(roles: Vec<RoleBinding>) -> Team {
         layout: None,
         scratch_files: None,
         consensus_file: None,
+        consensus: Vec::new(),
         append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     }
@@ -678,6 +679,7 @@ fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
         layout: Some(layout.to_owned()),
         scratch_files: None,
         consensus_file: None,
+        consensus: Vec::new(),
         append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     }
@@ -3033,7 +3035,8 @@ fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
         actual,
         [
             format!(
-                "team `crew` sets consensus-file or append-system-prompt-files but role `worker` \
+                "team `crew` sets consensus-file, consensus, or \
+                 append-system-prompt-files but role `worker` \
                  (claude) has no base system prompt to compose them onto; add system-prompt-file \
                  to role worker or its profile, or write {} with a nonempty body as the claude \
                  kind base (run `rimz agents validate` if it did not load)",
@@ -3041,7 +3044,8 @@ fn team_prompt_without_base_names_the_kind_and_supported_fixes() {
                     .join("agents/claude.md")
                     .display()
             ),
-            "team `crew` sets consensus-file or append-system-prompt-files but role `worker` \
+            "team `crew` sets consensus-file, consensus, or \
+             append-system-prompt-files but role `worker` \
              (amp) has no base system prompt to compose them onto; add system-prompt-file to role \
              worker or its profile"
                 .into(),
@@ -3073,7 +3077,8 @@ fn team_prompt_without_base_names_the_shadowing_profile() {
             .unwrap_err()
             .to_string()
     });
-    let expected = "team `crew` sets consensus-file or append-system-prompt-files but role \
+    let expected = "team `crew` sets consensus-file, consensus, or \
+                    append-system-prompt-files but role \
                     `worker` (claude) has no base system prompt to compose them onto; add \
                     system-prompt-file to role worker or its profile, or add system-prompt-file \
                     to profile `claude`, which replaces the claude kind base, or remove that profile";
@@ -3303,6 +3308,7 @@ fn team_leader_validation_accepts_one_target() {
         layout: Some(layout.to_owned()),
         scratch_files: None,
         consensus_file: None,
+        consensus: Vec::new(),
         append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     };

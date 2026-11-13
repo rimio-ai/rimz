@@ -1218,17 +1218,17 @@ pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanEr
         .map_err(Into::into)
 }
 
-/// Keep the inspection copy current across upgrades without waiting for the
+/// Keep the inspection copies current across upgrades without waiting for the
 /// next `rimz setup`. The launch composes from the embedded text and never
-/// reads the copy, so a failed refresh is enrichment lost, never a refusal.
+/// reads a copy, so a failed refresh is enrichment lost, never a refusal.
 fn refresh_consensus_copy(plan: &LaunchPlan) {
-    let built_in = plan
-        .prompt
-        .sources
-        .team_prompt
-        .as_ref()
-        .is_some_and(|layer| layer.consensus == super::team_prompt::Consensus::BuiltIn);
-    if !built_in {
+    let Some(layer) = &plan.prompt.sources.team_prompt else {
+        return;
+    };
+    let piece = super::team_prompt::reflect_copy_path(&crate::disk::paths::agents_home());
+    let embedded = layer.consensus == super::team_prompt::Consensus::BuiltIn
+        || layer.files.iter().any(|file| file.origin() == piece);
+    if !embedded {
         return;
     }
     if let Err(error) =

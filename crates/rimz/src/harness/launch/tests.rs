@@ -781,6 +781,7 @@ fn team() -> crate::harness::launch_reminders::TeamReminder {
         layout: None,
         scratch_files: Some(vec!["blackboard.md".to_owned()]),
         consensus_file: None,
+        consensus: Vec::new(),
         append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     })

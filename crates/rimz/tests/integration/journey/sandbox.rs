@@ -224,15 +224,13 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         )
         .expect("skill content");
     }
-    for name in ["visible", "reflect"] {
-        let dir = env.agents_home().join("skills").join(name);
-        std::fs::create_dir_all(&dir).expect("skill library directory");
-        std::fs::write(
-            dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: Test skill\n---\n{name}\n"),
-        )
-        .expect("skill library content");
-    }
+    let library = env.agents_home().join("skills/visible");
+    std::fs::create_dir_all(&library).expect("skill library directory");
+    std::fs::write(
+        library.join("SKILL.md"),
+        "---\nname: visible\ndescription: Test skill\n---\nvisible\n",
+    )
+    .expect("skill library content");
     let agent_bin = write_hook_firing_agent(&env, "claude");
     let shim = agent_bin.join("claude");
     let mut body = std::fs::read_to_string(&shim).expect("read hook-firing shim");

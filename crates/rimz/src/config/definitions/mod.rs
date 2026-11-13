@@ -11,6 +11,8 @@ pub mod review;
 mod team;
 mod traits;
 
+pub use traits::ConsensusPieces;
+
 #[cfg(test)]
 mod tests;
 
@@ -158,6 +160,7 @@ pub struct LoadedDefinitions {
     pub pack_items: Vec<PackItem>,
     pub warnings: Vec<crate::packs::Problem>,
     pack_problems: BTreeMap<PackName, Vec<Problem>>,
+    pub(in crate::config) consensus_pieces: ConsensusPieces,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -401,6 +404,7 @@ fn load_resolved(
         &catalog,
         &mut loaded,
     );
+    loaded.consensus_pieces = ConsensusPieces::new(agents_home, &sources.claims["traits"]);
     if let Ok(inventory) = catalog.chain.inventory(|_| true) {
         for problem in inventory
             .conflicts
