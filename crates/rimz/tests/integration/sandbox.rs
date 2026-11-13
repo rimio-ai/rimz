@@ -9,7 +9,7 @@ use rimz::agents::skills::SkillChain;
 use rimz::config::Isolation;
 use rimz::harness::launch::ExecRequest;
 use rimz::ids::AgentKind;
-use rimz::sandbox::{SandboxErr, SandboxInputs, SandboxPlan, SkillInputs, SkipReason};
+use rimz::sandbox::{Mount, SandboxErr, SandboxInputs, SandboxPlan, SkillInputs, SkipReason};
 
 use crate::common::{
     CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim, write_fake_login_shell,
@@ -1752,6 +1752,40 @@ fn sandbox_guarded_entries_follow_protected_identity_binds() {
         }
     }
     assert_eq!(plan.guarded_entries(), expected);
+    let mount_kind = |path: &Path| {
+        plan.plan
+            .mounts
+            .iter()
+            .filter_map(|mount| match mount {
+                Mount::Bind { target, .. } if target == path => Some("bind"),
+                Mount::RoBind { target, .. } if target == path => Some("ro-bind"),
+                Mount::RoBindTry { target, .. } if target == path => Some("ro-bind-try"),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let skip_if_absent: std::collections::BTreeSet<_> = plan
+        .plan
+        .mounts
+        .iter()
+        .filter_map(|mount| match mount {
+            Mount::RoBindTry { source, target } => {
+                assert_eq!(source, target, "a protected bind is an identity bind");
+                assert!(plan.plan.host_bound_paths().contains(target));
+                Some(target.canonicalize().unwrap())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        skip_if_absent,
+        expected.iter().cloned().collect(),
+        "exactly the guarded protected entries bind skip-if-absent"
+    );
+    assert_eq!(mount_kind(&inputs.read_only[0]), ["ro-bind"]);
+    assert_eq!(mount_kind(&overlay), ["bind"]);
+    let library_entry = overlay.join("skills/library");
+    assert_eq!(mount_kind(&library_entry), ["ro-bind"]);
 
     let plan = rimz::sandbox::plan(&SandboxInputs {
         project_root: &checkout,
@@ -1765,6 +1799,192 @@ fn sandbox_guarded_entries_follow_protected_identity_binds() {
         unique.len(),
         plan.guarded_entries().len(),
         "duplicate roots or aliases must not duplicate guards"
+    );
+}
+
+/// Plans a view over the project root holding `.agents/sentinel`, `.claude/sentinel` and
+/// `.mcp.json`, as a Codex neighbour's tool call can leave them just before a launch.
+fn vanishing_entries_plan(env: &Env) -> SandboxPlan {
+    for dir in [".agents", ".claude"] {
+        std::fs::create_dir(env.project_root.join(dir)).unwrap();
+        std::fs::write(env.project_root.join(dir).join("sentinel"), "original").unwrap();
+    }
+    std::fs::write(env.project_root.join(".mcp.json"), "original").unwrap();
+    let vars = environment(env);
+    let state = env.store();
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
+        env: &vars,
+        cwd: &env.project_root,
+        project_root: &env.project_root,
+        worktree: None,
+        checkout: None,
+        add_dirs: &[],
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: None,
+        skills: SkillInputs {
+            kind: "codex",
+            home: None,
+            manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
+            callable: None,
+        },
+    })
+    .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    for name in [".agents", ".claude", ".mcp.json"] {
+        assert!(
+            plan.guarded_entries()
+                .contains(&env.project_root.join(name).canonicalize().unwrap()),
+            "{name} must be planned as a protected entry"
+        );
+    }
+    plan
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_view_starts_without_protected_entries_removed_after_plan() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let plan = vanishing_entries_plan(&env);
+    let agents = env.project_root.join(".agents");
+    let mcp = env.project_root.join(".mcp.json");
+    std::fs::remove_dir_all(&agents).unwrap();
+    std::fs::remove_file(&mcp).unwrap();
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped)
+            .unwrap()
+            .unwrap(),
+        &plan.plan,
+        &env.project_root,
+        &[
+            "/bin/sh".into(),
+            "-c".into(),
+            r#"
+                test ! -e "$1" || exit 10
+                test ! -e "$2" || exit 11
+                test "$(cat "$3/sentinel")" = original || exit 12
+                if (printf bad >> "$3/sentinel") 2>/dev/null; then exit 13; fi
+            "#
+            .into(),
+            "vanished".into(),
+            agents.display().to_string(),
+            mcp.display().to_string(),
+            env.project_root.join(".claude").display().to_string(),
+        ],
+    );
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env("HOME", &env.home_root)
+        .env("RIMZ_HOME", env.rimz_home())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a protected entry removed after the plan must not fail the view: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!agents.exists() && !mcp.exists());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_guard_protects_an_entry_that_reappears_after_a_vanished_start() {
+    use rimz::sandbox::BindGuard;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let plan = vanishing_entries_plan(&env);
+    let unit = env.store().paths().temp_unit_dir(None);
+    let agents = env.project_root.join(".agents");
+    std::fs::remove_dir_all(&agents).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let guard = BindGuard::arm(plan.guarded_entries(), &env.rimz_bin(), move |outcome| {
+        tx.send(outcome).unwrap();
+    })
+    .unwrap()
+    .unwrap();
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped).unwrap().unwrap(),
+        &plan.plan,
+        &env.project_root,
+        &[
+            "/bin/sh".into(),
+            "-c".into(),
+            r#"
+                test ! -e "$1" || exit 10
+                : > /tmp/guard-ready
+                while [ ! -e /tmp/guard-go ]; do sleep 0.01; done
+                test "$(cat "$1/sentinel")" = reappeared || exit 11
+                if (printf bad >> "$1/sentinel") 2>/dev/null; then exit 12; fi
+                test "$(awk -v p="$1" '$5 == p { n++ } END { print n+0 }' /proc/self/mountinfo)" = 1 || exit 13
+            "#
+            .into(),
+            "reappeared".into(),
+            agents.display().to_string(),
+        ],
+    );
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env("HOME", &env.home_root)
+        .env("RIMZ_HOME", env.rimz_home())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !unit.join("guard-ready").exists() {
+        if child.try_wait().unwrap().is_some() {
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "view exited before readiness ({:?}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(Instant::now() < deadline, "view did not signal readiness");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    guard.point(child.id());
+    let staging = env.project_root.join("agents-staging");
+    std::fs::create_dir(&staging).unwrap();
+    std::fs::write(staging.join("sentinel"), "reappeared").unwrap();
+    std::fs::rename(&staging, &agents).unwrap();
+    let canonical = agents.canonicalize().unwrap();
+    let restored = rx.recv_timeout(Duration::from_secs(30));
+    assert!(
+        restored
+            .as_ref()
+            .is_ok_and(|o| o.paths == [canonical.clone()] && o.result.is_ok()),
+        "a reappeared protected entry must be bound read-only: {restored:?}"
+    );
+    std::fs::write(unit.join("guard-go"), "").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "view exit {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    drop(guard);
+    assert_eq!(
+        std::fs::read_to_string(agents.join("sentinel")).unwrap(),
+        "reappeared"
     );
 }
 
@@ -2214,7 +2434,7 @@ fn sandbox_guard_refuses_unwatchable_entries_and_empty_sets_need_no_helper() {
 #[test]
 #[cfg(target_os = "linux")]
 fn sandbox_guard_bounds_view_lookup_and_reaps_timed_out_helpers() {
-    use rimz::sandbox::{BindGuard, Mount, MountPlan};
+    use rimz::sandbox::{BindGuard, MountPlan};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Stdio;
@@ -2587,6 +2807,7 @@ fn scoped_protection_keeps_provider_homes_writable() {
         };
         for mount in &plan.plan.mounts {
             if let rimz::sandbox::Mount::RoBind { target, .. }
+            | rimz::sandbox::Mount::RoBindTry { target, .. }
             | rimz::sandbox::Mount::RemountRo { target } = mount
             {
                 assert_ne!(

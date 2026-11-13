@@ -3601,7 +3601,9 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
         .mounts
         .iter()
         .filter_map(|mount| match mount {
-            Mount::Bind { source, target } | Mount::RoBind { source, target }
+            Mount::Bind { source, target }
+            | Mount::RoBind { source, target }
+            | Mount::RoBindTry { source, target }
                 if source == target =>
             {
                 Some(target)
