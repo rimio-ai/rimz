@@ -537,6 +537,25 @@ fn scoped_bases_are_never_rebuilt_or_released() {
 }
 
 #[test]
+fn numbered_terminal_tabs_keep_their_name_and_take_status() {
+    let now = Timestamp::from_second(1_700_000_000).expect("time");
+    let frame = owned_frame("term-3", &["zsh"], &[]);
+    assert!(desired_tab_renames(&snapshot(vec![], now), &frame, "zsh").is_empty());
+    let running = snapshot(vec![(AgentStatus::Running, "%1", now)], now);
+    let renames = desired_tab_renames(&running, &frame, "zsh");
+    assert_eq!(renames[0].desired_name, "term-3 ⢿");
+    assert!(matches!(renames[0].intent, TabNameIntent::Status { .. }));
+    for base in ["term-0", "term-12", "terminal"] {
+        let renames = desired_tab_renames(
+            &snapshot(vec![], now),
+            &owned_frame(base, &["zsh"], &[]),
+            "zsh",
+        );
+        assert!(matches!(renames[0].intent, TabNameIntent::Release { .. }));
+    }
+}
+
+#[test]
 fn status_precedence_over_rebuild() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
     let frame = owned_frame("founder", &["a", "b"], &["%9"]);

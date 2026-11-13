@@ -172,6 +172,7 @@ pub(crate) fn desired_tab_renames(
             };
             if let TabOwner::Rimz(record) = owner
                 && !is_scoped_label(base)
+                && !crate::pane::is_terminal_view_name(base)
                 && !work_panes
                     .iter()
                     .any(|pane| record.founders.contains(&pane.pane_id) && is_live_agent(pane))

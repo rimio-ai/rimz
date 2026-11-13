@@ -149,6 +149,14 @@ impl std::fmt::Display for PaneTitle {
 /// classifiers so every backend speaks the same name.
 pub const VIEW_NAME: &str = "rimzd";
 
+const TERMINAL_VIEW_PREFIX: &str = "term-";
+
+/// Whether `name` is a numbered terminal's view name, `term-1` through `term-9`.
+pub(crate) fn is_terminal_view_name(name: &str) -> bool {
+    name.strip_prefix(TERMINAL_VIEW_PREFIX)
+        .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+}
+
 /// Substring marking the Claude remote-control host in a pane command.
 pub(crate) const COMMAND_MARKER: &str = "remote-control";
 
