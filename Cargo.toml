@@ -215,6 +215,9 @@ image-webp = "0.2"
 # Petdex pets may ship PNG sheets (for example `goose-default`). `png` is
 # pure Rust and keeps RimZ off the full `image` crate tree.
 png = "0.18"
+# Provider logos are SVG, drawn in process. No default features: no text, fonts,
+# raster images, or svgz, so an untrusted user logo loads nothing beyond itself.
+resvg = { version = "0.50", default-features = false }
 # Event-log frame checksum: hardware CRC32 for the per-frame validate and the
 # repair scan. Already in the tree through flate2 and already carries a
 # supply-chain exemption, so the direct dep adds zero footprint.

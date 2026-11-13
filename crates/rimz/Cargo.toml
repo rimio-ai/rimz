@@ -171,6 +171,7 @@ jiff.workspace = true
 kdl.workspace = true
 notify.workspace = true
 png.workspace = true
+resvg.workspace = true
 sentry = { workspace = true, optional = true }
 sentry-tracing = { workspace = true, optional = true }
 serde.workspace = true

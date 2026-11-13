@@ -72,13 +72,17 @@ criteria = "safe-to-run"
 version = "0.5.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.arrayref]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+
 [[exemptions.arrayvec]]
 version = "0.5.2"
 criteria = "safe-to-run"
 
 [[exemptions.arrayvec]]
 version = "0.7.8"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.assert_cmd]]
 version = "2.2.2"
@@ -316,6 +320,10 @@ criteria = "safe-to-deploy"
 version = "2.11.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.data-url]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.defmt]]
 version = "1.1.0"
 criteria = "safe-to-deploy"
@@ -461,6 +469,10 @@ version = "1.1.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.float-cmp]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.float-cmp]]
 version = "0.10.0"
 criteria = "safe-to-run"
 
@@ -554,6 +566,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.image-webp]]
 version = "0.2.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.imagesize]]
+version = "0.15.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.include_dir]]
@@ -658,6 +674,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.kqueue-sys]]
 version = "1.1.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.kurbo]]
+version = "0.13.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.lab]]
@@ -892,6 +912,10 @@ criteria = "safe-to-deploy"
 version = "0.11.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.pico-args]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.pin-project]]
 version = "1.1.13"
 criteria = "safe-to-run"
@@ -915,6 +939,10 @@ criteria = "safe-to-deploy"
 [[exemptions.polling]]
 version = "3.11.0"
 criteria = "safe-to-run"
+
+[[exemptions.polycool]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
 
 [[exemptions.portable-atomic]]
 version = "1.13.1"
@@ -1060,12 +1088,24 @@ criteria = "safe-to-run"
 version = "0.8.11"
 criteria = "safe-to-deploy"
 
+[[exemptions.resvg]]
+version = "0.50.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.rgb]]
+version = "0.8.53"
+criteria = "safe-to-deploy"
+
 [[exemptions.rimz]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
 version = "0.17.14"
+criteria = "safe-to-deploy"
+
+[[exemptions.roxmltree]]
+version = "0.21.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.rsqlite-vfs]]
@@ -1240,6 +1280,10 @@ criteria = "safe-to-deploy"
 version = "3.2.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.simplecss]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.siphasher]]
 version = "1.0.3"
 criteria = "safe-to-deploy"
@@ -1266,6 +1310,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.stable_deref_trait]]
 version = "1.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.strict-num]]
+version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.strip-ansi-escapes]]
@@ -1306,6 +1354,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.supports-unicode]]
 version = "2.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.svgtypes]]
+version = "0.16.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
@@ -1382,6 +1434,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.time-macros]]
 version = "0.2.31"
+criteria = "safe-to-deploy"
+
+[[exemptions.tiny-skia]]
+version = "0.12.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.tiny-skia-path]]
+version = "0.12.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-macros]]
@@ -1470,6 +1530,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ureq-proto]]
 version = "0.6.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.usvg]]
+version = "0.50.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.utf8-zero]]

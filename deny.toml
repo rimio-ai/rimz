@@ -30,6 +30,9 @@ allow = [
     # `notify` uses CC0-1.0: a public-domain dedication with no copyleft
     # obligations, accepted for the local filesystem watcher dependency.
     "CC0-1.0",
+    # `arrayref` (BSD-2-Clause), reached through `tiny-skia` for provider logo
+    # rasterization: a permissive, OSI-approved license.
+    "BSD-2-Clause",
 ]
 confidence-threshold = 0.93
 
