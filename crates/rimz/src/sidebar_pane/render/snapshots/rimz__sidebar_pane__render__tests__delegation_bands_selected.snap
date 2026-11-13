@@ -14,18 +14,18 @@ expression: screen
 ▌  delegate                                          ▐
 ▌  ▢ ────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                               ▐
-▌  ⧉ subagents (9) · ⧖ waits (1)                     ▐
-▌    ⣾ task-1                                        ▐
+▌  ⧉ subagents (9) · ⧖ waits (1)                $0.90▐
+▌    ⣾ task-1                                   $0.10▐
 ▌                                                 21m▐
-▌    ⣾ task-4                                        ▐
+▌    ⣾ task-4                                   $0.10▐
 ▌                                                 21m▐
-▌    ✓ task-2                                     20m▐
-▌    ✓ task-7                                     18m▐
-▌    ✓ task-0                                     16m▐
-▌    ✓ task-8                                     14m▐
-▌    ✓ task-5                                     11m▐
+▌    ✓ task-2                               20m $0.10▐
+▌    ✓ task-7                               18m $0.10▐
+▌    ✓ task-0                               16m $0.10▐
+▌    ✓ task-8                               14m $0.10▐
+▌    ✓ task-5                               11m $0.10▐
+▌    2 more finished                                 ▐
 ▌    ⌁ signal · deploy.done                     ◔ <1m▐
-▌    +2 older                                        ▐
 
 
 

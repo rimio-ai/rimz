@@ -241,7 +241,6 @@ fn prior_children_do_not_lift_parent_attention() {
         assert_eq!(parent_row.attention_status(), Some(AgentStatus::Idle));
         let card = parent_row.as_agent().unwrap();
         assert_eq!(card.current_sub_agents().count(), 0);
-        assert_eq!(card.sub_agent_count, 1);
         if status == AgentStatus::Failed {
             assert_eq!(card.sub_agents.len(), 1);
             assert!(card.sub_agents[0].prior_turn);

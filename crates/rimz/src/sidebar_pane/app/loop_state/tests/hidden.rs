@@ -8,7 +8,6 @@ fn mirror_pair(mux: MuxName) -> super::scroll::SharedPanes {
     let card = Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows)[0]
         .as_agent_mut()
         .unwrap();
-    card.sub_agent_count = 1;
     card.sub_agents = vec![
         serde_json::from_value(serde_json::json!({
             "id": "mirror-child", "kind": "claude", "name": "mirror-child",
@@ -262,11 +261,13 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
         for change in ["appear", "leave", "reorder", "scroll", "open", "close"] {
             let mut pair = mirror_pair(mux);
             if change == "close" {
+                let pin = crate::sidebar_pane::render::DelegationPin::current(
+                    &pair.snapshot,
+                    "agent-0",
+                    true,
+                );
                 pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-                    v.state
-                        .toggles
-                        .delegation_overrides
-                        .insert("agent-0".into(), true);
+                    v.state.toggles.delegation_overrides.extend([pin.clone()]);
                 });
                 repaint_source(&mut pair);
             }
@@ -302,12 +303,16 @@ fn hidden_mirrors_structural_layouts_on_both_backends() {
                         .on_input(Wakeup::Scroll { down: true }, &mut source.terminal)
                         .unwrap();
                 }
-                _ => pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-                    v.state
-                        .toggles
-                        .delegation_overrides
-                        .insert("agent-0".into(), change == "open");
-                }),
+                _ => {
+                    let pin = crate::sidebar_pane::render::DelegationPin::current(
+                        &pair.snapshot,
+                        "agent-0",
+                        change == "open",
+                    );
+                    pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
+                        v.state.toggles.delegation_overrides.extend([pin.clone()]);
+                    });
+                }
             }
             repaint_source(&mut pair);
             let target = pair.plane.views.read().mirror_target;
@@ -429,7 +434,6 @@ fn hidden_mirrors_last_card_height_changes_in_a_fitting_roster() {
         child.name = "tail-existing-child".into();
         let last = rows[1].as_agent_mut().unwrap();
         last.delegated_cost_usd = Some(1.0);
-        last.sub_agent_count = 1;
         last.sub_agents = vec![child];
         for rig in &mut pair.panes {
             rig.terminal = Terminal::with_options(
@@ -441,11 +445,10 @@ fn hidden_mirrors_last_card_height_changes_in_a_fitting_roster() {
             .unwrap();
         }
         pair.sample(&[(1, 0)]);
+        let pin =
+            crate::sidebar_pane::render::DelegationPin::current(&pair.snapshot, "agent-1", true);
         pair.panes[0].state.with_view_for_test(Route::READ, |_, v| {
-            v.state
-                .toggles
-                .delegation_overrides
-                .insert("agent-1".into(), true);
+            v.state.toggles.delegation_overrides.extend([pin.clone()]);
         });
         repaint_source(&mut pair);
         assert_eq!(
@@ -472,11 +475,10 @@ fn hidden_mirrors_last_card_height_changes_in_a_fitting_roster() {
             let mut child = rows[0].as_agent().unwrap().sub_agents[0].clone();
             child.id = "tail-child".into();
             child.name = "tail-child".into();
-            // Two child lines shrink to one older marker without reducing the lifetime count.
+            // A model gives the new entry its second line, so the last card changes height.
             child.model = Some("Opus".into());
             let last = rows[1].as_agent_mut().unwrap();
             if adding {
-                last.sub_agent_count = 2;
                 last.sub_agents.push(child);
             } else {
                 last.sub_agents.pop();

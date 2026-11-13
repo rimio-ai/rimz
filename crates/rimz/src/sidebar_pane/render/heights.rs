@@ -41,8 +41,6 @@ struct HeightInputs {
     stalled_after_secs: u32,
     card_density: CardDensityMode,
     stale_after_secs: u64,
-    recent_subagent_secs: u64,
-    max_recent_subagents: usize,
 }
 
 impl CardHeights {
@@ -64,13 +62,10 @@ impl CardHeights {
             card_density,
             stale_after_secs,
             entry_cursor: _, // Content-only; the mark replaces indent cells.
-            recent_subagent_secs,
-            max_recent_subagents,
             // These resolve into CardKey, not the epoch.
             selected_index: _,
             held_expansions: _,
             delegation_overrides: _,
-            delegation_history: _,
             lead_unread: _, // Derived from the owned groups.
             // Content-only; test builds re-measure every hit to guard this premise.
             animation_phase: _,
@@ -87,8 +82,6 @@ impl CardHeights {
             stalled_after_secs,
             card_density,
             stale_after_secs,
-            recent_subagent_secs,
-            max_recent_subagents,
         };
         if self.epoch.as_ref().is_some_and(|epoch| {
             Arc::ptr_eq(&epoch.groups, groups)

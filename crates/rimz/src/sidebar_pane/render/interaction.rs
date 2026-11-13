@@ -25,8 +25,6 @@ pub(in crate::sidebar_pane) enum HitTarget {
         row: String,
         open: bool,
     },
-    /// The `+K older` tail of an open delegation section.
-    ToggleDelegationHistory(String),
     UnreadBanner,
     FocusMarker,
     Hyperlink(String),
@@ -214,8 +212,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
         | HitTarget::ExpandGroup { .. }
         | HitTarget::ToggleInactive
         | HitTarget::MoreInactive
-        | HitTarget::ToggleDelegation { .. }
-        | HitTarget::ToggleDelegationHistory(_) => 3,
+        | HitTarget::ToggleDelegation { .. } => 3,
         HitTarget::Row(_) => 4,
         HitTarget::Hyperlink(_) => 5,
     }

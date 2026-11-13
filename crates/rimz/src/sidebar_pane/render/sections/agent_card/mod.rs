@@ -1,6 +1,6 @@
 //! The per-agent card: identity line, description, the context meter and its
 //! token and cache-expiry lines on selected or held cards (every engaged card at expanded density),
-//! and expanded subagent and wait entries. Read idle and done history can shrink to one line; closed, unreached resting history hides the delegation summary. A state-to-template table fixes
+//! and expanded subagent and wait entries. Read idle and done history can shrink to one line. A state-to-template table fixes
 //! the ordered line slots from lifecycle facts; late or absent data only fills
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
@@ -100,7 +100,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
         return false;
     };
     delegation_entries_drawn(row, density, expansion, stale_after_secs, now)
-        && (agent.sub_agents.iter().any(|child| {
+        && (agent.current_sub_agents().any(|child| {
             child.status == AgentStatus::Running
                 || (child.compacting && !child.status.is_attention())
         }) || !agent.background_shells.is_empty()
@@ -122,35 +122,28 @@ fn delegation_entries_drawn(
 
 struct DelegationEntries<'a> {
     shown: Vec<&'a SidebarSubAgent>,
-    older: Vec<&'a SidebarSubAgent>,
-    folded: usize,
+    more_finished: usize,
 }
 
-fn delegation_entries(
-    agent: &AgentCard,
-    expanded: CardExpansion,
-    now: jiff::Timestamp,
-    recent_secs: u64,
-    max_recent: usize,
-) -> DelegationEntries<'_> {
-    let bands = bands::delegation_bands(&agent.sub_agents, now, recent_secs, max_recent);
-    let mut shown = bands.live;
-    shown.extend(bands.recent);
-    // With no live or recent row to fold behind, a fold only costs a second click.
-    let show_older = expanded.history || shown.is_empty();
-    // The header counts lifetime children, including reaped children with no row to reveal.
-    let folded = if show_older {
-        0
-    } else {
-        usize::try_from(agent.sub_agent_count)
-            .unwrap_or(usize::MAX)
-            .saturating_sub(shown.len())
-    };
+fn delegation_entries(agent: &AgentCard) -> DelegationEntries<'_> {
+    let bands = bands::delegation_bands(agent.current_sub_agents());
+    let mut shown = bands.unfinished;
+    shown.extend(bands.finished);
     DelegationEntries {
         shown,
-        older: if show_older { bands.older } else { Vec::new() },
-        folded,
+        more_finished: bands.more_finished,
     }
+}
+
+fn wait_count(agent: &AgentCard) -> usize {
+    waits::visible_waits(&agent.pending_waits).count()
+        + agent.background_shells.len()
+        + usize::from(agent.idle_stop.is_some())
+}
+
+/// Whether the card has a current child or a wait for its delegation line to count.
+pub(super) fn has_delegation(agent: &AgentCard) -> bool {
+    agent.current_sub_agents().next().is_some() || wait_count(agent) > 0
 }
 
 pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
@@ -170,23 +163,11 @@ pub(in crate::sidebar_pane::render) fn delegation_entry_stops(
     }) else {
         return Vec::new();
     };
-    let entries = delegation_entries(
-        agent,
-        expanded,
-        now,
-        display.recent_subagent_secs,
-        display.max_recent_subagents,
-    );
-    let mut stops: Vec<_> = entries
+    delegation_entries(agent)
         .shown
         .iter()
-        .chain(&entries.older)
         .filter_map(|child| child.pane.clone().map(EntryCursor::SubAgent))
-        .collect();
-    if entries.folded > 0 {
-        stops.push(EntryCursor::Older);
-    }
-    stops
+        .collect()
 }
 
 pub(super) fn row_lines(
@@ -313,19 +294,17 @@ pub(super) fn row_lines(
                     }));
                 }
                 CardSlot::DelegationEntries => {
-                    let entries = delegation_entries(
-                        agent,
-                        expanded,
-                        ctx.now,
-                        ctx.recent_subagent_secs,
-                        ctx.max_recent_subagents,
-                    );
-                    inner.extend(sub_agent_entry_lines(
-                        ctx,
-                        &agent.sub_agents,
-                        &entries.shown,
-                        selected,
-                    ));
+                    let entries = delegation_entries(agent);
+                    let grid: Vec<_> = agent.current_sub_agents().collect();
+                    inner.extend(sub_agent_entry_lines(ctx, &grid, &entries.shown, selected));
+                    if entries.more_finished > 0 {
+                        let mut spans = entry_indent(ctx.theme, false);
+                        spans.push(Span::styled(
+                            format!("{} more finished", entries.more_finished),
+                            ctx.theme.muted(),
+                        ));
+                        inner.push(Line::from(spans).into());
+                    }
                     inner.extend(
                         waits::wait_entry_lines(
                             ctx,
@@ -336,28 +315,6 @@ pub(super) fn row_lines(
                         .into_iter()
                         .map(CardLine::from),
                     );
-                    // Older rows go last, after the waits, so opening the
-                    // history only appends below what was already on screen.
-                    inner.extend(sub_agent_entry_lines(
-                        ctx,
-                        &agent.sub_agents,
-                        &entries.older,
-                        selected,
-                    ));
-                    if entries.folded > 0 {
-                        let mut spans = entry_indent(
-                            ctx.theme,
-                            selected && ctx.entry_cursor == Some(&EntryCursor::Older),
-                        );
-                        spans.push(Span::styled(
-                            format!("+{} older", entries.folded),
-                            ctx.theme.muted(),
-                        ));
-                        inner.push(CardLine {
-                            line: Line::from(spans),
-                            target: Some(HitTarget::ToggleDelegationHistory(row.id.clone())),
-                        });
-                    }
                 }
             }
         }
@@ -433,33 +390,30 @@ fn message_mark_spans(ctx: &RowCtx<'_>, row: &SidebarRow, mut width: usize) -> V
     marks
 }
 
-/// The standing delegation line carries lifetime children, their known cost,
-/// and pending waits with background shells. Expansion only appends their entries.
+/// The standing delegation line carries the current turn's children, their
+/// known cost, and pending waits with background shells. Expansion only
+/// appends their entries.
 fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    let wait_count = waits::visible_waits(&agent.pending_waits).count()
-        + agent.background_shells.len()
-        + usize::from(agent.idle_stop.is_some());
-    if agent.sub_agent_count == 0 && wait_count == 0 {
+    let child_count = agent.current_sub_agents().count();
+    let wait_count = wait_count(agent);
+    if child_count == 0 && wait_count == 0 {
         return None;
     }
     let theme = ctx.theme;
     let width = content_width(ctx.width);
     let (subagents_label, waits_label) = if ctx.tier == Tier::L2 {
         (
-            format!(" subagents ({})", agent.sub_agent_count),
+            format!(" subagents ({child_count})"),
             format!(" waits ({wait_count})"),
         )
     } else {
-        (
-            format!(" {}", agent.sub_agent_count),
-            format!(" {wait_count}"),
-        )
+        (format!(" {child_count}"), format!(" {wait_count}"))
     };
     let mut left = vec![Span::raw("  ")];
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
     // middle weight like the children below it.
-    if agent.sub_agent_count > 0 {
+    if child_count > 0 {
         left.extend([
             Span::styled(
                 theme.glyph(GlyphRole::CardSubagents).to_owned(),
@@ -469,7 +423,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
         ]);
     }
     if wait_count > 0 {
-        if agent.sub_agent_count > 0 {
+        if child_count > 0 {
             left.push(Span::styled(value_seam(theme), theme.muted()));
         }
         left.extend([
@@ -481,7 +435,10 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
         ]);
     }
     let right = agent
-        .sub_agent_cost_usd
+        .current_sub_agents()
+        .fold(None, |total, child| {
+            crate::agents::spending::sum_optional_cost(total, child.cost_usd)
+        })
         .filter(|usd| *usd >= 0.005)
         .map(|usd| {
             vec![Span::styled(
@@ -507,11 +464,11 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// distinguishes current window occupancy from a whole-run total; unknown
 /// figures leave a blank slot. A metadata-free finished child degrades to its
 /// bare type line, its frozen runtime pinned ahead of its cost. Entry lines for
-/// `rows`, laid on the metadata grid of every child in `grid`, so rows rendered
-/// in separate bands share one set of columns.
+/// `rows`, laid on the metadata grid of every current child in `grid`, so the
+/// columns hold while finished rows cut in and out of the list.
 fn sub_agent_entry_lines(
     ctx: &RowCtx<'_>,
-    grid: &[SidebarSubAgent],
+    grid: &[&SidebarSubAgent],
     rows: &[&SidebarSubAgent],
     selected: bool,
 ) -> Vec<CardLine> {
@@ -527,6 +484,7 @@ fn sub_agent_entry_lines(
     // metadata-free children render no second row.
     let token_col = grid
         .iter()
+        .copied()
         .filter_map(sub_agent_tokens)
         .map(|total| compact_count(total).chars().count())
         .max()

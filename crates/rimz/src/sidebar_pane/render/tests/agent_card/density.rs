@@ -62,21 +62,36 @@ fn held_reach_is_distinct_and_live_selection_wins() {
 
 #[test]
 fn held_reach_opens_delegation_by_default() {
-    let snapshot = snapshot_with(vec![density_agent(
+    let mut snapshot = snapshot_with(vec![density_agent(
         "fresh",
         "claude",
         AgentStatus::Idle,
         None,
         0,
     )]);
-    let expansion = sections::CardExpansion::resolve(
-        &Default::default(),
-        &Default::default(),
-        CardDensityMode::Auto,
-        snapshot.rows().next().unwrap(),
-        SelectionReach::Held,
-    );
-    assert!(expansion.delegation);
+    let resolve = |snapshot: &SidebarSnapshot| {
+        sections::CardExpansion::resolve(
+            &Default::default(),
+            CardDensityMode::Auto,
+            snapshot.rows().next().unwrap(),
+            SelectionReach::Held,
+        )
+        .delegation
+    };
+    // Nothing to count leaves the section closed whatever opens the card.
+    assert!(!resolve(&snapshot));
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .background_shells
+    .push(crate::agents::BackgroundShell {
+        id: "b1".to_owned(),
+        command: Some("cargo test".to_owned()),
+        description: None,
+        started_at: snapshot.now,
+    });
+    assert!(resolve(&snapshot));
 }
 
 #[test]
@@ -424,13 +439,17 @@ fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
         .unwrap()
         .id
         .clone();
-    ui.toggles.delegation_overrides.insert(first.clone(), false);
+    ui.toggles
+        .delegation_overrides
+        .extend([DelegationPin::current(&snapshot, &first, false)]);
     let closed = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     assert!(!closed.contains("first delegation"), "{closed}");
     assert!(closed.contains("second delegation"), "{closed}");
 
     snapshot.theme.display.card_density = CardDensityMode::Auto;
-    ui.toggles.delegation_overrides.insert(first, true);
+    ui.toggles
+        .delegation_overrides
+        .extend([DelegationPin::current(&snapshot, &first, true)]);
     let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     assert!(opened.contains("first delegation"), "{opened}");
     assert!(!opened.contains("second delegation"), "{opened}");
@@ -762,28 +781,23 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
             .is_some_and(|agent| !agent.sub_agents.is_empty())
     })
     .unwrap();
-    let row_id = row.id.clone();
     let parent = row.as_agent_mut().unwrap();
-    let mut older = parent.sub_agents[0].clone();
-    older.id = "older-child".to_owned();
-    older.last_activity = fixed_now() - Duration::from_secs(3_600);
-    older.description = Some("previous render audit".to_owned());
-    parent.sub_agents.push(older);
-    parent.sub_agent_count += 1;
-    let turn = parent.user_turn_started_at;
-    let mut ui = ViewState {
+    let mut prior = parent.sub_agents[0].clone();
+    prior.id = "prior-child".to_owned();
+    prior.last_activity = fixed_now() - Duration::from_secs(3_600);
+    prior.description = Some("previous render audit".to_owned());
+    prior.prior_turn = true;
+    parent.sub_agents.push(prior);
+    let ui = ViewState {
         selected_index: Some(0),
         ..Default::default()
     };
-    let pane_ui = UiState::default();
-    let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 31);
-    assert!(folded.contains("map the render path"));
-    assert!(folded.contains("+1 older"));
-    assert!(!folded.contains("previous render audit"));
-    ui.toggles.delegation_history.insert(row_id, turn);
-    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 31);
-    assert!(opened.contains("previous render audit"));
-    assert!(!opened.contains("+1 older"));
+    let opened =
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 54, 31);
+    assert!(opened.contains("map the render path"));
+    assert!(opened.contains("⧉ subagents (1)"), "{opened}");
+    assert!(!opened.contains("previous render audit"));
+    assert!(!opened.contains("more finished"));
 }
 
 fn density_agent(

@@ -676,7 +676,6 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
             row: "agent-1".into(),
             open: true,
         },
-        HitTarget::ToggleDelegationHistory("agent-1".into()),
         HitTarget::ExpandGroup {
             key: "/repo/main".into(),
             row: "agent-1".into(),

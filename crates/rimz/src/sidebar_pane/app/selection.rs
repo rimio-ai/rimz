@@ -4,11 +4,11 @@
 
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
-use crate::store::snapshot::{SidebarSnapshot, lead_unread_row, triage_key};
+use crate::store::snapshot::{SidebarRow, SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, EntryCursor, HitTarget, UiState, ViewState, ViewportIntent,
-    active_dashboard_tab, dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs,
+    BodyFilter, Browse, DashboardTab, DelegationPin, EntryCursor, HitTarget, UiState, ViewState,
+    ViewportIntent, active_dashboard_tab, dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs,
     selected_agent_kind, selected_sub_provider,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
@@ -383,21 +383,6 @@ fn key_outcome(
             }
             match view.entry_cursor.clone() {
                 Some(EntryCursor::SubAgent(pane)) => return InputOutcome::focus(pane),
-                Some(EntryCursor::Older) => {
-                    if let Some(row) = view
-                        .selected_index
-                        .and_then(|index| view.visible_roster(snapshot).row(index))
-                        && toggle_delegation_history(view, snapshot, row.id.clone())
-                    {
-                        view.request(ViewportIntent::Hold);
-                    }
-                    view.entry_cursor = None;
-                    let mut outcome = InputOutcome::redraw();
-                    if let Some(pane) = view.selected_pane.clone() {
-                        outcome.effects.push(InputEffect::Focus(pane));
-                    }
-                    return outcome;
-                }
                 None => {}
             }
             // Focus the current visible row without moving the highlight — it
@@ -723,12 +708,6 @@ pub(super) fn handle_mouse_click(
             view.request(ViewportIntent::Hold);
             InputOutcome::redraw()
         }
-        Some(HitTarget::ToggleDelegationHistory(row_id)) => {
-            if toggle_delegation_history(view, snapshot, row_id) {
-                view.request(ViewportIntent::Hold);
-            }
-            InputOutcome::redraw()
-        }
         Some(HitTarget::Row(_) | HitTarget::SubAgentPane(_) | HitTarget::Hyperlink(_)) | None => {
             InputOutcome::default()
         }
@@ -756,9 +735,7 @@ pub(super) fn click_focus_pane(
                 .and_then(|index| roster.pane_at_ordinal(index))
         }
         HitTarget::SubAgentPane(pane) => Some(pane.clone()),
-        HitTarget::ToggleDelegation { row, .. }
-        | HitTarget::ToggleDelegationHistory(row)
-        | HitTarget::ExpandGroup { row, .. } => snapshot
+        HitTarget::ToggleDelegation { row, .. } | HitTarget::ExpandGroup { row, .. } => snapshot
             .rows()
             .find(|candidate| candidate.id == *row)
             .and_then(|row| row.pane.as_ref())
@@ -845,38 +822,21 @@ fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_k
     anchor_selection(ui, snapshot);
 }
 
-/// A header click sets the section open or closed for the renderer's life. A
-/// close also folds the `+K older` history, so reopening starts from the bands.
+/// A header click sets an agent card's section open or closed until the
+/// parent's user turn moves.
 fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String, open: bool) {
-    if !open {
-        ui.toggles.delegation_history.remove(&row_id);
-    }
-    ui.toggles.delegation_overrides.insert(row_id, open);
-    anchor_selection(ui, snapshot);
-}
-
-/// Whether the row was an agent card whose history fold flipped.
-fn toggle_delegation_history(
-    ui: &mut ViewState,
-    snapshot: &SidebarSnapshot,
-    row_id: String,
-) -> bool {
     let Some(agent) = snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
+        .rows()
         .find(|row| row.id == row_id)
-        .and_then(|row| row.as_agent())
+        .and_then(SidebarRow::as_agent)
     else {
-        return false;
+        return;
     };
-    if ui.toggles.delegation_history.remove(&row_id) != Some(agent.user_turn_started_at) {
-        ui.toggles
-            .delegation_history
-            .insert(row_id, agent.user_turn_started_at);
-    }
+    let turn = agent.user_turn_started_at;
+    ui.toggles
+        .delegation_overrides
+        .insert(row_id, DelegationPin { open, turn });
     anchor_selection(ui, snapshot);
-    true
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears

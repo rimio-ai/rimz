@@ -1,11 +1,10 @@
-//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered slot skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line, and closed resting history omits the delegation summary.
+//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered slot skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line.
 
 use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::store::snapshot::SidebarRow;
 
-use super::super::SelectionReach;
 use super::CardExpansion;
 use super::description::awaiting_first_prompt;
 
@@ -69,11 +68,11 @@ pub(super) enum CardSlot {
     Gauge,
     Tokens,
     Cache,
-    /// Standing lifetime child count and cost plus armed one-shot waits; empty
-    /// until either exists.
+    /// The current turn's child count and cost plus armed one-shot waits;
+    /// empty until either exists.
     Delegation,
-    /// Live and recent child entries, pending waits, and the `+K older` tail
-    /// that lists the rest.
+    /// Unfinished and newest finished child entries, a count of the other
+    /// finished children, and pending waits.
     DelegationEntries,
 }
 
@@ -178,18 +177,13 @@ pub(super) fn template(
         (true, true) => ENGAGED_EXPANDED,
         (true, false) => ENGAGED,
         (false, true) => ENGAGED_RESTING_EXPANDED,
-        (false, false)
-            if expansion.reach == SelectionReach::Unreached
-                && matches!(status, AgentStatus::Idle | AgentStatus::Success) =>
-        {
-            IDENTITY_DESCRIPTION_GAUGE
-        }
         (false, false) => ENGAGED_RESTING,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::SelectionReach;
     use super::*;
 
     #[test]
@@ -302,13 +296,6 @@ mod tests {
         if !expansion.reach.opens_card() && density != CardDensityMode::Expanded {
             slots.retain(|slot| !matches!(slot, CardSlot::Tokens | CardSlot::Cache));
         }
-        if expansion.reach == SelectionReach::Unreached
-            && !expansion.delegation
-            && density != CardDensityMode::Expanded
-            && matches!(status, AgentStatus::Idle | AgentStatus::Success)
-        {
-            slots.retain(|slot| *slot != CardSlot::Delegation);
-        }
         slots
     }
 
@@ -325,11 +312,7 @@ mod tests {
                 for density in DENSITIES {
                     for reach in REACHES {
                         for delegation in [false, true] {
-                            let expansion = CardExpansion {
-                                reach,
-                                delegation,
-                                history: false,
-                            };
+                            let expansion = CardExpansion { reach, delegation };
                             actual.push((
                                 stage,
                                 status,
@@ -368,7 +351,6 @@ mod tests {
                             CardExpansion {
                                 reach,
                                 delegation: reach == SelectionReach::Selected,
-                                history: false,
                             },
                         );
                         assert!(!template.contains(&CardSlot::Tokens));

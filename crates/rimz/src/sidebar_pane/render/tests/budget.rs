@@ -107,7 +107,6 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             context_severity: Some(crate::agents::ContextSeverity::Yellow),
             // Row 0 is the default selection, so its card expands these in every
             // composed frame — the sub-agent loop stays inside the measured work.
-            sub_agent_count: sub_agents.len() as u32,
             sub_agents,
             ..AgentCard::default()
         })),

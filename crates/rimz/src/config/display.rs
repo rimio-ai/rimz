@@ -134,13 +134,6 @@ pub struct DisplayConfig {
     pub card_density: CardDensityMode,
     /// Read idle and done cards quiet past this many seconds shrink to one line. `0` disables shrinking; expanded density never shrinks cards.
     pub stale_after_secs: u64,
-    /// How long, in seconds, a finished subagent stays in an open delegation
-    /// section's recent band before it folds behind `+K older`. `0` folds every
-    /// finished child. Display-only.
-    pub recent_subagent_secs: u64,
-    /// Most finished subagents the recent band shows, newest first; the rest
-    /// fold behind `+K older`. Running children are never capped. Display-only.
-    pub max_recent_subagents: usize,
     /// The context meter's color stops - where the card's context read leaves
     /// calm green and reaches yellow, amber, and red. Display-only; it tunes the
     /// color ramp, never the store.
@@ -173,8 +166,6 @@ impl Default for DisplayConfig {
             scrollbar: ScrollbarMode::default(),
             card_density: CardDensityMode::default(),
             stale_after_secs: 86400,
-            recent_subagent_secs: 900,
-            max_recent_subagents: 5,
             context_meter: ContextMeterConfig::default(),
             budget_bar: BudgetBarConfig::default(),
             highlight_steps: HighlightStepsConfig::default(),

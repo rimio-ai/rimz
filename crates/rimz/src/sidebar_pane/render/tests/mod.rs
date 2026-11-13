@@ -600,10 +600,7 @@ fn test_row_ctx<'a>(
         refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
-        recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
-        max_recent_subagents: snapshot.theme.display.max_recent_subagents,
         delegation_overrides: const { &std::collections::BTreeMap::new() },
-        delegation_history: const { &std::collections::BTreeMap::new() },
     }
 }
 

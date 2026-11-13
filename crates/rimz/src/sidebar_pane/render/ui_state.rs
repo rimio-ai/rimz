@@ -64,7 +64,6 @@ pub(in crate::sidebar_pane) struct UiState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) enum EntryCursor {
     SubAgent(PaneId),
-    Older,
 }
 
 /// Driver-clock milliseconds since the view context's animation start.
@@ -335,15 +334,37 @@ pub(in crate::sidebar_pane) struct PresentationToggles {
     /// and the close resets it.
     pub(in crate::sidebar_pane) inactive_peek: Option<InactivePeek>,
     /// View-owned open/closed choice for an agent card's delegation
-    /// section (row id → open), set by a header click. It outranks the default
-    /// (open under selection or `expanded` density) in both directions, stays
-    /// for the renderer's life, and drops only when the row leaves the snapshot.
-    pub(in crate::sidebar_pane) delegation_overrides: BTreeMap<String, bool>,
-    /// Delegation sections showing their older children through `+K older`
-    /// (row id → the parent's user turn at the click). Expires at the parent's
-    /// next user-authored prompt.
+    /// section (row id → pin), set by a header click or `z a`. It outranks the
+    /// default (open under selection or `expanded` density) in both directions
+    /// while the parent's user turn is the one it was taken in, and drops once
+    /// that turn moves or the row leaves the snapshot.
     /// Travels with the view, including a fork's initial state.
-    pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
+    pub(in crate::sidebar_pane) delegation_overrides: BTreeMap<String, DelegationPin>,
+}
+
+/// A delegation section's open/closed choice and the parent's
+/// `user_turn_started_at` when it was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane) struct DelegationPin {
+    pub(in crate::sidebar_pane) open: bool,
+    pub(in crate::sidebar_pane) turn: Option<Timestamp>,
+}
+
+#[cfg(test)]
+impl DelegationPin {
+    /// The map entry a click on `row_id`'s delegation line makes in its current turn.
+    pub(in crate::sidebar_pane) fn current(
+        snapshot: &SidebarSnapshot,
+        row_id: &str,
+        open: bool,
+    ) -> (String, Self) {
+        let turn = snapshot
+            .rows()
+            .find(|row| row.id == row_id)
+            .and_then(SidebarRow::as_agent)
+            .and_then(|agent| agent.user_turn_started_at);
+        (row_id.to_owned(), Self { open, turn })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -593,7 +614,6 @@ impl ViewState {
             super::sections::row_selection_reach(roster, group, index, self.selected_index, &held);
         let expansion = super::sections::CardExpansion::resolve(
             &self.toggles.delegation_overrides,
-            &self.toggles.delegation_history,
             snapshot.theme.display.card_density,
             row,
             reach,
@@ -803,7 +823,7 @@ mod tests {
             assert_eq!(view.layout_sequence, published, "{what}");
         };
         type Toggle = fn(&mut ViewState);
-        let toggles: [(&str, Toggle); 9] = [
+        let toggles: [(&str, Toggle); 8] = [
             ("expanded_groups", |view| {
                 view.toggles.expanded_groups.insert("group".into());
             }),
@@ -816,10 +836,13 @@ mod tests {
                 });
             }),
             ("delegation_overrides", |view| {
-                view.toggles.delegation_overrides.insert("row".into(), true);
-            }),
-            ("delegation_history", |view| {
-                view.toggles.delegation_history.insert("row".into(), None);
+                view.toggles.delegation_overrides.insert(
+                    "row".into(),
+                    DelegationPin {
+                        open: true,
+                        turn: None,
+                    },
+                );
             }),
             ("dashboard_tab", |view| {
                 view.toggles.dashboard_tab = Some(DashboardTab {

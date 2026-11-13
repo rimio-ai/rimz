@@ -170,10 +170,6 @@ impl Room {
                 && let Some(card) = agent.row.as_agent_mut()
             {
                 card.sub_agents.extend(children);
-                card.sub_agent_count = card.sub_agents.len() as u32;
-                card.sub_agent_cost_usd = card.sub_agents.iter().fold(None, |cost, child| {
-                    crate::agents::spending::sum_optional_cost(cost, child.cost_usd)
-                });
             }
             let groups = Arc::make_mut(&mut self.snapshot.worktree_groups);
             if !groups.iter().any(|group| group.key == agent.group) {

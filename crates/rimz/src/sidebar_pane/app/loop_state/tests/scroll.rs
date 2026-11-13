@@ -3462,14 +3462,15 @@ fn input_pass(rig: &mut Rig, wakeup: Wakeup) {
 /// that withdraws its authority and a wheel tick that restores it all reach the one paint.
 #[test]
 fn a_viewport_request_lives_until_the_paint_not_the_input_pass() {
+    let mut turn = None;
     let (mut rig, _) = scroll_rig_with(|snapshot| {
         let now = snapshot.now;
+        turn = Some(now);
         let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows);
         for (index, row) in rows.iter_mut().enumerate() {
             let card = row.as_agent_mut().unwrap();
             card.user_turn_started_at = Some(now);
             card.prompt = Some("delegate".to_owned());
-            card.sub_agent_count = 1;
             card.sub_agents = vec![
                 serde_json::from_value(serde_json::json!({
                     "id": format!("child-{index}"), "kind": "claude", "name": "child",
@@ -3486,7 +3487,7 @@ fn a_viewport_request_lives_until_the_paint_not_the_input_pass() {
         .ui()
         .toggles
         .delegation_overrides
-        .insert("agent-0".into(), true);
+        .insert("agent-0".into(), render::DelegationPin { open: true, turn });
     rig.state.pane.dirty = true;
     paint_at(&mut rig, 0);
     let painted_offset = rig.view().ui().scroll_offset;

@@ -71,19 +71,17 @@ pub(super) fn attach_sub_agents_indexed(
             .as_agent_mut()
             .expect("row index contains only agent rows");
         let mut delegated_cost_usd = None;
-        let mut sub_agent_cost_usd = None;
         let mut children = all_newest.values().copied().collect::<Vec<_>>();
         children.sort_by(|a, b| {
             cmp_start_asc(a.registered_at, b.registered_at)
                 .then_with(|| a.agent_id.cmp(&b.agent_id))
         });
         for child in children {
-            let cost_usd = child_cost_usd(child);
-            sub_agent_cost_usd =
-                crate::agents::spending::sum_optional_cost(sub_agent_cost_usd, cost_usd);
             if child.is_launched_child() {
-                delegated_cost_usd =
-                    crate::agents::spending::sum_optional_cost(delegated_cost_usd, cost_usd);
+                delegated_cost_usd = crate::agents::spending::sum_optional_cost(
+                    delegated_cost_usd,
+                    child_cost_usd(child),
+                );
             }
             let prior_turn = !child_is_current(child, parent_user_turn_started_at, now);
             if prior_turn
@@ -114,8 +112,6 @@ pub(super) fn attach_sub_agents_indexed(
             parent.sub_agents.push(entry);
         }
         parent.delegated_cost_usd = delegated_cost_usd;
-        parent.sub_agent_count = u32::try_from(all_newest.len()).unwrap_or(u32::MAX);
-        parent.sub_agent_cost_usd = sub_agent_cost_usd;
     }
     for agent in rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
         agent.sub_agents.sort_by(|a, b| {
