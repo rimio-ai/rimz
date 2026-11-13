@@ -1,7 +1,7 @@
 //! Resolve one owned message request, persist it, and order target fan-out.
 //!
 //! This module owns live-plus-durable target resolution, rollup-only selection,
-//! context folding, condition binding, hook preflight, reply causality, record
+//! context folding, condition binding, hook preflight, turn causality, record
 //! construction, and the park-vs-live decision. Live attempts delegate receiver
 //! recovery to [`super::deliver`]. Agent-originated broadcasts exclude the
 //! caller after address resolution, before any fan-out work begins.
@@ -29,7 +29,6 @@ use crate::store::snapshot::{PaneAgent, SidebarSnapshot, count_rows_materialized
 use crate::store::writer::{BoundaryClaim, ResumeAttempt};
 use crate::workspace::ResolvedWorkspace;
 
-use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
 use super::{deliver, send};
 
 const RESUME_REGISTER_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -89,7 +88,6 @@ pub struct DispatchRequest {
     pub sender: MessageSender,
     pub automated: bool,
     pub allow_fanout: bool,
-    pub reply: Option<ReplyJoin>,
     pub mux: Option<MuxName>,
     pub enter: bool,
     pub force: bool,
@@ -106,7 +104,6 @@ pub struct DispatchRequest {
 pub struct DispatchResult {
     pub outcomes: Vec<DispatchOutcome>,
     pub compacted: Vec<String>,
-    pub reply: Option<ReplyWait>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,10 +225,6 @@ pub enum DispatchErr {
     #[error(transparent)]
     Condition(#[from] ConditionErr),
     #[error(transparent)]
-    ReplyPreparation(#[from] ReplyPrepareErr),
-    #[error(transparent)]
-    Reply(#[from] super::reply::ReplyErr),
-    #[error(transparent)]
     Resolution(#[from] crate::sidebar::produce::ProduceErr),
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
@@ -278,9 +271,8 @@ pub fn dispatch(
     } else {
         Vec::new()
     };
-    let needs_context = request.mode.needs_agent_context()
-        || matches!(request.sender, MessageSender::Agent { .. })
-        || request.reply.is_some();
+    let needs_context =
+        request.mode.needs_agent_context() || matches!(request.sender, MessageSender::Agent { .. });
     let agent_context =
         needs_context.then(|| crate::store::agent_context::read_all(store.runtime_paths()));
 
@@ -375,20 +367,6 @@ pub fn dispatch(
         .is_none()
         .then(|| CompactDefaults::load(&workspace.project_root, &snapshot, &targets));
     let mode = prepare_mode(&request, &resolution, &targets, &pending)?;
-    let reply_preparation = request
-        .reply
-        .map(|_| {
-            ReplyPreparation::new(
-                store,
-                &snapshot,
-                targets.iter().map(|target| PreparationTarget {
-                    agent: target.agent.as_ref(),
-                    label: target.label(&snapshot),
-                }),
-                caller_sender(&request),
-            )
-        })
-        .transpose()?;
     let text = if targets.len() > 1 || crate::address::is_broadcast(&request.target) {
         crate::address::group_prefixed(&request.target, &request.text)
     } else {
@@ -402,19 +380,13 @@ pub fn dispatch(
         card_status: &resolution.card_status,
         pending: &pending,
         scope_channel: request.current_channel.channel.as_ref(),
-        reply: reply_preparation.as_ref(),
         in_reply_to: &in_reply_to,
         compact_defaults: compact_defaults.as_ref(),
     };
     let (outcomes, compacted) = dispatch_targets(&state, &targets, &text, &mode)?;
-    let reply = reply_preparation
-        .zip(request.reply)
-        .map(|(preparation, join)| preparation.attach(&outcomes, mode.kind, join))
-        .transpose()?;
     Ok(DispatchResult {
         outcomes,
         compacted,
-        reply,
     })
 }
 
@@ -894,7 +866,6 @@ struct DispatchState<'a> {
     card_status: &'a CardStatus,
     pending: &'a [MessageRecord],
     scope_channel: Option<&'a LaneName>,
-    reply: Option<&'a ReplyPreparation>,
     in_reply_to: &'a [MessageId],
     compact_defaults: Option<&'a CompactDefaults>,
 }
@@ -907,7 +878,6 @@ impl DispatchState<'_> {
         text: &str,
         mode: &PreparedMode,
         handle: &str,
-        lease: Option<&str>,
     ) -> Result<(MessageRecord, Option<ParkReason>)> {
         let recipient = match (target.agent.as_ref(), pane) {
             (Some(agent), pane) => Recipient::Agent { agent, pane },
@@ -930,8 +900,6 @@ impl DispatchState<'_> {
                 text,
                 Some(handle),
             )
-            .with_reply_wait(self.reply.is_some())
-            .with_reply_wait_lease(lease.map(str::to_owned))
             .with_in_reply_to(self.in_reply_to.to_vec());
         if let Some(defaults) = self.compact_defaults {
             message.auto_compact = target
@@ -1019,7 +987,7 @@ fn dispatch_targets(
     let mut preflighted_logins = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
-    for (index, (target, decision)) in targets.iter().zip(decisions).enumerate() {
+    for (target, decision) in targets.iter().zip(decisions) {
         if matches!(decision, DispatchDecision::Parked { .. }) {
             let agent = target
                 .agent
@@ -1039,7 +1007,6 @@ fn dispatch_targets(
             &mut live_send,
             &mut compacted,
             target,
-            state.reply.and_then(|reply| reply.lease_token(index)),
             text,
             mode,
             decision,
@@ -1156,29 +1123,24 @@ fn dispatch_decision(
     DispatchDecision::Live
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one leg's dispatch: its target, its reply-wait lease, and the shared send state"
-)]
 fn dispatch_one(
     state: &DispatchState<'_>,
     live_send: &mut send::LiveSend,
     compacted: &mut Vec<String>,
     target: &ResolvedTarget,
-    lease: Option<&str>,
     text: &str,
     mode: &PreparedMode,
     decision: DispatchDecision,
 ) -> Result<DispatchOutcome> {
     let handle = target.label(state.snapshot);
     if let DispatchDecision::Parked { reason } = decision {
-        return dispatch_parked(state, target, lease, text, mode, handle, reason);
+        return dispatch_parked(state, target, text, mode, handle, reason);
     }
     let Some(pane) = target.pane.as_ref() else {
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
     let bound = target.bound(state.snapshot);
-    let (message, reason) = state.enqueue(target, Some(pane), text, mode, &handle, lease)?;
+    let (message, reason) = state.enqueue(target, Some(pane), text, mode, &handle)?;
     if reason.is_some() {
         return Ok(DispatchOutcome::Queued {
             label: handle,
@@ -1248,13 +1210,12 @@ fn dispatch_one(
 fn dispatch_parked(
     state: &DispatchState<'_>,
     target: &ResolvedTarget,
-    lease: Option<&str>,
     text: &str,
     mode: &PreparedMode,
     handle: String,
     reason: Option<ParkReason>,
 ) -> Result<DispatchOutcome> {
-    let (message, queued_reason) = state.enqueue(target, None, text, mode, &handle, lease)?;
+    let (message, queued_reason) = state.enqueue(target, None, text, mode, &handle)?;
     Ok(DispatchOutcome::Queued {
         label: handle,
         message_id: message.message_id,
@@ -1293,23 +1254,6 @@ fn preflight_queue_hooks(
             unreachable!("queue hook preflight requests no lifecycle coverage")
         }
     }
-}
-
-/// The caller as a message sender, for reply-wait cycle detection: the
-/// request's own sender, or the caller's identity when it sends without a name.
-fn caller_sender(request: &DispatchRequest) -> Option<MessageSender> {
-    if let MessageSender::Agent { .. } = request.sender {
-        return Some(request.sender.clone());
-    }
-    let caller = request.caller.as_ref()?;
-    Some(MessageSender::Agent {
-        agent_id: caller.launch_id.clone(),
-        kind: caller.kind.clone(),
-        name: caller.name.clone(),
-        profile: caller.profile.clone(),
-        role: caller.role.clone(),
-        channel: None,
-    })
 }
 
 fn turn_openers_for_sender(snapshot: &SidebarSnapshot, sender: &MessageSender) -> Vec<MessageId> {

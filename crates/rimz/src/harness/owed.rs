@@ -3,7 +3,7 @@
 use crate::Store;
 use crate::agents::state::SoftCompactProgress;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::message::reply::TurnWaitView;
+use crate::message::turn_wait::TurnWaitView;
 use crate::store::StoreErr;
 use crate::store::snapshot::find_agent;
 

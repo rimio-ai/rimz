@@ -293,34 +293,41 @@ fn a_send_error_the_senders_own_command_reports_does_not_notify() {
 }
 
 #[test]
-fn nonagent_and_waiting_senders_do_not_notify() {
-    for (sender, reply_wait) in [
-        (MessageSender::Human, false),
-        (MessageSender::System, false),
-        (
-            MessageSender::Subagent {
-                kind: AgentKind::new_unchecked("claude"),
-                name: "sender".into(),
-            },
-            false,
-        ),
-        (
-            MessageSender::Harness {
-                notice: crate::store::message::HarnessNotice::Wait,
-            },
-            false,
-        ),
-        (sender(), true),
+fn nonagent_senders_do_not_notify() {
+    for sender in [
+        MessageSender::Human,
+        MessageSender::System,
+        MessageSender::Subagent {
+            kind: AgentKind::new_unchecked("claude"),
+            name: "sender".into(),
+        },
+        MessageSender::Harness {
+            notice: crate::store::message::HarnessNotice::Wait,
+        },
     ] {
         let q = Queue::new();
         register_sender(&q, false);
-        let original = q.queue_with(1, |record| {
-            record.sender = sender;
-            record.reply_wait = reply_wait;
-        });
+        let original = q.queue_with(1, |record| record.sender = sender);
         q.settle(&original.message_id, MessageStatus::Archived, None);
         assert!(q.live().is_empty());
     }
+}
+
+#[test]
+fn a_record_an_older_binary_sent_with_a_reply_wait_notifies_its_sender() {
+    let q = Queue::new();
+    register_sender(&q, false);
+    let original = q.queue_with(1, |record| {
+        record.sender = sender();
+        let mut legacy = serde_json::to_value(&*record).unwrap();
+        let fields = legacy.as_object_mut().unwrap();
+        fields.insert("reply_wait".to_owned(), serde_json::Value::Bool(true));
+        fields.insert("reply_wait_lease".to_owned(), "0123abcd".into());
+        *record = serde_json::from_value(legacy).unwrap();
+    });
+    assert!(original.wants_queued_notice());
+    q.settle(&original.message_id, MessageStatus::Archived, None);
+    assert_notice(&q, &original, "archived");
 }
 
 #[test]

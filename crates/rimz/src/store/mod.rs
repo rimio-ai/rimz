@@ -474,19 +474,6 @@ impl Store {
             })
             .unwrap_or_default()
     }
-
-    /// Return a frame-aligned active-log offset for incremental wait polls.
-    pub(crate) fn wait_fold_base(&self) -> Result<u64> {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        match std::fs::metadata(&self.inner.paths.events_log) {
-            Ok(meta) => Ok(meta.len()),
-            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(0),
-            Err(source) => Err(StoreErr::Io {
-                path: self.inner.paths.events_log.clone(),
-                source,
-            }),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -561,25 +548,6 @@ mod tests {
 
         assert!(store.is_pending_recovery(&kind, &parked));
         assert!(!store.is_pending_recovery(&kind, &AgentSessionId::from("other")));
-    }
-
-    #[test]
-    fn wait_fold_base_is_zero_then_frame_aligned() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
-        let runtime =
-            RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
-        let store = Store::open(paths.clone(), runtime).unwrap();
-
-        assert_eq!(store.wait_fold_base().unwrap(), 0);
-        event_log::append(&paths.events_log, &lifecycle(&workspace_id, 0)).unwrap();
-        let base = store.wait_fold_base().unwrap();
-        assert_eq!(base, std::fs::metadata(&paths.events_log).unwrap().len());
-        assert_eq!(
-            event_log::read_from_offset(&paths.events_log, base).unwrap(),
-            (Vec::new(), base)
-        );
     }
 
     #[test]

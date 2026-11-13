@@ -6,7 +6,7 @@ To hand work to an agent that is already running, you switch to its pane and typ
 
 Every send becomes a durable record before a byte reaches the pane. A busy agent, a room you close and reopen, or a failed write all leave a record you can read back, with the outcome on it, so nothing you send disappears quietly.
 
-Messages also wait for recent input to the receiving pane, until 30 seconds after the last counted input. On Linux, RimZ uses the terminal's input-read time, counts an advance only while a client views that pane, and keeps the hold after you leave it. On other platforms, the hold follows the last input of clients currently viewing the pane. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through, and so does a cache keepalive sent 30 seconds before the cache expires. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. `--wait` keeps waiting through the hold; explicit `pane send` and `answer` do not wait.
+Messages also wait for recent input to the receiving pane, until 30 seconds after the last counted input. On Linux, RimZ uses the terminal's input-read time, counts an advance only while a client views that pane, and keeps the hold after you leave it. On other platforms, the hold follows the last input of clients currently viewing the pane. The receipt says `held`, names the message and retry time, and `rimz message show <id>` explains the hold. Steer and interrupt wait too and retry as themselves after the pause; `--steer --force` still waits, while `--interrupt --force` goes through, and so does a cache keepalive sent 30 seconds before the cache expires. Set `harness.typing_hold` to another duration or `off`. A draft untouched longer than the hold can still be joined to the message: RimZ never reads your composer. Explicit `pane send` and `answer` do not wait.
 
 Linux terminal times are coarse, in eight-second blocks. RimZ excludes advances within eight seconds after a client arrives or RimZ writes to the pane. Switching panes, losing or regaining terminal focus, and opening or closing RimZ's palette without typing do not raise the pen. A pane or terminal-focus round trip between observations (about a second), a popup you open yourself, or a Zellij focus report within about a second after real input can still count. A first key after quiet can take up to eight seconds to count; continuous typing immediately after an arrival or a RimZ write can take up to about sixteen seconds (about twelve on average). A message can land during that gap. With the default hold, protection ends about 22 to 30 seconds after the last key.
 
@@ -14,7 +14,6 @@ Linux terminal times are coarse, in eight-second blocks. RimZ excludes advances 
 rimz message @claude "add coverage for the expiry edge cases"     # parks: lands when @claude's turn ends
 rimz message --steer @claude "stop: the parser test comes first"  # writes into the live turn now
 rimz message --schedule 60m @codex#feat-a "run the smoke test"    # no earlier than an hour from now
-rimz message @coder --wait "did the migration land? one line"     # ask, and print the reply
 rimz message @all "freeze new work; I'm cutting a release"        # everyone in your channel
 ```
 
@@ -22,7 +21,7 @@ The same command serves you, your scripts, and the agents themselves: a running 
 
 If you leave the target off a send, RimZ refuses it and shows the command to use instead. Bare `rimz message` still reads your lane's messages; put inbox flags after `list`, as in `rimz message list --json`, rather than on the send form.
 
-When an agent messages a [peer it launched](./fleet.md#manage-a-running-room), the new turn reports its result back automatically. A steer into an already-running turn opens no separate report. Text you type during a launcher-requested turn becomes part of that turn's final answer; if the peer was waiting for its own children, your turn can finish that pending request too. A provider that omits prompt text from its turn-start hook cannot start a new report from that message; use `--wait` for a message-correlated reply instead.
+When an agent messages a [peer it launched](./fleet.md#manage-a-running-room), the new turn reports its result back automatically. A steer into an already-running turn opens no separate report. Text you type during a launcher-requested turn becomes part of that turn's final answer; if the peer was waiting for its own children, your turn can finish that pending request too. A provider that omits prompt text from its turn-start hook cannot start a new report from that message.
 
 ## Address an agent
 
@@ -92,7 +91,7 @@ rimz message --steer @claude "stop: rebase on main first, the parser moved"
 
 Steering an agent that has no live pane yet parks the text instead of dropping it, and delivery follows once the pane appears.
 
-**Stop work that is no longer wanted.** Typing a correction into a busy pane does not stop its current tool call. Use `rimz message --interrupt @claude "stop: the user changed direction"` when that work should be canceled: RimZ types your prompt, then presses Escape three seconds later to stop the current turn. This works with Claude Code and Codex; other agents are refused. Codex may already have taken the text into its current turn, or into an open question's answer, so it does not always replay the text as a fresh prompt. RimZ warns if Codex's stop is not confirmed; [interrupt receipts](../reference/cli/message.md#when-a-message-lands) explain how to check. An agent that is already resting just receives the prompt, with no Escape. Use `--force` to send the text and Escape even at a native prompt waiting for input, or `--interrupt --wait` to print the reply if the text starts a new turn. Keep `--steer` for a correction that can wait behind the current tool, and plain `message` for follow-up at a turn boundary.
+**Stop work that is no longer wanted.** Typing a correction into a busy pane does not stop its current tool call. Use `rimz message --interrupt @claude "stop: the user changed direction"` when that work should be canceled: RimZ types your prompt, then presses Escape three seconds later to stop the current turn. This works with Claude Code and Codex; other agents are refused. Codex may already have taken the text into its current turn, or into an open question's answer, so it does not always replay the text as a fresh prompt. RimZ warns if Codex's stop is not confirmed; [interrupt receipts](../reference/cli/message.md#when-a-message-lands) explain how to check. An agent that is already resting just receives the prompt, with no Escape. Use `--force` to send the text and Escape even at a native prompt waiting for input. Keep `--steer` for a correction that can wait behind the current tool, and plain `message` for follow-up at a turn boundary.
 
 **Schedule a floor under delivery.** `--schedule` holds the text until a wall-clock moment: a duration in `s`, `m`, `h`, or `d`, or a 24-hour `HH:MM` time in your configured timezone, with a time already past today meaning tomorrow. The time is an earliest-delivery floor, not an appointment: once it comes due the message parks like any other and lands at the next boundary that takes it. A scheduled message stays out of the queue until it is due, so it never blocks later text to the same agent.
 
@@ -191,28 +190,6 @@ rimz message --smart-compact 70% @claude "now write the migration guide"   # com
 Give a percentage of the window (`70%`) or an occupied-token count (`120000`, `180k`). Omit the flag and RimZ uses the session's [`tune smart-compact` override](../reference/cli/agents.md#tune), then the recipient's role or profile-chain `smart-compact`, falling back to `[harness] smart_compact`, which defaults to `258k`. An explicit `off` stops inheritance. The flag overrides even a session override; queued messages keep the line selected at enqueue ([loops → smart compaction](./loops.md#smart-compaction), [configuration → smart compaction](./configuration.md#smart-compaction)).
 
 That same seat line also drives [mid-turn soft compaction](./loops.md#smart-compaction): RimZ asks a busy agent to wrap up cleanly, then compacts at rest if still needed and sends continue. A per-message flag changes only that delivery, not the mid-turn trigger. A steer or interrupt into a busy turn delivers your text without typing a compact command first.
-
-## Ask and wait for the reply
-
-`--wait` turns a send into a question: RimZ delivers the text, waits through the reply turn, and prints the agent's final message on stdout. Each target's send receipt and message id appear immediately on stderr, even with `--json`, leaving stdout for the answer.
-
-```sh
-rimz message @coder --wait "did the migration land? one line"    # the reply alone on stdout
-rimz message @all --wait --json "status? one line"               # one handle-keyed reply map
-rimz message --all @reviewer --wait --any "first verdict?"       # return on the first reply
-rimz message @codex --timeout 5m "open the PR"                   # bound delivery plus turn
-rimz message --steer @claude --wait "answer from this turn"      # the live turn is the reply
-```
-
-A fan-out wait gathers every reply from the agents' existing contexts and streams them under `@handle:` lines in completion order, while a failed target writes its forensics to stderr and the others keep gathering. `--json` buffers one uniform map instead, whether you asked one agent or twenty. The command exits 0 only when every reply turn completed, and a deadline exits 124 with the unfinished targets marked `timed_out`; the full exit-code table is in [cli/message.md](../reference/cli/message.md#wait-for-replies).
-
-A deadline does not withdraw queued text: it will still deliver unless you cancel its id with `rimz message cancel`. The timeout hints distinguish that queued text from text already typed into a pane (do not resend) and a delivered message still being worked on. Use `rimz agents logs @coder` to read the reply later. The same hints appear on stderr with `--json`.
-
-Every target must be a running agent with installed and trusted [hooks](./setup.md#install-agent-hooks), since hooks are what report the turn's end. `--wait` and `--timeout` conflict with `--create`, `--schedule`, and `--no-enter`, and `--json` and `--any` each require one of them.
-
-A turn that goes `waiting`, or pauses but can still recover, keeps the reply wait open. A provider pause that can no longer resume, which the card shows as `failed`, ends the wait as failed. A reply that arms a timer or a watch keeps the wait open until that fires. A bare `--wait` from your shell waits indefinitely, and from an agent it stops after an hour; pass `--timeout 5m` (or the attached `--wait=5m`) when a script needs its own bound.
-
-Agents wait on each other too, and RimZ catches the deadlock instead of hanging: a send whose target is already waiting on the caller's own reply is refused before anything is queued, and a cycle that forms inside a running fan-out fails that one target, each naming the handle and message that blocks it. Text already queued stays queued and delivers at the next boundary. An agent's own `@all --wait` gathers peer replies only, never its own.
 
 ## Send a file or piped input
 

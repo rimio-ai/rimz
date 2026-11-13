@@ -106,7 +106,6 @@ pub(super) fn reconcile_cohort_launch(
                         caller,
                         automated: false,
                         allow_fanout: false,
-                        reply: None,
                         mux: Some(backend.name()),
                         enter: true,
                         force: false,

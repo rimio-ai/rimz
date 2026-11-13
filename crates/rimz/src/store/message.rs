@@ -513,15 +513,6 @@ pub struct MessageRecord {
     /// Background orchestration traffic never earns a dollar-budget waiver.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automated: bool,
-    /// The CLI that created this record waited for the receiver's reply;
-    /// `reply_wait_lease` says whether it still does.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub reply_wait: bool,
-    /// The token of the waiting leg's lease under `locks/reply-waits/`: the wait still counts
-    /// toward cycle detection only while that lease is held. Absent on records from older
-    /// binaries, which count as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply_wait_lease: Option<String>,
     #[serde(default)]
     pub body: MessageBody,
     pub text: String,
@@ -626,7 +617,6 @@ impl MessageRecord {
     /// which reports it.
     pub(crate) fn wants_undelivered_notice(&self) -> bool {
         matches!(self.sender, MessageSender::Agent { .. })
-            && !self.reply_wait
             && matches!(
                 self.status,
                 MessageStatus::Archived
@@ -637,9 +627,7 @@ impl MessageRecord {
     }
 
     pub(crate) fn wants_queued_notice(&self) -> bool {
-        matches!(self.sender, MessageSender::Agent { .. })
-            && !self.reply_wait
-            && self.status == MessageStatus::Queued
+        matches!(self.sender, MessageSender::Agent { .. }) && self.status == MessageStatus::Queued
     }
 
     fn ships_headerless(&self) -> bool {
@@ -711,8 +699,6 @@ impl MessageRecord {
             channel: None,
             sender: MessageSender::Human,
             automated: false,
-            reply_wait: false,
-            reply_wait_lease: None,
             body: MessageBody::Prompt,
             text,
             enter,
@@ -744,8 +730,7 @@ impl MessageRecord {
         }
     }
 
-    /// Fresh `Queued` copy of a terminal record for `message requeue`. The
-    /// reply-wake stamp resets because a requeue has no waiting CLI behind it.
+    /// Fresh `Queued` copy of a terminal record for `message requeue`.
     pub fn requeue_from(record: &MessageRecord) -> MessageRecord {
         let mut message = Self::new_for_card(
             record.workspace_id.clone(),
@@ -801,18 +786,6 @@ impl MessageRecord {
     #[must_use]
     pub fn with_automated(mut self, automated: bool) -> Self {
         self.automated = automated;
-        self
-    }
-
-    #[must_use]
-    pub fn with_reply_wait(mut self, reply_wait: bool) -> Self {
-        self.reply_wait = reply_wait;
-        self
-    }
-
-    #[must_use]
-    pub fn with_reply_wait_lease(mut self, token: Option<String>) -> Self {
-        self.reply_wait_lease = token;
         self
     }
 

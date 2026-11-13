@@ -130,7 +130,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 
 - Turns, tool calls, and session exits arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.31.0 or later.
 - Kiro's local session store still supplies the card before the first prompt, pending approvals, context, and history.
-- Cancelled and errored turns release `message --wait` and `agents wait` while a sidebar runs. Supervised `-p` runs still wait out the deadline on both cancel and error.
+- Cancelled and errored turns release `agents wait` while a sidebar runs. Supervised `-p` runs still wait out the deadline on both cancel and error.
 - A pending tool approval or native question raises Waiting. Answer it in Kiro's pane, since `rimz asks` and `rimz answer` do not carry it.
 - Live details show the model, effort, and session title. Context usage is a percentage only.
 

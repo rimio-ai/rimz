@@ -13,63 +13,8 @@ use crate::harness::ancestry::{CallerIdentity, resolve_launch_caller};
 use crate::ids::{MessageId, RunId};
 use crate::store::Store;
 use crate::store::snapshot::SidebarSnapshot;
-use std::time::{Duration, Instant};
 
-use super::{RecordMutation, Result, RunRecord, list, update_record};
-
-/// Settle ceiling for a reply claim: the reply is read from the card, and the
-/// run fold that settles its answer lands in the same hook, moments apart.
-const REPLY_SETTLE_CEILING: Duration = Duration::from_secs(2);
-
-/// Join the settled answer a printed `rimz message --wait` reply came from.
-///
-/// Claims only for the child's attended launcher or a human shell (`caller`
-/// None), and only an answer whose `opened_by` holds `message_id`. Returns at
-/// once when no such answer exists; waits for one to settle until `deadline`
-/// or the settle ceiling, then leaves it to the digest.
-pub fn claim_reply(
-    store: &Store,
-    session_name: &str,
-    message_id: &MessageId,
-    caller: Option<&CallerIdentity>,
-    deadline: Option<Instant>,
-) -> crate::store::Result<()> {
-    let ceiling = Instant::now() + REPLY_SETTLE_CEILING;
-    let deadline = deadline.map_or(ceiling, |deadline| deadline.min(ceiling));
-    loop {
-        let snapshot = store.snapshot_cached()?;
-        let Some(claimant) = Claimant::resolve(&snapshot.agents, caller) else {
-            return Ok(());
-        };
-        let mut unsettled = false;
-        for record in list(store.paths())? {
-            if record.team.is_some() || (!record.subagent && record.peer.is_none()) {
-                continue;
-            }
-            if !claimant.owns(&snapshot.agents, &record) {
-                continue;
-            }
-            match answer_opened_by(&record, message_id) {
-                Some((ordinal, true)) => {
-                    return join_and_settle_digest(
-                        store,
-                        session_name,
-                        &record.run_id,
-                        Some(ordinal),
-                        "reply printed inline",
-                    );
-                }
-                Some((_, false)) => unsettled = true,
-                None => {}
-            }
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        if !unsettled || left.is_zero() {
-            return Ok(());
-        }
-        std::thread::sleep(left.min(Duration::from_millis(25)));
-    }
-}
+use super::{RecordMutation, Result, RunRecord, update_record};
 
 /// Whether a join that printed `record` to `caller` claims it: a person at a
 /// shell (`caller` None) does, and an agent does only once it resolves to a row
@@ -109,26 +54,6 @@ impl<'a> Claimant<'a> {
                 .any(|child| record.matches_agent(child) && child.launcher_is(parent)),
         }
     }
-}
-
-/// The answer `message_id` opened, as its ordinal and whether it has settled.
-fn answer_opened_by(record: &RunRecord, message_id: &MessageId) -> Option<(u32, bool)> {
-    let opened_by = record
-        .peer
-        .as_ref()
-        .map_or(&record.opened_by, |peer| &peer.opened_by);
-    if opened_by.contains(message_id) {
-        // The printed reply is one turn; an answer that spans a park owes the rest.
-        return record
-            .parked_answer
-            .is_none()
-            .then(|| (record.follow_ups + 1, record.status.is_terminal()));
-    }
-    record
-        .earlier_answers
-        .iter()
-        .find(|answer| answer.opened_by.contains(message_id))
-        .map(|answer| (answer.ordinal, answer.status.is_terminal()))
 }
 
 /// Join one settled ordinal; `None` dismisses every answer, including a live one.
@@ -435,39 +360,19 @@ mod tests {
     }
 
     #[test]
-    fn presented_reply_claims_only_its_settled_answer_for_attended_owner() {
-        use crate::harness::run;
-        use crate::store::run::{EarlierAnswer, PeerRun};
+    fn may_claim_only_for_a_person_or_the_attended_launcher() {
+        use crate::store::run::PeerRun;
 
-        for answer in ["current", "earlier", "peer", "parked"] {
+        for answer in ["subagent", "peer"] {
             for caller_kind in ["parent", "human", "stranger", "unattended", "missing"] {
-                let (_dir, store, mut record, message_id) = claim_fixture();
-                if answer == "earlier" {
-                    record.earlier_answers.push(EarlierAnswer {
-                        ordinal: 1,
-                        status: RunStatus::Completed,
-                        started_at: record.started_at,
-                        completed_at: record.completed_at,
-                        prompt: None,
-                        failure_tail: None,
-                        limit_failure: None,
-                        opened_by: std::mem::take(&mut record.opened_by),
-                        report_message_id: None,
-                        joined_at: None,
-                    });
-                    record.follow_ups = 1;
-                    record.status = RunStatus::Running;
-                } else if answer == "peer" {
+                let (_dir, store, mut record, _) = claim_fixture();
+                if answer == "peer" {
                     record.subagent = false;
                     record.peer = Some(PeerRun {
                         launch_id: "child".into(),
                         opened_by: std::mem::take(&mut record.opened_by),
                     });
-                } else if answer == "parked" {
-                    // The printed reply is one turn of an answer that spans a park.
-                    record.parked_answer = Some("report".into());
                 }
-                run::create(store.paths(), &record).unwrap();
                 let caller_name = match caller_kind {
                     "stranger" => "stranger",
                     "missing" => "missing",
@@ -493,77 +398,14 @@ mod tests {
                     profile: None,
                     role: None,
                 });
-                claim_reply(&store, "test", &message_id, caller.as_ref(), None).unwrap();
-                let claimed = run::load(store.paths(), &record.run_id).unwrap();
-                let joined = if answer == "earlier" {
-                    assert!(claimed.joined_at.is_none());
-                    claimed.earlier_answers[0].joined_at
-                } else {
-                    claimed.joined_at
-                };
+                let snapshot = store.snapshot_cached().unwrap();
                 assert_eq!(
-                    joined.is_some(),
-                    answer != "parked" && matches!(caller_kind, "parent" | "human"),
+                    may_claim(&snapshot, caller.as_ref(), &record),
+                    matches!(caller_kind, "parent" | "human"),
                     "{answer}/{caller_kind}"
                 );
-                if answer != "earlier" && joined.is_some() {
-                    assert!(!claimed.owes_report());
-                }
             }
         }
-    }
-
-    #[test]
-    fn presented_reply_without_an_opened_answer_returns_at_once() {
-        let (_dir, store, record, _) = claim_fixture();
-        let started = Instant::now();
-        claim_reply(&store, "test", &MessageId::new(), None, None).unwrap();
-        assert!(started.elapsed() < REPLY_SETTLE_CEILING / 4);
-        assert!(
-            super::super::load(store.paths(), &record.run_id)
-                .unwrap()
-                .joined_at
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn presented_reply_waits_for_durable_settlement_but_not_past_deadline() {
-        use crate::harness::run;
-
-        let (_dir, store, mut record, message_id) = claim_fixture();
-        record.status = RunStatus::Running;
-        run::create(store.paths(), &record).unwrap();
-        claim_reply(&store, "test", &message_id, None, Some(Instant::now())).unwrap();
-        assert!(
-            run::load(store.paths(), &record.run_id)
-                .unwrap()
-                .joined_at
-                .is_none()
-        );
-        let settling_store = store.clone();
-        let settling_id = record.run_id.clone();
-        let settling = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            let mut settled = run::load(settling_store.paths(), &settling_id).unwrap();
-            settled.status = RunStatus::Completed;
-            run::create(settling_store.paths(), &settled).unwrap();
-        });
-        claim_reply(
-            &store,
-            "test",
-            &message_id,
-            None,
-            Some(Instant::now() + Duration::from_secs(1)),
-        )
-        .unwrap();
-        settling.join().unwrap();
-        assert!(
-            run::load(store.paths(), &record.run_id)
-                .unwrap()
-                .joined_at
-                .is_some()
-        );
     }
 
     fn append_claim_agent(

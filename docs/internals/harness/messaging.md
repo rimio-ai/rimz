@@ -1,6 +1,6 @@
 # The message system
 
-> How text reaches a running agent: the durable record, the delivery decision, the pane write, the compaction commands and cache pings that ride the same path, the reply wait, and the channel lanes that scope addressing. The code is `crates/rimz/src/message/`. [fleet.md](./fleet.md) maps this area and owns the [address grammar](./fleet.md#the-address) this module resolves through. [transcript.md](./transcript.md) owns the conversation log that confirmed deliveries write and the ask records that hold delivery back. For users, the command is [cli/message.md](../../reference/cli/message.md).
+> How text reaches a running agent: the durable record, the delivery decision, the pane write, the compaction commands and cache pings that ride the same path, the shared turn reader, and the channel lanes that scope addressing. The code is `crates/rimz/src/message/`. [fleet.md](./fleet.md) maps this area and owns the [address grammar](./fleet.md#the-address) this module resolves through. [transcript.md](./transcript.md) owns the conversation log that confirmed deliveries write and the ask records that hold delivery back. For users, the command is [cli/message.md](../../reference/cli/message.md).
 
 ## What the module does
 
@@ -25,18 +25,18 @@ The rest of the page follows from that rule: how a record decides it is ready, w
 | [`message/synthetic.rs`](../../../crates/rimz/src/message/synthetic.rs) | RimZ-authored text for a card (`SyntheticMessage`, `deliver_now`, `attempt_now`): the record's channel, sender, and pane, the boundary attempt, and the recorded miss. |
 | [`message/compact.rs`](../../../crates/rimz/src/message/compact.rs) | Standalone compaction for the operator verb, idle compaction, and flip compaction: repeat refusal and boundary delivery. |
 | [`message/soft_compact.rs`](../../../crates/rimz/src/message/soft_compact.rs) | The two [soft-compaction](#mid-turn-soft-trigger) sends: `send_wrap_up` (one steer-only attempt) and `send_continue` (a queue-tail prompt). |
-| [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
+| [`message/turn_wait.rs`](../../../crates/rimz/src/message/turn_wait.rs) | The [shared turn reader](#the-shared-turn-reader) behind `rimz agents wait` and owed-report wakes. |
 | [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The host's side of the clock: read the wake stamp and spawn `message sweep`, naming the room by workspace id and mux. |
 | [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The record schema and vocabulary, card matching, FIFO, claim, and batch selection, prompt alignment for [confirmation](#confirmation-and-retry), header parsing, and the read-only submitted-prompt origin classifier. |
 | [`store/message/codec.rs`](../../../crates/rimz/src/store/message/codec.rs) | The JSONL codec for the live queue and terminal history. |
 | [`store/message/sender_notice.rs`](../../../crates/rimz/src/store/message/sender_notice.rs) | [Sender notice](#sender-notices) text and live-sender resolution. |
 | [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs) | Every status transition, under the workspace lock, with its audit event where one is written. Every live-queue write refreshes the host wake stamp before releasing the lock. |
-| [`cli/message/`](../../../crates/rimz/src/cli/message) | Flag parsing, rendering, reply polling, and the inbox verbs. No delivery logic. |
+| [`cli/message/`](../../../crates/rimz/src/cli/message) | Flag parsing, rendering, and the inbox verbs. No delivery logic. |
 | [`cli/hooks/lifecycle/delivery.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/delivery.rs) | The hook side: confirm sent records and spawn the delivery helper at turn boundaries. |
 
 Three neighbours carry pieces this module depends on. [`address.rs`](../../../crates/rimz/src/address.rs) resolves `@handle#channel` addresses, binds a match to a pane, and renders handles. [`transcript.rs`](../../../crates/rimz/src/transcript.rs) is the conversation log. [`harness/lanes.rs`](../../../crates/rimz/src/harness/lanes.rs) decides a launch's lane and owns the lane-name rules.
 
-The layering runs one way: `dispatch` calls `reply`, `deliver`, and `send`; `synthetic`, `compact`, and `soft_compact` call `deliver`; `deliver` calls `send`; and `send` calls the store and the mux. `reply` uses dispatch's outcome types but calls nothing in `dispatch`, and nothing calls back up.
+The layering runs one way: `dispatch` calls `deliver` and `send`; `synthetic`, `compact`, and `soft_compact` call `deliver`; `deliver` calls `send`; and `send` calls the store and the mux. Nothing calls back up.
 
 ## The record
 
@@ -53,8 +53,6 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `channel` | Receiver lane at enqueue |
 | `sender` | `Human`, `Agent { kind, agent_id, name, profile, role, channel }`, `Harness { notice }` (rendered as `@rimz`), or `System` (rendered as `rimz`). `Subagent { kind, name }` decodes but nothing writes it |
 | `automated` | Background orchestration traffic. Never earns a dollar-budget waiver, and makes a queued command perishable |
-| `reply_wait` | Sent by a CLI waiting for the reply; suppresses [sender notices](#sender-notices) ([Reply waits](#reply-waits)) |
-| `reply_wait_lease` | Optional token of the waiting leg's lease under `locks/reply-waits/`. The wait counts toward [cycle detection](#cycle-detection) only while that lease is held; omitted on records from older binaries |
 | `in_reply_to` | The messages that opened the sender's authoring turn. Empty starts a new conversation ([transcript.md § Causality](./transcript.md#causality)) |
 | `about_run` | Optional run id. Delivery withdraws the record when that run is terminal or gone, and a deadline stop also when the run no longer holds its claimed stop rung; omitted when absent and preserved by requeue |
 | `body` | `Prompt` (pasted) or `Command` (typed, such as `/compact`) |
@@ -243,7 +241,7 @@ A condition is met for delivery only once its `met_at` stamp is written (`Messag
 
 [`dispatch()`](../../../crates/rimz/src/message/dispatch.rs) is the one entry point for an owned send.
 
-1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars for interrupt mode, a condition, an agent sender, or `--wait`. After taking the pane lock and waiting out pacing and the typing check, every pane write reads its recipient's row and context once more and decides on that row ([below](#smart-compaction)).
+1. **Load what the decision needs.** Pending records (boundary mode or an explicit resuming recipient), plus agent-context sidecars for interrupt mode, a condition, or an agent sender. After taking the pane lock and waiting out pacing and the typing check, every pane write reads its recipient's row and context once more and decides on that row ([below](#smart-compaction)).
 2. **Choose a snapshot.** A full resolution snapshot costs a multiplexer round trip. When every target parks without a live pane (no lazy-registering kind, no provisional id), `targets_all_park_without_live` proves the cached rollup is enough and dispatch skips the mux. This `rollup_only` path is a latency optimization, and correctness never depends on it.
 3. **Resolve targets.** Live agents and live panes combine, so an agent with a bound pane yields one target. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, dispatch removes an agent caller from the resolved set before anything else runs, and no remaining peer is an error.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition already satisfied gets `met_at` at once.
@@ -269,7 +267,7 @@ Each queue write in the walk refreshes the wake stamp inside the store commit, s
 
 #### A resuming recipient
 
-The parent-only resume doorway names one ended child explicitly. Dispatch keeps that row for reply preparation, uses the rollup with context, and parks without resolving a live pane. The queue commit then decides join-or-start under the workspace lock, after all dispatch preflights:
+The parent-only resume doorway names one ended child explicitly. Dispatch keeps that row for target resolution, uses the rollup with context, and parks without resolving a live pane. The queue commit then decides join-or-start under the workspace lock, after all dispatch preflights:
 
 1. If the card became live, it writes nothing, and the doorway retries ordinary dispatch.
 2. Otherwise it reads the clock and the card's queued registration waits. A wait counts only while the child is absent or ended no later than its enqueue, and while its `register_by` is strictly later than now.
@@ -283,7 +281,7 @@ A later end, the cancellation of every waiting follow-up, or the deadline itself
 The receipt follows the decision:
 
 - A live write prints `sent to @handle (msg_...)`. The record is `Sent`, and only the receiver's acknowledgment makes it `Delivered`.
-- A typing hold prints `held for @handle (msg_...)`, says someone is using the receiver's pane, and gives the local retry time. It exits 0; a reply wait continues through it.
+- A typing hold prints `held for @handle (msg_...)`, says someone is using the receiver's pane, and gives the local retry time. It exits 0.
 - A park names its first cause, in this precedence: the scheduled opening, then the first unmet `after` condition, then the first unmet `when` condition, then the receiver's readiness, then the blocking record id or the missing pane. Status and provider-starting parks keep their steer hints.
 - A native-input wait points to `rimz asks show` and `rimz answer`.
 - A resume follow-up says the child is resuming, that delivery follows its registration, and that failure follows a missed registration deadline in absolute UTC. It does not depend on the three-second bind check.
@@ -432,7 +430,7 @@ The first deliverable record on the card's lane that fails a rule ends the batch
 
 Sender, sender channel, and type do not split a batch: a person's message, a peer's message from another channel, a harness notice, and a fleet digest (`SUBAGENT_REPORT`, `AGENT_REPORT`) land in one paste, in queue order. Every claimed member passes the [join guard](#the-subagent-digest-join-guard) and the [retirement guards](#the-run-linked-notice-guard) before the paste, so a digest needs no claim of its own. A join, soft-compaction, or idle-compaction check that fails with an error, or a cancel that fails, releases the whole claimed set; an unreadable linked run leaves its notice deliverable, as the run-link guard says.
 
-Whole-turn readers see a mixed paste as one turn. `rimz agents history` labels it by its first section, so later senders and types stay out of its row. The turn counts as opened by the person when any section is a person's message (`store::message::human_opened_turn`), and as wake-only only when every section is a `WAIT` or `SIGNAL`, so a [reply wait](#reply-waits) on the receiver ends on a mix where a wake alone would re-anchor it. Two reply waits whose questions land in one paste both take that turn's final answer.
+Whole-turn readers see a mixed paste as one turn. `rimz agents history` labels it by its first section, so later senders and types stay out of its row. The turn counts as opened by the person when any section is a person's message (`store::message::human_opened_turn`), and as wake-only only when every section is a `WAIT` or `SIGNAL`.
 
 The batch lands as one paste and one submit. Attributed members keep their own [header](#the-message-header), system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction. One exception: a cold-cache stop on a keepalive at the head errors the keepalive records in one commit and releases the rest in a second (see [the ping](#the-ping)).
 
@@ -524,7 +522,7 @@ A clean turn parked on background work already reads `success` in [`AgentState::
 
 The key does not guarantee a fresh turn. Codex's expanded question editor, for one, takes pasted text as an answer ([codex-reference.md § Async questions](../../externals/agent-adapter/codex-reference.md#async-questions-observed-on-01580)).
 
-Only Codex declares `confirm_interrupt`. A durable event follower starts before the key. After the pane lock is released, delivery waits up to `RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS` (default 5000) for a `TurnInterrupted` matching the kind and the live card's session id (queued records can keep a provisional launch id). A later `TurnStarted` cannot erase that evidence. Both CLI paths report an unconfirmed stop on stderr and leave the stdout receipt and exit 0 unchanged, because the text was already sent. Reply waits keep their own receipt stream and exit status. An unconfirmed stop can mean the turn is still running or that the optional Interrupt hook is untrusted. Confirmation is transient, never stored, and proves no restart. Claude and resting agents do not wait.
+Only Codex declares `confirm_interrupt`. A durable event follower starts before the key. After the pane lock is released, delivery waits up to `RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS` (default 5000) for a `TurnInterrupted` matching the kind and the live card's session id (queued records can keep a provisional launch id). A later `TurnStarted` cannot erase that evidence. Both CLI paths report an unconfirmed stop on stderr and leave the stdout receipt and exit 0 unchanged, because the text was already sent. An unconfirmed stop can mean the turn is still running or that the optional Interrupt hook is untrusted. Confirmation is transient, never stored, and proves no restart. Claude and resting agents do not wait.
 
 Two hazards are accepted. The budget parker may press Escape at the same instant, which produces a double Escape. A stopped Codex turn does not mean every descendant process exited.
 
@@ -771,58 +769,21 @@ The helper marks a ping final (`final_ping`) when `(now - since) + (TTL - margin
 
 The keepalive is cache retention, never durable correctness. The activity heartbeat is a latency hint. A slow refresh, no sidebar host, or early provider eviction can cost one cache write, but cannot lose a wait or its eventual wake. With an admitted lifetime and no `--check-in`, a wait on a command that never exits stays silent, and an explicit `--check-in` restores the check-in. The shared `harness.prompt_cache_margin` covers refresh, helper spawn, and submission, not an end-of-response clock. Config load refuses a margin at or above any static lifetime (fallback and every provider/sign-in combination) or `cache_keepalive_max`; that settings-and-defaults check cannot judge the agent's own later cache writes.
 
-## Reply waits
+## The shared turn reader
 
-`--wait[=DURATION]` turns a send into a synchronous scatter-gather: it stamps `reply_wait` on each record, then polls until every leg settles.
+[`message/turn_wait.rs`](../../../crates/rimz/src/message/turn_wait.rs) answers whether an agent's turn has completed, and if not, why. `rimz agents wait` reads it on every poll, and the supervised-run owed predicate (`harness::owed`) reads its wake and soft-compaction terms.
 
-Preparation refuses what a reply wait cannot follow. Every target must be a lifecycle-bound card with installed, trusted hooks, checked once per login key. The resume doorway's explicit ended child is accepted and waits through registration and delivery, and a terminal delivery failure prints the record's reason. Broadcasts and fan-out are accepted. Create-on-miss, schedules, `--after`, `--when`, bare pane targets, and unsubmitted pastes are rejected before dispatch.
+`TurnWaitView` loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, reads as `Sleeping`. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. The shared `harness::auto_continue::CardStatus` reader makes a displayed provider pause read as `Failed` once the card's `ParkDemotion` counts it as spent; budget parks stay `Paused`. It builds that evidence lazily, at most once per reader, only for a status read of a provider pause without a budget park, using the snapshot's read instant. The turn settles through `TurnCompletion`:
 
-Dispatch captures one frame-aligned event-log base before enqueue and copies it into every leg, so each leg folds terminal message events from its own cursor. Each `Sent` leg anchors a skip-existing transcript cursor before dispatch, so it reads only assistant messages written after the prompt. Ordinary queued legs re-anchor when delivery starts, to exclude intervening turns. A follow-up queued to an ended, resuming child keeps its pre-dispatch anchor: there is no intervening live turn, and its reply may finish before the first delivery poll.
-
-The re-anchor leaves a known gap. An ordinary queued leg has no cursor until the first 500 ms poll that reads its record as `Sent` or `Delivered`, and that poll anchors at the transcript's end. A receiver that answers and ends its turn before that poll has its answer behind the anchor, so the leg settles `Completed` with no final message. `crates/rimz/src/message/reply/tests.rs::parked_reply_reanchors_when_delivery_starts` pins the re-anchor. The fix is to anchor at the acknowledged prompt's own transcript entry instead of the end.
-
-Each leg is a two-phase machine.
-
-**Delivery** waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply. Interrupt never takes that shortcut, so `--interrupt --wait` follows only the fresh turn that `Delivered` acknowledges.
-
-**Reply** reads status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness wake still in flight, reads as `Sleeping`. A `Sent` wake stays in flight while its deadline has not passed or its receiver's compaction bracket is open, regardless of the 90 s display/delivery window. After the bracket closes, the deadline applies again. The shared `harness::auto_continue::CardStatus` reader makes a displayed provider pause read as `Failed` once the card's `ParkDemotion` counts it as spent; budget parks stay `Paused`. It builds that evidence lazily, at most once per reader, only for a status read of a provider pause without a budget park, using the snapshot's read instant. Legs settle through `TurnCompletion`:
-
-| Observed | Leg |
+| Observed | Turn |
 | --- | --- |
-| `Idle` or `Success` after a turn opened (`turn_started_at` set) | Completes |
-| `Failed` (including a non-pausing provider error or a provider pause the card counts as spent), a delivery failure, a vanished card, or a skipped waiting input | Fails, while the other legs keep gathering |
-| `Waiting`, a recoverable provider pause or budget park (`Paused`), or `Sleeping` | Stays in the reply and keeps its turn anchor |
-| `Running` with a `turn_started_at` other than the anchor, whose `AgentState::prompt` is wake notices alone | Re-anchors on the new stamp and keeps waiting |
-| `Running` with a new `turn_started_at` and any other prompt | Ends: a human or peer prompt, or a batch mixing a wake with another section, opened an unrelated turn |
+| `Idle` or `Success` after a turn opened (`turn_started_at` set) | Completed |
+| `Failed` (including a non-pausing provider error or a provider pause the card counts as spent) | Failed |
+| `Running`, `Waiting`, a recoverable provider pause or budget park (`Paused`), or `Sleeping` | Open |
 
-`store::message::prompt_is_wake_only` decides the wake-only case: every section must be a `WAIT` or `SIGNAL`. The re-anchor holds even when no poll saw `Sleeping`.
+`TurnWaitView::reason` names the blocker of an open turn from the same view: a person's ask, pending waits, a wake in flight, a pause, no turn yet, or a running turn.
 
-`TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. The view captures one clock beside its queue read and excludes a `Sent` record past its hold deadline, deferrals included, without reconciliation. Reply waits pass `false`, counting `Wait` and `Signal` only. The supervised-run owed predicate passes `true` to also count `SubagentReport`. A digest alone does not hold a reply wait open.
-
-One 500 ms poll reads the message list and cached snapshot once per tick and advances every unfinished leg. On entry and every tenth tick (`WAIT_GUARD_TICKS`) it also folds agent-context sidecars and re-checks for cycles.
-
-### Cycle detection
-
-Two agents that each wait on the other would hang forever, so [`wait_cycle`](../../../crates/rimz/src/message/reply.rs) builds a wait graph and refuses to enter a cycle. An edge runs from a sender card to a receiver card in two cases:
-
-- A live `reply_wait` record that is `Queued`, `Claimed`, or `Sent`, from a `Running` sender.
-- A `Delivered` `reply_wait` record from history, when the receiver is `Running`, its `turn_opened_by` context lists the record, and the sender is `Running`.
-
-Either record counts only while its wait is live. `ReplyPreparation::new` claims one lease per leg at `locks/reply-waits/<token>.lock` through `disk::lease::claim` before dispatch writes the leg's record, and dispatch stamps the token on that record as `reply_wait_lease`. The waiting process holds the lease until the leg settles, and the kernel frees it when the process exits, so a completed, failed, yielded, timed-out, killed, or interrupted leg stops counting while the rest of an all-join wait goes on. `wait_cycle` probes the lease: a held lease counts, a free or missing one does not. A record without a token (from an older binary) counts, and so does a lease whose probe fails, with a warning, since a missed deadlock costs more than a refusal the caller can retry. `reply_wait` itself, and the notice suppression it carries, ignore the lease.
-
-The sender card of each edge, and the caller's own card, resolve through `resolve_sender` as sender notices do ([Sender notices](#sender-notices)): a session id before a name, so a same-name card in another lane never stands in for either.
-
-Dispatch checks the graph before enqueue, and the periodic poll catches simultaneous dispatches and cycles that form later. The youngest `msg_` id in a detected cycle yields: only that reply leg fails, and its record is left untouched so the turn boundary still delivers the text. Older waits continue. Diagnostics name the blocking handle and message id and render the multi-hop chain.
-
-### Settlement
-
-The join succeeds only when every leg completes. Otherwise it takes the first non-completed status in target order. `--any` returns the first terminal leg without canceling the rest.
-
-A leg releases its lease (and removes the file, best-effort) when it settles, and the process's exit releases the rest, `--any`'s unfinished legs included. GC's `locks/` sweep removes any file a release left behind. The records themselves are untouched: a released leg's record still delivers at its turn boundary.
-
-One deadline spans fan-out dispatch and every reply turn. A human's bare `--wait` is indefinite, an agent's defaults to one hour, and an explicit duration wins. On expiry every unfinished `Sent` record is marked timed out, every unfinished leg is classified `TimedOut`, and the command exits 124.
-
-Before polling, the CLI prints each ordinary delivery receipt on stderr, in JSON mode too. Text output streams labeled replies in completion order, and `--json` buffers one handle-keyed map. A single agent that writes no assistant message yields empty stdout and a note on stderr. Each `ReplyResult` carries its leg's last observed message status, so deadline hints describe the same queued, sent, or delivered state that timeout settlement acted on, without re-reading the store. The timeout header and per-leg hints go to stderr in both output modes.
+`TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. The view captures one clock beside its queue read and excludes a `Sent` record past its hold deadline, deferrals included, without reconciliation. Every reader counts `Wait` and `Signal`; the supervised-run owed predicate passes `true` to also count `SubagentReport`.
 
 ## Scheduling and wakeups
 
@@ -854,9 +815,9 @@ Durations accept `s`, `m`, `h`, and `d`, and zero is rejected. Wall-clock `HH:MM
 
 ## Sender notices
 
-An agent that sent a message gets one notice when the message ends undelivered and one when it stays queued too long. Harness senders never get either, so a notice cannot cause a notice. Neither notice is an owed wake, and `reply_wait` records get neither, because their blocked CLI already reports failures and timeout hints.
+An agent that sent a message gets one notice when the message ends undelivered and one when it stays queued too long. Harness senders never get either, so a notice cannot cause a notice. Neither notice is an owed wake.
 
-**Undelivered.** `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects agent-sent, non-`reply_wait` endings in `Archived`, `TimedOut`, `Abandoned`, or `Expired`. `Store::commit_queue` resolves the live sender and queues a `MESSAGE_UNDELIVERED` notice and its `message.queued` event in the same commit as the ending. A closed record leaves the live queue once, so an ending cannot notify twice. The notice quotes the ending reason and attempt evidence, previews the text, and asks the sender to inspect the receiver before resending. `Errored` is left out: a send failure errors inside the sender's own `rimz message` call, which exits non-zero with the reason. A queued compaction refused as a repeat also ends `Errored` without a notice. Delivered and deliberately canceled messages do not qualify.
+**Undelivered.** `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects agent-sent endings in `Archived`, `TimedOut`, `Abandoned`, or `Expired`. `Store::commit_queue` resolves the live sender and queues a `MESSAGE_UNDELIVERED` notice and its `message.queued` event in the same commit as the ending. A closed record leaves the live queue once, so an ending cannot notify twice. The notice quotes the ending reason and attempt evidence, previews the text, and asks the sender to inspect the receiver before resending. `Errored` is left out: a send failure errors inside the sender's own `rimz message` call, which exits non-zero with the reason. A queued compaction refused as a repeat also ends `Errored` without a notice. Delivered and deliberately canceled messages do not qualify.
 
 **Still queued.** The sweep classifies a refused head's verdict through the exhaustive `crates/rimz/src/message/deliver.rs::DeliveryVerdict::stall_class`:
 
@@ -894,13 +855,14 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 ### Mixed binaries
 
-A room can be shared by binaries of different versions, and five record changes have a compatibility edge:
+A room can be shared by binaries of different versions, and six record changes have a compatibility edge:
 
 - `Expired` is a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries fail the history reads behind `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup. The terminal commit removes the record from the live queue, so older queue transactions never meet the status. Event-log readers keep unknown methods through their catch-all.
 - `queued_notice_at` is dropped by an older binary that rewrites the queue, so a later sweep by a newer binary can send a second still-queued notice. No status or event method marks this.
 - `about_run` is dropped by an older binary that rewrites the queue, so a linked notice can then deliver even after its child run has ended. Records written without a link retain their existing JSON shape.
 - `idle_since` is dropped by an older binary that rewrites the queue, so an idle compaction can then deliver after the agent has taken a turn. Untagged records retain their existing JSON shape.
 - Harness notice strings a binary does not know survive its queue rewrites as `HarnessNotice::Other`.
+- `reply_wait` and `reply_wait_lease`, which an older binary's `rimz message --wait` writes, decode and are dropped. A newer binary sends such a record's agent sender the ordinary undelivered and still-queued notices, and its queue rewrite removes both keys, so the older wait's cycle detection stops seeing that record.
 
 ## The inbox verbs
 
@@ -976,7 +938,6 @@ Every message timing in one place. The environment overrides take milliseconds t
 | Typing hold | 30 s | `[harness] typing_hold`, or `off` | [delivery modes](#four-modes-on-one-timing-axis) |
 | Typing-hold client-view read | 500 ms | none | [writing to the pane](#writing-to-the-pane) |
 | Typing record lock wait | 250 ms | none | [delivery modes](#four-modes-on-one-timing-axis) |
-| Reply poll | 500 ms, guard every 10 ticks | none | [reply waits](#reply-waits) |
 
 ## Hazards
 

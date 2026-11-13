@@ -69,7 +69,6 @@ rimz subagents wait @otter @fox      # collect named children's results
 rimz subagents list                  # inspect own children, or the user shell's channel
 rimz subagents stop --all            # from an agent: stop all its live children
 rimz message @coder "rebase first"   # park for the next turn boundary
-rimz message @coder --wait "did the migration land? one line" # ask and print the reply
 rimz message --steer @coder "stop"   # type into the live turn now; it does not interrupt
 rimz message show msg_<id>           # why a message hasn't landed
 rimz asks --json                     # structured prompts that currently block agents
@@ -204,7 +203,7 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 - `room/` — private managed-room context, birth/reset/teardown lifecycle, sidebar/presence options, and health gating.
 - `sandbox/` — Linux bubblewrap agent mount views, live protected-bind repair, provider-home binds, per-agent temp units, rewritten skill copies, profile skill views, and capability preflight.
 - `harness/` — layout IR, teams, team prompt layer and built-in consensus, locked board entries and stage flips, launch plan compile/apply and argv, shared headless check launches (`headless.rs`), supervised run transitions and their wake socket, workflow definitions, the agent-attempt host seam and condition/script/shell/judge transitions (`workflow/`), the elected hook drainer and socket leases (`hook_drain.rs`), loop scheduling over clock/signal/watch/condition triggers and the home-wide start throttle (`schedule/fire.rs` and the read-only `when.rs` evaluator are in the sidebar graph), signal selectors and in-process firing, resume planning, rebirth recovery inspection/materialization, and the home-wide note store behind `rimz notes` (`notes.rs`).
-- `message/` — message delivery: park-vs-live dispatch, live-pane send, reply waits, scheduled wakeups, synthetic text for a card (composition, boundary attempt, recorded miss).
+- `message/` — message delivery: park-vs-live dispatch, live-pane send, the shared turn reader, scheduled wakeups, synthetic text for a card (composition, boundary attempt, recorded miss).
 - `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, raw hook ingress and drain cursor (`ingress.rs`), message record and queue codec, lifecycle follower, the supervised-run record with its codec and terminal wake sender, workflow records and journals (`workflow.rs`), GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, cross-backend live-session snapshot, subprocess engine, reconcile planner, recovery, focus-intent anchor, room width target, Zellij pane-topology and presence-desired caches, per-pane write lock, pane winsize repair.
 - `sidebar/` — data plane: Zellij presence ingestion, shared host production, pulled-truth/event fusion, realtime overlay store, projection fold, final-fold reconciliation of runtime records, heavy-lane refresh.

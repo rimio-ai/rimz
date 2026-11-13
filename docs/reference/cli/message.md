@@ -9,8 +9,6 @@ rimz message --on any @codex#cli-docs "If the run failed, capture the error firs
 rimz message --schedule 14:30 @planner "Restart the review."
 rimz message @coder --after @planner "Read plan.md when the planner finishes."
 rimz message @codex --when '@codex idle 58m' "Keep the prompt cache warm."
-rimz message @coder --wait "did the migration land? one line"
-rimz message @all --wait --json "status? one line"
 git diff main | rimz message @reviewer --stdin "Review this change."
 rimz message                                                          # inbox for the current lane
 rimz message show msg_…
@@ -22,9 +20,9 @@ rimz message clear @claude-2#cli-docs
 
 ## Send a message
 
-A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags may come before, between, or after them. Pass the text as one quoted argument. `TEXT` may start with `-`; only a value that is itself one of the command's flags (`--steer`, `--wait`, `-h`, `--help`, etc.) needs `--` before it.
+A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags may come before, between, or after them. Pass the text as one quoted argument. `TEXT` may start with `-`; only a value that is itself one of the command's flags (`--steer`, `--file`, `-h`, `--help`, etc.) needs `--` before it.
 
-Bare `rimz message` lists the current lane. Any send flag without a target is an invalid command line (exit 2), with the intended send form and a list hint. For inbox flags, use `rimz message list --json`, `rimz message list --all`, or `rimz message list --channel <NAME>`; these flags mean reply formatting, fan-out, and recipient scope on the send form. Bare words and message ids in place of a target also exit 2. `rimz message cancel` requires at least one message id and exits 2 without one.
+Bare `rimz message` lists the current lane. Any send flag without a target is an invalid command line (exit 2), with the intended send form and a list hint. For inbox flags, use `rimz message list --json`, `rimz message list --all`, or `rimz message list --channel <NAME>`; on the send form `--all` and `--channel` mean fan-out and recipient scope, and `--json` is not a send flag. Bare words and message ids in place of a target also exit 2. `rimz message cancel` requires at least one message id and exits 2 without one.
 
 The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_…` suggests `rimz message show msg_…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents (or `no agents are running`), and exits 1.
 
@@ -51,7 +49,7 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 
 `--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar host wakes due messages.
 
-Recent input to the receiving pane holds message writes until 30 seconds after the last counted input. On Linux, terminal input-read times count only when observed with a viewer, exclude advances within eight seconds after an arrival or a RimZ write, and keep the hold after the viewer leaves. On other platforms, the same attached client must currently view the pane and have recent input. Linux timing is coarse; see [the timing gaps](../../guide/messaging.md#park-steer-interrupt-or-schedule). The held record stays queued, prints a receipt with its id and local retry time, and the room's sweep retries it after the pause. A held steer or interrupt retries in its original mode, even while the agent is running. `--steer --force` still waits; only `--interrupt --force` and a cache keepalive's forced fire, 30 seconds before the cache expires, bypass the typing hold. `[harness] typing_hold` changes the duration, or `"off"` disables it. A draft left untouched longer than the hold can still be joined to the message; RimZ never reads the composer to detect drafts. `pane send` and `answer` are explicit input and do not wait. `--wait` keeps waiting through a hold.
+Recent input to the receiving pane holds message writes until 30 seconds after the last counted input. On Linux, terminal input-read times count only when observed with a viewer, exclude advances within eight seconds after an arrival or a RimZ write, and keep the hold after the viewer leaves. On other platforms, the same attached client must currently view the pane and have recent input. Linux timing is coarse; see [the timing gaps](../../guide/messaging.md#park-steer-interrupt-or-schedule). The held record stays queued, prints a receipt with its id and local retry time, and the room's sweep retries it after the pause. A held steer or interrupt retries in its original mode, even while the agent is running. `--steer --force` still waits; only `--interrupt --force` and a cache keepalive's forced fire, 30 seconds before the cache expires, bypass the typing hold. `[harness] typing_hold` changes the duration, or `"off"` disables it. A draft left untouched longer than the hold can still be joined to the message; RimZ never reads the composer to detect drafts. `pane send` and `answer` are explicit input and do not wait.
 
 The receiving card's `✎` pen (`󰏫` with Nerd Font glyphs) shows the live typing-hold window; `↧ N` counts due messages, even while a different gate below still holds them.
 
@@ -70,7 +68,7 @@ Interrupt skips Escape when the agent is already resting. A native prompt waitin
 
 Interrupt requires an existing recipient and refuses `--create`.
 
-After pressing Escape for Codex, RimZ waits up to five seconds for its Interrupt hook to confirm the stop. `RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS` sets this window in milliseconds (default 5000), separately for each target. If no confirmation arrives, the stdout receipt stays unchanged and the command still exits 0: the text was already sent. A stderr warning says the turn may still be running, suggests `rimz pane capture @coder`, and names the other possible cause: Codex's Interrupt hook is not trusted (`rimz doctor` shows it). With `--wait`, the reply outcome still determines the exit status. Confirmation proves the stop, not that the text started a fresh turn. Claude interrupts are not confirmed this way.
+After pressing Escape for Codex, RimZ waits up to five seconds for its Interrupt hook to confirm the stop. `RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS` sets this window in milliseconds (default 5000), separately for each target. If no confirmation arrives, the stdout receipt stays unchanged and the command still exits 0: the text was already sent. A stderr warning says the turn may still be running, suggests `rimz pane capture @coder`, and names the other possible cause: Codex's Interrupt hook is not trusted (`rimz doctor` shows it). Confirmation proves the stop, not that the text started a fresh turn. Claude interrupts are not confirmed this way.
 
 ### Receipts
 
@@ -99,7 +97,7 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 
 ## Conditions
 
-`--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer`, `--wait`, `--timeout`, and `--create`. `rimz message steer <id>` delivers past unmet conditions.
+`--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer` and `--create`. `rimz message steer <id>` delivers past unmet conditions.
 
 **`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn, including a provider pause the card shows as `failed`, keeps it waiting under `--on done` and releases it under `--on any`, so under `--on any` the condition can be met between a limit's reset and auto-continue resuming that agent; a recoverable provider pause or a RimZ budget park keeps it waiting under both.
 
@@ -136,7 +134,7 @@ Each fan-out delivery starts with the typed selector, such as `@all, ` or `@code
 | --- | --- |
 | `--channel <NAME>` | Match only agents in that named channel. Same as an inline `#NAME`. Conflicts with `--worktree`. |
 | `--worktree <NAME>` | Match only agents in that worktree, by name or path. Conflicts with `--channel`. |
-| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` launches into that lane, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, `--wait`, and `--timeout`. |
+| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` launches into that lane, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, and `--when`. |
 
 When `--create --worktree NAME` finds an existing unoccupied RimZ-owned tree, it uses the [worktree entry check](./agents.md#relaunch-into-a-named-worktree). Without a terminal it refuses with the facts and a `rimz agents <spec> -w NAME --fresh` command carrying the message text; use that command to enter without asking.
 
@@ -179,7 +177,7 @@ Read plan.md when the planner finishes.
 | `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery, or a signal a workflow step [subscribes](./workflow.md#run-a-workflow) to | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |
 
-Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED` notice per message. `--wait` senders get neither; the wait reports failures directly. A queued notice does not expire or resend the message. Unmet `--schedule`, `--after`, and `--when` conditions suppress queued notices. Notices go to the sender's live card and appear in `rimz message list --system`.
+Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED` notice per message. A queued notice does not expire or resend the message. Unmet `--schedule`, `--after`, and `--when` conditions suppress queued notices. Notices go to the sender's live card and appear in `rimz message list --system`.
 
 | Environment variable | Default | Controls |
 | --- | --- | --- |
@@ -188,44 +186,6 @@ Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED`
 | `RIMZ_MESSAGE_REGISTER_TIMEOUT_MS` | `120000` (2 min) | Registration limit for a child's resume, in milliseconds from the follow-up that opens its pane; joining follow-ups share that deadline, and a registered child waiting on a provider prompt does not expire |
 
 `rimz transcript` hides `@rimz` deliveries from its human view; `rimz transcript --json` keeps them.
-
-## Wait for replies
-
-If the prompt starts a fresh turn, that turn is the reply for `--interrupt --wait`. RimZ waits for that prompt's delivery acknowledgement before following the reply, not the interrupted turn's remaining activity. A confirmed stop alone does not satisfy the reply wait.
-
-`--wait` sends or parks one message per target, waits for each reply turn to finish, and prints the replies. `--timeout <DURATION>` (`s`, `m`, or `h`; also `--timeout=<DURATION>`) sets a total deadline covering delivery plus the turn and implies `--wait`, so `--wait --timeout 10m` is the same wait as `--timeout 10m`. The attached `--wait=<DURATION>` sets the same deadline; passing it together with `--timeout` is refused with exit 2. Bare `--wait` takes no value, so it can sit before the text. A user shell's bare wait has no deadline; an agent's bare wait stops after one hour.
-
-| Flag | Effect |
-| --- | --- |
-| `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait` or `--timeout`. |
-| `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait` or `--timeout`. |
-
-At the start, stderr prints each target's ordinary send receipt, including its message id, even with `--json`. Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting`, or paused but can still recover, is still in progress; a provider pause the card shows as `failed` ends the wait as failed. A script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
-
-A parent's message to its ended child queues before opening the resume pane; steer and interrupt also become the next prompt. `--wait` continues through registration and delivery, exits 1 with the message's failure reason if delivery fails, and still exits 124 on its own wait budget. Registration expiry needs the room's sidebar sweep or an explicit message sweep/gc; without one the queued record remains pending.
-
-After printing a subagent or launched peer's reply, `--wait` claims that answer for its launcher during an open turn, or for a human shell. Other agents and unattended callers claim nothing. Only the answer opened by the sent message is claimed; earlier unread answers still reach the fleet report. If the answer has not settled before the wait's deadline, it remains eligible for reporting. An already queued report containing other unread answers can still repeat a claimed row.
-
-Each `--json` value carries `status`, `reply` (a string or `null`), and `message_id`, plus `error` when delivery failed, the agent stopped, or the wait aborted:
-
-```json
-{"@coder":{"status":"completed","reply":"landed","message_id":"msg_…"}}
-```
-
-The exit code is the first non-completed target's run status, in target order:
-
-| Code | Meaning |
-| --- | --- |
-| `0` | Every reply turn completed. |
-| `1` | A turn failed, or the wait could not run. |
-| `123` | Verification failed. |
-| `124` | The deadline passed. Unfinished targets read `timed_out`, and `--json` still prints the map. |
-| `125` | A budget cap stopped the turn. |
-| `130` | Canceled. |
-
-At the deadline, stderr starts with `rimz: wait timed out` (naming unfinished targets for a fan-out, and adding `(default 1h for agent callers; use --wait=<duration> to change)` when an agent's bare wait ran out), then explains each unfinished message. Queued or claimed text stays queued and will deliver; withdraw it with `rimz message cancel <id>`. Text already typed but not acknowledged must not be resent. A delivered message is still being worked on. Read later replies with `rimz agents logs @handle`. These hints also accompany the JSON map.
-
-A wait is refused before sending when a target has no lifecycle state, is not running, or lacks installed and trusted hooks. It is also refused with `--create`, `--schedule`, or `--no-enter`. A wait that would deadlock, because the target is waiting on the caller's own reply, is refused or aborted with the blocking handle and message named; any parked text stays queued. A single target holding an open prompt fails with the `waiting on your input` error, the automatic-review explanation above while a Codex permission is still under review, or the provider-error explanation above while a pane stays reserved after a turn-ending error.
 
 ## Message statuses
 

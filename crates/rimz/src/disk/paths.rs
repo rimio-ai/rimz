@@ -1061,13 +1061,6 @@ impl RuntimePaths {
         self.locks_dir.join(name)
     }
 
-    /// A reply wait leg's liveness lease, held by its waiting process until the leg settles.
-    pub(crate) fn reply_wait_lease_path(&self, token: &str) -> PathBuf {
-        self.locks_dir
-            .join("reply-waits")
-            .join(format!("{token}.lock"))
-    }
-
     /// Detach disposable classes before removal so late writers cannot refill
     /// the tree being removed. Lock inodes remain in place across a reset.
     pub(crate) fn remove_disposable_dirs(&self) -> Result<bool> {

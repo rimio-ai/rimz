@@ -1261,7 +1261,7 @@ fn parses_legacy_main_thread_transcript_and_excludes_sidechains() {
     );
     // Thought parts and tool-call-only records leave no visible prose.
     assert_eq!(messages[1].text, "hi there");
-    // Streaming filters to assistant text for `--wait`/`-p --stream`.
+    // Streaming filters to assistant text for `agents wait --stream`/`-p --stream`.
     assert_eq!(adapter.stream_assistant_messages(lines), vec!["hi there"]);
 }
 

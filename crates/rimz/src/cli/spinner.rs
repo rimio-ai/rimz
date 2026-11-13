@@ -21,7 +21,6 @@ pub(crate) struct Spinner {
 
 struct SpinnerInner {
     label: Arc<Mutex<String>>,
-    paused: Arc<AtomicBool>,
     /// Set once the worker draws a frame; a clear erases only a line the
     /// spinner wrote, never one it found.
     drawn: Arc<AtomicBool>,
@@ -40,21 +39,17 @@ impl Spinner {
         }
 
         let label = Arc::new(Mutex::new(label.into()));
-        let paused = Arc::new(AtomicBool::new(false));
         let drawn = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_drawn = Arc::clone(&drawn);
         let worker_label = Arc::clone(&label);
-        let worker_paused = Arc::clone(&paused);
         let worker_stop = Arc::clone(&stop);
         let started = Instant::now();
         let worker = thread::spawn(move || {
             let mut frame = 0;
             while !worker_stop.load(Ordering::Relaxed) {
                 if started.elapsed() >= min_age
-                    && !worker_paused.load(Ordering::SeqCst)
                     && let Ok(label) = worker_label.lock()
-                    && !worker_paused.load(Ordering::SeqCst)
                 {
                     let elapsed = format_elapsed(started.elapsed());
                     let mut stderr = std::io::stderr().lock();
@@ -75,7 +70,6 @@ impl Spinner {
         Self {
             inner: Some(SpinnerInner {
                 label,
-                paused,
                 drawn,
                 stop,
                 worker: Some(worker),
@@ -90,22 +84,6 @@ impl Spinner {
         if let Ok(mut current) = inner.label.lock() {
             *current = label.into();
         }
-    }
-
-    pub(crate) fn pause(&self) {
-        let Some(inner) = &self.inner else {
-            return;
-        };
-        inner.paused.store(true, Ordering::SeqCst);
-        let _label = inner.label.lock();
-        Self::clear_drawn(&inner.drawn);
-    }
-
-    pub(crate) fn resume(&self) {
-        let Some(inner) = &self.inner else {
-            return;
-        };
-        inner.paused.store(false, Ordering::SeqCst);
     }
 
     fn clear_drawn(drawn: &AtomicBool) {
