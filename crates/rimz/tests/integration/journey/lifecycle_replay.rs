@@ -359,7 +359,7 @@ fn errored_turn_renders_failed() {
 }
 
 #[test]
-fn subagent_child_row_appears_and_stays_recent_across_the_next_turn() {
+fn subagent_child_row_appears_and_leaves_at_the_next_turn() {
     for agent in [ReplayAgent::Claude, ReplayAgent::Codex] {
         let env = Env::new();
         if env.skip_if_sandboxed() {
@@ -398,16 +398,18 @@ fn subagent_child_row_appears_and_stays_recent_across_the_next_turn() {
             "subagent stop settles the child to success for the current turn:\n{screen}"
         );
 
-        // A child that just landed sits in the recent band, which keys on the
-        // landed age rather than the parent's turn, so the next prompt keeps it.
+        // The card lists the current turn's children only, so the next prompt
+        // takes the landed child and its summary line off the card.
         room.agent_hook(agent.source(), &agent.prompt("next parent turn"));
-        let screen = room.wait_for(
-            |s| s.contains("next parent turn") && s.contains("⧉ 1") && s.contains("✓ review"),
-            SETTLE,
-        );
+        let next_turn_without_child = |screen: &str| {
+            screen.contains("next parent turn")
+                && !screen.contains("⧉ 1")
+                && !screen.contains("✓ review")
+        };
+        let screen = room.wait_for(next_turn_without_child, SETTLE);
         assert!(
-            screen.contains("⧉ 1") && screen.contains("✓ review"),
-            "next parent turn keeps lifetime stats and the recently landed child row:\n{screen}"
+            next_turn_without_child(&screen),
+            "next parent turn drops the prior turn's child row and count:\n{screen}"
         );
     }
 }
