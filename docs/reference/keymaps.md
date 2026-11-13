@@ -59,6 +59,8 @@ A binding value is an action name, `"none"` (removes the bundled key), or `{ run
 | `pane.send_prefix` | `send-keys` of the prefix | `Write` of the prefix's bytes |
 | `tab.new` | `new-window` in the pane's directory | `NewTab` |
 | `tab.next` / `tab.prev` | `next-window` / `previous-window` | `GoToNextTab` / `GoToPreviousTab` |
+| `tab.dashboard` | [`rimz tab dashboard`](./cli/tab.md) | same |
+| `tab.terminal.1` .. `tab.terminal.9` | [`rimz tab terminal N`](./cli/tab.md) | same |
 | `mode.prefix` / `pane` / `tab` / `resize` / `move` | `switch-client -T rimz-<mode>` | `SwitchToMode` |
 | `mode.scrollback` | `copy-mode` | scroll mode |
 | `mode.exit` | back to the root table | back to locked |
@@ -87,7 +89,8 @@ The normal mode of `tmux`, `zellij` and `vim`:
 | `Alt+J` / `Alt+K` | `worktree.next` / `worktree.prev` |
 | `Alt+?` | `filter.needs_you` |
 | `Alt+n` | `palette.new_agent` |
-| `Alt+1` .. `Alt+9` | `card.slot.1` .. `card.slot.9` |
+| `Alt+0` | `tab.dashboard` |
+| `Alt+1` .. `Alt+9` | `tab.terminal.1` .. `tab.terminal.9` |
 | `Alt+;` | `card.last` |
 | prefix | `mode.prefix` |
 
@@ -211,4 +214,4 @@ Prefix `Alt+w`, scrollback `vi`. Its pane and tab modes are empty.
 - resize: `h j k l` and arrows `pane.resize.*`; `<` left, `>` right, `+` down, `-` up; `Esc`, `Enter` `mode.exit`.
 - move: `h j k l` and arrows `pane.swap.*`; `Esc`, `Enter` `mode.exit`.
 
-Not bound: vim's `CTRL-W W`, `x` (exchange), `r` (rotate), `T` (move to a new tab), `=`, `_` and `|`, and the `CTRL-W CTRL-<letter>` variants. Here `r` and `T` carry the RimZ actions in the table above. Of the vocabulary, `pane.close`, `pane.send_prefix`, `mode.pane`, `mode.tab`, `mode.move` and `sidebar.focus` are unbound.
+Not bound: vim's `CTRL-W W`, `x` (exchange), `r` (rotate), `T` (move to a new tab), `=`, `_` and `|`, and the `CTRL-W CTRL-<letter>` variants. Here `r` and `T` carry the RimZ actions in the table above. Of the vocabulary, `pane.close`, `pane.send_prefix`, `mode.pane`, `mode.tab`, `mode.move`, `card.slot.1` .. `card.slot.9` and `sidebar.focus` are unbound.

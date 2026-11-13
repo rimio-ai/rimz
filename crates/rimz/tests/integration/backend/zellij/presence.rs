@@ -437,12 +437,18 @@ fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Pa
                done\n\
                [ \"${{1:-}}\" = sidebar ] && [ \"${{2:-}}\" = \"$keymap_test_verb\" ]\n\
              }}\n\
+             is_tab() {{\n\
+               while [ \"$#\" -ge 2 ]; do\n\
+                 case \"$1\" in --mux|--root) shift 2 ;; *) break ;; esac\n\
+               done\n\
+               [ \"${{1:-}}\" = tab ]\n\
+             }}\n\
              if is_sidebar focus \"$@\"; then\n\
                {real_rimz} \"$@\" >> {focus_exec_log} 2>&1\n\
                printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
              elif is_sidebar serve \"$@\"; then\n\
                exec {real_rimz} \"$@\" 2>> {focus_exec_log}\n\
-             elif [ \"${{1:-}}\" = palette ]; then\n\
+             elif [ \"${{1:-}}\" = palette ] || is_tab \"$@\"; then\n\
                :\n\
              else\n\
                {real_rimz} \"$@\" >/dev/null 2>> {focus_exec_log}\n\
@@ -1930,6 +1936,22 @@ fn rimz_keymap_clears_bindings_and_keeps_modes_per_client() {
         },
         "prefix z dispatches zoom and returns to locked",
     );
+
+    // The shim logs these without running them, so no tab opens or moves focus.
+    for (key, verb) in [('3', "tab terminal 3"), ('0', "tab dashboard")] {
+        first.press_alt(key);
+        let pressed = format!("{verb} --session-name {}", room.name());
+        poll_until(
+            SPAWN_TIMEOUT,
+            || {
+                let mut lines = poke_lines(&log);
+                lines.retain(|line| !logged_command_is(line, "sidebar wake"));
+                Ok(lines)
+            },
+            |lines| lines.iter().any(|line| logged_command_is(line, &pressed)),
+            &format!("Alt+{key} runs `{pressed}` for the pressing room"),
+        );
+    }
 
     let runs = key_runs();
     second.press_alt('x');

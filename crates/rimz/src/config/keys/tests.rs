@@ -94,9 +94,11 @@ fn embedded_keymap_matches_every_spec_binding() {
             concat!(
                 "Alt+j card.next\nAlt+k card.prev\nAlt+J worktree.next\nAlt+K worktree.prev\n",
                 "Alt+h pane.focus.left\nAlt+l pane.focus.right\nAlt+? filter.needs_you\n",
-                "Alt+n palette.new_agent\nAlt+t tab.new\nAlt+1 card.slot.1\nAlt+2 card.slot.2\n",
-                "Alt+3 card.slot.3\nAlt+4 card.slot.4\nAlt+5 card.slot.5\nAlt+6 card.slot.6\n",
-                "Alt+7 card.slot.7\nAlt+8 card.slot.8\nAlt+9 card.slot.9\nAlt+; card.last\nAlt+p mode.prefix"
+                "Alt+n palette.new_agent\nAlt+t tab.new\nAlt+0 tab.dashboard\n",
+                "Alt+1 tab.terminal.1\nAlt+2 tab.terminal.2\nAlt+3 tab.terminal.3\n",
+                "Alt+4 tab.terminal.4\nAlt+5 tab.terminal.5\nAlt+6 tab.terminal.6\n",
+                "Alt+7 tab.terminal.7\nAlt+8 tab.terminal.8\nAlt+9 tab.terminal.9\n",
+                "Alt+; card.last\nAlt+p mode.prefix"
             ),
         ),
         (
@@ -198,6 +200,29 @@ fn overlays_remove_bindings_and_prefix_moves_both_symbolic_entries_last() {
         action(&map, KeyMode::Prefix, "p").as_deref(),
         Some("palette.commands")
     );
+}
+
+#[test]
+fn overlays_win_over_the_bundled_dashboard_and_terminal_chords() {
+    for keymap in ["rimz", "tmux", "zellij", "vim"] {
+        let machine = config(&format!(
+            "[room]\nstyle='rimz'\n[keys]\nkeymap='{keymap}'\n\
+             [keys.bind.normal]\n'Alt+3'='card.slot.3'\n'Alt+0'='none'\n"
+        ));
+        assert!(machine.notices.key_bindings.is_empty(), "{keymap}");
+        let map = machine.room_keymap();
+        assert_eq!(
+            action(&map, KeyMode::Normal, "Alt+3").as_deref(),
+            Some("card.slot.3"),
+            "{keymap}"
+        );
+        assert_eq!(action(&map, KeyMode::Normal, "Alt+0"), None, "{keymap}");
+        assert_eq!(
+            action(&map, KeyMode::Normal, "Alt+4").as_deref(),
+            Some("tab.terminal.4"),
+            "{keymap}"
+        );
+    }
 }
 
 #[test]
@@ -378,7 +403,16 @@ fn rimz_actions_carry_commands_and_typed_palette_modes() {
         let action = KeyActionName::parse(&format!("card.slot.{slot}")).unwrap();
         assert!(matches!(action, KeyActionName::Command { args, .. }
             if args == ["sidebar", "slot", slot.as_str()]));
+        let action = KeyActionName::parse(&format!("tab.terminal.{slot}")).unwrap();
+        assert!(matches!(action, KeyActionName::Command { args, .. }
+            if args == ["tab", "terminal", slot.as_str()]));
+        assert!(!action.is_motion());
     }
+    let dashboard = KeyActionName::parse("tab.dashboard").unwrap();
+    assert!(matches!(dashboard, KeyActionName::Command { args, .. }
+        if args == ["tab", "dashboard"]));
+    assert_eq!(KeyActionName::parse("tab.terminal.0"), None);
+    assert_eq!(KeyActionName::parse("tab.terminal.10"), None);
     for (name, mode, word) in [
         ("palette.cards", KeyPaletteMode::Cards, "cards"),
         ("palette.commands", KeyPaletteMode::Commands, "commands"),
@@ -459,9 +493,10 @@ fn motion_actions_are_exactly_the_sticky_set() {
 
 const CARD_LAYER: &str = concat!(
     "Alt+j card.next\nAlt+k card.prev\nAlt+J worktree.next\nAlt+K worktree.prev\n",
-    "Alt+? filter.needs_you\nAlt+n palette.new_agent\nAlt+1 card.slot.1\nAlt+2 card.slot.2\n",
-    "Alt+3 card.slot.3\nAlt+4 card.slot.4\nAlt+5 card.slot.5\nAlt+6 card.slot.6\n",
-    "Alt+7 card.slot.7\nAlt+8 card.slot.8\nAlt+9 card.slot.9\nAlt+; card.last\n"
+    "Alt+? filter.needs_you\nAlt+n palette.new_agent\nAlt+0 tab.dashboard\n",
+    "Alt+1 tab.terminal.1\nAlt+2 tab.terminal.2\nAlt+3 tab.terminal.3\n",
+    "Alt+4 tab.terminal.4\nAlt+5 tab.terminal.5\nAlt+6 tab.terminal.6\n",
+    "Alt+7 tab.terminal.7\nAlt+8 tab.terminal.8\nAlt+9 tab.terminal.9\nAlt+; card.last\n"
 );
 
 const SLOTS: &str = concat!(

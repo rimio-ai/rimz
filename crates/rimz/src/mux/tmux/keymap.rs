@@ -762,6 +762,45 @@ mod tests {
     }
 
     #[test]
+    fn alt_digits_run_the_tab_verbs_and_an_overlay_restores_a_slot() {
+        let bind = |commands: &[Vec<String>], key: &str| {
+            commands
+                .iter()
+                .find(|cmd| cmd[0] == "bind-key" && cmd[3] == key)
+                .map(|cmd| cmd[4..].to_vec())
+        };
+        let bundled = commands("[room]\nstyle='rimz'", "", None);
+        for (key, verb) in [
+            ("M-3", "'tab' 'terminal' '3'"),
+            ("M-0", "'tab' 'dashboard'"),
+        ] {
+            assert_eq!(
+                bind(&bundled, key).unwrap(),
+                [
+                    "run-shell".to_owned(),
+                    "-b".to_owned(),
+                    format!(
+                        "'/bin/rimz' '--mux' 'tmux' {verb} '--session-name' '#{{session_name}}'"
+                    )
+                ]
+            );
+        }
+        let overlay = commands(
+            "[room]\nstyle='rimz'\n[keys.bind.normal]\n'Alt+3'='card.slot.3'\n'Alt+0'='none'",
+            "",
+            None,
+        );
+        assert!(
+            bind(&overlay, "M-3")
+                .unwrap()
+                .last()
+                .unwrap()
+                .contains("'sidebar' 'slot' '3'")
+        );
+        assert_eq!(bind(&overlay, "M-0"), None);
+    }
+
+    #[test]
     fn named_commands_do_not_depend_on_the_session_start_directory() {
         for config in ["", "[room]\nstyle='rimz'"] {
             for command in commands(config, "", None) {

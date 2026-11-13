@@ -133,7 +133,8 @@ struct KeyFacts {
 struct StyleFacts {
     next: Option<KeyChord>,
     prev: Option<KeyChord>,
-    slots: Vec<Option<KeyChord>>,
+    dashboard: Option<KeyChord>,
+    terminals: Vec<Option<KeyChord>>,
     needs_you: Option<KeyChord>,
     prefix: Option<KeyChord>,
     zoom: Option<KeyChord>,
@@ -155,8 +156,9 @@ impl KeyFacts {
             rimz: StyleFacts {
                 next: chord_for(&rimz, KeyMode::Normal, "card.next"),
                 prev: chord_for(&rimz, KeyMode::Normal, "card.prev"),
-                slots: (1..=9)
-                    .map(|slot| chord_for(&rimz, KeyMode::Normal, &format!("card.slot.{slot}")))
+                dashboard: chord_for(&rimz, KeyMode::Normal, "tab.dashboard"),
+                terminals: (1..=9)
+                    .map(|n| chord_for(&rimz, KeyMode::Normal, &format!("tab.terminal.{n}")))
                     .collect(),
                 needs_you: chord_for(&rimz, KeyMode::Normal, "filter.needs_you"),
                 prefix: rimz.style.map(|style| style.prefix),
@@ -1088,11 +1090,11 @@ fn chord(chord: Option<KeyChord>) -> String {
     chord.map_or_else(|| "(unbound)".to_owned(), |chord| chord.to_string())
 }
 
-/// The bound slot chords in slot order, a run of consecutive digits under one
-/// modifier collapsed to its ends (`Alt+1..9`).
-fn slots_text(slots: &[Option<KeyChord>]) -> String {
+/// The bound terminal chords in terminal order, a run of consecutive digits
+/// under one modifier collapsed to its ends (`Alt+1..9`).
+fn terminals_text(terminals: &[Option<KeyChord>]) -> String {
     let mut runs: Vec<(KeyChord, KeyChord)> = Vec::new();
-    for next in slots.iter().flatten().copied() {
+    for next in terminals.iter().flatten().copied() {
         match runs.last_mut() {
             Some((_, last)) if next_digit(*last, next) => *last = next,
             _ => runs.push((next, next)),
@@ -1156,7 +1158,8 @@ fn room_keys_options(facts: &KeyFacts, mux: MuxName, status_bar_unset: bool) -> 
         indent,
         &[
             format!("{}/{} walk agents", chord(rimz.next), chord(rimz.prev)),
-            format!("{} jump", slots_text(&rimz.slots)),
+            format!("{} dashboard", chord(rimz.dashboard)),
+            format!("{} terminals", terminals_text(&rimz.terminals)),
             format!("{} who needs you", chord(rimz.needs_you)),
         ],
     ));

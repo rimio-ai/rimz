@@ -11,7 +11,7 @@
 | `close [--pane PANE_ID]` | Close the highlighted row's pane, or the pane of the card that owns `PANE_ID`. |
 | `reopen` | Resume the most recently closed agent card. |
 
-Native room style, the default, binds none of these commands to multiplexer keys. With `[room] style = "rimz"`, every bundled [room keymap](../keymaps.md#actions) binds all six (its `filter.needs_you` key runs `filter needs-you --toggle`), and `rimz keys` lists the chords. Inside the sidebar pane, the default [sidebar keys](../../guide/configuration.md#sidebar-keys) reach the same actions under both styles: `1` to `9` for `slot`, `Tab` for `last`, `f n` for `filter needs-you --toggle`, and `d d` for `close --pane` on the selected card. The [command palette](./palette.md) offers `walk`, `slot`, and `last` as room rows.
+Native room style, the default, binds none of these commands to multiplexer keys. With `[room] style = "rimz"`, every bundled [room keymap](../keymaps.md#actions) binds `walk`, `last`, `filter needs-you --toggle`, `close`, and `reopen`; the `tmux` and `zellij` keymaps also bind `slot`, to the prefix digits and the tab-mode digits, while `rimz` and `vim` leave it unbound. `rimz keys` lists the chords. Inside the sidebar pane, the default [sidebar keys](../../guide/configuration.md#sidebar-keys) reach the same actions under both styles: `1` to `9` for `slot`, `Tab` for `last`, `f n` for `filter needs-you --toggle`, and `d d` for `close --pane` on the selected card. The [command palette](./palette.md) offers `walk`, `slot`, and `last` as room rows.
 
 ## Room and view
 

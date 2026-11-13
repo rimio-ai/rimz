@@ -164,6 +164,14 @@ fn pty_commands_resolve_the_pressing_room_and_preserve_literal_arguments() {
             "--mux\ntmux\npane\nzoom\n--session-name\nsecond\n",
         ),
         (
+            &b"\x1b3"[..],
+            "--mux\ntmux\ntab\nterminal\n3\n--session-name\nsecond\n",
+        ),
+        (
+            &b"\x1b0"[..],
+            "--mux\ntmux\ntab\ndashboard\n--session-name\nsecond\n",
+        ),
+        (
             &b"\x1by"[..],
             "--mux\ntmux\nmessage\n@coder\n#{session_name} % ;\n",
         ),

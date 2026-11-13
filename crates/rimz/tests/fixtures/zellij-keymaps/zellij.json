@@ -5,8 +5,18 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "dashboard",
+      "--session-name",
+      "room"
+    ],
+    [
+      "--mux",
+      "zellij",
+      "--root",
+      "/project,=%2C",
+      "tab",
+      "terminal",
       "1",
       "--session-name",
       "room"
@@ -16,8 +26,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "2",
       "--session-name",
       "room"
@@ -27,8 +37,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "3",
       "--session-name",
       "room"
@@ -38,8 +48,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "4",
       "--session-name",
       "room"
@@ -49,8 +59,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "5",
       "--session-name",
       "room"
@@ -60,8 +70,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "6",
       "--session-name",
       "room"
@@ -71,8 +81,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "7",
       "--session-name",
       "room"
@@ -82,8 +92,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "8",
       "--session-name",
       "room"
@@ -93,8 +103,8 @@
       "zellij",
       "--root",
       "/project,=%2C",
-      "sidebar",
-      "slot",
+      "tab",
+      "terminal",
       "9",
       "--session-name",
       "room"
@@ -352,7 +362,7 @@
     {
       "binds": [
         {
-          "key": "Alt 1",
+          "key": "Alt 0",
           "steps": [
             {
               "run": 0
@@ -360,7 +370,7 @@
           ]
         },
         {
-          "key": "Alt 2",
+          "key": "Alt 1",
           "steps": [
             {
               "run": 1
@@ -368,7 +378,7 @@
           ]
         },
         {
-          "key": "Alt 3",
+          "key": "Alt 2",
           "steps": [
             {
               "run": 2
@@ -376,7 +386,7 @@
           ]
         },
         {
-          "key": "Alt 4",
+          "key": "Alt 3",
           "steps": [
             {
               "run": 3
@@ -384,7 +394,7 @@
           ]
         },
         {
-          "key": "Alt 5",
+          "key": "Alt 4",
           "steps": [
             {
               "run": 4
@@ -392,7 +402,7 @@
           ]
         },
         {
-          "key": "Alt 6",
+          "key": "Alt 5",
           "steps": [
             {
               "run": 5
@@ -400,7 +410,7 @@
           ]
         },
         {
-          "key": "Alt 7",
+          "key": "Alt 6",
           "steps": [
             {
               "run": 6
@@ -408,7 +418,7 @@
           ]
         },
         {
-          "key": "Alt 8",
+          "key": "Alt 7",
           "steps": [
             {
               "run": 7
@@ -416,7 +426,7 @@
           ]
         },
         {
-          "key": "Alt 9",
+          "key": "Alt 8",
           "steps": [
             {
               "run": 8
@@ -424,7 +434,7 @@
           ]
         },
         {
-          "key": "Alt ;",
+          "key": "Alt 9",
           "steps": [
             {
               "run": 9
@@ -432,7 +442,7 @@
           ]
         },
         {
-          "key": "Alt ?",
+          "key": "Alt ;",
           "steps": [
             {
               "run": 10
@@ -440,7 +450,7 @@
           ]
         },
         {
-          "key": "Alt J",
+          "key": "Alt ?",
           "steps": [
             {
               "run": 11
@@ -448,10 +458,18 @@
           ]
         },
         {
-          "key": "Alt K",
+          "key": "Alt J",
           "steps": [
             {
               "run": 12
+            }
+          ]
+        },
+        {
+          "key": "Alt K",
+          "steps": [
+            {
+              "run": 13
             }
           ]
         },
@@ -470,7 +488,7 @@
           "key": "Alt j",
           "steps": [
             {
-              "run": 13
+              "run": 14
             }
           ]
         },
@@ -478,7 +496,7 @@
           "key": "Alt k",
           "steps": [
             {
-              "run": 14
+              "run": 15
             }
           ]
         },
@@ -541,7 +559,7 @@
           "key": "?",
           "steps": [
             {
-              "float": 15
+              "float": 16
             },
             {
               "mode": "locked"
@@ -605,7 +623,7 @@
           "key": "u",
           "steps": [
             {
-              "run": 16
+              "run": 17
             },
             {
               "mode": "locked"
@@ -616,7 +634,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 17
+              "run": 18
             },
             {
               "mode": "locked"
@@ -677,7 +695,7 @@
                   "NewPane",
                   "Down"
                 ],
-                "run": 18
+                "run": 19
               }
             },
             {
@@ -689,7 +707,7 @@
           "key": "f",
           "steps": [
             {
-              "run": 19
+              "run": 20
             },
             {
               "mode": "locked"
@@ -749,7 +767,7 @@
                   "NewPane",
                   "Right"
                 ],
-                "run": 20
+                "run": 21
               }
             },
             {
@@ -776,7 +794,7 @@
                   "NewPane",
                   "Right"
                 ],
-                "run": 21
+                "run": 22
               }
             },
             {
@@ -788,7 +806,7 @@
           "key": "x",
           "steps": [
             {
-              "run": 22
+              "run": 23
             },
             {
               "mode": "locked"
@@ -865,7 +883,7 @@
           "key": "1",
           "steps": [
             {
-              "run": 23
+              "run": 24
             },
             {
               "mode": "locked"
@@ -876,7 +894,7 @@
           "key": "2",
           "steps": [
             {
-              "run": 24
+              "run": 25
             },
             {
               "mode": "locked"
@@ -887,7 +905,7 @@
           "key": "3",
           "steps": [
             {
-              "run": 25
+              "run": 26
             },
             {
               "mode": "locked"
@@ -898,7 +916,7 @@
           "key": "4",
           "steps": [
             {
-              "run": 26
+              "run": 27
             },
             {
               "mode": "locked"
@@ -909,7 +927,7 @@
           "key": "5",
           "steps": [
             {
-              "run": 27
+              "run": 28
             },
             {
               "mode": "locked"
@@ -920,7 +938,7 @@
           "key": "6",
           "steps": [
             {
-              "run": 28
+              "run": 29
             },
             {
               "mode": "locked"
@@ -931,7 +949,7 @@
           "key": "7",
           "steps": [
             {
-              "run": 29
+              "run": 30
             },
             {
               "mode": "locked"
@@ -942,7 +960,7 @@
           "key": "8",
           "steps": [
             {
-              "run": 30
+              "run": 31
             },
             {
               "mode": "locked"
@@ -953,7 +971,7 @@
           "key": "9",
           "steps": [
             {
-              "run": 31
+              "run": 32
             },
             {
               "mode": "locked"

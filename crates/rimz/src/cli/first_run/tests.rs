@@ -341,7 +341,9 @@ fn room_keys_text_quotes_the_resolved_chords_per_multiplexer() {
     for text in [&tmux, &zellij] {
         assert_fits(text);
         assert!(text.contains("Alt+j/Alt+k walk agents"));
-        assert!(text.contains("Alt+1..9 jump"));
+        assert!(text.contains("Alt+0 dashboard"));
+        assert!(text.contains("Alt+1..9 terminals"));
+        assert!(!text.contains("jump"));
         assert!(text.contains("Alt+p, then: z fullscreen"));
         assert!(text.contains("r resize mode, kept through moves until Esc"));
         assert!(text.contains("your own prefix bindings do not fire in rooms"));
@@ -372,7 +374,7 @@ fn room_keys_text_quotes_the_resolved_chords_per_multiplexer() {
         toml::from_str("[keys.bind.normal]\n\"Alt+5\" = \"none\"\n").expect("config");
     let gap = room_keys_options(&KeyFacts::from_config(&gap), MuxName::Tmux, true).join("\n");
     assert!(!gap.contains("Alt+1..9"), "{gap}");
-    assert!(gap.contains("Alt+1..4/Alt+6..9 jump"), "{gap}");
+    assert!(gap.contains("Alt+1..4/Alt+6..9 terminals"), "{gap}");
     assert_fits(&gap);
 
     let ctrl: MachineConfig = toml::from_str(concat!(
@@ -380,16 +382,16 @@ fn room_keys_text_quotes_the_resolved_chords_per_multiplexer() {
         "\"Alt+1\" = \"none\"\n\"Alt+2\" = \"none\"\n\"Alt+4\" = \"none\"\n",
         "\"Alt+5\" = \"none\"\n\"Alt+6\" = \"none\"\n\"Alt+7\" = \"none\"\n",
         "\"Alt+9\" = \"none\"\n",
-        "\"Ctrl+1\" = \"card.slot.1\"\n\"Ctrl+2\" = \"card.slot.2\"\n",
-        "\"Ctrl+4\" = \"card.slot.4\"\n\"Ctrl+5\" = \"card.slot.5\"\n",
-        "\"Ctrl+6\" = \"card.slot.6\"\n\"Ctrl+7\" = \"card.slot.7\"\n",
-        "\"Ctrl+9\" = \"card.slot.9\"\n",
+        "\"Ctrl+1\" = \"tab.terminal.1\"\n\"Ctrl+2\" = \"tab.terminal.2\"\n",
+        "\"Ctrl+4\" = \"tab.terminal.4\"\n\"Ctrl+5\" = \"tab.terminal.5\"\n",
+        "\"Ctrl+6\" = \"tab.terminal.6\"\n\"Ctrl+7\" = \"tab.terminal.7\"\n",
+        "\"Ctrl+9\" = \"tab.terminal.9\"\n",
     ))
     .expect("config");
     let ctrl = room_keys_options(&KeyFacts::from_config(&ctrl), MuxName::Tmux, true).join("\n");
     assert_fits(&ctrl);
     assert!(
-        ctrl.contains("Ctrl+1..2/Alt+3/Ctrl+4..7/Alt+8/Ctrl+9 jump"),
+        ctrl.contains("Ctrl+1..2/Alt+3/Ctrl+4..7/Alt+8/Ctrl+9 terminals"),
         "{ctrl}"
     );
 
@@ -398,11 +400,11 @@ fn room_keys_text_quotes_the_resolved_chords_per_multiplexer() {
         "\"Alt+1\" = \"none\"\n\"Alt+2\" = \"none\"\n\"Alt+3\" = \"none\"\n",
         "\"Alt+4\" = \"none\"\n\"Alt+5\" = \"none\"\n\"Alt+6\" = \"none\"\n",
         "\"Alt+7\" = \"none\"\n\"Alt+8\" = \"none\"\n\"Alt+9\" = \"none\"\n",
-        "\"Ctrl+Right\" = \"card.slot.1\"\n\"Ctrl+Left\" = \"card.slot.2\"\n",
-        "\"Ctrl+Down\" = \"card.slot.3\"\n\"Ctrl+Up\" = \"card.slot.4\"\n",
-        "\"Alt+Right\" = \"card.slot.5\"\n\"Alt+Left\" = \"card.slot.6\"\n",
-        "\"Alt+Down\" = \"card.slot.7\"\n\"Alt+Up\" = \"card.slot.8\"\n",
-        "\"Ctrl+q\" = \"card.slot.9\"\n",
+        "\"Ctrl+Right\" = \"tab.terminal.1\"\n\"Ctrl+Left\" = \"tab.terminal.2\"\n",
+        "\"Ctrl+Down\" = \"tab.terminal.3\"\n\"Ctrl+Up\" = \"tab.terminal.4\"\n",
+        "\"Alt+Right\" = \"tab.terminal.5\"\n\"Alt+Left\" = \"tab.terminal.6\"\n",
+        "\"Alt+Down\" = \"tab.terminal.7\"\n\"Alt+Up\" = \"tab.terminal.8\"\n",
+        "\"Ctrl+q\" = \"tab.terminal.9\"\n",
     ))
     .expect("config");
     let mixed = room_keys_options(&KeyFacts::from_config(&mixed), MuxName::Tmux, true).join("\n");
@@ -410,9 +412,9 @@ fn room_keys_text_quotes_the_resolved_chords_per_multiplexer() {
     let chords: String = mixed.split_whitespace().collect();
     assert!(
         chords.contains(
-            "Ctrl+Right/Ctrl+Left/Ctrl+Down/Ctrl+Up/Alt+Right/Alt+Left/Alt+Down/Alt+Up/Ctrl+qjump"
+            "Ctrl+Right/Ctrl+Left/Ctrl+Down/Ctrl+Up/Alt+Right/Alt+Left/Alt+Down/Alt+Up/Ctrl+qterminals"
         ),
-        "every bound chord is shown in slot order:\n{mixed}"
+        "every bound chord is shown in terminal order:\n{mixed}"
     );
 
     let mut bare = KeyFacts::from_config(&MachineConfig::default());
