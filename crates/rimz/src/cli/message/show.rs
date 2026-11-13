@@ -403,12 +403,7 @@ pub(super) fn steer_failure(
         return format!("receiver {target} is gone; cannot steer {message_id}");
     }
     if !check.pane.present {
-        return match &check.pane.pinned_pane_id {
-            Some(pane_id) => {
-                format!("pinned pane {pane_id} is not live for {target}; cannot steer {message_id}")
-            }
-            None => format!("no live pane for {target}; cannot steer {message_id}"),
-        };
+        return format!("no live pane for {target}; cannot steer {message_id}");
     }
     if check.passes() {
         return format!(
@@ -663,8 +658,6 @@ fn pane_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
             .as_ref()
             .map(|pane_id| format!("ok ({pane_id})"))
             .unwrap_or_else(|| "ok".to_owned())
-    } else if let Some(pane_id) = &check.pane.pinned_pane_id {
-        format!("pinned pane {pane_id} not live")
     } else {
         "no live pane".to_owned()
     };
@@ -798,9 +791,7 @@ pub(super) fn render_verdict(
         deliver::DeliveryVerdict::PaneHeld => format!(
             "waiting: {target} ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open"
         ),
-        deliver::DeliveryVerdict::NoPane { pinned_pane_id } => {
-            format!("{} for {target}", deliver::no_pane_blocker(pinned_pane_id.as_ref()))
-        }
+        deliver::DeliveryVerdict::NoPane => format!("{} for {target}", deliver::NO_LIVE_PANE),
         deliver::DeliveryVerdict::Ready => "ready: delivery conditions pass".to_owned(),
     }
 }
@@ -830,7 +821,7 @@ pub(super) fn delivery_action_hint(
         deliver::DeliveryVerdict::PaneHeld => Some(format!(
             "check it: rimz pane capture {target}      send now: rimz message steer {message_id} --force"
         )),
-        deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
+        deliver::DeliveryVerdict::NoPane | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
         deliver::DeliveryVerdict::WaitingForRegistration { .. } => None,
         deliver::DeliveryVerdict::Expired { .. } => None,
@@ -1079,7 +1070,6 @@ mod tests {
             pane: deliver::PaneCheck {
                 present: true,
                 pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_3")),
-                pinned_pane_id: None,
             },
         };
 

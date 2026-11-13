@@ -489,7 +489,7 @@ fn provisional_pane_skips_readiness_gate() {
     let launch = agent("launch_pending", AgentStatus::Running);
     let pane = pane_only("terminal_1", "coder");
     let snapshot = snapshot_with_panes(vec![launch.clone()], vec![pane.clone()]);
-    let binding = crate::address::pane_binding(&snapshot, &pane, None).unwrap();
+    let binding = crate::address::pane_binding(&snapshot, &pane).unwrap();
     assert!(binding.agent.is_some() && binding.exact_agent.is_none());
     let target = ResolvedTarget {
         pane: Some(pane),

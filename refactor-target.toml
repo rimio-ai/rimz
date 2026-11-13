@@ -7209,7 +7209,7 @@ reason = "Public lane-membership face of the private Candidate trait; exposing t
 [[verdict]]
 kind = "item"
 key = "address::pane_binding"
-reason = "The durable message pane pin reaches this guard through bind_agent; it rejects a different pane rather than redirecting delivery (pass 14)."
+reason = "Delivery binds a card to its current pane through bind_agent, and dispatch binds one live pane; both share this one ladder (pass 14)."
 
 [[verdict]]
 kind = "item"

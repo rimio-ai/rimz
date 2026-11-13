@@ -839,7 +839,11 @@ impl Store {
                 now,
             )
             .map(|blocker| blocker.message_id.clone());
-            let queued = queue.at_tail(message);
+            let mut queued = queue.at_tail(message);
+            if blocker.is_some() {
+                // The pane was read for this claim; parked, the record waits for the card.
+                queued.pane_id = None;
+            }
             let event = EventEnvelope::message_event(
                 &queued,
                 session_name,
@@ -1064,11 +1068,10 @@ impl Store {
                 typing_hold.until
             );
             Ok(queue.apply_all(session_name, now, |message| {
-                let Some(claim) = held.iter().find(|claim| holds(claim, message)) else {
+                if !held.iter().any(|claim| holds(claim, message)) {
                     return MessageUpdate::Keep;
-                };
+                }
                 message.requeue(now, &note);
-                message.pane_id = claim.pane_id.clone();
                 message.attempts = message.attempts.saturating_sub(1);
                 message.last_attempt_at = None;
                 message.retry_after = Some(typing_hold.until);

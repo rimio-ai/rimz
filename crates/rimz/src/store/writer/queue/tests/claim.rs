@@ -426,7 +426,7 @@ fn typing_hold_requeues_owned_claims_without_spending_attempts() {
             MessageStatus::Queued,
             MAX_DELIVERY_ATTEMPTS - 1,
             None,
-            Some(pane_id),
+            None,
             Some(hold),
             Some(hold.until),
             (!compacted).then_some(AutoCompact::Percent(70)),
@@ -504,7 +504,6 @@ fn stored_hold_push_records_replay_and_force_without_claiming() {
     let q = Queue::new();
     let until = Timestamp::now() + Duration::from_secs(30);
     let held = q.queue_with(1, |message| {
-        message.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
         message.typing_hold = Some(TypingHold {
             until,
             replay: None,
@@ -532,7 +531,7 @@ fn stored_hold_push_records_replay_and_force_without_claiming() {
     assert_eq!(encoded["force"], true);
     assert_eq!(updated.status, MessageStatus::Queued);
     assert_eq!(updated.attempts, 0);
-    assert_eq!(updated.pane_id, held.pane_id);
+    assert_eq!(updated.pane_id, None);
     assert_eq!(updated.retry_after, Some(until));
     assert!(!updated.force);
 
@@ -734,7 +733,9 @@ fn fresh_boundary_claim_parks_behind_either_id_order() {
         let held = q
             .queue_claimed_message(&q.record(winner_id), "session", now)
             .unwrap();
-        let fresh = q.record(loser_id);
+        let fresh = q
+            .record(loser_id)
+            .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
         let BoundaryClaim::Parked {
             message: parked,
             blocker,
@@ -749,6 +750,8 @@ fn fresh_boundary_claim_parks_behind_either_id_order() {
         assert_eq!(parked.status, MessageStatus::Queued);
         assert_eq!(parked.attempts, 0);
         assert_eq!(parked.last_attempt_at, None);
+        // The fresh record carries the live pane for its claim; parked, it keeps none.
+        assert_eq!(parked.pane_id, None);
         assert!(
             !q.message_claims_held(std::slice::from_ref(&parked))
                 .unwrap()
@@ -760,6 +763,15 @@ fn fresh_boundary_claim_parks_behind_either_id_order() {
             parked.message_id.as_str(),
             "{events:?}"
         );
+        assert!(
+            events
+                .last()
+                .unwrap()
+                .params_value()
+                .get("pane_id")
+                .is_none(),
+            "{events:?}"
+        );
     }
 }
 
@@ -767,7 +779,9 @@ fn fresh_boundary_claim_parks_behind_either_id_order() {
 fn fresh_boundary_claim_parks_behind_a_sent_prompt() {
     let q = Queue::new();
     let sent = q.sent(2);
-    let fresh = q.record(1);
+    let fresh = q
+        .record(1)
+        .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
     let BoundaryClaim::Parked {
         message: parked,
         blocker,
@@ -781,6 +795,7 @@ fn fresh_boundary_claim_parks_behind_a_sent_prompt() {
     assert!(parked.message_id.as_str() > sent.message_id.as_str());
     let mut fresh = fresh;
     fresh.message_id = parked.message_id;
+    fresh.pane_id = None;
     assert_eq!(q.by_id(&fresh.message_id), fresh);
     assert!(!q.message_claims_held(std::slice::from_ref(&fresh)).unwrap());
     assert_eq!(
@@ -804,7 +819,9 @@ fn fresh_boundary_claim_prefers_a_deliverable_queue_head() {
     other.message_id = MessageId::parse("msg_v000000000000002").unwrap();
     other.agent_id = "other-session".into();
     q.queue_message(&other, "session").unwrap();
-    let fresh = q.record(3);
+    let fresh = q
+        .record(3)
+        .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
     let BoundaryClaim::Parked {
         message: parked,
         blocker,
@@ -817,6 +834,7 @@ fn fresh_boundary_claim_prefers_a_deliverable_queue_head() {
     assert!(parked.message_id.as_str() < other.message_id.as_str());
     let mut fresh = fresh;
     fresh.message_id = parked.message_id;
+    fresh.pane_id = None;
     assert_eq!(q.by_id(&fresh.message_id), fresh);
     assert!(!q.message_claims_held(std::slice::from_ref(&fresh)).unwrap());
     assert_eq!(

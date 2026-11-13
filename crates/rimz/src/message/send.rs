@@ -488,7 +488,10 @@ fn wait_and_decide(
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_MESSAGE_BEFORE_WRITE");
     // Every delivery binds its claim to the pane before entering the write path.
-    let pane = head.pane_id.as_ref().expect("live send has a pane pin");
+    let pane = head
+        .pane_id
+        .as_ref()
+        .expect("a claimed send carries its pane");
     if let Some(until) = send.typing_hold_until(workspace, store.runtime_paths(), pane) {
         return Ok(Decided::Stop(Receipt::TypingHeld { until, compacted }));
     }

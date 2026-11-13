@@ -6,6 +6,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::config::DONE_STAGE;
 use crate::harness::board::{BoardErr, LockedBoard};
 use crate::harness::schedule::pending::SessionWaits;
+use crate::ids::PaneId;
 use crate::message::synthetic::SyntheticMessage;
 use crate::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use crate::store::snapshot::find_agent;
@@ -21,13 +22,15 @@ pub enum NudgeErr {
     Store(#[from] crate::store::StoreErr),
 }
 
+/// Queue the nudge for the stage owner, returning it with the owner's pane as read now, for the
+/// immediate attempt.
 pub fn queue(
     request: &StallNudgeRequest,
     workspace: &ResolvedWorkspace,
     store: &Store,
     zone: &TimeZone,
     read_agents: impl FnOnce() -> crate::store::Result<(Vec<AgentState>, Timestamp)>,
-) -> Result<Option<MessageRecord>, NudgeErr> {
+) -> Result<Option<(MessageRecord, Option<PaneId>)>, NudgeErr> {
     let locked = match LockedBoard::open(store, &request.checkout, Some(&request.team)) {
         Ok(board) => board,
         Err(BoardErr::Unlinked(_) | BoardErr::WrongTeam { .. }) => return Ok(None),
@@ -102,11 +105,13 @@ pub fn queue(
             notice: HarnessNotice::TeamStalled,
         },
         gate: DeliveryGate::Done,
-        pane_id: target.pane.as_ref().map(|pane| pane.pane_id.clone()),
     }
     .record(workspace);
     store.queue_message(&message, &workspace.session_name)?;
-    Ok(Some(message))
+    Ok(Some((
+        message,
+        target.pane.as_ref().map(|pane| pane.pane_id.clone()),
+    )))
 }
 
 fn text(

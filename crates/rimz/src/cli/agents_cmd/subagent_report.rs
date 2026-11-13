@@ -211,7 +211,6 @@ pub(super) fn report_fleet_with_kind(
         text: compose_digest(&digest_rows, &held, subagents, &clock),
         sender,
         gate: DeliveryGate::Done,
-        pane_id: pane_id.cloned(),
     }
     .record(workspace);
     let message_id = message.message_id.clone();

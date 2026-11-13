@@ -107,7 +107,6 @@ pub fn send_compact(
         text: request.command,
         sender: request.sender,
         gate: DeliveryGate::Done,
-        pane_id: Some(request.pane_id),
     }
     .record(workspace)
     .with_automated(request.automated)
@@ -121,6 +120,7 @@ pub fn send_compact(
         workspace,
         store,
         &message,
+        Some(&request.pane_id),
         DeliveryFailureDisposition::Retry,
         "compaction delivery gate closed",
     )? {

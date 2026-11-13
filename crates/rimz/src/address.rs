@@ -593,16 +593,11 @@ impl PaneBinding<'_, '_> {
 }
 
 /// Bind one pane to exact lifecycle state, a same-channel provisional launch,
-/// or a sessionless lazy target. A pinned pane filters this result in place;
-/// it never redirects to another pane.
+/// or a sessionless lazy target.
 pub(crate) fn pane_binding<'snapshot, 'pane>(
     snapshot: &'snapshot SidebarSnapshot,
     pane: &'pane PaneAgent,
-    pinned: Option<&PaneId>,
 ) -> Option<PaneBinding<'snapshot, 'pane>> {
-    if pinned.is_some_and(|pinned| pinned != &pane.pane_id) {
-        return None;
-    }
     if let Some(agent_id) = pane.agent_id.as_ref() {
         let agent = find_agent(&snapshot.agents, &pane.kind, agent_id)?;
         return Some(PaneBinding {
@@ -630,17 +625,22 @@ pub(crate) fn pane_binding<'snapshot, 'pane>(
     })
 }
 
-/// Find the exact or provisional live pane associated with one logical card.
+/// Find the live pane associated with one logical card: the pane stamped with the card's own id
+/// when there is one, else the first sessionless pane its provisional launch binds.
 pub(crate) fn bind_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     agent: &AgentState,
-    pinned: Option<&PaneId>,
 ) -> Option<PaneBinding<'a, 'a>> {
-    snapshot
-        .agent_panes
-        .iter()
-        .filter_map(|pane| pane_binding(snapshot, pane, pinned))
-        .find(|binding| binding.matches_agent(agent))
+    let bindings = || {
+        snapshot
+            .agent_panes
+            .iter()
+            .filter_map(|pane| pane_binding(snapshot, pane))
+            .filter(|binding| binding.matches_agent(agent))
+    };
+    bindings()
+        .find(|binding| binding.exact_agent.is_some())
+        .or_else(|| bindings().next())
 }
 
 /// The full agent sessions that can be named in this snapshot. Provider-native

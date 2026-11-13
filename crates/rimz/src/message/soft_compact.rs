@@ -1,6 +1,7 @@
 //! Steer-only wrap-ups and queue-tail continues for a soft-compaction cycle.
 
 use crate::Store;
+use crate::ids::PaneId;
 use crate::store::message::MessageRecord;
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
@@ -14,17 +15,19 @@ pub enum WrapUpOutcome {
     Missed(String),
 }
 
+/// Queue and steer the wrap-up on the multiplexer of `pane`, the card's pane as the caller read it.
 pub fn send_wrap_up(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message: &MessageRecord,
+    pane: &PaneId,
 ) -> Result<WrapUpOutcome> {
     store.queue_message(message, &workspace.session_name)?;
     let outcome = deliver::deliver_one_report(
         workspace,
         store,
         &message.message_id,
-        message.pane_id.as_ref().map(crate::ids::PaneId::mux),
+        Some(pane.mux()),
         DeliveryPolicy::Steer { force: false },
     );
     let reason = match &outcome {
@@ -50,17 +53,19 @@ pub fn send_wrap_up(
     outcome.map(|_| WrapUpOutcome::Missed(reason))
 }
 
+/// Queue the continue at the card's tail and attempt it on the multiplexer of `pane`.
 pub fn send_continue(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message: &MessageRecord,
+    pane: &PaneId,
 ) -> Result<()> {
     let queued = store.queue_tail_message(message, &workspace.session_name)?;
     synthetic::attempt_now(
         workspace,
         store,
         &queued.message_id,
-        queued.pane_id.as_ref(),
+        Some(pane),
         DeliveryFailureDisposition::Retry,
         "soft-compaction continue delivery gate closed",
     )?;

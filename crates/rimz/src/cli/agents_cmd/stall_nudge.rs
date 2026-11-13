@@ -13,7 +13,7 @@ pub(super) fn run(request: StallNudgeRequest) -> Result<()> {
     let ctx = Ctx::for_workspace(request.workspace_id.clone(), None)
         .context("resolving stall nudge workspace")?;
     let machine = MachineConfig::load_lenient();
-    let Some(message) = rimz::harness::stall_nudge::helper::queue(
+    let Some((message, pane)) = rimz::harness::stall_nudge::helper::queue(
         &request,
         &ctx.workspace,
         &ctx.store,
@@ -24,7 +24,7 @@ pub(super) fn run(request: StallNudgeRequest) -> Result<()> {
     else {
         return Ok(());
     };
-    let outcome = match &message.pane_id {
+    let outcome = match &pane {
         Some(pane) => deliver_one(
             &ctx.workspace,
             &ctx.store,

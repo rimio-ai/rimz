@@ -945,19 +945,18 @@ fn notify_parent_restarted(
             notice: HarnessNotice::SubagentRestarted,
         },
         gate: DeliveryGate::Done,
-        pane_id: parent.pane.as_ref().map(|pane| pane.pane_id.clone()),
     }
     .record(&ctx.workspace)
     .with_about_run(Some(run.run_id.clone()));
     ctx.store
         .queue_message(&message, &ctx.workspace.session_name)
         .context("queueing the restart notice")?;
-    if let Some(pane_id) = &message.pane_id {
+    if let Some(pane) = &parent.pane {
         rimz::message::deliver::deliver_one(
             &ctx.workspace,
             &ctx.store,
             &message.message_id,
-            Some(pane_id.mux()),
+            Some(pane.pane_id.mux()),
             rimz::message::deliver::DeliveryPolicy::Boundary,
         )
         .context("delivering the restart notice")?;
