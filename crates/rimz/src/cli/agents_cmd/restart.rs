@@ -695,11 +695,13 @@ pub(super) fn swap_briefing(
         .map(handle)
         .collect::<Vec<_>>();
     let catalog = rimz::harness::schedule::catalog::TaskCatalog::load(Some(project_root))?;
-    let session = (agent.kind.clone(), agent.agent_id.clone());
+    let audit = store.audit_rows()?;
+    let rows = audit.iter().collect::<Vec<_>>();
     let waits = rimz::harness::schedule::pending::session_deliveries(
         &catalog,
         project_root,
-        Some(&session),
+        Some(agent),
+        &rows,
     )
     .map(|(name, _)| name.to_owned())
     .collect::<Vec<_>>();

@@ -478,23 +478,79 @@ fn execute_prepared_delivery(
     prepared: rimz::harness::schedule::runner::PreparedDelivery,
     globals: &GlobalFlags,
 ) -> Result<rimz::harness::schedule::runner::TaskFireEffect> {
-    let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root))?;
+    let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root.clone()))?;
     let store = crate::cli::require_existing_store(&workspace)?;
     let channel = crate::cli::current_channel(&workspace, Some(&store));
-    let sender = rimz::store::message::MessageSender::Harness {
-        notice: match prepared.intent {
-            rimz::harness::schedule::runner::DeliveryIntent::Signal => {
-                rimz::store::message::HarnessNotice::Signal
+    for message_id in &prepared.supersedes {
+        store.cancel_message(
+            message_id,
+            &workspace.session_name,
+            "superseded by the wait's final outcome",
+        )?;
+    }
+    // A swap between the fire and this dispatch can move the agent to another
+    // session, so the holder is read here, and read again once when its
+    // session is gone by the time the dispatch resolves it.
+    let mut gone_session = None;
+    loop {
+        let Some(holder) = prepared.holder()? else {
+            return Ok(rimz::harness::schedule::runner::TaskFireEffect::TargetGone);
+        };
+        if gone_session.as_ref() == Some(&holder.session) {
+            return Ok(rimz::harness::schedule::runner::TaskFireEffect::TargetGone);
+        }
+        match dispatch_wake(&workspace, &store, &channel, &prepared, &holder, globals) {
+            Err(rimz::message::dispatch::DispatchErr::Recipient(
+                rimz::address::TargetErr::NoMatch { .. }
+                | rimz::address::TargetErr::NoMatchInChannel { .. },
+            )) if gone_session.is_none() => gone_session = Some(holder.session),
+            Err(rimz::message::dispatch::DispatchErr::Recipient(
+                rimz::address::TargetErr::NoMatch { .. }
+                | rimz::address::TargetErr::NoMatchInChannel { .. },
+            )) => return Ok(rimz::harness::schedule::runner::TaskFireEffect::TargetGone),
+            Err(err) => return Err(err.into()),
+            Ok(result) => {
+                let message_id = result
+                    .outcomes
+                    .first()
+                    .map(|outcome| match outcome {
+                        rimz::message::dispatch::DispatchOutcome::Sent { message_id, .. }
+                        | rimz::message::dispatch::DispatchOutcome::Queued { message_id, .. }
+                        | rimz::message::dispatch::DispatchOutcome::CompactionPending {
+                            message_id,
+                            ..
+                        }
+                        | rimz::message::dispatch::DispatchOutcome::SkippedWaiting {
+                            message_id,
+                            ..
+                        } => message_id.clone(),
+                    })
+                    .context("loop wait dispatch returned no outcome")?;
+                crate::cli::send::report_dispatch(
+                    dispatch_kind(&prepared, &holder),
+                    &prepared.target.handle,
+                    &result.outcomes,
+                    &result.compacted,
+                )?;
+                return Ok(rimz::harness::schedule::runner::TaskFireEffect::Delivered(
+                    message_id,
+                ));
             }
-            _ => rimz::store::message::HarnessNotice::Wait,
-        },
-    };
-    tracing::debug!(
-        kind = %prepared.target.kind,
-        session = %prepared.target.session,
-        "queueing loop wake-up"
-    );
-    let mode = if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
+        }
+    }
+}
+
+/// A self wait steers its living holder. A holder still starting cannot take a
+/// steer, and its provisional id is no address: its wake parks under the name
+/// its row carries for its first turn boundary, and the record follows the
+/// agent's launch.
+fn wake_mode(
+    prepared: &rimz::harness::schedule::runner::PreparedDelivery,
+    holder: &rimz::config::TaskTarget,
+) -> rimz::message::dispatch::DispatchMode {
+    if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait
+        && !holder.session.is_provisional()
+    {
         rimz::message::dispatch::DispatchMode::Steer
     } else {
         rimz::message::dispatch::DispatchMode::Boundary {
@@ -503,26 +559,56 @@ fn execute_prepared_delivery(
             after: Vec::new(),
             when: Vec::new(),
         }
-    };
-    let kind = mode.kind();
-    for message_id in &prepared.supersedes {
-        store.cancel_message(
-            message_id,
-            &workspace.session_name,
-            "superseded by the wait's final outcome",
-        )?;
     }
-    let dispatched = rimz::message::dispatch::dispatch(
-        &workspace,
-        &store,
+}
+
+fn dispatch_kind(
+    prepared: &rimz::harness::schedule::runner::PreparedDelivery,
+    holder: &rimz::config::TaskTarget,
+) -> rimz::message::DeliveryKind {
+    wake_mode(prepared, holder).kind()
+}
+
+fn dispatch_wake(
+    workspace: &rimz::ResolvedWorkspace,
+    store: &rimz::Store,
+    channel: &crate::cli::CurrentChannel,
+    prepared: &rimz::harness::schedule::runner::PreparedDelivery,
+    holder: &rimz::config::TaskTarget,
+    globals: &GlobalFlags,
+) -> std::result::Result<
+    rimz::message::dispatch::DispatchResult,
+    rimz::message::dispatch::DispatchErr,
+> {
+    tracing::debug!(
+        kind = %holder.kind,
+        session = %holder.session,
+        "queueing loop wake-up"
+    );
+    let target = if holder.session.is_provisional() {
+        holder.handle.clone()
+    } else {
+        format!("@{}", holder.session)
+    };
+    let sender = rimz::store::message::MessageSender::Harness {
+        notice: match prepared.intent {
+            rimz::harness::schedule::runner::DeliveryIntent::Signal => {
+                rimz::store::message::HarnessNotice::Signal
+            }
+            _ => rimz::store::message::HarnessNotice::Wait,
+        },
+    };
+    rimz::message::dispatch::dispatch(
+        workspace,
+        store,
         rimz::message::dispatch::DispatchRequest {
             about_run: None,
             selected: Vec::new(),
             reply_wanted: false,
             premises: rimz::store::message::Premise::NONE,
             resuming_recipient: None,
-            target: format!("@{}", prepared.target.session),
-            text: prepared.prompt,
+            target,
+            text: prepared.prompt.clone(),
             target_scope: None,
             current_channel: channel.address_context(),
             caller: None,
@@ -534,42 +620,9 @@ fn execute_prepared_delivery(
             force: false,
             // Domain dispatch resolves the recipient's seat line, then the harness default.
             auto_compact: None,
-            mode,
+            mode: wake_mode(prepared, holder),
         },
-    );
-    match dispatched {
-        Ok(result) => {
-            let message_id = result
-                .outcomes
-                .first()
-                .map(|outcome| match outcome {
-                    rimz::message::dispatch::DispatchOutcome::Sent { message_id, .. }
-                    | rimz::message::dispatch::DispatchOutcome::Queued { message_id, .. }
-                    | rimz::message::dispatch::DispatchOutcome::CompactionPending {
-                        message_id,
-                        ..
-                    }
-                    | rimz::message::dispatch::DispatchOutcome::SkippedWaiting {
-                        message_id, ..
-                    } => message_id.clone(),
-                })
-                .context("loop wait dispatch returned no outcome")?;
-            crate::cli::send::report_dispatch(
-                kind,
-                &prepared.target.handle,
-                &result.outcomes,
-                &result.compacted,
-            )?;
-            Ok(rimz::harness::schedule::runner::TaskFireEffect::Delivered(
-                message_id,
-            ))
-        }
-        Err(rimz::message::dispatch::DispatchErr::Recipient(
-            rimz::address::TargetErr::NoMatch { .. }
-            | rimz::address::TargetErr::NoMatchInChannel { .. },
-        )) => Ok(rimz::harness::schedule::runner::TaskFireEffect::TargetGone),
-        Err(err) => Err(err.into()),
-    }
+    )
 }
 
 fn write_manual_header(

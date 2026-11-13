@@ -1665,13 +1665,17 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .and_then(|store| {
             let caller = super::super::send::resolve_caller(store).ok().flatten()?;
             let projection = store.runtime_projection(rimz::RuntimeScope::Audit).ok()?;
-            rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &caller)
+            let agent = rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &caller)
                 .ok()
                 .filter(|agent| agent.ended_at.is_none())
-                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                .cloned()?;
+            Some((agent, projection.agents))
         })
         .zip(entry.wait.as_ref())
-        .is_some_and(|((kind, session), target)| kind == target.kind && session == target.session);
+        .is_some_and(|((agent, agents), target)| {
+            let rows = agents.iter().collect::<Vec<_>>();
+            rimz::harness::schedule::pending::wait_of(&rows, target, &agent)
+        });
     let booker = entry
         .booked_by
         .first()

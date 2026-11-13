@@ -138,7 +138,7 @@ Scope is the project root, wherever the task is added from; a `--wait` keeps the
 
 The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout>`, and `now: waiting · team.stage: Review, ci: unknown` (`unknown · ...` when the known readings do not settle it, or `holding 0s/30m` when already true); a window term reads as `now: waiting · window.5h.left: 8`. Without a room, a CI or PR condition also prints `ci and pr readings come from the room's sidebar; the loop timer alone never sees them`.
 
-`--wait --when` pins the live session like other waits. A live subscription with the same target session, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt, label, or `--once` differs. Identical conditions on different worktrees remain separate waits.
+`--wait --when` pins the live session like other waits. A live subscription with the same target agent, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt, label, or `--once` differs. Identical conditions on different worktrees remain separate waits.
 
 ### `loop explain`
 
@@ -326,7 +326,7 @@ Signals come from `rimz events emit`, forge state changes on watched checkouts, 
 
 Firing runs in the emitting process. A signal reaches only the tasks subscribed at that moment; a later subscription never receives it. A busy task can retain its own trigger through its [overlap policy](#overlapping-triggers). A disabled or paused task, or a project task whose project is untrusted, skips the signal.
 
-`--signal --wait` with the same target session, selector, matches, and root as a live subscription prints `already subscribed as <name>` and writes nothing, even when the prompt, label, or `--once` differ.
+`--signal --wait` with the same target agent, selector, matches, and root as a live subscription prints `already subscribed as <name>` and writes nothing, even when the prompt, label, or `--once` differ.
 
 A signal delivered to a running agent (`--wait`) opens with a subject line and a verdict line carrying the task name, then the task's `--prompt`:
 
@@ -398,7 +398,7 @@ rimz loop add merged --signal pr.merged --once --wait @me
 
 ## Waits and checks
 
-`--wait @<handle>` resolves the address at add time over the same live roster that `rimz wait` uses and pins that exact session id. A named address cannot target a session shadowed by its pane's current owner, such as the old session left by a Claude `/clear`. The task keeps the handle a `rimz wait` receipt gives that agent. `--wait @me` and a bare `--wait` pin the calling agent, identified from its launch environment or process ancestry; a user shell must name a live target. A session that has not registered yet is refused. When the pinned session ends, is lost, or is stopped, its tasks retire; a fire that finds it gone records `target gone` and removes the task.
+`--wait @<handle>` resolves the address at add time over the same live roster that `rimz wait` uses and pins that agent's launch, which a restart or molt keeps. A named address cannot target a session shadowed by its pane's current owner, such as the old session left by a Claude `/clear`. The task keeps the handle a `rimz wait` receipt gives that agent. `--wait @me` and a bare `--wait` pin the calling agent, identified from its launch environment or process ancestry; a user shell must name a live target. A session that has not registered yet is refused. When the pinned agent ends, is lost, or is stopped, its tasks retire; a fire that finds it gone records `target gone` and removes the task.
 
 A `--wait` delivery arrives from `@rimz` and parks until the target's current turn ends. A signal fire carries `Type: SIGNAL`; a clock fire carries `Type: WAIT` and opens `scheduled wait` then `fired [<task>]`. The [message header](./message.md#the-message-header) lists every type. Waits armed by `rimz wait` interrupt instead ([the delivered message](./wait.md#the-delivered-message)).
 

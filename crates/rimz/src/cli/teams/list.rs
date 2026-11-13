@@ -821,8 +821,7 @@ fn live_signal(
     let target = entry.wait.as_ref()?;
     if source != TaskSource::Instance
         || entry.team.as_ref().is_none_or(|team| team != instance)
-        || target.kind != agent.kind
-        || target.session != agent.agent_id
+        || !rimz::harness::schedule::pending::wait_for(&target.kind, &target.session, agent)
     {
         return None;
     }

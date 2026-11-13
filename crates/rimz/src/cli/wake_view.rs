@@ -138,8 +138,17 @@ impl WakeRow {
         arm_state: ArmState,
         watcher_pid: Option<u32>,
         snapshot: Option<&SidebarSnapshot>,
+        audit: &[&AgentState],
         now: Timestamp,
     ) -> Self {
+        // The row keeps its target as the key its holder files it under now,
+        // read over `audit`, so an older session target reads as its launch's.
+        let mut entry = entry.clone();
+        if let Some(target) = &mut entry.wait {
+            (target.kind, target.session) =
+                schedule::pending::holder_key(audit.iter().copied(), &target.kind, &target.session);
+        }
+        let entry = &entry;
         let parsed = schedule::parse_trigger(name, entry);
         let delay = entry
             .wait_meta
@@ -205,9 +214,7 @@ impl WakeRow {
             .map(rimz::address::addressable_agents)
             .unwrap_or_default();
         let parent = entry.wait.as_ref().and_then(|target| {
-            let agent = peers
-                .iter()
-                .find(|agent| agent.kind == target.kind && agent.agent_id == target.session)?;
+            let agent = target_agent(&peers, target)?;
             let parent = rimz::address::launched_parent(peers.iter().copied(), agent)?;
             Some(rimz::address::agent_handle(parent, &peers, true))
         });
@@ -233,6 +240,12 @@ impl WakeRow {
             entry: entry.clone(),
             arm_state,
         }
+    }
+
+    /// The key the row's target files under, as [`Self::new`] resolved it.
+    pub(super) fn target_key(&self) -> Option<(AgentKind, AgentSessionId)> {
+        let target = self.entry.wait.as_ref()?;
+        Some((target.kind.clone(), target.session.clone()))
     }
 
     pub(super) fn is_self(&self) -> bool {
@@ -442,7 +455,8 @@ pub(super) fn write_room(
                 .wait
                 .as_ref()
                 .zip(row.entry.wait.as_ref())
-                .is_some_and(|(a, b)| a.kind == b.kind && a.session == b.session)
+                // Each row's target is already its holder's key (`WakeRow::new`).
+                .is_some_and(|(a, b)| schedule::pending::same_target(&[], a, b))
         });
         if let Some(group) = group {
             group.push(row);
@@ -468,21 +482,20 @@ pub(super) fn write_room(
         write_waits(out, &card, current_root, &zoned_now, 4)?;
     }
     for (owner, members) in subscriptions(rows) {
-        let targets =
-            members
-                .iter()
-                .map(|row| {
-                    let you = row.entry.wait.as_ref().zip(caller).is_some_and(
-                        |(target, (kind, session))| {
-                            &target.kind == kind && &target.session == session
-                        },
-                    );
-                    action_text(TaskActionKind::Deliver, &row.target, Some(&row.entry), you)
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
-                .join(", ");
+        let targets = members
+            .iter()
+            .map(|row| {
+                let you = row
+                    .entry
+                    .wait
+                    .as_ref()
+                    .is_some_and(|target| is_caller(target, &agents, caller));
+                action_text(TaskActionKind::Deliver, &row.target, Some(&row.entry), you)
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
         let worktrees = members
             .iter()
             .map(|row| row.entry.run_dir())
@@ -504,12 +517,7 @@ fn card_header(
     caller: Option<&(AgentKind, AgentSessionId)>,
 ) -> String {
     let target = row.entry.wait.as_ref();
-    let agent = target.and_then(|target| {
-        peers
-            .iter()
-            .copied()
-            .find(|agent| agent.kind == target.kind && agent.agent_id == target.session)
-    });
+    let agent = target.and_then(|target| target_agent(peers, target));
     let mut header = if let Some(agent) = agent {
         let mut chain = vec![agent];
         while let Some(parent) = rimz::address::launched_parent(peers.iter().copied(), chain[0]) {
@@ -540,13 +548,38 @@ fn card_header(
     } else {
         row.target.clone()
     };
-    if target
-        .zip(caller)
-        .is_some_and(|(target, (kind, session))| &target.kind == kind && &target.session == session)
-    {
+    if target.is_some_and(|target| is_caller(target, peers, caller)) {
         header.push_str(" (you)");
     }
     header
+}
+
+/// The row of the agent a wait target names, among one row per agent.
+fn target_agent<'a>(
+    peers: &[&'a AgentState],
+    target: &rimz::config::TaskTarget,
+) -> Option<&'a AgentState> {
+    peers
+        .iter()
+        .copied()
+        .find(|agent| schedule::pending::wait_for(&target.kind, &target.session, agent))
+}
+
+/// Whether a wait target names the calling agent, in whichever session it now runs.
+fn is_caller(
+    target: &rimz::config::TaskTarget,
+    peers: &[&AgentState],
+    caller: Option<&(AgentKind, AgentSessionId)>,
+) -> bool {
+    caller.is_some_and(|(kind, session)| {
+        (&target.kind == kind && &target.session == session)
+            || peers
+                .iter()
+                .find(|agent| &agent.kind == kind && &agent.agent_id == session)
+                .is_some_and(|agent| {
+                    schedule::pending::wait_for(&target.kind, &target.session, agent)
+                })
+    })
 }
 
 fn write_waits(
@@ -761,6 +794,7 @@ mod tests {
             ArmState::Live,
             None,
             Some(snapshot),
+            &[],
             snapshot.generated_at,
         )
     }
@@ -834,6 +868,85 @@ mod tests {
     }
 
     #[test]
+    fn an_older_wait_joins_its_holders_card_and_kinds_sharing_a_session_keep_theirs() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut old = rimz::testkit::agent_state("claude", "old-session", now);
+        old.launch_id = Some("launch-one".into());
+        old.ended_at = Some(now);
+        let mut new = rimz::testkit::agent_state("claude", "new-session", now);
+        new.launch_id = Some("launch-one".into());
+        new.epoch = 1;
+        let snapshot = SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(Path::new("/repo")),
+            vec![new.clone()],
+            now,
+        );
+        let audit = [&old, &new];
+        let row = |name: &str, kind: &str, session: &str| {
+            WakeRow::new(
+                name,
+                &TaskEntry {
+                    root: "/repo".into(),
+                    signal: Some("deploy.done".into()),
+                    wait: Some(rimz::config::TaskTarget {
+                        kind: AgentKind::new_unchecked(kind),
+                        session: session.into(),
+                        handle: format!("@{kind}-{session}"),
+                    }),
+                    wait_meta: Some(
+                        serde_json::from_value(serde_json::json!({ "armed_at": now })).unwrap(),
+                    ),
+                    ..Default::default()
+                },
+                ArmState::Live,
+                None,
+                Some(&snapshot),
+                &audit,
+                now,
+            )
+        };
+        let rows = [
+            row("wait-older", "claude", "old-session"),
+            row("wait-launch", "claude", "launch-one"),
+            row("wait-plugin-a", "plugin-a", "shared"),
+            row("wait-plugin-b", "plugin-b", "shared"),
+        ];
+        let caller = (new.kind.clone(), new.agent_id.clone());
+        let mut out = Vec::new();
+        write_room(
+            &mut out,
+            &rows,
+            Some(&snapshot),
+            Some(&caller),
+            Path::new("/repo"),
+            now,
+        )
+        .unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        let cards = rendered
+            .lines()
+            .map(|line| {
+                line.split("  ")
+                    .find(|word| !word.is_empty())
+                    .unwrap_or(line)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cards,
+            [
+                "@claude (you)",
+                "wait-launch",
+                "wait-older",
+                "@plugin-a-shared",
+                "wait-plugin-a",
+                "@plugin-b-shared",
+                "wait-plugin-b"
+            ],
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn subscriptions_pluralize_distinct_worktrees() {
         let now = Timestamp::from_second(1_000).unwrap();
         let mut rows = Vec::new();
@@ -855,6 +968,7 @@ mod tests {
                 ArmState::Live,
                 None,
                 None,
+                &[],
                 now,
             ));
             let mut out = Vec::new();

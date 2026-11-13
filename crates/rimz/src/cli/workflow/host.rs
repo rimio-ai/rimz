@@ -520,9 +520,10 @@ impl workflow::AttemptHost for Host<'_> {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error.to_string())),
             };
-            // A handle outlives its session: a reused one names another agent.
+            // A handle outlives its agent: a reused one names another agent, while a
+            // restart or molt keeps the agent the pin names under a new session.
             if let Some(session) = session
-                && agent.agent_id != *session
+                && !pin_names(ctx.store.audit_rows()?.iter(), session, agent)
             {
                 return Ok(Err(format!(
                     "{target} is session {}, not the pinned session {session}",
@@ -609,5 +610,56 @@ impl workflow::AttemptHost for Host<'_> {
         account: Option<&rimz::ids::LoginName>,
     ) -> Result<Vec<rimz::harness::throttle::StartGroup>, WorkflowErr> {
         workflow::launch_groups(record, agent, account)
+    }
+}
+
+/// Whether the step's pinned `session` names `agent`: the pin resolves to its launch under the
+/// kind of each row the session is (a molt may have moved the agent to another kind), or as a
+/// launch id under any kind, and that launch must be `agent`'s.
+fn pin_names<'a>(
+    rows: impl IntoIterator<Item = &'a rimz::agents::AgentState> + Clone,
+    session: &rimz::ids::AgentSessionId,
+    agent: &rimz::agents::AgentState,
+) -> bool {
+    let mut kinds: Vec<_> = rows
+        .clone()
+        .into_iter()
+        .filter(|row| &row.agent_id == session)
+        .map(|row| &row.kind)
+        .collect();
+    kinds.push(&agent.kind);
+    kinds.into_iter().any(|kind| {
+        rimz::agents::state::launch_members(rows.clone(), kind, session)
+            .iter()
+            .any(|row| row.kind == agent.kind && row.agent_id == agent.agent_id)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use rimz::agents::{AgentState, AgentStatus};
+
+    #[test]
+    fn a_session_pin_names_its_agent_after_a_molt_to_another_kind() {
+        let mut old = AgentState::stub("claude", "sess-old", AgentStatus::Idle);
+        old.launch_id = Some("launch_coder".into());
+        let mut holder = AgentState::stub("codex", "sess-new", AgentStatus::Idle);
+        holder.launch_id = old.launch_id.clone();
+        holder.epoch = 1;
+        let mut reused = AgentState::stub("codex", "sess-other", AgentStatus::Idle);
+        reused.launch_id = Some("launch_other".into());
+        let rows = [old, holder.clone(), reused.clone()];
+        for pin in ["sess-old", "sess-new", "launch_coder"] {
+            assert!(super::pin_names(rows.iter(), &pin.into(), &holder), "{pin}");
+            assert!(
+                !super::pin_names(rows.iter(), &pin.into(), &reused),
+                "{pin}"
+            );
+        }
+        assert!(!super::pin_names(
+            rows.iter(),
+            &"ses-elsewhere".into(),
+            &holder
+        ));
     }
 }

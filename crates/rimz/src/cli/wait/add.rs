@@ -55,7 +55,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let target = TaskTarget {
         kind: agent.kind.clone(),
-        session: agent.agent_id.clone(),
+        session: agent.launch_key().clone(),
         handle: rimz::address::agent_handle(
             agent,
             &rimz::address::addressable_agents(&snapshot),

@@ -2552,6 +2552,22 @@ fn register_paned_planner(env: &Env, launch: LaunchParams, transcript: Option<&s
 
 /// Arms a self wait for `@planner` and seeds its running child `@kit`.
 fn arm_owed_to_planner(env: &Env) {
+    let parked = rimz::store::message::MessageRecord::new_for_card(
+        env.resolve_workspace(&env.project_root).workspace_id,
+        AgentKind::new_unchecked("claude"),
+        "provider-session".into(),
+        Some("planner".into()),
+        "rebase first".into(),
+        true,
+        rimz::store::message::DeliveryGate::Done,
+    )
+    .with_launch_id(Some("launch-session".into()));
+    env.store()
+        .queue_message(
+            &parked,
+            &env.resolve_workspace(&env.project_root).session_name,
+        )
+        .unwrap();
     let output = crate::common::wait::agent_wait(env)
         .args(["wait", "--in", "30m"])
         .bounded_output()
@@ -2721,7 +2737,133 @@ fn restart_keeps_the_agent_its_wait_and_its_child_fresh_or_resumed() {
             }
         }
         assert_planner_kept_what_it_was_owed(&env);
+        assert_the_wait_follows_the_planner(&env, resumed);
+        if !resumed {
+            assert_the_parked_message_follows_the_planner(&env);
+        }
     }
+}
+
+/// The message parked for `@planner` before its swap reaches the new session
+/// alone once that session is live. The test process stands in for the
+/// replacement's runtime owner by binding the reservation again, since the
+/// swap's own stand-in bind exited with the restart command.
+fn assert_the_parked_message_follows_the_planner(env: &Env) {
+    let workspace = env.resolve_workspace(&env.project_root);
+    let holder = env
+        .store()
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.launch_id.as_deref() == Some("launch-session") && row.epoch == 1)
+        .unwrap()
+        .clone();
+    let identity = rimz::store::writer::AgentLaunchIdentity {
+        kind: holder.kind.clone(),
+        agent_id: holder.agent_id.clone(),
+        launch_id: Some("launch-session".into()),
+        name: "planner".into(),
+        name_explicit: false,
+        launch: LaunchParams {
+            epoch: Some(1),
+            ..Default::default()
+        },
+        run_id: None,
+        prompt: None,
+    };
+    env.store()
+        .bind_agent_launch(
+            &identity,
+            &workspace.session_name,
+            &env.project_root,
+            &rimz::ids::PaneId::parse("zellij:terminal_9999").unwrap(),
+            None,
+        )
+        .unwrap();
+    let messages = env.store().list_pending_messages().unwrap();
+    let parked = messages
+        .iter()
+        .find(|message| message.text == "rebase first")
+        .unwrap_or_else(|| panic!("the parked message is still queued: {messages:#?}"));
+    let snapshot = env.store().snapshot().unwrap();
+    let receivers = rimz::address::addressable_agents(&snapshot)
+        .into_iter()
+        .filter(|agent| parked.card_ref().matches(agent.card_ref()))
+        .map(|agent| (agent.agent_id.clone(), agent.epoch))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        receivers,
+        vec![(holder.agent_id.clone(), 1)],
+        "only the new session receives the parked message"
+    );
+}
+
+/// The self wait `@planner` armed before its swap is the holder's: stored
+/// under the agent's launch and, while the new session is still starting,
+/// fired into the queue for it. The swap's wrapper has exited here, so its
+/// card is expelled and the agent-side views are checked in a live room.
+fn assert_the_wait_follows_the_planner(env: &Env, resumed: bool) {
+    let waits = crate::common::wait::wait_instances(env);
+    let (name, entry) = waits.0.iter().next().expect("the self wait is armed");
+    let target = entry.wait.as_ref().unwrap();
+    assert_eq!(
+        (target.kind.as_str(), target.session.as_str()),
+        ("claude", "launch-session"),
+        "a wait stores its agent's launch"
+    );
+    if !resumed {
+        // The replaced process's end arrives once its pane closes.
+        append_planner_lifecycle(env, "provider-session", LifecycleSignal::Ended, None);
+        let fired = env
+            .rimz()
+            .args(["loop", "fire", name])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            fired.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fired.stderr)
+        );
+        let rows = env.store().audit_rows().unwrap();
+        let holder = rows
+            .iter()
+            .find(|row| row.launch_id.as_deref() == Some("launch-session") && row.epoch == 1)
+            .unwrap();
+        let messages = env.store().list_pending_messages().unwrap();
+        let wake = messages
+            .iter()
+            .find(|message| {
+                message.launch_id.as_deref() == Some("launch-session")
+                    && message.text != "rebase first"
+            })
+            .unwrap_or_else(|| panic!("the wake is queued for the agent: {messages:#?}"));
+        assert_eq!(
+            (&wake.agent_id, wake.status),
+            (
+                &holder.agent_id,
+                rimz::store::message::MessageStatus::Queued
+            ),
+            "a starting holder gets the wake parked: {wake:#?}"
+        );
+    }
+}
+
+/// Appends one lifecycle observation for a session of `@planner`'s launch.
+fn append_planner_lifecycle(env: &Env, session: &str, signal: LifecycleSignal, epoch: Option<u32>) {
+    let mut observation = AgentLifecycleObservation::new(Some(session.into()), signal);
+    observation.launch_id = Some("launch-session".into());
+    observation.launch.epoch = epoch;
+    observation.pane_id = Some(rimz::ids::PaneId::parse("zellij:terminal_9999").unwrap());
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "seed",
+            &observation,
+        ))
+        .unwrap();
 }
 
 #[cfg(unix)]

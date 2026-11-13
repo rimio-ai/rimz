@@ -98,7 +98,7 @@ pub(crate) fn arm_member(
     let peers: Vec<_> = agents.iter().collect();
     let target = TaskTarget {
         kind: member.kind.clone(),
-        session: member.agent_id.clone(),
+        session: member.launch_key().clone(),
         handle: crate::address::agent_handle(member, &peers, true),
     };
     let mut names = BTreeSet::new();
@@ -159,7 +159,7 @@ fn binding_spec(
             .map_err(super::ScheduleErr::from)?;
     let mut matches = binding.matches.clone();
     arm::default_signal_matches(workspace, agents, member, &selector, &mut matches)?;
-    arm::validate_self_signal(&selector, &matches, target)?;
+    arm::validate_self_signal(&selector, &matches, target, Some(member))?;
     Ok(DeliverySpec {
         name: DeliveryName::Named(name),
         label: None,

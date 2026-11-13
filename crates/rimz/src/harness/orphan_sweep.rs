@@ -111,8 +111,8 @@ fn scan(
     let waits = std::cell::OnceCell::new();
     let parents = digest_parents_from(agents.iter(), runs, |kind, session| {
         waits
-            .get_or_init(|| SessionWaits::load(paths))
-            .contains(kind, session)
+            .get_or_init(|| SessionWaits::load(paths).following(&agents.iter().collect::<Vec<_>>()))
+            .contains_session(agents.iter(), kind, session)
     });
     Ok((orphans, parents))
 }

@@ -137,6 +137,19 @@ fn a_pinned_message_step_delivers_only_to_its_session() {
     assert_eq!(value["record"]["state"], "done", "{value:#}");
     assert_eq!(record.agent_id, agent);
 
+    // A pin on the agent's launch is the agent, whichever session holds it.
+    let rows = room.env.store().audit_rows().unwrap();
+    let launch = rows
+        .iter()
+        .find(|row| row.agent_id == agent)
+        .and_then(|row| row.launch_id.clone())
+        .expect("the leader has a launch");
+    assert_ne!(launch, agent);
+    let id = tell_with(&room, "@codex", &format!("session='{launch}'\n"));
+    let (value, record) = notice(&room, &id);
+    assert_eq!(value["record"]["state"], "done", "{value:#}");
+    assert_eq!(record.agent_id, agent);
+
     let id = tell_with(&room, "@codex", "session='ses-elsewhere'\n");
     let value = until(&room.env, &id, |value| value["record"]["state"] == "failed");
     let routes = events(&value, "route");

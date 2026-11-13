@@ -16,7 +16,7 @@ use crate::store::message::MessageRecord;
 /// Derive team signals from the transitioning audit row and its live cohort members.
 /// `addressable` is the cached snapshot's resolver candidate set, with rest certificates.
 /// `pending` is the complete pending queue, including delayed and resume-gated messages.
-/// `sleeping` contains sessions with a pending one-shot wait in this workspace.
+/// `sleeping` contains the targets of pending one-shot waits in this workspace.
 pub(crate) fn team_lifecycle_signals(
     event: &LifecycleEvent,
     member: &AgentState,
@@ -61,9 +61,11 @@ pub(crate) fn team_lifecycle_signals(
     };
     let others_at_rest = others.iter().all(|agent| at_rest(agent.status));
     let has_wait = |members: &[&AgentState]| {
-        members
-            .iter()
-            .any(|agent| sleeping.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        members.iter().any(|agent| {
+            sleeping.iter().any(|(kind, session)| {
+                crate::harness::schedule::pending::wait_for(kind, session, agent)
+            })
+        })
     };
     let mut names = Vec::new();
     if !terminal
