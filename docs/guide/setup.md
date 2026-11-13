@@ -133,7 +133,8 @@ Which keys move you between panes and agents?
 
   1  Yours         your tmux config and bindings, as they are. RimZ adds:
                      Alt+p  sidebar and back     Alt+g  fullscreen this pane
-  2  RimZ          Alt+j/Alt+k walk agents · Alt+1..9 jump · Alt+? who needs you
+  2  RimZ          Alt+j/Alt+k walk agents · Alt+0 dashboard
+                   Alt+1..9 terminals · Alt+? who needs you
                    Alt+p, then: z fullscreen
                    r resize mode, kept through moves until Esc
                    Hides the tmux status bar in rooms.
@@ -149,7 +150,7 @@ Room keys? [1]
 ```
 
 - **Yours** keeps your multiplexer's own config and bindings, which a room still reads, and adds two keys that work from any pane: one jumps to the sidebar and back, one makes the pane fullscreen. It writes `room.style = "native"`.
-- **RimZ** switches the room to RimZ's keymap: chords to walk and jump between agent cards, a prefix layer, and a resize mode that stays through moves until `Esc`. It writes `room.style = "rimz"` and `keys.keymap = "rimz"`. When `[mux] status_bar` is unset, RimZ style hides the multiplexer's status bar in rooms.
+- **RimZ** switches the room to RimZ's keymap: chords to walk agent cards, show the dashboard, and open or show numbered terminal tabs ([room keymap](./configuration.md#room-keymap)), a prefix layer, and a resize mode that stays through moves until `Esc`. It writes `room.style = "rimz"` and `keys.keymap = "rimz"`. When `[mux] status_bar` is unset, RimZ style hides the multiplexer's status bar in rooms.
 - **RimZ + tmux** (or **RimZ + Zellij**) keeps the same agent keys and makes the multiplexer's usual prefix RimZ's, with tmux-like or Zellij-like keys after it. Bindings you made under your own prefix do not fire in a room. It writes `room.style = "rimz"` and `keys.keymap = "tmux"` or `"zellij"`.
 
 The text names the multiplexer the run chose. On tmux, rooms run on [RimZ's own tmux server](./multiplexer.md#your-tmux-rooms-run-on-their-own-server), so whichever you pick, sessions outside RimZ keep their own keys. On Zellij both RimZ options replace your own bindings inside rooms, since both are RimZ style, and going back to yours takes a detach and a reattach:
@@ -161,7 +162,8 @@ Which keys move you between panes and agents?
 
   1  Yours         your Zellij config and bindings, as they are. RimZ adds:
                      Alt+p  sidebar and back     Alt+g  fullscreen this pane
-  2  RimZ          Alt+j/Alt+k walk agents · Alt+1..9 jump · Alt+? who needs you
+  2  RimZ          Alt+j/Alt+k walk agents · Alt+0 dashboard
+                   Alt+1..9 terminals · Alt+? who needs you
                    Alt+p, then: z fullscreen
                    r resize mode, kept through moves until Esc
                    Hides the Zellij status bar in rooms.

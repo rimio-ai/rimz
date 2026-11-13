@@ -560,10 +560,46 @@ mod tests {
             assert_eq!(
                 wire,
                 fixture,
-                "{} is stale; rerun with RIMZ_KEYMAP_FIXTURES=update",
+                "{} is stale; regenerate the fixtures with \
+                 `RIMZ_KEYMAP_FIXTURES=update cargo nextest run -p rimz --lib --all-features \
+                 -E 'test(=mux::zellij::keymap::tests::bundled_keymap_wires_match_their_plugin_fixtures)'` \
+                 (`cargo xtask test` strips RIMZ_KEYMAP_FIXTURES, so it cannot update them)",
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn alt_digits_run_the_tab_verbs_and_an_overlay_restores_a_slot() {
+        let command = |wire: &Value, key: &str| {
+            let index = steps(wire, "locked", key)[0]["run"].as_u64().unwrap() as usize;
+            wire["commands"][index].clone()
+        };
+        let room = ["--mux", "zellij", "--root", "/project,=%2C"];
+        let session = ["--session-name", "room"];
+        let bundled = wire("[room]\nstyle='rimz'");
+        for (key, verb) in [
+            ("Alt 3", &["tab", "terminal", "3"][..]),
+            ("Alt 0", &["tab", "dashboard"][..]),
+        ] {
+            assert_eq!(
+                command(&bundled, key),
+                json!([&room[..], verb, &session[..]].concat())
+            );
+        }
+        let overlay =
+            wire("[room]\nstyle='rimz'\n[keys.bind.normal]\n'Alt+3'='card.slot.3'\n'Alt+0'='none'");
+        assert_eq!(
+            command(&overlay, "Alt 3"),
+            json!([&room[..], &["sidebar", "slot", "3"][..], &session[..]].concat())
+        );
+        assert!(
+            !overlay["modes"][0]["binds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|bind| bind["key"] == "Alt 0")
+        );
     }
 
     #[test]

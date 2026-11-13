@@ -442,6 +442,8 @@ prefix = "Ctrl+a"
 z = "pane.zoom"
 ```
 
+Every bundled keymap gives the room fixed tabs in normal mode. `Alt+0` shows the dashboard, the `rimzd` tab, and reopens it first if you closed it. `Alt+1` through `Alt+9` show terminals 1 to 9: the first press of `Alt+3` opens a tab named `term-3` with a shell at the project root beside the sidebar, and every later press returns to that same shell, idle or running a command, until you close it. A terminal is not an agent: an agent you launch inside one takes over its tab, and the next press opens a fresh shell. [`rimz tab`](../reference/cli/tab.md) is the command behind these keys. To jump to sidebar cards by number on those chords instead, bind them back, for example `"Alt+3" = "card.slot.3"` under `[keys.bind.normal]`.
+
 `keymap` is `rimz`, `tmux`, `zellij` or `vim`, and defaults to `rimz`. Each keymap has its own default prefix: `Alt+p` for `rimz`, `Ctrl+b` for `tmux`, `Ctrl+g` for `zellij`, and `Alt+w` for `vim` (not vim's `Ctrl+w`, which would capture delete-word in every pane). An unset `prefix` takes that default; a set one moves every prefix entry of whichever keymap you pick. User tables under `keys.bind` (`normal`, `prefix`, `pane`, `tab`, `resize`, `move`) override the bundled keys; `"none"` removes a binding. The configured prefix is applied last, so it wins even over an override on the same chord.
 
 Pane, tab, resize and move modes are sticky for motions: a focus, swap, resize, tab or card step stays in the mode, and any other action returns to normal. Prefix mode runs one action and returns. Each keymap also picks a scrollback flavour: `rimz` and `vim` use vi keys, while `tmux` and `zellij` keep the multiplexer's own copy and scroll keys.
