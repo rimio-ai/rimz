@@ -252,6 +252,11 @@ pub(crate) const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 /// stamped with the staged build before reporting them unconverged.
 pub(crate) const RELOAD_CONVERGE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Longest `rimz reload --repair` holds, after a build change, for the room's
+/// fresh heartbeat count to stop changing before its full repair pass. A room
+/// that never reports again repairs at this bound.
+pub(crate) const REPAIR_HEARTBEAT_HOLD_CAP: Duration = Duration::from_secs(30);
+
 /// Poll cadence while `rimz reload` waits for build-stamped heartbeats.
 pub(crate) const RELOAD_CONVERGE_POLL: Duration = Duration::from_millis(150);
 

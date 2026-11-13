@@ -512,7 +512,7 @@ Across attach rounds the supervisor also checks that its pane still exists, once
 
 ## Reload and repair
 
-Reload replaces the running binary and mounts a sidebar only where a view has none, closing, replacing and moving no pane. Repair fixes the rest of the pane structure. `rimz reload --repair` upgrades each room, then repairs it before reporting its resulting state. Standalone `rimz sidebar repair` keeps its own report and exit rules.
+Reload replaces the running binary and mounts a sidebar only where a view has none, docking it beside that view's work panes and closing or replacing no pane. Repair fixes the rest of the pane structure. `rimz reload --repair` upgrades each room, then repairs it before reporting its resulting state. When the room recorded a different build, so its sidebar hosts restart, `hold_for_heartbeats` in `reload.rs` first waits until the session's fresh heartbeat count is non-zero and has not changed, up or down, for one `SIDEBAR_HEARTBEAT_TTL` (5 seconds), at most `REPAIR_HEARTBEAT_HOLD_CAP` (30 seconds), so the full pass replaces no view whose renderer is still re-attaching. A drop restarts that window too: it is a pane that just went silent, which the full pass would replace. A room that never reports again repairs at the bound. Standalone `rimz sidebar repair` follows no upgrade and does not wait.
 
 ### Build promotion
 

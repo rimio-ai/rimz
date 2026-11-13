@@ -219,10 +219,18 @@ fn staging_sweeps_only_unreferenced_builds() {
         .set_modified(std::time::SystemTime::now() - STAGED_BUILD_GC_GRACE - Duration::from_secs(1))
         .unwrap();
     let second = stage_build_under(&second_source, dir.path()).unwrap();
-    let room_bin =
+    let recorded =
         record_live_room_bin_at(&known, &second, &paths, &runtime, &MachineConfig::default())
-            .unwrap()
-            .bin;
+            .unwrap();
+    assert!(recorded.build_changed, "a new build is a change");
+    let room_bin = recorded.bin;
+    let again =
+        record_live_room_bin_at(&known, &second, &paths, &runtime, &MachineConfig::default())
+            .unwrap();
+    assert!(
+        !again.build_changed,
+        "recording the same build is no change"
+    );
 
     assert!(
         first.path.is_file(),
@@ -581,4 +589,82 @@ fn convergence_wait_returns_latest_heartbeat_on_timeout() {
 
     assert_eq!(heartbeats.len(), 1);
     assert_eq!(heartbeats[0].build.as_deref(), Some("old"));
+}
+
+/// Runs the repair hold on a fake clock that only `sleep` advances, with
+/// `count` answering from the elapsed time. Returns when the hold ended.
+fn hold_ends_after(count: impl Fn(Duration) -> usize) -> Duration {
+    let start = Instant::now();
+    let clock = std::cell::Cell::new(start);
+    hold_for_heartbeats_with(
+        Duration::from_secs(5),
+        Duration::from_secs(30),
+        Duration::from_millis(150),
+        || clock.get(),
+        |step| clock.set(clock.get() + step),
+        || count(clock.get() - start),
+    );
+    clock.get() - start
+}
+
+#[test]
+fn repair_hold_waits_for_returning_heartbeats_to_stop_changing() {
+    // Absent for 2 s, then one sidebar, then three from 4 s on.
+    let ended = hold_ends_after(|elapsed| match elapsed.as_millis() {
+        0..2_000 => 0,
+        2_000..4_000 => 1,
+        _ => 3,
+    });
+
+    assert!(
+        ended >= Duration::from_secs(9) && ended < Duration::from_millis(9_300),
+        "hold ends one TTL after the last change, ended at {ended:?}",
+    );
+}
+
+#[test]
+fn repair_hold_ends_at_the_cap_when_no_sidebar_reports() {
+    let ended = hold_ends_after(|_| 0);
+
+    assert_eq!(ended, Duration::from_secs(30));
+}
+
+#[test]
+fn repair_hold_ends_one_ttl_after_an_already_stable_count() {
+    let ended = hold_ends_after(|_| 2);
+
+    assert!(
+        ended >= Duration::from_secs(5) && ended < Duration::from_millis(5_300),
+        "a count already stable holds one TTL, ended at {ended:?}",
+    );
+}
+
+#[test]
+fn repair_hold_restarts_its_window_when_the_count_drops() {
+    // A pane going silent is a view a Full pass would replace.
+    let ended = hold_ends_after(|elapsed| match elapsed.as_millis() {
+        1_000..2_000 => 1,
+        _ => 2,
+    });
+
+    assert!(
+        ended >= Duration::from_secs(7) && ended < Duration::from_millis(7_300),
+        "a dip and return restarts the stable window, ended at {ended:?}",
+    );
+}
+
+#[test]
+fn repair_hold_waits_out_a_decline_then_rebuild() {
+    // Old beats age out while the new host re-attaches: 3, 3, 1, 1, 2, 2, 3.
+    let ended = hold_ends_after(|elapsed| match elapsed.as_millis() {
+        0..3_000 => 3,
+        3_000..6_000 => 1,
+        6_000..9_000 => 2,
+        _ => 3,
+    });
+
+    assert!(
+        ended >= Duration::from_secs(14) && ended < Duration::from_millis(14_300),
+        "hold ends one TTL after the last change, ended at {ended:?}",
+    );
 }
