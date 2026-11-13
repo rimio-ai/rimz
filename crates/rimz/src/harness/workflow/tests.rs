@@ -378,8 +378,8 @@ mod graph;
 mod inspection;
 mod judges;
 mod message;
+mod refusals;
 mod sleep;
-mod tolerance;
 mod turns;
 
 #[test]
@@ -429,11 +429,11 @@ const VALID: &str = r#"
 on-break = "@failed"
 scope = "worktree"
 start = "pick"
-[checks.pick]
+[script.pick]
 run = "python3 checks/pick.py"
 on = { ready = "build", done = "@done", pending = "@wait" }
 timeout = "1d"
-[steps.build]
+[agent.build]
 agent = "claude"
 prompt-file = "prompts/build.md"
 lifecycle = "turn"
@@ -458,7 +458,7 @@ fn then_lists_validate_every_entry_and_direct_link() {
         .replace("lifecycle = \"turn\"", "lifecycle = 'until'")
         .replace("then = \"pick\"", "then = ['pick', 'review']")
         .replace("done = \"@done\"", "done = 'review'")
-        + "[checks.review]\nrun='true'\non.ok='@done'\n";
+        + "[script.review]\nrun='true'\non.ok='@done'\n";
     for (text, error, warning) in [
         (base.clone(), None, false),
         (
@@ -477,7 +477,10 @@ fn then_lists_validate_every_entry_and_direct_link() {
             false,
         ),
         (
-            base.replace("run='true'\non.ok='@done'", "sleep='1m'\nthen='@done'"),
+            base.replace(
+                "[script.review]\nrun='true'\non.ok='@done'",
+                "[sleep.review]\nsleep='1m'\nthen='@done'",
+            ),
             Some("cannot use a sleep"),
             false,
         ),
@@ -498,18 +501,27 @@ fn then_lists_validate_every_entry_and_direct_link() {
             true,
         ),
         (
-            base.replace("agent = \"claude\"", "shell='true'\ntimeout='1m'"),
-            None,
-            true,
+            base.replace(
+                "[agent.build]\nagent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = 'until'",
+                "[command.build]\nshell='true'\ntimeout='1m'",
+            ),
+            Some("invalid type: sequence"),
+            false,
         ),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
+        let path = if text.contains("[command.build]") {
+            "command.build.then"
+        } else {
+            "agent.build.then"
+        };
         match error {
             Some(message) => assert!(
-                report.errors.iter().any(
-                    |issue| issue.path == "steps.build.then" && issue.message.contains(message)
-                ),
+                report
+                    .errors
+                    .iter()
+                    .any(|issue| issue.path == path && issue.message.contains(message)),
                 "{report:?}"
             ),
             None => assert!(report.errors.is_empty(), "{report:?}"),
@@ -518,22 +530,13 @@ fn then_lists_validate_every_entry_and_direct_link() {
             report
                 .warnings
                 .iter()
-                .any(|issue| issue.path == "steps.build.then"
+                .any(|issue| issue.path == path
                     && issue
                         .message
                         .contains("only an until step keeps its agent open")),
             warning,
             "{report:?}"
         );
-        if let Ok(spec) = load(&dir) {
-            assert!(
-                spec.ignored()
-                    .iter()
-                    .all(|issue| issue.path != "steps.build.then"),
-                "{:?}",
-                spec.ignored()
-            );
-        }
     }
 }
 
@@ -542,12 +545,12 @@ fn validation_carries_check_and_step_summaries() {
     let (_home, dir) = fixture();
     let text = VALID
         .replace(
-            "[checks.pick]",
-            "[checks.pick]\nsummary = 'Choose the next item'",
+            "[script.pick]",
+            "[script.pick]\nsummary = 'Choose the next item'",
         )
         .replace(
-            "[steps.build]",
-            "[steps.build]\nsummary = ' Build the chosen item '",
+            "[agent.build]",
+            "[agent.build]\nsummary = ' Build the chosen item '",
         );
     fs::write(dir.join("workflow.toml"), text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -575,13 +578,13 @@ fn validation_carries_workflow_summary() {
 }
 
 #[test]
-fn validation_ignores_empty_or_multiline_summaries_at_the_field() {
+fn validation_refuses_empty_or_multiline_summaries_at_the_field() {
     let (_home, dir) = fixture();
     let mut actual = Vec::new();
     for (kind, node) in [
         ("workflow", None),
-        ("checks", Some("pick")),
-        ("steps", Some("build")),
+        ("script", Some("pick")),
+        ("agent", Some("build")),
     ] {
         for summary in [
             "",
@@ -606,11 +609,12 @@ fn validation_ignores_empty_or_multiline_summaries_at_the_field() {
                 Some(node) => format!("{kind}.{node}.summary"),
                 None => format!("{kind}.summary"),
             };
-            let ignored = report.errors.is_empty()
-                && report.warnings.iter().any(|issue| {
-                    issue.path == path && issue.message.contains("a summary is one nonempty line")
-                });
-            actual.push((path, summary, ignored, format!("{report:?}")));
+            let refused = matches!(
+                report.errors.as_slice(),
+                [issue] if issue.path == path
+                    && issue.message.contains("a summary is one nonempty line")
+            );
+            actual.push((path, summary, refused, format!("{report:?}")));
         }
     }
     assert_eq!(
@@ -649,31 +653,31 @@ fn validation_accepts_step_layouts() {
         (
             "no agent",
             VALID.replace("agent = \"claude\"", "agent = 'term'"),
-            Some("steps.build.agent"),
+            Some("agent.build.agent"),
         ),
         (
             "ambiguous leader",
             VALID.replace("agent = \"claude\"", "agent = 'claude,claude'"),
-            Some("steps.build.agent"),
+            Some("agent.build.agent"),
         ),
         (
             "team",
             VALID.replace("agent = \"claude\"", "agent = 'forge'"),
-            Some("steps.build.agent"),
+            Some("agent.build.agent"),
         ),
         (
             "team until",
             VALID
                 .replace("agent = \"claude\"", "agent = 'forge'")
                 .replace("lifecycle = \"turn\"", "lifecycle='until'"),
-            Some("steps.build.agent"),
+            Some("agent.build.agent"),
         ),
         (
             "team omitted lifecycle",
             VALID
                 .replace("agent = \"claude\"", "agent = 'forge'")
                 .replace("lifecycle = \"turn\"", ""),
-            Some("steps.build.agent"),
+            Some("agent.build.agent"),
         ),
         (
             "team stay",
@@ -684,11 +688,16 @@ fn validation_accepts_step_layouts() {
         ),
         (
             "judge layout",
-            VALID.replace(
-                "run = \"python3 checks/pick.py\"",
-                "agent='claude,codex'\nprompt-file='prompts/build.md'",
-            ),
-            Some("checks.pick.agent"),
+            VALID
+                .replace(
+                    "[script.pick]",
+                    "[judge.pick]\nsummary='Picks the next item'",
+                )
+                .replace(
+                    "run = \"python3 checks/pick.py\"",
+                    "agent='claude,codex'\nprompt-file='prompts/build.md'",
+                ),
+            Some("judge.pick.agent"),
         ),
     ];
     let results: Vec<_> = cases
@@ -711,7 +720,7 @@ fn validation_accepts_step_layouts() {
                         && match label {
                             label if label.starts_with("team") => {
                                 issue.message
-                                    == "example: steps.build.agent: a team runs only in a stay \
+                                    == "example: agent.build.agent: a team runs only in a stay \
                                         step; set lifecycle = \"stay\""
                             }
                             "no agent" => issue.message.contains("add an agent"),
@@ -762,7 +771,7 @@ fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() 
     let results = ["@done", "pick"].map(|target| {
         let spec: Definition = toml::from_str(&format!(
             "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\non.deadline='@wait'\n\
-             [checks.pick]\nrun='true'\non.ready='{target}'\n"
+             [script.pick]\nrun='true'\non.ready='{target}'\n"
         ))
         .unwrap();
         let report = super::validate::validate_spec(
@@ -782,7 +791,7 @@ fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() 
         results,
         [
             vec![],
-            vec!["review: checks.pick: check-only cycle has no @wait".to_owned()]
+            vec!["review: script.pick: check-only cycle has no @wait".to_owned()]
         ]
     );
 }
@@ -831,37 +840,37 @@ fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
 
 #[test]
 fn validation_rejects_each_invalid_spec() {
-    let shell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+    let shell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
     let cases = [
         (
             "shell requires pass",
             shell.replace("pass='@done',", ""),
-            "checks.pick.on.pass",
+            "test.pick.on.pass",
         ),
         (
             "shell requires fail",
             shell.replace(",fail='@failed'", ""),
-            "checks.pick.on.fail",
+            "test.pick.on.fail",
         ),
         (
             "empty shell",
             shell.replace("shell='true'", "shell='  '"),
-            "checks.pick.shell",
+            "test.pick.shell",
         ),
         (
             "shell and run",
             shell.replace("shell='true'", "shell='true'\nrun='true'"),
-            "checks.pick",
+            "test.pick",
         ),
         (
             "shell and agent",
             shell.replace("shell='true'", "shell='true'\nagent='claude'"),
-            "checks.pick",
+            "test.pick.agent",
         ),
         (
             "shell and cases",
-            format!("{shell}[[checks.pick.cases]]\nwhen=['ci=passed']\noutcome='pass'\n"),
-            "checks.pick",
+            format!("{shell}cases=[{{when=['ci=passed'],outcome='pass'}}]\n"),
+            "test.pick.cases",
         ),
         (
             "unknown start",
@@ -871,17 +880,17 @@ fn validation_rejects_each_invalid_spec() {
         (
             "unknown edge",
             VALID.replace("ready = \"build\"", "ready = \"missing\""),
-            "checks.pick.on.ready",
+            "script.pick.on.ready",
         ),
         (
             "duplicate node",
-            format!("{VALID}\n[checks.build]\nrun = 'true'\non.ok = '@done'\n"),
+            format!("{VALID}\n[script.build]\nrun = 'true'\non.ok = '@done'\n"),
             "build",
         ),
         (
             "no runner",
             VALID.replace("run = \"python3 checks/pick.py\"", ""),
-            "checks.pick",
+            "script.pick",
         ),
         (
             "two runners",
@@ -889,22 +898,27 @@ fn validation_rejects_each_invalid_spec() {
                 "run = \"python3 checks/pick.py\"",
                 "run = 'true'\nagent = 'claude'",
             ),
-            "checks.pick",
+            "script.pick.agent",
         ),
         (
             "judge prompt",
-            VALID.replace("run = \"python3 checks/pick.py\"", "agent = 'claude'"),
-            "checks.pick.prompt-file",
+            VALID
+                .replace(
+                    "[script.pick]",
+                    "[judge.pick]\nsummary = 'Picks the next item'",
+                )
+                .replace("run = \"python3 checks/pick.py\"", "agent = 'claude'"),
+            "judge.pick.prompt-file",
         ),
         (
             "then missing",
             VALID.replace("then = \"pick\"", ""),
-            "steps.build.then",
+            "agent.build.then",
         ),
         (
             "then step",
             VALID.replace("then = \"pick\"", "then = 'build'"),
-            "steps.build.then",
+            "agent.build.then",
         ),
         (
             "until then terminal",
@@ -912,59 +926,59 @@ fn validation_rejects_each_invalid_spec() {
                 "lifecycle = \"turn\"\nthen = \"pick\"",
                 "lifecycle = \"until\"\nthen = '@done'",
             ),
-            "steps.build.then",
+            "agent.build.then",
         ),
         (
             "unknown profile",
             VALID.replace("agent = \"claude\"", "agent = 'missing-profile'"),
-            "steps.build.agent",
+            "agent.build.agent",
         ),
         (
             "missing prompt",
             VALID.replace("prompts/build.md", "prompts/missing.md"),
-            "steps.build.prompt-file",
+            "agent.build.prompt-file",
         ),
         (
             "missing script",
             VALID.replace("checks/pick.py", "checks/missing.py"),
-            "checks.pick.run",
+            "script.pick.run",
         ),
         (
             "absolute path",
             VALID.replace("prompts/build.md", "/etc/passwd"),
-            "steps.build.prompt-file",
+            "agent.build.prompt-file",
         ),
         (
             "parent path",
             VALID.replace("prompts/build.md", "prompts/../build.md"),
-            "steps.build.prompt-file",
+            "agent.build.prompt-file",
         ),
         (
             "unbounded step cycle",
             VALID.replace("max-visits = 3", ""),
-            "steps.build",
+            "agent.build",
         ),
         (
             "unbounded capacity cycle",
             format!(
-                "{}\n[checks.after]\nrun='true'\non.done='@done'\n",
+                "{}\n[script.after]\nrun='true'\non.done='@done'\n",
                 VALID
                     .replace("max-visits = 3", "")
                     .replace("then = \"pick\"", "then = 'after'\non.capacity = 'pick'")
             ),
-            "steps.build",
+            "agent.build",
         ),
         (
             "hot check cycle",
             VALID
                 .replace("ready = \"build\"", "ready = 'pick'")
                 .replace(", pending = \"@wait\"", ""),
-            "checks.pick",
+            "script.pick",
         ),
         (
             "wait timeout",
             VALID.replace("timeout = \"1d\"", ""),
-            "checks.pick.timeout",
+            "script.pick.timeout",
         ),
         (
             "timeout cannot wait",
@@ -972,107 +986,108 @@ fn validation_rejects_each_invalid_spec() {
                 "pending = \"@wait\"",
                 "pending = '@wait', timeout = '@wait'",
             ),
-            "checks.pick.on.timeout",
+            "script.pick.on.timeout",
         ),
         (
             "step then cannot wait",
             VALID.replace("then = \"pick\"", "then = '@wait'"),
-            "steps.build.then",
+            "agent.build.then",
         ),
         (
             "cap cannot wait",
             format!("{VALID}\non.cap = '@wait'\n"),
-            "steps.build.on.cap",
+            "agent.build.on.cap",
         ),
         (
             "asked cannot wait",
             format!("{VALID}\non.asked = '@wait'\n"),
-            "steps.build.on.asked",
+            "agent.build.on.asked",
         ),
         (
             "cap cannot target itself",
             format!("{VALID}\non.cap = 'build'\n"),
-            "steps.build.on.cap",
+            "agent.build.on.cap",
         ),
         (
             "bad duration",
             VALID.replace("timeout = \"1d\"", "timeout = 'tomorrow'"),
-            "checks.pick.timeout",
+            "script.pick.timeout",
         ),
         (
             "bad node name",
-            VALID.replace("checks.pick", "checks.'bad name'"),
+            VALID.replace("script.pick", "script.'bad name'"),
             "bad name",
         ),
         (
             "bad command",
             VALID.replace("python3 checks/pick.py", "'unclosed"),
-            "checks.pick.run",
+            "script.pick.run",
         ),
     ];
     let cycle_cases = [(
         "step cycle without max-visits",
         VALID.replace("max-visits = 3", ""),
-        "steps.build",
+        "agent.build",
         "cycle through steps has no max-visits bound",
     )];
-    let command = VALID
-        .replace("agent = \"claude\"", "shell = 'true'\ntimeout = '1m'")
-        .replace("prompt-file = \"prompts/build.md\"", "");
+    let command = VALID.replace(
+        "[agent.build]\nagent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = \"turn\"",
+        "[command.build]\nshell = 'true'\ntimeout = '1m'",
+    );
     let command_cases = [
         (
             "step no runner",
             VALID.replace("agent = \"claude\"", ""),
-            "steps.build",
-            "set exactly one of agent, run, shell, or message",
+            "agent.build",
+            "missing field `agent`",
         ),
         (
             "step two runners",
             format!("{command}agent='claude'\n"),
-            "steps.build",
-            "set exactly one of agent, run, shell, or message",
+            "command.build.agent",
+            "unknown field `agent`",
         ),
         (
             "agent prompt required",
             VALID.replace("prompt-file = \"prompts/build.md\"", ""),
-            "steps.build.prompt-file",
+            "agent.build.prompt-file",
             "an agent step requires prompt-file",
         ),
         (
             "shell timeout required",
             command.replace("timeout = '1m'", ""),
-            "steps.build.timeout",
+            "command.build.timeout",
             "a run or shell step requires timeout",
         ),
         (
             "run timeout required",
             command.replace("shell = 'true'\ntimeout = '1m'", "run = 'true'"),
-            "steps.build.timeout",
+            "command.build.timeout",
             "a run or shell step requires timeout",
         ),
         (
             "run argv",
             command.replace("shell = 'true'", "run = \"'unclosed\""),
-            "steps.build.run",
+            "command.build.run",
             "invalid run command",
         ),
         (
             "run confinement",
             command.replace("shell = 'true'", "run = 'sh /etc/passwd'"),
-            "steps.build.run",
+            "command.build.run",
             "invalid workflow path",
         ),
         (
             "shell blank",
             command.replace("shell = 'true'", "shell = '  '"),
-            "steps.build.shell",
+            "command.build.shell",
             "set a nonempty shell command",
         ),
         (
-            "takeover and share",
-            format!("{VALID}takeover=true\nshare=true\n"),
-            "steps.build.share",
-            "takeover stops an idle occupant; share launches beside it",
+            "two occupancies",
+            format!("{VALID}admission.occupancy='takeover-and-share'\n"),
+            "agent.build.admission.occupancy",
+            "unknown variant",
         ),
     ];
     let mut missed = Vec::new();
@@ -1096,83 +1111,44 @@ fn validation_rejects_each_invalid_spec() {
 }
 
 #[test]
-fn validation_warns_only_for_bounded_command_cycles_that_never_wait() {
+fn bounded_command_cycles_validate_without_a_never_waits_warning() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\non.fail='build'\n";
+    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\non.fail='build'\n";
     let two = base.replace("on.fail='build'", "on.fail='pack'")
-        + "[steps.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[checks.back]\nrun='true'\non.fail='build'\n";
-    let route = "run='true'\non.fail='build'";
-    let condition = "cases=[{when=['pr=merged'],outcome='yes'}]\nelse='no'\n\
+        + "[command.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[script.back]\nrun='true'\non.fail='build'\n";
+    let route = "[script.pick]\nrun='true'\non.fail='build'";
+    let condition = "[condition.pick]\ncases=[{when=['pr=merged'],outcome='yes'}]\nelse='no'\n\
                      on={yes='@done',no='build',unknown='@wait'}\ntimeout='1m'";
-    let held_condition = "cases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
+    let held_condition = "[condition.pick]\ncases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
                           on={yes='build',no='@done',unknown='@failed'}";
-    let helper = "[steps.helper]\nagent='claude'\nprompt-file='prompts/build.md'\n\
-                  then='back'\nmax-visits=4\n[checks.back]\nrun='true'\non.fail='build'\n";
-    let judge = "agent='claude'\nprompt-file='prompts/build.md'\n\
+    let helper = "[agent.helper]\nagent='claude'\nprompt-file='prompts/build.md'\n\
+                  then='back'\nmax-visits=4\n[script.back]\nrun='true'\non.fail='build'\n";
+    let judge = "[judge.pick]\nagent='claude'\nprompt-file='prompts/build.md'\n\
                  summary='Review the work'\non.fail='build'";
-    let list = base
-        .replace("then='pick'", "then=['pick','after']")
-        .replace("on.fail='build'", "on={fail='build',ok='after'}")
-        + "[checks.after]\nrun='true'\non.ok='@done'\n";
     let cases = [
-        (base.to_owned(), vec![("build", 3)]),
-        (
-            base.replace("[steps.build]\nrun=", "[steps.build]\nshell="),
-            vec![("build", 3)],
-        ),
-        (two, vec![("build", 3), ("pack", 7)]),
-        (
-            base.replace("max-visits=3", "max-visits=3\nlimit={stagger='1m'}"),
-            vec![("build", 3)],
-        ),
-        (list, vec![("build", 3)]),
-        (
-            base.replace("start='build'", "start='build'\non.deadline='@wait'"),
-            vec![("build", 3)],
-        ),
-        (
-            base.to_owned() + "on.pending='@wait'\ntimeout='1m'\n",
-            vec![],
-        ),
-        (base.replace(route, "sleep='1m'\nthen='build'"), vec![]),
-        (base.replace(route, condition), vec![]),
-        (base.replace(route, held_condition), vec![("build", 3)]),
-        (
-            base.replace("on.fail='build'", "on.fail='helper'") + helper,
-            vec![],
-        ),
-        (base.replace(route, judge), vec![("build", 3)]),
+        base.to_owned(),
+        base.replace("[command.build]\nrun=", "[command.build]\nshell="),
+        two,
+        base.replace("start='build'", "start='build'\non.deadline='@wait'"),
+        base.to_owned() + "on.pending='@wait'\ntimeout='1m'\n",
+        base.replace(route, "[sleep.pick]\nsleep='1m'\nthen='build'"),
+        base.replace(route, condition),
+        base.replace(route, held_condition),
+        base.replace("on.fail='build'", "on.fail='helper'") + helper,
+        base.replace(route, judge),
     ];
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (text, warnings) in cases {
+    for text in cases {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(report.errors.is_empty(), "{text}: {report:?}");
-        actual.push(
+        assert!(
             report
                 .warnings
                 .iter()
-                .filter(|issue| {
-                    issue
-                        .message
-                        .contains("cycle through command or message steps")
-                })
-                .map(|issue| (issue.path.clone(), issue.message.clone()))
-                .collect::<Vec<_>>(),
+                .all(|issue| !issue.message.contains("never waits")),
+            "{text}: {report:?}"
         );
-        let mut step_warnings = Vec::new();
-        for (node, visits) in warnings {
-            let message = format!(
-                "example: steps.{node}: cycle through command or message steps never waits and \
-                 can spend all {visits} visits in one advance; route it through a check that can \
-                 wait (@wait) if that is not intended"
-            );
-            step_warnings.push((format!("steps.{node}"), message));
-        }
-        expected.push(step_warnings);
     }
-    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -1184,8 +1160,8 @@ fn validation_accepts_command_steps_without_agent_warnings() {
             let text = VALID
                 .replace("start = \"pick\"", "start = \"build\"")
                 .replace(
-                    "agent = \"claude\"",
-                    &format!("{runner} = 'echo ready'\ntimeout='1m'"),
+                    "[agent.build]\nagent = \"claude\"",
+                    &format!("[command.build]\n{runner} = 'echo ready'\ntimeout='1m'"),
                 )
                 .replace("prompt-file = \"prompts/build.md\"", "")
                 .replace("lifecycle = \"turn\"", "");
@@ -1215,7 +1191,7 @@ fn validation_accepts_shell_checks_without_confining_the_command() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',invalid='@done',timeout='@failed'}\n",
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',invalid='@done',timeout='@failed'}\n",
     ).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
@@ -1230,7 +1206,7 @@ fn validation_refuses_judges_without_a_headless_launch() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        VALID.replace(
+        VALID.replace("[script.pick]", "[judge.pick]").replace(
             "run = \"python3 checks/pick.py\"",
             "agent = 'pi'\nsummary='Review the work'\nprompt-file = 'prompts/build.md'",
         ),
@@ -1241,7 +1217,7 @@ fn validation_refuses_judges_without_a_headless_launch() {
         report
             .errors
             .iter()
-            .any(|issue| issue.path == "checks.pick.agent" && issue.message.contains("headless")),
+            .any(|issue| issue.path == "judge.pick.agent" && issue.message.contains("headless")),
         "{report:?}"
     );
 }
@@ -1249,9 +1225,9 @@ fn validation_refuses_judges_without_a_headless_launch() {
 #[test]
 fn validation_resolves_edges_and_warns_about_auto_continue() {
     let (_home, dir) = fixture();
-    let text = VALID.replace(
+    let text = VALID.replace("[script.pick]", "[judge.pick]").replace(
         "run = \"python3 checks/pick.py\"",
-        "agent = 'claude'\nsummary='Review the work'\nprompt-file = 'prompts/build.md'\nwindow = '5h.left>=42 && 7d.left>=10'",
+        "agent = 'claude'\nsummary='Review the work'\nprompt-file = 'prompts/build.md'\nadmission.window = '5h.left>=42 && 7d.left>=10'",
     );
     fs::write(dir.join("workflow.toml"), &text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -1272,7 +1248,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
         report
             .warnings
             .iter()
-            .any(|issue| issue.path == "checks.pick"
+            .any(|issue| issue.path == "judge.pick"
                 && issue.message.contains("ends the attempt as limited"))
     );
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
@@ -1290,14 +1266,11 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     .unwrap();
     let codex = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
-        codex
-            .warnings
-            .iter()
-            .any(|issue| issue.path == "checks.pick"
-                && issue
-                    .message
-                    .contains("retries once, then follows on.invalid")
-                && !issue.message.contains("ends the attempt as limited")),
+        codex.warnings.iter().any(|issue| issue.path == "judge.pick"
+            && issue
+                .message
+                .contains("retries once, then follows on.invalid")
+            && !issue.message.contains("ends the attempt as limited")),
         "{codex:?}"
     );
     let cases = [
@@ -1361,7 +1334,7 @@ fn validation_takes_any_directory_confines_symlinks_and_reports_broken_profiles(
         validate(&dir, &LoadedDefinitions::default(), None)
             .errors
             .iter()
-            .any(|issue| issue.path == "steps.build.prompt-file")
+            .any(|issue| issue.path == "agent.build.prompt-file")
     );
     fs::write(
         dir.join("workflow.toml"),
@@ -1386,14 +1359,20 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
     let mut actual = Vec::new();
     for (extra, field) in [
         (
-            "capacity-wait='2h'\nthrottle='off'\non.capacity='pick'",
+            "admission.give-up='2h'\nadmission.throttle='off'\non.capacity='pick'",
             None,
         ),
-        ("capacity-wait='forever'", None),
-        ("capacity-wait='0s'", None),
-        ("throttle='sometimes'", None),
-        ("on.capacity='@user'", Some("steps.build.on.capacity")),
-        ("on.capacity='@wait'", Some("steps.build.on.capacity")),
+        ("admission.give-up='forever'", None),
+        (
+            "admission.give-up='0s'",
+            Some("agent.build.admission.give-up"),
+        ),
+        (
+            "admission.throttle='sometimes'",
+            Some("agent.build.admission.throttle"),
+        ),
+        ("on.capacity='@user'", Some("agent.build.on.capacity")),
+        ("on.capacity='@wait'", Some("agent.build.on.capacity")),
     ] {
         fs::write(dir.join("workflow.toml"), format!("{VALID}{extra}\n")).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -1416,34 +1395,50 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
             }
         });
     }
-    let command = VALID
-        .replace("agent = \"claude\"", "shell='true'\ntimeout='1m'")
-        .replace("prompt-file = \"prompts/build.md\"", "");
     for (extra, field) in [
-        ("throttle='off'", "steps.build.throttle"),
-        ("capacity-wait='1h'", "steps.build.capacity-wait"),
-        ("on.capacity='@failed'", "steps.build.on.capacity"),
+        ("admission.throttle='off'", "command.build.admission"),
+        ("admission.give-up='1h'", "command.build.admission"),
+        ("on.capacity='@failed'", "command.build.on.capacity"),
     ] {
-        fs::write(dir.join("workflow.toml"), format!("{command}{extra}\n")).unwrap();
+        fs::write(
+            dir.join("workflow.toml"),
+            format!("{}{extra}\n", command(VALID)),
+        )
+        .unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
         actual.push(
-            report.errors.is_empty() && report.warnings.iter().any(|issue| issue.path == field),
+            report
+                .errors
+                .iter()
+                .map(|issue| issue.path.as_str())
+                .eq([field]),
         );
     }
     assert_eq!(actual, vec![true; 9]);
     assert!(super::spec::RESERVED_OUTCOMES.contains(&"capacity"));
 }
 
+/// `text` with its `build` agent rewritten as a command step.
+fn command(text: &str) -> String {
+    text.replace(
+        "[agent.build]\nagent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = \"turn\"",
+        "[command.build]\nshell='true'\ntimeout='1m'",
+    )
+}
+
 #[test]
-fn limits_validate_both_scopes_and_ignore_invalid_values_with_a_warning() {
+fn limits_validate_both_scopes_and_refuse_invalid_values() {
     let (_home, dir) = fixture();
     let mut actual = Vec::new();
-    for scope in ["workflow", "steps.build"] {
+    for (scope, table) in [
+        ("workflow.limit", "workflow.limit"),
+        ("agent.build.admission", "agent.build.admission"),
+    ] {
         for (value, suffix) in [
             ("max-parallel=3", None),
             ("stagger='10m'", None),
             ("max-parallel=4\nstagger='2m'", None),
-            ("", Some("")),
+            ("", (scope == "workflow.limit").then_some("")),
             ("max-parallel=0", Some(".max-parallel")),
             ("stagger='0s'", Some(".stagger")),
             ("stagger='soon'", Some(".stagger")),
@@ -1452,50 +1447,42 @@ fn limits_validate_both_scopes_and_ignore_invalid_values_with_a_warning() {
         ] {
             fs::write(
                 dir.join("workflow.toml"),
-                format!("{VALID}\n[{scope}.limit]\n{value}\n"),
+                format!("{VALID}\n[{table}]\n{value}\n"),
             )
             .unwrap();
             let report = validate(&dir, &LoadedDefinitions::default(), None);
-            let valid = report.errors.is_empty()
-                && match suffix {
-                    None => !report
-                        .warnings
-                        .iter()
-                        .any(|issue| issue.path.starts_with(&format!("{scope}.limit"))),
-                    Some(suffix) => report
-                        .warnings
-                        .iter()
-                        .any(|issue| issue.path == format!("{scope}.limit{suffix}")),
-                };
-            actual.push((scope, value, valid, report.errors, report.warnings));
+            let paths = report
+                .errors
+                .iter()
+                .map(|issue| issue.path.clone())
+                .collect::<Vec<_>>();
+            let valid = match suffix {
+                None => paths.is_empty(),
+                Some(suffix) => paths == [format!("{scope}{suffix}")],
+            };
+            actual.push((scope, value, valid, report.errors));
         }
     }
-    let command = VALID
-        .replace("agent = \"claude\"", "shell='true'\ntimeout='1m'")
-        .replace("prompt-file = \"prompts/build.md\"", "");
     fs::write(
         dir.join("workflow.toml"),
-        format!("{command}\n[steps.build.limit]\nmax-parallel=1\n"),
+        format!(
+            "{}\n[command.build.admission]\nmax-parallel=1\n",
+            command(VALID)
+        ),
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     actual.push((
         "command",
         "max-parallel=1",
-        report.errors.is_empty()
-            && report.warnings.iter().any(|issue| {
-                issue.path == "steps.build.limit"
-                    && issue
-                        .message
-                        .contains("a command step has no turn to count")
-            }),
+        report
+            .errors
+            .iter()
+            .map(|issue| issue.path.as_str())
+            .eq(["command.build.admission"]),
         report.errors,
-        report.warnings,
     ));
-    assert!(
-        actual.iter().all(|(_, _, valid, _, _)| *valid),
-        "{actual:#?}"
-    );
+    assert!(actual.iter().all(|(_, _, valid, _)| *valid), "{actual:#?}");
 }
 
 #[test]
@@ -1510,11 +1497,21 @@ fn schema_is_derived_from_the_loader_types() {
     );
     assert!(value["$defs"]["Case"]["properties"].get("key").is_none());
     assert!(
-        value["$defs"]["Step"]["properties"]
+        value["$defs"]["AgentNode"]["properties"]
             .get("max-visits-per-outcome")
             .is_none()
     );
-    for item in ["Header", "Check", "Step"] {
+    for item in [
+        "Header",
+        "AgentNode",
+        "CommandNode",
+        "MessageNode",
+        "TestNode",
+        "ScriptNode",
+        "JudgeNode",
+        "ConditionNode",
+        "SleepNode",
+    ] {
         assert_eq!(
             value["$defs"][item]["properties"]["summary"]["type"],
             serde_json::json!(["string", "null"])

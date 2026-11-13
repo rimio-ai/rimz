@@ -42,9 +42,6 @@ pub(super) fn render(
             "address":run.record.address().to_string(),
             "dir":run.paths.work,"record":run.record,"journal":journal,
         });
-        if let Ok(spec) = &spec {
-            value["warnings"] = serde_json::json!(spec.ignored());
-        }
         if let Some(notes) = notes {
             value["notes"] = serde_json::json!(notes);
         }
@@ -80,9 +77,6 @@ pub(super) fn render(
     let mut out = render::out();
     view.headline(&mut out, pr_number, agent.as_deref())?;
     if history {
-        for warning in spec.ignored() {
-            writeln!(out, "warning: {}", warning.message)?;
-        }
         return view.history(&mut out);
     }
     if run.record.state == RunState::Active {
@@ -107,9 +101,6 @@ pub(super) fn render(
         view.park(&mut out)?;
     }
     view.rail(&mut out)?;
-    for warning in spec.ignored() {
-        writeln!(out, "warning: {}", warning.message)?;
-    }
     view.visits(&mut out)?;
     view.trail(&mut out)?;
     writeln!(
@@ -602,7 +593,7 @@ mod tests {
                 "first":now-jiff::SignedDuration::from_mins(1),"last":now,"count":1},
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
         std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
         std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
         let paths = state.workflow(&record.id);
@@ -649,7 +640,7 @@ mod tests {
                 "unknown":"team.stage (no board)","first":first,"last":now,"count":2},
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\nelse='pending'\non={ready='@done',pending='@wait',unknown='@wait'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n").unwrap();
         let paths = state.workflow(&record.id);
         let globals = crate::cli::GlobalFlags {
             mux: None,
@@ -699,7 +690,7 @@ mod tests {
             "visit_grant":0,"deadline_fired":false,"next_seq":1,
         }))
         .unwrap();
-        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='p.md'\nlifecycle='turn'\nthen='nap'\n[checks.nap]\nsleep='5m'\nwhen=['team.stage=Done']\nthen='@done'\n").unwrap();
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='p.md'\nlifecycle='turn'\nthen='nap'\n[sleep.nap]\nsleep='5m'\nwhen=['team.stage=Done']\nthen='@done'\n").unwrap();
         std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
         std::fs::write(
             dir.path().join(".rimz/team/blackboard.md"),
@@ -733,7 +724,7 @@ mod tests {
         );
     }
 
-    const GATE: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[checks.future]\nshell='true'\non={pass='@done',fail='@failed'}\n[steps.build]\nshell='true'\nthen='gate'\n";
+    const GATE: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='1h'\ncases=[{when=['ci=pending'],outcome='pending'}]\non={pending='@wait',pass='future',fail='build'}\n[test.future]\nshell='true'\non={pass='@done',fail='@failed'}\n[command.build]\nshell='true'\nthen='gate'\n";
 
     fn output(with_you: bool) -> (String, String) {
         output_of(GATE, with_you)

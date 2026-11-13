@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, CheckKind, Issue, RESERVED_OUTCOMES, StepKind, issue};
+use super::spec::{self, CheckKind, Invoke, Issue, RESERVED_OUTCOMES, StepKind, Wake, issue};
 use super::{Definition, Target};
 use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
@@ -56,7 +56,8 @@ pub fn validate(
             let path = match &err {
                 super::SpecErr::Toml { path, .. }
                 | super::SpecErr::ReservedTarget { path, .. }
-                | super::SpecErr::ReservedNode { path } => path.as_str(),
+                | super::SpecErr::ReservedNode { path }
+                | super::SpecErr::DuplicateNode { path, .. } => path.as_str(),
                 _ => "workflow",
             };
             report.error(path, format!("{name}: {err}"));
@@ -73,12 +74,20 @@ pub(super) fn validate_spec(
     definitions: &LoadedDefinitions,
     project_root: Option<&Path>,
 ) -> Validation {
-    let mut report = Validation {
-        warnings: spec.authored().ignored.clone(),
-        ..Default::default()
-    };
+    let mut report = Validation::default();
     if let Err(err) = crate::harness::name::validate_name(name) {
         report.error("workflow", err);
+    }
+    let header = &spec.authored().workflow;
+    report.summary("workflow.summary", header.summary.as_deref());
+    report.parses("workflow.deadline", header.deadline.as_deref(), |raw| {
+        spec::parse_deadline(raw).map(|_| ())
+    });
+    if let Some(limit) = &header.limit {
+        if limit.max_parallel.is_none() && limit.stagger.is_none() {
+            report.error("workflow.limit", "set max-parallel or stagger");
+        }
+        report.limit("workflow.limit", limit);
     }
     if !spec
         .authored()
@@ -109,39 +118,31 @@ pub(super) fn validate_spec(
         );
     }
     for (node, check) in &spec.authored().checks {
-        let path = format!("checks.{node}");
+        let path = format!("{}.{node}", check.table.word());
         report.node_name(&path, node);
-        if spec.authored().steps.contains_key(node) {
-            report.error(&path, "name is also used by a step");
-        }
         if check.kind().is_none() {
-            report.error(
-                &path,
-                "set exactly one of run, shell, agent, sleep, or cases (nonempty)",
-            );
+            report.error(&path, "set exactly one of run or shell");
         }
-        if let Some(CheckKind::Run(run)) = check.kind()
-            && let Err(err) = spec::resolve_argv(dir, run)
-        {
-            report.error(&format!("{path}.run"), err);
-        }
-        if let Some(CheckKind::Shell(shell)) = check.kind() {
-            if shell.trim().is_empty() {
-                report.error(&format!("{path}.shell"), "set a nonempty shell command");
-            }
+        report.check_values(&path, check);
+        let invoke = match check.kind() {
+            Some(CheckKind::Test(invoke) | CheckKind::Script(invoke)) => Some(invoke),
+            _ => None,
+        };
+        report.invoke(dir, &path, invoke);
+        if matches!(check.kind(), Some(CheckKind::Test(_))) {
             for outcome in ["pass", "fail"] {
                 if !check.on.contains_key(outcome) {
                     report.error(
                         &format!("{path}.on.{outcome}"),
-                        "a shell check requires both on.pass and on.fail",
+                        "a test check requires both on.pass and on.fail",
                     );
                 }
             }
         }
-        if matches!(check.kind(), Some(CheckKind::Agent(_))) && check.prompt_file.is_none() {
+        if matches!(check.kind(), Some(CheckKind::Judge(_))) && check.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
-                "an agent check requires prompt-file",
+                "a judge check requires prompt-file",
             );
         }
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
@@ -168,7 +169,7 @@ pub(super) fn validate_spec(
             }
             report.condition_terms(&path, check, project_root);
         }
-        if let Some(CheckKind::Agent(agent)) = check.kind() {
+        if let Some(CheckKind::Judge(agent)) = check.kind() {
             if check.summary.is_none() {
                 report.error(
                     &format!("{path}.summary"),
@@ -221,10 +222,12 @@ pub(super) fn validate_spec(
             workflow: name.into(),
             node: node.clone(),
             summary: check.summary.clone(),
-            kind: "check".into(),
+            kind: check.table.word().into(),
             runner: match check.kind() {
-                Some(CheckKind::Run(_)) => "run",
-                Some(CheckKind::Shell(_)) => "shell",
+                Some(CheckKind::Test(Invoke::Run(_)) | CheckKind::Script(Invoke::Run(_))) => "run",
+                Some(CheckKind::Test(Invoke::Shell(_)) | CheckKind::Script(Invoke::Shell(_))) => {
+                    "shell"
+                }
                 Some(CheckKind::Condition) => "condition",
                 Some(CheckKind::Sleep) => "sleep",
                 _ => "agent",
@@ -243,17 +246,18 @@ pub(super) fn validate_spec(
         let path = if at_break {
             "workflow.on-break".into()
         } else {
-            format!("steps.{node}")
+            format!("{}.{node}", step.table.word())
         };
         if !at_break {
             report.node_name(&path, node);
         }
         if step.kind().is_none() {
-            report.error(&path, "set exactly one of agent, run, shell, or message");
+            report.error(&path, "set exactly one of run or shell");
         }
         let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
-        let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
+        let command = matches!(step.kind(), Some(StepKind::Command(_)));
         let message = matches!(step.kind(), Some(StepKind::Message(_)));
+        report.step_values(&path, step);
         if let Some(file) = &step.system_prompt_file
             && let Err(error) = spec::confined_file(dir, file)
         {
@@ -271,16 +275,11 @@ pub(super) fn validate_spec(
                 "a run or shell step requires timeout, so a hung command cannot hold the run",
             );
         }
-        if let Some(StepKind::Run(run)) = step.kind()
-            && let Err(error) = spec::resolve_argv(dir, run)
-        {
-            report.error(&format!("{path}.run"), error);
-        }
-        if let Some(StepKind::Shell(shell)) = step.kind()
-            && shell.trim().is_empty()
-        {
-            report.error(&format!("{path}.shell"), "set a nonempty shell command");
-        }
+        let invoke = match step.kind() {
+            Some(StepKind::Command(invoke)) => Some(invoke),
+            _ => None,
+        };
+        report.invoke(dir, &path, invoke);
         if let Some(StepKind::Message(target)) = step.kind() {
             if let Err(error) = message_target(target) {
                 report.error(&format!("{path}.message"), error);
@@ -386,12 +385,6 @@ pub(super) fn validate_spec(
                 );
             }
         }
-        if step.takeover == Some(true) && step.share == Some(true) {
-            report.error(
-                &format!("{path}.share"),
-                "choose takeover or share: takeover stops an idle occupant; share launches beside it",
-            );
-        }
         if agent && let Some(target) = &step.on.capacity {
             report.target(spec, &format!("{path}.on.capacity"), target);
             if matches!(target.as_str(), "@user" | "@wait") {
@@ -430,10 +423,10 @@ pub(super) fn validate_spec(
             workflow: name.into(),
             node: node.clone(),
             summary: step.summary.clone(),
-            kind: "step".into(),
+            kind: step.table.word().into(),
             runner: match step.kind() {
-                Some(StepKind::Run(_)) => "run",
-                Some(StepKind::Shell(_)) => "shell",
+                Some(StepKind::Command(Invoke::Run(_))) => "run",
+                Some(StepKind::Command(Invoke::Shell(_))) => "shell",
                 Some(StepKind::Message(_)) => "message",
                 Some(StepKind::Agent(_)) | None => "agent",
             }
@@ -464,25 +457,11 @@ pub(super) fn validate_spec(
                     if edge.outcome == "deadline" {
                         "workflow.on.deadline".into()
                     } else {
-                        let kind = if row.kind == "check" {
-                            "checks"
-                        } else {
-                            "steps"
-                        };
-                        format!("{kind}.{}.on.{}", row.node, edge.outcome)
+                        format!("{}.{}.on.{}", row.kind, row.node, edge.outcome)
                     }
                 })
         })
         .collect::<BTreeSet<_>>();
-    if !missing.is_empty()
-        && let Some(issue) = spec
-            .authored()
-            .ignored
-            .iter()
-            .find(|issue| issue.path.starts_with("workflow.on-break"))
-    {
-        report.error(&issue.path, "invalid on-break is needed by a failure edge; fix it or route every failure explicitly");
-    }
     for path in missing {
         report.error(&path, "a fireable failure edge needs a route; route it to a node, @done, or @failed, or set [workflow] on-break");
     }
@@ -492,11 +471,8 @@ pub(super) fn validate_spec(
     {
         for row in &report.rows {
             if row.agent.is_some() {
-                let (kind, message) = if row.kind == "step" {
-                    (
-                        "steps",
-                        "auto-continue is off; a step paused on a provider limit waits for you",
-                    )
+                let message = if row.kind == "agent" {
+                    "auto-continue is off; a step paused on a provider limit waits for you"
                 } else if row
                     .agent
                     .as_deref()
@@ -506,46 +482,20 @@ pub(super) fn validate_spec(
                     })
                     .is_some_and(|profile| profile.kind.as_str() == "codex")
                 {
-                    (
-                        "checks",
-                        "auto-continue is off; a failed Codex judge retries once, then follows on.invalid",
-                    )
+                    "auto-continue is off; a failed Codex judge retries once, then follows on.invalid"
                 } else {
-                    (
-                        "checks",
-                        "auto-continue is off; a provider limit mid-attempt ends the attempt as limited",
-                    )
+                    "auto-continue is off; a provider limit mid-attempt ends the attempt as limited"
                 };
                 let path = if spec.is_break(&row.node) {
                     "workflow.on-break".into()
                 } else {
-                    format!("{kind}.{}", row.node)
+                    format!("{}.{}", row.kind, row.node)
                 };
                 report.warnings.push(issue(&path, message));
             }
         }
     }
     for (node, step) in &spec.authored().steps {
-        if let Some(visits) = step.max_visits
-            && never_waits(step)
-            && cycles_to(spec, node, |name| {
-                spec.authored().steps.get(name).is_some_and(never_waits)
-                    || (spec.authored().checks.contains_key(name)
-                        && !spec
-                            .edges(name)
-                            .iter()
-                            .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait))
-            })
-        {
-            report.warnings.push(issue(
-                &format!("steps.{node}"),
-                format!(
-                    "cycle through command or message steps never waits and can spend all \
-                     {visits} visits in one advance; route it through a check that can wait \
-                     (@wait) if that is not intended"
-                ),
-            ));
-        }
         if step.max_visits.is_none()
             && cycles_to(spec, node, |name| {
                 !spec
@@ -556,12 +506,12 @@ pub(super) fn validate_spec(
             })
         {
             report.error(
-                &format!("steps.{node}"),
+                &format!("{}.{node}", step.table.word()),
                 "cycle through steps has no max-visits bound",
             );
         }
     }
-    for node in spec.authored().checks.keys() {
+    for (node, check) in &spec.authored().checks {
         if !spec
             .edges(node)
             .iter()
@@ -574,7 +524,10 @@ pub(super) fn validate_spec(
                         .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait)
             })
         {
-            report.error(&format!("checks.{node}"), "check-only cycle has no @wait");
+            report.error(
+                &format!("{}.{node}", check.table.word()),
+                "check-only cycle has no @wait",
+            );
         }
     }
     for issue in report.errors.iter_mut().chain(&mut report.warnings) {
@@ -596,6 +549,263 @@ pub(super) fn validate_spec(
 impl Validation {
     fn error(&mut self, path: &str, message: impl Display) {
         self.errors.push(issue(path, message));
+    }
+
+    /// Refuse an optional value its parser rejects, at the value's own path.
+    fn parses<T: ?Sized, E: Display>(
+        &mut self,
+        path: &str,
+        value: Option<&T>,
+        parse: impl FnOnce(&T) -> Result<(), E>,
+    ) {
+        if let Some(error) = value.and_then(|value| parse(value).err()) {
+            self.error(path, error);
+        }
+    }
+
+    fn summary(&mut self, path: &str, summary: Option<&str>) {
+        self.parses(path, summary, |text| {
+            if text.trim().is_empty() || text.contains(['\n', '\r']) {
+                Err("a summary is one nonempty line")
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    fn duration(&mut self, path: &str, raw: Option<&str>) {
+        self.parses(path, raw, |raw| {
+            crate::harness::duration::duration(raw).map(|_| ())
+        });
+    }
+
+    /// A nonzero duration, as a hold or a stagger must be.
+    fn nonzero(&mut self, path: &str, raw: Option<&str>, zero: &str) {
+        self.parses(path, raw, |raw| {
+            match crate::harness::duration::duration(raw) {
+                Ok(duration) if duration.is_zero() => Err(zero.to_owned()),
+                Ok(_) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            }
+        });
+    }
+
+    fn limit(&mut self, path: &str, limit: &crate::harness::throttle::Limit) {
+        if limit.max_parallel == Some(0) {
+            self.error(&format!("{path}.max-parallel"), "must be at least 1");
+        }
+        self.nonzero(
+            &format!("{path}.stagger"),
+            limit.stagger.as_deref(),
+            "must be greater than zero",
+        );
+    }
+
+    /// A test, script, or command's one invocation: an argv that resolves, or shell text.
+    fn invoke(&mut self, dir: &Path, path: &str, invoke: Option<Invoke<'_>>) {
+        match invoke {
+            Some(Invoke::Run(run)) => {
+                if let Err(error) = spec::resolve_argv(dir, run) {
+                    self.error(&format!("{path}.run"), error);
+                }
+            }
+            Some(Invoke::Shell(shell)) if shell.trim().is_empty() => {
+                self.error(&format!("{path}.shell"), "set a nonempty shell command");
+            }
+            Some(Invoke::Shell(_)) | None => {}
+        }
+    }
+
+    fn wakes(
+        &mut self,
+        path: &str,
+        wakes: Option<&Vec<Wake>>,
+        parse: fn(&Wake) -> Result<spec::Subscription, super::SpecErr>,
+    ) {
+        for (index, wake) in wakes.into_iter().flatten().enumerate() {
+            if let Err(error) = parse(wake) {
+                self.error(&format!("{path}.{index}"), error);
+            }
+        }
+    }
+
+    /// The values a check's own fields must hold, beyond what its kind table admits.
+    fn check_values(&mut self, path: &str, check: &spec::Check) {
+        let condition = matches!(check.kind(), Some(CheckKind::Condition));
+        let sleep = check.is_sleep();
+        self.summary(&format!("{path}.summary"), check.summary.as_deref());
+        self.duration(&format!("{path}.timeout"), check.timeout.as_deref());
+        self.parses(
+            &format!("{path}.admission.window"),
+            check.window.as_deref(),
+            |raw| spec::parse_window(raw).map(|_| ()),
+        );
+        self.wakes(
+            &format!("{path}.wake"),
+            check.wake.as_ref(),
+            Wake::subscription,
+        );
+        for (index, wake) in check.wake.iter().flatten().enumerate() {
+            if wake.prompt().is_some() {
+                self.error(
+                    &format!("{path}.wake.{index}.prompt"),
+                    "a prompt is only for an agent's subscribe binding",
+                );
+            }
+        }
+        let outcomes = check
+            .cases
+            .iter()
+            .map(|case| case.outcome.as_str())
+            .chain(check.else_outcome.as_deref())
+            .collect::<BTreeSet<_>>();
+        for outcome in check.on.keys() {
+            let engine = RESERVED_OUTCOMES.contains(&outcome.as_str())
+                && !matches!(outcome.as_str(), "timeout" | "invalid")
+                && !(condition && outcome == "unknown");
+            let dead = condition
+                && !outcomes.contains(outcome.as_str())
+                && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid");
+            if engine || dead {
+                self.error(
+                    &format!("{path}.on.{outcome}"),
+                    "dead route: this check cannot answer that outcome",
+                );
+            }
+        }
+        for (index, case) in check.cases.iter().enumerate() {
+            let case_path = format!("{path}.cases.{index}.for");
+            self.nonzero(&case_path, case.hold.as_deref(), "for must be nonzero");
+            if case.hold.is_some() && check.on.get(&case.outcome).is_some_and(|to| to == "@wait") {
+                self.error(&case_path, "a held case must route away from @wait");
+            }
+        }
+        if sleep {
+            self.parses(&format!("{path}.for"), check.hold.as_deref(), |raw| {
+                let hold = crate::harness::duration::duration(raw).map_err(|e| e.to_string())?;
+                if hold.is_zero() {
+                    return Err("for must be nonzero".to_owned());
+                }
+                if check.when.is_none() {
+                    return Err("for requires when".into());
+                }
+                if check
+                    .sleep
+                    .as_deref()
+                    .and_then(|sleep| crate::harness::duration::duration(sleep).ok())
+                    .is_some_and(|sleep| hold >= sleep)
+                {
+                    return Err("for must be shorter than sleep".into());
+                }
+                Ok(())
+            });
+        }
+        if condition || sleep {
+            self.parses(
+                &format!("{path}.provider"),
+                check.provider.as_ref(),
+                |provider| {
+                    crate::agents::find_definition(provider.as_str())
+                        .map(|_| ())
+                        .ok_or_else(|| format!("unknown provider {provider}"))
+                },
+            );
+            let window = check
+                .condition_cases()
+                .iter()
+                .filter_map(|case| crate::harness::when::WhenExpr::parse(&case.when).ok())
+                .any(|expr| expr.terms().any(|term| term.key.starts_with("window.")));
+            if check.provider.is_some() && !window {
+                self.error(
+                    &format!("{path}.provider"),
+                    "provider requires a window term",
+                );
+            }
+            if check.account.is_some() && check.provider.is_none() {
+                self.error(&format!("{path}.account"), "account requires provider");
+            }
+        }
+    }
+
+    /// The values a step's own fields must hold, beyond what its kind table admits.
+    fn step_values(&mut self, path: &str, step: &spec::Step) {
+        let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
+        let lifecycle = step.lifecycle();
+        self.summary(&format!("{path}.summary"), step.summary.as_deref());
+        self.duration(&format!("{path}.timeout"), step.timeout.as_deref());
+        if step.max_visits == Some(0) {
+            self.error(&format!("{path}.max-visits"), "must be at least 1");
+        }
+        self.parses(
+            &format!("{path}.admission.window"),
+            step.window.as_deref(),
+            |raw| spec::parse_window(raw).map(|_| ()),
+        );
+        if let Some(limit) = &step.limit {
+            self.limit(&format!("{path}.admission"), limit);
+        }
+        self.parses(&format!("{path}.budget"), step.budget.as_deref(), |raw| {
+            raw.parse::<crate::harness::budget::BudgetSpec>()
+                .map(|_| ())
+        });
+        self.parses(
+            &format!("{path}.worktree"),
+            step.worktree.as_deref(),
+            |name| {
+                if name.is_empty() {
+                    return Ok(());
+                }
+                crate::worktree::parse_requested_name(name).map(|_| ())
+            },
+        );
+        if step
+            .session
+            .as_ref()
+            .is_some_and(|session| session.as_str().trim().is_empty())
+        {
+            self.error(
+                &format!("{path}.session"),
+                "set a nonempty agent session id",
+            );
+        }
+        if step.mode == Some(crate::agents::PermissionMode::Plan) {
+            self.error(
+                &format!("{path}.mode"),
+                "plan mode cannot do a step's work; use auto, ask, or yolo",
+            );
+        }
+        if !agent {
+            return;
+        }
+        if step.keep.is_some() && lifecycle == StepLifecycle::Stay {
+            self.error(
+                &format!("{path}.keep"),
+                "keep is only for turn and until agent steps",
+            );
+        }
+        if step.subscribe.is_some() && lifecycle.is_turn() {
+            self.error(
+                &format!("{path}.subscribe"),
+                "only a staying agent step receives signals; a turn ends where they would land",
+            );
+        }
+        self.wakes(
+            &format!("{path}.subscribe"),
+            step.subscribe.as_ref(),
+            Wake::step_subscription,
+        );
+        if step.timeout.is_some() && lifecycle == StepLifecycle::Stay {
+            self.error(
+                &format!("{path}.timeout"),
+                "a staying step has no step timeout; remove timeout or use lifecycle = \"turn\"",
+            );
+        }
+        if step.on.asked.is_some() && !lifecycle.is_turn() {
+            self.error(
+                &format!("{path}.on.asked"),
+                "a staying step never ends on a question; remove on.asked or use lifecycle = \"turn\"",
+            );
+        }
     }
 
     fn node_name(&mut self, path: &str, node: &str) {
@@ -736,14 +946,6 @@ impl Validation {
     }
 }
 
-/// Command and message steps finish within one advance.
-fn never_waits(step: &spec::Step) -> bool {
-    matches!(
-        step.kind(),
-        Some(StepKind::Run(_) | StepKind::Shell(_) | StepKind::Message(_))
-    )
-}
-
 /// A message step names one living agent: `@handle` or `@handle#channel`, never a person.
 fn message_target(target: &str) -> Result<(), String> {
     if !target.starts_with('@') || target.contains(':') {
@@ -839,10 +1041,7 @@ fn cycles_to(spec: &Definition, start: &str, allowed: impl Fn(&str) -> bool) -> 
             continue;
         }
         for edge in spec.resolved_edges(&node).unwrap_or_default() {
-            if edge.outcome == "deadline"
-                || (spec.authored().steps.contains_key(&node)
-                    && edge.source != EdgeSource::Explicit)
-            {
+            if edge.outcome == "deadline" {
                 continue;
             }
             let target = edge.target.as_str().to_owned();

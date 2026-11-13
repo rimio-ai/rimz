@@ -1,26 +1,16 @@
 use super::*;
 use crate::store::workflow::StepLifecycle;
 
-const JUDGED: &str = "[checks.judge]\nrun='cat answer.json'\ntimeout='1m'\non.next='@done'\n";
+const JUDGED: &str = "[script.judge]\nrun='cat answer.json'\ntimeout='1m'\non.next='@done'\n";
 
-fn report(text: &str) -> (Vec<(String, String)>, Vec<String>) {
+fn report(text: &str) -> Vec<(String, String)> {
     let (_home, dir) = super::super::fixture();
     fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, &LoadedDefinitions::default(), None);
-    let ignored = load(&dir)
-        .map(|spec| {
-            spec.ignored()
-                .iter()
-                .map(|issue| issue.path.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    let errors = report
+    validate(&dir, &LoadedDefinitions::default(), None)
         .errors
         .into_iter()
         .map(|issue| (issue.path, issue.message))
-        .collect();
-    (errors, ignored)
+        .collect()
 }
 
 fn paths(errors: &[(String, String)]) -> Vec<&str> {
@@ -31,18 +21,17 @@ fn paths(errors: &[(String, String)]) -> Vec<&str> {
 fn launch_settings_parse_validate_and_reach_the_host() {
     let settings = "account='work'\nmode='yolo'\neffort='high'\nfast=true\nbudget='$5/day'\n\
         system-prompt-file='prompts/build.md'\nworktree='feat-x'\n";
-    let (errors, ignored) =
-        report(&VALID.replace("max-visits = 3", &format!("max-visits = 3\n{settings}")));
-    assert_eq!((errors, ignored), (vec![], vec![]));
-    let (escaped, _) = report(&VALID.replace(
+    let errors = report(&VALID.replace("max-visits = 3", &format!("max-visits = 3\n{settings}")));
+    assert_eq!(errors, vec![]);
+    let escaped = report(&VALID.replace(
         "max-visits = 3",
         "max-visits = 3\nsystem-prompt-file='../outside.md'",
     ));
     assert_eq!(
         escaped,
         [(
-            "steps.build.system-prompt-file".to_owned(),
-            "example: steps.build.system-prompt-file: invalid workflow path ../outside.md: use a relative path with only normal components"
+            "agent.build.system-prompt-file".to_owned(),
+            "example: agent.build.system-prompt-file: invalid workflow path ../outside.md: use a relative path with only normal components"
                 .to_owned()
         )]
     );
@@ -86,12 +75,12 @@ fn a_bare_step_launches_with_no_overrides() {
 fn turn_and_stay_steps_may_end_the_run_at_then_and_until_steps_may_not() {
     for lifecycle in ["turn", "stay", "until"] {
         for terminal in ["@done", "@failed"] {
-            let (errors, _) = report(&VALID.replace(
+            let errors = report(&VALID.replace(
                 "lifecycle = \"turn\"\nthen = \"pick\"",
                 &format!("lifecycle = '{lifecycle}'\nthen = '{terminal}'"),
             ));
             let expected: &[&str] = if lifecycle == "until" {
-                &["steps.build.then"]
+                &["agent.build.then"]
             } else {
                 &[]
             };
@@ -102,17 +91,17 @@ fn turn_and_stay_steps_may_end_the_run_at_then_and_until_steps_may_not() {
             );
         }
     }
-    let (errors, _) = report(&VALID.replace("then = \"pick\"", "then = ['@done', 'pick']"));
+    let errors = report(&VALID.replace("then = \"pick\"", "then = ['@done', 'pick']"));
     assert_eq!(
         errors,
         [
             (
-                "steps.build.then".to_owned(),
-                "example: steps.build.then: then lists only checks; @done or @failed stands alone as then".to_owned()
+                "agent.build.then".to_owned(),
+                "example: agent.build.then: then lists only checks; @done or @failed stands alone as then".to_owned()
             ),
             (
-                "steps.build.then".to_owned(),
-                "example: steps.build.then: @done requires a direct route to the next listed check pick".to_owned()
+                "agent.build.then".to_owned(),
+                "example: agent.build.then: @done requires a direct route to the next listed check pick".to_owned()
             ),
         ]
     );
@@ -120,12 +109,10 @@ fn turn_and_stay_steps_may_end_the_run_at_then_and_until_steps_may_not() {
 
 #[test]
 fn on_failed_names_a_live_target_on_agent_steps() {
-    let (errors, ignored) =
-        report(&VALID.replace("max-visits = 3", "max-visits = 3\non.failed = 'pick'"));
-    assert_eq!((errors, ignored), (vec![], vec![]));
-    let (errors, _) =
-        report(&VALID.replace("max-visits = 3", "max-visits = 3\non.failed = 'nowhere'"));
-    assert_eq!(paths(&errors), ["steps.build.on.failed"], "{errors:?}");
+    let errors = report(&VALID.replace("max-visits = 3", "max-visits = 3\non.failed = 'pick'"));
+    assert_eq!(errors, vec![]);
+    let errors = report(&VALID.replace("max-visits = 3", "max-visits = 3\non.failed = 'nowhere'"));
+    assert_eq!(paths(&errors), ["agent.build.on.failed"], "{errors:?}");
 }
 
 #[test]
@@ -268,7 +255,7 @@ fn only_written_routes_classify_as_explicit() {
 
 #[test]
 fn a_message_step_hands_its_pinned_session_to_the_host() {
-    let tell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+    let tell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
     for (definition, expected) in [
         (format!("{tell}session='ses-1'\n"), Some("ses-1")),
         (tell.to_owned(), None),

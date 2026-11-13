@@ -54,22 +54,18 @@ fn step_notes_name_kept_memory_only_when_enabled_and_recorded() {
 }
 
 #[test]
-fn command_notes_warn_and_wrong_typed_optional_notes_are_ignored() {
+fn command_notes_refuse_whatever_their_type() {
     let mut actual = Vec::new();
     for value in ["false", "'wrong'"] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nshell='true'\nthen='@done'\nnotes={value}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\nthen='@done'\nnotes={value}\n"
         );
-        let spec = crate::harness::workflow::spec::parse(&text).unwrap();
-        actual.push(
-            spec.ignored()
-                .iter()
-                .map(|issue| (issue.path.clone(), issue.message.contains("unknown field")))
-                .collect::<Vec<_>>(),
-        );
+        match crate::harness::workflow::spec::parse(&text) {
+            Err(crate::harness::workflow::SpecErr::Toml { path, source }) => {
+                actual.push((path, source.message().contains("unknown field")));
+            }
+            other => panic!("notes on a command refuses: {other:?}"),
+        }
     }
-    assert_eq!(
-        actual,
-        vec![vec![("steps.build.notes".to_owned(), false)]; 2]
-    );
+    assert_eq!(actual, vec![("command.build.notes".to_owned(), true); 2]);
 }

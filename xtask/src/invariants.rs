@@ -643,8 +643,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "workflow/definition.rs",
         "workflow/graph.rs",
         "workflow/inspect.rs",
-        "workflow/spec/tolerant.rs",
-        "workflow/spec/tolerant/clean.rs",
+        "workflow/spec/kinds.rs",
     ]
     .map(|name| harness_root.join(name));
     for needle in [

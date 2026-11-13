@@ -27,7 +27,7 @@ pub(super) fn compose(
         parts.push(prompt);
     } else if !matches!(step.kind(), Some(Kind::Message(_))) {
         return Err(WorkflowErr::Refused(format!(
-            "steps.{}.prompt-file: an agent step requires prompt-file",
+            "agent.{}.prompt-file: an agent step requires prompt-file",
             record.node
         )));
     }
@@ -74,9 +74,7 @@ fn break_prompt(record: &RunRecord, paths: &WorkflowPaths) -> Result<String> {
                 "answer_or_error": object,
                 "log": entry.seq.and_then(|seq| match spec.check_kind(from)? {
                     Kind::Judge(_) => Some(paths.check_output(seq)),
-                    Kind::Run(_) | Kind::Shell(_) => {
-                        Some(paths.check_log(seq))
-                    }
+                    Kind::Test(_) | Kind::Script(_) => Some(paths.check_log(seq)),
                     _ => None,
                 }),
             })),
@@ -391,7 +389,7 @@ pub(super) fn launch(
                 cwd: record.scope.path.clone(),
                 throttle_turn,
                 overrides,
-                takeover: step.takeover().unwrap_or_default(),
+                takeover: step.occupancy() == Some(super::super::OccupancyPolicy::Takeover),
                 task: record.task.clone(),
                 booked_by: record
                     .fire
@@ -453,7 +451,7 @@ pub(super) fn launch(
         Err(NotLaunched::Taken(occupancy)) => {
             // The step waits as the first read would have, with no attempt counted.
             t.withdraw_attempt();
-            let wait = super::occupancy_wait(&occupancy, step.takeover().unwrap_or_default());
+            let wait = super::occupancy_wait(&occupancy, step);
             if let Some(wait) = wait {
                 t.step_wait(wait, None);
             }

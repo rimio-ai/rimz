@@ -32,7 +32,7 @@ fn terminal_runs_keep_history_and_overwrite_an_existing_copy() {
     let mut actual = Vec::new();
     for target in ["@done", "@failed"] {
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.ok='{target}'\nwake=['memory.ready']\ntimeout='1h'\n"
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.ok='{target}'\nwake=['memory.ready']\ntimeout='1h'\n"
         );
         let (env, dir) = fixture(&spec, PENDING);
         let id = start(&env);
@@ -136,7 +136,7 @@ fn gc_backfills_history_before_removing_a_terminal_home_and_keeps_it_on_failure(
     let mut actual = Vec::new();
     for fail in [false, true] {
         let (env, _) = fixture(
-            &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\n"),
+            &format!("{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\n"),
             "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
         );
         let id = start(&env);

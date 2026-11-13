@@ -271,7 +271,9 @@ mod tests {
     fn case_marks_paint_only_the_decision_prefix_and_else() {
         use CaseMark::{False, NotReached, Unread, Winner};
 
-        let check: Check = toml::from_str("else='pending'\ncases=[{when=['pr=merged'],outcome='merged'},{when=['ci=passed'],outcome='green'},{when=['team.stage=Done'],outcome='done'}]").unwrap();
+        let check = Check::condition(
+            "else='pending'\ncases=[{when=['pr=merged'],outcome='merged'},{when=['ci=passed'],outcome='green'},{when=['team.stage=Done'],outcome='done'}]",
+        );
         let expressions = check
             .cases
             .iter()
@@ -328,7 +330,9 @@ mod tests {
 
     #[test]
     fn case_marks_use_the_held_case_from_the_record() {
-        let check: Check = toml::from_str("else='pending'\ncases=[{when=['pr=merged'],outcome='merged'},{when=['ci=passed'],outcome='green',for='30m'}]").unwrap();
+        let check = Check::condition(
+            "else='pending'\ncases=[{when=['pr=merged'],outcome='merged'},{when=['ci=passed'],outcome='green',for='30m'}]",
+        );
         let object = json!({"outcome":"hold","readings":{"pr":"open","ci":"passed"}});
         let wait: Wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":1,"first":"2026-01-01T00:00:00Z","last":"2026-01-01T00:00:01Z","count":2})).unwrap();
         assert_eq!(
@@ -342,7 +346,9 @@ mod tests {
 
     #[test]
     fn case_marks_read_an_unknown_answer_under_a_surviving_hold() {
-        let check: Check = toml::from_str("else='pending'\ncases=[{when=['team.stage=Done'],outcome='done'},{when=['pr=merged'],outcome='merged',for='2m'}]").unwrap();
+        let check = Check::condition(
+            "else='pending'\ncases=[{when=['team.stage=Done'],outcome='done'},{when=['pr=merged'],outcome='merged',for='2m'}]",
+        );
         let object = json!({"outcome":"unknown","readings":{"team.stage":null,"pr":"merged"}});
         let wait: Wait = serde_json::from_value(json!({"node":"gate","outcome":"hold","case":1,"unknown":"team.stage (no board)","first":"2026-01-01T00:00:00Z","last":"2026-01-01T00:00:01Z","count":2})).unwrap();
         assert_eq!(
@@ -374,10 +380,9 @@ mod tests {
                 .iter()
                 .map(|(_, clause, _)| *clause)
                 .collect::<Vec<_>>();
-            let check: Check = toml::from_str(&format!(
+            let check = Check::condition(&format!(
                 "else='pending'\ncases=[{{when={clauses:?},outcome='ready'}}]"
-            ))
-            .unwrap();
+            ));
             let expressions = [WhenExpr::parse(&check.cases[0].when).unwrap()];
             let expected = reasons[..count]
                 .iter()
@@ -443,7 +448,10 @@ mod tests {
                 Some(0),
             ),
         ] {
-            let check: Check = toml::from_str(&format!("else='pending'\n[[cases]]\nwhen=['{}']\noutcome='first'\n[[cases]]\nwhen=['{}']\noutcome='second'\n", conditions[0], conditions[1])).unwrap();
+            let check = Check::condition(&format!(
+                "else='pending'\n[[cases]]\nwhen=['{}']\noutcome='first'\n[[cases]]\nwhen=['{}']\noutcome='second'\n",
+                conditions[0], conditions[1]
+            ));
             let expressions: Vec<_> = conditions
                 .into_iter()
                 .map(|s| WhenExpr::parse(&[s.into()]).unwrap())
@@ -488,10 +496,9 @@ mod tests {
                 "team.stage=Done".into(),
                 "window.5h.left>=40".into(),
             ];
-            let check: Check = toml::from_str(&format!(
+            let check = Check::condition(&format!(
                 "else='pending'\n[[cases]]\nwhen={clauses:?}\noutcome='ready'\n"
-            ))
-            .unwrap();
+            ));
             let expressions = [WhenExpr::parse(&clauses).unwrap()];
             for (checked, outcome) in [
                 (None, "unknown"),
@@ -628,10 +635,9 @@ mod tests {
             ),
         ] {
             for clause in ["ci=failed", "!ci=passed"] {
-                let check: Check = toml::from_str(&format!(
+                let check = Check::condition(&format!(
                     "else='pending'\n[[cases]]\nwhen=['{clause}']\noutcome='ready'\n"
-                ))
-                .unwrap();
+                ));
                 let object = answer(
                     &Node::of_check(&check),
                     &[WhenExpr::parse(&[clause.into()]).unwrap()],
@@ -678,10 +684,9 @@ mod tests {
             ("pr.review[topic]", "approved"),
         ] {
             let clause = format!("{key}={value}");
-            let check: Check = toml::from_str(&format!(
+            let check = Check::condition(&format!(
                 "else='pending'\n[[cases]]\nwhen=['{clause}']\noutcome='ready'\n"
-            ))
-            .unwrap();
+            ));
             let object = answer(
                 &Node::of_check(&check),
                 &[WhenExpr::parse(&[clause]).unwrap()],

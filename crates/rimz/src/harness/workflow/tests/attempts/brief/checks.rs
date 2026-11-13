@@ -20,12 +20,23 @@ fn launch_notes_describe_each_check_kind_and_the_until_pushback() {
             "review is clean",
         ),
         (
-            "else='pending'\n[[checks.watch.cases]]\nwhen=['team.stage=Done']\noutcome='done'",
+            "else='pending'\n[[condition.watch.cases]]\nwhen=['team.stage=Done']\noutcome='done'",
             "`done`: `team.stage=Done` → `@done`",
         ),
     ] {
+        let kind = match definition.split('=').next() {
+            Some("run") => "script",
+            Some("shell") => "test",
+            Some("agent") => "judge",
+            _ => "condition",
+        };
+        let routes = if kind == "test" {
+            "pass='@done',fail='build'"
+        } else {
+            "done='@done',pending='build',unknown='build'"
+        };
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[checks.watch]\non={{done='@done',pending='build',unknown='build',pass='@done',fail='build'}}\n{definition}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[{kind}.watch]\non={{{routes}}}\n{definition}\n"
         );
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
@@ -59,7 +70,7 @@ fn launch_notes_describe_each_check_kind_and_the_until_pushback() {
 
 #[test]
 fn sealed_judge_without_summary_uses_a_safe_note_and_lists_stay_ordered() {
-    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen=['cheap','review']\n[checks.cheap]\nrun='true'\non.pass='review'\n[checks.review]\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
+    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen=['cheap','review']\n[script.cheap]\nrun='true'\non.pass='review'\n[judge.review]\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
     let (_dir, state, record) = setup(definition);
     let paths = state.workflow(&record.id);
     let spec = crate::harness::workflow::load(&paths.home).unwrap();

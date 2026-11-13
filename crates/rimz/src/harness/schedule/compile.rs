@@ -119,8 +119,9 @@ impl InlineTask {
             let timeout = runner::configured_timeout(config)?
                 .unwrap_or(runner::SCHEDULED_RUN_DEFAULT_TIMEOUT);
             let mut table: Table = toml::from_str(&text)?;
-            if let Some(Value::Table(step)) =
-                table.get_mut("steps").and_then(|steps| steps.get_mut(step))
+            if let Some(Value::Table(step)) = table
+                .get_mut("agent")
+                .and_then(|agents| agents.get_mut(step))
             {
                 step.insert("timeout".into(), seconds(timeout));
             }
@@ -145,15 +146,20 @@ impl InlineTask {
     }
 }
 
-/// Keep the agent step's session when its run ends, as a `--keep` fire asks.
+/// Keep the agent step's session when its run ends, as a `--keep` fire asks. A stay agent
+/// already keeps its pane and takes no `keep`, so it is left as compiled.
 pub(super) fn keep_agent(text: &str) -> Result<String> {
     let mut table: Table = toml::from_str(text)?;
-    if let Some(Value::Table(step)) = table
-        .get_mut("steps")
-        .and_then(|steps| steps.get_mut(AGENT))
-    {
-        step.insert("keep".into(), true.into());
+    let Some(Value::Table(step)) = table
+        .get_mut("agent")
+        .and_then(|agents| agents.get_mut(AGENT))
+    else {
+        return Ok(text.to_owned());
+    };
+    if step.get("lifecycle").and_then(Value::as_str) == Some("stay") {
+        return Ok(text.to_owned());
     }
+    step.insert("keep".into(), true.into());
     Ok(toml::to_string(&table)?)
 }
 
@@ -216,8 +222,8 @@ enum Act<'a> {
 
 struct Graph<'a> {
     entry: &'a TaskEntry,
-    checks: Table,
-    steps: Table,
+    /// The compiled nodes, one table per kind (`agent`, `test`, `condition`, ...).
+    nodes: Table,
     assets: Vec<Asset>,
 }
 
@@ -225,8 +231,7 @@ impl<'a> Graph<'a> {
     fn new(entry: &'a TaskEntry) -> Self {
         Self {
             entry,
-            checks: Table::new(),
-            steps: Table::new(),
+            nodes: Table::new(),
             assets: Vec::new(),
         }
     }
@@ -272,7 +277,7 @@ impl<'a> Graph<'a> {
             on.insert("timeout".into(), "@failed".into());
             on.insert("invalid".into(), "@failed".into());
             check.insert("on".into(), on.into());
-            self.checks.insert("check".into(), check.into());
+            self.insert("test", "check", check);
         }
         let offset = usize::from(guard.shell.is_some());
         for (index, judge) in guard.judges.iter().enumerate() {
@@ -298,18 +303,30 @@ impl<'a> Graph<'a> {
             ("start", start.into()),
         ]);
         let mut spec = table([("workflow", workflow.into())]);
-        if !self.checks.is_empty() {
-            spec.insert("checks".into(), self.checks.into());
-        }
-        if !self.steps.is_empty() {
-            spec.insert("steps".into(), self.steps.into());
-        }
+        spec.extend(self.nodes);
         InlineTask {
             // A table of strings, booleans, integers, and tables always serializes.
             text: toml::to_string(&spec).expect("compiled definition serializes"),
             timed_step,
             assets: self.assets,
         }
+    }
+
+    fn insert(&mut self, kind: &str, name: &str, node: Table) {
+        if let Value::Table(nodes) = self
+            .nodes
+            .entry(kind)
+            .or_insert_with(|| Table::new().into())
+        {
+            nodes.insert(name.into(), node.into());
+        }
+    }
+
+    fn has(&self, kind: &str, name: &str) -> bool {
+        self.nodes
+            .get(kind)
+            .and_then(Value::as_table)
+            .is_some_and(|nodes| nodes.contains_key(name))
     }
 
     /// Where a declining `guard` goes. A deduping task holds its run and re-enters `first`
@@ -342,7 +359,7 @@ impl<'a> Graph<'a> {
                     ]),
                 ),
             };
-            self.checks.insert(node.clone(), sleep.into());
+            self.insert("sleep", &node, sleep);
             return node;
         };
         let when = Value::from(
@@ -382,8 +399,8 @@ impl<'a> Graph<'a> {
             held.insert("provider".into(), provider.as_str().into());
         }
         let node = format!("held-{guard}");
-        self.checks.insert(node.clone(), held.into());
-        if !self.checks.contains_key("rearm") {
+        self.insert("condition", &node, held);
+        if !self.has("condition", "rearm") {
             let mut rearm_case = table([("when", when), ("outcome", "holds".into())]);
             if let Some(hold) = &self.entry.hold {
                 rearm_case.insert("for".into(), hold.as_str().into());
@@ -408,7 +425,7 @@ impl<'a> Graph<'a> {
             if let Some(provider) = &self.entry.provider {
                 rearm.insert("provider".into(), provider.as_str().into());
             }
-            self.checks.insert("rearm".into(), rearm.into());
+            self.insert("condition", "rearm", rearm);
         }
         node
     }
@@ -433,7 +450,7 @@ impl<'a> Graph<'a> {
             ("on", on.into()),
         ]);
         self.assets.push(Asset::Judge(tier));
-        self.checks.insert(format!("judge-{tier}"), check.into());
+        self.insert("judge", &format!("judge-{tier}"), check);
     }
 
     fn agent(&mut self, agent: &str) -> Option<&'static str> {
@@ -467,12 +484,13 @@ impl<'a> Graph<'a> {
                 step.insert(key.into(), value.into());
             }
         }
+        let mut admission = Table::new();
         for (key, value) in [
             ("throttle", entry.throttle.map(Value::try_from)),
-            ("capacity-wait", entry.capacity_wait.map(Value::try_from)),
+            ("give-up", entry.capacity_wait.map(Value::try_from)),
         ] {
             if let Some(Ok(value)) = value {
-                step.insert(key.into(), value);
+                admission.insert(key.into(), value);
             }
         }
         if entry.system_prompt_file.is_some() {
@@ -483,9 +501,9 @@ impl<'a> Graph<'a> {
         let timed = if entry.stay {
             step.insert("lifecycle".into(), "stay".into());
             // A staying step launches beside its checkout's occupants unless it takes them over.
-            step.insert(
+            admission.insert(
+                "occupancy".into(),
                 if entry.takeover { "takeover" } else { "share" }.into(),
-                true.into(),
             );
             if !entry.subscribe.is_empty() {
                 let wakes = entry.subscribe.iter().map(|binding| {
@@ -539,7 +557,7 @@ impl<'a> Graph<'a> {
                     .into(),
                 ),
             ]);
-            self.checks.insert("verify".into(), check.into());
+            self.insert("test", "verify", check);
             true
         } else {
             step.insert("lifecycle".into(), "turn".into());
@@ -547,6 +565,9 @@ impl<'a> Graph<'a> {
             true
         };
         step.insert("on".into(), on.into());
+        if !admission.is_empty() {
+            step.insert("admission".into(), admission.into());
+        }
         let timed = match (&entry.timeout, timed) {
             (Some(timeout), true) => {
                 step.insert("timeout".into(), timeout.as_str().into());
@@ -555,7 +576,7 @@ impl<'a> Graph<'a> {
             (None, true) => Some(AGENT),
             (_, false) => None,
         };
-        self.steps.insert(AGENT.into(), step.into());
+        self.insert("agent", AGENT, step);
         timed
     }
 
@@ -573,7 +594,7 @@ impl<'a> Graph<'a> {
             ("then", "@done".into()),
             ("on", routes([("undelivered", "@failed")]).into()),
         ]);
-        self.steps.insert("deliver".into(), step.into());
+        self.insert("message", "deliver", step);
     }
 }
 

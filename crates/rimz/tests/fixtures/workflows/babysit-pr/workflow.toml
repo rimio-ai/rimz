@@ -3,39 +3,39 @@ on-break = "@failed"
 scope = "worktree"
 start = "pr"
 
-[checks.pr]
+[script.pr]
 run = "uv run checks/pr.py"
 on = { merged = "notes", ci-pending = "@wait", needs-sweep = "sweep" }
 timeout = "2d"
 wake = ["ci.*", "pr.*"]
 
-[checks.notes]
+[script.notes]
 run = "uv run checks/notes.py"
 on = { none = "@done", needed = "triage", unsure = "judge" }
 
-[checks.judge]
+[judge.judge]
 summary = "Decide whether the PR needs triage"
 agent = "haiku"
 prompt-file = "checks/triage-judge.md"
-window = "5h.left>=42"
+admission.window = "5h.left>=42"
 on = { skip = "@done", triage = "triage" }
 timeout = "3d"
 
-[steps.sweep]
+[agent.sweep]
 agent = "sweeper"
 lifecycle = "turn"
 prompt-file = "prompts/sweep.md"
-takeover = true
+admission.occupancy = "takeover"
 then = "pr"
 max-visits = 5
 timeout = "6h"
 
-[steps.triage]
+[agent.triage]
 agent = "yagni"
 lifecycle = "turn"
 prompt-file = "prompts/triage.md"
-window = "5h.left>=42"
-takeover = true
+admission.window = "5h.left>=42"
+admission.occupancy = "takeover"
 then = "notes"
 on.asked = "judge"
 max-visits = 3

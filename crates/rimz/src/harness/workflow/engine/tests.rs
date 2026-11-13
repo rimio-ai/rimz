@@ -9,7 +9,7 @@ fn spawn_arguments_name_only_the_current_hook_frame() {
     use crate::store::ingress::HookIngress;
 
     let (_home, _state, record, _spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\non.ok='@done'\n",
     );
     let ordinary: Vec<std::ffi::OsString> = vec![
         "--root".into(),
@@ -64,7 +64,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
         return;
     }
     let (_home, state, record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.pending='@wait'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\non.pending='@wait'\n",
     );
     let paths = state.workflow(&record.id);
     let mut t = Transition {
@@ -286,7 +286,7 @@ fn detaching_a_task_preserves_foreign_and_finished_runs() {
     ] {
         for task in ["review", "other"] {
             let (_home, state, mut record, _) = fixture(
-                "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.pending='@wait'\n",
+                "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\non.pending='@wait'\n",
             );
             record.task = Some(task.into());
             record.state = run_state;
@@ -319,7 +319,7 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
         ("other", RunState::Active, &["pick"][..]),
     ] {
         let (_home, state, mut record, _) = fixture(
-            "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.go='fix'\n[steps.fix]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+            "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
         );
         record.task = Some(task.into());
         record.state = run_state;
@@ -342,7 +342,7 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
 fn bound_routes_stop_when_waiting_or_inactive() {
     for target in ["@wait", "@user", "@done", "@failed"] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='1s'\non.timeout='{target}'\n"
+            "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\ntimeout='1s'\non.timeout='{target}'\n"
         );
         let (_home, state, record, spec) = fixture(&text);
         let decision = prepare(
@@ -372,7 +372,7 @@ fn bound_routes_stop_when_waiting_or_inactive() {
 
 #[test]
 fn create_validates_the_spec_it_reads_before_publication() {
-    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='missing'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='missing'\n";
     let (home, state, record, _) = fixture(text);
     let dir = home.path().join("example");
     fs::create_dir(&dir).unwrap();
@@ -395,7 +395,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("checks.pr.on.ok"),
+        error.to_string().contains("script.pr.on.ok"),
         "the bytes to seal must be validated first: {error}"
     );
     assert_eq!(workflow::list(&state).unwrap().len(), 1);
@@ -453,7 +453,7 @@ fn window_wait_evidence_names_the_known_leaf_that_decides_over_an_unread_one() {
 
 #[test]
 fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
-    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\non.ok='@done'\n";
     let (home, state, mut record, _) = fixture(text);
     let dir = home.path().join("review");
     fs::create_dir(&dir).unwrap();
@@ -513,7 +513,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
         (ScopeKind::Worktree, false, false),
     ] {
         let (home, state, mut record, _) = fixture(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\n",
+            "[workflow]\nscope='worktree'\nstart='pr'\n[script.pr]\nrun='true'\non.ok='@done'\n",
         );
         let dir = home.path().join("review");
         let checkout = home.path().join("feature");
@@ -557,7 +557,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
 #[test]
 fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
     let (_home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude'\nprompt-file='prompt.md'\ntakeover=true\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude'\nprompt-file='prompt.md'\nadmission.occupancy='takeover'\nthen='@done'\n",
     );
     record.task = Some("nightly".into());
     // A fire's cutoff stands, however late in the run the first hold comes.
@@ -653,7 +653,7 @@ fn min_disk_is_read_where_a_steps_worktree_will_be_made() {
     for worktree in [Some("feat"), None] {
         let line = worktree.map_or_else(String::new, |name| format!("worktree='{name}'\n"));
         let (home, state, mut record, spec) = fixture(&format!(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude'\n\
+            "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude'\n\
              prompt-file='prompt.md'\n{line}then='@done'\n"
         ));
         record.task = Some("nightly".into());
@@ -703,7 +703,7 @@ fn admission_after_occupancy(expires: bool) {
     use std::rc::Rc;
 
     let (home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.go='pr'\n[steps.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\n[checks.after]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='pr'\n[agent.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\n[script.after]\nrun='true'\non.ok='@done'\n",
     );
     fs::write(home.path().join("prompt.md"), "Build").unwrap();
     let deadline = Timestamp::now() + jiff::SignedDuration::from_secs(1);
@@ -758,17 +758,17 @@ fn admission_after_occupancy(expires: bool) {
 }
 
 #[test]
-fn invalid_optional_timeout_is_ignored_without_panicking() {
-    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nshell='true'\ntimeout='tomorrow'\non={pass='@done',fail='@failed'}\n";
+fn invalid_sealed_timeout_refuses_without_panicking() {
+    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[test.pr]\nshell='true'\ntimeout='tomorrow'\non={pass='@done',fail='@failed'}\n";
     let (_home, state, record, _) = fixture(text);
     let result = std::panic::catch_unwind(|| {
         advance(&state, &record.id, &super::super::tests::FakeHost::new())
     });
     assert!(
-        matches!(result, Ok(Ok(()))),
-        "an invalid optional sealed timeout must be ignored: {result:?}"
+        matches!(&result, Ok(Err(error)) if error.to_string().contains("tomorrow")),
+        "an invalid sealed timeout refuses the advance: {result:?}"
     );
-    assert_eq!(
+    assert_ne!(
         workflow::load(&state.workflow(&record.id)).unwrap().state,
         RunState::Done
     );
@@ -780,7 +780,7 @@ fn step_window_waits_for_a_closed_companion_provider() {
     use crate::ids::{AgentKind, LoginKey};
     let now = Timestamp::now();
     let (_home, state, record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude,codex,term'\nprompt-file='prompt.md'\nthen='after'\nwindow='5h.left>=20'\n[checks.after]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude,codex,term'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left>=20'\n[script.after]\nrun='true'\non.ok='@done'\n",
     );
     fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
     let windows = WindowReadings::fixed(
@@ -827,8 +827,8 @@ fn step_window_waits_for_a_closed_companion_provider() {
 fn a_window_or_stagger_that_does_not_parse_reaches_its_consumer_as_an_error() {
     use crate::harness::when::WindowReadings;
     let spec: Definition = toml::from_str(
-        "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n[steps.build]\n\
-         agent='claude'\nprompt-file='p.md'\nwindow='window.5h.bogus>=x'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n[agent.build]\n\
+         agent='claude'\nprompt-file='p.md'\nadmission.window='window.5h.bogus>=x'\nthen='@done'\n",
     )
     .unwrap();
     let windows = WindowReadings::fixed(Timestamp::UNIX_EPOCH, BTreeMap::new());
@@ -856,7 +856,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
     let now = "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap();
     let kind = crate::ids::AgentKind::new_unchecked("claude");
     let (_home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\nwindow='5h.left >= 20'\n[checks.after]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left >= 20'\n[script.after]\nrun='true'\non.ok='@done'\n",
     );
     fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
     record.key = Some(workflow::Key::Integer(7));
@@ -939,7 +939,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
         );
     }
     let (home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[judge.pr]\nagent='claude'\nprompt-file='prompt.md'\non.ok='@done'\n",
     );
     fs::write(home.path().join("prompt.md"), "Judge").unwrap();
     record.check_retry = 1;
@@ -1009,8 +1009,8 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
     assert_eq!(ctx["retry"], record.check_retry_context.unwrap());
 }
 
-const CHECK_ONLY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='@done'\n";
-const ONE_TURN: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='fix'\n[steps.fix]\nagent='claude'\nprompt-file='prompts/fix.md'\nlifecycle='turn'\nthen='@done'\non.failed='@failed'\n";
+const CHECK_ONLY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
+const ONE_TURN: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompts/fix.md'\nlifecycle='turn'\nthen='@done'\non.failed='@failed'\n";
 
 fn bare_room() -> (tempfile::TempDir, StatePaths) {
     let home = tempfile::tempdir().unwrap();

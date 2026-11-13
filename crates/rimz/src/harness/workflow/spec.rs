@@ -15,9 +15,11 @@ use crate::store::workflow::{RunRecord, StepLifecycle};
 
 pub use crate::store::workflow::ScopeKind;
 
-type Subscription = (SignalSelector, BTreeMap<String, String>);
+pub(super) type Subscription = (SignalSelector, BTreeMap<String, String>);
 
-mod tolerant;
+mod kinds;
+
+pub use kinds::WorkflowFile;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Issue {
@@ -32,20 +34,17 @@ pub(super) fn issue(path: &str, message: impl Display) -> Issue {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
+/// The compiled model of a definition: each kind table lowered into a check or a step, as
+/// the engine and its readers consume them. The authored file is [`kinds::WorkflowFile`].
+#[derive(Clone, Debug)]
 pub struct WorkflowSpec {
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub ignored: Vec<Issue>,
     pub workflow: Header,
-    #[serde(default)]
     pub checks: BTreeMap<String, Check>,
-    #[serde(default)]
     pub steps: BTreeMap<String, Step>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct Header {
     pub summary: Option<String>,
@@ -58,7 +57,6 @@ pub struct Header {
     #[serde(default)]
     pub on: HeaderEdges,
 }
-
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(untagged, rename_all = "kebab-case")]
 #[schemars(deny_unknown_fields)]
@@ -87,7 +85,7 @@ impl<'de> Deserialize<'de> for OnBreak {
 
             fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<OnBreak, M::Error> {
                 #[derive(Deserialize)]
-                #[serde(rename_all = "kebab-case")]
+                #[serde(rename_all = "kebab-case", deny_unknown_fields)]
                 struct Handler {
                     agent: String,
                     prompt_file: Option<String>,
@@ -105,13 +103,13 @@ impl<'de> Deserialize<'de> for OnBreak {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct HeaderEdges {
     pub deadline: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
-#[schemars(deny_unknown_fields)]
+#[derive(Clone, Debug, Default)]
 pub struct StepEdges {
     pub asked: Option<String>,
     pub cap: Option<String>,
@@ -122,32 +120,90 @@ pub struct StepEdges {
     pub failed: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-#[schemars(deny_unknown_fields)]
+/// The kind table a check was written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckTable {
+    Test,
+    Script,
+    Judge,
+    Condition,
+    Sleep,
+}
+
+/// The kind table a step was written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepTable {
+    Agent,
+    Command,
+    Message,
+}
+
+impl CheckTable {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Script => "script",
+            Self::Judge => "judge",
+            Self::Condition => "condition",
+            Self::Sleep => "sleep",
+        }
+    }
+}
+
+impl StepTable {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Command => "command",
+            Self::Message => "message",
+        }
+    }
+}
+
+#[cfg(test)]
+impl Check {
+    /// A condition check lowered from its `[condition.<name>]` body, for tests.
+    pub(in crate::harness::workflow) fn condition(body: &str) -> Self {
+        let node: toml::Table = toml::from_str(body).expect("condition body parses");
+        let file = toml::Table::from_iter([
+            (
+                "workflow".to_owned(),
+                toml::Table::from_iter([
+                    ("scope".to_owned(), "worktree".into()),
+                    ("start".to_owned(), "c".into()),
+                ])
+                .into(),
+            ),
+            (
+                "condition".to_owned(),
+                toml::Table::from_iter([("c".to_owned(), node.into())]).into(),
+            ),
+        ]);
+        let file: WorkflowFile = file.try_into().expect("condition table parses");
+        let mut spec = file.lower().expect("condition lowers");
+        spec.checks.remove("c").expect("lowered condition")
+    }
+}
+
+/// A check as the definition compiles it, from its kind table.
+#[derive(Clone, Debug)]
 pub struct Check {
+    pub table: CheckTable,
     pub summary: Option<String>,
     pub run: Option<String>,
     pub shell: Option<String>,
     pub agent: Option<String>,
     pub sleep: Option<String>,
     pub when: Option<Vec<String>>,
-    #[serde(rename = "for")]
     pub hold: Option<String>,
     pub then: Option<String>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
     pub(super) wake: Option<Vec<Wake>>,
-    #[serde(default, deserialize_with = "nonempty_cases")]
-    #[schemars(length(min = 1))]
     pub cases: Vec<Case>,
-    #[serde(rename = "else")]
     pub else_outcome: Option<String>,
-    #[schemars(with = "Option<String>")]
     pub provider: Option<crate::ids::AgentKind>,
-    #[schemars(with = "Option<String>")]
     pub account: Option<crate::ids::LoginName>,
-    #[serde(default)]
     pub on: BTreeMap<String, String>,
     pub timeout: Option<String>,
 }
@@ -183,6 +239,7 @@ impl<'de> Deserialize<'de> for Wake {
 
             fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Wake, M::Error> {
                 #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
                 struct Binding {
                     signal: String,
                     #[serde(default, rename = "match")]
@@ -256,6 +313,7 @@ impl Wake {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct Case {
     pub when: Vec<String>,
@@ -264,7 +322,7 @@ pub struct Case {
     pub hold: Option<String>,
 }
 
-fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
+pub(super) fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<Case>, D::Error> {
     let cases = Vec::<Case>::deserialize(deserializer)?;
@@ -274,30 +332,40 @@ fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
     Ok(cases)
 }
 
-pub enum CheckKind<'a> {
+/// How a command node runs its command: as an argv or under `sh -c`.
+pub enum Invoke<'a> {
     Run(&'a str),
     Shell(&'a str),
-    Agent(&'a str),
+}
+
+pub enum CheckKind<'a> {
+    Test(Invoke<'a>),
+    Script(Invoke<'a>),
+    Judge(&'a str),
     Condition,
     Sleep,
 }
 
+/// The one command a `run` or `shell` pair names; none when both or neither is set.
+fn invoke<'a>(run: Option<&'a str>, shell: Option<&'a str>) -> Option<Invoke<'a>> {
+    match (run, shell) {
+        (Some(run), None) => Some(Invoke::Run(run)),
+        (None, Some(shell)) => Some(Invoke::Shell(shell)),
+        _ => None,
+    }
+}
+
 impl Check {
     pub fn kind(&self) -> Option<CheckKind<'_>> {
-        match (
-            &self.run,
-            &self.shell,
-            &self.agent,
-            &self.sleep,
-            self.cases.is_empty(),
-        ) {
-            (Some(run), None, None, None, true) => Some(CheckKind::Run(run)),
-            (None, Some(shell), None, None, true) => Some(CheckKind::Shell(shell)),
-            (None, None, Some(agent), None, true) => Some(CheckKind::Agent(agent)),
-            (None, None, None, None, false) => Some(CheckKind::Condition),
-            (None, None, None, Some(_), true) => Some(CheckKind::Sleep),
-            _ => None,
-        }
+        let invoke = || invoke(self.run.as_deref(), self.shell.as_deref());
+        Some(match self.table {
+            CheckTable::Test => CheckKind::Test(invoke()?),
+            CheckTable::Script => CheckKind::Script(invoke()?),
+            CheckTable::Judge => CheckKind::Judge(self.agent.as_deref()?),
+            CheckTable::Condition if self.cases.is_empty() => return None,
+            CheckTable::Condition => CheckKind::Condition,
+            CheckTable::Sleep => CheckKind::Sleep,
+        })
     }
 
     pub fn is_sleep(&self) -> bool {
@@ -332,10 +400,10 @@ pub(super) const RESERVED_OUTCOMES: [&str; 7] = [
     "timeout", "invalid", "cap", "capacity", "deadline", "unknown", "hold",
 ];
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-#[schemars(deny_unknown_fields)]
+/// A step as the definition compiles it, from its kind table.
+#[derive(Clone, Debug)]
 pub struct Step {
+    pub table: StepTable,
     pub summary: Option<String>,
     pub agent: Option<String>,
     pub run: Option<String>,
@@ -346,26 +414,17 @@ pub struct Step {
     pub notes: Option<bool>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
-    pub takeover: Option<bool>,
-    pub share: Option<bool>,
+    pub occupancy: Option<OccupancyPolicy>,
     pub(super) subscribe: Option<Vec<Wake>>,
-    #[schemars(with = "Option<String>")]
     pub throttle: Option<crate::config::ThrottleSwitch>,
-    #[schemars(with = "Option<String>")]
     pub capacity_wait: Option<crate::config::CapacityWait>,
     pub limit: Option<Limit>,
-    #[serde(default, deserialize_with = "then_checks")]
-    #[schemars(required, with = "Then", !default)]
     pub then: Vec<String>,
-    #[serde(default)]
     pub on: StepEdges,
-    #[schemars(range(min = 1))]
     pub max_visits: Option<u64>,
     pub timeout: Option<String>,
     /// The account an agent step's launch runs on; unset follows the profile and the room.
-    #[schemars(with = "Option<String>")]
     pub account: Option<crate::ids::LoginName>,
-    #[schemars(with = "Option<String>")]
     pub mode: Option<crate::agents::PermissionMode>,
     pub effort: Option<String>,
     pub fast: Option<bool>,
@@ -376,8 +435,28 @@ pub struct Step {
     pub worktree: Option<String>,
     /// The agent session a message step delivers to; another session under the address is
     /// undelivered.
-    #[schemars(with = "Option<String>")]
     pub session: Option<crate::ids::AgentSessionId>,
+}
+
+/// What an agent step does about agents already in its checkout: wait for them to leave,
+/// stop an idle one, or launch beside them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum OccupancyPolicy {
+    #[default]
+    Wait,
+    Takeover,
+    Share,
+}
+
+impl OccupancyPolicy {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Wait => "wait",
+            Self::Takeover => "takeover",
+            Self::Share => "share",
+        }
+    }
 }
 
 /// An agent step's launch settings beside its profile, as a fresh launch applies them.
@@ -395,12 +474,14 @@ pub struct LaunchOverrides {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
-enum Then {
+pub(super) enum Then {
     One(String),
     Many(#[schemars(length(min = 1))] Vec<String>),
 }
 
-fn then_checks<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+pub(super) fn then_checks<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
     Then::deserialize(deserializer).map(|checks| match checks {
         Then::One(check) => vec![check],
         Then::Many(checks) => checks,
@@ -409,8 +490,7 @@ fn then_checks<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<
 
 pub enum StepKind<'a> {
     Agent(&'a str),
-    Run(&'a str),
-    Shell(&'a str),
+    Command(Invoke<'a>),
     Message(&'a str),
 }
 
@@ -458,13 +538,13 @@ impl Step {
     }
 
     pub fn kind(&self) -> Option<StepKind<'_>> {
-        match (&self.agent, &self.run, &self.shell, &self.message) {
-            (Some(agent), None, None, None) => Some(StepKind::Agent(agent)),
-            (None, Some(run), None, None) => Some(StepKind::Run(run)),
-            (None, None, Some(shell), None) => Some(StepKind::Shell(shell)),
-            (None, None, None, Some(target)) => Some(StepKind::Message(target)),
-            _ => None,
-        }
+        Some(match self.table {
+            StepTable::Agent => StepKind::Agent(self.agent.as_deref()?),
+            StepTable::Command => {
+                StepKind::Command(invoke(self.run.as_deref(), self.shell.as_deref())?)
+            }
+            StepTable::Message => StepKind::Message(self.message.as_deref()?),
+        })
     }
 }
 
@@ -477,6 +557,12 @@ pub enum SpecErr {
     ReservedTarget { path: String, target: String },
     #[error("{path}: @break is reserved for workflow.on-break; choose another node name")]
     ReservedNode { path: String },
+    #[error("{path}: {other}.{name} has the same name; a node name is unique across every kind")]
+    DuplicateNode {
+        path: String,
+        name: String,
+        other: &'static str,
+    },
     #[error("cannot read {path}: {source}")]
     Io {
         path: PathBuf,
@@ -526,21 +612,13 @@ pub(crate) fn parse(text: &str) -> Result<Definition, SpecErr> {
         source,
     })?;
     reject_reserved_targets(&value)?;
-    let mut spec = tolerant::parse(value)?;
-    for (kind, exists) in [
-        ("checks", spec.checks.contains_key("@break")),
-        ("steps", spec.steps.contains_key("@break")),
-    ] {
-        if exists {
-            return Err(SpecErr::ReservedNode {
-                path: format!("{kind}.@break"),
-            });
-        }
-    }
+    let file = kinds::deserialize(value)?;
+    let mut spec = file.lower()?;
     if let Some(OnBreak::Agent { agent, prompt_file }) = &spec.workflow.on_break {
         spec.steps.insert(
             "@break".into(),
             Step {
+                table: StepTable::Agent,
                 summary: Some("Investigate the workflow failure with the user".into()),
                 agent: Some(agent.clone()),
                 prompt_file: prompt_file.clone(),
@@ -556,8 +634,7 @@ pub(crate) fn parse(text: &str) -> Result<Definition, SpecErr> {
                 keep: None,
                 notes: None,
                 window: None,
-                takeover: None,
-                share: None,
+                occupancy: None,
                 subscribe: None,
                 throttle: None,
                 capacity_wait: None,
@@ -594,38 +671,26 @@ fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {
                 .and_then(toml::Value::as_str),
         )?;
     }
-    for kind in ["checks", "steps"] {
+    for kind in kinds::KINDS {
         let Some(nodes) = value.get(kind).and_then(toml::Value::as_table) else {
             continue;
         };
         for (name, node) in nodes {
             let path = format!("{kind}.{name}");
+            if name == "@break" {
+                return Err(SpecErr::ReservedNode { path });
+            }
             if let Some(then) = node.get("then") {
                 reject_reserved_target(&format!("{path}.then"), then.as_str())?;
-                if kind == "steps" {
-                    for target in then.as_array().into_iter().flatten() {
-                        reject_reserved_target(&format!("{path}.then"), target.as_str())?;
-                    }
+                for target in then.as_array().into_iter().flatten() {
+                    reject_reserved_target(&format!("{path}.then"), target.as_str())?;
                 }
             }
             let Some(on) = node.get("on").and_then(toml::Value::as_table) else {
                 continue;
             };
             for (outcome, route) in on {
-                if kind == "steps"
-                    && !matches!(
-                        outcome.as_str(),
-                        "asked" | "cap" | "capacity" | "failed" | "invalid" | "undelivered"
-                    )
-                {
-                    continue;
-                }
-                reject_reserved_target(
-                    &format!("{path}.on.{outcome}"),
-                    route
-                        .as_str()
-                        .or_else(|| route.get("to").and_then(toml::Value::as_str)),
-                )?;
+                reject_reserved_target(&format!("{path}.on.{outcome}"), route.as_str())?;
             }
         }
     }
@@ -643,7 +708,7 @@ fn reject_reserved_target(path: &str, target: Option<&str>) -> Result<(), SpecEr
 }
 
 pub fn schema() -> schemars::Schema {
-    schemars::schema_for!(WorkflowSpec)
+    schemars::schema_for!(WorkflowFile)
 }
 
 pub(super) fn confined_file(dir: &Path, path: &str) -> Result<PathBuf, SpecErr> {

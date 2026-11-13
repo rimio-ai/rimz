@@ -53,7 +53,7 @@ fn record() -> RunRecord {
 }
 
 fn spec() -> Definition {
-    toml::from_str("[workflow]\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\ntimeout = '1h'\n").unwrap()
+    toml::from_str("[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = '@done'\ntimeout = '1h'\n").unwrap()
 }
 
 #[test]
@@ -71,8 +71,8 @@ fn inspection_timeout_uses_the_node_entry_time() {
 #[test]
 fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
     let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.deadline='@user'\n\
-        [checks.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',unknown='@wait',timeout='@failed'}\n\
-        [[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='10m'\n").unwrap();
+        [condition.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',unknown='@wait',timeout='@failed'}\n\
+        [[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='10m'\n").unwrap();
     let mut record = record();
     record.attempt = None;
     record.wait = serde_json::from_value(json!({"node":"pr", "outcome":"hold", "case":0,

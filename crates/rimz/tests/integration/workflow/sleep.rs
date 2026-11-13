@@ -1,75 +1,43 @@
 use super::*;
 
-const SLEEP: &str = "[checks.pr]\nsleep='30m'\nthen='@done'\n";
+const SLEEP: &str = "[sleep.pr]\nsleep='30m'\nthen='@done'\n";
 
 #[test]
-fn sleep_fields_warn_with_dotted_paths_in_validate_and_run() {
-    for (fields, paths) in [
-        (
-            "wake=['pr.opened']\non.foo='@done'\ntimeout='1h'\nelse='other'\nwindow='5h.left>=40'\nprompt-file='prompt.md'\nprovider='claude'\naccount='default'\n",
-            vec![
-                "wake",
-                "on.foo",
-                "timeout",
-                "else",
-                "window",
-                "prompt-file",
-                "provider",
-                "account",
-            ],
-        ),
-        ("for='2m'\n", vec!["for"]),
-        ("when=['ci=passed']\nfor='30m'\n", vec!["for"]),
-        ("when=['ci=passed']\nfor='31m'\n", vec!["for"]),
-        ("when=['ci=passed']\nfor=4\n", vec!["for"]),
-        ("when=['ci=passed']\nfor='soon'\n", vec!["for"]),
-        ("when=['ci=passed']\nfor='0s'\n", vec!["for"]),
+fn sleep_fields_refuse_at_their_dotted_paths_in_validate_and_run() {
+    for (fields, path) in [
+        ("wake=['pr.opened']\n", "wake"),
+        ("on.foo='@done'\n", "on.foo"),
+        ("timeout='1h'\n", "timeout"),
+        ("else='other'\n", "else"),
+        ("window='5h.left>=40'\n", "window"),
+        ("prompt-file='prompt.md'\n", "prompt-file"),
+        ("provider='claude'\n", "provider"),
+        ("account='default'\n", "account"),
+        ("for='2m'\n", "for"),
+        ("when=['ci=passed']\nfor='30m'\n", "for"),
+        ("when=['ci=passed']\nfor='31m'\n", "for"),
+        ("when=['ci=passed']\nfor=4\n", "for"),
+        ("when=['ci=passed']\nfor='soon'\n", "for"),
+        ("when=['ci=passed']\nfor='0s'\n", "for"),
     ] {
         let (env, _) = fixture(&format!("{HEADER}{SLEEP}{fields}"), "");
-        let output = command(&env, &["workflow", "validate", "review"]);
-        assert!(
-            output.status.success(),
-            "sleep optional fields must only warn: {output:?}"
-        );
-        let text = String::from_utf8(output.stdout).unwrap();
-        let value: Value = serde_json::from_str(&success(command(
-            &env,
-            &["workflow", "validate", "review", "--json"],
-        )))
-        .unwrap();
-        let mut actual: Vec<_> = value["warnings"]
+        let path = format!("sleep.pr.{path}");
+        let output = command(&env, &["workflow", "validate", "review", "--json"]);
+        assert!(!output.status.success(), "{fields}: {output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let errors: Vec<_> = value["errors"]
             .as_array()
             .unwrap()
             .iter()
             .map(|issue| issue["path"].as_str().unwrap().to_owned())
             .collect();
-        let mut expected: Vec<_> = paths
-            .iter()
-            .map(|path| format!("checks.pr.{path}"))
-            .collect();
-        actual.sort();
-        expected.sort();
-        assert_eq!(actual, expected, "{value}");
-        for path in &expected {
-            assert!(
-                text.contains(&format!("warning: review: {path}: ignored field:")),
-                "{text}"
-            );
-        }
+        assert_eq!(errors, std::slice::from_ref(&path), "{fields}: {value}");
+        assert_eq!(value["warnings"], json!([]), "{fields}: {value}");
         let output = command(&env, &["workflow", "run", "review"]);
-        assert!(output.status.success(), "{output:?}");
+        assert!(!output.status.success(), "{fields}: {output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
-        for path in expected {
-            assert!(
-                stderr.contains(&format!("warning: review: {path}:")),
-                "{stderr}"
-            );
-        }
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        success(command(
-            &env,
-            &["workflow", "cancel", stdout.lines().next().unwrap()],
-        ));
+        assert!(stderr.contains(&path), "{fields}: {stderr}");
+        assert!(output.stdout.is_empty(), "{fields}: no run starts");
     }
 }
 

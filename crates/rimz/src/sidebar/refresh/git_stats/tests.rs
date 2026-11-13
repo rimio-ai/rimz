@@ -519,19 +519,19 @@ fn active_workflows_supply_pane_free_forge_scopes_and_branches() {
             r#"[workflow]
 scope = "worktree"
 start = "work"
-[steps.work]
+[agent.work]
 agent = "codex"
 prompt-file = "work.md"
 then = "probe"
-[checks.probe]
+[condition.probe]
 timeout = "1h"
 else = "pending"
 {provider}
 on = {{ ready = "@done", pending = "@wait", unknown = "@wait" }}
-[[checks.probe.cases]]
+[[condition.probe.cases]]
 when = ["team.stage=Done"]
 outcome = "ready"
-[[checks.probe.cases]]
+[[condition.probe.cases]]
 when = ["{condition}"]
 outcome = "ready"
 "#

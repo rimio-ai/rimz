@@ -4,6 +4,237 @@ expression: value
 ---
 {
   "$defs": {
+    "AgentAdmission": {
+      "additionalProperties": false,
+      "description": "What admits an agent node's start: its usage window, its checkout's occupants, its own\nstart limit, the machine throttle, and how long it waits for capacity.",
+      "properties": {
+        "give-up": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max-parallel": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "occupancy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OccupancyPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stagger": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "throttle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AgentEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "asked": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capacity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
+          "description": "An ending that died, timed out, or was limited; without it, `then` takes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invalid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AgentNode": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "admission": {
+          "$ref": "#/$defs/AgentAdmission"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "budget": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fast": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "keep": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max-visits": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "on": {
+          "$ref": "#/$defs/AgentEdges"
+        },
+        "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subscribe": {
+          "items": {
+            "$ref": "#/$defs/Wake"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system-prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "then": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "then"
+      ],
+      "type": "object"
+    },
+    "CapEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "cap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Case": {
       "additionalProperties": false,
       "properties": {
@@ -29,58 +260,19 @@ expression: value
       ],
       "type": "object"
     },
-    "Check": {
+    "CommandNode": {
       "additionalProperties": false,
       "properties": {
-        "account": {
+        "max-visits": {
+          "format": "uint64",
+          "minimum": 1,
           "type": [
-            "string",
-            "null"
-          ]
-        },
-        "agent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cases": {
-          "items": {
-            "$ref": "#/$defs/Case"
-          },
-          "minItems": 1,
-          "type": "array"
-        },
-        "else": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "for": {
-          "type": [
-            "string",
+            "integer",
             "null"
           ]
         },
         "on": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "prompt-file": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/CapEdges"
         },
         "run": {
           "type": [
@@ -89,12 +281,6 @@ expression: value
           ]
         },
         "shell": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "sleep": {
           "type": [
             "string",
             "null"
@@ -117,32 +303,61 @@ expression: value
             "string",
             "null"
           ]
-        },
-        "wake": {
-          "items": {
-            "$ref": "#/$defs/Wake"
-          },
+        }
+      },
+      "type": "object"
+    },
+    "ConditionNode": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
           "type": [
-            "array",
+            "string",
             "null"
           ]
         },
-        "when": {
+        "cases": {
           "items": {
+            "$ref": "#/$defs/Case"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "else": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on": {
+          "additionalProperties": {
             "type": "string"
           },
+          "default": {},
+          "type": "object"
+        },
+        "provider": {
           "type": [
-            "array",
+            "string",
             "null"
           ]
         },
-        "window": {
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
           "type": [
             "string",
             "null"
           ]
         }
       },
+      "required": [
+        "cases"
+      ],
       "type": "object"
     },
     "Header": {
@@ -208,6 +423,67 @@ expression: value
       },
       "type": "object"
     },
+    "JudgeAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "window": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "JudgeNode": {
+      "additionalProperties": false,
+      "properties": {
+        "admission": {
+          "$ref": "#/$defs/JudgeAdmission"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "on": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wake": {
+          "items": {
+            "$ref": "#/$defs/Wake"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "type": "object"
+    },
     "Limit": {
       "additionalProperties": false,
       "properties": {
@@ -227,6 +503,80 @@ expression: value
         }
       },
       "type": "object"
+    },
+    "MessageEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "cap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "undelivered": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MessageNode": {
+      "additionalProperties": false,
+      "properties": {
+        "max-visits": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "on": {
+          "$ref": "#/$defs/MessageEdges"
+        },
+        "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "then": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "OccupancyPolicy": {
+      "description": "What an agent step does about agents already in its checkout: wait for them to leave,\nstop an idle one, or launch beside them.",
+      "enum": [
+        "wait",
+        "takeover",
+        "share"
+      ],
+      "type": "string"
     },
     "OnBreak": {
       "anyOf": [
@@ -260,124 +610,19 @@ expression: value
       ],
       "type": "string"
     },
-    "Step": {
+    "ScriptNode": {
       "additionalProperties": false,
       "properties": {
-        "account": {
-          "description": "The account an agent step's launch runs on; unset follows the profile and the room.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "agent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "budget": {
-          "description": "A per-launch dollar budget, in the `--budget` grammar.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "capacity-wait": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "effort": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "fast": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "keep": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "lifecycle": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StepLifecycle"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "limit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Limit"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "max-visits": {
-          "format": "uint64",
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mode": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "notes": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "on": {
-          "$ref": "#/$defs/StepEdges"
-        },
-        "prompt-file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
         },
         "run": {
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "session": {
-          "description": "The agent session a message step delivers to; another session under the address is\nundelivered.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "share": {
-          "type": [
-            "boolean",
             "null"
           ]
         },
@@ -387,48 +632,7 @@ expression: value
             "null"
           ]
         },
-        "subscribe": {
-          "items": {
-            "$ref": "#/$defs/Wake"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "summary": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "system-prompt-file": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "takeover": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "then": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            }
-          ]
-        },
-        "throttle": {
           "type": [
             "string",
             "null"
@@ -440,48 +644,96 @@ expression: value
             "null"
           ]
         },
-        "window": {
+        "wake": {
+          "items": {
+            "$ref": "#/$defs/Wake"
+          },
           "type": [
-            "string",
+            "array",
             "null"
           ]
-        },
-        "worktree": {
-          "description": "Launch the agent in a new worktree of the run's checkout under this name.",
+        }
+      },
+      "type": "object"
+    },
+    "SleepEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "invalid": {
           "type": [
             "string",
             "null"
           ]
         }
       },
+      "type": "object"
+    },
+    "SleepNode": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "for": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on": {
+          "$ref": "#/$defs/SleepEdges"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sleep": {
+          "type": "string"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "then": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "when": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
       "required": [
-        "then"
+        "sleep"
       ],
       "type": "object"
     },
-    "StepEdges": {
+    "StepLifecycle": {
+      "enum": [
+        "turn",
+        "stay",
+        "until"
+      ],
+      "type": "string"
+    },
+    "TestEdges": {
       "additionalProperties": false,
       "properties": {
-        "asked": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cap": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "capacity": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "failed": {
-          "description": "An agent step's ending that died, timed out, or was limited; without it, `then` takes it.",
+        "fail": {
           "type": [
             "string",
             "null"
@@ -493,7 +745,13 @@ expression: value
             "null"
           ]
         },
-        "undelivered": {
+        "pass": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
           "type": [
             "string",
             "null"
@@ -502,13 +760,47 @@ expression: value
       },
       "type": "object"
     },
-    "StepLifecycle": {
-      "enum": [
-        "turn",
-        "stay",
-        "until"
-      ],
-      "type": "string"
+    "TestNode": {
+      "additionalProperties": false,
+      "properties": {
+        "on": {
+          "$ref": "#/$defs/TestEdges"
+        },
+        "run": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shell": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wake": {
+          "items": {
+            "$ref": "#/$defs/Wake"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "Wake": {
       "anyOf": [
@@ -548,15 +840,51 @@ expression: value
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "checks": {
+    "agent": {
       "additionalProperties": {
-        "$ref": "#/$defs/Check"
+        "$ref": "#/$defs/AgentNode"
       },
       "type": "object"
     },
-    "steps": {
+    "command": {
       "additionalProperties": {
-        "$ref": "#/$defs/Step"
+        "$ref": "#/$defs/CommandNode"
+      },
+      "type": "object"
+    },
+    "condition": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ConditionNode"
+      },
+      "type": "object"
+    },
+    "judge": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JudgeNode"
+      },
+      "type": "object"
+    },
+    "message": {
+      "additionalProperties": {
+        "$ref": "#/$defs/MessageNode"
+      },
+      "type": "object"
+    },
+    "script": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ScriptNode"
+      },
+      "type": "object"
+    },
+    "sleep": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SleepNode"
+      },
+      "type": "object"
+    },
+    "test": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TestNode"
       },
       "type": "object"
     },
@@ -567,6 +895,6 @@ expression: value
   "required": [
     "workflow"
   ],
-  "title": "WorkflowSpec",
+  "title": "WorkflowFile",
   "type": "object"
 }

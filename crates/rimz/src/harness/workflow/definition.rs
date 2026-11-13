@@ -1,4 +1,4 @@
-//! The typed definition `spec::parse` compiles once the authored tables are cleaned and the
+//! The typed definition `spec::parse` compiles once the kind tables are lowered and the
 //! `@break` step is synthesized: each node's kind, its edges resolved once, its route targets,
 //! and every definition string the engine parses, kept as the authored text beside the result
 //! of the parser its consumer runs. Compiling never fails: a value admission would refuse loads
@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::graph::Edge;
-use super::spec::{self, Check, Issue, LaunchOverrides, SpecErr, Step, Wake, WorkflowSpec};
+use super::spec::{self, Check, LaunchOverrides, SpecErr, Step, Wake, WorkflowSpec};
 use crate::harness::budget::{BudgetParseError, BudgetSpec};
 use crate::harness::signal::SignalSelector;
 use crate::harness::signal::default_signal_match_key;
@@ -188,10 +188,13 @@ enum Authored {
 /// has none.
 #[derive(Debug)]
 pub enum Kind {
-    /// A command check or step: its argv, split as the definition writes it.
-    Run(Command),
-    Shell(String),
-    /// An agent check, under this headless profile.
+    /// A test check: the command's exit code is its outcome.
+    Test(Invocation),
+    /// A script check: the command prints its outcome as JSON.
+    Script(Invocation),
+    /// A command step.
+    Command(Invocation),
+    /// A judge check, under this headless profile.
     Judge(String),
     Condition(Vec<Case>),
     Sleep(Sleep),
@@ -199,6 +202,15 @@ pub enum Kind {
     Agent(String),
     /// A message step, to this address.
     Message(String),
+}
+
+/// How a test, script, or command node invokes its command.
+#[derive(Debug)]
+pub enum Invocation {
+    /// An argv, split as the definition writes it.
+    Run(Command),
+    /// A `sh -c` script.
+    Shell(String),
 }
 
 /// A `run` command: its text and its `shlex` split, `None` when the text does not split into a
@@ -366,6 +378,14 @@ impl Node {
         self.fallback.as_deref()
     }
 
+    /// The kind table the node was written in: `agent`, `test`, and the rest.
+    pub fn table(&self) -> &'static str {
+        match &self.authored {
+            Authored::Check(check) => check.table.word(),
+            Authored::Step(step) => step.table.word(),
+        }
+    }
+
     fn check_table(&self) -> Option<&Check> {
         match &self.authored {
             Authored::Check(check) => Some(check),
@@ -471,12 +491,9 @@ impl Node {
         self.step_table()?.notes
     }
 
-    pub fn takeover(&self) -> Option<bool> {
-        self.step_table()?.takeover
-    }
-
-    pub fn share(&self) -> Option<bool> {
-        self.step_table()?.share
+    /// The agent's checkout occupancy as written; unwritten waits.
+    pub fn occupancy(&self) -> Option<spec::OccupancyPolicy> {
+        self.step_table()?.occupancy
     }
 
     pub fn throttle(&self) -> Option<crate::config::ThrottleSwitch> {
@@ -667,11 +684,6 @@ impl Definition {
         node == BREAK
     }
 
-    /// The fields cleanup ignored, each with its path.
-    pub fn ignored(&self) -> &[Issue] {
-        &self.authored.ignored
-    }
-
     pub fn summary(&self) -> Option<&str> {
         self.authored.workflow.summary.as_deref()
     }
@@ -766,7 +778,9 @@ impl Definition {
 #[cfg(any(test, feature = "testkit"))]
 impl<'de> serde::Deserialize<'de> for Definition {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        WorkflowSpec::deserialize(deserializer).map(Self::compile)
+        use serde::de::Error;
+        let file = <spec::WorkflowFile as serde::Deserialize>::deserialize(deserializer)?;
+        file.lower().map(Self::compile).map_err(D::Error::custom)
     }
 }
 
@@ -803,6 +817,13 @@ fn command(text: &str) -> Command {
     }
 }
 
+fn invocation(invoke: spec::Invoke<'_>) -> Invocation {
+    match invoke {
+        spec::Invoke::Run(run) => Invocation::Run(command(run)),
+        spec::Invoke::Shell(shell) => Invocation::Shell(shell.into()),
+    }
+}
+
 fn subscribed(
     wakes: Option<&Vec<Wake>>,
     rule: fn(&Wake) -> Result<Subscription, SpecErr>,
@@ -830,9 +851,9 @@ fn check_node(check: &Check) -> Node {
         .then(|| check.when.as_deref().map(Condition::new))
         .flatten();
     let kind = check.kind().map(|kind| match kind {
-        spec::CheckKind::Run(run) => Kind::Run(command(run)),
-        spec::CheckKind::Shell(shell) => Kind::Shell(shell.into()),
-        spec::CheckKind::Agent(agent) => Kind::Judge(agent.into()),
+        spec::CheckKind::Test(invoke) => Kind::Test(invocation(invoke)),
+        spec::CheckKind::Script(invoke) => Kind::Script(invocation(invoke)),
+        spec::CheckKind::Judge(agent) => Kind::Judge(agent.into()),
         spec::CheckKind::Condition => Kind::Condition(cases(&check.cases)),
         spec::CheckKind::Sleep => Kind::Sleep(Sleep {
             // The kind is a sleep only when `sleep` is set.
@@ -865,8 +886,7 @@ fn check_node(check: &Check) -> Node {
 fn step_node(step: &Step) -> Node {
     let kind = step.kind().map(|kind| match kind {
         spec::StepKind::Agent(agent) => Kind::Agent(agent.into()),
-        spec::StepKind::Run(run) => Kind::Run(command(run)),
-        spec::StepKind::Shell(shell) => Kind::Shell(shell.into()),
+        spec::StepKind::Command(invoke) => Kind::Command(invocation(invoke)),
         spec::StepKind::Message(target) => Kind::Message(target.into()),
     });
     Node {

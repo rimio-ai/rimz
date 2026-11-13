@@ -6240,7 +6240,7 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
                 std::fs::write(
                     dir.join("workflow.toml"),
                     "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'ready'\n\
-                     [checks.ready]\nrun = 'true'\non.ok = '@done'\n",
+                     [script.ready]\nrun = 'true'\non.ok = '@done'\n",
                 )
                 .unwrap();
                 "workflow = 'review'\n".to_owned()

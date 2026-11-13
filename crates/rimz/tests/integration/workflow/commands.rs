@@ -9,7 +9,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 fn command_fixture(runner: &str, command: &str) -> (Env, PathBuf) {
     fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.go='build'\n[steps.build]\n{runner}={}\ntimeout='1h'\nthen='report'\nmax-visits=2\n[checks.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n",
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.go='build'\n[command.build]\n{runner}={}\ntimeout='1h'\nthen='report'\nmax-visits=2\n[test.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n",
             toml::Value::String(command.into())
         ),
         "printf '%s\\n' '{\"outcome\":\"go\",\"key\":7,\"payload\":\"keep me\"}'",

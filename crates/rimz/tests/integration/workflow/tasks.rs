@@ -56,7 +56,7 @@ fn a_name_that_is_both_a_workflow_and_a_task_refuses_and_names_both_selectors() 
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\non.timeout = '@failed'\non.invalid = '@failed'\n",
+        "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = '@done'\non.timeout = '@failed'\non.invalid = '@failed'\n",
     )
     .unwrap();
     for verb in ["show", "validate"] {
@@ -157,7 +157,7 @@ fn loop_eject_publishes_a_resident_tasks_graph_and_points_its_machine_row_at_it(
     assert!(!kept.status.success());
     assert_eq!(
         String::from_utf8_lossy(&kept.stderr).trim(),
-        "error: workflow task `tend` cannot use --keep; set `keep = true` on the workflow's agent `[steps.<name>]`"
+        "error: workflow task `tend` cannot use --keep; set `keep = true` on the workflow's `[agent.<name>]`"
     );
     assert_eq!(String::from_utf8_lossy(&kept.stdout), "");
 }

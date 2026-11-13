@@ -105,8 +105,8 @@ pub(super) fn run_one(
     let entry = loaded.entry().clone();
     if keep && entry.workflow.is_some() {
         anyhow::bail!(
-            "workflow task `{name}` cannot use --keep; set `keep = true` on the workflow's agent \
-             `[steps.<name>]`"
+            "workflow task `{name}` cannot use --keep; set `keep = true` on the workflow's \
+             `[agent.<name>]`"
         );
     }
     let checkout = resident_checkout(&entry, mode, args.cwd)?;

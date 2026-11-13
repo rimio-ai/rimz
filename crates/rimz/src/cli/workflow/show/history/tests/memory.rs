@@ -4,7 +4,7 @@ use super::*;
 fn terminal_history_dates_its_end_and_every_row_clock() {
     let spec = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
-         [checks.pr]\nrun='true'\non.done='@done'\n",
+         [script.pr]\nrun='true'\non.done='@done'\n",
     )
     .unwrap();
     let mut record = waiting_record(0, 0, 1);

@@ -60,8 +60,9 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
 fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
     let mut actual = Vec::new();
     for machine_cap in [false, true] {
-        let room =
-            Room::new("throttle='off'\non.capacity='after'\n[steps.build.limit]\nmax-parallel=1\n");
+        let room = Room::new(
+            "on.capacity='after'\n[agent.build.admission]\nthrottle='off'\nmax-parallel=1\n",
+        );
         let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
         fs::write(
             &spec,
@@ -113,7 +114,7 @@ fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
 fn restart_is_manual_for_window_and_capacity_but_still_refuses_layouts_over_a_machine_cap() {
     let mut actual = Vec::new();
     for (oversized, machine_cap) in [(false, false), (true, false), (true, true)] {
-        let room = Room::new("window='5h.left>=99'\n[steps.build.limit]\nmax-parallel=1\n");
+        let room = Room::new("[agent.build.admission]\nwindow='5h.left>=99'\nmax-parallel=1\n");
         if machine_cap {
             let core = room.env.rimz_home().join("config.toml");
             let mut config = fs::read_to_string(&core).unwrap_or_default();
@@ -164,7 +165,7 @@ fn restart_is_manual_for_window_and_capacity_but_still_refuses_layouts_over_a_ma
 
 #[test]
 fn off_steps_still_hold_at_the_machine_automation_cap() {
-    let room = Room::new("throttle='off'\ncapacity-wait='1h'\n");
+    let room = Room::new("admission.throttle='off'\nadmission.give-up='1h'\n");
     let core = room.env.rimz_home().join("config.toml");
     let mut config = fs::read_to_string(&core).unwrap_or_default();
     config.push_str("\n[throttle]\nmax-parallel-automation=1\n");
@@ -189,7 +190,7 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
     let mut actual = Vec::new();
     for (edge, terminal) in [("", "failed"), ("on.capacity='after'\n", "done")] {
         let room = Room::new(&format!(
-            "throttle='off'\ncapacity-wait='1h'\n{edge}[steps.build.limit]\nmax-parallel=1\n"
+            "{edge}[agent.build.admission]\nthrottle='off'\ngive-up='1h'\nmax-parallel=1\n"
         ));
         fs::write(
             room.env.rimz_home().join("loop.toml"),
@@ -239,13 +240,13 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
 #[test]
 fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
     for task in [None, Some("nightly")] {
-        let room = Room::new("[steps.build.limit]\nmax-parallel=1\nstagger='2m'\n");
+        let room = Room::new("[agent.build.admission]\nmax-parallel=1\nstagger='2m'\n");
         let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
         fs::write(
             &spec,
             fs::read_to_string(&spec).unwrap().replace(
-                "[checks.pr]",
-                "[workflow.limit]\nmax-parallel=1\nstagger='3m'\n[checks.pr]",
+                "[script.pr]",
+                "[workflow.limit]\nmax-parallel=1\nstagger='3m'\n[script.pr]",
             ),
         )
         .unwrap();
@@ -324,7 +325,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
 
 #[test]
 fn limited_manual_starts_under_a_clear_cap_store_and_print_no_skip() {
-    let room = Room::new("[steps.build.limit]\nmax-parallel=1\n");
+    let room = Room::new("[agent.build.admission]\nmax-parallel=1\n");
     let record = pending(&room, None);
     let value = advance(&room, &record);
     assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
@@ -362,7 +363,7 @@ fn limited_manual_starts_under_a_clear_cap_store_and_print_no_skip() {
 
 #[test]
 fn limited_off_admission_errors_settle_as_died_instead_of_bypassing_admission() {
-    let room = Room::new("throttle='off'\n[steps.build.limit]\nmax-parallel=1\n");
+    let room = Room::new("[agent.build.admission]\nthrottle='off'\nmax-parallel=1\n");
     let record = pending(&room, None);
     fs::create_dir_all(room.env.rimz_home().join("loops")).unwrap();
     fs::write(
@@ -382,7 +383,7 @@ fn limited_off_admission_errors_settle_as_died_instead_of_bypassing_admission() 
 
 #[test]
 fn lock_timeouts_leave_a_limit_wait_as_recorded_and_its_standing_ahead() {
-    let room = Room::new("capacity-wait='1h'\n[steps.build.limit]\nmax-parallel=1\n");
+    let room = Room::new("[agent.build.admission]\ngive-up='1h'\nmax-parallel=1\n");
     let record = pending(&room, Some("nightly"));
     fill_limit(&room, &record);
     let limited = advance(&room, &record);

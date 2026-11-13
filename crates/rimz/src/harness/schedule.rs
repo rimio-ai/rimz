@@ -279,12 +279,12 @@ impl TaskAction {
                 (
                     entry.throttle.is_some(),
                     "throttle",
-                    "capacity policy belongs to the workflow's agent steps (`steps.<name>.throttle`)",
+                    "capacity policy belongs to the workflow's agent nodes (`agent.<name>.admission.throttle`)",
                 ),
                 (
                     entry.capacity_wait.is_some(),
                     "capacity-wait",
-                    "capacity policy belongs to the workflow's agent steps (`steps.<name>.capacity-wait`)",
+                    "capacity policy belongs to the workflow's agent nodes (`agent.<name>.admission.give-up`)",
                 ),
                 (
                     entry.stay,
@@ -294,7 +294,7 @@ impl TaskAction {
                 (
                     entry.takeover,
                     "takeover",
-                    "takeover belongs to the workflow's steps (`[steps.<name>] takeover = true`)",
+                    "takeover belongs to the workflow's agent nodes (`[agent.<name>.admission] occupancy = \"takeover\"`)",
                 ),
                 (
                     !entry.subscribe.is_empty(),
@@ -304,12 +304,12 @@ impl TaskAction {
                 (
                     entry.check.is_some(),
                     "check",
-                    "checks are the workflow's `[checks.<name>]` nodes",
+                    "checks are the workflow's `[test.<name>]`, `[script.<name>]`, `[judge.<name>]` and `[condition.<name>]` nodes",
                 ),
                 (
                     !entry.judge.is_empty(),
                     "judge",
-                    "checks are the workflow's `[checks.<name>]` nodes",
+                    "checks are the workflow's `[test.<name>]`, `[script.<name>]`, `[judge.<name>]` and `[condition.<name>]` nodes",
                 ),
             ] {
                 if set {

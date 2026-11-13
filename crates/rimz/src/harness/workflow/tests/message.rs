@@ -3,7 +3,7 @@ use crate::disk::paths::WorkflowPaths;
 use crate::ids::MessageId;
 use crate::store::workflow::{self as records, AttemptOutcome, JournalEvent, RunState};
 
-const TELL: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+const TELL: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
 
 fn attempt_rows(paths: &WorkflowPaths) -> Vec<(AttemptOutcome, Option<String>, Option<MessageId>)> {
     records::journal(paths)
@@ -97,7 +97,7 @@ fn a_message_step_without_prompt_text_sends_its_header_line_alone() {
 fn an_undelivered_message_follows_on_undelivered_never_then() {
     for (routes, entered) in [("", None), ("on.undelivered='retry'\n", Some("retry"))] {
         let text = format!(
-            "{TELL}{routes}[checks.retry]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
+            "{TELL}{routes}[test.retry]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
         );
         let (_dir, state, record) = super::attempts::setup(&text);
         let paths = state.workflow(&record.id);
@@ -282,7 +282,7 @@ fn a_cancel_or_deadline_after_the_host_died_retires_its_queued_notice() {
 #[test]
 fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[checks.done]\nrun='true'\non.ok='@done'\n";
+    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[script.done]\nrun='true'\non.ok='@done'\n";
     fs::write(dir.join("workflow.toml"), base).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -290,47 +290,47 @@ fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
         (
             "bare",
             base.replace("'@planner#feat-x'", "'planner'"),
-            "steps.tell.message",
+            "message.tell.message",
         ),
         (
             "pane",
             base.replace("'@planner#feat-x'", "'tmux:%1'"),
-            "steps.tell.message",
+            "message.tell.message",
         ),
         (
             "user",
             base.replace("'@planner#feat-x'", "'@user'"),
-            "steps.tell.message",
+            "message.tell.message",
         ),
         (
             "me",
             base.replace("'@planner#feat-x'", "'@me'"),
-            "steps.tell.message",
+            "message.tell.message",
         ),
         (
             "empty then",
             base.replace("then='@done'", "then=[]"),
-            "steps.tell.then",
+            "message.tell.then",
         ),
         (
             "two then",
             base.replace("then='@done'", "then=['done', '@done']"),
-            "steps.tell.then",
+            "message.tell.then",
         ),
         (
             "wait",
             base.replace("then='@done'", "then='@wait'"),
-            "steps.tell.then",
+            "message.tell.then",
         ),
         (
             "unknown",
             base.replace("then='@done'", "then='nowhere'"),
-            "steps.tell.then",
+            "message.tell.then",
         ),
         (
             "two kinds",
             base.replace("message=", "shell='true'\nmessage="),
-            "steps.tell",
+            "message.tell.shell",
         ),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
@@ -367,7 +367,7 @@ fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
         report
             .errors
             .iter()
-            .any(|error| error.path == "steps.tell.prompt-file"),
+            .any(|error| error.path == "message.tell.prompt-file"),
         "{:?}",
         report.errors
     );
@@ -376,14 +376,14 @@ fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
 #[test]
 fn a_message_step_row_lists_then_undelivered_cap_and_deadline() {
     let (_home, dir) = fixture();
-    let text = "[workflow]\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner'\nthen='@done'\non={asked='@failed', capacity='@failed', invalid='@failed'}\n";
+    let text = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nthen='@done'\n";
     fs::write(dir.join("workflow.toml"), text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report
             .errors
             .iter()
-            .any(|error| error.path == "steps.tell.on.undelivered"),
+            .any(|error| error.path == "message.tell.on.undelivered"),
         "an unfilled undelivered edge refuses: {:?}",
         report.errors
     );
@@ -418,23 +418,14 @@ fn a_message_step_row_lists_then_undelivered_cap_and_deadline() {
 }
 
 #[test]
-fn a_message_step_cycle_warns_that_it_never_waits() {
+fn a_bounded_message_step_cycle_validates_without_a_never_waits_warning() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner'\nthen='tell'\nmax-visits=3\n",
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nthen='tell'\nmax-visits=3\n",
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
-    let warning = report
-        .warnings
-        .iter()
-        .find(|issue| issue.path == "steps.tell")
-        .unwrap_or_else(|| panic!("{:?}", report.warnings));
-    assert!(
-        warning.message.contains("message steps") && warning.message.contains("never waits"),
-        "{}",
-        warning.message
-    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }

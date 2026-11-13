@@ -12,7 +12,7 @@ fn tell_with(room: &Room, target: &str, extra: &str) -> String {
     fs::write(
         dir.join("workflow.toml"),
         format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='{target}'\nprompt-file='prompt.md'\nthen='@done'\n{extra}"
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='{target}'\nprompt-file='prompt.md'\nthen='@done'\n{extra}"
         ),
     )
     .unwrap();
@@ -246,7 +246,7 @@ fn held(
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@codex'\nthen='@done'\n",
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@codex'\nthen='@done'\n",
     )
     .unwrap();
     let run = room
@@ -390,7 +390,7 @@ fn node_view_and_definition_rail_name_a_message_step_target() {
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[steps.tell]\nmessage='@planner#feat-x'\nthen='@done'\n",
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner#feat-x'\nthen='@done'\n",
     )
     .unwrap();
     let show = |args: &[&str]| success(room.command(args).env("NO_COLOR", "1").output().unwrap());

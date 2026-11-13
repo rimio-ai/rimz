@@ -218,9 +218,6 @@ pub(in crate::cli) fn terminal(
             &format!("{glyph} {} {}", record.state.as_str(), dated_clock(now))
         )
     )?;
-    for warning in spec.ignored() {
-        writeln!(out, "warning: {}", warning.message)?;
-    }
     render(record, spec, journal, now, prose, out)
 }
 

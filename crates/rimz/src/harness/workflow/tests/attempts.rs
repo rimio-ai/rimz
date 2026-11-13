@@ -8,12 +8,12 @@ use crate::store::workflow::{
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
+const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
 
 const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
-    [checks.watch]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',blue='build',queued='@wait'}\n\
-    [checks.judge]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',queued='@wait'}\n\
-    [steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n";
+    [script.watch]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',blue='build',queued='@wait'}\n\
+    [script.judge]\nrun='cat answer.json'\ntimeout='1h'\non={red='build',queued='@wait'}\n\
+    [agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=6\n";
 
 mod brief;
 mod capabilities;
@@ -114,7 +114,7 @@ fn on_break_launch_failure_opens_a_trace_and_cancel_detaches() {
 
 #[test]
 fn on_break_launch_disables_the_leader_wrappers_cleanup() {
-    let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[checks.nap]\nsleep='invalid'\nthen='@done'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[sleep.nap]\nsleep='invalid'\nthen='@done'\n";
     let (_dir, state, record) = setup(text);
     let host = FakeHost::new();
     assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
@@ -126,7 +126,7 @@ fn on_break_launch_disables_the_leader_wrappers_cleanup() {
 
 #[test]
 fn on_break_sleep_keeps_failure_input_and_survives_deadline_until_session_exit() {
-    let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[checks.nap]\nsleep='invalid'\nthen='@done'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[sleep.nap]\nsleep='invalid'\nthen='@done'\n";
     let (_dir, state, mut record) = setup(text);
     record.input = Some(json!({"outcome":"previous"}));
     update(&state, &record);
@@ -151,7 +151,7 @@ fn on_break_sleep_keeps_failure_input_and_survives_deadline_until_session_exit()
 fn on_break_resume_detaches_and_reenters_the_source_or_selected_node() {
     for at in [None, Some("other")] {
         let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
-            + "[checks.other]\nrun='cat answer.json'\non.ok='@done'\n";
+            + "[script.other]\nrun='cat answer.json'\non.ok='@done'\n";
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
         *host.failure.borrow_mut() = Some(LaunchFailure {
@@ -235,7 +235,7 @@ fn on_break_cap_resume_resets_the_source_visits_without_another_debugger() {
         .replace("start='build'", "start='build'\non-break={agent='claude'}")
         .replace("max-visits=2", "max-visits=1")
         .replace("then='@done'", "then='gate'")
-        + "[checks.gate]\nrun='cat answer.json'\non.again='build'\n";
+        + "[script.gate]\nrun='cat answer.json'\non.again='build'\n";
     let (_dir, state, record) = setup(&text);
     fs::write(
         record.spec_dir.join("answer.json"),
@@ -276,7 +276,10 @@ fn on_break_detached_debuggers_neither_block_nor_get_evicted_on_resume() {
     for takeover in [false, true] {
         for working in [false, true] {
             let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
-                + &format!("takeover={takeover}\n");
+                + &format!(
+                    "admission.occupancy='{}'\n",
+                    if takeover { "takeover" } else { "wait" }
+                );
             let (_dir, state, record) = setup(&text);
             let host = FakeHost::new();
             *host.failure.borrow_mut() = Some(LaunchFailure {
@@ -401,8 +404,8 @@ fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
     let text = until::UNTIL
         .replace("start='build'", "start='build'\non-break={agent='claude'}")
         .replace(
-            "run='sh check.sh'",
-            "agent='claude'\nprompt-file='prompt.md'",
+            "[script.pr]\nrun='sh check.sh'",
+            "[judge.pr]\nagent='claude'\nprompt-file='prompt.md'",
         );
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
@@ -472,10 +475,13 @@ fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
 fn on_break_cap_trace_does_not_misname_an_earlier_command_exit() {
     let text = STEP
         .replace("start='build'", "start='build'\non-break={agent='claude'}")
-        .replace("agent='claude'\nlifecycle='turn'", "run='exit 7'")
+        .replace(
+            "[agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'",
+            "[command.build]\nrun='exit 7'",
+        )
         .replace("max-visits=2", "max-visits=1")
         .replace("then='@done'", "then='gate'")
-        + "[checks.gate]\nrun='cat answer.json'\non.again='build'\n";
+        + "[script.gate]\nrun='cat answer.json'\non.again='build'\n";
     let (_dir, state, record) = setup(&text);
     fs::write(
         record.spec_dir.join("answer.json"),
@@ -494,7 +500,7 @@ fn on_break_cap_trace_does_not_misname_an_earlier_command_exit() {
 
 #[test]
 fn on_break_trace_bounds_a_long_poll_history_below_the_prompt_guard() {
-    let text = "[workflow]\nscope='worktree'\nstart='poll'\non-break={agent='claude'}\n[checks.poll]\nrun='true'\non.pending='@wait'\ntimeout='1h'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='poll'\non-break={agent='claude'}\n[script.poll]\nrun='true'\non.pending='@wait'\ntimeout='1h'\n";
     let (_dir, state, record) = setup(text);
     let paths = state.workflow(&record.id);
     let spec = spec::load(&paths.home).unwrap();
@@ -610,7 +616,7 @@ fn on_break_judge_second_failure_routes_invalid_and_history_records_the_hop() {
         for explicit in [false, true] {
             let (_, paths, record) = judge_fixture();
             let text = format!(
-                "[workflow]\nscope='worktree'\nstart='judge'\non-break={{agent='claude'}}\n[checks.judge]\nagent='claude'\nprompt-file='judge.md'\non.ok='@done'\n{}",
+                "[workflow]\nscope='worktree'\nstart='judge'\non-break={{agent='claude'}}\n[judge.judge]\nagent='claude'\nprompt-file='judge.md'\non.ok='@done'\n{}",
                 if explicit { "on.invalid='@failed'" } else { "" }
             );
             let spec = super::super::spec::parse(&text).unwrap();
@@ -714,7 +720,7 @@ fn resuming_a_cap_resets_the_capped_steps_count() {
 #[test]
 fn cap_routed_into_a_different_step_counts_under_cap() {
     let text = format!(
-        "{}on.cap='recover'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n",
+        "{}on.cap='recover'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n",
         OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
@@ -769,7 +775,7 @@ fn cap_resume_resets_all_counts_and_keeps_grants() {
 fn step_then_forwards_the_routed_outcome_into_the_next_context() {
     let text = OUTCOME_STEP.replace("then='watch'", "then='finish'");
     let text = format!(
-        "{text}[steps.finish]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n"
+        "{text}[agent.finish]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n"
     );
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
@@ -796,7 +802,7 @@ fn cancel_reason_is_recorded_for_waiting_and_broken_runs() {
     let mut rows = Vec::new();
     for broken in [false, true] {
         let text = if broken {
-            "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[checks.nap]\nsleep='invalid'\nthen='@done'\n"
+            "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[sleep.nap]\nsleep='invalid'\nthen='@done'\n"
         } else {
             STEP
         };
@@ -839,8 +845,7 @@ fn cancel_reason_survives_agent_settlement() {
 
 #[test]
 fn cancel_reason_is_recorded_for_script_attempts() {
-    let text =
-        "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nshell='true'\nthen='@done'\n";
+    let text = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\nthen='@done'\n";
     let (_dir, state, mut record) = setup(text);
     record.attempt = Some(
         serde_json::from_value(json!({
@@ -878,14 +883,14 @@ fn cancel_without_reason_keeps_the_old_journal_shape() {
 fn cancel_preserves_the_stopping_node_in_the_record_and_terminal_journal() {
     for command in [false, true] {
         let runner = if command {
-            "[steps.work]\nshell='sleep 60'\ntimeout='1h'\nthen='after'\n"
+            "[command.work]\nshell='sleep 60'\ntimeout='1h'\nthen='after'\n"
         } else {
-            "[checks.work]\nshell='false'\ntimeout='1h'\non.fail='@wait'\non.pass='@done'\n"
+            "[test.work]\nshell='false'\ntimeout='1h'\non.fail='@wait'\non.pass='@done'\n"
         };
         let text = format!(
             "[workflow]\nscope='worktree'\nstart='begin'\n\
-             [checks.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
-             {runner}[checks.after]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+             [test.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
+             {runner}[test.after]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
         );
         let (_dir, state, record) = setup(&text);
         let paths = state.workflow(&record.id);
@@ -949,7 +954,7 @@ fn cancel_helper_names_the_machine_wide_id_and_reason() {
 }
 
 #[test]
-fn reread_prompt_file_type_error_records_a_launch_failure_without_panicking() {
+fn reread_prompt_file_type_error_refuses_without_panicking() {
     let (_dir, state, record) = setup(STEP);
     let paths = state.workflow(&record.id);
     fs::write(
@@ -962,16 +967,10 @@ fn reread_prompt_file_type_error_records_a_launch_failure_without_panicking() {
         advance(&state, &record.id, &host)
     }));
     assert!(
-        result.is_ok(),
-        "a dropped prompt-file must not panic: {result:?}"
+        matches!(&result, Ok(Err(error)) if error.to_string().contains("agent.build.prompt-file")),
+        "a sealed prompt-file of the wrong type refuses the advance: {result:?}"
     );
-    result.unwrap().unwrap();
     assert!(host.launched.borrow().is_empty());
-    assert!(records::journal(&paths).unwrap().iter().any(|row| {
-        matches!(&row.event, JournalEvent::Attempt {
-            outcome: AttemptOutcome::Died, reason: Some(reason), ..
-        } if reason.contains("steps.build.prompt-file"))
-    }));
 }
 
 #[test]
@@ -1558,7 +1557,10 @@ fn asked_edge_routes_and_launch_failures_count_as_attempts() {
 #[test]
 fn occupancy_waits_merge_without_consuming_input_key_or_visits() {
     for takeover in [false, true] {
-        let (_dir, state, mut record) = setup(&format!("{STEP}takeover={takeover}\n"));
+        let (_dir, state, mut record) = setup(&format!(
+            "{STEP}admission.occupancy='{}'\n",
+            if takeover { "takeover" } else { "wait" }
+        ));
         record.key = Some(Key::Integer(7));
         record.input = Some(json!({"outcome":"work", "key":7}));
         update(&state, &record);
@@ -1602,7 +1604,7 @@ fn occupancy_waits_merge_without_consuming_input_key_or_visits() {
 
 #[test]
 fn successful_eviction_admits_only_the_immediate_launch() {
-    let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
+    let (_dir, state, record) = setup(&format!("{STEP}admission.occupancy='takeover'\n"));
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
     host.stale_after_evict.set(true);
@@ -1629,7 +1631,7 @@ fn successful_eviction_admits_only_the_immediate_launch() {
 /// stops the occupant again, and a second failure is the counted `died` attempt.
 #[test]
 fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
-    let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
+    let (_dir, state, record) = setup(&format!("{STEP}admission.occupancy='takeover'\n"));
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
     host.evict_error.set(true);
@@ -1683,7 +1685,7 @@ fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
 #[test]
 fn a_retried_eviction_launches_and_a_reentered_step_retries_again() {
     let (_dir, state, record) = setup(&format!(
-        "{}takeover=true\n",
+        "{}admission.occupancy='takeover'\n",
         STEP.replace("then='@done'", "then='build'")
     ));
     let host = FakeHost::new();
@@ -1729,7 +1731,7 @@ fn a_retried_eviction_launches_and_a_reentered_step_retries_again() {
 /// nor takes the retry; the settled wait still retries once.
 #[test]
 fn an_advance_during_a_failed_eviction_neither_launches_nor_spends_the_retry() {
-    let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
+    let (_dir, state, record) = setup(&format!("{STEP}admission.occupancy='takeover'\n"));
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
     host.evict_error.set(true);
@@ -1827,7 +1829,10 @@ fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
         (false, blocked(), Some("takeover")),
         (true, blocked(), Some("takeover")),
     ] {
-        let (_dir, state, record) = setup(&format!("{STEP}takeover={takeover}\n"));
+        let (_dir, state, record) = setup(&format!(
+            "{STEP}admission.occupancy='{}'\n",
+            if takeover { "takeover" } else { "wait" }
+        ));
         let host = FakeHost::new();
         *host.arrives_at_launch.borrow_mut() = Some(arrived);
         let live = advance_ok(&state, &record.id, &host);
@@ -1861,7 +1866,7 @@ fn a_free_checkout_is_read_again_once_the_launch_is_prepared() {
 
 #[test]
 fn sharing_step_launches_beside_any_occupant_without_reading_or_stopping_it() {
-    let (_dir, state, record) = setup(&format!("{STEP}share=true\n"));
+    let (_dir, state, record) = setup(&format!("{STEP}admission.occupancy='share'\n"));
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Blocked(vec![(
         "sweeper".into(),
@@ -2123,7 +2128,7 @@ fn live_stopper_is_left_alone_and_dead_stopper_is_retaken() {
 }
 
 fn judge_fixture() -> (Definition, crate::disk::paths::WorkflowPaths, RunRecord) {
-    let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[checks.judge]\nagent='claude'\nsummary='Review the work'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
+    let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='judge'\n[judge.judge]\nagent='claude'\nsummary='Review the work'\nprompt-file='judge.md'\non.ok='@done'\n").unwrap();
     let state = StatePaths::for_project_root_under(
         std::path::Path::new("/scratch"),
         std::path::Path::new("/project"),

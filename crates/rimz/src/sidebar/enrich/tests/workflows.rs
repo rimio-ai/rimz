@@ -162,11 +162,9 @@ fn live_run(
         "[workflow]\n\
          scope='worktree'\n\
          start='watch'\n\
-         [checks.watch]\n\
+         [script.watch]\n\
          shell='true'\n\
-         outcomes=['queued']\n\
-         [checks.watch.on]\n\
-         queued='@wait'\n",
+         on.queued='@wait'\n",
     )
     .unwrap();
     let record = serde_json::json!({

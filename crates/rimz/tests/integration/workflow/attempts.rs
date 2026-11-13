@@ -30,7 +30,10 @@ fn dummy_agent_process() -> std::process::Child {
 #[test]
 fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
     for takeover in [true, false] {
-        let room = Room::new(&format!("takeover={takeover}\n"));
+        let room = Room::new(&format!(
+            "admission.occupancy='{}'\n",
+            if takeover { "takeover" } else { "wait" }
+        ));
         let dir = room.env.rimz_home().join("workflows/review");
         let path = dir.join("workflow.toml");
         fs::write(
@@ -38,7 +41,7 @@ fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
             fs::read_to_string(&path)
                 .unwrap()
                 .replace("on-break='@failed'", "on-break={agent='codex'}")
-                + "\n[checks.continue]\nrun='sh checks/continue.sh'\non.pending='@wait'\non.ready='build'\ntimeout='1h'\nwake=['ci.passed']\n",
+                + "\n[script.continue]\nrun='sh checks/continue.sh'\non.pending='@wait'\non.ready='build'\ntimeout='1h'\nwake=['ci.passed']\n",
         )
         .unwrap();
         fs::write(dir.join("checks/continue.sh"), PENDING).unwrap();
@@ -769,7 +772,7 @@ fn turn_layout_pins_every_agent_and_wraps_commands() {
 
 #[test]
 fn signals_leave_step_waits_and_live_attempts_untouched() {
-    let room = Room::new("window='5h.left>=100'\n");
+    let room = Room::new("admission.window='5h.left>=100'\n");
     let id = room.start();
     until(&room.env, &id, |value| {
         value["record"]["wait"]["outcome"] == "window"
@@ -825,7 +828,7 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
         );
     }
     let dir = room.env.rimz_home().join("workflows/review");
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\n[checks.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[steps.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\n[script.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[agent.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
     fs::write(dir.join("checks/pr.sh"), "test -d \"$RIMZ_WORKFLOW_DIR/notes\" && test -d \"$RIMZ_WORKFLOW_DIR/signs\" || exit 1\nwhile read -r item; do\n if ! grep -qxF \"$item\" \"$RIMZ_WORKFLOW_DIR\"/notes/*.done 2>/dev/null; then printf '{\"outcome\":\"ready\",\"key\":\"%s\"}' \"$item\"; exit; fi\ndone < items.txt\nprintf '{\"outcome\":\"none\"}'\n").unwrap();
     let id = room.start();
     for item in ["one", "two"] {
@@ -1669,12 +1672,12 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
     assert_ne!(records[0].scope.path, records[1].scope.path);
     for (field, hint) in [
         ("stay=true", "not a resident agent"),
-        ("takeover=true", "[steps.<name>]"),
+        ("takeover=true", "[agent.<name>.admission]"),
         (
             "subscribe=[{signal='ci.done'}]",
             "check names what it waits for",
         ),
-        ("check='true'", "[checks.<name>]"),
+        ("check='true'", "[test.<name>]"),
     ] {
         fs::write(&config, format!("{base}{field}\n")).unwrap();
         let output = room.command(&["loop", "run", "review"]).output().unwrap();
@@ -1747,7 +1750,7 @@ impl Room {
             "lifecycle='turn'\n"
         };
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.go = 'build'\n[steps.build]\nagent = '{kind}'\nprompt-file = 'prompt.md'\nthen = 'after'\nmax-visits = 2\n{lifecycle}{extra}\n[checks.after]\nrun = 'sh checks/pr.sh'\non.done = '@done'\n"
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.go = 'build'\n[agent.build]\nagent = '{kind}'\nprompt-file = 'prompt.md'\nthen = 'after'\nmax-visits = 2\n{lifecycle}{extra}\n[script.after]\nrun = 'sh checks/pr.sh'\non.done = '@done'\n"
         );
         let (env, _) = fixture(
             &spec,
@@ -1975,7 +1978,7 @@ fn terminal_write_without_a_hook_wakes_the_workflow() {
 
 #[test]
 fn show_keeps_durable_history_when_takeover_blockers_are_unavailable() {
-    let room = Room::new("window='5h.left>=100'\n");
+    let room = Room::new("admission.window='5h.left>=100'\n");
     let id = room.start();
     until(&room.env, &id, |v| {
         v["record"]["wait"]["outcome"] == "window"
@@ -2397,7 +2400,7 @@ fn timeout_still_settles_but_a_failed_turn_waits_for_a_clean_end() {
 #[test]
 fn closed_window_merges_without_visits_then_reopens() {
     use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
-    let room = Room::new("window='5h.left>=42'");
+    let room = Room::new("admission.window='5h.left>=42'");
     let capacity = |used| {
         room.env.publish_rate_limits(&RateLimitsCache {
             entries: BTreeMap::from([(
