@@ -14,7 +14,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The workflow language version, which is also the run record's: a sealed definition means
 /// what the binary of this version reads it to mean, so a change to what one means raises it,
 /// and `load` refuses a record of any other version before decoding it.
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -487,6 +487,22 @@ impl Wait {
     }
 }
 
+/// What a run's agent starts do at a capacity hold: wait in front of the node, or launch past
+/// the hold and record it on the attempt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartCapacity {
+    #[default]
+    Wait,
+    Skip,
+}
+
+impl StartCapacity {
+    pub fn is_wait(&self) -> bool {
+        *self == Self::Wait
+    }
+}
+
 /// Where a run's definition came from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -607,11 +623,13 @@ pub struct RunRecord {
     /// `project_root`, through [`RunRecord::firing_checkout`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fire_tree: bool,
-    /// When a loop fire's default capacity wait gives up: a second before the task's next clock
-    /// fire, never past its deadline. An agent step that sets no `admission.give-up` holds
-    /// until then, however late in the run its first hold comes.
+    /// The run's give-up instant, a start argument: a capacity wait at an agent step that sets
+    /// no `admission.give-up` gives up then, however late in the run its first hold comes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capacity_until: Option<Timestamp>,
+    pub give_up: Option<Timestamp>,
+    /// Whether the run's starts wait at a capacity hold or launch past it, a start argument.
+    #[serde(default, skip_serializing_if = "StartCapacity::is_wait")]
+    pub capacity: StartCapacity,
     /// The loop task row's `surplus` value as written when its fire started the run. The run's
     /// judges gate on it and on `surplus_after`, never on the live row; a record with neither
     /// applies no surplus gate to its judges.

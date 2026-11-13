@@ -22,7 +22,7 @@ mod receipt;
 mod show;
 
 use host::Host;
-pub(super) use receipt::restart;
+pub(super) use receipt::{first_pass, restart, write_held};
 
 fn workflow_agent(
     record: &RunRecord,
@@ -136,6 +136,14 @@ enum Command {
         /// `context.json`.
         #[arg(long, allow_hyphen_values = true, value_name = "TEXT")]
         prompt: Option<String>,
+        /// Give up a capacity wait at this instant, at a step that sets no `admission.give-up`: a
+        /// timestamp, a local date-time, or a date.
+        #[arg(long, value_name = "WHEN", value_parser = workflow::parse_give_up)]
+        give_up: Option<jiff::Timestamp>,
+        /// Launch past every capacity hold instead of waiting, recording each one on the
+        /// attempt.
+        #[arg(long)]
+        skip_capacity: bool,
     },
     /// List active and parked workflow runs across rooms.
     List {
@@ -221,7 +229,19 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             name,
             worktree,
             prompt,
-        } => start(name, worktree, prompt, globals),
+            give_up,
+            skip_capacity,
+        } => {
+            let args = workflow::StartArgs {
+                give_up,
+                capacity: if skip_capacity {
+                    records::StartCapacity::Skip
+                } else {
+                    records::StartCapacity::Wait
+                },
+            };
+            start(name, worktree, prompt, args, globals)
+        }
         Command::List { json } => list::run(json, globals),
         Command::Show {
             id,
@@ -294,6 +314,7 @@ fn start(
     name: PathBuf,
     worktree: Option<String>,
     prompt: Option<String>,
+    args: workflow::StartArgs,
     globals: &super::GlobalFlags,
 ) -> Result<()> {
     let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
@@ -316,7 +337,7 @@ fn start(
         ctx.workspace.worktree_root.clone()
     };
     refuse_unwritable_home("started")?;
-    let record = workflow::create(
+    let (record, advance) = workflow::create(
         ctx.store.paths(),
         workflow::DefinitionSource::Deployed {
             dir: &dir,
@@ -331,6 +352,7 @@ fn start(
         },
         || Ok(prompt),
         false,
+        args,
     )?;
     writeln!(
         render::out(),
@@ -343,7 +365,9 @@ fn start(
         "→ {}",
         resolve::run_command(&record, "show", globals, None, &[], &[])
     )?;
-    Ok(())
+    let paths = ctx.store.paths().workflow(&record.id);
+    let record = receipt::first_pass(&paths, Some(&advance))?;
+    receipt::write_held(&paths, &record, "")
 }
 
 fn calling_run(globals: &super::GlobalFlags) -> Result<resolve::Located> {

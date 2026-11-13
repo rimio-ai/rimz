@@ -20,7 +20,6 @@ pub(in crate::harness) struct WorkflowStart {
     pub(in crate::harness) arrival: Timestamp,
     pub(in crate::harness) workflow_limit: Option<StartLimit>,
     pub(in crate::harness) step_limit: Option<StartLimit>,
-    pub(in crate::harness) may_wait: bool,
 }
 
 /// A workflow or step `limit` table as its definition parsed it.

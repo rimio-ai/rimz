@@ -215,45 +215,40 @@ fn limited_off_capacity_edges_keep_the_give_up_routes() {
         actual,
         [
             (json!("never"), json!("give-up-forever")),
-            (json!("in-loop-runs"), serde_json::Value::Null),
+            (json!("yes"), serde_json::Value::Null),
             (json!("never"), json!("give-up-forever")),
-            (json!("in-loop-runs"), serde_json::Value::Null),
+            (json!("yes"), serde_json::Value::Null),
         ]
     );
 }
 
 #[test]
-fn capacity_edges_name_the_loop_and_definition_preconditions() {
+fn capacity_edges_name_the_give_up_preconditions() {
     for (settings, fires, because, mark) in [
         (
             "",
-            "never",
-            Some("give-up-forever"),
-            "never: give-up is forever",
+            "with-give-up",
+            None,
+            Some("only when the run carries a give-up instant"),
         ),
         (
             "admission.give-up='forever'",
             "never",
             Some("give-up-forever"),
-            "never: give-up is forever",
+            Some("never: give-up is forever"),
         ),
-        (
-            "admission.give-up='5m'",
-            "in-loop-runs",
-            None,
-            "only when a loop task starts the run",
-        ),
+        ("admission.give-up='5m'", "yes", None, None),
         (
             "admission.throttle='off'",
-            "never",
-            Some("give-up-forever"),
-            "never: give-up is forever",
+            "with-give-up",
+            None,
+            Some("only when the run carries a give-up instant"),
         ),
         (
             "admission.throttle='off'\nadmission.give-up='5m'",
-            "in-loop-runs",
+            "yes",
             None,
-            "only when a loop task starts the run",
+            None,
         ),
     ] {
         let spec = spec(
@@ -266,7 +261,7 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
             edge.get("because"),
             because.map(|text| json!(text)).as_ref()
         );
-        assert_eq!(actual_mark, Some(mark));
+        assert_eq!(actual_mark, mark);
         assert_eq!(edge["target"], "@failed");
     }
     let spec = spec("run='true'", "shell='true'\nthen='gate'");

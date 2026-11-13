@@ -446,6 +446,8 @@ pub struct TaskFire<'a> {
     queued_arrival: Option<WaitingTrigger>,
     /// This fire started a run or found one live, whose report drains the backlog.
     saw_run: bool,
+    /// The detached advance of the run this fire started, which its receipt waits on.
+    advance: Option<crate::harness::workflow::Advance>,
 }
 
 impl<'a> TaskFire<'a> {
@@ -504,7 +506,13 @@ impl<'a> TaskFire<'a> {
             draining: false,
             queued_arrival: None,
             saw_run: false,
+            advance: None,
         })
+    }
+
+    /// The detached advance of the run this fire started, if it started one.
+    pub fn advance(&self) -> Option<&crate::harness::workflow::Advance> {
+        self.advance.as_ref()
     }
 
     /// Hand an action's SIGTERM guard through terminal recording and run-lock release.
@@ -913,6 +921,10 @@ impl<'a> TaskFire<'a> {
             WorkflowSource::Deployed(_) => self.run_prompt().map_err(|error| format!("{error:#}")),
             WorkflowSource::Inline(_) => Ok(None),
         };
+        let give_up = match &source {
+            WorkflowSource::Deployed(_) => None,
+            WorkflowSource::Inline(_) => self.default_capacity_cutoff()?,
+        };
         let definition = match &source {
             WorkflowSource::Deployed(dir) => crate::harness::workflow::DefinitionSource::Deployed {
                 dir,
@@ -929,7 +941,6 @@ impl<'a> TaskFire<'a> {
                         assets: definition.assets.clone(),
                     },
                     fire_tree: fresh,
-                    capacity_until: self.default_capacity_cutoff()?,
                     surplus: self.entry.surplus.clone(),
                     surplus_after: self.entry.surplus_after.clone(),
                     fire: Some(self.run_fire()),
@@ -948,9 +959,16 @@ impl<'a> TaskFire<'a> {
             },
             prompt,
             self.mode == LoopRunMode::Manual,
+            crate::harness::workflow::StartArgs {
+                give_up,
+                capacity: crate::store::workflow::StartCapacity::Wait,
+            },
         );
         let run = match created {
-            Ok(run) => run,
+            Ok((run, advance)) => {
+                self.advance = Some(advance);
+                run
+            }
             Err(crate::harness::workflow::WorkflowErr::Exists {
                 run, task, kind, ..
             }) => {

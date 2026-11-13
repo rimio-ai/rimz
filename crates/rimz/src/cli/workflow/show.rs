@@ -89,7 +89,7 @@ pub(super) fn render(
         .session_attempt()
         .and_then(|attempt| attempt.started_past_limit.as_deref())
     {
-        writeln!(out, "{text}; started anyway: manual starts do not wait")?;
+        writeln!(out, "{text}; started anyway: the run skips capacity")?;
     }
     if run.record.state == RunState::Active {
         if let Some(asking) = workflow_view::asking(&run.record) {

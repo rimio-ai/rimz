@@ -757,6 +757,16 @@ pub(super) fn parse_deadline(raw: &str) -> Result<jiff::Timestamp, jiff::Error> 
     Ok(civil.to_zoned(jiff::tz::TimeZone::system())?.timestamp())
 }
 
+/// A start's give-up instant, in the grammar of the workflow `deadline`.
+pub fn parse_give_up(raw: &str) -> Result<jiff::Timestamp, String> {
+    parse_deadline(raw).map_err(|_| {
+        format!(
+            "{raw:?} is not an instant; give a timestamp (2026-11-13T21:00:00Z), a local \
+             date-time (2026-11-13T21:00), or a date (2026-11-14)"
+        )
+    })
+}
+
 pub(super) fn parse_window(raw: &str) -> Result<crate::harness::when::WhenExpr, SpecErr> {
     let mut expression = String::new();
     for part in raw.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_') {

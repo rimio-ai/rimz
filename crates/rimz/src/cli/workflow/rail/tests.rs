@@ -72,6 +72,32 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
     }
 }
 
+#[test]
+fn rail_rows_draw_a_capacity_edge_only_when_it_is_routed_or_bounded_by_the_step() {
+    let cases = [
+        ("", false),
+        ("on.capacity = '@done'\n", true),
+        ("admission = { give-up = '6h' }\n", true),
+        ("admission = { give-up = 'forever' }\n", false),
+    ];
+    let drawn: Vec<_> = cases
+        .iter()
+        .map(|(fields, _)| {
+            let spec: Definition = toml::from_str(&format!(
+                "[workflow]\nscope='worktree'\nstart='work'\non-break='@failed'\n\
+                 [agent.work]\nagent='claude'\nlifecycle='turn'\nthen='@done'\n{fields}"
+            ))
+            .unwrap();
+            Rail::definition(&spec)
+                .rows
+                .iter()
+                .any(|row| row.heading.contains("capacity"))
+        })
+        .collect();
+    let expected: Vec<_> = cases.iter().map(|(_, drawn)| *drawn).collect();
+    assert_eq!(drawn, expected, "{cases:?}");
+}
+
 fn record(node: &str) -> RunRecord {
     serde_json::from_value(serde_json::json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",

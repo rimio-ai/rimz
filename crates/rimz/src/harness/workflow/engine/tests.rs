@@ -392,6 +392,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
         },
         || Ok(None),
         false,
+        Default::default(),
     )
     .unwrap_err();
     assert!(
@@ -486,6 +487,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             },
             || Ok(None),
             false,
+            Default::default(),
         )
         .unwrap_err();
         assert_eq!(
@@ -541,6 +543,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
             },
             || Err("prompt was read".into()),
             false,
+            Default::default(),
         )
         .unwrap_err();
         assert_eq!(
@@ -559,12 +562,11 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
     let (_home, state, mut record, spec) = fixture(
         "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nadmission.occupancy='takeover'\nthen='@done'\n",
     );
-    record.task = Some("nightly".into());
-    // A fire's cutoff stands, however late in the run the first hold comes.
+    // The run's give-up instant stands, however late in the run the first hold comes.
     let cutoff = Timestamp::now()
         .checked_add(jiff::SignedDuration::from_hours(1))
         .unwrap();
-    record.capacity_until = Some(cutoff);
+    record.give_up = Some(cutoff);
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     workflow::write(&paths, &record, &guard).unwrap();
@@ -616,7 +618,7 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
     assert_eq!(
         wait.gives_up_at,
         Some(cutoff),
-        "the run's cutoff bounds the hold"
+        "the run's give-up instant bounds the hold"
     );
     prepare(
         &state,
@@ -646,6 +648,118 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
         serde_json::to_value(&t.entries.last().unwrap().event).unwrap()["hold"],
         "capacity"
     );
+}
+
+#[test]
+fn every_origin_waits_at_a_hold_and_only_the_stored_skip_launches_past_admission() {
+    let mut actual = Vec::new();
+    for origin in ["hand", "loop fire", "scheduled", "restart"] {
+        for capacity in [workflow::StartCapacity::Wait, workflow::StartCapacity::Skip] {
+            for answer in ["held", "unreadable"] {
+                let (_home, state, mut record, spec) = fixture(
+                    "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\n\
+                     agent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+                );
+                record.task = (origin != "hand").then(|| "nightly".into());
+                record.manual = origin == "loop fire";
+                record.restart = (origin == "restart").then_some(workflow::Restart {
+                    resume: None,
+                    settled: None,
+                });
+                record.capacity = capacity;
+                fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+                let paths = state.workflow(&record.id);
+                let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+                workflow::write(&paths, &record, &guard).unwrap();
+                drop(guard);
+                let host = super::super::tests::FakeHost::new();
+                let mut admission = Admission::default();
+                let prepare = |admission: &mut Admission| {
+                    prepare(
+                        &state,
+                        &paths,
+                        &spec,
+                        &mut BTreeSet::new(),
+                        &host,
+                        &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+                        admission,
+                    )
+                    .unwrap()
+                };
+                let Decision::Admit(admit) = prepare(&mut admission) else {
+                    panic!("{origin}: every agent start asks admission first")
+                };
+                assert_eq!(
+                    admit.2.skip,
+                    capacity == workflow::StartCapacity::Skip,
+                    "{origin}"
+                );
+                admission.capacity = Some((
+                    record.next_seq,
+                    record.node.clone(),
+                    match answer {
+                        "held" => Ok(throttle::Attempt::Held(
+                            serde_json::from_value(
+                                json!({"kind":"capacity", "text":"no capacity", "kinds":["claude"]}),
+                            )
+                            .unwrap(),
+                        )),
+                        _ => Err(throttle::ThrottleError::Unreadable("no psi".into())),
+                    },
+                ));
+                let decision = match prepare(&mut admission) {
+                    Decision::Stop => "stop".to_owned(),
+                    Decision::Launch(launch) => match &launch.1 {
+                        Ok(_) => format!(
+                            "launch past {:?}",
+                            launch.0.attempt.as_ref().unwrap().started_past_limit
+                        ),
+                        Err(reason) => format!("fail: {reason}"),
+                    },
+                    _ => "other".to_owned(),
+                };
+                let wait = workflow::load(&paths)
+                    .unwrap()
+                    .wait
+                    .map(|wait| wait.outcome);
+                actual.push((origin, capacity, answer, decision, wait));
+            }
+        }
+    }
+    let mut expected = Vec::new();
+    for origin in ["hand", "loop fire", "scheduled", "restart"] {
+        expected.extend([
+            (
+                origin,
+                workflow::StartCapacity::Wait,
+                "held",
+                "stop".to_owned(),
+                Some("capacity".to_owned()),
+            ),
+            (
+                origin,
+                workflow::StartCapacity::Wait,
+                "unreadable",
+                "fail: no psi".to_owned(),
+                None,
+            ),
+            (
+                origin,
+                workflow::StartCapacity::Skip,
+                "held",
+                "launch past Some(\"no capacity\")".to_owned(),
+                None,
+            ),
+            (
+                origin,
+                workflow::StartCapacity::Skip,
+                "unreadable",
+                "launch past Some(\"no psi\")".to_owned(),
+                None,
+            ),
+        ]);
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -688,6 +802,36 @@ fn min_disk_is_read_where_a_steps_worktree_will_be_made() {
     }
 }
 
+/// `prepare` with admission answering open, as an unthrottled machine does.
+fn prepare_open(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    spec: &Definition,
+    host: &dyn AttemptHost,
+    windows: &WindowReadings<'_>,
+) -> Decision {
+    let mut admission = Admission::default();
+    loop {
+        match prepare(
+            state,
+            paths,
+            spec,
+            &mut BTreeSet::new(),
+            host,
+            windows,
+            &mut admission,
+        )
+        .unwrap()
+        {
+            Decision::Admit(admit) => {
+                let (seq, node, _) = *admit;
+                admission.capacity = Some((seq, node, Ok(throttle::Attempt::Open)));
+            }
+            decision => return decision,
+        }
+    }
+}
+
 #[test]
 fn admission_rechecks_bounds_after_occupancy() {
     admission_after_occupancy(true);
@@ -716,8 +860,11 @@ fn admission_after_occupancy(expires: bool) {
     let observed_at = Rc::new(Cell::new(None));
     let host = super::super::tests::FakeHost::new();
     let observed = observed_at.clone();
+    let reads = Cell::new(0);
     *host.on_occupancy.borrow_mut() = Some(Box::new(move || {
-        if expires {
+        // The bound falls due while the admitted pass reads occupancy, after admission asked.
+        reads.set(reads.get() + 1);
+        if expires && reads.get() == 2 {
             let remaining = deadline.duration_since(Timestamp::now());
             if remaining.is_positive() {
                 std::thread::sleep(std::time::Duration::try_from(remaining).unwrap());
@@ -725,16 +872,13 @@ fn admission_after_occupancy(expires: bool) {
         }
         observed.set(Some(Timestamp::now()));
     }));
-    let decision = prepare(
+    let decision = prepare_open(
         &state,
         &paths,
         &spec,
-        &mut BTreeSet::new(),
         &host,
         &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
-        &mut Admission::default(),
-    )
-    .unwrap();
+    );
     let after_occupancy = observed_at.get().expect("admission must reach occupancy");
     let current = workflow::load(&paths).unwrap();
     if expires {
@@ -892,16 +1036,8 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
             open
         );
         for _ in 0..if open { 1 } else { 2 } {
-            let decision = prepare(
-                &state,
-                &state.workflow(&record.id),
-                &spec,
-                &mut BTreeSet::new(),
-                &host,
-                &windows,
-                &mut Admission::default(),
-            )
-            .unwrap();
+            let decision =
+                prepare_open(&state, &state.workflow(&record.id), &spec, &host, &windows);
             assert_eq!(matches!(decision, Decision::Launch(_)), open);
         }
         let current = workflow::load(&state.workflow(&record.id)).unwrap();
@@ -1037,7 +1173,6 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
                 .collect(),
         },
         fire_tree: false,
-        capacity_until: None,
         surplus: None,
         surplus_after: None,
         fire: None,
@@ -1054,7 +1189,9 @@ fn start_at(state: &StatePaths, root: &Path, source: DefinitionSource<'_>) -> Re
         },
         || Ok(None),
         false,
+        Default::default(),
     )
+    .map(|(record, _)| record)
 }
 
 #[test]

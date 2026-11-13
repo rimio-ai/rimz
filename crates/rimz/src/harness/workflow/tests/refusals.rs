@@ -1144,6 +1144,7 @@ fn create_and_validate_agree_on_refusals() {
             },
             || Ok(None),
             false,
+            Default::default(),
         );
         actual.push((
             report.errors.is_empty(),

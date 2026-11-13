@@ -26,7 +26,6 @@ fn limited(workflow: Option<&str>, step: Option<&str>) -> Run {
             arrival: Timestamp::from_millisecond(1_000_000).unwrap(),
             workflow_limit: workflow.map(limit),
             step_limit: step.map(limit),
-            may_wait: true,
         }),
         ..run("nightly")
     }
@@ -659,77 +658,106 @@ fn limits_fifo_uses_capacity_arrival_scope_and_run_id_ties() {
 }
 
 #[test]
-fn manual_claims_carry_only_the_limit_they_skipped() {
+fn skipped_starts_launch_past_every_hold_and_carry_each_one() {
     let mut actual = Vec::new();
-    for scenario in ["full", "clear", "unreadable", "stagger", "unlimited"] {
+    for scenario in [
+        "full",
+        "clear",
+        "unreadable",
+        "stagger",
+        "no-room",
+        "check-error",
+        "memory",
+    ] {
         let fake = FakeHost::new();
-        let mut manual = limited(None, Some("max-parallel=1\nstagger='10m'"));
-        manual.limits.as_mut().unwrap().may_wait = false;
-        if scenario == "full" {
-            install(&fake, attempt("/repo", "build", StepLifecycle::Turn));
-        }
-        if scenario == "unreadable" || scenario == "unlimited" {
-            install(&fake, attempt("/repo", "build", StepLifecycle::Turn));
-            fake.run_errors
-                .lock()
-                .unwrap()
-                .insert(workspace().to_string(), "broken room".into());
-        }
-        if scenario == "unlimited" {
-            manual.limits.as_mut().unwrap().step_limit = None;
-        }
-        if scenario == "stagger" {
-            let first = turn(try_admit_in(&fake.host(), &config(""), &manual).unwrap());
-            assert!(first.started_past_limit().is_none());
-            first.report_launch(&workspace(), &"manual".into());
-            drop(first);
-            for path in ticket_paths(&fake.queue_dir()).unwrap() {
-                std::fs::remove_file(path).unwrap();
+        let mut skipped = limited(None, Some("max-parallel=1\nstagger='10m'"));
+        skipped.machine_gated = true;
+        skipped.skip = true;
+        let mut configured = config("check='capacity'");
+        match scenario {
+            "full" => install(&fake, attempt("/repo", "build", StepLifecycle::Turn)),
+            "unreadable" => {
+                install(&fake, attempt("/repo", "build", StepLifecycle::Turn));
+                fake.run_errors
+                    .lock()
+                    .unwrap()
+                    .insert(workspace().to_string(), "broken room".into());
             }
+            "stagger" => {
+                let first = turn(try_admit_in(&fake.host(), &configured, &skipped).unwrap());
+                assert!(first.started_past_limit().is_none());
+                first.report_launch(&workspace(), &"skipped".into());
+                drop(first);
+                for path in ticket_paths(&fake.queue_dir()).unwrap() {
+                    std::fs::remove_file(path).unwrap();
+                }
+                fake.checks.lock().unwrap().clear();
+            }
+            "no-room" => *fake.check_answer.lock().unwrap() = Ok((Some(75), false)),
+            "check-error" => *fake.check_answer.lock().unwrap() = Ok((Some(2), false)),
+            "memory" => {
+                configured.min_memory = Some("1GB".into());
+                *fake.memory.lock().unwrap() = Ok(0);
+            }
+            _ => {}
         }
-        let admitted = turn(
-            try_admit_in(
-                &fake.host(),
-                &config("max-parallel-agents=1\ncheck='capacity'"),
-                &manual,
-            )
-            .unwrap(),
-        );
-        actual.push((scenario, admitted.started_past_limit().map(str::to_owned)));
-        assert!(fake.checked_groups().is_empty());
+        let admitted = turn(try_admit_in(&fake.host(), &configured, &skipped).unwrap());
+        actual.push((
+            scenario,
+            admitted.started_past_limit().map(str::to_owned),
+            fake.checks.lock().unwrap().len(),
+        ));
     }
     assert_eq!(
         actual,
         [
             (
                 "full",
-                Some("step build: 1 of 1 agents open (@leader)".into())
+                Some("step build: 1 of 1 agents open (@leader)".into()),
+                1
             ),
-            ("clear", None),
-            ("unreadable", None),
-            ("stagger", Some("step build: next start in 10m".into())),
-            ("unlimited", None),
+            ("clear", None, 1),
+            (
+                "unreadable",
+                Some("cannot count open agents: broken room".into()),
+                1
+            ),
+            ("stagger", Some("step build: next start in 10m".into()), 1),
+            (
+                "no-room",
+                Some("claude: no capacity (your check)".into()),
+                1
+            ),
+            (
+                "check-error",
+                Some("capacity check failing: claude exit 2".into()),
+                1
+            ),
+            ("memory", Some("available memory 0 B < 1 GB".into()), 1),
         ]
     );
 }
 
 #[test]
-fn limits_manual_claims_never_wait_and_restart_workflow_stagger() {
+fn skipped_starts_still_claim_and_stamp_the_workflow_stagger() {
     let fake = FakeHost::new();
     install(&fake, attempt("/repo", "build", StepLifecycle::Turn));
-    let mut manual = limited(Some("max-parallel=1\nstagger='10m'"), None);
-    manual.limits.as_mut().unwrap().may_wait = false;
+    let mut skipped = limited(Some("max-parallel=1\nstagger='10m'"), None);
+    skipped.skip = true;
     let first = turn(
         try_admit_in(
             &fake.host(),
             &config("max-parallel-agents=1\ncheck='capacity'"),
-            &manual,
+            &skipped,
         )
         .unwrap(),
     );
-    first.report_launch(&workspace(), &"manual".into());
+    assert_eq!(
+        first.started_past_limit(),
+        Some("workflow review: 1 of 1 agents open (@leader)")
+    );
+    first.report_launch(&workspace(), &"skipped".into());
     assert!(fake.start_stamps().is_file());
-    assert!(fake.checked_groups().is_empty());
 }
 
 #[test]

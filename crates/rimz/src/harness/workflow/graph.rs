@@ -46,7 +46,7 @@ pub enum Fireability {
     Yes,
     Never,
     WithDeadline,
-    InLoopRuns,
+    WithGiveUp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -84,7 +84,7 @@ impl Edge {
             Fireability::Yes => None,
             Fireability::Never => self.because.map(NeverReason::mark),
             Fireability::WithDeadline => Some("only with a deadline"),
-            Fireability::InLoopRuns => Some("only when a loop task starts the run"),
+            Fireability::WithGiveUp => Some("only when the run carries a give-up instant"),
         }
     }
 }
@@ -388,10 +388,11 @@ impl Definition {
         if outcome != "capacity" {
             return (Fireability::Yes, None);
         }
-        if !matches!(step.capacity_wait, Some(CapacityWait::Duration(_))) {
-            return (Fireability::Never, Some(NeverReason::GiveUpForever));
+        match step.capacity_wait {
+            Some(CapacityWait::Duration(_)) => (Fireability::Yes, None),
+            Some(CapacityWait::Forever) => (Fireability::Never, Some(NeverReason::GiveUpForever)),
+            None => (Fireability::WithGiveUp, None),
         }
-        (Fireability::InLoopRuns, None)
     }
 
     fn node_edges(&self, node: &str) -> Option<BTreeMap<String, (Target, bool)>> {

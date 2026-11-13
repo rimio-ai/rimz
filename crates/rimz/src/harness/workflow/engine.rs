@@ -71,17 +71,40 @@ pub enum DefinitionSource<'a> {
     },
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
     /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
-    /// the project root, where the task fired. `capacity_until` is the fire's default capacity
-    /// give-up, for an agent step that sets no `admission.give-up`.
+    /// the project root, where the task fired.
     Inline {
         task: String,
         definition: InlineDefinition,
         fire_tree: bool,
-        capacity_until: Option<Timestamp>,
         surplus: Option<String>,
         surplus_after: Option<String>,
         fire: Option<RunFire>,
     },
+}
+
+/// The arguments a start gives its run, whatever started it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StartArgs {
+    /// The run's give-up instant, for a capacity wait at a step without `admission.give-up`.
+    pub give_up: Option<Timestamp>,
+    pub capacity: workflow::StartCapacity,
+}
+
+/// The detached `rimz workflow advance` a start or restart spawned.
+#[derive(Clone, Debug)]
+pub struct Advance {
+    pid: u32,
+    start: Option<String>,
+}
+
+impl Advance {
+    /// Whether the spawned advance is still running; without a start token to rule out pid
+    /// reuse it reads as gone.
+    pub fn is_running(&self) -> bool {
+        self.start
+            .as_deref()
+            .is_some_and(|start| crate::proc::process_is_live(self.pid, Some(start)))
+    }
 }
 
 /// Definition text plus the files it names by relative path, written beside it.
@@ -96,7 +119,8 @@ pub fn create(
     roots: ScopeRoots,
     prompt: impl FnOnce() -> std::result::Result<Option<String>, String>,
     manual: bool,
-) -> Result<RunRecord> {
+    args: StartArgs,
+) -> Result<(RunRecord, Advance)> {
     let roots = ScopeRoots {
         checkout: roots.checkout.canonicalize()?,
         project: roots.project.canonicalize()?,
@@ -120,7 +144,6 @@ pub fn create(
                 task: task.clone(),
                 spec_dir: dir,
                 fire_tree: false,
-                capacity_until: None,
                 surplus: surplus.clone(),
                 surplus_after: surplus_after.clone(),
                 fire: fire.clone(),
@@ -129,7 +152,6 @@ pub fn create(
         DefinitionSource::Inline {
             task,
             fire_tree,
-            capacity_until,
             surplus,
             surplus_after,
             fire,
@@ -140,7 +162,6 @@ pub fn create(
             task: Some(task.clone()),
             spec_dir: std::path::PathBuf::new(),
             fire_tree: *fire_tree,
-            capacity_until: *capacity_until,
             surplus: surplus.clone(),
             surplus_after: surplus_after.clone(),
             fire: fire.clone(),
@@ -188,6 +209,7 @@ pub fn create(
             roots,
             prompt,
             manual,
+            args,
         )
     });
     if published.is_err() {
@@ -195,8 +217,8 @@ pub fn create(
         let _ = std::fs::remove_dir_all(&paths.home);
     }
     let record = published?;
-    spawn(&record)?;
-    Ok(record)
+    let advance = spawn(&record)?;
+    Ok((record, advance))
 }
 
 /// A deployed definition directory as its run seals it: the definition, each asset's
@@ -312,7 +334,6 @@ struct RunStart {
     task: Option<String>,
     spec_dir: std::path::PathBuf,
     fire_tree: bool,
-    capacity_until: Option<Timestamp>,
     surplus: Option<String>,
     surplus_after: Option<String>,
     fire: Option<RunFire>,
@@ -326,6 +347,7 @@ fn publish(
     roots: ScopeRoots,
     prompt: Option<String>,
     manual: bool,
+    args: StartArgs,
 ) -> Result<RunRecord> {
     let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&start.spec_dir))?;
     let spec =
@@ -394,7 +416,8 @@ fn publish(
         prompt,
         scope,
         fire_tree: start.fire_tree,
-        capacity_until: start.capacity_until,
+        give_up: args.give_up,
+        capacity: args.capacity,
         surplus: start.surplus,
         surplus_after: start.surplus_after,
         fire: start.fire,
@@ -496,8 +519,8 @@ fn spawn_args(record: &RunRecord) -> Vec<std::ffi::OsString> {
 
 /// Name the applying hook frame so this advance does not wait on its own wake before the
 /// drainer publishes the applied cursor. Advances outside a frame carry no ingress id.
-fn spawn(record: &RunRecord) -> Result<()> {
-    crate::child_process::spawn_detached_reaped(
+fn spawn(record: &RunRecord) -> Result<Advance> {
+    let pid = crate::child_process::spawn_detached_reaped(
         crate::proc::rimz_exe(),
         |command| {
             #[cfg(unix)]
@@ -521,7 +544,10 @@ fn spawn(record: &RunRecord) -> Result<()> {
         },
         "workflow advance",
     )?;
-    Ok(())
+    Ok(Advance {
+        pid,
+        start: crate::proc::process_start_token(pid),
+    })
 }
 
 fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
@@ -1227,6 +1253,10 @@ fn prepare(
     }
     let mut launch_error = None;
     let mut evict = None;
+    // The one capacity decision: a waiting start fails on an admission it cannot take and
+    // waits at a hold; a skipped start launches past either and records it on the attempt. A
+    // start too wide for a machine cap fails either way.
+    let waits = t.record.capacity == workflow::StartCapacity::Wait;
     if let Some(step) = spec.step(&t.record.node) {
         if let Some((visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
@@ -1239,29 +1269,20 @@ fn prepare(
             return Ok(Decision::Again);
         }
         if let Some(Kind::Agent(agent)) = spec.step_kind(&t.record.node) {
-            let admits = spec.limit().is_some()
-                || step.limit().is_some()
-                || t.record.restart.is_some()
-                || (t.record.task.is_some() && !t.record.manual);
-            if admits
-                && let Some((_, _, Err(reason))) = &admission.capacity
-                && !queue_lock_timed_out(reason)
+            if let Some((_, _, Err(reason))) = &admission.capacity
+                && ((waits && !queue_lock_timed_out(reason))
+                    || matches!(reason, throttle::ThrottleError::Oversized { .. }))
             {
                 launch_error = Some(reason.to_string());
             }
-            let groups = if admits || step.window().is_some() {
-                match host.start_groups(&t.record, agent, step.account()) {
-                    Ok(groups) => groups,
-                    Err(error) => {
-                        launch_error = Some(error.to_string());
-                        Vec::new()
-                    }
+            let groups = match host.start_groups(&t.record, agent, step.account()) {
+                Ok(groups) => groups,
+                Err(error) => {
+                    launch_error = Some(error.to_string());
+                    Vec::new()
                 }
-            } else {
-                Vec::new()
             };
-            if t.record.restart.is_none()
-                && launch_error.is_none()
+            if launch_error.is_none()
                 && let Some(window) = step.window()
                 && let Some(detail) = window_wait_for_groups(&t.record, &groups, window, windows)?
             {
@@ -1288,7 +1309,15 @@ fn prepare(
             }
             t.now = Timestamp::now();
             if launch_error.is_none()
-                && let Some(decision) = prepare_capacity(&mut t, step, groups, admission, &guard)?
+                && let Some(decision) = prepare_capacity(
+                    &mut t,
+                    step,
+                    groups,
+                    admission,
+                    &guard,
+                    waits,
+                    host.machine_gated(),
+                )?
             {
                 return Ok(decision);
             }
@@ -1372,6 +1401,12 @@ fn prepare(
             .as_ref()
             .and_then(|(_, _, answer)| match answer {
                 Ok(throttle::Attempt::Turn(turn)) => turn.started_past_limit().map(str::to_owned),
+                Ok(throttle::Attempt::Held(hold)) if !waits => Some(hold.text.clone()),
+                Err(error)
+                    if !waits && !matches!(error, throttle::ThrottleError::Oversized { .. }) =>
+                {
+                    Some(error.to_string())
+                }
                 _ => None,
             }),
         started_at: t.now,
@@ -1438,11 +1473,12 @@ fn prepare_capacity(
     groups: Vec<throttle::StartGroup>,
     admission: &mut Admission,
     guard: &WorkspaceLock,
+    waits: bool,
+    host_gated: bool,
 ) -> Result<Option<Decision>> {
-    let may_wait = t.record.task.is_some() && !t.record.manual && t.record.restart.is_none();
-    let machine_gated = may_wait && step.throttle() != Some(crate::config::ThrottleSwitch::Off);
-    let limits = (t.spec.limit().is_some() || step.limit().is_some() || t.record.restart.is_some())
-        .then(|| throttle::WorkflowStart {
+    let machine_gated = host_gated && step.throttle() != Some(crate::config::ThrottleSwitch::Off);
+    let limits =
+        (t.spec.limit().is_some() || step.limit().is_some()).then(|| throttle::WorkflowStart {
             workflow: t.record.workflow.clone(),
             step: t.record.node.clone(),
             run: t.record.id.clone(),
@@ -1454,17 +1490,12 @@ fn prepare_capacity(
                 .map_or(t.now, |wait| wait.first),
             workflow_limit: t.spec.limit().map(start_limit),
             step_limit: step.limit().map(start_limit),
-            may_wait,
         });
-    if !may_wait && limits.is_none() {
-        admission.capacity = None;
-        return Ok(None);
-    }
     if let Some(wait) = t
         .record
         .wait
         .as_ref()
-        .filter(|wait| may_wait && wait.outcome == "capacity")
+        .filter(|wait| wait.outcome == "capacity")
         && wait.gives_up_at.is_some_and(|at| t.now >= at)
     {
         let object = json!({
@@ -1506,16 +1537,16 @@ fn prepare_capacity(
                     .record
                     .wait
                     .as_ref()
-                    .filter(|_| may_wait)
                     .and_then(|wait| wait.gives_up_at)
                     .and_then(|at| u64::try_from(at.as_millisecond()).ok()),
+                skip: !waits,
             },
         )))));
     };
     let hold = match answer {
-        Ok(throttle::Attempt::Held(hold)) => hold.clone(),
+        Ok(throttle::Attempt::Held(hold)) if waits => hold.clone(),
         // Admission could not answer; a standing capacity wait keeps what it last learned.
-        Err(error) if queue_lock_timed_out(error) => {
+        Err(error) if waits && queue_lock_timed_out(error) => {
             if t.record
                 .wait
                 .as_ref()
@@ -1545,15 +1576,20 @@ fn prepare_capacity(
         wait.kinds.dedup();
     }
     wait.gives_up_at = match step.capacity_wait() {
-        _ if !may_wait => None,
         Some(crate::config::CapacityWait::Duration(duration)) => {
             wait.first.checked_add(duration).ok()
         }
         Some(crate::config::CapacityWait::Forever) => None,
-        None => t.record.capacity_until,
+        None => t.record.give_up,
     };
+    // A give-up instant already behind the first hold gives up on this pass.
+    let expired = wait.gives_up_at.is_some_and(|at| t.now >= at);
     persist(t, guard)?;
-    Ok(Some(Decision::Stop))
+    Ok(Some(if expired {
+        Decision::Again
+    } else {
+        Decision::Stop
+    }))
 }
 
 /// Contention on the machine's start queue, which a later advance retries as a capacity wait.
@@ -1781,7 +1817,7 @@ pub fn restart(
     id: &WorkflowRunId,
     resume: Option<(u64, crate::ids::AgentSessionId)>,
     host: &dyn AttemptHost,
-) -> Result<RunRecord> {
+) -> Result<(RunRecord, Option<Advance>)> {
     let paths = state.workflow(id);
     let spec = spec::load(&paths.home)?;
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
@@ -1937,10 +1973,12 @@ pub fn restart(
         agent::finish(state, &paths, &spec, &record, host, None)?;
     }
     let record = workflow::load(&paths)?;
-    if record.state == RunState::Active {
-        spawn(&record)?;
-    }
-    Ok(record)
+    let advance = if record.state == RunState::Active {
+        Some(spawn(&record)?)
+    } else {
+        None
+    };
+    Ok((record, advance))
 }
 
 pub fn resume(
@@ -2407,7 +2445,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
             for forward in &forwards {
                 forward.send(host, &t.record, signal);
             }
-            spawn(&t.record)
+            spawn(&t.record).map(drop)
         })();
         if let Err(error) = result {
             tracing::warn!(path = %paths.home.display(), %error, "could not wake workflow; continuing with other runs");
@@ -2419,7 +2457,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
 pub fn wake_run(project_root: &Path, id: &WorkflowRunId) -> Result<()> {
     let state = StatePaths::for_project_root(project_root)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
-    spawn(&workflow::load(&state.workflow(id))?)
+    spawn(&workflow::load(&state.workflow(id))?).map(drop)
 }
 
 #[cfg(test)]

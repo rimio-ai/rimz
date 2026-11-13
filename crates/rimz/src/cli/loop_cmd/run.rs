@@ -231,7 +231,14 @@ pub(super) fn run_one(
     fire.release_run_lock()?;
     present_finished(name, &entry, &action, mode, &finished)?;
     if mode == LoopRunMode::Manual {
-        write_launched_run_command(&entry, &action, keep, &finished.record, globals)?;
+        write_launched_run_command(
+            &entry,
+            &action,
+            keep,
+            &finished.record,
+            fire.advance(),
+            globals,
+        )?;
     }
     if let Some(code) = finished.presentation.exit_code {
         std::process::exit(code);
@@ -443,13 +450,15 @@ fn present_finished(
     print_run_summary(name, entry, action, mode, &summary)
 }
 
-/// `→ <workflow show command>` under a hand fire's `launched <id>` receipt, as `workflow run`
-/// prints it.
+/// `→ <workflow show command>` under a hand fire's `launched <id>` receipt, then the hold in
+/// front of the run's node once its advance has had its first pass, as `workflow run` prints
+/// both.
 fn write_launched_run_command(
     entry: &TaskEntry,
     action: &TaskAction,
     keep: bool,
     record: &LoopRunRecord,
+    advance: Option<&rimz::harness::workflow::Advance>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     if record.result != LoopRunResult::Launched {
@@ -472,7 +481,9 @@ fn write_launched_run_command(
     if let Some(hint) = keep_hint(entry, action, keep, run.state.is_terminal()) {
         writeln!(ui::out(), "{}", ui::paint(ui::palette::muted(), hint))?;
     }
-    Ok(())
+    let paths = paths.workflow(&id);
+    let run = crate::cli::workflow::first_pass(&paths, advance)?;
+    crate::cli::workflow::write_held(&paths, &run, "  ")
 }
 
 fn execute_prepared_delivery(

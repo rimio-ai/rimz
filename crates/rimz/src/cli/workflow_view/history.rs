@@ -414,7 +414,7 @@ impl History<'_> {
                         writeln!(out, "    log: {}", log.display())?;
                     }
                     if let Some(text) = started_past_limit {
-                        writeln!(out, "    {text}; started anyway: manual starts do not wait")?;
+                        writeln!(out, "    {text}; started anyway: the run skips capacity")?;
                     }
                     if let Some(reason) = reason.as_ref().filter(|_| !message) {
                         self.prose(out, &format!("reason: {reason}"), "    ")?;

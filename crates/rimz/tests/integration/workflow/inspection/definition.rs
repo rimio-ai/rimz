@@ -63,7 +63,6 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "4 visits, then @failed",
         "takes over",
         "give-up 6h",
-        "only when a loop task starts the run",
         "asked ↑ watch",
         "A turn step goes on to its next check when its turn ends cleanly or its provider exits.",
         "one node in full: rimz workflow show review begin",
@@ -79,9 +78,66 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         .map(|name| text.find(name).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("never:"), "{text}");
+    assert!(!text.contains("give-up instant"), "{text}");
     assert!(text.contains("invalid @failed"), "{text}");
     assert!(!text.contains("waits ≤1h"), "{text}");
     assert!(!text.contains("max-visits-per-outcome"), "{text}");
+}
+
+#[test]
+fn capacity_edges_print_their_three_states_in_text_and_json() {
+    let agent =
+        "lifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\non.capacity='@failed'\n";
+    let spec = format!(
+        "[workflow]\nscope='worktree'\nstart='bare'\n\
+         [agent.bare]\n{agent}then='bounded'\n\
+         [agent.bounded]\n{agent}then='forever'\nadmission.give-up='5m'\n\
+         [agent.forever]\n{agent}then='@done'\nadmission.give-up='forever'\n"
+    );
+    let (env, _) = super::super::fixture(&spec, "");
+    let lines = ["bare", "bounded", "forever"].map(|node| {
+        let text = success(command(&env, &["workflow", "show", "review", node]));
+        text.lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("capacity →"))
+            .map(str::to_owned)
+    });
+    assert_eq!(
+        lines,
+        [
+            Some(
+                "capacity → @failed (explicit, only when the run carries a give-up instant)".into()
+            ),
+            Some("capacity → @failed (explicit)".into()),
+            Some("capacity → @failed (explicit, never: give-up is forever)".into()),
+        ]
+    );
+    let report: Value =
+        serde_json::from_slice(&command(&env, &["workflow", "validate", "--json"]).stdout).unwrap();
+    let fires = ["bare", "bounded", "forever"].map(|node| {
+        let row = report["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["node"] == node)
+            .unwrap();
+        let edge = row["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edge| edge["outcome"] == "capacity")
+            .unwrap();
+        (edge["fires"].clone(), edge["because"].clone())
+    });
+    assert_eq!(
+        fires,
+        [
+            (json!("with-give-up"), Value::Null),
+            (json!("yes"), Value::Null),
+            (json!("never"), json!("give-up-forever")),
+        ],
+        "{report:#}"
+    );
 }
 
 #[test]
@@ -342,7 +398,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "then → judge (explicit)",
                 "asked → watch (explicit)",
                 "cap → @failed (explicit)",
-                "capacity → @failed (explicit, only when a loop task starts the run)",
+                "capacity → @failed (explicit)",
             ],
         ),
         (

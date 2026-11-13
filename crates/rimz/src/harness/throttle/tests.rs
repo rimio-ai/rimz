@@ -296,6 +296,7 @@ fn run(task: &str) -> Run {
             agents: 1,
         }],
         gives_up_ms: None,
+        skip: false,
     }
 }
 

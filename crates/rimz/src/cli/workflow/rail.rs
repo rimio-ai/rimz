@@ -366,6 +366,12 @@ impl Row {
         let live = edges
             .iter()
             .filter(|edge| edge.fires != Fireability::Never)
+            // A capacity edge is drawn only when the step routes it or bounds the wait itself.
+            .filter(|edge| {
+                !(edge.outcome == "capacity"
+                    && edge.fires == Fireability::WithGiveUp
+                    && edge.source == EdgeSource::Default)
+            })
             .collect::<Vec<_>>();
         let mut row = Self {
             name: name.into(),

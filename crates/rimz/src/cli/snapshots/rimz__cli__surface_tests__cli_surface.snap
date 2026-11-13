@@ -4221,10 +4221,12 @@ rimz workflow resume
 rimz workflow run
     <name>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --give-up <WHEN>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --prompt <TEXT>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --skip-capacity  [action=set-true takes=0..=0]
     --tmux  [action=set-true takes=0..=0 global]
     -w, --worktree <WORKTREE>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]

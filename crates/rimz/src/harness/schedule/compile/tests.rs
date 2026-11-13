@@ -389,7 +389,6 @@ fn fire_in(state: &StatePaths, home: &std::path::Path, row: &str) -> RunRecord {
             task: "nightly".into(),
             definition: definition("nightly", &task),
             fire_tree: false,
-            capacity_until: None,
             surplus: task.entry().surplus.clone(),
             surplus_after: task.entry().surplus_after.clone(),
             fire: None,
@@ -400,8 +399,10 @@ fn fire_in(state: &StatePaths, home: &std::path::Path, row: &str) -> RunRecord {
         },
         || Ok(None),
         false,
+        Default::default(),
     )
     .unwrap()
+    .0
 }
 
 /// Advance the run and collect it, as `rimz workflow advance` does.
@@ -963,7 +964,6 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
                 assets: Default::default(),
             },
             fire_tree: false,
-            capacity_until: None,
             surplus: None,
             surplus_after: None,
             fire: None,
@@ -974,8 +974,10 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
         },
         || Ok(None),
         false,
+        Default::default(),
     )
-    .unwrap();
+    .unwrap()
+    .0;
     let host = FakeHost::new();
     let mut current = step(&state, &record, &host);
     for _ in 0..400 {
@@ -1594,7 +1596,6 @@ fn inline_and_ejected(
                 .inline_definition(inline(&task))
                 .unwrap(),
             fire_tree: false,
-            capacity_until: None,
             surplus: None,
             surplus_after: None,
             fire: None,
@@ -1605,8 +1606,10 @@ fn inline_and_ejected(
         },
         || Ok(None),
         false,
+        Default::default(),
     )
-    .unwrap();
+    .unwrap()
+    .0;
     let inline = drive(&state, &record, inline_home.path());
 
     let ejected_home = tempfile::tempdir().unwrap();
@@ -1631,8 +1634,10 @@ fn inline_and_ejected(
         },
         || Ok(prompt),
         false,
+        Default::default(),
     )
-    .unwrap();
+    .unwrap()
+    .0;
     (inline, drive(&state, &record, ejected_home.path()))
 }
 
@@ -1788,7 +1793,6 @@ fn a_keep_fire_keeps_a_turn_agent_and_a_resident_session() {
                 task: "nightly".into(),
                 definition,
                 fire_tree: false,
-                capacity_until: None,
                 surplus: None,
                 surplus_after: None,
                 fire: None,
@@ -1799,6 +1803,7 @@ fn a_keep_fire_keeps_a_turn_agent_and_a_resident_session() {
             },
             || Ok(None),
             false,
+            Default::default(),
         )
         .unwrap_or_else(|err| panic!("{row}: {err:#}"));
         assert_eq!(spec.node(AGENT).unwrap().keep(), kept, "{row}");

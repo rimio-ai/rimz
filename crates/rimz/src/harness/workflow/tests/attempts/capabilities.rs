@@ -41,6 +41,8 @@ fn launch_settings_parse_validate_and_reach_the_host() {
          system-prompt-file='prompt.md'\nworktree='feat-x'\n"
     ));
     let host = FakeHost::new();
+    // Admission resolves the step's agent on the named account, which this home lacks.
+    *host.groups.borrow_mut() = Some(Vec::new());
     advance_ok(&state, &record.id, &host);
     let launched = host.launched.borrow();
     let [launch] = launched.as_slice() else {

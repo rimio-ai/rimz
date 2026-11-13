@@ -2387,7 +2387,8 @@ path = "crates/rimz/src/harness"
 # cache_keepalive::RoomCapacities and RoomCapacities::{new, window_spent} share one capacity reading per pass across the cache ping and idle and smart compaction (+3).
 # RoomCapacities::compaction_blocked reads the pass's credits cache once for both compactions (+1).
 # team_prompt::SHIPPED_REFLECT and team_prompt::reflect_copy_path let team loads and explain resolve and label the shipped `reflect` consensus piece (+2).
-surface-budget = 1212
+# workflow::{StartArgs, Advance, parse_give_up}, TaskFire::advance and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI and loop fires to admission (+5).
+surface-budget = 1217
 
 [[verdict]]
 kind = "item"
@@ -6384,6 +6385,11 @@ reason = "A loop fire owns the action driver's SIGTERM guard across CLI cleanup 
 kind = "item"
 key = "harness::schedule::runner::TaskFire::record_signal_guard"
 reason = "The CLI arms the supervised action's guard directly in the fire so errors and returns leave no fatal signal gap before terminal recording."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::TaskFire::advance"
+reason = "The fire hands `rimz loop fire` the detached advance of the run it started, so the receipt reports a held start with the workflow run helper."
 
 [[verdict]]
 kind = "item"
@@ -11817,6 +11823,16 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 
 [[verdict]]
 kind = "item"
+key = "store::workflow::StartCapacity"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::StartCapacity::is_wait"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
 key = "store::workflow::RunRecord::started_by"
 reason = "The loop selector and locked rename share one predicate for a task's live workflow runs."
 
@@ -12222,6 +12238,11 @@ reason = "Workflow-local input parsers serve validation and execution without wi
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::parse_give_up"
+reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+
+[[verdict]]
+kind = "item"
 key = "cli::workflow::WorkflowArgs"
 reason = "The parent CLI dispatch owns workflow argument parsing and presentation only."
 
@@ -12239,6 +12260,16 @@ reason = "Workflow run control reports typed storage, spec, lock and process fai
 kind = "item"
 key = "harness::workflow::create"
 reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::StartArgs"
+reason = "A run's start arguments, its give-up instant and capacity switch, are plain values the CLI and the loop scheduler pass to the engine."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Advance"
+reason = "The detached advance a start spawned lets each start command's receipt read the run's first pass without owning engine policy."
 
 [[verdict]]
 kind = "item"

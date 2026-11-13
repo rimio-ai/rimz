@@ -101,7 +101,7 @@ fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees()
             "{detail}"
         );
         assert_eq!(wait["kinds"], json!(["codex"]), "{value:#}");
-        assert_eq!(wait["gives_up_at"].is_string(), task.is_some(), "{value:#}");
+        assert!(wait["gives_up_at"].is_string(), "{value:#}");
         assert_eq!(value["record"]["visits"], json!({}), "{value:#}");
         assert!(value["record"]["attempt"].is_null(), "{value:#}");
         assert!(events(&value, "attempt").is_empty(), "{value:#}");
@@ -113,21 +113,6 @@ fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees()
         assert!(shown.contains(detail), "{shown}");
         let again = advance_queue_busy(&room, &record);
         assert_eq!(again["record"]["wait"], *wait, "{again:#}");
-        if task.is_none() {
-            let mut expired = again["record"].clone();
-            expired["wait"]["gives_up_at"] =
-                json!(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
-            save(&room, &expired);
-            let value = advance_queue_busy(&room, &record);
-            assert_eq!(value["record"]["state"], "active", "{value:#}");
-            assert_eq!(value["record"]["wait"]["outcome"], "capacity", "{value:#}");
-            assert!(
-                !events(&value, "route")
-                    .iter()
-                    .any(|row| row["outcome"] == "capacity"),
-                "{value:#}"
-            );
-        }
         drop(queue);
         let value = advance(&room, &record);
         assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
@@ -141,7 +126,7 @@ fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees()
 }
 
 #[test]
-fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time() {
+fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_until_the_node_give_up() {
     for restart in [false, true] {
         let room = Room::new("[agent.build.admission]\ngive-up='2h'\nmax-parallel=5\n");
         let record = pending(&room, Some("nightly"));
@@ -175,7 +160,7 @@ fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time
                 && detail.contains("loops/throttle.lock"),
             "{detail}"
         );
-        assert!(wait["gives_up_at"].is_null(), "{value:#}");
+        assert!(wait["gives_up_at"].is_string(), "{value:#}");
         assert_eq!(value["record"]["visits"], json!({}), "{value:#}");
         assert!(value["record"]["attempt"].is_null(), "{value:#}");
         assert!(events(&value, "attempt").is_empty(), "{value:#}");
@@ -201,9 +186,15 @@ fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time
 
 #[test]
 fn capacity_lock_timeout_waits_still_give_up_through_capacity() {
+    for task in [Some("nightly"), None] {
+        lock_timeout_gives_up(task);
+    }
+}
+
+fn lock_timeout_gives_up(task: Option<&str>) {
     let room = Room::new("admission.give-up='2h'\n");
     write_capacity_config(&room, "[throttle]\nmax-parallel-agents=5\n").unwrap();
-    let record = pending(&room, Some("nightly"));
+    let record = pending(&room, task);
     let _queue = hold_queue(&room);
     let mut value = advance_queue_busy(&room, &record);
     assert_eq!(value["record"]["wait"]["hold"], "queue", "{value:#}");
@@ -271,9 +262,9 @@ fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
 }
 
 #[test]
-fn capacity_manual_loop_workflows_launch_but_scheduled_workflows_wait() {
+fn capacity_hand_manual_and_scheduled_workflows_all_wait() {
     let mut actual = Vec::new();
-    for verb in ["fire", "run"] {
+    for verb in ["workflow", "fire", "run"] {
         let room = Room::new("");
         write_capacity_config(
             &room,
@@ -286,7 +277,11 @@ fn capacity_manual_loop_workflows_launch_but_scheduled_workflows_wait() {
             ),
         )
         .unwrap();
-        success(room.command(&["loop", verb, "nightly"]).output().unwrap());
+        let start = match verb {
+            "workflow" => ["workflow", "run", "review"],
+            verb => ["loop", verb, "nightly"],
+        };
+        success(room.command(&start).output().unwrap());
         let state = room.env.state_path_for(&room.env.project_root);
         let record = records::list(&state).unwrap().pop().unwrap();
         let value = until(&room.env, record.id.as_str(), |value| {
@@ -304,7 +299,144 @@ fn capacity_manual_loop_workflows_launch_but_scheduled_workflows_wait() {
                 .unwrap(),
         );
     }
-    assert_eq!(actual, [(true, true, false), (false, false, true)]);
+    assert_eq!(
+        actual,
+        [
+            (false, false, true),
+            (false, true, true),
+            (false, false, true)
+        ]
+    );
+}
+
+#[test]
+fn capacity_receipts_of_run_fire_and_restart_say_the_start_is_held() {
+    let room = Room::new("");
+    let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec)
+            .unwrap()
+            .replace("start = 'pr'", "start = 'build'"),
+    )
+    .unwrap();
+    write_capacity_config(
+        &room,
+        format!(
+            concat!(
+                "[throttle]\ncheck='exit 75'\n[tasks.nightly]\n",
+                "workflow='review'\nroot={:?}\nevery='1h'\n"
+            ),
+            room.env.project_root
+        ),
+    )
+    .unwrap();
+    let held = |line: &str, indent: &str| {
+        line.strip_prefix(indent).is_some_and(|line| {
+            line.starts_with("build held ")
+                && line.ends_with("codex/default: no capacity (your check)")
+        })
+    };
+    let run = success(
+        room.command(&["workflow", "run", "review"])
+            .output()
+            .unwrap(),
+    );
+    let lines: Vec<_> = run.lines().collect();
+    assert_eq!(lines.len(), 4, "{run}");
+    assert!(lines[2].starts_with("→ rimz workflow show"), "{run}");
+    assert!(held(lines[3], ""), "{run}");
+    // A run no loop task started is listed by its address.
+    let listed = success(room.command(&["workflow", "list"]).output().unwrap());
+    assert!(
+        listed.contains("review · 0 active · 1 held") && listed.contains("#main  held · "),
+        "{listed}"
+    );
+    let id = lines[0];
+    let restart = success(room.command(&["workflow", "restart", id]).output().unwrap());
+    assert!(
+        restart.lines().last().is_some_and(|line| held(line, "")),
+        "{restart}"
+    );
+    let cancel = |id: &str| success(room.command(&["workflow", "cancel", id]).output().unwrap());
+    cancel(id);
+    let fire = success(room.command(&["loop", "fire", "nightly"]).output().unwrap());
+    assert!(
+        fire.lines().last().is_some_and(|line| held(line, "  ")),
+        "{fire}"
+    );
+    let state = room.env.state_path_for(&room.env.project_root);
+    for record in records::list(&state).unwrap() {
+        assert_eq!(record.visits.get("build"), None, "{record:#?}");
+        if !record.state.is_terminal() {
+            cancel(record.id.as_str());
+        }
+    }
+}
+
+#[test]
+fn capacity_give_up_takes_an_instant_and_ends_a_hand_run_there() {
+    let room = Room::new("");
+    let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &spec,
+        fs::read_to_string(&spec)
+            .unwrap()
+            .replace("start = 'pr'", "start = 'build'"),
+    )
+    .unwrap();
+    write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
+    let refused = room
+        .command(&["workflow", "run", "review", "--give-up", "30m"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(concat!(
+            "\"30m\" is not an instant; give a timestamp (2026-11-13T21:00:00Z), ",
+            "a local date-time (2026-11-13T21:00), or a date (2026-11-14)"
+        )),
+        "{stderr}"
+    );
+    let state = room.env.state_path_for(&room.env.project_root);
+    assert!(records::list(&state).unwrap().is_empty());
+    let mut actual = Vec::new();
+    for offset in [3600, -1] {
+        let at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(offset);
+        let receipt = success(
+            room.command(&["workflow", "run", "review", "--give-up", &at.to_string()])
+                .output()
+                .unwrap(),
+        );
+        let id = receipt.lines().next().unwrap();
+        let value = until(&room.env, id, |value| {
+            if offset > 0 {
+                value["record"]["wait"]["outcome"] == "capacity"
+            } else {
+                value["record"]["state"] == "failed"
+            }
+        });
+        actual.push((
+            value["record"]["give_up"] == json!(at),
+            value["record"]["state"].as_str().unwrap().to_owned(),
+            value["record"]["wait"]["gives_up_at"] == json!(at),
+            events(&value, "route")
+                .iter()
+                .any(|row| row["outcome"] == "capacity"),
+            value["record"]["visits"] == json!({}),
+        ));
+        if offset > 0 {
+            success(room.command(&["workflow", "cancel", id]).output().unwrap());
+        }
+    }
+    assert_eq!(
+        actual,
+        [
+            (true, "active".into(), true, false, true),
+            (true, "failed".into(), false, true, true)
+        ]
+    );
 }
 
 #[test]
@@ -530,9 +662,14 @@ fn capacity_give_up_routes_failed_or_a_node_without_an_attempt() {
 }
 
 #[test]
-fn capacity_manual_and_exempt_steps_bypass_the_door() {
+fn capacity_exempt_steps_and_skipped_starts_pass_the_door() {
     let mut actual = Vec::new();
-    for (task, extra) in [(None, ""), (Some("nightly"), "admission.throttle='off'\n")] {
+    for (task, extra, skip) in [
+        (None, "", false),
+        (None, "admission.throttle='off'\n", false),
+        (Some("nightly"), "admission.throttle='off'\n", false),
+        (None, "", true),
+    ] {
         let room = Room::new(extra);
         write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
         let throttle: Value = serde_json::from_str(&success(
@@ -542,17 +679,43 @@ fn capacity_manual_and_exempt_steps_bypass_the_door() {
         ))
         .unwrap();
         assert_eq!(throttle["check"], "exit 75", "{throttle:#}");
-        let record = pending(&room, task);
-        let value = advance(&room, &record);
-        actual.push(value["record"]["visits"]["build"] == 1);
-        assert!(tickets(&room).is_empty());
-        success(
-            room.command(&["workflow", "cancel", record.id.as_str()])
-                .output()
-                .unwrap(),
-        );
+        // The skipped start goes through the CLI flag, so its lowering onto the record is covered.
+        let (id, value) = if skip {
+            let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
+            let text = fs::read_to_string(&spec).unwrap();
+            fs::write(&spec, text.replace("start = 'pr'", "start = 'build'")).unwrap();
+            let receipt = success(
+                room.command(&["workflow", "run", "review", "--skip-capacity"])
+                    .output()
+                    .unwrap(),
+            );
+            let id = receipt.lines().next().unwrap().to_owned();
+            let value = until(&room.env, &id, |value| {
+                value["record"]["visits"]["build"] == 1
+                    || value["record"]["wait"]["outcome"] == "capacity"
+            });
+            (id, value)
+        } else {
+            let record = pending(&room, task);
+            (record.id.to_string(), advance(&room, &record))
+        };
+        actual.push((
+            value["record"]["visits"]["build"] == 1,
+            value["record"]["attempt"]["started_past_limit"].clone(),
+            tickets(&room).len(),
+        ));
+        success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     }
-    assert_eq!(actual, vec![true; 2]);
+    let launched = (true, Value::Null, 0);
+    assert_eq!(
+        actual,
+        [
+            (false, Value::Null, 0),
+            launched.clone(),
+            launched,
+            (true, json!("codex/default: no capacity (your check)"), 1),
+        ]
+    );
 }
 
 #[test]
