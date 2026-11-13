@@ -519,7 +519,7 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
             "{}\n[agent.fallback]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\n",
             fs::read_to_string(&spec)
                 .unwrap()
-                .replace("start = 'pr'", "start = 'pr'\non.deadline='fallback'")
+                .replace("start = 'pr'", "start = 'pr'\non.failed='fallback'")
         ),
     )
     .unwrap();
@@ -646,8 +646,7 @@ fn capacity_give_up_routes_failed_or_a_node_without_an_attempt() {
             value["record"]["state"] == terminal,
             events(&value, "route").iter().any(|row| {
                 row["outcome"] == "capacity"
-                    && row["input"]["kinds"] == json!(["codex"])
-                    && row["input"]["waited_ms"]
+                    && row["input"]["detail"]["waited_ms"]
                         .as_u64()
                         .is_some_and(|ms| ms >= 2000)
             }),
@@ -819,7 +818,7 @@ fn capacity_admission_rechecks_bounds_and_windows_and_releases_unused_turns() {
             if closes == "window" {
                 &value["record"]["wait"]["outcome"]
             } else {
-                &value["record"]["input"]["outcome"]
+                &value["record"]["input"]["cause"]
             },
             closes,
             "{value:#}"

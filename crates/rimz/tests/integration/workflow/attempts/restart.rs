@@ -18,39 +18,6 @@ pub(super) fn wait_for_pane_close(room: &Room, child: &mut std::process::Child) 
     }
 }
 
-/// Report the `@break` agent's launch, as its provider would. A restart or resume detaches the
-/// debugger and leaves it running, so its launch keeps its machine turn until it reports. It
-/// reports from a pane of its own, beside the kept previous card's pane 61.
-fn report_break_launch(room: &Room, id: &str) {
-    let run = room.attempt(id);
-    room.list_pane(62, run.kind.as_str());
-    let payload = json!({
-        "hook_event_name":"SessionStart", "session_id":"break-session",
-        "cwd":room.env.project_root
-    });
-    let mut cmd = room.hook_command(run.kind.as_str());
-    cmd.env(
-        "RIMZ_AGENT_PID",
-        room.owner(run.run_id.as_str()).to_string(),
-    )
-    .env("RIMZ_RUN_ID", run.run_id.as_str())
-    .env("RIMZ_AGENT_NAME", run.agent_name.as_deref().unwrap())
-    .env("RIMZ_WORKFLOW_RUN", id)
-    .env("ZELLIJ", "1")
-    .env("ZELLIJ_PANE_ID", "62")
-    .env(
-        "RIMZ_TEST_ZELLIJ_LIST_PANES",
-        r#"[{"id":62,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-    );
-    success(
-        room.env
-            .spawn_payload(cmd, &payload.to_string())
-            .wait_with_output()
-            .unwrap(),
-    );
-    room.env.drain_hooks();
-}
-
 #[test]
 fn agents_restart_clears_a_former_steps_pin_and_stays_outside_the_run() {
     let room = Room::new("");
@@ -439,9 +406,8 @@ fn continued_restart_receipts_the_addressable_handle() {
 }
 
 #[test]
-fn fresh_restart_from_a_cap_break_leaves_the_kept_previous_card_live_and_detached() {
+fn a_visits_failure_ends_the_run_and_leaves_the_kept_card_live_and_detached() {
     let room = Room::new("keep=true\n");
-    on_break(&room);
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
         &path,
@@ -452,7 +418,7 @@ fn fresh_restart_from_a_cap_break_leaves_the_kept_previous_card_live_and_detache
     )
     .unwrap();
     let (id, run) = room.launch();
-    // Another checkout keeps ordinary occupancy from gating the fresh launch.
+    // The kept card moves to another checkout; its lane stays where it launched.
     let kept_checkout = room
         .env
         .project_root
@@ -475,8 +441,9 @@ fn fresh_restart_from_a_cap_break_leaves_the_kept_previous_card_live_and_detache
         &run,
         json!({"hook_event_name":"Stop", "worktree_path":kept_checkout}),
     );
-    let broken = until(&room.env, &id, |v| v["record"]["node"] == "@break");
-    assert_eq!(broken["record"]["input"]["outcome"], "cap");
+    let broken = until(&room.env, &id, |v| v["record"]["state"] == "failed");
+    assert_eq!(broken["record"]["input"]["outcome"], "failed");
+    assert_eq!(broken["record"]["input"]["cause"], "visits");
     assert_eq!(
         broken["record"]["prev_attempt"]["run_id"],
         run.run_id.as_str()
@@ -497,23 +464,6 @@ fn fresh_restart_from_a_cap_break_leaves_the_kept_previous_card_live_and_detache
     assert!(
         kept.ended_at.is_none() && kept.workflow.is_none(),
         "{kept:#?}"
-    );
-    report_break_launch(&room, &id);
-
-    success(
-        room.command(&["workflow", "restart", &id])
-            .output()
-            .unwrap(),
-    );
-    assert_ne!(room.attempt(&id).run_id, run.run_id);
-    let current = room.env.store().snapshot().unwrap();
-    let previous = current
-        .agents
-        .iter()
-        .find(|agent| agent.agent_id == kept.agent_id);
-    assert!(
-        previous.is_some_and(|agent| agent.ended_at.is_none() && agent.workflow.is_none()),
-        "a fresh restart must leave the kept previous card live and detached: {previous:#?}"
     );
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
     assert!(!trace.contains("close-pane"), "{trace}");
@@ -604,8 +554,16 @@ fn continued_restart(routed: bool) {
 
 #[test]
 fn continue_rechecks_the_history_pool_after_stopping() {
-    let room = Room::new("");
-    on_break(&room);
+    let room = Room::new("on.died = 'hold'\n");
+    let dir = room.env.rimz_home().join("workflows/review");
+    let path = dir.join("workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path).unwrap()
+            + "[script.hold]\nrun = 'sh checks/hold.sh'\non = { pending = '@wait', ready = 'build' }\ntimeout = '1h'\n",
+    )
+    .unwrap();
+    fs::write(dir.join("checks/hold.sh"), PENDING).unwrap();
     success(
         room.command(&[
             "accounts",
@@ -663,6 +621,7 @@ fn continue_rechecks_the_history_pool_after_stopping() {
         value["record"]["attempt"]["run"]["run_id"]
             .as_str()
             .is_some_and(|current| current != run.run_id.as_str())
+            || value["record"]["node"] == "hold"
             || value["record"]["state"] != "active"
     });
     assert!(
@@ -674,7 +633,14 @@ fn continue_rechecks_the_history_pool_after_stopping() {
         "a pool change during stop must refuse the resume: {value:#}"
     );
     let fix = format!("rimz workflow restart {id}");
-    assert_eq!(value["record"]["node"], "@break", "{value:#}");
+    assert_eq!(value["record"]["node"], "hold", "{value:#}");
+    // The hold check can evaluate before this read and replace the record's input.
+    assert!(
+        events(&value, "route")
+            .iter()
+            .any(|route| route["node"] == "build" && route["input"]["cause"] == "died"),
+        "{value:#}"
+    );
     assert!(
         events(&value, "attempt").iter().any(|event| {
             event["reason"]
@@ -683,15 +649,18 @@ fn continue_rechecks_the_history_pool_after_stopping() {
         }),
         "an after-stop refusal must name the fresh restart command: {value:#}"
     );
-    // The receipt can precede settlement; read the remedy after the persisted break.
+    // The receipt can precede settlement; read the remedy after the persisted route.
     let shown = success(
         room.command(&["workflow", "show", &id, "--history"])
             .output()
             .unwrap(),
     );
     assert!(shown.contains(&fix), "{shown}");
-    report_break_launch(&room, &id);
-    success(room.command(&["workflow", "resume", &id]).output().unwrap());
+    success(
+        room.command(&["workflow", "resume", &id, "--at", "build"])
+            .output()
+            .unwrap(),
+    );
     let restarted = until(&room.env, &id, |v| {
         v["record"]["attempt"]["node"] == "build" && v["record"]["attempt"]["run"].is_object()
     });
@@ -699,15 +668,4 @@ fn continue_rechecks_the_history_pool_after_stopping() {
         restarted["record"]["attempt"]["run"]["run_id"],
         run.run_id.as_str()
     );
-}
-
-fn on_break(room: &Room) {
-    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
-    fs::write(
-        &path,
-        fs::read_to_string(&path)
-            .unwrap()
-            .replace("on-break='@failed'", "on-break={agent='codex'}"),
-    )
-    .unwrap();
 }

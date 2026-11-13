@@ -4,7 +4,7 @@ use rimz::store::workflow::{RunRecord, RunState};
 mod definition;
 mod show;
 
-const SPEC: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='gate'\n[script.gate]\nrun='true'\non.ok='build'\ntimeout='1h'\n[command.build]\nshell='true'\nthen='gate'\nmax-visits=2\n";
+const SPEC: &str = "[workflow]\nscope='worktree'\nstart='gate'\n[script.gate]\nrun='true'\non.ok='build'\ntimeout='1h'\n[command.build]\nshell='true'\nthen='gate'\nmax-visits=2\n";
 
 fn seed(env: &Env, root: &Path, checkout: &Path, state: &str) -> RunRecord {
     let id = rimz::ids::WorkflowRunId::new();
@@ -727,7 +727,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     assert!(!stderr.contains("has used"), "{stderr}");
     save(&env, &record);
     let paths = env.state_path_for(&env.project_root).workflow(&record.id);
-    fs::write(paths.spec, format!("{SPEC}on.cap='gate'\n")).unwrap();
+    fs::write(paths.spec, format!("{SPEC}on.visits='gate'\n")).unwrap();
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")

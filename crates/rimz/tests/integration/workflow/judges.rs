@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\n[test.recover]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\non.died='recover'\n[test.recover]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
         ),
         "",
     );
@@ -281,7 +281,7 @@ done
     );
     assert!(reason.ends_with("upgrade Codex"), "{reason}");
     let value = settled(&env, id, "failed");
-    assert_eq!(events(&value, "route")[0]["outcome"], "invalid");
+    assert_eq!(events(&value, "route")[0]["outcome"], "died");
     let evaluations = events(&value, "evaluation");
     assert!(
         evaluations.iter().all(|row| row["digests"] == json!({})),
@@ -381,7 +381,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
             }
             "missing" => {
                 let value = settled(&env, id, "failed");
-                assert_eq!(value["record"]["input"]["outcome"], "invalid");
+                assert_eq!(value["record"]["input"]["cause"], "died");
                 assert_eq!(value["record"]["check_retry"], 1);
                 assert_eq!(events(&value, "evaluation").len(), 2);
                 assert_eq!(context(&value)["retry"]["outcome"], "died");

@@ -67,7 +67,7 @@ expression: value
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 8,
+  "version": 9,
   "visit_grant": 0,
   "visits": {
     "build": 2

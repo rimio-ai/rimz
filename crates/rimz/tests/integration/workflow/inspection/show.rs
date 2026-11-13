@@ -5,89 +5,6 @@ const AT: &str = "2000-01-01T12:00:00Z";
 const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['gate','later']\nthen='gate'\n[condition.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
-fn active_break_resume_receipt_counts_the_destination_step_visits() {
-    let (env, mut record) = fixture("active", None, vec![]);
-    record.node = "@break".into();
-    record.input = Some(json!({"outcome":"died", "edge":"invalid", "from":"build"}));
-    record.visits.insert("build".into(), 1);
-    record.attempt = Some(
-        serde_json::from_value(json!({
-            "kind":"agent", "lifecycle":"session", "seq":1, "node":"@break", "visit":1,
-            "started_at":record.entered_at, "host":{"pid":0,"start":null}
-        }))
-        .unwrap(),
-    );
-    save(&env, &record);
-    sealed_spec(
-        &env,
-        &record,
-        "[workflow]\nscope='worktree'\nstart='build'\non-break={agent='claude'}\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nmax-visits=2\nthen='@done'\n",
-    );
-    let receipt = success(
-        env.rimz()
-            .args(["workflow", "resume", record.id.as_str()])
-            .env("RIMZ_BIN", "/bin/true")
-            .output()
-            .unwrap(),
-    );
-    assert!(
-        receipt.starts_with("resumed review#main at build · build 1 of 2 visits\n"),
-        "{receipt}"
-    );
-}
-
-#[test]
-fn active_break_resume_receipts_its_source_instead_of_an_extension() {
-    for live in [true, false] {
-        for at in [None, Some("other")] {
-            let (env, mut record) = fixture("active", None, vec![]);
-            record.node = "@break".into();
-            record.input = Some(json!({"outcome":"invalid","edge":"invalid","from":"gate"}));
-            if live {
-                record.attempt = Some(
-                    serde_json::from_value(json!({
-                        "kind":"agent", "lifecycle":"session", "seq":1, "node":"@break",
-                        "visit":1, "started_at":record.entered_at,
-                        "host":{"pid":0,"start":null},
-                    }))
-                    .unwrap(),
-                );
-                record.next_seq = 2;
-            }
-            save(&env, &record);
-            sealed_spec(
-                &env,
-                &record,
-                "[workflow]\nscope='worktree'\nstart='gate'\non-break={agent='claude'}\n\
-                 [sleep.gate]\nsleep='1h'\nthen='@done'\n\
-                 [sleep.other]\nsleep='1h'\nthen='@done'\n",
-            );
-            let mut args = vec!["workflow", "resume", record.id.as_str()];
-            if let Some(at) = at {
-                args.extend(["--at", at]);
-            }
-            let target = at.unwrap_or("gate");
-            let receipt = success(command(&env, &args));
-            assert!(
-                receipt.starts_with(&format!("resumed review#main at {target}\n")),
-                "{receipt}"
-            );
-            let value = until(&env, record.id.as_str(), |value| {
-                value["record"]["node"] == target
-            });
-            let history = human(&env, &record, true);
-            assert!(
-                history.contains(&format!("{target} resume → {target} ·")),
-                "live={live}, at={at:?}: {history}"
-            );
-            let resumes = events(&value, "resume");
-            assert_eq!(resumes.len(), 1, "{value:#}");
-            assert_eq!(resumes[0]["node"], target, "{value:#}");
-        }
-    }
-}
-
-#[test]
 fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_writing() {
     for (state, node) in [("active", "build"), ("parked", "build"), ("parked", "gate")] {
         let (env, mut record) = fixture(state, (state == "parked").then_some("user"), vec![]);
@@ -404,22 +321,22 @@ fn copied_park_options_accept_a_hyphen_leading_node() {
 }
 
 #[test]
-fn cap_after_an_engine_route_fails_the_run_and_names_both_hops() {
+fn visits_after_an_engine_route_fails_the_run_and_names_both_hops() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\non.invalid='build'\n\
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\non.died='build'\n\
             [command.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=1\n"
         ),
         "exit 7\n",
     );
     let id = start(&env);
     let value = settled(&env, &id, "failed");
-    assert_eq!(value["record"]["input"]["outcome"], "cap", "{value:#}");
+    assert_eq!(value["record"]["input"]["cause"], "visits", "{value:#}");
     let text = success(command(&env, &["workflow", "show", &id]));
     // A finished run shows its saved history, which names both hops in its own words.
     contains(
         &text,
-        &["pr said invalid → build", "build route cap → @failed"],
+        &["pr said died → build", "build route visits → @failed"],
     );
 }
 
@@ -830,7 +747,7 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
     save(&env, &record);
     fs::write(
         &paths.spec,
-        SPEC.replace("start='gate'", "start='gate'\non.deadline='@failed'")
+        SPEC.replace("start='gate'", "start='gate'\non.failed='@failed'")
             .replace("on.ok='build'", "on={ok='build',pending='@wait'}"),
     )
     .unwrap();

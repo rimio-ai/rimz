@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::Definition;
 use super::definition::Target;
-use super::spec::RESERVED_OUTCOMES;
+use super::spec::{self, Cause};
 use crate::disk::paths::WorkflowPaths;
 use crate::harness::headless::judge::FailureKind;
 use crate::store::workflow::{
@@ -20,11 +20,11 @@ enum JudgeFailure {
     Canceled,
     /// A provider limit held the judge; it rechecks after the reset.
     Limited,
-    /// The judge's account may not spend: the run fails, as a refused agent launch fails it.
+    /// The judge's account may not spend: the check fails `limited`.
     Budget,
     /// The first failure; the judge runs once more.
     Retry,
-    /// A second failure, routed through the check's `invalid` edge.
+    /// A second failure, routed through the failure chain under its own cause.
     Route,
 }
 
@@ -67,7 +67,7 @@ impl Transition<'_> {
         };
         if let Ok(object) = object {
             self.record.check_retry_context = None;
-            self.finish_check(seq, Ok(object), result.stderr_tail)?;
+            self.finish_check(seq, Ok(object), json!({}), result.stderr_tail)?;
             for entry in &mut self.entries {
                 if entry.seq == Some(seq)
                     && let JournalEvent::Evaluation {
@@ -90,19 +90,23 @@ impl Transition<'_> {
             Some(kind) if kind.retry_owed(self.record.check_retry > 0) => JudgeFailure::Retry,
             _ => JudgeFailure::Route,
         };
-        let routed = disposition == JudgeFailure::Route;
-        let outcome = if routed { "invalid" } else { failure };
-        let mut object = self.engine_object(json!({"outcome":outcome, "reason":reason}));
-        if routed {
-            object["failure"] = json!(failure);
-        }
+        let cause = match disposition {
+            JudgeFailure::Budget => Some(Cause::Limited),
+            JudgeFailure::Route => Some(Cause::parse(failure).unwrap_or(Cause::Invalid)),
+            _ => None,
+        };
+        let node = self.record.node.clone();
+        let object = match cause {
+            Some(cause) => self.failure_input(&node, cause, &reason, &json!({})),
+            None => self.engine_object(json!({"outcome":failure, "reason":reason})),
+        };
         self.close_wait();
         self.push(
             Some(seq),
             JournalEvent::Evaluation {
                 origin: EvaluationOrigin::Engine,
-                outcome: outcome.into(),
-                object: object.clone(),
+                outcome: cause.map_or(failure, Cause::word).into(),
+                object,
                 digests: attempt.digests,
                 started_at: attempt.started_at,
                 ended_at: self.now,
@@ -113,23 +117,14 @@ impl Transition<'_> {
         );
         self.record.attempt = None;
         self.record.recheck_at = None;
+        if let Some(cause) = cause {
+            self.fail(Some(seq), &node, cause, reason, json!({}))?;
+            return Ok(false);
+        }
         match disposition {
-            JudgeFailure::Canceled => Ok(true),
             JudgeFailure::Limited => {
                 self.record.recheck_at =
                     self.bounded_recheck(result.limited.and_then(|limited| limited.reset_at))?;
-                Ok(false)
-            }
-            JudgeFailure::Budget => {
-                let target = self.spec.engine_target(&self.record.node, "budget");
-                self.push(
-                    Some(seq),
-                    JournalEvent::Route {
-                        outcome: "budget".into(),
-                        input: object.clone(),
-                    },
-                );
-                self.route(&target, object, ParkReason::Check)?;
                 Ok(false)
             }
             JudgeFailure::Retry => {
@@ -137,18 +132,7 @@ impl Transition<'_> {
                 self.record.check_retry_context = Some(json!({"outcome":failure,"reason":reason}));
                 Ok(true)
             }
-            JudgeFailure::Route => {
-                let target = self.spec.engine_target(&self.record.node, "invalid");
-                self.push(
-                    Some(seq),
-                    JournalEvent::Route {
-                        outcome: "invalid".into(),
-                        input: object.clone(),
-                    },
-                );
-                self.route(&target, object, ParkReason::Check)?;
-                Ok(false)
-            }
+            _ => Ok(true),
         }
     }
 
@@ -166,10 +150,13 @@ impl Transition<'_> {
         });
     }
 
+    /// Settle the current check's answer, or fail it with `detail`, the evidence its process
+    /// left (`log`, and `code` once it exited), when the answer is refused.
     pub(super) fn finish_check(
         &mut self,
         seq: u64,
         object: Result<Value, String>,
+        detail: Value,
         stderr_tail: Option<String>,
     ) -> Result<(), TimeInputErr> {
         if !self.current(seq) {
@@ -180,28 +167,19 @@ impl Transition<'_> {
         let edges = self.spec.edges(&self.record.node);
         let object = object
             .and_then(|object| normalize_object(object, check, self.record.key.as_ref(), &edges));
-        let (mut object, mut outcome, mut target, reason, origin) = match object {
-            Ok(object) => {
-                let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
-                let target = self.spec.engine_target(&self.record.node, &outcome);
-                (
-                    object,
-                    outcome,
-                    target,
-                    ParkReason::User,
-                    EvaluationOrigin::Check,
-                )
+        let mut object = match object {
+            Ok(object) => object,
+            Err(reason) => {
+                let cause = match check.kind() {
+                    Some(super::Kind::Condition(_) | super::Kind::Sleep(_)) => None,
+                    Some(super::Kind::Test(_)) => Some(Cause::Died),
+                    _ => Some(Cause::Invalid),
+                };
+                return self.check_failure(seq, cause, reason, detail, stderr_tail);
             }
-            Err(reason) => (
-                self.engine_object(
-                    json!({"outcome":"invalid", "node":self.record.node, "reason":reason}),
-                ),
-                "invalid".into(),
-                self.spec.engine_target(&self.record.node, "invalid"),
-                ParkReason::Invalid,
-                EvaluationOrigin::Engine,
-            ),
         };
+        let mut outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
+        let mut target = self.spec.engine_target(&self.record.node, &outcome);
         if matches!(
             check.kind(),
             Some(super::Kind::Condition(_) | super::Kind::Sleep(_))
@@ -223,31 +201,59 @@ impl Transition<'_> {
         self.push(
             Some(seq),
             JournalEvent::Evaluation {
-                origin,
-                outcome: outcome.clone(),
+                origin: EvaluationOrigin::Check,
+                outcome,
                 cost_usd: None,
                 retry: None,
                 object: object.clone(),
                 digests: attempt.digests,
                 started_at: attempt.started_at,
                 ended_at: self.now,
-                stderr_tail: if reason == ParkReason::Invalid {
-                    stderr_tail
-                } else {
-                    None
-                },
+                stderr_tail: None,
             },
         );
-        if reason == ParkReason::Invalid {
-            self.push(
-                Some(seq),
-                JournalEvent::Route {
-                    outcome,
-                    input: object.clone(),
-                },
-            );
+        self.route(&target, object, ParkReason::User)
+    }
+
+    /// Settle the current check's evaluation as a failure of `cause`, or, with none, as an
+    /// engine fault that ends the run failed with no route (a condition's or sleep's
+    /// reading error).
+    pub(super) fn check_failure(
+        &mut self,
+        seq: u64,
+        cause: Option<Cause>,
+        reason: String,
+        detail: Value,
+        stderr_tail: Option<String>,
+    ) -> Result<(), TimeInputErr> {
+        if !self.current(seq) {
+            return Ok(());
         }
-        self.route(&target, object, reason)
+        // current verified that this sequence owns the live attempt.
+        let attempt = self.record.attempt.take().expect("current check attempt");
+        let node = self.record.node.clone();
+        let object = match cause {
+            Some(cause) => self.failure_input(&node, cause, &reason, &detail),
+            None => self.engine_object(json!({"outcome":"fault", "node":node, "reason":reason})),
+        };
+        self.push(
+            Some(seq),
+            JournalEvent::Evaluation {
+                origin: EvaluationOrigin::Engine,
+                outcome: cause.map_or("fault", Cause::word).into(),
+                cost_usd: None,
+                retry: None,
+                object,
+                digests: attempt.digests,
+                started_at: attempt.started_at,
+                ended_at: self.now,
+                stderr_tail,
+            },
+        );
+        match cause {
+            Some(cause) => self.fail(Some(seq), &node, cause, reason, detail),
+            None => self.fault(reason),
+        }
     }
 
     fn hold_until(&self, case: u32) -> Result<Option<Timestamp>, TimeInputErr> {
@@ -320,8 +326,16 @@ impl Transition<'_> {
                 turn,
                 check: verdict
                     .map_or_else(|| self.record.node.clone(), |verdict| verdict.node.clone()),
-                outcome: verdict
-                    .and_then(|verdict| verdict.object["outcome"].as_str().map(str::to_owned)),
+                // A failure verdict names its cause, as its Route entry does.
+                outcome: verdict.and_then(|verdict| {
+                    let object = &verdict.object;
+                    let field = if object["outcome"] == "failed" {
+                        "cause"
+                    } else {
+                        "outcome"
+                    };
+                    object[field].as_str().map(str::to_owned)
+                }),
                 target: verdict.map(|verdict| verdict.target.clone()),
                 reason,
                 visit: (action == TurnEndAction::Pushed)
@@ -425,7 +439,7 @@ impl Transition<'_> {
     pub(super) fn route(
         &mut self,
         target: &Target,
-        mut object: Value,
+        object: Value,
         reason: ParkReason,
     ) -> Result<(), TimeInputErr> {
         if self.record.state.is_terminal() {
@@ -446,16 +460,6 @@ impl Transition<'_> {
             });
             self.record.attempt = None;
             return Ok(());
-        }
-        let to_break = target.node().is_some_and(|node| self.spec.is_break(node));
-        if to_break {
-            object["edge"] = json!(match reason {
-                ParkReason::Cap => "cap",
-                ParkReason::Deadline => "deadline",
-                ParkReason::Timeout => "timeout",
-                _ => "invalid",
-            });
-            object["from"] = json!(self.record.node);
         }
         if *target == Target::Wait {
             self.merge_wait(&object, self.now, true)?;
@@ -494,25 +498,38 @@ impl Transition<'_> {
                     if *node != self.record.node {
                         self.record.restart = None;
                     }
-                    self.record.node = node.clone();
-                    self.record.entered_at = self.now;
-                    self.record.check_retry = 0;
-                    self.record.check_retry_context = None;
-                    self.record.launch_retry = false;
+                    self.enter(node.clone());
                 }
                 // The outer branch took the wait.
                 Target::Wait => unreachable!("routed wait"),
             }
         }
         self.record.attempt = None;
-        if !to_break && (sleep || self.record.wait.as_ref().is_some_and(Wait::is_hold)) {
-            return Ok(());
+        self.hand_on(object, sleep);
+        Ok(())
+    }
+
+    /// Move the run onto `node`, its entry fresh.
+    pub(super) fn enter(&mut self, node: String) {
+        self.record.node = node;
+        self.record.entered_at = self.now;
+        self.record.check_retry = 0;
+        self.record.check_retry_context = None;
+        self.record.launch_retry = false;
+    }
+
+    /// Hand a route's `object` to the next node as its input and key. A failure always does;
+    /// an answer that `keeps_input` (a sleep's, or one between a session's listed rest checks),
+    /// and one that leaves a hold standing, keep the input the node was given.
+    pub(super) fn hand_on(&mut self, object: Value, keeps_input: bool) {
+        let failure = object["outcome"] == "failed";
+        if !failure && (keeps_input || self.record.wait.as_ref().is_some_and(Wait::is_hold)) {
+            return;
         }
         self.record.key = object
             .get("key")
             .and_then(|key| serde_json::from_value(key.clone()).ok());
         self.record.input = Some(object);
-        Ok(())
     }
 
     pub(super) fn engine_object(&self, mut object: Value) -> Value {
@@ -522,29 +539,82 @@ impl Transition<'_> {
         object
     }
 
-    pub(super) fn cap_route(&mut self, visits: u64, max: u64) -> Verdict {
-        let object = self.engine_object(json!({
-            "outcome":"cap", "step":self.record.node, "bound":"max-visits",
-            "visits":visits, "max":max, "routed_by":self.record.routed_by()
-        }));
+    /// The input a failure of `cause` at `node` hands the route it takes, with the run's key.
+    fn failure_input(&self, node: &str, cause: Cause, reason: &str, detail: &Value) -> Value {
+        self.engine_object(json!({
+            "outcome":"failed", "cause":cause.word(), "node":node, "reason":reason,
+            "detail":detail,
+        }))
+    }
+
+    /// The failure entry: every failure, whatever raised it, builds its input here, with the
+    /// run's key, journals the route under its cause, and takes the fallback chain's target.
+    /// The verdict is for a caller that stops an agent before the route commits; `fail`
+    /// commits it at once. `seq` is the evaluation's that raised it, if one did.
+    pub(super) fn failure(
+        &mut self,
+        seq: Option<u64>,
+        node: &str,
+        cause: Cause,
+        reason: String,
+        detail: Value,
+    ) -> Verdict {
+        let object = self.failure_input(node, cause, &reason, &detail);
         self.push(
-            None,
+            seq,
             JournalEvent::Route {
-                outcome: "cap".into(),
+                outcome: cause.word().into(),
                 input: object.clone(),
             },
         );
         Verdict {
-            node: self.record.node.clone(),
+            node: node.into(),
             entered_at: self.record.entered_at,
             at: self.now,
-            target: self
-                .spec
-                .engine_target(&self.record.node, "cap")
-                .to_string(),
+            target: self.spec.failure_target(node, cause).to_string(),
             object,
-            reason: ParkReason::Cap,
+            reason: match cause {
+                Cause::Visits => ParkReason::Cap,
+                Cause::Deadline => ParkReason::Deadline,
+                Cause::Timeout => ParkReason::Timeout,
+                _ => ParkReason::Invalid,
+            },
         }
+    }
+
+    /// Take the failure route of `cause` out of `node` now.
+    pub(super) fn fail(
+        &mut self,
+        seq: Option<u64>,
+        node: &str,
+        cause: Cause,
+        reason: String,
+        detail: Value,
+    ) -> Result<(), TimeInputErr> {
+        let verdict = self.failure(seq, node, cause, reason, detail);
+        self.route(
+            &Target::parse(&verdict.target),
+            verdict.object,
+            verdict.reason,
+        )
+    }
+
+    /// The failure a spent visit cap raises at the current node, which counts no visit.
+    pub(super) fn visits_failure(&mut self, visits: u64, max: u64) -> Verdict {
+        let node = self.record.node.clone();
+        self.failure(
+            None,
+            &node,
+            Cause::Visits,
+            format!("{node} has used {visits} of {max} visits"),
+            json!({"visits":visits, "max":max}),
+        )
+    }
+
+    /// End the run failed with no route: an engine fault, not a failure of the node.
+    pub(super) fn fault(&mut self, reason: String) -> Result<(), TimeInputErr> {
+        let object = self.engine_object(json!({"outcome":"fault", "reason":reason}));
+        self.route(&Target::Failed, object, ParkReason::Invalid)
     }
 
     pub(super) fn engine_route(
@@ -704,16 +774,6 @@ impl Transition<'_> {
                 .iter()
                 .any(|stopped| stopped.kind == child.kind && stopped.handle == child.handle)
         });
-        if self.spec.is_break(&attempt.node) {
-            if let Some(run) = &attempt.run {
-                self.record.break_agents.push(run.handle.clone());
-            }
-            self.record
-                .break_agents
-                .extend(children.live.iter().map(|child| child.handle.clone()));
-            self.record.break_agents.sort();
-            self.record.break_agents.dedup();
-        }
         previous.children = Some(children);
         if ending.outcome != AttemptOutcome::Asked {
             previous.asked = None;
@@ -771,12 +831,13 @@ impl Transition<'_> {
             }
             self.record.node = verdict.node;
             self.record.entered_at = verdict.entered_at;
-            if self.spec.is_break(&attempt.node) && verdict.reason == ParkReason::User {
-                self.route(
-                    &Target::parse(&verdict.target),
-                    verdict.object,
-                    verdict.reason,
-                )?;
+            self.route(
+                &Target::parse(&verdict.target),
+                verdict.object,
+                verdict.reason,
+            )?;
+            if ending.cause == EndCause::Resume {
+                // Journaled at the node the run moved to, after the attempt it ended.
                 self.push(
                     None,
                     JournalEvent::Resume {
@@ -784,22 +845,8 @@ impl Transition<'_> {
                         deadline: self.record.deadline,
                     },
                 );
-                return Ok(());
             }
-            if verdict.reason == ParkReason::Invalid && attempt.node == self.record.node {
-                self.push(
-                    Some(attempt.seq),
-                    JournalEvent::Route {
-                        outcome: "invalid".into(),
-                        input: verdict.object.clone(),
-                    },
-                );
-            }
-            return self.route(
-                &Target::parse(&verdict.target),
-                verdict.object,
-                verdict.reason,
-            );
+            return Ok(());
         }
         if let EndCause::Restart { continued } = ending.cause {
             self.restart_step(&attempt.node, continued);
@@ -825,26 +872,7 @@ impl Transition<'_> {
             return Ok(());
         }
         if ending.cause == EndCause::Deadline {
-            self.record.deadline_fired = true;
-            return self.engine_route(
-                "deadline",
-                json!({"outcome":"deadline", "deadline":self.record.deadline}),
-                &self.spec.engine_target(&self.record.node, "deadline"),
-                ParkReason::Deadline,
-            );
-        }
-        if ending.outcome == AttemptOutcome::Died
-            && matches!(
-                self.spec.step_kind(&attempt.node),
-                Some(super::Kind::Message(_))
-            )
-        {
-            return self.engine_route(
-                "undelivered",
-                json!({"outcome":"undelivered", "reason":reason}),
-                &self.spec.engine_target(&attempt.node, "undelivered"),
-                ParkReason::Invalid,
-            );
+            return self.deadline_failure(&attempt.node);
         }
         if ending.outcome == AttemptOutcome::Asked {
             return self.engine_route(
@@ -857,22 +885,59 @@ impl Transition<'_> {
                 ParkReason::Asked,
             );
         }
-        if self
+        let Some(cause) = self
             .spec
-            .routes_on_failed(&attempt.node, ending.outcome.as_str())
-        {
-            return self.engine_route(
-                "failed",
-                json!({"outcome":"failed", "ending":ending.outcome, "reason":reason}),
-                &self.spec.engine_target(&attempt.node, "failed"),
+            .ending_cause(&attempt.node, ending.outcome.as_str())
+        else {
+            let target = self.spec.engine_target(&self.record.node, "then");
+            return self.route(
+                &target,
+                self.engine_object(self.record.input.clone().unwrap_or_else(|| json!({}))),
                 ParkReason::User,
             );
+        };
+        // The evidence was saved before this routing tail, as its journal entry read it.
+        let evidence = self
+            .record
+            .prev_attempt
+            .as_ref()
+            .expect("step end evidence");
+        let mut detail = json!({});
+        if let Some(code) = evidence.code {
+            detail["code"] = json!(code);
         }
-        let target = self.spec.engine_target(&self.record.node, "then");
-        self.route(
-            &target,
-            self.engine_object(self.record.input.clone().unwrap_or_else(|| json!({}))),
-            ParkReason::User,
+        if let Some(log) = &evidence.log {
+            detail["log"] = json!(log);
+        }
+        if let Some(reset_at) = evidence
+            .limited
+            .as_ref()
+            .and_then(|limited| limited.reset_at)
+        {
+            detail["reset_at"] = json!(reset_at);
+        }
+        let reason = reason.unwrap_or_else(|| match cause {
+            Cause::Timeout => "the step's timeout passed".into(),
+            Cause::Limited => "a provider limit or budget stopped the attempt".into(),
+            Cause::Undelivered => "the message was not delivered".into(),
+            _ => format!("the attempt ended {}", ending.outcome.as_str()),
+        });
+        self.fail(None, &attempt.node, cause, reason, detail)
+    }
+
+    /// The deadline fails the node the run is at, once per grant.
+    pub(super) fn deadline_failure(&mut self, node: &str) -> Result<(), TimeInputErr> {
+        self.record.deadline_fired = true;
+        let deadline = self.record.deadline;
+        self.fail(
+            None,
+            node,
+            Cause::Deadline,
+            deadline.map_or_else(
+                || "the run's deadline passed".into(),
+                |deadline| format!("the run's deadline {deadline} passed"),
+            ),
+            json!({"deadline":deadline}),
         )
     }
 
@@ -1010,10 +1075,11 @@ impl Transition<'_> {
             return Ok(false);
         }
         if self.record.held.is_none()
-            && !self.spec.is_break(&self.record.node)
             && !self.record.deadline_fired
-            && let Some(deadline) = self.record.deadline
-            && deadline <= self.now
+            && self
+                .record
+                .deadline
+                .is_some_and(|deadline| deadline <= self.now)
         {
             if self.finish_script(
                 Ending {
@@ -1028,14 +1094,8 @@ impl Transition<'_> {
             )? {
                 return Ok(true);
             }
-            self.record.deadline_fired = true;
-            let target = self.spec.engine_target(&self.record.node, "deadline");
-            self.engine_route(
-                "deadline",
-                json!({"outcome":"deadline", "deadline":deadline}),
-                &target,
-                ParkReason::Deadline,
-            )?;
+            let node = self.record.node.clone();
+            self.deadline_failure(&node)?;
             return Ok(true);
         }
         if !self.timeout_at()?.is_some_and(|at| at <= self.now) {
@@ -1060,12 +1120,16 @@ impl Transition<'_> {
             .expect("a check timeout fires at its check")
             .timeout()
             .map(super::definition::Parsed::text);
-        let target = self.spec.engine_target(&self.record.node, "timeout");
-        self.engine_route(
-            "timeout",
-            json!({"outcome":"timeout", "node":self.record.node, "timeout":timeout}),
-            &target,
-            ParkReason::Timeout,
+        let node = self.record.node.clone();
+        self.fail(
+            None,
+            &node,
+            Cause::Timeout,
+            format!(
+                "{node} ran past its timeout {}",
+                timeout.unwrap_or_default()
+            ),
+            json!({}),
         )?;
         Ok(true)
     }
@@ -1085,7 +1149,8 @@ impl Transition<'_> {
             && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
     }
 
-    fn kill_child(&self) {
+    /// Stop the live attempt's child process group, when the run still owns it.
+    pub(super) fn kill_child(&self) {
         let Some(child) = self
             .record
             .attempt
@@ -1134,7 +1199,7 @@ fn normalize_object(
         .get("outcome")
         .and_then(Value::as_str)
         .ok_or("outcome must be a string")?;
-    if (RESERVED_OUTCOMES.contains(&outcome)
+    if (spec::reserved(outcome)
         && !(outcome == "unknown"
             && matches!(
                 check.kind(),

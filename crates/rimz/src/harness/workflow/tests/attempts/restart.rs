@@ -4,9 +4,9 @@ use crate::store::workflow::{Park, ParkReason};
 #[test]
 fn continued_restart_failure_uses_the_sealed_failure_policy() {
     for explicit in [false, true] {
-        let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
+        let text = STEP.to_owned()
             + if explicit {
-                "on.invalid='@failed'\n"
+                "on.died='triage'\n[sleep.triage]\nsleep='1h'\nthen='@done'\n"
             } else {
                 ""
             };
@@ -28,12 +28,52 @@ fn continued_restart_failure_uses_the_sealed_failure_policy() {
         let failed = advance_ok(&state, &record.id, &host);
         assert_eq!(failed.visits["build"], 1);
         if explicit {
-            assert_eq!(failed.state, RunState::Failed);
+            assert_eq!(failed.node, "triage");
+            assert_eq!(failed.input.unwrap()["cause"], "died");
         } else {
-            assert_eq!(failed.node, "@break");
-            assert_eq!(failed.input.unwrap()["edge"], "invalid");
+            assert_eq!(failed.state, RunState::Failed);
         }
     }
+}
+
+#[test]
+fn a_pending_restarts_session_resumes_only_at_its_own_step() {
+    let definition = STEP.to_owned()
+        + "[agent.other]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='@done'\n";
+    let mut actual = Vec::new();
+    for target in ["build", "other"] {
+        let (_dir, state, record) = setup(&definition);
+        let host = FakeHost::new();
+        let live = advance_ok(&state, &record.id, &host);
+        let seq = live.attempt.as_ref().unwrap().seq;
+        restart(
+            &state,
+            &record.id,
+            Some((seq, "conversation".into())),
+            &host,
+        )
+        .unwrap();
+        resume(&state, &record.id, Some(target), &[]).unwrap();
+        let relaunched = advance_ok(&state, &record.id, &host);
+        let launches = host.launched.borrow();
+        actual.push((
+            relaunched.node,
+            launches.len(),
+            launches
+                .last()
+                .unwrap()
+                .resume
+                .as_ref()
+                .map(ToString::to_string),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            ("build".into(), 2, Some("conversation".into())),
+            ("other".into(), 2, None),
+        ]
+    );
 }
 
 #[test]
@@ -90,26 +130,6 @@ fn restart_history_is_a_manual_reentry_not_a_resumed_conversation() {
             reached(&trail, &entries)["build"]
         ),
         ("Restart".into(), Some("Restart".into()), 2)
-    );
-}
-
-#[test]
-fn restart_that_breaks_on_a_step_bound_can_be_restarted_again() {
-    let (_dir, state, record) = setup(&on_break(STEP));
-    let host = FakeHost::new();
-    advance_ok(&state, &record.id, &host);
-    restart(&state, &record.id, None, &host).unwrap();
-    let mut pending = records::load(&state.workflow(&record.id)).unwrap();
-    pending.deadline = Some(jiff::Timestamp::now() - std::time::Duration::from_secs(2));
-    update(&state, &pending);
-    let broken = advance_ok(&state, &record.id, &host);
-    assert_eq!(broken.node, "@break");
-    assert_eq!(broken.input.as_ref().unwrap()["edge"], "deadline");
-    assert!(broken.restart.is_none(), "{broken:#?}");
-    restart(&state, &record.id, None, &host).unwrap();
-    assert_eq!(
-        advance_ok(&state, &record.id, &host).state,
-        RunState::Active
     );
 }
 

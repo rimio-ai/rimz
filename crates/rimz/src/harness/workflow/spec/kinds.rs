@@ -86,11 +86,13 @@ struct AgentNode {
 #[schemars(deny_unknown_fields)]
 struct AgentEdges {
     asked: Option<String>,
-    cap: Option<String>,
-    capacity: Option<String>,
-    invalid: Option<String>,
-    /// An ending that died, timed out, or was limited; without it, `then` takes it.
     failed: Option<String>,
+    died: Option<String>,
+    timeout: Option<String>,
+    limited: Option<String>,
+    visits: Option<String>,
+    capacity: Option<String>,
+    deadline: Option<String>,
 }
 
 /// What admits an agent node's start: its usage window, its checkout's occupants, its own
@@ -128,7 +130,7 @@ struct CommandNode {
     timeout: Option<String>,
     then: Option<String>,
     #[serde(default)]
-    on: CapEdges,
+    on: CommandEdges,
     #[schemars(range(min = 1))]
     max_visits: Option<u64>,
 }
@@ -136,8 +138,12 @@ struct CommandNode {
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
-struct CapEdges {
-    cap: Option<String>,
+struct CommandEdges {
+    failed: Option<String>,
+    died: Option<String>,
+    timeout: Option<String>,
+    visits: Option<String>,
+    deadline: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -160,8 +166,10 @@ struct MessageNode {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 struct MessageEdges {
-    cap: Option<String>,
+    failed: Option<String>,
     undelivered: Option<String>,
+    visits: Option<String>,
+    deadline: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -183,8 +191,10 @@ struct TestNode {
 struct TestEdges {
     pass: Option<String>,
     fail: Option<String>,
+    failed: Option<String>,
+    died: Option<String>,
     timeout: Option<String>,
-    invalid: Option<String>,
+    deadline: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -256,7 +266,8 @@ struct SleepNode {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 struct SleepEdges {
-    invalid: Option<String>,
+    failed: Option<String>,
+    deadline: Option<String>,
 }
 
 fn give_up<'de, D: serde::Deserializer<'de>>(
@@ -422,11 +433,15 @@ impl WorkflowFile {
                     subscribe: node.subscribe,
                     on: StepEdges {
                         asked: node.on.asked,
-                        cap: node.on.cap,
-                        capacity: node.on.capacity,
-                        invalid: node.on.invalid,
                         failed: node.on.failed,
-                        undelivered: None,
+                        causes: routes([
+                            ("died", node.on.died),
+                            ("timeout", node.on.timeout),
+                            ("limited", node.on.limited),
+                            ("visits", node.on.visits),
+                            ("capacity", node.on.capacity),
+                            ("deadline", node.on.deadline),
+                        ]),
                     },
                     max_visits: node.max_visits,
                     timeout: node.timeout,
@@ -457,7 +472,13 @@ impl WorkflowFile {
                     timeout: node.timeout,
                     then: node.then.into_iter().collect(),
                     on: StepEdges {
-                        cap: node.on.cap,
+                        failed: node.on.failed,
+                        causes: routes([
+                            ("died", node.on.died),
+                            ("timeout", node.on.timeout),
+                            ("visits", node.on.visits),
+                            ("deadline", node.on.deadline),
+                        ]),
                         ..StepEdges::default()
                     },
                     max_visits: node.max_visits,
@@ -476,8 +497,12 @@ impl WorkflowFile {
                     prompt_file: node.prompt_file,
                     session: node.session,
                     on: StepEdges {
-                        cap: node.on.cap,
-                        undelivered: node.on.undelivered,
+                        failed: node.on.failed,
+                        causes: routes([
+                            ("undelivered", node.on.undelivered),
+                            ("visits", node.on.visits),
+                            ("deadline", node.on.deadline),
+                        ]),
                         ..StepEdges::default()
                     },
                     max_visits: node.max_visits,
@@ -498,8 +523,10 @@ impl WorkflowFile {
                     on: routes([
                         ("pass", node.on.pass),
                         ("fail", node.on.fail),
+                        ("failed", node.on.failed),
+                        ("died", node.on.died),
                         ("timeout", node.on.timeout),
-                        ("invalid", node.on.invalid),
+                        ("deadline", node.on.deadline),
                     ]),
                     ..check(CheckTable::Test)
                 },
@@ -564,7 +591,7 @@ impl WorkflowFile {
                     hold: node.hold,
                     provider: node.provider,
                     account: node.account,
-                    on: routes([("invalid", node.on.invalid)]),
+                    on: routes([("failed", node.on.failed), ("deadline", node.on.deadline)]),
                     ..check(CheckTable::Sleep)
                 },
             );

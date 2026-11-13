@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, CheckKind, Invoke, Issue, RESERVED_OUTCOMES, StepKind, Wake, issue};
+use super::spec::{self, Cause, CheckKind, Invoke, Issue, StepKind, Wake, issue};
 use super::{Definition, Target};
 use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
@@ -55,7 +55,6 @@ pub fn validate(
             let path = match &err {
                 super::SpecErr::Toml { path, .. }
                 | super::SpecErr::ReservedTarget { path, .. }
-                | super::SpecErr::ReservedNode { path }
                 | super::SpecErr::DuplicateNode { path, .. } => path.as_str(),
                 _ => "workflow",
             };
@@ -105,16 +104,8 @@ pub(super) fn validate_spec(
             ),
         );
     }
-    if let Some(target) = &spec.authored().workflow.on.deadline {
-        report.target(spec, "workflow.on.deadline", target);
-    }
-    if let Some(spec::OnBreak::Target(target)) = &spec.authored().workflow.on_break
-        && !matches!(target.as_str(), "@done" | "@failed")
-    {
-        report.error(
-            "workflow.on-break",
-            "use @failed, @done, or { agent = \"<profile>\" }",
-        );
+    if let Some(target) = &spec.authored().workflow.on.failed {
+        report.failure_target(spec, "workflow.on.failed", target);
     }
     for (node, check) in &spec.authored().checks {
         let path = format!("{}.{node}", check.table.word());
@@ -222,12 +213,11 @@ pub(super) fn validate_spec(
             );
         }
         for (outcome, route) in &check.on {
-            report.target(spec, &format!("{path}.on.{outcome}"), route);
-            if outcome == "timeout" && route == "@wait" {
-                report.error(
-                    &format!("{path}.on.timeout"),
-                    "a timed-out check cannot wait on its expired timeout clock",
-                );
+            let path = format!("{path}.on.{outcome}");
+            if outcome == "failed" || Cause::parse(outcome).is_some() {
+                report.failure_target(spec, &path, route);
+            } else {
+                report.target(spec, &path, route);
             }
         }
         report.rows.push(NodeRow {
@@ -254,15 +244,8 @@ pub(super) fn validate_spec(
         });
     }
     for (node, step) in &spec.authored().steps {
-        let at_break = spec.is_break(node);
-        let path = if at_break {
-            "workflow.on-break".into()
-        } else {
-            format!("{}.{node}", step.table.word())
-        };
-        if !at_break {
-            report.node_name(&path, node);
-        }
+        let path = format!("{}.{node}", step.table.word());
+        report.node_name(&path, node);
         if step.kind().is_none() {
             report.error(&path, "set exactly one of run or shell");
         }
@@ -275,7 +258,7 @@ pub(super) fn validate_spec(
         {
             report.error(&format!("{path}.system-prompt-file"), error);
         }
-        if agent && !at_break && step.prompt_file.is_none() {
+        if agent && step.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
                 "an agent step requires prompt-file",
@@ -338,8 +321,7 @@ pub(super) fn validate_spec(
         }
         let ends_run = agent
             && matches!(step.then.as_slice(), [target] if matches!(target.as_str(), "@done" | "@failed"));
-        if !at_break
-            && !message
+        if !message
             && !ends_run
             && step
                 .then
@@ -379,39 +361,20 @@ pub(super) fn validate_spec(
                 }
             }
         }
-        if agent && let Some(target) = &step.on.capacity {
-            report.target(spec, &format!("{path}.on.capacity"), target);
-            if matches!(target.as_str(), "@user" | "@wait") {
-                report.error(
-                    &format!("{path}.on.capacity"),
-                    "capacity give-up cannot park or wait; use @failed, @done, or a node",
-                );
+        if let Some(target) = &step.on.asked {
+            report.target(spec, &format!("{path}.on.asked"), target);
+            if target == "@wait" {
+                report.error(&format!("{path}.on.asked"), "only checks can wait");
             }
         }
-        for (outcome, target) in [
-            ("asked", &step.on.asked),
-            ("cap", &step.on.cap),
-            ("failed", &step.on.failed),
-            ("invalid", &step.on.invalid),
-            ("undelivered", &step.on.undelivered),
-        ] {
-            if (matches!(outcome, "asked" | "failed" | "invalid") && !agent)
-                || (outcome == "undelivered" && !message)
-            {
-                continue;
-            }
-            if let Some(target) = target {
-                report.target(spec, &format!("{path}.on.{outcome}"), target);
-                if target == "@wait" {
-                    report.error(&format!("{path}.on.{outcome}"), "only checks can wait");
-                }
-                if outcome == "cap" && target == node {
-                    report.error(
-                        &format!("{path}.on.cap"),
-                        "a capped step cannot target itself",
-                    );
-                }
-            }
+        let failures = step.on.failed.iter().map(|target| ("failed", target));
+        for (outcome, target) in failures.chain(
+            step.on
+                .causes
+                .iter()
+                .map(|(cause, target)| (cause.as_str(), target)),
+        ) {
+            report.failure_target(spec, &format!("{path}.on.{outcome}"), target);
         }
         report.rows.push(NodeRow {
             workflow: name.into(),
@@ -433,32 +396,6 @@ pub(super) fn validate_spec(
             edges: spec.edges(node),
         });
     }
-    let missing = report
-        .rows
-        .iter()
-        .flat_map(|row| {
-            row.edges
-                .iter()
-                .filter(|edge| {
-                    edge.fires == super::Fireability::Yes
-                        && edge.source == EdgeSource::Default
-                        && matches!(
-                            edge.outcome.as_str(),
-                            "timeout" | "invalid" | "undelivered" | "cap" | "deadline"
-                        )
-                })
-                .map(move |edge| {
-                    if edge.outcome == "deadline" {
-                        "workflow.on.deadline".into()
-                    } else {
-                        format!("{}.{}.on.{}", row.kind, row.node, edge.outcome)
-                    }
-                })
-        })
-        .collect::<BTreeSet<_>>();
-    for path in missing {
-        report.error(&path, "a fireable failure edge needs a route; route it to a node, @done, or @failed, or set [workflow] on-break");
-    }
     if !crate::config::MachineConfig::load_lenient()
         .resume
         .auto_continue
@@ -476,15 +413,11 @@ pub(super) fn validate_spec(
                     })
                     .is_some_and(|profile| profile.kind.as_str() == "codex")
                 {
-                    "auto-continue is off; a failed Codex judge retries once, then follows on.invalid"
+                    "auto-continue is off; a failed Codex judge retries once, then fails invalid"
                 } else {
                     "auto-continue is off; a provider limit mid-attempt ends the attempt as limited"
                 };
-                let path = if spec.is_break(&row.node) {
-                    "workflow.on-break".into()
-                } else {
-                    format!("{}.{}", row.kind, row.node)
-                };
+                let path = format!("{}.{}", row.kind, row.node);
                 report.warnings.push(issue(&path, message));
             }
         }
@@ -524,6 +457,7 @@ pub(super) fn validate_spec(
             );
         }
     }
+    returning_failures(&mut report, spec);
     for issue in report.errors.iter_mut().chain(&mut report.warnings) {
         issue.message = format!("{name}: {}", issue.message);
     }
@@ -654,12 +588,14 @@ impl Validation {
             .chain(check.else_outcome.as_deref())
             .collect::<BTreeSet<_>>();
         for outcome in check.on.keys() {
-            let engine = RESERVED_OUTCOMES.contains(&outcome.as_str())
-                && !matches!(outcome.as_str(), "timeout" | "invalid")
-                && !(condition && outcome == "unknown");
+            let raised = outcome == "failed"
+                || Cause::parse(outcome)
+                    .is_some_and(|cause| Cause::raised_by(check.table.word()).contains(&cause));
+            let engine = spec::reserved(outcome) && !raised && !(condition && outcome == "unknown");
             let dead = condition
                 && !outcomes.contains(outcome.as_str())
-                && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid");
+                && !raised
+                && outcome != "unknown";
             if engine || dead {
                 self.error(
                     &format!("{path}.on.{outcome}"),
@@ -793,7 +729,7 @@ impl Validation {
     fn condition_fields(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
         let mut outcomes = BTreeSet::new();
         if let Some(outcome) = &check.else_outcome {
-            if RESERVED_OUTCOMES.contains(&outcome.as_str()) {
+            if spec::reserved(outcome) {
                 self.error(&format!("{path}.else"), "choose a non-reserved outcome");
             }
             outcomes.insert(outcome.as_str());
@@ -803,7 +739,7 @@ impl Validation {
         for (index, case) in check.cases.iter().enumerate() {
             let case_path = format!("{path}.cases.{index}");
             outcomes.insert(case.outcome.as_str());
-            if RESERVED_OUTCOMES.contains(&case.outcome.as_str()) {
+            if spec::reserved(&case.outcome) {
                 self.error(
                     &format!("{case_path}.outcome"),
                     "choose a non-reserved outcome",
@@ -887,6 +823,17 @@ impl Validation {
         {
             self.error(path, format!("unknown target {target}"));
         }
+    }
+
+    fn failure_target(&mut self, spec: &Definition, path: &str, target: &str) {
+        if target == "@wait" {
+            self.error(
+                path,
+                "a failure route cannot wait; route it to a node, @done, or @failed",
+            );
+            return;
+        }
+        self.target(spec, path, target);
     }
 
     fn agent_fields(
@@ -1010,6 +957,78 @@ fn do_background(agent: Option<&str>, definitions: &LoadedDefinitions) -> Option
             .concern_coverage(crate::agents::IntegrationConcern::BackgroundParking)
             .is_wired(),
     )
+}
+
+/// R10: a node's resolved `visits` or `capacity` route must not lead the run back to it, since
+/// neither failure counts a visit and the run would come back to the same failure.
+fn returning_failures(report: &mut Validation, spec: &Definition) {
+    let tables = spec
+        .authored()
+        .steps
+        .iter()
+        .map(|(node, step)| (node, step.table.word()))
+        .chain(
+            spec.authored()
+                .checks
+                .iter()
+                .map(|(node, check)| (node, check.table.word())),
+        );
+    let mut refused = BTreeSet::new();
+    for (node, table) in tables {
+        for cause in [Cause::Visits, Cause::Capacity] {
+            let fires = spec.edges(node).iter().any(|edge| {
+                edge.outcome == cause.word() && edge.fires != super::Fireability::Never
+            });
+            if !Cause::raised_by(table).contains(&cause) || !fires {
+                continue;
+            }
+            let (target, source) = spec.failure_route(node, cause);
+            let Some(start) = target.node() else {
+                continue;
+            };
+            if !reaches(spec, start, node) {
+                continue;
+            }
+            let path = match source {
+                EdgeSource::WorkflowFailed => "workflow.on.failed".to_owned(),
+                EdgeSource::NodeFailed => format!("{table}.{node}.on.failed"),
+                _ => format!("{table}.{node}.on.{}", cause.word()),
+            };
+            if refused.insert(path.clone()) {
+                report.error(
+                    &path,
+                    format!(
+                        "the {} route out of {node} leads back to {node}; it counts no visit, so route it where the run cannot return",
+                        cause.word()
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Whether some fireable route from `from` leads to `to`. A `deadline` route is not followed:
+/// it fires once per deadline grant, so a return through it is bounded.
+fn reaches(spec: &Definition, from: &str, to: &str) -> bool {
+    let mut pending = vec![from.to_owned()];
+    let mut seen = BTreeSet::new();
+    while let Some(node) = pending.pop() {
+        if node == to {
+            return true;
+        }
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        for edge in spec.resolved_edges(&node).unwrap_or_default() {
+            if edge.outcome == "deadline" || edge.fires == super::Fireability::Never {
+                continue;
+            }
+            if let Some(target) = edge.target.node() {
+                pending.push(target.to_owned());
+            }
+        }
+    }
+    false
 }
 
 fn cycles_to(spec: &Definition, start: &str, allowed: impl Fn(&str) -> bool) -> bool {

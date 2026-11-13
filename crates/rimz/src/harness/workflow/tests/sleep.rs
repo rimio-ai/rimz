@@ -5,7 +5,8 @@ use crate::store::workflow::{self as records, JournalEvent, Key, RunRecord, RunS
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-const SLEEP: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n[sleep.cooldown]\nsleep='30m'\nthen='@done'\n";
+const SLEEP: &str =
+    "[workflow]\nscope='worktree'\nstart='cooldown'\n[sleep.cooldown]\nsleep='30m'\nthen='@done'\n";
 
 fn update(state: &StatePaths, record: &RunRecord) {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
@@ -96,7 +97,7 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
         brief.contains("slept at") && !brief.contains("answered `then`"),
         "{brief}"
     );
-    let text = text.replace("start='cooldown'", "start='cooldown'\non.deadline='build'");
+    let text = text.replace("start='cooldown'", "start='cooldown'\non.failed='build'");
     let (_dir, state, record) = attempts::setup(&text);
     let spec = load(&state.workflow(&record.id).home).unwrap();
     let mut waiting = advance_sleep(&state, &record);
@@ -114,7 +115,7 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
 }
 
 #[test]
-fn sleep_deadline_clamps_the_wake_and_fails_without_replacing_input() {
+fn sleep_deadline_clamps_the_wake_and_fails_with_the_failure_input() {
     let (_dir, state, mut record) = attempts::setup(SLEEP);
     record.input = Some(json!({"outcome":"repair", "key":7}));
     record.key = Some(Key::Integer(7));
@@ -126,7 +127,12 @@ fn sleep_deadline_clamps_the_wake_and_fails_without_replacing_input() {
     update(&state, &waiting);
     let failed = advance_sleep(&state, &record);
     assert_eq!(failed.state, RunState::Failed);
-    assert_eq!((&failed.input, &failed.key), (&record.input, &record.key));
+    let input = failed.input.unwrap();
+    assert_eq!(
+        (&input["cause"], &input["node"], &input["key"]),
+        (&json!("deadline"), &json!("cooldown"), &json!(7))
+    );
+    assert_eq!(failed.key, record.key);
 }
 
 #[test]
@@ -304,8 +310,7 @@ fn sleep_validation_accepts_plain_conditional_and_polling_cycles_with_explicit_t
         [
             ("then", "poll", EdgeSource::Explicit),
             ("sleeping", "@wait", EdgeSource::Default),
-            ("invalid", "@failed", EdgeSource::OnBreak),
-            ("deadline", "@failed", EdgeSource::OnBreak),
+            ("deadline", "@failed", EdgeSource::Default),
         ]
     );
 }
@@ -386,7 +391,7 @@ fn sleep_derives_the_same_subscriptions_and_forge_demand_as_a_condition() {
     .map(|term| {
         let sleep: Definition = toml::from_str(&format!("{SLEEP}when=['{term}']\n")).unwrap();
         let condition: Definition = toml::from_str(&format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n\
+            "[workflow]\nscope='worktree'\nstart='cooldown'\n\
              [condition.cooldown]\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
         ))
         .unwrap();

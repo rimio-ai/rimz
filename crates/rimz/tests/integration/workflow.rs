@@ -35,7 +35,7 @@ fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     (env, dir)
 }
 
-const HEADER: &str = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n";
+const HEADER: &str = "[workflow]\nscope = 'worktree'\nstart = 'pr'\n";
 const WAIT: &str = "[script.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = '@done' }\ntimeout = '1h'\n";
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
 
@@ -480,11 +480,6 @@ fn workflow_accounting_tracks_routes_and_terminal_states() {
 #[test]
 fn workflow_accounting_counts_check_canceled_as_a_route() {
     check_outcome_route_is_accounted("canceled");
-}
-
-#[test]
-fn workflow_accounting_counts_check_limited_as_a_route() {
-    check_outcome_route_is_accounted("limited");
 }
 
 fn check_outcome_route_is_accounted(outcome: &str) {
@@ -1262,7 +1257,7 @@ fn sealed_scripts_keep_their_executable_bit() {
 }
 
 #[test]
-fn malformed_and_unrouted_objects_are_invalid() {
+fn malformed_and_unrouted_objects_are_invalid_and_a_failed_exit_dies() {
     let bodies = [
         "exit 3",
         "printf nope",
@@ -1275,30 +1270,37 @@ fn malformed_and_unrouted_objects_are_invalid() {
     ];
     for body in bodies {
         let spec = format!(
-            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ ok = '@done', invalid = 'report' }}\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ ok = '@done', invalid = 'report', died = 'report' }}\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
         );
         let (env, dir) = fixture(&spec, body);
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
         let id = start(&env);
         let value = settled(&env, &id, "done");
-        assert_eq!(context(&value)["input"]["outcome"], "invalid", "{body}");
-        assert_eq!(events(&value, "route")[0]["outcome"], "invalid");
-        assert_eq!(events(&value, "evaluation")[0]["outcome"], "invalid");
+        let cause = if body == "exit 3" { "died" } else { "invalid" };
+        let input = &context(&value)["input"];
+        assert_eq!(input["cause"], cause, "{body}");
+        let code = if body == "exit 3" { 3 } else { 0 };
+        assert_eq!(input["detail"]["code"], code, "{body}: {input:#}");
+        assert!(
+            input["detail"]["log"]
+                .as_str()
+                .is_some_and(|log| moved(log).is_file()),
+            "{body}: {input:#}"
+        );
+        assert_eq!(events(&value, "route")[0]["outcome"], cause);
+        assert_eq!(events(&value, "evaluation")[0]["outcome"], cause);
     }
 }
 
 #[test]
-fn invalid_defaults_fail_and_deleted_script_is_invalid() {
+fn a_deleted_script_dies_and_fails_the_run() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     fs::remove_file(sealed(&env, &id).join("checks/pr.sh")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     let value = settled(&env, &id, "failed");
-    assert_eq!(
-        events(&value, "route").last().unwrap()["outcome"],
-        "invalid"
-    );
+    assert_eq!(events(&value, "route").last().unwrap()["outcome"], "died");
     assert!(
         events(&value, "evaluation").last().unwrap()["object"]["reason"]
             .as_str()
@@ -1342,8 +1344,11 @@ fn steps_spec(cap: &str) -> String {
 }
 
 #[test]
-fn cap_only_self_cycle_is_refused_before_launch() {
-    let (env, dir) = fixture(&steps_spec("on.cap = 'build'"), &evaluation_script("work"));
+fn visits_only_self_cycle_is_refused_before_launch() {
+    let (env, dir) = fixture(
+        &steps_spec("on.visits = 'build'"),
+        &evaluation_script("work"),
+    );
     let output = env
         .rimz()
         .args(["workflow", "run", "review"])
@@ -1352,23 +1357,27 @@ fn cap_only_self_cycle_is_refused_before_launch() {
     assert_eq!(
         output.status.code(),
         Some(1),
-        "a cap self-cycle must be refused before launch"
+        "a visits self-cycle must be refused before launch"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("agent.build.on.cap"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("agent.build.on.visits"));
     assert!(dir.exists());
 }
 
 #[test]
 fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
-        "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[script.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
+        "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.failed = 'report'\n{WAIT}[script.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
     );
     let (env, _) = fixture(&spec, PENDING);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     assert_eq!(
         context(&value)["input"],
-        json!({"outcome":"deadline","deadline":"2000-01-01T00:00:00Z"})
+        json!({
+            "outcome":"failed", "cause":"deadline", "node":"pr",
+            "reason":"the run's deadline 2000-01-01T00:00:00Z passed",
+            "detail":{"deadline":"2000-01-01T00:00:00Z"}
+        })
     );
     success(command(&env, &["workflow", "advance", &id]));
     assert_eq!(events(&show(&env, &id), "route").len(), 1);
@@ -1435,7 +1444,10 @@ fn timeout_kills_script_and_routes_or_fails() {
         };
         assert_eq!(
             input,
-            json!({"outcome":"timeout","node":"pr","timeout":"1h"})
+            json!({
+                "outcome":"failed", "cause":"timeout", "node":"pr",
+                "reason":"pr ran past its timeout 1h", "detail":{}
+            })
         );
         let evaluations = events(&value, "evaluation");
         assert!(
@@ -1447,7 +1459,13 @@ fn timeout_kills_script_and_routes_or_fails() {
         assert!(!rimz::proc::process_is_live(pid, None));
         let history = success(command(&env, &["workflow", "show", &id, "--history"]));
         assert!(history.contains("pr said nothing · timeout\n"), "{history}");
-        assert!(history.contains("pr route timeout →"), "{history}");
+        let target = if edge.is_empty() { "@failed" } else { "report" };
+        assert!(
+            history.contains(&format!(
+                "pr route timeout → {target} · reason=pr ran past its timeout 1h\n"
+            )),
+            "{history}"
+        );
     }
 }
 
@@ -1506,7 +1524,7 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
     let value = show(&env, &id);
     assert_eq!(value["record"]["state"], "failed");
     assert_eq!(events(&value, "route")[0]["outcome"], "timeout");
-    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\n[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\non.deadline = 'report'\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
     let (env, dir) = fixture(spec, "exec sleep 60");
     fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
     let id = start(&env);
@@ -1525,7 +1543,7 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
         ],
     ));
     let value = settled(&env, &id, "done");
-    assert_eq!(context(&value)["input"]["outcome"], "deadline");
+    assert_eq!(context(&value)["input"]["cause"], "deadline");
     assert_eq!(events(&value, "route").len(), 1);
 }
 
@@ -1650,7 +1668,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
     use std::io::Write;
     use std::os::unix::net::UnixListener;
 
-    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'pr'\n[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\n[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\non.deadline = 'pr'\n";
     let (env, _) = fixture(
         spec,
         "while ! test -f \"$RIMZ_WORKFLOW_DIR/consume\"; do sleep 0.01; done\ndd if=\"$RIMZ_WORKFLOW_DIR/context.json\" of=\"$RIMZ_WORKFLOW_DIR/consumed.tmp\" 2>/dev/null\nmv \"$RIMZ_WORKFLOW_DIR/consumed.tmp\" \"$RIMZ_WORKFLOW_DIR/consumed.json\"\nexec sleep 60",
@@ -2068,7 +2086,7 @@ fn validate_json_shape_errors_and_exit_status() {
     let env = Env::new();
     let dir = env.rimz_home().join("workflows/review");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = 'missing'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = 'missing'\n").unwrap();
     let output = env
         .rimz()
         .args(["workflow", "validate", "--json"])
@@ -2088,9 +2106,10 @@ fn validate_json_shape_errors_and_exit_status() {
             "workflow": "review", "node": "pr", "kind": "script", "runner": "run", "run": "true", "shell": null, "agent": null, "message": null, "summary": null, "do_background": false,
             "edges": [
                 {"outcome":"ok", "target":"missing", "source":"explicit", "fires":"yes"},
-                {"outcome":"timeout", "target":"@failed", "source":"on-break", "fires":"never", "because":"no-timeout"},
-                {"outcome":"invalid", "target":"@failed", "source":"on-break", "fires":"yes"},
-                {"outcome":"deadline", "target":"@failed", "source":"on-break", "fires":"with-deadline"}
+                {"outcome":"died", "target":"@failed", "source":"default", "fires":"yes"},
+                {"outcome":"invalid", "target":"@failed", "source":"default", "fires":"yes"},
+                {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"never", "because":"no-timeout"},
+                {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
             ]
         }])
     );
@@ -2102,7 +2121,7 @@ fn validate_json_shape_errors_and_exit_status() {
             .unwrap()
             .contains("pr")
     );
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = '@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = '@done'\n").unwrap();
     assert!(
         env.rimz()
             .args(["workflow", "validate"])
@@ -2162,9 +2181,9 @@ fn validate_json_shape_errors_and_exit_status() {
                 "edges":[
                     {"outcome":"fail", "target":"@failed", "source":"explicit", "fires":"yes"},
                     {"outcome":"pass", "target":"@done", "source":"explicit", "fires":"yes"},
-                    {"outcome":"timeout", "target":"@failed", "source":"on-break", "fires":"never", "because":"no-timeout"},
-                    {"outcome":"invalid", "target":"@failed", "source":"on-break", "fires":"yes"},
-                    {"outcome":"deadline", "target":"@failed", "source":"on-break", "fires":"with-deadline"}
+                    {"outcome":"died", "target":"@failed", "source":"default", "fires":"yes"},
+                    {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"never", "because":"no-timeout"},
+                    {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
                 ]
             }]
         })
@@ -2172,11 +2191,11 @@ fn validate_json_shape_errors_and_exit_status() {
     let text = success(command(&env, &["workflow", "validate"]));
     assert!(text.contains("printf shell"), "{text}");
     assert!(
-        text.contains("timeout → @failed (on-break, never: no timeout)"),
+        text.contains("timeout → @failed (default, never: no timeout)"),
         "{text}"
     );
     assert!(
-        text.contains("deadline → @failed (on-break, only with a deadline)"),
+        text.contains("deadline → @failed (default, only with a deadline)"),
         "{text}"
     );
     for runner in ["run", "shell"] {
@@ -2202,8 +2221,10 @@ fn validate_json_shape_errors_and_exit_status() {
                 "agent":null, "message":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"then", "target":"pr", "source":"explicit", "fires":"yes"},
-                    {"outcome":"cap", "target":"@failed", "source":"on-break", "fires":"yes"},
-                    {"outcome":"deadline", "target":"@failed", "source":"on-break", "fires":"with-deadline"}
+                    {"outcome":"died", "target":"@failed", "source":"default", "fires":"yes"},
+                    {"outcome":"timeout", "target":"@failed", "source":"default", "fires":"yes"},
+                    {"outcome":"visits", "target":"@failed", "source":"default", "fires":"yes"},
+                    {"outcome":"deadline", "target":"@failed", "source":"default", "fires":"with-deadline"}
                 ]
             })
         );
