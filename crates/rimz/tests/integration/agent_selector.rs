@@ -1014,3 +1014,31 @@ fn message_stdin_me_names_the_caller() {
     .collect::<Vec<_>>();
     assert_eq!(recipients, ["peer"]);
 }
+
+/// A stdin `@me` line from a caller RimZ cannot identify fails alone: every
+/// other line still gets the message, and a lone one sends nothing.
+#[test]
+fn message_stdin_me_from_no_agent_misses_alone() {
+    let env = seed_room();
+    let recipients = || {
+        let (live, history) = env.store().list_messages_and_history().expect("messages");
+        live.into_iter()
+            .chain(history)
+            .map(|record| record.agent_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let me_line =
+        "error @me: @me requires an agent RimZ can identify; run this command from an agent pane";
+    for (stdin, sent) in [("@me\n@seat-peer\n", ["peer"]), ("@me\n", ["peer"])] {
+        let out = rimz(&env, &["message", "-", "--all", "hi"], stdin);
+        assert_eq!(out.status.code(), Some(1), "{stdin:?}: {}", text(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line == me_line),
+            "{stdin:?}: {}",
+            text(&out)
+        );
+        assert_eq!(recipients(), sent, "{stdin:?}: {}", text(&out));
+    }
+}
