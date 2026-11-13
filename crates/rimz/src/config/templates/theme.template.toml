@@ -100,6 +100,7 @@
 # effect, and speed; omitted fields keep the built-in value. Colors are semantic
 # slots, palette roles, "clay", "#rrggbb", or a 0-255 color index.
 ## unread = "shimmer"
+## redeem_breath = true             # false holds the redeem-now credit marker still
 ## [theme.animations.thinking]
 ## frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 ## color = "clay"

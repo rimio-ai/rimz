@@ -9,7 +9,7 @@ use super::compose::lead_unread;
 use crate::theme::{GlyphSet, Palette};
 
 use super::theme::{Theme, tone_color};
-use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
+use crate::store::snapshot::{RedeemForecast, SidebarRow, SidebarSnapshot};
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
@@ -99,6 +99,7 @@ pub(super) fn animation_cadence(
     // quieted to `static`. The cockpit lead bucket pulses with it, so this one
     // condition covers both the row and its bucket.
     breath |= lead_unread_needs_motion(snapshot, animations);
+    breath |= animations.redeem_breathes() && redeem_marker_breathes(snapshot);
     if breath || animations.has_resting_motion() {
         AnimationCadence::Breath
     } else {
@@ -317,6 +318,28 @@ fn breath_unit(theta: f32) -> f32 {
     ((theta.sin().exp() - floor) / (std::f32::consts::E - floor)).clamp(0.0, 1.0)
 }
 
+/// One redeem-now breath, from `good` down to the body tone and back.
+const REDEEM_BREATH_MS: f32 = 3_500.0;
+
+/// Where the redeem-now glyph sits on the calm ramp at `phase`: full `good` at
+/// the cycle's start, easing to the body tone mid-cycle and back.
+pub(super) fn redeem_breath_amount(phase: u64, refresh_ms: u16) -> f32 {
+    let period = REDEEM_BREATH_MS / f32::from(refresh_ms.max(1));
+    1.0 - breath_unit(breath_theta(phase, period))
+}
+
+/// Whether a banked reset-credit marker breathes: a credit is worth redeeming
+/// now and an agent on that account is stopped on a limit.
+fn redeem_marker_breathes(snapshot: &SidebarSnapshot) -> bool {
+    snapshot.providers.iter().any(|panel| {
+        panel.redeem_forecast == Some(RedeemForecast::NowWaiting)
+            && panel
+                .reset_credits
+                .as_ref()
+                .is_some_and(|credits| credits.count > 0)
+    })
+}
+
 /// The 2-pole blink level for the unread attention signal: full on the first
 /// half of each cycle, off the second — a hard square swing between the resting
 /// tone and the bright crest, no easing between them. `period` is the age tempo
@@ -411,6 +434,7 @@ impl Animation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedAnimations {
     unread: UnreadEffect,
+    redeem_breath: bool,
     roles: [Animation; AnimationRole::COUNT],
 }
 
@@ -440,8 +464,21 @@ impl ResolvedAnimations {
         });
         Self {
             unread: config.unread.unwrap_or_default(),
+            redeem_breath: config.redeem_breath.unwrap_or(true),
             roles,
         }
+    }
+
+    /// The same animations on a terminal without colour, where the redeem-now
+    /// breath has no tone to move along and bold alone carries the state.
+    pub(super) fn without_color(mut self) -> Self {
+        self.redeem_breath = false;
+        self
+    }
+
+    /// Whether a redeem-now marker may breathe on this frame's theme.
+    pub(crate) fn redeem_breathes(&self) -> bool {
+        self.redeem_breath
     }
 
     pub(crate) fn role(&self, role: AnimationRole) -> &Animation {

@@ -1409,7 +1409,7 @@ fn is_unknown_get_shape(path: &[String]) -> bool {
             [root, child, role]
                 if root == "theme"
                     && child == "animations"
-                    && role != "unread"
+                    && !matches!(role.as_str(), "unread" | "redeem_breath")
                     && !is_animation_role(role)
         )
         || matches!(
@@ -1474,7 +1474,7 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         || matches!(path, [root, display, child] if root == "theme" && display == "display" && matches!(child.as_str(), "context_meter" | "budget_bar" | "highlight_steps" | "popup"))
         || matches!(path, [root, display, budget, child] if root == "theme" && display == "display" && budget == "budget_bar" && child == "burn_rate")
         || matches!(path, [root, child, _] if root == "theme" && matches!(child.as_str(), "colors" | "providers"))
-        || matches!(path, [root, child, role] if root == "theme" && child == "animations" && role != "unread")
+        || matches!(path, [root, child, role] if root == "theme" && child == "animations" && !matches!(role.as_str(), "unread" | "redeem_breath"))
         || matches!(
             path,
             [root, child, role, field]

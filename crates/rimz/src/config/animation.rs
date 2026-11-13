@@ -18,6 +18,11 @@ pub struct ThemeAnimationsConfig {
     /// the default shimmer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unread: Option<UnreadEffect>,
+    /// Whether the banked reset-credit marker's glyph breathes while a credit
+    /// is worth redeeming and an agent on that account is stopped on a limit.
+    /// Unset keeps it on; `false` holds the marker still.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redeem_breath: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<AnimationSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -445,6 +450,25 @@ mod tests {
         }
         assert_eq!(UnreadEffect::default(), UnreadEffect::Shimmer);
         assert_eq!(ThemeAnimationsConfig::default().unread, None);
+    }
+
+    #[test]
+    fn redeem_breath_is_an_optional_switch_that_defaults_on() {
+        assert_eq!(ThemeAnimationsConfig::default().redeem_breath, None);
+        let off: ThemeAnimationsConfig = toml::from_str("redeem_breath = false\n").expect("config");
+        assert_eq!(off.redeem_breath, Some(false));
+        assert!(!off.is_unset());
+        assert!(
+            toml::to_string(&off)
+                .expect("serialize")
+                .contains("redeem_breath = false")
+        );
+        assert!(
+            !toml::to_string(&ThemeAnimationsConfig::default())
+                .expect("serialize")
+                .contains("redeem_breath"),
+            "an unset switch is not written"
+        );
     }
 
     #[test]
