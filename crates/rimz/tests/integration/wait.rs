@@ -3731,11 +3731,17 @@ fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Co
             String::from_utf8_lossy(&output.stderr)
         );
         if trigger == "when" && index == 0 {
-            // First sight arms the condition; only a later tick fires it.
-            let messages = env.store().list_pending_messages().unwrap();
-            assert!(messages.is_empty(), "{messages:?}");
-            let rows = wait_instances(env).0;
-            assert_eq!(rows.keys().collect::<Vec<_>>(), [&name], "{rows:?}");
+            // First sight arms the condition; only a later tick fires it. The
+            // tick writes its plan before it spawns the detached runner, so
+            // the plan, not the runner's message or row, shows no fire.
+            let runtime = env.runtime_paths();
+            let stamps = rimz::harness::schedule::last_stamps(&runtime);
+            assert!(stamps.contains_key(&name), "{stamps:?}");
+            let conditions: serde_json::Value = std::fs::read(runtime.lane_path("loop-when.json"))
+                .map_or(serde_json::Value::Null, |bytes| {
+                    serde_json::from_slice(&bytes).unwrap()
+                });
+            assert_ne!(conditions[&name]["fired"], true, "{conditions}");
         }
     }
     name
