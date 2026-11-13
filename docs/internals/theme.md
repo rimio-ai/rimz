@@ -45,7 +45,7 @@ Each kind of change lands in one layer. A scheme switch replaces Layer 1, and a 
 | [`tone.rs`](../../crates/rimz/src/theme/tone.rs) | `Tone`, a resolved `Rgb` or `Indexed` color awaiting a renderer. |
 | [`oklab.rs`](../../crates/rimz/src/theme/oklab.rs) | Perceptual color math: `blend`, `lift_lightness`, `warm_toward`, `chromatic_distance`, and the gamut fit, plus WCAG contrast from linearized sRGB. |
 | [`glyphs.rs`](../../crates/rimz/src/theme/glyphs.rs) | The glyph catalog (one row per `GlyphRole`), `GlyphSet::resolve`, and the first-run Nerd Font probes. |
-| [`provider.rs`](../../crates/rimz/src/theme/provider.rs) | Provider display identity: name, emblem, emblem tints, and brand color. |
+| [`provider.rs`](../../crates/rimz/src/theme/provider.rs) | Provider display identity: name, emblem, emblem tints, brand color, and the pixel logo sources in tier order. |
 | [`identity.rs`](../../crates/rimz/src/theme/identity.rs) | `Identity`, the three scheme-independent tones: Claude clay (`#d97757`), dollar green (`#85bb65`), and Rimio amber (`#ffb454`) for RimZ wordmarks only. |
 | [`fmt.rs`](../../crates/rimz/src/theme/fmt.rs) | Renderer-independent value formats (see [Shared value formats](#shared-value-formats)). |
 
@@ -180,6 +180,8 @@ Tab and window names are the exception to configured glyphs. `crates/rimz/src/si
 - `product_name` replaces the name.
 - `color` replaces the brand and leaves the art and its tints intact.
 - `ascii_art` replaces the art and clears the tints, so the replacement paints in the single brand color.
+
+The pixel logo is resolved beside it, by `resolve_provider_logos(kind, styles)` in [`theme/provider.rs`](../../crates/rimz/src/theme/provider.rs): the sources to try in order, a non-empty `logo` file first, then the shipped SVG (`agents::shipped_logo`) unless a non-empty `ascii_art` is set. The renderer draws the first whose image is ready and falls back to the text emblem when none is, so an `ascii_art` override keeps the text emblem on the pixel path. `currentColor` in either SVG takes the resolved brand as a truecolor value, and the file's other colors are drawn as written ([pixel logos](./sidebar/pets.md#provider-logos)).
 
 An unregistered kind gets a title-cased name (`provider_title_case`) and `BrandColor::Indexed(244)`, a neutral grey. `resolve_provider_brand` returns the brand alone, without allocating the name or cloning emblem lines. Name, tab, and other color-only paths use it, and full dashboard panels use the whole identity.
 

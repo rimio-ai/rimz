@@ -135,6 +135,8 @@ pub(in crate::sidebar_pane) struct MeterPixels {
     /// protected until composition identifies the next visible set.
     visible: BTreeSet<u32>,
     next_index: u32,
+    /// The dashboard's provider logos, on their own ids in the same slot.
+    pub(in crate::sidebar_pane) logos: super::logo::LogoPixels,
 }
 
 impl MeterPixels {
@@ -145,6 +147,7 @@ impl MeterPixels {
             clock: 0,
             visible: BTreeSet::new(),
             next_index: 0,
+            logos: super::logo::LogoPixels::new(id_base),
         }
     }
 
@@ -195,6 +198,7 @@ impl MeterPixels {
     /// Replace the previous-frame protection set with ids referenced by the
     /// final viewport. This pass observes placeholders without rewriting them.
     pub(in crate::sidebar_pane) fn observe_visible(&mut self, lines: &[Line<'static>]) {
+        self.logos.observe_visible(lines);
         let interned = self
             .table
             .values()

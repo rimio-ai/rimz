@@ -868,6 +868,22 @@ A bar's filled part is the budget left, and the spent part is drawn one step qui
 
 Where the context meter paints in pixels ([theming: display](../guide/theme.md#display)), each bar is one continuous slanted pixel bar in the cells of its `▰▱` text bar: the budget left solid, the spent part a solid strip three quarters of the bar's height in the quieter tone, and the cut between them at the reading's whole percent, where the strip meets the fill's slanted edge, so a few percent spent is visible on a full bar. A spent bar is the whole strip in a dimmed red, quieter than a red fill, an unknown reading the whole strip in the quieter tone, and a full or `∞` bar solid. The text bar keeps its red `▱` track at 0 left. A model's `╱` tick is a slanted line at its exact percent and a `╎` ceiling a dashed upright mark, each in its text tick's color and drawn even where the text bar would let one cell hide the other. A bar the pixel path cannot match keeps the text bar in the same cells: a theme that overrides a mana glyph, a terminal without truecolor or `NO_COLOR`, and a frame with no free image id.
 
+### Provider logos
+
+On the same pixel path, each block draws its provider's logo in the emblem column instead of the text emblem: a square mark four rows tall, centred across the column and on the block's detail lines (the header when it holds the emblem column, the stats, and the budget rows). With an odd number of detail lines the mark sits half a row lower inside a five-row box. Where the box reaches past the details and the block has no blank line there, the block gains one, so a block can be a line taller than its text frame. The logo is the shipped mark, or the SVG `[theme.providers.<kind>] logo` names ([theming: provider logos](../guide/theme.md#provider-logos)); a mark without colors of its own takes the brand color. Below, `▒` marks the logo's image cells, and each `▰` bar stands for the pixel bar painted in its cells:
+
+```
+──────────────────────────────────────────────────────
+Claude v2.1.158 · Claude Max
+▒▒▒▒▒▒▒▒▒
+▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
+▒▒▒▒▒▒▒▒▒ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ↻  <reset>
+▒▒▒▒▒▒▒▒▒ 7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ↻  <reset>
+▒▒▒▒▒▒▒▒▒
+```
+
+Stacked blocks each draw their logo, tabs draw the active block's, and in pet mode the active block draws it beside the pet. A block keeps its text emblem off that path (no kitty graphics client, `pixel = "off"`, or a frame that holds no image slot), when its brand color does not resolve to truecolor (an indexed theme, `NO_COLOR`, or a brand with no truecolor value), when your theme overrides a mana glyph, and also when you set an `ascii_art` override and no `logo`, when the kind has no shipped logo (a plugin), when the pane is too narrow for the emblem column, while the logo is still loading, when your `logo` file cannot be used and there is no shipped one, and when every logo image id is taken. A sidebar drawn while it shows no image (a hidden tab's sidebar, or one the host has not yet seen on a client's screen) still lays out the rows a loaded logo takes and draws the text emblem in them, so the frame it shows matches the frame it draws once the logo appears.
+
 A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. An API-billed login never shows this alarm. The header uses the account's valid display label or its name (here `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
 
 ```
@@ -920,7 +936,7 @@ With `[theme.pets] enabled = true`, the active block narrows and an animated com
 
 The pipeline reserves the whole run total, then admits the first shape that fits: track, name, and stage time; track and name; name and stage time; or an ellipsized name. The team badge fits only beside a drawn track or an undeclared stage and drops first. Stage time can reappear after the dots drop; dropping a declared track never buys the team badge back. The name keeps two cells beside an admitted total, and neither duration nor track draws partially.
 
-As the pane narrows, a block drops the input and output token split, then the version text. Below 34 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
+As the pane narrows, a block drops the input and output token split, then the version text. Below 34 columns the provider emblem, or its logo, goes and the bars run the full width. A pet narrows the block further.
 
 ### The fleet store
 

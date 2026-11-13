@@ -7,6 +7,29 @@ use serde::{Deserialize, Serialize};
 
 const CATALOG_SOURCE: &str = include_str!("emblems.toml");
 
+/// The SVG mark shipped for each built-in kind, from `crates/rimz/logos/`.
+/// A mark with no colour of its own fills with `currentColor`.
+const SHIPPED_LOGOS: &[(&str, &str)] = &[
+    ("claude", include_str!("../../logos/claude.svg")),
+    ("codex", include_str!("../../logos/codex.svg")),
+    ("amp", include_str!("../../logos/amp.svg")),
+    ("copilot", include_str!("../../logos/copilot.svg")),
+    ("kimi", include_str!("../../logos/kimi.svg")),
+    ("pi", include_str!("../../logos/pi.svg")),
+    ("opencode", include_str!("../../logos/opencode.svg")),
+    ("antigravity", include_str!("../../logos/antigravity.svg")),
+    ("cursor", include_str!("../../logos/cursor.svg")),
+    ("droid", include_str!("../../logos/droid.svg")),
+    ("kiro", include_str!("../../logos/kiro.svg")),
+    ("qwen", include_str!("../../logos/qwen.svg")),
+    ("grok", include_str!("../../logos/grok.svg")),
+    ("hermes", include_str!("../../logos/hermes.svg")),
+    ("qoder", include_str!("../../logos/qoder.svg")),
+    ("omp", include_str!("../../logos/omp.svg")),
+    ("muse", include_str!("../../logos/muse.svg")),
+    ("minimax", include_str!("../../logos/minimax.svg")),
+];
+
 /// One tinted run inside an emblem: chars `[start, start + len)` of art row
 /// `row` paint in this tone instead of the provider's brand tone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +209,13 @@ pub(crate) fn emblem_for(kind: &str) -> Emblem {
         .unwrap_or_else(|| catalog().fallback[0].clone())
 }
 
+/// The SVG logo shipped for a built-in `kind`; plugin kinds have none.
+pub(crate) fn shipped_logo(kind: &str) -> Option<&'static str> {
+    SHIPPED_LOGOS
+        .iter()
+        .find_map(|(shipped, svg)| (*shipped == kind).then_some(*svg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +236,46 @@ mod tests {
             let art = art.expect("checked above");
             assert!(!art.lines.is_empty(), "{kind} emblem must not be empty");
             assert_ne!(art, fallback, "{kind} must have art of its own");
+        }
+    }
+
+    #[test]
+    fn every_provider_ships_a_logo_on_a_transparent_ground() {
+        for adapter in BUILTINS {
+            let kind = adapter.spec().kind;
+            let svg = shipped_logo(kind).unwrap_or_else(|| panic!("{kind} must ship a logo"));
+            let tree = crate::config::parse_logo_svg(svg.as_bytes(), [0x40, 0x80, 0xc0])
+                .unwrap_or_else(|err| panic!("{kind} logo must parse: {err}"));
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 64).expect("pixmap");
+            let size = tree.size();
+            let scale = (64.0 / size.width()).min(64.0 / size.height());
+            resvg::render(
+                &tree,
+                resvg::tiny_skia::Transform::from_scale(scale, scale),
+                &mut pixmap.as_mut(),
+            );
+            let alphas = pixmap.pixels().iter().map(|pixel| pixel.alpha());
+            let (opaque, clear) = alphas.fold((0, 0), |(opaque, clear), alpha| {
+                (
+                    opaque + usize::from(alpha > 0),
+                    clear + usize::from(alpha == 0),
+                )
+            });
+            assert!(
+                opaque > 64,
+                "{kind} logo must draw a mark: {opaque} painted pixels"
+            );
+            assert!(
+                clear > 64 * 64 / 8,
+                "{kind} logo must keep a transparent ground: {clear} clear pixels"
+            );
+            for corner in [0, 63, 64 * 63, 64 * 64 - 1] {
+                assert_eq!(
+                    pixmap.pixels()[corner].alpha(),
+                    0,
+                    "{kind} logo must not sit on a background tile"
+                );
+            }
         }
     }
 

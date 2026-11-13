@@ -654,6 +654,14 @@ const MANA_GLYPHS: [GlyphRole; 4] = [
 
 static PRESET_GLYPHS: LazyLock<GlyphSet> = LazyLock::new(GlyphSet::default);
 
+/// A user's own mana glyph: every budget bar of the frame keeps its text form,
+/// since the pixels would swap against it.
+pub(in crate::sidebar_pane::render) fn mana_glyphs_overridden(theme: &Theme) -> bool {
+    MANA_GLYPHS
+        .iter()
+        .any(|role| theme.glyph(*role) != PRESET_GLYPHS.glyph(*role))
+}
+
 /// A dashboard budget bar: the pixel twin of [`mana_bar_spans`] when the frame
 /// lends `pixels`, else the text bar in the same cells. `None` is an unknown
 /// reading, the twin of [`unknown_mana_bar_spans`].
@@ -689,11 +697,7 @@ fn pixel_budget_bar_spans(
     pixels: &mut MeterPixels,
 ) -> Option<Vec<Span<'static>>> {
     let width = width.max(1);
-    if !placeholder_columns_supported(width)
-        || MANA_GLYPHS
-            .iter()
-            .any(|role| theme.glyph(*role) != PRESET_GLYPHS.glyph(*role))
-    {
+    if !placeholder_columns_supported(width) || mana_glyphs_overridden(theme) {
         return None;
     }
     let tone = |remaining_pct| theme.pixel_rgb(mana_style(theme, remaining_pct, zones).fg?);

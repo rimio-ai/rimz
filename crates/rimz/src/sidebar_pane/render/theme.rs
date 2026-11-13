@@ -499,6 +499,11 @@ impl Theme {
         tone_color(resolve_provider_brand(kind, &self.provider_styles).tone(&self.palette))
     }
 
+    /// The provider's pixel logo sources, in tier order.
+    pub(crate) fn provider_logos(&self, kind: &str) -> Vec<crate::theme::ProviderLogo> {
+        crate::theme::resolve_provider_logos(kind, &self.provider_styles)
+    }
+
     /// The kind's product name, without the account a panel title appends.
     pub(crate) fn provider_product_name(&self, kind: &str) -> String {
         resolve_provider_identity(kind, &self.provider_styles).product_name

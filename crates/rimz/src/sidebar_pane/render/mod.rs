@@ -554,6 +554,14 @@ pub(in crate::sidebar_pane) fn animation_interval(
     let Some(theme) = ui.cached_theme(&snapshot.theme) else {
         return Some(base);
     };
+    // A logo mark rasterizing on its worker lands on the next frame drawn.
+    if ui
+        .meter_pixels
+        .as_ref()
+        .is_some_and(|pixels| pixels.logos.loading())
+    {
+        return Some(base);
+    }
     // A scrollbar fade needs the fast grid to read as motion; it is brief and
     // self-terminating, so the cost is bounded to the settle window. Continuous
     // row pulse rides the breath cadence below.

@@ -11,7 +11,7 @@ use crate::sidebar_pane::pixel::{
 };
 
 const _: () =
-    assert!(super::catalog::FRAME_COUNT <= crate::sidebar_pane::pixel::METER_ID_OFFSET as usize);
+    assert!(super::catalog::FRAME_COUNT <= crate::sidebar_pane::pixel::LOGO_ID_OFFSET as usize);
 
 /// Pet sprite indexes occupy the image IDs immediately above `id_base`.
 /// Other pixel surfaces reserve offsets outside the bounded sprite-sheet range.

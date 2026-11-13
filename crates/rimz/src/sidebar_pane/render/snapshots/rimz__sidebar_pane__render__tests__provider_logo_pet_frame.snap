@@ -1,0 +1,15 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+─── Claude ──── Claude ───────────────────────────────
+                                              ready
+▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
+▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k        $3.50
+▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPPPPPPP ↻  <reset>
+▒▒▒▒▒▒▒▒▒ 7d  PPPPPPPPPPPPPPPPPP ↻  <reset>
+
+ ── Total: ────────────────────────────── PPPPPPPPPPPP
+ W: ◎ 0                   ◇ 0 ↘ 0 ↗ 0 ◌ 0 PPPPPPPPPPPP
+ M: ◎ 0                   ◇ 0 ↘ 0 ↗ 0 ◌ 0 PPPPPPPPPPPP
+ W: $0.00                        M: $0.00

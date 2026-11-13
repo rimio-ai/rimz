@@ -99,8 +99,8 @@ use definition::{
     PresetMatchers, PromptStyle, SessionCommand, StaticPresetMatcher, program_names_kind,
 };
 pub use delegated_account::expects_usage_reading;
-pub(crate) use emblems::emblem_for;
 pub use emblems::{Emblem, EmblemTint};
+pub(crate) use emblems::{emblem_for, shipped_logo};
 pub use folder_trust::{
     FolderTrust, FolderTrustErr, FolderTrustGap, FolderTrustPreview, FolderTrustRow,
     folder_trust_rows, grant_folder_trust,

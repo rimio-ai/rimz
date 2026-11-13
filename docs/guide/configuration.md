@@ -1135,7 +1135,7 @@ An opt-in animated companion in the provider dashboard. Answering yes to the pet
 
 ### Sidebar bands
 
-The agent card's context meter and the provider budget bar interpolate across color stops you can tune, in `[theme.display.context_meter]` and `[theme.display.budget_bar]`. The context meter defaults to the provider-capped native compaction point when known, including Codex's own point when RimZ sets none and OpenCode's predicted default point; `scale = "window"` restores a window-scaled meter while keeping the published-capacity label ([meter settings](./theme.md#meter-color-stops)). `[theme.display] pixel` is the master kitty-graphics switch for pets, context meters, and provider budget bars, `auto` or `off`. The model, the terminal requirements, the fallbacks, and the shipped numbers are in [theme → display](./theme.md#display).
+The agent card's context meter and the provider budget bar interpolate across color stops you can tune, in `[theme.display.context_meter]` and `[theme.display.budget_bar]`. The context meter defaults to the provider-capped native compaction point when known, including Codex's own point when RimZ sets none and OpenCode's predicted default point; `scale = "window"` restores a window-scaled meter while keeping the published-capacity label ([meter settings](./theme.md#meter-color-stops)). `[theme.display] pixel` is the master kitty-graphics switch for pets, context meters, provider budget bars, and provider logos, `auto` or `off`. The model, the terminal requirements, the fallbacks, and the shipped numbers are in [theme → display](./theme.md#display).
 
 ### Provider dashboard
 

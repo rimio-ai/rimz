@@ -176,8 +176,8 @@ pub struct InlineAnsiColors {
     pub white: Option<String>,
 }
 
-/// Per-provider styling: the ASCII emblem and brand color for the bottom
-/// dashboard. Every field is optional; an omitted field uses the built-in
+/// Per-provider styling: the name, ASCII emblem, pixel logo and brand color for
+/// the bottom dashboard. Every field is optional; an omitted field uses the built-in
 /// default for the provider kind, so a user overrides just the art or just the
 /// color without restating both.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -189,6 +189,11 @@ pub struct ThemeProviderStyle {
     /// Multi-line ASCII emblem painted at the left of the provider block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ascii_art: Option<String>,
+    /// An SVG file drawn in the emblem's place where the sidebar paints
+    /// pixels. `~` expands to `HOME`; another relative path reads from the
+    /// sidebar's working directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
     /// Brand color for the emblem. Accepts a palette role, 256-color index, or
     /// `#rrggbb`.
     #[serde(skip_serializing_if = "Option::is_none")]

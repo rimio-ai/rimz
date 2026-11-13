@@ -510,6 +510,86 @@ fn broken_machine_files_reports_theme_without_failing_strict_load() {
 }
 
 #[test]
+fn broken_machine_files_keeps_each_unusable_provider_logo_and_loads_the_theme() {
+    let dir = tempdir().expect("tempdir");
+    let path = write(&dir, "");
+    let theme_path = dir.path().join(THEME_FILE);
+    let good = dir.path().join("good.svg");
+    std::fs::write(
+        &good,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><rect width="4" height="4" fill="currentColor"/></svg>"#,
+    )
+    .unwrap();
+    let invalid = dir.path().join("invalid.svg");
+    std::fs::write(&invalid, "<svg").unwrap();
+    let huge = dir.path().join("huge.svg");
+    std::fs::write(&huge, vec![b' '; 300 * 1024]).unwrap();
+    let missing = dir.path().join("missing.svg");
+    let entries = [
+        ("amp", &good),
+        ("claude", &invalid),
+        ("codex", &huge),
+        ("grok", &missing),
+    ];
+    let text = entries
+        .iter()
+        .map(|(kind, logo)| format!("[theme.providers.{kind}]\nlogo = {:?}\n", logo.display()))
+        .collect::<String>()
+        + "[theme.providers.pi]\nlogo = \"\"\n";
+    std::fs::write(&theme_path, text).unwrap();
+    let files = MachineConfigFiles::from_paths(path.clone(), dir.path().join("agents-home"));
+
+    let errors = broken_machine_files_in(&files);
+
+    let messages = errors
+        .iter()
+        .map(|error| match error {
+            ConfigErr::Theme { path, message } if path == &theme_path => message.as_str(),
+            other => panic!("a logo problem is kept as a theme record: {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 3, "an empty logo is unset: {messages:?}");
+    for (kind, logo, cause) in [
+        ("claude", &invalid, "is not valid SVG"),
+        ("codex", &huge, "cap"),
+        ("grok", &missing, "reading provider logo"),
+    ] {
+        let message = messages
+            .iter()
+            .find(|message| message.contains(&logo.display().to_string()))
+            .unwrap_or_else(|| panic!("{kind}'s logo is kept: {messages:?}"));
+        assert!(message.contains(cause), "{message}");
+        assert!(
+            message.contains(&format!("as if `[theme.providers.{kind}] logo` were unset")),
+            "{message}"
+        );
+    }
+    let theme = load_no_fragments(&path).unwrap().theme;
+    assert_eq!(
+        theme.providers["claude"].logo.as_deref(),
+        Some(invalid.to_str().unwrap()),
+        "the room still loads the theme"
+    );
+}
+
+#[test]
+fn a_logo_path_that_is_not_a_regular_file_is_refused_before_it_is_opened() {
+    let dir = tempdir().expect("tempdir");
+    let fifo = dir.path().join("logo.svg");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).expect("mkfifo");
+    let raw = fifo.display().to_string();
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sent.send(read_logo_file(&raw)));
+
+    let read = received
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("a FIFO with no writer does not block the read");
+
+    let error = read.expect_err("a FIFO is no logo");
+    assert!(error.contains("not a regular file"), "{error}");
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().unwrap();
     let path = write(&dir, "not = = toml");
