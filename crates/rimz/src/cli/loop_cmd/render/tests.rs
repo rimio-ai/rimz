@@ -13,8 +13,10 @@ fn write_agent_runs(
     super::write_agent_runs(out, records, &collapsed_run_rows(records), now)
 }
 
+/// `has_active_run` is a run that holds the run lock.
 fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
-    super::stale_clause(records, &refused_fire_attribution(records), has_active_run)
+    let holder = has_active_run.then_some(InProgress::Locked(()));
+    super::stale_clause(records, &refused_fire_attribution(records), holder.as_ref())
 }
 
 fn write_runs_table(
@@ -3804,6 +3806,33 @@ fn stale_tail_names_row_counts_and_counts_only_rowless_fires_while_running() {
 }
 
 #[test]
+fn a_fire_skipped_behind_a_lock_free_run_names_no_lock() {
+    let holder = task_run("active", "c", "gate", 20);
+    let mut refused = scheduled(30, LoopRunResult::Overlapped);
+    refused.blocking_run = Some(holder.id.clone());
+    let records = [scheduled(10, LoopRunResult::Failed), refused];
+    let verdict = |in_progress: InProgress<InFlightRun>| {
+        let mut out = Vec::new();
+        let now = Timestamp::from_second(100).unwrap();
+        let attribution = refused_fire_attribution(&records);
+        write_verdict(&mut out, &records, &attribution, Some(&in_progress), now).unwrap();
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+    };
+    let since = Timestamp::from_second(20).unwrap();
+    for executing in [true, false] {
+        assert_eq!(
+            verdict(InProgress::Run { since, executing }),
+            "  ✗ last finished run 1m ago, failed · 1 fire skipped while a run is in progress\n",
+            "executing: {executing}"
+        );
+    }
+    assert_eq!(
+        stale_clause(&records, true).as_deref(),
+        Some("1 fire skipped while the active run holds the lock")
+    );
+}
+
+#[test]
 fn show_verdict_names_a_gate_rows_refused_fire_without_recounting_it() {
     let holder = run_lock_info(11, 15);
     let mut completed = scheduled(10, LoopRunResult::Completed);
@@ -3817,7 +3846,7 @@ fn show_verdict_names_a_gate_rows_refused_fire_without_recounting_it() {
         &mut out,
         &records,
         &refused_fire_attribution(&records),
-        false,
+        None,
         now,
     )
     .unwrap();
