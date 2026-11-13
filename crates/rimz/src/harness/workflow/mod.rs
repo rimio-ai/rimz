@@ -283,6 +283,26 @@ fn leader_turn(
     Ok(Some(turn))
 }
 
+/// Whether the leader of the session run `session` exited at rest, read at `now` while the
+/// caller holds the workspace lock. It reads the row's turn stamps (a turn was opened) and its
+/// rest states ([`rests`](super::idle_stop::rests): no ask, budget park, compaction, busy or
+/// parked turn, or background shell), an end stamped since aside. It leaves out the rest
+/// check's other gates in [`leader_turn`], an owed message or running child and a pending
+/// ingress frame, so a session that exits at a clean rest while it owes a message or a child's
+/// result ended cleanly. A session the snapshot has no row for ended at rest, since nothing
+/// shows it was not.
+pub(super) fn exited_at_rest(
+    store: &Store,
+    session: &crate::store::run::RunRecord,
+    now: jiff::Timestamp,
+) -> Result<bool, StoreErr> {
+    let snapshot = store.snapshot_cached()?;
+    let Some(leader) = observe::leader(&snapshot, session) else {
+        return Ok(true);
+    };
+    Ok(leader.turn_started_at.is_some() && super::idle_stop::rests(leader, now).is_ok())
+}
+
 pub struct LaunchFailure {
     pub outcome: AttemptOutcome,
     pub reason: String,

@@ -78,6 +78,12 @@ pub(super) fn resting(agent: &AgentState, now: Timestamp) -> Result<(), Hold> {
     if agent.ended_at.is_some() {
         return Err(Hold::Ended);
     }
+    rests(agent, now)
+}
+
+/// [`resting`] apart from the session's end: a session whose provider just exited reads its
+/// rest from these terms, whatever end has been stamped since.
+pub(super) fn rests(agent: &AgentState, now: Timestamp) -> Result<(), Hold> {
     if agent.is_provider_subagent() {
         return Err(Hold::ProviderSubagent);
     }

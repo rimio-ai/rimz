@@ -83,8 +83,13 @@ const AGENT: &str = "[workflow]\nscope='worktree'\nstart='build'\n\
 
 #[test]
 fn a_died_agent_takes_the_nearest_route_of_the_chain_and_never_then() {
-    for levels in [3, 2, 1, 0] {
-        let text = chained(AGENT, "build", "died", levels);
+    // A session's supervised run settles failed when its provider exits away from rest.
+    for (lifecycle, levels) in ["turn", "session"]
+        .into_iter()
+        .flat_map(|lifecycle| [3, 2, 1, 0].map(|levels| (lifecycle, levels)))
+    {
+        let agent = AGENT.replace("lifecycle='turn'", &format!("lifecycle='{lifecycle}'"));
+        let text = chained(&agent, "build", "died", levels);
         let (_dir, state, record) = keyed(&text);
         let host = FakeHost::new();
         advanced(&state, &record.id, &host);
