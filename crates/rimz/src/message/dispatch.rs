@@ -456,7 +456,7 @@ impl ResolvedTarget {
     fn bound<'a>(&self, snapshot: &'a SidebarSnapshot) -> Option<&'a AgentState> {
         self.pane
             .as_ref()
-            .and_then(|pane| crate::address::pane_binding(snapshot, pane, None))
+            .and_then(|pane| crate::address::pane_binding(snapshot, pane))
             .and_then(|binding| binding.exact_agent)
     }
 }
@@ -622,7 +622,7 @@ impl ResolutionView<'_> {
                 .enumerate()
                 .find(|(index, pane)| {
                     !used_panes[*index]
-                        && crate::address::pane_binding(self.snapshot, pane, None)
+                        && crate::address::pane_binding(self.snapshot, pane)
                             .is_some_and(|binding| binding.matches_agent(agent))
                 })
                 .map(|(index, _)| index);
@@ -639,7 +639,7 @@ impl ResolutionView<'_> {
             if used_panes[index] {
                 continue;
             }
-            let binding = crate::address::pane_binding(self.snapshot, pane, None);
+            let binding = crate::address::pane_binding(self.snapshot, pane);
             targets.push(ResolvedTarget {
                 pane: Some(pane.clone()),
                 agent: binding.and_then(|binding| binding.agent).cloned(),

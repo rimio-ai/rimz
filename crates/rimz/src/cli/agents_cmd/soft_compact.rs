@@ -48,18 +48,18 @@ pub(super) fn run(request: SoftCompactRequest) -> Result<()> {
             SoftCompactStep::WrapUp => DeliveryGate::Any,
             SoftCompactStep::Continue => DeliveryGate::Done,
         },
-        pane_id: Some(request.pane_id),
     }
     .record(&ctx.workspace)
     .with_automated(request.step == SoftCompactStep::WrapUp);
     message.soft_compact = Some(request.step);
     if request.step == SoftCompactStep::Continue {
         message.auto_compact = threshold;
-        return soft_compact::send_continue(&ctx.workspace, &ctx.store, &message)
+        return soft_compact::send_continue(&ctx.workspace, &ctx.store, &message, &request.pane_id)
             .context("sending soft-compaction continue");
     }
     let threshold = threshold.context("soft-compaction wrap-up has no threshold")?;
-    let outcome = soft_compact::send_wrap_up(&ctx.workspace, &ctx.store, &message);
+    let outcome =
+        soft_compact::send_wrap_up(&ctx.workspace, &ctx.store, &message, &request.pane_id);
     let error = match &outcome {
         Ok(WrapUpOutcome::Sent) => None,
         Ok(WrapUpOutcome::Missed(reason)) => Some(reason.clone()),

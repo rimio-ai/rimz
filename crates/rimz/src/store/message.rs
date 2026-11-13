@@ -532,6 +532,9 @@ pub struct MessageRecord {
     /// boundary.
     #[serde(default)]
     pub force: bool,
+    /// The pane this claim writes to: stamped at claim, then kept as history on `Sent` and on an
+    /// `Errored` record that a failed write ended. A `Queued` record carries none, so each attempt
+    /// writes to the pane its card holds then; delivery ignores one an older record still carries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
     pub status: MessageStatus,

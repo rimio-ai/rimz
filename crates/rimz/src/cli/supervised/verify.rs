@@ -46,13 +46,13 @@ pub(super) fn deliver_reprompt(
         text,
         sender: MessageSender::System,
         gate: DeliveryGate::Any,
-        pane_id: Some(pane.pane_id),
     }
     .record(workspace);
     let delivered = synthetic::deliver_now(
         workspace,
         store,
         &message,
+        Some(&pane.pane_id),
         DeliveryFailureDisposition::Retry,
         "verify re-prompt delivery gate closed",
     )

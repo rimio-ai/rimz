@@ -91,6 +91,7 @@ impl Fixture {
             || Ok((self.agents.clone(), self.now)),
         )
         .unwrap()
+        .map(|(message, _)| message)
     }
 
     fn seed(&self, notice: Option<HarnessNotice>, status: MessageStatus, at: Timestamp) {

@@ -2142,78 +2142,152 @@ fn sweep_delivers_harness_wake_to_stamped_daemon_view_agent() {
 }
 
 #[test]
-fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
-    for pinned in [false, true] {
+fn sweep_delivers_queued_harness_records_to_the_agents_current_pane_in_order() {
+    // `true` stands for a record queued before this rule, which carries on disk
+    // the pane it was written for, and the blocker text that pane used to earn.
+    for stored_old_pane in [false, true] {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
         // Every rimz process here, hooks included, reaches the trace shim rather
-        // than a live multiplexer; the empty trace at the end proves none tried.
-        let trace_log = env.project_root.join("zellij-missing-pane-wake-trace.log");
+        // than a live multiplexer.
+        let trace_log = env.project_root.join("zellij-replaced-pane-trace.log");
         let shim = zellij_trace_shim();
-        let pane_env: &[(&str, &str)] = &[
-            ("ZELLIJ_PANE_ID", "3"),
-            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
-            (
-                "RIMZ_TEST_ZELLIJ_LOG",
-                trace_log.to_str().expect("trace path"),
-            ),
-        ];
-        register_running_agent(&env, "sess-missing-pane", "feature-missing-pane", pane_env);
-        // The wake is queued after Stop: a Stop with a queued head spawns a
-        // detached `message deliver` the test cannot await, which would race the sweep.
-        run_hook(
-            &env,
-            json!({
-                "hook_event_name": "Stop",
-                "session_id": "sess-missing-pane",
-                "worktree_branch": "feature-missing-pane",
-            }),
-            pane_env,
-        );
-        let pane_fixture = env.write_pane_fixture(&[]);
-        let snapshot = env.store().snapshot_cached().expect("snapshot");
-        let mut wake = MessageRecord::new(
-            env.workspace_id.clone(),
-            &snapshot.agents[0],
-            "wait finished".to_owned(),
-            DeliveryGate::Done,
-        )
-        .with_sender(MessageSender::Harness {
-            notice: HarnessNotice::Wait,
-        });
-        let blocker = if pinned {
-            wake = wake.with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
-            "stuck: pinned pane zellij:terminal_3 is not live"
-        } else {
-            "stuck: no live pane"
+        let pane_env = |pane: &'static str| -> Vec<(&'static str, String)> {
+            vec![
+                ("ZELLIJ_PANE_ID", pane.to_owned()),
+                ("RIMZ_ZELLIJ_BIN", shim.display().to_string()),
+                ("RIMZ_TEST_ZELLIJ_LOG", trace_log.display().to_string()),
+            ]
         };
-        env.store().queue_message(&wake, "rimz-test").unwrap();
+        let old_pane = pane_env("7");
+        let new_pane = pane_env("3");
+        let old_pane = as_env(&old_pane);
+        let new_pane = as_env(&new_pane);
+        let stop = json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-replaced-pane",
+            "worktree_branch": "feature-replaced-pane",
+        });
+        register_running_agent(
+            &env,
+            "sess-replaced-pane",
+            "feature-replaced-pane",
+            &old_pane,
+        );
+        run_hook(&env, stop.clone(), &old_pane);
+        // A restart resumes the same session in a new pane. The records are queued
+        // after its Stop: a Stop with a queued head spawns a detached `message
+        // deliver` the test cannot await, which would race the sweeps.
+        register_running_agent(
+            &env,
+            "sess-replaced-pane",
+            "feature-replaced-pane",
+            &new_pane,
+        );
+        run_hook(&env, stop, &new_pane);
+        let snapshot = env.store().snapshot_cached().expect("snapshot");
+        assert_eq!(snapshot.agents.len(), 1, "{:?}", snapshot.agents);
+        assert_eq!(
+            snapshot.agents[0].pane.as_ref().map(|pane| &pane.pane_id),
+            Some(&PaneId::from_parts(MuxName::Zellij, TRACE_PANE))
+        );
+        let wake = |text: &str| {
+            MessageRecord::new(
+                env.workspace_id.clone(),
+                &snapshot.agents[0],
+                text.to_owned(),
+                DeliveryGate::Done,
+            )
+            .with_sender(MessageSender::Harness {
+                notice: HarnessNotice::Wait,
+            })
+        };
+        let mut first = wake("first wait finished");
+        if stored_old_pane {
+            first = first.with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_7"));
+            first.last_error = Some("stuck: pinned pane zellij:terminal_7 is not live".to_owned());
+        }
+        let second = wake("second wait finished");
+        env.store().queue_message(&first, "rimz-test").unwrap();
+        env.store().queue_message(&second, "rimz-test").unwrap();
 
+        let no_panes = env.write_pane_fixture(&[]);
         run_success(
             traced_rimz(&env, &trace_log)
-                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+                .env("RIMZ_TEST_PANE_LIST", &no_panes)
                 .args(["message", "sweep"]),
-            "sweep unbindable wake",
+            "sweep without a live pane",
         );
-
-        let queued = message_by_id(&env, &wake.message_id);
+        let queued = message_by_id(&env, &first.message_id);
         assert_eq!(queued.status, MessageStatus::Queued);
         assert_eq!(queued.attempts, 0);
-        assert_eq!(queued.pane_id, wake.pane_id);
-        assert_eq!(queued.last_error.as_deref(), Some(blocker));
+        assert_eq!(queued.last_error.as_deref(), Some("stuck: no live pane"));
+        assert_eq!(
+            message_by_id(&env, &second.message_id).status,
+            MessageStatus::Queued
+        );
         assert!(trace_lines(&trace_log).is_empty());
         let shown = run_success(
-            env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args([
+            env.rimz().env("RIMZ_TEST_PANE_LIST", &no_panes).args([
                 "message",
                 "show",
-                wake.message_id.as_str(),
+                first.message_id.as_str(),
             ]),
-            "show unbindable wake",
+            "show paneless wake",
         );
         let shown = String::from_utf8_lossy(&shown.stdout);
-        assert!(shown.contains(blocker), "{shown}");
+        assert!(shown.contains("stuck: no live pane"), "{shown}");
+        assert!(!shown.contains("pinned"), "{shown}");
+
+        let current = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+        run_success(
+            traced_rimz(&env, &trace_log)
+                .env("RIMZ_TEST_PANE_LIST", &current)
+                .args(["message", "sweep"]),
+            "sweep with the agent's current pane",
+        );
+        for record in [&first, &second] {
+            let sent = message_by_id(&env, &record.message_id);
+            assert_eq!(sent.status, MessageStatus::Sent, "{}", record.message_id);
+            assert_eq!(
+                sent.pane_id,
+                Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE))
+            );
+        }
+        let lines = trace_lines(&trace_log);
+        assert!(
+            lines.iter().all(|line| !line.contains("terminal_7")),
+            "{lines:?}"
+        );
+        let at = |text: &str| {
+            let payload = text
+                .bytes()
+                .map(|byte| byte.to_string())
+                .collect::<Vec<_>>()
+                .join("\t");
+            lines
+                .iter()
+                .enumerate()
+                .find_map(|(index, line)| {
+                    let column = line.find(&payload)?;
+                    line.contains(&format!("\twrite\t--pane-id\t{TRACE_PANE}\t"))
+                        .then_some((index, column))
+                })
+                .unwrap_or_else(|| panic!("no write of `{text}` to {TRACE_PANE}: {lines:?}"))
+        };
+        assert!(
+            at("first wait finished") < at("second wait finished"),
+            "{lines:?}"
+        );
     }
+}
+
+fn as_env<'a>(pairs: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    pairs
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect()
 }
 
 #[test]
@@ -3381,7 +3455,7 @@ fn resume_gate_failed_park_waits_for_recovery_then_delivers() {
 }
 
 #[test]
-fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
+fn auto_continue_queues_a_system_resume_then_defers_on_a_closed_gate() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -3433,7 +3507,7 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
         })
         .find(|event| event.message_id == message.message_id)
         .expect("queued resume event");
-    assert_eq!(queued.pane_id.as_ref(), Some(&request.pane_id));
+    assert_eq!(queued.pane_id, None);
     assert_eq!(message.text, "continue");
     assert!(message.enter);
     assert_eq!(message.status, MessageStatus::Queued);

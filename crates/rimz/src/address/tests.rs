@@ -1781,43 +1781,55 @@ fn pane_binding_distinguishes_exact_provisional_and_lazy_targets() {
     let provisional_pane = lazy_pane("claude", "/repo/docs", "terminal_2");
     let lazy = lazy_pane("codex", "/repo/other", "terminal_3");
 
-    let binding = pane_binding(&snapshot, &exact_pane, None).unwrap();
+    let binding = pane_binding(&snapshot, &exact_pane).unwrap();
     assert_eq!(
         binding.exact_agent.map(|agent| agent.agent_id.as_str()),
         Some("session-exact")
     );
 
-    let binding = pane_binding(&snapshot, &provisional_pane, None).unwrap();
+    let binding = pane_binding(&snapshot, &provisional_pane).unwrap();
     assert_eq!(
         binding.agent.map(|agent| agent.agent_id.as_str()),
         Some("launch_pending")
     );
     assert!(binding.exact_agent.is_none());
 
-    let binding = pane_binding(&snapshot, &lazy, None).unwrap();
+    let binding = pane_binding(&snapshot, &lazy).unwrap();
     assert!(binding.agent.is_none());
 }
 
 #[test]
-fn pane_binding_rejects_wrong_channel_stale_and_wrong_pinned_panes() {
+fn pane_binding_rejects_wrong_channel_and_stale_panes() {
     let mut snapshot = empty_snapshot();
     let provisional = agent("claude", "launch_pending", Some("docs"), "terminal_1");
     snapshot.agents = vec![provisional].into();
 
     let wrong_channel = lazy_pane("claude", "/repo/auth", "terminal_1");
     assert!(
-        pane_binding(&snapshot, &wrong_channel, None)
+        pane_binding(&snapshot, &wrong_channel)
             .unwrap()
             .agent
             .is_none()
     );
 
     let stale = bound_pane("claude", 1, "stale", "session-gone", "docs", "terminal_2");
-    assert!(pane_binding(&snapshot, &stale, None).is_none());
+    assert!(pane_binding(&snapshot, &stale).is_none());
 
+    // With no pane stamped as its own, the provisional card binds its lane's first pane.
     let matching = lazy_pane("claude", "/repo/docs", "terminal_3");
-    let other_pane = PaneId::from_parts(MuxName::Zellij, "terminal_4");
-    assert!(pane_binding(&snapshot, &matching, Some(&other_pane)).is_none());
+    snapshot.agent_panes = vec![wrong_channel, stale, matching.clone()].into();
+    assert_eq!(
+        bind_agent(&snapshot, &snapshot.agents[0]).map(|binding| &binding.pane.pane_id),
+        Some(&matching.pane_id)
+    );
+
+    // A pane stamped with the card's id wins over a sessionless pane listed before it.
+    let own = bound_pane("claude", 1, "own", "launch_pending", "docs", "terminal_4");
+    snapshot.agent_panes = vec![matching, own.clone()].into();
+    assert_eq!(
+        bind_agent(&snapshot, &snapshot.agents[0]).map(|binding| &binding.pane.pane_id),
+        Some(&own.pane_id)
+    );
 }
 
 #[test]

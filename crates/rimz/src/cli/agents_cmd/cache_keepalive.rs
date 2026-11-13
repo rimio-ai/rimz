@@ -31,7 +31,6 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             notice: HarnessNotice::CacheKeepalive,
         },
         gate: DeliveryGate::Done,
-        pane_id: Some(request.pane_id),
     }
     .record(&ctx.workspace);
     let message = rimz::store::message::MessageRecord {
@@ -42,6 +41,7 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
         &ctx.workspace,
         &ctx.store,
         &message,
+        Some(&request.pane_id),
         DeliveryFailureDisposition::Terminal,
         CLOSED_GATE,
     );

@@ -30,7 +30,6 @@ pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
             notice: HarnessNotice::SubagentStalled,
         },
         gate: DeliveryGate::Done,
-        pane_id: stall.parent.pane.as_ref().map(|pane| pane.pane_id.clone()),
     }
     .record(&ctx.workspace)
     .with_about_run(Some(run.run_id.clone()));
@@ -41,12 +40,12 @@ pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
         let _ = rimz::harness::run::release_stall_notice(paths, &run.run_id, now);
         return Err(err).context("queueing stall notice");
     }
-    let outcome = match &message.pane_id {
-        Some(pane_id) => deliver_one(
+    let outcome = match &stall.parent.pane {
+        Some(pane) => deliver_one(
             &ctx.workspace,
             &ctx.store,
             &message.message_id,
-            Some(pane_id.mux()),
+            Some(pane.pane_id.mux()),
             DeliveryPolicy::Boundary,
         )
         .context("delivering stall notice"),

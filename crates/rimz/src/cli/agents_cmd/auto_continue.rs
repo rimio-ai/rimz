@@ -65,13 +65,13 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
                 text: text.to_owned(),
                 sender: MessageSender::System,
                 gate,
-                pane_id: Some(request.pane_id),
             }
             .record(workspace);
             let outcome = synthetic::deliver_now(
                 workspace,
                 store,
                 &message,
+                Some(&request.pane_id),
                 DeliveryFailureDisposition::Retry,
                 &reason,
             )

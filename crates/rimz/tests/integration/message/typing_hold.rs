@@ -221,10 +221,9 @@ fn boundary_hold_keeps_the_claim_budget_and_is_explained_without_mux_reads() {
     let record = fixture.record();
     assert_eq!(record.status, MessageStatus::Queued);
     assert_eq!(record.attempts, 0);
-    assert_eq!(
-        record.pane_id,
-        Some(PaneId::from_parts(MuxName::Tmux, "%3"))
-    );
+    // A held record keeps no pane: the replay below writes to the pane the agent
+    // holds when the hold expires.
+    assert_eq!(record.pane_id, None);
     let value = serde_json::to_value(&record).unwrap();
     assert_eq!(value["retry_after"], value["typing_hold"]["until"]);
     assert!(value["typing_hold"]["until"].is_string(), "{value}");
@@ -418,7 +417,7 @@ fn pushing_a_held_boundary_message_replays_it_in_the_requested_live_mode() {
             Some("typing-session".into()),
             LifecycleSignal::TurnStarted { turn_id: None },
         );
-        observation.pane_id = record.pane_id.clone();
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%3"));
         fixture
             .env
             .store()

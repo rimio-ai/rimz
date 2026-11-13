@@ -173,9 +173,7 @@ pub enum DeliveryVerdict {
     ProviderStarting,
     AskWaiting,
     PaneHeld,
-    NoPane {
-        pinned_pane_id: Option<PaneId>,
-    },
+    NoPane,
     Ready,
 }
 
@@ -203,7 +201,7 @@ impl DeliveryVerdict {
             }
             | Self::Compacting
             | Self::TypingHeld { .. } => Some(StallClass::Busy),
-            Self::NoPane { .. }
+            Self::NoPane
             | Self::ProviderStarting
             | Self::ResumeUnrecovered
             | Self::AskWaiting
@@ -226,7 +224,7 @@ impl DeliveryVerdict {
             Self::TypingHeld { until } => {
                 format!("someone is using the receiver's pane; retry at {until}")
             }
-            Self::NoPane { pinned_pane_id } => no_pane_blocker(pinned_pane_id.as_ref()),
+            Self::NoPane => NO_LIVE_PANE.to_owned(),
             Self::ProviderStarting => "provider is starting".to_owned(),
             Self::ResumeUnrecovered => "resuming".to_owned(),
             Self::AskWaiting => "waiting on input in its pane".to_owned(),
@@ -276,17 +274,12 @@ impl DeliveryVerdict {
     }
 }
 
-const NO_LIVE_PANE: &str = "stuck: no live pane";
+/// The blocker sentence for a `NoPane` verdict, without the receiver; the sweep records it as `last_error` and the CLI appends the target.
+pub const NO_LIVE_PANE: &str = "stuck: no live pane";
+/// The blocker a record pinned to its enqueue-time pane once recorded; records on disk may still
+/// carry it.
 const PINNED_PANE_PREFIX: &str = "stuck: pinned pane ";
 const PINNED_PANE_SUFFIX: &str = " is not live";
-
-/// The blocker sentence for a `NoPane` verdict, without the receiver; the sweep records it as `last_error` and the CLI appends the target.
-pub fn no_pane_blocker(pinned_pane_id: Option<&PaneId>) -> String {
-    match pinned_pane_id {
-        Some(pane_id) => format!("{PINNED_PANE_PREFIX}{pane_id}{PINNED_PANE_SUFFIX}"),
-        None => NO_LIVE_PANE.to_owned(),
-    }
-}
 
 /// Whether a recorded `last_error` is one this sweep wrote, so a defer on any other verdict clears it and leaves a real send failure alone.
 fn is_no_pane_blocker(blocker: &str) -> bool {
@@ -987,15 +980,9 @@ pub fn sweep(
                 Some(DeliveryVerdict::TypingHeld { until }) => Some(*until),
                 _ => None,
             };
-            let recorded = match verdict {
-                Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
-                    Some(no_pane_blocker(pinned_pane_id.as_ref()))
-                }
-                _ => None,
-            };
-            let blocker = match recorded.as_deref() {
-                Some(sentence) => BlockerUpdate::Set(sentence),
-                None => BlockerUpdate::ClearOwn(is_no_pane_blocker),
+            let blocker = match verdict {
+                Some(DeliveryVerdict::NoPane) => BlockerUpdate::Set(NO_LIVE_PANE),
+                _ => BlockerUpdate::ClearOwn(is_no_pane_blocker),
             };
             let retry_at = held_until.unwrap_or_else(|| {
                 head.register_by
@@ -1195,9 +1182,7 @@ impl DeliveryCheck {
             };
         }
         if !self.pane.present {
-            return DeliveryVerdict::NoPane {
-                pinned_pane_id: self.pane.pinned_pane_id.clone(),
-            };
+            return DeliveryVerdict::NoPane;
         }
         DeliveryVerdict::Ready
     }
@@ -1280,8 +1265,6 @@ pub struct PaneCheck {
     pub present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pinned_pane_id: Option<PaneId>,
 }
 
 pub(super) struct AfterEvaluation {
@@ -1388,8 +1371,7 @@ fn evaluate_delivery<'a>(
         _ => None,
     };
     let waiting = readiness.is_some_and(|readiness| readiness.waiting);
-    let binding = agent
-        .and_then(|agent| crate::address::bind_agent(snapshot, agent, message.pane_id.as_ref()));
+    let binding = agent.and_then(|agent| crate::address::bind_agent(snapshot, agent));
     let retry_at = message
         .typing_hold
         .filter(|hold| hold.until > now)
@@ -1458,7 +1440,6 @@ fn evaluate_delivery<'a>(
         pane: PaneCheck {
             present: binding.is_some(),
             pane_id: binding.map(|binding| binding.pane.pane_id.clone()),
-            pinned_pane_id: message.pane_id.clone(),
         },
     };
     DeliveryEvaluation {

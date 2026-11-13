@@ -73,12 +73,7 @@ fn forced_interrupt_ignores_a_stored_typing_hold_when_the_pane_is_gone() {
         Candidacy::Refused(verdict) => Some(verdict),
         _ => None,
     };
-    assert_eq!(
-        verdict,
-        Some(DeliveryVerdict::NoPane {
-            pinned_pane_id: held.pane_id,
-        })
-    );
+    assert_eq!(verdict, Some(DeliveryVerdict::NoPane));
 }
 
 #[test]
@@ -293,12 +288,7 @@ fn failed_idle_compaction_check_names_its_claim_release_reason() {
 fn stall_classes_cover_every_delivery_verdict() {
     let now = Timestamp::now();
     let mut cases = vec![
-        (
-            DeliveryVerdict::NoPane {
-                pinned_pane_id: None,
-            },
-            Some(StallClass::NotWorking),
-        ),
+        (DeliveryVerdict::NoPane, Some(StallClass::NotWorking)),
         (
             DeliveryVerdict::ProviderStarting,
             Some(StallClass::NotWorking),
@@ -659,6 +649,36 @@ fn explain_reports_actionable_delivery_blockers() {
 }
 
 #[test]
+fn a_stored_pane_never_filters_the_agents_current_pane() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let receiver = agent("sess-receiver", AgentStatus::Idle);
+    let live = snapshot(receiver.clone(), true, now);
+    // A record queued before the rule keeps the pane it was written for on disk.
+    let stale =
+        message(&receiver, 1, "go").with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+    let check = explain(&stale, std::slice::from_ref(&stale), &live, now);
+    assert_eq!(check.verdict(), DeliveryVerdict::Ready);
+    assert_eq!(
+        check.pane.pane_id,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    );
+    let paneless = snapshot(receiver, false, now);
+    let check = explain(&stale, std::slice::from_ref(&stale), &paneless, now);
+    assert_eq!(check.verdict().reason(), "stuck: no live pane");
+}
+
+#[test]
+fn the_no_pane_recognizer_also_claims_the_old_pinned_pane_text() {
+    for blocker in [
+        "stuck: no live pane",
+        "stuck: pinned pane zellij:terminal_9 is not live",
+    ] {
+        assert!(is_no_pane_blocker(blocker), "{blocker}");
+    }
+    assert!(!is_no_pane_blocker("pane missing"));
+}
+
+#[test]
 fn explain_names_sent_prompt_and_claimed_fifo_blockers() {
     let now = Timestamp::from_second(10_000).unwrap();
     let receiver = agent("sess-receiver", AgentStatus::Idle);
@@ -746,13 +766,7 @@ fn delivery_check_reports_first_blocker_and_passes_only_when_ready() {
     check.ask.turn_ended = false;
     check.ask.waiting = false;
     check.pane.present = false;
-    check.pane.pinned_pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
-    assert_eq!(
-        check.verdict(),
-        DeliveryVerdict::NoPane {
-            pinned_pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"))
-        }
-    );
+    assert_eq!(check.verdict(), DeliveryVerdict::NoPane);
     assert!(!check.passes());
 }
 
@@ -960,7 +974,6 @@ fn ready_check() -> DeliveryCheck {
         pane: PaneCheck {
             present: true,
             pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_3")),
-            pinned_pane_id: None,
         },
     }
 }

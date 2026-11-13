@@ -9,39 +9,37 @@ use crate::workspace::ResolvedWorkspace;
 
 use super::deliver::{self, DeliveryPolicy, DeliveryReport, Result};
 
-/// Text RimZ composes for one card. Every synthetic record carries the card's channel, submits (Enter), and optionally pins a pane.
+/// Text RimZ composes for one card. Every synthetic record carries the card's channel and submits
+/// (Enter); it carries no pane, so delivery writes to the pane the card holds then.
 pub struct SyntheticMessage<'a> {
     pub agent: &'a AgentState,
     pub text: String,
     pub sender: MessageSender,
     pub gate: DeliveryGate,
-    pub pane_id: Option<PaneId>,
 }
 
 impl SyntheticMessage<'_> {
-    /// Compose a record with the card's channel, the sender, and the pane when given.
+    /// Compose a record with the card's channel and the sender.
     pub fn record(self, workspace: &ResolvedWorkspace) -> MessageRecord {
-        let record = MessageRecord::new(
+        MessageRecord::new(
             workspace.workspace_id.clone(),
             self.agent,
             self.text,
             self.gate,
         )
         .with_channel(self.agent.lane_name())
-        .with_sender(self.sender);
-        match self.pane_id {
-            Some(pane_id) => record.with_pane_id(pane_id),
-            None => record,
-        }
+        .with_sender(self.sender)
     }
 }
 
-/// Queue `message`, attempt one boundary delivery against its pinned pane, and record a miss under `on_miss`.
+/// Queue `message`, attempt one boundary delivery on the multiplexer of `pane`, the card's pane as
+/// the caller read it, and record a miss under `on_miss`.
 /// Returns whether the text reached the pane now (a miss whose record has meanwhile turned `Sent` counts as delivered).
 pub fn deliver_now(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message: &MessageRecord,
+    pane: Option<&PaneId>,
     on_miss: DeliveryFailureDisposition,
     fallback_reason: &str,
 ) -> Result<bool> {
@@ -50,7 +48,7 @@ pub fn deliver_now(
         workspace,
         store,
         &message.message_id,
-        message.pane_id.as_ref(),
+        pane,
         on_miss,
         fallback_reason,
     )
@@ -106,7 +104,7 @@ pub fn attempt_now(
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
-    use crate::ids::{MuxName, WorkspaceId};
+    use crate::ids::WorkspaceId;
     use crate::store::message::{HarnessNotice, MessageStatus};
     use crate::workspace::RootClass;
 
@@ -124,18 +122,16 @@ mod tests {
     }
 
     #[test]
-    fn system_resume_carries_the_cards_channel_and_pinned_pane() {
+    fn system_resume_carries_the_cards_channel_and_no_pane() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = workspace(dir.path());
         let mut agent = AgentState::stub("claude", "sess-parked", AgentStatus::Paused);
         agent.channel = Some("auth".to_owned());
-        let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_4");
         let message = SyntheticMessage {
             agent: &agent,
             text: "continue".to_owned(),
             sender: MessageSender::System,
             gate: DeliveryGate::Resume,
-            pane_id: Some(pane_id.clone()),
         }
         .record(&workspace);
 
@@ -144,7 +140,7 @@ mod tests {
             Some("auth")
         );
         assert_eq!(message.sender, MessageSender::System);
-        assert_eq!(message.pane_id, Some(pane_id));
+        assert_eq!(message.pane_id, None);
         assert_eq!(message.workspace_id, workspace.workspace_id);
         assert_eq!(message.agent_id, agent.agent_id);
         assert_eq!(message.text, "continue");
@@ -155,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_notice_keeps_its_sender_without_a_pane_pin() {
+    fn harness_notice_keeps_its_sender_without_a_pane() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = workspace(dir.path());
         let mut agent = AgentState::stub("claude", "sess-idle", AgentStatus::Idle);
@@ -168,7 +164,6 @@ mod tests {
             text: "team finished".to_owned(),
             sender: sender.clone(),
             gate: DeliveryGate::Done,
-            pane_id: None,
         }
         .record(&workspace);
 

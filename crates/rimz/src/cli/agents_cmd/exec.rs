@@ -1852,7 +1852,6 @@ fn queue_resume_continue(
             text: text.to_owned(),
             sender: rimz::store::message::MessageSender::System,
             gate: rimz::store::message::DeliveryGate::Done,
-            pane_id: None,
         }
         .record(workspace),
         &workspace.session_name,

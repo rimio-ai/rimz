@@ -145,7 +145,6 @@ pub(super) fn run_budget(
                         text,
                         sender: MessageSender::System,
                         gate: DeliveryGate::Done,
-                        pane_id: None,
                     }
                     .record(workspace),
                     &workspace.session_name,

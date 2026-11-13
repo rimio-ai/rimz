@@ -179,7 +179,6 @@ fn report_team(
             notice: HarnessNotice::TeamReport,
         },
         gate: DeliveryGate::Done,
-        pane_id: pane_id.cloned(),
     }
     .record(workspace);
     let message_id: MessageId = message.message_id.clone();
