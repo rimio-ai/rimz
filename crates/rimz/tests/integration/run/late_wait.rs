@@ -222,6 +222,27 @@ fn late_wait_by_the_launcher_prints_and_marks_the_ended_peer_run() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "alpha run answer\n");
     assert_read(&env, &peer);
+    let digest = env
+        .store()
+        .list_message_history()
+        .expect("list history")
+        .into_iter()
+        .find(|message| message.message_id == peer.digest)
+        .expect("digest in history");
+    assert_eq!(
+        (digest.withdrawn, digest.last_error.as_deref()),
+        (true, Some("joined inline"))
+    );
+    let show = env
+        .rimz()
+        .args(["message", "show", peer.digest.as_str()])
+        .output()
+        .expect("run message show");
+    let shown = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        show.status.success() && shown.contains("withdrawn") && shown.contains("joined inline"),
+        "{show:?}"
+    );
 }
 
 #[test]

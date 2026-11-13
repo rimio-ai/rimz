@@ -66,7 +66,9 @@ pub fn join_and_settle_digest(
 ) -> crate::store::Result<()> {
     for message_id in mark_joined_record(store.paths(), run_id, ordinal)? {
         if digest_fully_joined(store.paths(), &message_id)? {
-            store.cancel_message(&message_id, session_name, reason)?;
+            store.withdraw_messages(session_name, |message| {
+                (message.message_id == message_id).then(|| reason.to_owned())
+            })?;
         }
     }
     Ok(())
