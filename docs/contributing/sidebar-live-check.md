@@ -579,7 +579,7 @@ Plain `sandbox in` scrubs the caller's session keys and does not descend from a 
 error: arming a wait is only available to an agent RimZ can identify; run this command from an agent pane
 ```
 
-`--as` copies the selected agent's session keys while retaining the sandbox roots, and sets `RIMZ_AGENT_PID` to the stub for hook attribution. It runs the command directly with inherited stdio, like plain `in`. Neither flag sends SessionStart: before an explicit feed, `wait` refuses the provisional session:
+`--as` copies the selected agent's session keys while retaining the sandbox roots, and sets `RIMZ_AGENT_PID` to the stub for hook attribution. It runs the command directly with inherited stdio, like plain `in`. Plain `in` and `--as` exit 1 for any nonzero exit of the command and name its real status only in the error line (`sandboxed command ... exited with ...`), so a check of an exit code records it inside the sandbox: `-- sh -c '<command>; echo $? > <file>'`. Neither flag sends SessionStart: before an explicit feed, `wait` refuses the provisional session:
 
 ```console
 error: the calling agent has not registered a real session yet
