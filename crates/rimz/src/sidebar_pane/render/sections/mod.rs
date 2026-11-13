@@ -25,7 +25,7 @@ use crate::store::snapshot::SidebarRow;
 
 use super::layout::{pin_right, spans_width, trim_spans_to_width};
 use super::theme::{Component, Theme};
-use super::{CostRolls, FrameTime};
+use super::{CostRolls, DelegationPin, FrameTime};
 
 mod agent_card;
 mod cockpit;
@@ -95,36 +95,39 @@ pub(super) fn row_selection_reach(
 }
 
 /// What a card opens: reach marks its own live or held selection.
-/// Delegation entries follow the sticky header override, else open for a live or
-/// held selection or under `expanded` density.
+/// Delegation entries open only on a card with a current child or a wait to
+/// count. There they follow a header pin taken in the parent's current user
+/// turn, else open for a live or held selection or under `expanded` density.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct CardExpansion {
     pub(super) reach: SelectionReach,
     pub(super) delegation: bool,
-    /// The open section also lists the children folded behind `+K older`.
-    pub(super) history: bool,
 }
 
 impl CardExpansion {
     pub(super) fn resolve(
-        overrides: &BTreeMap<String, bool>,
-        history: &BTreeMap<String, Option<Timestamp>>,
+        pins: &BTreeMap<String, DelegationPin>,
         density: CardDensityMode,
         row: &SidebarRow,
         reach: SelectionReach,
     ) -> Self {
-        let delegation = overrides
-            .get(&row.id)
-            .copied()
-            .unwrap_or(reach.opens_card() || density == CardDensityMode::Expanded);
-        let history = row
+        let Some(agent) = row
             .as_agent()
-            .is_some_and(|agent| history.get(&row.id) == Some(&agent.user_turn_started_at));
-        Self {
-            reach,
-            delegation,
-            history,
-        }
+            .filter(|agent| agent_card::has_delegation(agent))
+        else {
+            return Self {
+                reach,
+                delegation: false,
+            };
+        };
+        let delegation = pins
+            .get(&row.id)
+            .filter(|pin| pin.turn == agent.user_turn_started_at)
+            .map_or(
+                reach.opens_card() || density == CardDensityMode::Expanded,
+                |pin| pin.open,
+            );
+        Self { reach, delegation }
     }
 }
 
@@ -148,10 +151,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) refresh_ms: u16,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
-    pub(in crate::sidebar_pane::render) recent_subagent_secs: u64,
-    pub(in crate::sidebar_pane::render) max_recent_subagents: usize,
-    pub(in crate::sidebar_pane::render) delegation_overrides: &'a BTreeMap<String, bool>,
-    pub(in crate::sidebar_pane::render) delegation_history: &'a BTreeMap<String, Option<Timestamp>>,
+    pub(in crate::sidebar_pane::render) delegation_overrides: &'a BTreeMap<String, DelegationPin>,
 }
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the

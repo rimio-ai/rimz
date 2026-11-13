@@ -1753,7 +1753,6 @@ fn side_conversations_never_become_launched_children() {
         .with_live_panes(vec![pane("%1", "codex", "/tmp/x")], None);
     assert_eq!(snapshot.agents, baseline.agents);
     let parent = row(&snapshot, "root-session").as_agent().unwrap();
-    assert_eq!(parent.sub_agent_count, 3);
     assert_eq!(
         parent
             .sub_agents

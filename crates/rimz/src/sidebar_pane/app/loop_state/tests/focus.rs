@@ -301,7 +301,6 @@ fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
     let card = row.as_agent_mut().unwrap();
     card.status = crate::agents::AgentStatus::Running;
     card.user_turn_started_at = Some(snapshot.now);
-    card.sub_agent_count = 2;
     card.sub_agents = children
         .iter()
         .enumerate()
@@ -313,11 +312,10 @@ fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
             .unwrap()
         })
         .collect();
-    rig.view()
-        .ui()
-        .toggles
-        .delegation_overrides
-        .insert(row.id.clone(), true);
+    let row_id = row.id.clone();
+    rig.view().ui().toggles.delegation_overrides.extend([
+        crate::sidebar_pane::render::DelegationPin::current(&snapshot, &row_id, true),
+    ]);
     rig.fold(snapshot, SnapshotSource::Produced);
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
@@ -394,7 +392,6 @@ fn tall_child_focus_rig() -> (Rig, Vec<PaneId>) {
             child
         })
         .collect();
-    card.sub_agent_count = panes.len() as u32;
     rig.fold(snapshot, SnapshotSource::Produced);
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())

@@ -442,12 +442,14 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
 
     ui.toggles
         .delegation_overrides
-        .insert(row_id.clone(), false);
+        .extend([DelegationPin::current(&snapshot, &row_id, false)]);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
     ui.toggles.delegation_overrides.clear();
     ui.selected_index = Some(usize::MAX);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
-    ui.toggles.delegation_overrides.insert(row_id.clone(), true);
+    ui.toggles
+        .delegation_overrides
+        .extend([DelegationPin::current(&snapshot, &row_id, true)]);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
 
     // A read done card quiet past the stale threshold: the click-open section
@@ -471,7 +473,9 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     assert!(open.contains("cargo test"), "{open}");
     ui.toggles.delegation_overrides.remove(&row_id);
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
-    ui.toggles.delegation_overrides.insert(row_id, true);
+    ui.toggles
+        .delegation_overrides
+        .extend([DelegationPin::current(&snapshot, &row_id, true)]);
     let row = &mut std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0];
@@ -556,7 +560,6 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     .as_agent_mut()
     .unwrap();
     agent.pending_waits.clear();
-    agent.sub_agent_count = 1;
     agent.sub_agents = vec![
         serde_json::from_value(serde_json::json!({
             "id": "child", "kind": "claude", "name": "child", "status": "running",
@@ -565,6 +568,19 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         .unwrap(),
     ];
     assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_some());
+    // A prior-turn child is off the card, so it drives no motion.
+    let set_prior = |snapshot: &mut SidebarSnapshot, prior: bool| {
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
+            .prior_turn = prior;
+    };
+    set_prior(&mut snapshot, true);
+    assert!(animation_interval(&snapshot, &ui, &pane_ui, ms(0), false).is_none());
+    set_prior(&mut snapshot, false);
     // Only a running child's head moves on the fast grid; a live child resting
     // in any other status, like a finished one, leaves the open section cold.
     for status in [

@@ -1,79 +1,66 @@
-//! Visibility bands for an open delegation section. Live children come first in
-//! spawn order, uncapped; finished children follow newest-landed first while
-//! they ended inside the recent window and up to the recent cap; every other
-//! finished child is older and folds behind `+K older` — unless no live or recent
-//! row is visible, where the card shows the older rows directly rather than a
-//! lone fold that costs a second click. The collapsed list is a
-//! prefix of the expanded one, and a child that finishes leaves the live band
-//! for the recent band.
-
-use jiff::Timestamp;
+//! Visibility bands for an open delegation section over the current turn's
+//! children. Unfinished children come first in spawn order, uncapped; finished
+//! children follow newest finish first, up to [`MAX_FINISHED`], and the rest
+//! are only counted. A child that finishes leaves the unfinished band for the
+//! top of the finished band, and nothing else moves.
 
 use crate::store::snapshot::SidebarSubAgent;
 
 use super::sub_agent_finished;
-use crate::sidebar_pane::render::fmt::age_secs;
+
+/// The finished children an open section lists before it only counts the rest.
+const MAX_FINISHED: usize = 5;
 
 pub(super) struct DelegationBands<'a> {
     /// Every child not yet finished, in the projection's spawn order.
-    pub(super) live: Vec<&'a SidebarSubAgent>,
-    /// Finished children inside the window and cap, newest landed first.
-    pub(super) recent: Vec<&'a SidebarSubAgent>,
-    /// Every other finished child, continuing the recent band's order.
-    pub(super) older: Vec<&'a SidebarSubAgent>,
+    pub(super) unfinished: Vec<&'a SidebarSubAgent>,
+    /// The newest finished children, newest finish first.
+    pub(super) finished: Vec<&'a SidebarSubAgent>,
+    /// Finished children beyond the listed ones.
+    pub(super) more_finished: usize,
 }
 
 /// Classify `children` (spawn-ordered by the projection) into bands. A finished
 /// child's finish instant is `finished_at`, falling back to `last_activity`.
-pub(super) fn delegation_bands(
-    children: &[SidebarSubAgent],
-    now: Timestamp,
-    recent_secs: u64,
-    max_recent: usize,
-) -> DelegationBands<'_> {
-    let (mut finished, live): (Vec<_>, Vec<_>) =
-        children.iter().partition(|child| sub_agent_finished(child));
+pub(super) fn delegation_bands<'a>(
+    children: impl IntoIterator<Item = &'a SidebarSubAgent>,
+) -> DelegationBands<'a> {
+    let (mut finished, unfinished): (Vec<_>, Vec<_>) = children
+        .into_iter()
+        .partition(|child| sub_agent_finished(child));
     finished.sort_by(|a, b| {
         b.finished_at
             .unwrap_or(b.last_activity)
             .cmp(&a.finished_at.unwrap_or(a.last_activity))
             .then_with(|| a.id.cmp(&b.id))
     });
-    let window = i64::try_from(recent_secs).unwrap_or(i64::MAX);
-    let recent_len = finished
-        .iter()
-        .take(max_recent)
-        .take_while(|child| {
-            age_secs(child.finished_at.unwrap_or(child.last_activity), now) < window
-        })
-        .count();
-    let older = finished.split_off(recent_len);
+    let more_finished = finished.len().saturating_sub(MAX_FINISHED);
+    finished.truncate(MAX_FINISHED);
     DelegationBands {
-        live,
-        recent: finished,
-        older,
+        unfinished,
+        finished,
+        more_finished,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::agents::AgentStatus;
-    use jiff::SignedDuration;
+    use jiff::{SignedDuration, Timestamp};
 
     use super::*;
 
-    fn child(
-        id: &str,
-        status: AgentStatus,
-        landed_secs_ago: i64,
-        now: Timestamp,
-    ) -> SidebarSubAgent {
+    fn now() -> Timestamp {
+        Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1)
+    }
+
+    fn child(id: &str, status: AgentStatus, landed_secs_ago: i64) -> SidebarSubAgent {
         serde_json::from_value(serde_json::json!({
             "id": id,
             "kind": "claude",
             "name": id,
             "status": status,
-            "last_activity": now - SignedDuration::from_secs(landed_secs_ago),
+            "last_activity": now() - SignedDuration::from_secs(landed_secs_ago),
         }))
         .expect("minimal subagent")
     }
@@ -82,111 +69,98 @@ mod tests {
         children.iter().map(|child| child.id.clone()).collect()
     }
 
-    fn visible(bands: &DelegationBands<'_>) -> Vec<String> {
-        ids(&bands.live)
-            .into_iter()
-            .chain(ids(&bands.recent))
-            .collect()
-    }
-
-    fn all(bands: &DelegationBands<'_>) -> Vec<String> {
-        visible(bands)
-            .into_iter()
-            .chain(ids(&bands.older))
-            .collect()
-    }
-
-    fn roster(now: Timestamp) -> Vec<SidebarSubAgent> {
+    fn roster() -> Vec<SidebarSubAgent> {
         vec![
-            child("a", AgentStatus::Success, 1_200, now),
-            child("b", AgentStatus::Running, 30, now),
-            child("c", AgentStatus::Failed, 60, now),
-            child("d", AgentStatus::Waiting, 5, now),
-            child("e", AgentStatus::Success, 300, now),
-            child("f", AgentStatus::Success, 120, now),
+            child("a", AgentStatus::Success, 1_200),
+            child("b", AgentStatus::Running, 30),
+            child("c", AgentStatus::Failed, 60),
+            child("d", AgentStatus::Waiting, 5),
+            child("e", AgentStatus::Success, 300),
+            child("f", AgentStatus::Success, 120),
         ]
     }
 
     #[test]
-    fn finish_order_and_window_ignore_later_activity() {
-        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
-        let mut wire = serde_json::to_value(child("early", AgentStatus::Success, 0, now)).unwrap();
-        wire["finished_at"] = serde_json::json!(now - SignedDuration::from_secs(1_200));
+    fn finish_order_reads_finished_at_before_later_activity() {
+        let mut wire = serde_json::to_value(child("early", AgentStatus::Success, 0)).unwrap();
+        wire["finished_at"] = serde_json::json!(now() - SignedDuration::from_secs(1_200));
         let children = vec![
             serde_json::from_value(wire).unwrap(),
-            child("later", AgentStatus::Success, 60, now),
+            child("later", AgentStatus::Success, 60),
         ];
-        let wide = delegation_bands(&children, now, 3_600, 5);
-        let recent = delegation_bands(&children, now, 900, 5);
-        assert_eq!(
-            (all(&wide), ids(&recent.recent), ids(&recent.older)),
-            (
-                vec!["later".to_owned(), "early".to_owned()],
-                vec!["later".to_owned()],
-                vec!["early".to_owned()],
-            )
-        );
+        let bands = delegation_bands(&children);
+        assert_eq!(ids(&bands.finished), ["later", "early"]);
+        assert_eq!(bands.more_finished, 0);
     }
 
     #[test]
-    fn a_stalled_child_stays_live_while_an_old_failure_folds() {
-        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
-        let stalled = child("silent", AgentStatus::Failed, 1_920, now);
+    fn a_stalled_child_stays_unfinished_however_old() {
+        let stalled = child("silent", AgentStatus::Failed, 86_400);
         let mut wire = serde_json::to_value(stalled).unwrap();
         wire["stalled"] = serde_json::json!(true);
         let children = vec![
             serde_json::from_value(wire).unwrap(),
-            child("failed", AgentStatus::Failed, 1_920, now),
+            child("failed", AgentStatus::Failed, 86_400),
         ];
-        let bands = delegation_bands(&children, now, 900, 5);
-        assert_eq!(ids(&bands.live), ["silent"]);
-        assert!(bands.recent.is_empty());
-        assert_eq!(ids(&bands.older), ["failed"]);
+        let bands = delegation_bands(&children);
+        assert_eq!(ids(&bands.unfinished), ["silent"]);
+        assert_eq!(ids(&bands.finished), ["failed"]);
     }
 
     #[test]
-    fn live_keeps_spawn_order_and_recent_runs_newest_first() {
-        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
-        let children = roster(now);
-        let bands = delegation_bands(&children, now, 900, 5);
-        assert_eq!(ids(&bands.live), ["b", "d"]);
-        assert_eq!(ids(&bands.recent), ["c", "f", "e"]);
-        assert_eq!(ids(&bands.older), ["a"]);
+    fn unfinished_keep_spawn_order_and_finished_run_newest_first() {
+        let children = roster();
+        let bands = delegation_bands(&children);
+        assert_eq!(ids(&bands.unfinished), ["b", "d"]);
+        assert_eq!(ids(&bands.finished), ["c", "f", "e", "a"]);
+        assert_eq!(bands.more_finished, 0);
     }
 
     #[test]
-    fn window_and_cap_trim_recent_from_its_tail_only() {
-        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
-        let children = roster(now);
-        let wide = delegation_bands(&children, now, 3_600, 5);
-        for (secs, cap) in [(900, 5), (200, 5), (3_600, 2), (0, 5), (3_600, 0)] {
-            let bands = delegation_bands(&children, now, secs, cap);
-            assert_eq!(all(&bands), all(&wide), "{secs}s cap {cap}");
-            assert!(all(&bands).starts_with(&visible(&bands)));
-            assert_eq!(ids(&bands.live), ids(&wide.live));
-            assert!(ids(&wide.recent).starts_with(&ids(&bands.recent)));
-        }
-        assert!(delegation_bands(&children, now, 0, 5).recent.is_empty());
-        assert!(delegation_bands(&children, now, 3_600, 0).recent.is_empty());
+    fn five_finished_list_whole_and_a_sixth_is_counted() {
+        let finished = |count: usize| {
+            (0..count)
+                .map(|index| {
+                    child(
+                        &format!("f{index}"),
+                        AgentStatus::Success,
+                        i64::try_from(index).unwrap() * 60,
+                    )
+                })
+                .chain([child("live", AgentStatus::Running, 0)])
+                .collect::<Vec<_>>()
+        };
+        let five = finished(5);
+        let bands = delegation_bands(&five);
+        assert_eq!(ids(&bands.finished), ["f0", "f1", "f2", "f3", "f4"]);
+        assert_eq!(bands.more_finished, 0);
+        let six = finished(6);
+        let bands = delegation_bands(&six);
+        assert_eq!(ids(&bands.unfinished), ["live"]);
+        assert_eq!(ids(&bands.finished), ["f0", "f1", "f2", "f3", "f4"]);
+        assert_eq!(bands.more_finished, 1);
+        // Unfinished children are never capped.
+        let many: Vec<_> = (0..12)
+            .map(|index| child(&format!("r{index}"), AgentStatus::Running, 0))
+            .collect();
+        assert_eq!(delegation_bands(&many).unfinished.len(), 12);
     }
 
     #[test]
-    fn a_child_that_finishes_moves_to_the_top_of_recent_and_nothing_else_moves() {
-        let now = Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1);
-        let mut children = roster(now);
-        let before = delegation_bands(&children, now, 900, 5);
-        let (before_live, before_recent) = (ids(&before.live), ids(&before.recent));
-        children[1] = child("b", AgentStatus::Success, 0, now);
-        let after = delegation_bands(&children, now, 900, 5);
-        assert_eq!(ids(&after.live), ["d"]);
+    fn a_child_that_finishes_moves_to_the_top_of_finished_and_nothing_else_moves() {
+        let mut children = roster();
+        let before = delegation_bands(&children);
+        let (before_unfinished, before_finished) = (ids(&before.unfinished), ids(&before.finished));
+        children[1] = child("b", AgentStatus::Success, 0);
+        let after = delegation_bands(&children);
         assert_eq!(
-            ids(&after.live),
-            before_live
+            ids(&after.unfinished),
+            before_unfinished
                 .into_iter()
                 .filter(|id| id != "b")
                 .collect::<Vec<_>>()
         );
-        assert_eq!(ids(&after.recent)[0], "b");
-        assert_eq!(ids(&after.recent)[1..], before_recent[..]);
+        assert_eq!(ids(&after.finished)[0], "b");
+        assert_eq!(ids(&after.finished)[1..], before_finished[..]);
     }
 }

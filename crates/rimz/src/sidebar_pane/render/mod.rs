@@ -46,7 +46,7 @@ pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Alert, EntryCursor, FrameTime, Newborn, PresentationToggles, UiState, ViewState,
+    Alert, DelegationPin, EntryCursor, FrameTime, Newborn, PresentationToggles, UiState, ViewState,
     ViewportIntent, ViewportRequest,
 };
 pub(in crate::sidebar_pane) use self::ui_state::{
@@ -290,8 +290,8 @@ fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     });
 }
 
-/// An override lives as long as its row; the `+K older` history also expires
-/// when the parent's user turn moves.
+/// A pin lives while its row stays and the parent's user turn is the one it was
+/// taken in.
 fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     let agent = |id: &str| {
         snapshot
@@ -303,10 +303,7 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     };
     ui.toggles
         .delegation_overrides
-        .retain(|id, _| agent(id).is_some());
-    ui.toggles
-        .delegation_history
-        .retain(|id, turn| agent(id).is_some_and(|agent| agent.user_turn_started_at == *turn));
+        .retain(|id, pin| agent(id).is_some_and(|agent| agent.user_turn_started_at == pin.turn));
     ui.validate_entry_cursor(snapshot);
 }
 
@@ -328,7 +325,6 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool
             .any(|(row_index, row)| {
                 let expansion = sections::CardExpansion::resolve(
                     &ui.toggles.delegation_overrides,
-                    &ui.toggles.delegation_history,
                     density,
                     row,
                     sections::row_selection_reach(
@@ -691,16 +687,6 @@ fn render_line_ansi<W: Write>(
             .worktree_groups
             .iter()
             .map(|group| group.key.clone())
-            .collect();
-        view.toggles.delegation_history = snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| group.rows.iter())
-            .filter_map(|row| {
-                row.as_agent()
-                    .filter(|agent| agent.sub_agent_count > 0)
-                    .map(|agent| (row.id.clone(), agent.user_turn_started_at))
-            })
             .collect();
     }
     let height = height.unwrap_or_else(|| {

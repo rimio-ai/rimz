@@ -922,12 +922,9 @@ fn resolve_scroll_offset(
         return resolved;
     }
     if view.viewport.own_input_reveal
-        && let (Some(cursor), Some(row)) = (&view.entry_cursor, selected)
+        && let (Some(super::EntryCursor::SubAgent(pane)), Some(_)) = (&view.entry_cursor, selected)
     {
-        let target = match cursor {
-            super::EntryCursor::SubAgent(pane) => HitTarget::SubAgentPane(pane.clone()),
-            super::EntryCursor::Older => HitTarget::ToggleDelegationHistory(row.id.clone()),
-        };
+        let target = HitTarget::SubAgentPane(pane.clone());
         if let Some(span) = input.scroll_interactions.target_rows(&target) {
             resolved.offset = nudge_into_view(
                 span.start,
@@ -1455,10 +1452,7 @@ fn scroll_lines_windowed(
         refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
         cost_rolls: &view.cost_rolls,
         lead_unread: lead_unread_id,
-        recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
-        max_recent_subagents: snapshot.theme.display.max_recent_subagents,
         delegation_overrides: &view.toggles.delegation_overrides,
-        delegation_history: &view.toggles.delegation_history,
     };
     if walk.measuring
         && let Some(cache) = walk.heights.as_deref_mut()

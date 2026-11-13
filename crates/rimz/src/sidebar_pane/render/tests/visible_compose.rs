@@ -211,9 +211,10 @@ proptest! {
                 10 => ui.toggles.search_draft =
                     Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
                 _ => {
-                    let row = snapshot.worktree_groups[0].rows[0].id.clone();
-                    ui.toggles.delegation_overrides.insert(row.clone(), value % 2 == 0);
-                    ui.toggles.delegation_history.insert(row, None);
+                    let row = &snapshot.worktree_groups[0].rows[0].id;
+                    ui.toggles
+                        .delegation_overrides
+                        .extend([DelegationPin::current(&snapshot, row, value % 2 == 0)]);
                 }
             }
             let before = ui.clone();

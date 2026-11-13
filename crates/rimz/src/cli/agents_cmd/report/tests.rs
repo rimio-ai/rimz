@@ -648,7 +648,6 @@ fn full_entry_has_a_stable_projection() {
             description: state.description.clone(),
             context: Some(context),
             context_severity: Some(ContextSeverity::Yellow),
-            sub_agent_count: 1,
             sub_agents: vec![SidebarSubAgent {
                 pane: None,
                 first_prompt: None,

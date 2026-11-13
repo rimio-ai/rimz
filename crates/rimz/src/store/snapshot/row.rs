@@ -571,16 +571,6 @@ pub struct AgentCard {
     /// The retained `sub_agents` list excludes reaped running ghosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_cost_usd: Option<f64>,
-    /// Lifetime count of every child this session spawned — provider-native and
-    /// pane-backed alike — as far back as the store retains them. The
-    /// retained `sub_agents` list is a subset.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub sub_agent_count: u32,
-    /// Lifetime sum of every child's known cost. Provider-native cost is also
-    /// inside the parent's own session figure, so this is not additive with
-    /// `cost_usd()`; `delegated_cost_usd` is the pane-backed-only part that is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sub_agent_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,
     /// The session's registration instant, copied from
@@ -604,7 +594,6 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheClock>,
     /// Current children and prior-turn finished children, nested under the parent.
-    /// `sub_agent_count` also includes reaped running ghosts retained by the store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_agents: Vec<SidebarSubAgent>,
     /// The agent is condensing its context window right now.
@@ -687,8 +676,6 @@ impl Default for AgentCard {
             usage: AgentUsageSummary::default(),
             context: None,
             delegated_cost_usd: None,
-            sub_agent_count: 0,
-            sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: None,
             engaged_at: None,
@@ -782,8 +769,6 @@ impl AgentCard {
                 }),
             context: agent.context.clone(),
             delegated_cost_usd: None,
-            sub_agent_count: 0,
-            sub_agent_cost_usd: None,
             context_severity: None,
             registered_at: agent.registered_at,
             engaged_at: agent.registered_at.max(agent.last_prompt_at),

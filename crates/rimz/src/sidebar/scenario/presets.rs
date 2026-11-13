@@ -5,7 +5,6 @@
 
 use super::Preset;
 use super::{AgentSpec, Field, Verb};
-use crate::agents::spending::sum_optional_cost;
 use crate::ids::LinkTier;
 use crate::ids::WorkspaceId;
 use crate::store::snapshot::{
@@ -2266,10 +2265,6 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
         }
         None => {}
     }
-    card.sub_agent_count = card.sub_agents.len() as u32;
-    card.sub_agent_cost_usd = card.sub_agents.iter().fold(None, |total, sub_agent| {
-        sum_optional_cost(total, sub_agent.cost_usd)
-    });
 
     SidebarRow {
         checkout: None,
@@ -2325,7 +2320,7 @@ fn agent_context(
 }
 
 fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> {
-    let mut children = vec![
+    vec![
         sub_agent(
             SubAgentSpec {
                 id: "child:explore",
@@ -2362,9 +2357,7 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
             },
             now,
         ),
-    ];
-    children[0].prior_turn = true;
-    children
+    ]
 }
 
 struct SubAgentSpec<'a> {

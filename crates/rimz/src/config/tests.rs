@@ -643,6 +643,37 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
 }
 
 #[test]
+fn retired_subagent_display_keys_warn_and_load() {
+    let dir = tempdir().unwrap();
+    let path = write_named(
+        &dir,
+        THEME_FILE,
+        "[theme.display]\nrecent_subagent_secs = 60\nmax_recent_subagents = 2\n\
+         stale_after_secs = 7\n",
+    );
+    for config in [
+        load_no_fragments(&path).expect("retired keys load"),
+        load_lenient_no_fragments(&path),
+    ] {
+        assert_eq!(config.theme.display.stale_after_secs, 7);
+        let mut keys: Vec<_> = config
+            .notices
+            .unknown_keys
+            .iter()
+            .map(|notice| notice.key.as_str())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "theme.display.max_recent_subagents",
+                "theme.display.recent_subagent_secs",
+            ]
+        );
+    }
+}
+
+#[test]
 fn retired_theme_roles_warn_without_changing_other_settings() {
     let dir = tempdir().unwrap();
     let path = write_named(

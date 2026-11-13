@@ -659,7 +659,7 @@ fn growth_above_keeps_expansions_until_freeze_expires() {
     let mut pane_ui = UiState::default();
     ui.toggles
         .delegation_overrides
-        .insert("codex-1".into(), true);
+        .extend([DelegationPin::current(&snapshot, "codex-1", true)]);
     let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
     assert_eq!(
@@ -1202,7 +1202,6 @@ fn entry_reveal_nudges_both_lines_inside_a_card_taller_than_the_viewport() {
     let card = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0]
         .as_agent_mut()
         .unwrap();
-    card.sub_agent_count = 20;
     card.sub_agents = panes
         .iter()
         .enumerate()

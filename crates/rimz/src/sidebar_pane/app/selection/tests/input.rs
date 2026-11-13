@@ -175,7 +175,6 @@ fn stepping_back_uses_the_entries_in_the_effective_held_frame() {
         .as_agent_mut()
         .unwrap();
         card.sub_agents.truncate(1);
-        card.sub_agent_count = 1;
         card.sub_agents[0].pane = Some(child.clone());
         let mut view = ViewState::default();
         let mut ui = UiState::default();
@@ -220,7 +219,9 @@ fn card_level_motions_and_search_clear_an_entry_even_without_a_card_move() {
         let mut view = ViewState::default();
         let mut ui = UiState::default();
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
-        view.entry_cursor = Some(render::EntryCursor::Older);
+        view.entry_cursor = Some(render::EntryCursor::SubAgent(
+            "zellij:terminal_live_child".parse().unwrap(),
+        ));
         handle_key(action, &mut view, &mut ui, &snapshot);
         retained.push(view.entry_cursor.is_some());
     }
@@ -234,7 +235,6 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
     for cause in ["prompt", "fresh", "filter", "cap"] {
         let mut snapshot = delegation_snapshot();
         let parent = pane_of(&snapshot, 0);
-        let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
         let child: PaneId = "zellij:terminal_old_child".parse().unwrap();
         let card = std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -243,9 +243,6 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
         .unwrap();
         card.sub_agents[1].pane = Some(child.clone());
         let mut view = ViewState::default();
-        view.toggles
-            .delegation_history
-            .insert(row_id, card.user_turn_started_at);
         let mut ui = UiState::default();
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
         handle_key(KeyAction::Down, &mut view, &mut ui, &snapshot);
@@ -258,13 +255,16 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
         .unwrap();
         match cause {
             "prompt" => {
-                card.user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1))
+                // The projection tags children launched before the new prompt.
+                card.user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1));
+                for child in &mut card.sub_agents {
+                    child.prior_turn = true;
+                }
             }
             "fresh" => {
                 let children = std::mem::take(&mut card.sub_agents);
                 *card = crate::store::snapshot::AgentCard {
                     sub_agents: children,
-                    sub_agent_count: 2,
                     ..Default::default()
                 };
             }
@@ -286,7 +286,6 @@ fn a_new_prompt_a_fresh_stage_or_a_filter_invalidates_the_entry() {
                         format!("zellij:terminal_idle_{index}").parse().unwrap();
                     let card = row.as_agent_mut().unwrap();
                     card.sub_agents.clear();
-                    card.sub_agent_count = 0;
                     row
                 })
                 .collect::<Vec<_>>();
@@ -313,7 +312,6 @@ fn delegation_snapshot() -> SidebarSnapshot {
     .as_agent_mut()
     .unwrap();
     card.user_turn_started_at = Some(now);
-    card.sub_agent_count = 2;
     card.sub_agents = [
         ("live-child", "running", now),
         (
@@ -351,13 +349,14 @@ fn j_and_k_walk_live_children_but_skip_paneless_entries() {
     closed.id = "closed-child".to_owned();
     closed.provider_native = false;
     card.sub_agents.push(closed);
-    card.sub_agent_count = 3;
     let parent = pane_of(&snapshot, 0);
     let next = pane_of(&snapshot, 1);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
     let mut view = ViewState {
         toggles: PresentationToggles {
-            delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+            delegation_overrides: std::collections::BTreeMap::from([
+                render::DelegationPin::current(&snapshot, &row_id, true),
+            ]),
             ..Default::default()
         },
         ..Default::default()
@@ -391,47 +390,6 @@ fn j_and_k_walk_live_children_but_skip_paneless_entries() {
 }
 
 #[test]
-fn older_entry_enter_matches_its_click() {
-    let snapshot = delegation_snapshot();
-    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let mut keyboard = ViewState::default();
-    let mut ui = UiState::default();
-    handle_key(KeyAction::Down, &mut keyboard, &mut ui, &snapshot);
-    let mut mouse = keyboard.clone();
-    paint(&mut mouse, &mut ui, &snapshot, 64);
-    remember_roster(&mut mouse, &mut ui, &snapshot);
-    let (column, line) = ui
-        .interactions
-        .line_for_target(&HitTarget::ToggleDelegationHistory(row_id.clone()))
-        .unwrap();
-    let clicked = handle_mouse_click(column, line, &mut mouse, &mut ui, &snapshot);
-    handle_key(
-        KeyAction::Down,
-        &mut keyboard,
-        &mut UiState::default(),
-        &snapshot,
-    );
-    let entered = handle_key(
-        KeyAction::Enter,
-        &mut keyboard,
-        &mut UiState::default(),
-        &snapshot,
-    );
-    assert_eq!(
-        (
-            entered,
-            &keyboard.toggles.delegation_history,
-            keyboard.selected_pane
-        ),
-        (
-            clicked,
-            &mouse.toggles.delegation_history,
-            mouse.selected_pane
-        )
-    );
-}
-
-#[test]
 fn card_motions_leave_the_entry_and_m_marks_its_parent() {
     let mut snapshot = delegation_snapshot();
     let rows = std::sync::Arc::make_mut(
@@ -441,7 +399,6 @@ fn card_motions_leave_the_entry_and_m_marks_its_parent() {
     rows[0].unread = false;
     let card = rows[0].as_agent_mut().unwrap();
     card.sub_agents.truncate(1);
-    card.sub_agent_count = 1;
     let child: PaneId = "zellij:terminal_child".parse().unwrap();
     card.sub_agents[0].pane = Some(child.clone());
     let parent = pane_of(&snapshot, 0);
@@ -554,7 +511,9 @@ fn losing_the_entry_pane_or_closing_its_section_returns_to_the_parent() {
         if close_pane {
             snapshot.remove_pane_rows(&child);
         } else {
-            view.toggles.delegation_overrides.insert(row_id, false);
+            view.toggles
+                .delegation_overrides
+                .extend([render::DelegationPin::current(&snapshot, &row_id, false)]);
         }
         reconcile_selection(&mut view, &snapshot, None);
         actual.push(handle_key(KeyAction::Enter, &mut view, &mut ui, &snapshot));
@@ -584,7 +543,9 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
         selected_pane: Some(other.clone()),
         selected_index: Some(1),
         toggles: PresentationToggles {
-            delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+            delegation_overrides: std::collections::BTreeMap::from([
+                render::DelegationPin::current(&snapshot, &row_id, true),
+            ]),
             ..Default::default()
         },
         ..Default::default()
@@ -678,7 +639,9 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
     let mut ui = render::ViewState {
         toggles: PresentationToggles {
             make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
-            delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
+            delegation_overrides: std::collections::BTreeMap::from([
+                render::DelegationPin::current(&snapshot, &parent_id, true),
+            ]),
             ..Default::default()
         },
         ..Default::default()
@@ -780,8 +743,7 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     let opened = compose(&ui, &pane_ui);
     assert_eq!(opened.scroll_offset, collapsed.scroll_offset);
     assert!(shows(&opened.lines, "live-child"));
-    assert!(shows(&opened.lines, "+1 older"));
-    assert!(!shows(&opened.lines, "old-child"));
+    assert!(shows(&opened.lines, "old-child"));
     click_delegation_header(
         &mut ui,
         &mut pane_ui,
@@ -812,7 +774,6 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
     let closed = compose(&ui, &pane_ui);
     assert!(!shows(&closed.lines, "live-child"));
-    assert!(!shows(&closed.lines, "+1 older"));
 
     click_delegation_header(
         &mut ui,
@@ -823,45 +784,13 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
         true,
     );
     let reopened = compose(&ui, &pane_ui);
-    let tail = reopened
-        .lines
-        .iter()
-        .position(|line| line.to_string().contains("+1 older"))
-        .unwrap();
-    pane_ui.interactions = reopened.interactions;
-    assert_eq!(
-        pane_ui.interactions.target_at(10, tail as u16),
-        Some(HitTarget::ToggleDelegationHistory(row_id.clone()))
-    );
-    reconcile_selection(&mut ui, &snapshot, Some(other));
-    assert_eq!(
-        handle_mouse_click(10, tail as u16, &mut ui, &mut pane_ui, &snapshot),
-        InputOutcome {
-            redraw: true,
-            effects: vec![InputEffect::Focus(pane_of(&snapshot, 0))],
-        }
-    );
-    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
-    let history = compose(&ui, &pane_ui);
-    assert!(shows(&history.lines, "live-child"));
-    assert!(shows(&history.lines, "old-child"));
-    assert!(!shows(&history.lines, "+1 older"));
-    let mut ordinals = (0..history.interactions.line_count())
-        .filter_map(|line| history.interactions.row_at_line(line))
+    assert!(shows(&reopened.lines, "live-child"));
+    assert!(shows(&reopened.lines, "old-child"));
+    let mut ordinals = (0..reopened.interactions.line_count())
+        .filter_map(|line| reopened.interactions.row_at_line(line))
         .collect::<Vec<_>>();
     ordinals.dedup();
     assert_eq!(ordinals, vec![0, 1]);
-
-    // Closing the section folds the history, so reopening starts from the bands.
-    click_delegation_header(
-        &mut ui,
-        &mut pane_ui,
-        &snapshot,
-        history.interactions,
-        &row_id,
-        false,
-    );
-    assert!(!ui.toggles.delegation_history.contains_key(&row_id));
 }
 
 #[test]
@@ -873,69 +802,105 @@ fn delegation_click_without_a_parent_pane_only_toggles() {
     )[0]
     .pane = None;
     let other = pane_of(&snapshot, 1);
-    for target in [
-        HitTarget::ToggleDelegation {
-            row: row_id.clone(),
-            open: true,
-        },
-        HitTarget::ToggleDelegationHistory(row_id.clone()),
-    ] {
-        let mut ui = ViewState::default();
-        let mut pane_ui = UiState::default();
-        reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
-        pane_ui.interactions = render::FrameInteractions::from_parts(
-            Vec::new(),
-            vec![render::HitRegion::whole_line(0, target.clone())],
-        );
-        assert_eq!(
-            handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
-            InputOutcome::redraw()
-        );
-        assert_eq!(ui.selected_pane, Some(other.clone()));
-        match target {
-            HitTarget::ToggleDelegation { .. } => {
-                assert_eq!(ui.toggles.delegation_overrides.get(&row_id), Some(&true))
-            }
-            _ => assert!(ui.toggles.delegation_history.contains_key(&row_id)),
-        }
-    }
+    let target = HitTarget::ToggleDelegation {
+        row: row_id.clone(),
+        open: true,
+    };
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
+    pane_ui.interactions = render::FrameInteractions::from_parts(
+        Vec::new(),
+        vec![render::HitRegion::whole_line(0, target)],
+    );
+    assert_eq!(
+        handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert_eq!(ui.selected_pane, Some(other));
+    assert_eq!(
+        ui.toggles
+            .delegation_overrides
+            .get(&row_id)
+            .map(|pin| pin.open),
+        Some(true)
+    );
 }
 
 #[test]
-fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stays() {
-    let mut snapshot = delegation_snapshot();
-    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let mut ui = ViewState::default();
-    let mut pane_ui = UiState::default();
-    set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
-    toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
-    assert!(ui.toggles.delegation_history.contains_key(&row_id));
-    std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-    )[0]
-    .as_agent_mut()
-    .unwrap()
-    .user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1));
-    let theme = pane_ui.theme(&snapshot.theme);
-    let stale = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
-    assert!(
-        !stale
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("old-child")),
-        "stale history is inert before pruning"
-    );
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
-    assert!(!ui.toggles.delegation_history.contains_key(&row_id));
-    assert_eq!(ui.toggles.delegation_overrides.get(&row_id), Some(&true));
-    toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+fn a_delegation_pin_holds_for_the_parents_turn_and_lapses_when_it_moves() {
+    for unstamped in [false, true] {
+        let mut snapshot = delegation_snapshot();
+        let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+        let set_turn = |snapshot: &mut SidebarSnapshot, turn| {
+            std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            )[0]
+            .as_agent_mut()
+            .unwrap()
+            .user_turn_started_at = turn;
+        };
+        if unstamped {
+            set_turn(&mut snapshot, None);
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
+        let mut pane_ui = UiState::default();
+        let shows_child = |ui: &ViewState, pane_ui: &mut UiState, snapshot: &SidebarSnapshot| {
+            let theme = pane_ui.theme(&snapshot.theme);
+            let lines = render::compose_lines(snapshot, None, ui, pane_ui, theme.as_ref(), 54, 64);
+            shows(&lines.lines, "live-child")
+        };
+        // Unselected, the card is closed by default; the pin opens it, and a
+        // draw keeps the pin while the turn holds, `None` included.
+        let mut ui = ViewState::default();
+        set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
+        render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
+        assert!(
+            shows_child(&ui, &mut pane_ui, &snapshot),
+            "unstamped={unstamped}"
+        );
+        assert!(ui.toggles.delegation_overrides.contains_key(&row_id));
+        let next_turn = snapshot.now + std::time::Duration::from_secs(1);
+        set_turn(&mut snapshot, Some(next_turn));
+        assert!(
+            !shows_child(&ui, &mut pane_ui, &snapshot),
+            "a pin from another turn is inert before pruning"
+        );
+        render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
+        assert!(!ui.toggles.delegation_overrides.contains_key(&row_id));
+
+        // Selected, the card is open by default; a closing pin lapses back to open.
+        let mut ui = ViewState::default();
+        reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
+        set_delegation_open(&mut ui, &snapshot, row_id.clone(), false);
+        assert!(!shows_child(&ui, &mut pane_ui, &snapshot));
+        let next_turn = snapshot.now + std::time::Duration::from_secs(2);
+        set_turn(&mut snapshot, Some(next_turn));
+        assert!(shows_child(&ui, &mut pane_ui, &snapshot));
+
+        // A pin taken in the current turn on a card with nothing current to
+        // count opens nothing, and it drops with its row.
+        set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
+        let card = std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0]
+        .as_agent_mut()
+        .unwrap();
+        for child in &mut card.sub_agents {
+            child.prior_turn = true;
+        }
+        assert_eq!(
+            ui.delegation_open(&snapshot, 0),
+            Some((row_id.clone(), false))
+        );
+        std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )
         .remove(0);
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
-    assert!(!ui.toggles.delegation_history.contains_key(&row_id));
-    assert!(!ui.toggles.delegation_overrides.contains_key(&row_id));
+        render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
+        assert!(!ui.toggles.delegation_overrides.contains_key(&row_id));
+    }
 }
 
 #[test]
@@ -3019,7 +2984,9 @@ fn revealing_view(snapshot: &SidebarSnapshot) -> (ViewState, UiState) {
     let parent = snapshot.worktree_groups[0].rows[1].id.clone();
     let mut view = ViewState {
         toggles: PresentationToggles {
-            delegation_overrides: std::collections::BTreeMap::from([(parent, true)]),
+            delegation_overrides: std::collections::BTreeMap::from([
+                render::DelegationPin::current(snapshot, &parent, true),
+            ]),
             ..Default::default()
         },
         ..Default::default()

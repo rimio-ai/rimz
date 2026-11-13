@@ -741,8 +741,12 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
             .any(|child| child.id == "child" && child.prior_turn)
     );
     assert!(card.current_sub_agents().all(|child| child.id != "child"));
-    assert_eq!(card.sub_agent_count, 2);
-    assert!((card.sub_agent_cost_usd.expect("known child cost") - 0.67).abs() < 1e-9);
+    let child_cost: f64 = card
+        .sub_agents
+        .iter()
+        .filter_map(|child| child.cost_usd)
+        .sum();
+    assert!((child_cost - 0.67).abs() < 1e-9);
     assert_eq!(card.delegated_cost_usd, Some(0.42));
 }
 
@@ -915,11 +919,6 @@ fn sub_agent_retention_tracks_the_parent_turn_boundary() {
                 "{label}"
             );
         }
-        assert_eq!(
-            rows[0].as_agent().expect("parent card").sub_agent_count,
-            1,
-            "{label}"
-        );
     }
 }
 
@@ -1045,8 +1044,12 @@ fn mixed_children_attach_to_rendered_successor_not_live_predecessor() {
     assert_eq!(card.sub_agents.len(), 2);
     assert!(card.sub_agents.iter().any(|child| child.id == "launched"));
     assert!(card.sub_agents.iter().any(|child| child.id == "native"));
-    assert_eq!(card.sub_agent_count, 2);
-    assert_eq!(card.sub_agent_cost_usd, Some(0.75));
+    let child_cost: f64 = card
+        .sub_agents
+        .iter()
+        .filter_map(|child| child.cost_usd)
+        .sum();
+    assert!((child_cost - 0.75).abs() < 1e-9);
     assert_eq!(card.delegated_cost_usd, Some(0.5));
 }
 

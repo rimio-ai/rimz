@@ -563,7 +563,6 @@ fn focused_child_snapshot() -> SidebarSnapshot {
     )[0]
     .as_agent_mut()
     .unwrap();
-    card.sub_agent_count = 2;
     card.sub_agents = [
         ("explorer", Some(child.clone()), "inspect the click seam"),
         ("reviewer", None, "review the parent card"),
@@ -657,42 +656,6 @@ fn unselected_parent_does_not_mark_the_focused_child_entry() {
     assert!(rendered.lines().any(|line| line.contains("explorer")));
     assert!(!rendered.contains("  ▏ "));
     assert_snapshot("focused_child_unselected", rendered);
-}
-
-#[test]
-fn older_entry_marks_the_cursor_in_the_same_light_selection_tone() {
-    let mut snapshot = focused_child_snapshot();
-    let card = std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
-    )[0]
-    .as_agent_mut()
-    .unwrap();
-    card.sub_agents[1].status = AgentStatus::Success;
-    card.sub_agents[1].last_activity = snapshot.now - Duration::from_secs(3_600);
-    let theme = Theme::fixed(false);
-    let frame = compose_lines(
-        &snapshot,
-        None,
-        &ViewState {
-            selected_index: Some(0),
-            entry_cursor: Some(EntryCursor::Older),
-            ..Default::default()
-        },
-        &UiState::default(),
-        &theme,
-        54,
-        24,
-    );
-    let line = frame
-        .lines
-        .iter()
-        .find(|line| line.to_string().contains("+1 older"))
-        .unwrap();
-    let marker = line.spans.iter().find(|span| span.content == "▏");
-    assert!(marker.is_some(), "the older stop carries the entry cursor");
-    let style = marker.unwrap().style;
-    assert_eq!(style.fg, theme.selection().fg);
-    assert!(!style.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -943,8 +906,16 @@ fn paused_child_headline_stays_in_live_band() {
     }
 }
 
+/// Pin `row`'s delegation section open or closed, as a click on its line does.
+fn pin_delegation(ui: &mut ViewState, row: &SidebarRow, open: bool) {
+    let turn = row.as_agent().and_then(|agent| agent.user_turn_started_at);
+    ui.toggles
+        .delegation_overrides
+        .insert(row.id.clone(), DelegationPin { open, turn });
+}
+
 #[test]
-fn delegation_bands_keep_live_children_and_fold_older_ones() {
+fn delegation_lists_unfinished_then_the_newest_five_finished_and_counts_the_rest() {
     let mut parent = agent(
         "parent",
         "claude",
@@ -955,9 +926,9 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
     );
     parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(3_600));
     let mut agents = vec![parent];
-    // Spawn order task-0..task-8. task-1 and task-4 still run; the finished
-    // children landed out of spawn order, six inside the 15m window (the cap
-    // keeps five) and one outside it.
+    // Spawn order task-0..task-8, all inside the parent's turn. task-1 and
+    // task-4 still run; seven finished out of spawn order, so the newest five
+    // list and two count behind the remainder line.
     let landed_secs_ago = [300, 0, 60, 780, 0, 600, 1_200, 180, 420];
     for (index, ago) in landed_secs_ago.into_iter().enumerate() {
         let running = matches!(index, 1 | 4);
@@ -977,11 +948,26 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
         child.registered_at = Some(fixed_now() - Duration::from_secs(1_300 - index as u64));
         child.last_activity = fixed_now() - Duration::from_secs(if running { 5 } else { ago });
         child.last_seen = child.last_activity;
+        child.subagent_cost_usd = Some(0.10);
         agents.push(child);
     }
+    // Finished before the parent's turn: retained by the projection, but no
+    // row, count, or cost on the card.
+    let mut prior = agent(
+        "child-prior",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("task-prior"),
+    );
+    prior.parent_agent_id = Some("parent".into());
+    prior.registered_at = Some(fixed_now() - Duration::from_secs(5_000));
+    prior.last_activity = fixed_now() - Duration::from_secs(4_000);
+    prior.last_seen = prior.last_activity;
+    prior.subagent_cost_usd = Some(5.0);
+    agents.push(prior);
     let mut snapshot = snapshot_with(agents);
-    // A pending wait sits between the recent band and the folded tail, so the
-    // history rows must land after it.
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         [0]
     .as_agent_mut()
@@ -996,7 +982,7 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
         armed_at: Some(fixed_now()),
     });
     let row = &snapshot.worktree_groups[0].rows[0];
-    let turn = row.as_agent().unwrap().user_turn_started_at;
+    assert_eq!(row.as_agent().unwrap().sub_agents.len(), 10);
     let entries = |rendered: &str| {
         rendered
             .lines()
@@ -1008,57 +994,52 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
             .collect::<Vec<_>>()
     };
     let mut screens = Vec::new();
-    for (selected_index, open, history, name) in [
-        (0, None, false, "delegation_bands_selected"),
-        (0, None, true, "delegation_bands_history"),
-        (usize::MAX, None, false, "delegation_bands_unselected"),
-        (0, Some(false), false, "delegation_bands_override_closed"),
+    for (selected_index, open, name) in [
+        (0, None, "delegation_bands_selected"),
+        (usize::MAX, None, "delegation_bands_unselected"),
+        (0, Some(false), "delegation_bands_override_closed"),
     ] {
         let mut ui = ViewState {
             selected_index: Some(selected_index),
             ..Default::default()
         };
-        let pane_ui = UiState::default();
         if let Some(open) = open {
-            ui.toggles.delegation_overrides.insert(row.id.clone(), open);
+            pin_delegation(&mut ui, row, open);
         }
-        if history {
-            ui.toggles.delegation_history.insert(row.id.clone(), turn);
-        }
-        let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 44);
-        assert!(rendered.contains("subagents (9)"), "{rendered}");
+        let rendered =
+            snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 54, 44);
+        assert!(
+            rendered.lines().any(|line| line.contains("subagents (9)")
+                && line.trim_end_matches(['▐', ' ']).ends_with(" $0.90")),
+            "the line counts and prices the current children alone:\n{rendered}"
+        );
+        assert!(!rendered.contains("task-prior"), "{rendered}");
         assert_snapshot(name, rendered.clone());
         screens.push(rendered);
     }
-    let [selected, history, unselected, closed] = screens.as_slice() else {
-        unreachable!("four scenarios");
+    let [selected, unselected, closed] = screens.as_slice() else {
+        unreachable!("three scenarios");
     };
+    let listed = entries(selected);
     assert_eq!(
-        entries(selected),
+        listed,
         [
             "task-1", "task-4", "task-2", "task-7", "task-0", "task-8", "task-5"
         ]
     );
-    assert!(selected.contains("+2 older"), "{selected}");
-    let tail = selected
-        .lines()
-        .position(|line| line.contains("+2 older"))
-        .expect("folded tail");
-    assert!(
-        selected
-            .lines()
-            .take(tail)
-            .any(|line| line.contains("deploy"))
-    );
-    assert!(
-        history.lines().take(tail).eq(selected.lines().take(tail)),
-        "history must only append below the tail:\n{selected}\n{history}"
-    );
-    assert_eq!(&entries(history)[7..], ["task-3", "task-6"]);
-    assert!(!history.contains("older"), "{history}");
+    let lines: Vec<_> = selected.lines().collect();
+    let position = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} in\n{selected}"))
+    };
+    let remainder = position("2 more finished");
+    assert_eq!(listed.len() + 2, 9);
+    assert!(position("task-5") < remainder && remainder < position("deploy"));
     for screen in [unselected, closed] {
         assert!(entries(screen).is_empty(), "{screen}");
-        assert!(!screen.contains("older"), "{screen}");
+        assert!(!screen.contains("more finished"), "{screen}");
     }
 }
 
@@ -1283,12 +1264,11 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     );
 }
 
-#[test]
-fn subagent_stats_line_outlives_the_turn() {
+fn prior_turn_child_snapshot(parent_status: AgentStatus) -> SidebarSnapshot {
     let mut parent = agent(
         "claude-root",
         "claude",
-        AgentStatus::Running,
+        parent_status,
         Some("/repo/main"),
         Some("main"),
         Some("delegate"),
@@ -1316,25 +1296,38 @@ fn subagent_stats_line_outlives_the_turn() {
         ..crate::agents::AgentCost::default()
     });
     child.context = Some(context);
+    snapshot_with(vec![parent, child])
+}
 
-    let snapshot = snapshot_with(vec![parent, child]);
+#[test]
+fn prior_turn_children_leave_the_card_while_its_cost_keeps_them() {
+    let snapshot = prior_turn_child_snapshot(AgentStatus::Running);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert!(row.as_agent().unwrap().sub_agents[0].prior_turn);
     let theme = Theme::fixed(false);
-    let unselected = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
-    assert_eq!(unselected.len(), 5, "{}", unselected.join("\n"));
-    assert!(
-        unselected[4].contains("⧉ subagents (1)") && unselected[4].contains("$0.42"),
-        "{}",
-        unselected.join("\n")
-    );
-
-    // The child finished before the parent's current turn but landed inside
-    // the recent window, so the selected card still lists it with its age.
-    let selected = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert_eq!(selected.len(), 7, "{}", selected.join("\n"));
-    assert!(selected[5].contains("⧉ subagents (1)"));
-    assert!(selected[6].contains("map sidebar") && selected[6].contains("1m $0.42"));
-    assert!(!selected.iter().any(|line| line.contains("older")));
-
+    for selected in [usize::MAX, 0] {
+        let lines = line_texts(&group_lines(&snapshot, &theme, selected));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("subagents") || line.contains("map sidebar")),
+            "{}",
+            lines.join("\n")
+        );
+        // The parent's own cost still carries the launched child's spend.
+        assert!(lines[1].contains("$0.42"), "{}", lines.join("\n"));
+    }
+    for open in [true, false] {
+        let mut ui = ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        };
+        pin_delegation(&mut ui, row, open);
+        let rendered =
+            snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &UiState::default(), 60, 20);
+        assert!(!rendered.contains("subagents"), "{rendered}");
+        assert!(!rendered.contains("map sidebar"), "{rendered}");
+    }
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -1350,10 +1343,141 @@ fn subagent_stats_line_outlives_the_turn() {
 }
 
 #[test]
-fn all_older_children_open_in_one_click_without_a_lone_fold() {
-    // Every child landed outside the recent window, so no live or recent row
-    // is visible. Opening the section shows the older rows directly rather
-    // than a lone `+K older` fold that would cost a second click.
+fn an_open_pin_with_nothing_to_count_lets_a_quiet_card_go_stale() {
+    let mut snapshot = prior_turn_child_snapshot(AgentStatus::Success);
+    snapshot.theme.display.stale_after_secs = 5;
+    let row = snapshot.rows_mut().next().unwrap();
+    row.unread = false;
+    row.last_activity = fixed_now() - Duration::from_secs(600);
+    let row = snapshot.worktree_groups[0].rows[0].clone();
+    let draw = |snapshot: &SidebarSnapshot, pinned: bool| {
+        let mut ui = ViewState::default();
+        if pinned {
+            pin_delegation(&mut ui, &row, true);
+        }
+        snapshot_to_screen_with_alert_and_ui(snapshot, None, &ui, &UiState::default(), 60, 20)
+    };
+    let stale = draw(&snapshot, false);
+    assert_eq!(draw(&snapshot, true), stale);
+    assert!(!stale.contains("subagents"), "{stale}");
+    // The same pin opens the section, and so holds the card open, once a
+    // current child gives it something to count.
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents[0]
+        .prior_turn = false;
+    let open = draw(&snapshot, true);
+    assert!(open.contains("map sidebar"), "{open}");
+    assert_ne!(open, stale);
+}
+
+#[test]
+fn waits_keep_the_line_and_entries_without_a_current_child() {
+    let mut snapshot = prior_turn_child_snapshot(AgentStatus::Running);
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        [0]
+    .as_agent_mut()
+    .unwrap()
+    .pending_waits
+    .push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
+        name: "deploy".to_owned(),
+        trigger: PendingWaitTrigger::Signal {
+            selector: "deploy.done".to_owned(),
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let lines = line_texts(&group_lines(&snapshot, &Theme::fixed(false), 0));
+    let text = lines.join("\n");
+    assert!(
+        text.contains("⧖ waits (1)") && !text.contains("subagents"),
+        "{text}"
+    );
+    assert!(
+        text.contains("deploy") && !text.contains("map sidebar"),
+        "{text}"
+    );
+}
+
+#[test]
+fn resting_unreached_cards_show_the_closed_line_for_a_current_child() {
+    for status in [AgentStatus::Idle, AgentStatus::Success] {
+        let mut snapshot = prior_turn_child_snapshot(status);
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
+        let card = row.as_agent_mut().unwrap();
+        card.sub_agents[0].prior_turn = false;
+        let lines = line_texts(&group_lines(&snapshot, &Theme::fixed(false), usize::MAX));
+        let text = lines.join("\n");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("⧉ subagents (1)") && line.contains("$0.42")),
+            "{status:?}:\n{text}"
+        );
+        assert!(!text.contains("map sidebar"), "{status:?}:\n{text}");
+    }
+}
+
+#[test]
+fn prior_turn_children_do_not_widen_the_entry_grid() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(600));
+    let mut current = agent(
+        "child-now",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("task-now"),
+    );
+    current.parent_agent_id = Some("parent".into());
+    current.model = Some("claude-haiku-4-5".to_owned());
+    current.last_activity = fixed_now() - Duration::from_secs(60);
+    current.last_seen = current.last_activity;
+    let mut prior = agent(
+        "child-prior",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("task-prior"),
+    );
+    prior.parent_agent_id = Some("parent".into());
+    prior.model = Some("claude-opus-4-8".to_owned());
+    prior.usage.fresh_input_tokens = Some(1_234_000);
+    prior.last_activity = fixed_now() - Duration::from_secs(1_200);
+    prior.last_seen = prior.last_activity;
+    let theme = Theme::fixed(false);
+    let alone = line_texts(&group_lines(
+        &snapshot_with(vec![parent.clone(), current.clone()]),
+        &theme,
+        0,
+    ));
+    let beside = line_texts(&group_lines(
+        &snapshot_with(vec![parent, current, prior]),
+        &theme,
+        0,
+    ));
+    assert_eq!(alone, beside);
+    assert!(alone.iter().any(|line| line.contains("Haiku 4.5")));
+}
+
+#[test]
+fn an_open_card_lists_every_current_finished_child_up_to_five() {
+    // Every child finished inside the parent's turn, long ago by the clock:
+    // the open section lists them all with no remainder line.
     let mut parent = agent(
         "claude-root",
         "claude",
@@ -1384,12 +1508,10 @@ fn all_older_children_open_in_one_click_without_a_lone_fold() {
         ..Default::default()
     };
     let pane_ui = UiState::default();
-    ui.toggles
-        .delegation_overrides
-        .insert(snapshot.worktree_groups[0].rows[0].id.clone(), true);
+    pin_delegation(&mut ui, &snapshot.worktree_groups[0].rows[0], true);
     let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
     assert!(text.contains("subagents (3)"), "{text}");
-    assert!(!text.contains("older"), "{text}");
+    assert!(!text.contains("more finished"), "{text}");
     for index in 0..3 {
         assert!(text.contains(&format!("task-{index}")), "{text}");
     }
