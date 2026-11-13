@@ -181,7 +181,8 @@ fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
     blocking_check(&env);
     let blocker = start_blocker(&env);
     arrive(&env, "a", "b");
-    let row = last_loop_record(&env);
+    // The detached cancel appends the blocker's row whenever it lands, so read by position.
+    let row = read_loop_run_records(&env).swap_remove(1);
     assert_eq!(row.result, LoopRunResult::Deferred);
     assert!(
         row.error
