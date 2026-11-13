@@ -237,6 +237,7 @@ fn answer_raised(
         &ctx.store,
         DispatchRequest {
             about_run: None,
+            reply_wanted: false,
             target: handle.to_owned(),
             text,
             target_scope: None,

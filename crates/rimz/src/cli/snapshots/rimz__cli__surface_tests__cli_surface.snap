@@ -2361,6 +2361,7 @@ rimz message (aliases: msg)
     --no-enter  [action=set-true takes=0..=0]
     --no-from  [action=set-true takes=0..=0]
     --on <ON>  [action=set takes=1..=1]
+    --reply-wanted  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --schedule <DUR|HH:MM>  [action=set takes=1..=1]
     --smart-compact <PCT|TOKENS>  [action=set takes=1..=1]

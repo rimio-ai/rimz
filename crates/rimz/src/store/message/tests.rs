@@ -733,6 +733,16 @@ fn message_header_parser_rejects_near_misses() {
         "Type: FUTURE_NOTICE \nFrom: @rimz\nContent:\nship it",
         "Type: NÖTICE\nFrom: @rimz\nContent:\nship it",
         "Type: \nFrom: @rimz\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner), wants a reply extra\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner), wants a reply \nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner),wants a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner) , wants a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner) wants a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner), Wants a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder, wants  a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder, wants a reply, wants a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @, wants a reply\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (), wants a reply\nContent:\nship it",
         "ordinary text: with colon",
     ] {
         assert_eq!(parse_message_header(text), None, "{text}");
@@ -763,6 +773,144 @@ fn message_header_parser_strips_only_a_valid_label() {
             Some((kind, "@calm-fox#docs".to_owned(), "ship it".to_owned()))
         );
     }
+}
+
+#[test]
+fn marked_from_lines_parse_as_their_unmarked_sender() {
+    for (from, handle) in [
+        ("@swift-otter (planner), wants a reply", "@swift-otter"),
+        ("@planner, wants a reply", "@planner"),
+        (
+            "@swift-otter#auth (planner), wants a reply",
+            "@swift-otter#auth",
+        ),
+        (
+            "@swift-otter#a,b (planner), wants a reply",
+            "@swift-otter#a,b",
+        ),
+        ("@planner#a,b, wants a reply", "@planner#a,b"),
+    ] {
+        let prompt = format!("Type: AGENT_MESSAGE\nFrom: {from}\nContent:\nDid it land?");
+        assert_eq!(
+            parse_message_header(&prompt),
+            Some((
+                HeaderKind::Agent,
+                handle.to_owned(),
+                "Did it land?".to_owned()
+            )),
+            "{from}"
+        );
+    }
+}
+
+#[test]
+fn marked_agent_message_aligns_beside_unmarked_and_harness_sections() {
+    let recipient = agent("session-recipient", None);
+    let record = |id: u64, text: &str, sender: MessageSender, reply_wanted: bool| {
+        let mut record = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+            &recipient,
+            text.to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(sender);
+        record.message_id = message_id(id);
+        record.reply_wanted = reply_wanted;
+        record
+    };
+    let marked = record(1, "Did it land?", agent_sender("planner", None), true);
+    let unmarked = record(2, "noted", agent_sender("coder", Some("a,b")), false);
+    let wait = record(
+        3,
+        "check back",
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        },
+        false,
+    );
+    let sections = [
+        "Type: AGENT_MESSAGE\nFrom: @planner, wants a reply\nContent:\nDid it land?",
+        "Type: AGENT_MESSAGE\nFrom: @coder#a,b\nContent:\nnoted",
+        "Type: WAIT\nFrom: @rimz\nContent:\ncheck back",
+    ];
+    let prompt = sections.join("\n\n");
+    let records = [&marked, &unmarked, &wait];
+
+    assert_eq!(
+        align_submitted_prompt(&prompt, &records),
+        Some((None, sections.to_vec(), None))
+    );
+    assert_eq!(
+        align_submitted_prompt(sections[0], &[&marked]),
+        Some((None, vec![sections[0]], None))
+    );
+    assert_eq!(split_batched_prompt(&prompt), sections);
+    let classified = classify_submitted_prompt(&prompt, &records, &[])
+        .into_iter()
+        .map(|section| {
+            (
+                section.origin,
+                section.text,
+                section.record.map(|record| record.message_id.clone()),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        classified,
+        vec![
+            (
+                SectionOrigin::Agent("@planner".to_owned()),
+                "Did it land?".to_owned(),
+                Some(marked.message_id.clone())
+            ),
+            (
+                SectionOrigin::Agent("@coder#a,b".to_owned()),
+                "noted".to_owned(),
+                Some(unmarked.message_id.clone())
+            ),
+            (
+                SectionOrigin::Notice("@rimz".to_owned()),
+                "check back".to_owned(),
+                Some(wait.message_id.clone())
+            ),
+        ]
+    );
+    assert!(!prompt_is_wake_only(&prompt));
+    assert!(!prompt_is_wake_only(sections[0]));
+    assert!(prompt_is_wake_only(sections[2]));
+    assert!(prompt_is_harness_delivered(sections[0]));
+}
+
+#[test]
+fn reply_wanted_round_trips_through_record_queue_and_requeue() {
+    let unmarked = delivery_message(1, &agent("child", None), DeliveryGate::Done, None)
+        .with_sender(agent_sender("planner", None));
+    assert!(
+        serde_json::to_value(&unmarked)
+            .unwrap()
+            .get("reply_wanted")
+            .is_none()
+    );
+    let mut marked = unmarked.clone();
+    marked.message_id = message_id(2);
+    marked.reply_wanted = true;
+    let encoded = serde_json::to_value(&marked).unwrap();
+    assert_eq!(encoded["reply_wanted"], true);
+    assert_eq!(
+        serde_json::from_value::<MessageRecord>(encoded).unwrap(),
+        marked
+    );
+    assert!(MessageRecord::requeue_from(&marked).reply_wanted);
+    assert!(!MessageRecord::requeue_from(&unmarked).reply_wanted);
+
+    let dir = tempfile::tempdir().unwrap();
+    let messages_dir = dir.path().join("messages");
+    std::fs::create_dir_all(&messages_dir).unwrap();
+    codec::write_queue(&messages_dir, &[unmarked.clone(), marked.clone()]).unwrap();
+    assert_eq!(
+        codec::read_queue(&messages_dir).unwrap(),
+        vec![unmarked, marked]
+    );
 }
 
 #[test]

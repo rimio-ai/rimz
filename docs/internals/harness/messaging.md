@@ -53,6 +53,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `channel` | Receiver lane at enqueue |
 | `sender` | `Human`, `Agent { kind, agent_id, name, profile, role, channel }`, `Harness { notice }` (rendered as `@rimz`), or `System` (rendered as `rimz`). `Subagent { kind, name }` decodes but nothing writes it |
 | `automated` | Background orchestration traffic. Never earns a dollar-budget waiver, and makes a queued command perishable |
+| `reply_wanted` | The sender's `--reply-wanted`, stamped from `DispatchRequest.reply_wanted` on every fan-out record. `address::record_header` ends the agent `From:` line with `store::message::REPLY_WANTED_MARK`; nothing else reads it. Omitted when false and preserved by requeue |
 | `in_reply_to` | The messages that opened the sender's authoring turn. Empty starts a new conversation ([transcript.md § Causality](./transcript.md#causality)) |
 | `about_run` | Optional run id. Delivery withdraws the record when that run is terminal or gone, and a deadline stop also when the run no longer holds its claimed stop rung; omitted when absent and preserved by requeue |
 | `body` | `Prompt` (pasted) or `Command` (typed, such as `/compact`) |
@@ -555,7 +556,7 @@ Content:
 
 | `Type` | Sent for | `From` |
 | --- | --- | --- |
-| `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base |
+| `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base, then `, wants a reply` when the record's `reply_wanted` is set |
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
@@ -578,7 +579,7 @@ A handle gains `#channel` when the delivery crosses lanes. The recipient's lane 
 
 `address::agent_sender_handle` uses `agents::petname::sender_handle`: role, else explicit or pet name, else kind. Unlike the [listing handle](./fleet.md#petnames-and-the-canonical-handle), it never depends on a profile's or kind's current uniqueness. A matching live peer supplies identity and channel, and otherwise the stored sender fields do. A bare-resumed launched agent still carries a minted name recovered through ancestry. The kind fallback is for senders with no role or name, such as a hook-registered agent or an unknown parent.
 
-The receiver's turn-start hook parses every notice header into transcript entries with body text only ([transcript.md § Writing entries](./transcript.md#writing-entries)). The reader uses the writer's `HarnessNotice` vocabulary, including restarted-child, stalled-child, queued, and undelivered notices. An unknown type matching `[A-Z][A-Z0-9_]*` is also a notice when its next line is exactly `From: @rimz`; an unknown type from any other sender stays unrecognized. Named types accept the existing sender grammar: `store::message::parse_sender_handle`, shared by header parsing and prompt alignment, accepts only `From: @<handle>` or `From: @<handle> (<label>)`. The handle is non-empty and whitespace-free. The label is non-empty, whitespace-free, and free of parentheses, and nothing may follow the closing parenthesis. The label is stripped before writing `entry.from`, which leaves the bare `@handle[#channel]` reply address.
+The receiver's turn-start hook parses every notice header into transcript entries with body text only ([transcript.md § Writing entries](./transcript.md#writing-entries)). The reader uses the writer's `HarnessNotice` vocabulary, including restarted-child, stalled-child, queued, and undelivered notices. An unknown type matching `[A-Z][A-Z0-9_]*` is also a notice when its next line is exactly `From: @rimz`; an unknown type from any other sender stays unrecognized. Named types accept the existing sender grammar: `store::message::parse_sender_handle`, shared by header parsing and prompt alignment, accepts only `From: @<handle>` or `From: @<handle> (<label>)`, either optionally followed by exactly `, wants a reply` (`REPLY_WANTED_MARK`, the constant the writer appends). The mark is stripped from the end of the line, never by splitting at a comma, since a `#channel` suffix may hold one. The handle is non-empty and whitespace-free. The label is non-empty, whitespace-free, and free of parentheses, and nothing but the mark may follow the closing parenthesis. The mark and the label are stripped before writing `entry.from`, which leaves the bare `@handle[#channel]` reply address; no parsed header, transcript entry, or event payload carries the mark.
 
 ## Compaction commands
 
@@ -855,7 +856,7 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 ### Mixed binaries
 
-A room can be shared by binaries of different versions, and six record changes have a compatibility edge:
+A room can be shared by binaries of different versions, and seven record changes have a compatibility edge:
 
 - `Expired` is a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries fail the history reads behind `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup. The terminal commit removes the record from the live queue, so older queue transactions never meet the status. Event-log readers keep unknown methods through their catch-all.
 - `queued_notice_at` is dropped by an older binary that rewrites the queue, so a later sweep by a newer binary can send a second still-queued notice. No status or event method marks this.
@@ -863,6 +864,7 @@ A room can be shared by binaries of different versions, and six record changes h
 - `idle_since` is dropped by an older binary that rewrites the queue, so an idle compaction can then deliver after the agent has taken a turn. Untagged records retain their existing JSON shape.
 - Harness notice strings a binary does not know survive its queue rewrites as `HarnessNotice::Other`.
 - `reply_wait` and `reply_wait_lease`, which an older binary's `rimz message --wait` writes, decode and are dropped. A newer binary sends such a record's agent sender the ordinary undelivered and still-queued notices, and its queue rewrite removes both keys, so the older wait's cycle detection stops seeing that record.
+- `reply_wanted` is dropped by an older binary that rewrites the queue, so a later delivery prints the header without the mark. Unmarked records retain their existing JSON shape. A receiver whose turn-start hook runs an older binary cannot parse a marked `From:` line: the delivery stays unconfirmed and is resent like any unacknowledged prompt, and its transcript section is attributed to the user.
 
 ## The inbox verbs
 

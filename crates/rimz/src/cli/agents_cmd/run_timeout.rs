@@ -143,6 +143,7 @@ fn deadline_stop_request(
 ) -> rimz::message::dispatch::DispatchRequest {
     rimz::message::dispatch::DispatchRequest {
         about_run: Some(run_id.clone()),
+        reply_wanted: false,
         resuming_recipient: None,
         target,
         text,

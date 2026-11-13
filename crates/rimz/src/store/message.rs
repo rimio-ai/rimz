@@ -513,6 +513,10 @@ pub struct MessageRecord {
     /// Background orchestration traffic never earns a dollar-budget waiver.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automated: bool,
+    /// The sender asked for a message back: the delivered `From:` line ends with
+    /// `REPLY_WANTED_MARK`, and nothing else reads it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reply_wanted: bool,
     #[serde(default)]
     pub body: MessageBody,
     pub text: String,
@@ -702,6 +706,7 @@ impl MessageRecord {
             channel: None,
             sender: MessageSender::Human,
             automated: false,
+            reply_wanted: false,
             body: MessageBody::Prompt,
             text,
             enter,
@@ -777,6 +782,7 @@ impl MessageRecord {
                 .collect(),
         );
         message.soft_compact = record.soft_compact;
+        message.reply_wanted = record.reply_wanted;
         message
     }
 
@@ -1304,6 +1310,9 @@ fn classify_header_start(line: &str, from: Option<&str>) -> Option<HeaderKind> {
     Some(HeaderKind::Notice(notice))
 }
 
+/// What a `From:` line ends with when its sender asked for a message back.
+pub(crate) const REPLY_WANTED_MARK: &str = ", wants a reply";
+
 /// Split a delivered prompt into its structured header and body.
 ///
 /// The handle keeps its leading `@` and any `#channel` suffix. System and
@@ -1319,6 +1328,7 @@ pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> 
 }
 
 fn parse_sender_handle(from: &str) -> Option<&str> {
+    let from = from.strip_suffix(REPLY_WANTED_MARK).unwrap_or(from);
     let handle = if let Some((handle, label)) = from.split_once(" (") {
         let label = label.strip_suffix(')')?;
         if label.is_empty()

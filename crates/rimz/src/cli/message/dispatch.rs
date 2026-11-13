@@ -43,7 +43,11 @@ pub(super) fn send_message(
         file,
         stdin: _,
         no_from,
+        reply_wanted,
     } = flags;
+    if reply_wanted {
+        refuse_unmarkable(no_from, create)?;
+    }
     let ctx = Ctx::open(globals)?;
     let caller = send::resolve_caller(&ctx.store)?;
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
@@ -65,9 +69,15 @@ pub(super) fn send_message(
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let current_channel = ctx.channel().cloned();
     let sender = send::sender_for(caller.as_ref(), current_channel.as_ref(), no_from);
+    if reply_wanted && !matches!(sender, MessageSender::Agent { .. }) {
+        bail!(
+            "--reply-wanted asks for a message back, and a user shell has no inbox one could reach; send without --reply-wanted"
+        );
+    }
     let kind = mode.kind();
     let request = || DispatchRequest {
         about_run: None,
+        reply_wanted,
         resuming_recipient: None,
         target: target.clone(),
         text: text.clone(),
@@ -113,6 +123,26 @@ pub(super) fn send_message(
         Err(err) => return Err(map_dispatch_err(err, &ctx)),
     };
     send::report_dispatch(kind, &target, &result.outcomes, &result.compacted)
+}
+
+/// Refuse `--reply-wanted` where no header would carry the mark: `--create` may
+/// launch with the text as a bare first prompt whether or not the target exists.
+fn refuse_unmarkable(no_from: bool, create: bool) -> Result<()> {
+    if no_from {
+        return Err(UsageError::new(
+            "--reply-wanted needs the message header to carry it, and --no-from sends none; send without --reply-wanted"
+                .to_owned(),
+        )
+        .into());
+    }
+    if create {
+        return Err(UsageError::new(
+            "--reply-wanted cannot mark a first prompt --create launches an agent with; send without --reply-wanted"
+                .to_owned(),
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// Validate the flag combinations a send mode forbids, then resolve it into the

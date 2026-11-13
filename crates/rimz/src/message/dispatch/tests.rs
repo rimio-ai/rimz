@@ -54,6 +54,7 @@ fn completed_permission_cell_allows_unforced_steer_and_interrupt() {
     }];
     let mut request = DispatchRequest {
         about_run: None,
+        reply_wanted: false,
         target: "@session".into(),
         text: "continue".into(),
         target_scope: None,
@@ -126,6 +127,7 @@ fn dispatch_copies_only_live_rows_and_the_resuming_child() {
         &frame,
         DispatchRequest {
             about_run: None,
+            reply_wanted: false,
             target: "@ended".into(),
             text: "resume".into(),
             target_scope: None,
@@ -234,6 +236,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
             after: Vec::new(),
             when: Vec::new(),
             about_run: None,
+            reply_wanted: false,
         },
     };
     let mut actual = Vec::new();
@@ -386,6 +389,7 @@ fn resumed_provider_parks_until_registration_or_the_window() {
             after: Vec::new(),
             when: Vec::new(),
             about_run: None,
+            reply_wanted: false,
         },
     };
     let snapshot = snapshot_with_panes(vec![receiver.clone()], vec![pane.clone()]);
@@ -509,6 +513,7 @@ fn provisional_pane_skips_readiness_gate() {
             after: Vec::new(),
             when: Vec::new(),
             about_run: None,
+            reply_wanted: false,
         },
     };
 

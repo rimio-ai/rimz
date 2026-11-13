@@ -125,6 +125,7 @@ fn targetless_send_flags_refuse_with_usage_error() {
         vec!["--file", "missing.txt"],
         vec!["--stdin"],
         vec!["--no-from"],
+        vec!["--reply-wanted"],
         vec!["--steer", "list"],
     ] {
         let output = env.rimz().arg("message").args(&flags).output().unwrap();
@@ -7207,6 +7208,245 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
         .find(|event| event.method == "message.sent")
         .expect("no-from sent event");
     assert_eq!(sent.params_value()["sender"]["origin"], "system");
+}
+
+#[test]
+fn reply_wanted_marks_the_header_and_confirms_under_its_sender() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-marked", "feature-marked", pane_env);
+    let marked = "Type: AGENT_MESSAGE\nFrom: @swift-otter (codex), wants a reply\nContent:\n";
+    let from_agent = |log: &str| {
+        let mut cmd = traced_rimz(&env, log);
+        cmd.env("RIMZ_AGENT_KIND", "codex")
+            .env("RIMZ_AGENT_NAME", "swift-otter");
+        cmd
+    };
+
+    let out = run_success(
+        from_agent("zellij-marked-steer.log").args([
+            "message",
+            "--steer",
+            "--reply-wanted",
+            "@claude",
+            "--",
+            "Did it land?",
+        ]),
+        "marked steer",
+    );
+    let message_id = sent_id_from_stdout(&out.stdout);
+    let payload = format!("{marked}Did it land?");
+    assert_text_then_enter(&env.project_root.join("zellij-marked-steer.log"), &payload);
+
+    let shown = run_success(
+        env.rimz().args(["message", "show", &message_id, "--json"]),
+        "message show --json",
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["message"]["reply_wanted"], true, "{shown}");
+    let shown = run_success(
+        env.rimz().args(["message", "show", &message_id]),
+        "message show",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains("\n  reply:    wanted\n"), "{shown}");
+    let listed = run_success(
+        env.rimz().args(["message", "list", "--all", "--json"]),
+        "message list --json",
+    );
+    let listed: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let rows = listed.as_array().expect("list rows");
+    let row = |id: &str| {
+        rows.iter()
+            .find(|row| row["message_id"] == id)
+            .unwrap_or_else(|| panic!("{id} listed: {listed}"))
+    };
+    assert_eq!(row(&message_id)["reply_wanted"], true);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-marked",
+            "prompt": payload,
+            "worktree_branch": "feature-marked",
+        }),
+        pane_env,
+    );
+    assert_eq!(delivered_message_ids(&env), vec![message_id.clone()]);
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("transcript");
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry.message_id.as_ref().map(ToString::to_string) == Some(message_id.clone())
+        })
+        .expect("transcript entry for the marked message");
+    assert_eq!(entry.entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(entry.from.as_deref(), Some("@swift-otter"));
+    assert_eq!(entry.text, "Did it land?");
+    let opened_by =
+        rimz::store::agent_context::read_one(&env.runtime_paths(), "claude", "sess-marked")
+            .expect("agent context")
+            .context
+            .turn_opened_by;
+    assert_eq!(
+        opened_by
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec![message_id]
+    );
+
+    let draft = run_success(
+        from_agent("zellij-marked-no-enter.log").args([
+            "message",
+            "--steer",
+            "--no-enter",
+            "--reply-wanted",
+            "@claude",
+            "--",
+            "draft",
+        ]),
+        "marked --no-enter steer",
+    );
+    sent_id_from_stdout(&draft.stdout);
+    let lines = trace_lines(&env.project_root.join("zellij-marked-no-enter.log"));
+    assert!(
+        lines
+            .iter()
+            .any(|line| is_paste(line, &format!("{marked}draft"))),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|line| is_enter_key(line)), "{lines:?}");
+}
+
+#[test]
+fn reply_wanted_rides_fanout_schedule_and_requeue() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_role_agent(&env, "claude", "sess-mark-a", "mark-a", false, None);
+    register_role_agent(&env, "claude", "sess-mark-b", "mark-b", false, None);
+
+    let out = run_success(
+        env.rimz()
+            .env("RIMZ_AGENT_KIND", "codex")
+            .env("RIMZ_AGENT_NAME", "swift-otter")
+            .args([
+                "message",
+                "--schedule",
+                "60m",
+                "--all",
+                "--reply-wanted",
+                "@claude",
+                "--",
+                "Did it land?",
+            ]),
+        "marked scheduled fan-out",
+    );
+    let pending = env.store().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 2, "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        pending
+            .iter()
+            .all(|record| record.reply_wanted && record.not_before.is_some()),
+        "{pending:?}"
+    );
+
+    let (canceled, leg) = (
+        pending[0].message_id.to_string(),
+        pending[0].agent_id.clone(),
+    );
+    run_success(
+        env.rimz().args(["message", "cancel", &canceled]),
+        "cancel one leg",
+    );
+    run_success(
+        env.rimz().args(["message", "requeue", &canceled]),
+        "requeue the canceled leg",
+    );
+    let pending = env.store().list_pending_messages().expect("pending queue");
+    let copy = pending
+        .iter()
+        .find(|record| record.agent_id == leg && record.message_id.as_str() != canceled)
+        .expect("requeued copy");
+    assert!(copy.reply_wanted, "{copy:?}");
+}
+
+#[test]
+fn reply_wanted_refuses_where_no_header_or_inbox_can_carry_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-refuse",
+        "feature-refuse",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let mut failures = Vec::new();
+    for (agent, flags, code, reason) in [
+        (
+            true,
+            vec!["--no-from"],
+            2,
+            "--reply-wanted needs the message header to carry it, and --no-from sends none; send without --reply-wanted",
+        ),
+        (
+            true,
+            vec!["--create"],
+            2,
+            "--reply-wanted cannot mark a first prompt --create launches an agent with; send without --reply-wanted",
+        ),
+        (
+            true,
+            vec!["--create", "--steer"],
+            2,
+            "--reply-wanted cannot mark a first prompt --create launches an agent with; send without --reply-wanted",
+        ),
+        (
+            false,
+            vec![],
+            1,
+            "--reply-wanted asks for a message back, and a user shell has no inbox one could reach; send without --reply-wanted",
+        ),
+    ] {
+        for target in ["@claude", "@codex"] {
+            let log = format!("zellij-refuse{}-{target}.log", flags.concat());
+            let mut cmd = traced_rimz(&env, &log);
+            if agent {
+                cmd.env("RIMZ_AGENT_KIND", "codex")
+                    .env("RIMZ_AGENT_NAME", "swift-otter");
+            }
+            let output = cmd
+                .args(["message", "--reply-wanted"])
+                .args(&flags)
+                .args([target, "--", "Did it land?"])
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let trace = trace_lines(&env.project_root.join(&log));
+            if output.status.code() != Some(code)
+                || !output.stdout.is_empty()
+                || stderr.trim() != format!("error: {reason}")
+                || trace
+                    .iter()
+                    .any(|line| line.contains("new-") || is_enter_key(line))
+            {
+                failures.push(format!(
+                    "{flags:?} {target} (agent {agent}): exit {:?}, stdout {:?}, stderr {stderr}, trace {trace:?}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(env.store().list_messages().unwrap().is_empty());
+    assert!(env.store().list_message_history().unwrap().is_empty());
 }
 
 #[test]
