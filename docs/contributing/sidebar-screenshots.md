@@ -4,6 +4,8 @@
 
 For clock, stage-flip, click-routing, native-subagent replay, and kitty-graphics capture and Ghostty replay checks in a disposable room, use the [sidebar live check](./sidebar-live-check.md).
 
+Scenario playback forces pixel mode off, so these PNGs draw the text bars: a change to a pixel-strip colour or shape is checked with the recorded capture in [Capture kitty graphics](./sidebar-live-check.md#capture-kitty-graphics), not here.
+
 The renderer uses `freeze` with the checked-in Ghostty TokyoNight config at [ghostty-tokyonight.json](../../xtask/assets/ghostty-tokyonight.json). The command writes PNGs under `target/screenshots/` by default and prints the path when the image lands.
 
 ## Bootstrap
