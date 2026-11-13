@@ -6765,10 +6765,10 @@ fn agents_list_filter_selects_children_closed_sessions_and_addresses() {
         run_agents_json_command(&env, session, &args)
     };
     assert_agent_ids(&list(&[]), &["parent"]);
-    assert_agent_ids(&list(&["--filter", "parent=*"]), &["kin", "child"]);
+    assert_agent_ids(&list(&["--filter", "parent=*"]), &["child", "kin"]);
     assert_agent_ids(
         &list(&["--filter", "parent=@seat-parent"]),
-        &["kin", "child"],
+        &["child", "kin"],
     );
     let closed = list(&["--filter", "live=no"]);
     assert_agent_ids(&closed, &["gone"]);
@@ -6971,15 +6971,19 @@ fn agents_command(env: &Env, session_name: &str, args: &[&str]) -> std::process:
     command
 }
 
+/// Asserts which agents a listing holds, whatever their row order: `expected`
+/// is given sorted. Fixtures registered back to back can share a registration
+/// millisecond, and the ranking then orders them by pane.
 fn assert_agent_ids(json: &serde_json::Value, expected: &[&str]) {
     assert_eq!(json["schema"], 2);
-    let actual: Vec<&str> = json
+    let mut actual: Vec<&str> = json
         .get("agents")
         .and_then(serde_json::Value::as_array)
         .expect("agent array")
         .iter()
         .map(|agent| agent["id"].as_str().expect("id"))
         .collect();
+    actual.sort_unstable();
     assert_eq!(actual, expected, "scoped list returned {json:#}");
 }
 
