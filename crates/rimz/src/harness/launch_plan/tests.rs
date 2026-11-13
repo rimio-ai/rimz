@@ -1622,16 +1622,23 @@ fn routine_permissions_cover_actions_children_and_isolations() {
         ),
         ("HOME".into(), home.display().to_string()),
     ]);
-    for (enabled, listed, rules) in [
-        (false, false, false),
-        (false, false, true),
-        (false, true, false),
-        (false, true, true),
-        (true, false, false),
-        (true, false, true),
-        (true, true, false),
-        (true, true, true),
+    // The home's note store links elsewhere; the grant names where it resolves.
+    let store = config.path().join("notes");
+    std::fs::create_dir(&store).unwrap();
+    let store_link = project.path().join("notes");
+    for (enabled, listed, rules, stored) in [
+        (false, false, false, false),
+        (false, false, true, true),
+        (false, true, false, true),
+        (false, true, true, false),
+        (true, false, false, true),
+        (true, false, true, false),
+        (true, true, false, false),
+        (true, true, true, true),
     ] {
+        if stored {
+            std::os::unix::fs::symlink(&store, &store_link).unwrap();
+        }
         let machine: crate::config::MachineConfig =
             toml::from_str(&format!("[agents]\nallow-routine-rimz = {enabled}")).unwrap();
         let effective =
@@ -1704,6 +1711,9 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                             dirs.clear();
                         }
                         dirs.push(run.clone());
+                        if stored {
+                            dirs.push(store.clone());
+                        }
                         dirs.push(added.path().to_path_buf());
                         assert_eq!(
                             value["permissions"]["additionalDirectories"],
@@ -1732,6 +1742,9 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                     }
                 }
             }
+        }
+        if stored {
+            std::fs::remove_file(&store_link).unwrap();
         }
     }
 }

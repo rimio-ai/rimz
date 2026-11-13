@@ -37,6 +37,8 @@ pub(super) struct LaunchReminders {
     pub permission_roots: Option<[PathBuf; 3]>,
     /// The canonical automation and team notes runs; empty in preflight compiles.
     pub notes_runs: Vec<PathBuf>,
+    /// The canonical home-wide note store, when it exists.
+    pub notes_store: Option<PathBuf>,
     /// The launch's temp unit and the room's shared dir; every compiled launch has them.
     pub files: Option<TempFiles>,
     pub workflow_definition: Option<PathBuf>,
@@ -74,6 +76,7 @@ impl Default for LaunchReminders {
             routine_rimz: None,
             permission_roots: None,
             notes_runs: Vec::new(),
+            notes_store: None,
             files: None,
             workflow_definition: None,
             model: true,

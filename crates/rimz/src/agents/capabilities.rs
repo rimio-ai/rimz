@@ -607,7 +607,8 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
-    /// Grant native file access to the checkout's archived team run, where supported.
+    /// Grant native file access to a notes folder (the checkout's team or
+    /// automation notes run, or the home-wide note store), where supported.
     fn allow_team_notes_args(
         &self,
         _run: &Path,
