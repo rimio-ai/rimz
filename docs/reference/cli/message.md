@@ -134,6 +134,8 @@ An address that matches several agents is an error that lists the handles, unles
 
 Each fan-out delivery starts with the typed selector, such as `@all, ` or `@codex, `, so every recipient reads a group message. Deliveries go out one after another, and an agent that cannot take the message now does not stop the rest.
 
+`rimz message --filter QUERY <TEXT>` and `rimz message - <TEXT>` send to a [selection](./agents.md#act-on-a-selection): the agents a filter matches, or one address per line on stdin. Under `--filter` the text is the only positional; put it after `--` when it starts with `-` or is a subcommand's name (`rimz message --filter QUERY -- list`), since a selection beside a subcommand refuses with exit 2. More than one recipient needs `--all`, which then acts as consent rather than widening an address. Each recipient gets the text with no group prefix, and it reaches the sender too when the selection names it. Each address resolves on its own, after the selection, to exactly one agent, the one selected; one that names another agent, several, an ended one, or none prints `error <address>: <reason>` while the rest still receive the message, and any miss exits `1`. With `-`, the body comes inline or from `--file`, since stdin carries the addresses: `--stdin` refuses with exit 2, as does `--create` with either form.
+
 | Flag | Effect |
 | --- | --- |
 | `--channel <NAME>` | Match only agents in that named channel. Same as an inline `#NAME`. Conflicts with `--worktree`. |
