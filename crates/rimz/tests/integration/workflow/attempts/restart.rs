@@ -18,12 +18,37 @@ pub(super) fn wait_for_pane_close(room: &Room, child: &mut std::process::Child) 
     }
 }
 
-/// Report the current attempt's launch in its own session, as its provider would: a launch
-/// holds the machine's start queue until it reports, so a relaunch would wait behind it.
-fn report_launch(room: &Room, id: &str, session: &str, owner: u32) {
+/// Report the `@break` agent's launch, as its provider would. A restart or resume detaches the
+/// debugger and leaves it running, so its launch keeps its machine turn until it reports. It
+/// reports from a pane of its own, beside the kept previous card's pane 61.
+fn report_break_launch(room: &Room, id: &str) {
     let run = room.attempt(id);
-    let payload = json!({"hook_event_name":"SessionStart"});
-    room.hook_in_session(id, &run, owner, session, payload, &[]);
+    room.list_pane(62, run.kind.as_str());
+    let payload = json!({
+        "hook_event_name":"SessionStart", "session_id":"break-session",
+        "cwd":room.env.project_root
+    });
+    let mut cmd = room.hook_command(run.kind.as_str());
+    cmd.env(
+        "RIMZ_AGENT_PID",
+        room.owner(run.run_id.as_str()).to_string(),
+    )
+    .env("RIMZ_RUN_ID", run.run_id.as_str())
+    .env("RIMZ_AGENT_NAME", run.agent_name.as_deref().unwrap())
+    .env("RIMZ_WORKFLOW_RUN", id)
+    .env("ZELLIJ", "1")
+    .env("ZELLIJ_PANE_ID", "62")
+    .env(
+        "RIMZ_TEST_ZELLIJ_LIST_PANES",
+        r#"[{"id":62,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+    );
+    success(
+        room.env
+            .spawn_payload(cmd, &payload.to_string())
+            .wait_with_output()
+            .unwrap(),
+    );
+    room.env.drain_hooks();
 }
 
 #[test]
@@ -302,26 +327,13 @@ fn agents_restart_warns_and_keeps_the_pin_when_its_run_is_unreadable() {
 fn fresh_restart_replaces_the_step_and_receipts_its_first_visit() {
     let room = Room::new("");
     let (id, old) = room.launch();
-    // The stopped card must end before the relaunch passes the checkout wait.
-    let mut owner = dummy_agent_process();
-    report_launch(&room, &id, "first-session", owner.id());
-    fs::write(
-        room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
-    )
-    .unwrap();
     let memory = super::super::memory::history_path(&room.env, &id);
     fs::write(&memory, "earlier history").unwrap();
-    let mut child = room
-        .command(&["workflow", "restart", &id])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    wait_for_pane_close(&room, &mut child);
-    owner.kill().unwrap();
-    owner.wait().unwrap();
-    let receipt = success(child.wait_with_output().unwrap());
+    let receipt = success(
+        room.command(&["workflow", "restart", &id])
+            .output()
+            .unwrap(),
+    );
     let value = until(&room.env, &id, |value| {
         value["record"]["attempt"]["run"]["run_id"]
             .as_str()
@@ -472,7 +484,7 @@ fn fresh_restart_from_a_cap_break_leaves_the_kept_previous_card_live_and_detache
         kept.ended_at.is_none() && kept.workflow.is_none(),
         "{kept:#?}"
     );
-    report_launch(&room, &id, "break-session", room.env.agent_owner_pid());
+    report_break_launch(&room, &id);
 
     success(
         room.command(&["workflow", "restart", &id])
@@ -664,7 +676,7 @@ fn continue_rechecks_the_history_pool_after_stopping() {
             .unwrap(),
     );
     assert!(shown.contains(&fix), "{shown}");
-    report_launch(&room, &id, "break-session", room.env.agent_owner_pid());
+    report_break_launch(&room, &id);
     success(room.command(&["workflow", "resume", &id]).output().unwrap());
     let restarted = until(&room.env, &id, |v| {
         v["record"]["attempt"]["node"] == "build" && v["record"]["attempt"]["run"].is_object()

@@ -1058,6 +1058,37 @@ fn capacity_check_extends_the_ceiling_but_provider_reports_still_release_it() {
 }
 
 #[test]
+fn a_launch_its_workflow_stops_releases_its_turn_before_the_provider_reports() {
+    let fake = FakeHost::new();
+    let configured = config("");
+    let (first, _) = admitted(admit_quiet(&fake, &configured, &run("first")));
+    fake.set_agents(&workspace(), vec![launched("launch_a")]);
+    first.report_launch(&workspace(), &AgentSessionId::from("launch_a"));
+    let stopped = |name: &str| {
+        let mut record = crate::store::run::RunRecord::new(
+            workspace(),
+            AgentKind::new_unchecked("claude"),
+            crate::agents::PermissionMode::Auto,
+            String::new(),
+            PathBuf::from("/repo"),
+        );
+        record.agent_name = Some(name.to_owned());
+        record
+    };
+    let mut answers = Vec::new();
+    for name in ["another", "launch_a"] {
+        release_stopped_in(fake.host().as_ref(), &stopped(name));
+        let next = try_admit_in(&fake.host(), &configured, &run("next")).unwrap();
+        answers.push(matches!(next, Attempt::Turn(_)));
+    }
+    assert_eq!(
+        answers,
+        [false, true],
+        "only the stopped launch's turn is released"
+    );
+}
+
+#[test]
 fn capacity_only_denied_kinds_hold_and_slow_checks_do_not_extend_cache_freshness() {
     let fake = FakeHost::new();
     let mut run = run("first");

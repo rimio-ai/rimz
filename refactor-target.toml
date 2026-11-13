@@ -5866,7 +5866,8 @@ allowed-dependencies = [
     "worktree",
 ]
 # probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
-surface-budget = 42
+# release_stopped frees the machine turn of a launch its workflow stopped before it reported (+1).
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/harness/when"
@@ -8680,6 +8681,11 @@ reason = "The throttle's start-lock probe opens its queue lock the way every loc
 kind = "item"
 key = "harness::throttle::probe_queue_lock"
 reason = "Workflow run, resume, and restart refuse before changing anything when the detached engine could not open the home-wide start lock."
+
+[[verdict]]
+kind = "item"
+key = "harness::throttle::release_stopped"
+reason = "The workflow engine frees the machine turn of a launch it stopped before the provider reported, so the next start does not wait for the turn ceiling."
 
 [[verdict]]
 kind = "item"

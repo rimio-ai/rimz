@@ -560,7 +560,12 @@ pub(super) fn finish(
             if detached {
                 host.detach(run)?
             } else {
-                host.stop(run)?
+                let children = host.stop(run)?;
+                // An unreadable record leaves the launch's turn to its report or ceiling.
+                if let Ok(stopped) = crate::harness::run::load(state, &run.run_id) {
+                    crate::harness::throttle::release_stopped(&stopped);
+                }
+                children
             },
             host.observe(run, Observation::Attempt)?.cost_usd,
         ),
