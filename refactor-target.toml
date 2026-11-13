@@ -2374,7 +2374,8 @@ path = "crates/rimz/src/harness"
 # deadline::interrupt_expired and run::{hold_interrupted_turn, expire_interrupt} let the timeout helper stamp, expire and settle an interrupted subagent turn's hold (+3).
 # deadline::stop_interrupts tells the timeout helper to send a Claude or Codex stop rung as an interrupt (+1).
 # run::release_rung gives back a stop rung the helper's interrupt could not deliver (+1).
-# harness::notes and its NotesErr, AddRequest, Added, ListFilter, Note, Listing, add and list own the home-wide note store behind `rimz notes` (+9).
+# harness::notes and its NotesErr, AddRequest, Added, ListRequest, Note, Listing, add and list own the home-wide note store behind `rimz notes` (+9).
+# harness::notes::RIMZ_KEYS gives `rimz notes list --filter help` the header keys the filter names.
 # throttle::probe_queue_lock lets workflow run, resume, and restart refuse an unwritable home (+1).
 # deadline::stop_claimed lets message delivery withdraw a deadline stop whose run no longer holds the stop rung (+1).
 # schedule::attention moves the loop task verdict out of the CLI for loop list, loop watch, and the sidebar: Attention, Hold with of_ticket and of_wait, Facts, TaskFacts, decide, parked_overrides, run_summary, parked_words, since_wait_armed, fired, capacity_waits, RoomReadings with new and observe, BlockingTerm, TaskReading, ReadContext, and read_room; its inputs run_log::ProcessExit with of and LoopRunRecord::exit_label, TaskActionKind::text, TaskCatalog::load_room_lenient, and the when items below come with it (+28).

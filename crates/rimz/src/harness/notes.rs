@@ -15,6 +15,8 @@ use crate::harness::launch::{
     ENV_AGENT_MODEL, ENV_AGENT_NAME, ENV_AGENT_PROFILE, ENV_AGENT_ROLE, ENV_TEAM,
 };
 use crate::harness::loop_task::LOOP_TASK_ENV;
+use crate::utils::filter::{self, Op, TermError, Word, glob};
+use crate::utils::time::parse_compact_duration;
 use crate::workspace::{
     ENV_CHANNEL, ENV_PROJECT_ROOT, ENV_WORKTREE_PATH, WorkspaceErr, WorkspaceResolver,
 };
@@ -30,8 +32,8 @@ const WORKFLOW_RUN_ENV: &str = "RIMZ_WORKFLOW_RUN";
 type MetaEntries = Vec<(String, String)>;
 
 /// Every header key RimZ owns, in the order a note writes them. A caller's
-/// `--meta` key never takes one of these names.
-const RIMZ_KEYS: [&str; 13] = [
+/// `--meta` key never takes one of these names; `list`'s filter names each.
+pub const RIMZ_KEYS: [&str; 13] = [
     "kind",
     "title",
     "written",
@@ -73,6 +75,12 @@ pub enum NotesErr {
         limit = HEADER_MAX
     )]
     HeaderTooLarge { bytes: usize },
+    #[error("empty filter: write <field><op><value>, such as kind=handoff; see `--filter help`")]
+    EmptyFilter,
+    #[error(transparent)]
+    Term(#[from] TermError),
+    #[error("filter term `{term}`: {reason}")]
+    BadTerm { term: String, reason: String },
     #[error("cannot write note {path}: {source}")]
     Write {
         path: PathBuf,
@@ -110,13 +118,13 @@ pub struct Added {
     pub unresolved_project: Option<WorkspaceErr>,
 }
 
-/// Which notes `list` keeps; every filter set must match.
+/// Which notes `list` keeps and how many of the newest it shows.
 #[derive(Debug, Default)]
-pub struct ListFilter {
-    pub kind: Option<String>,
-    pub since: Option<Timestamp>,
-    pub author: Option<String>,
-    pub project: Option<PathBuf>,
+pub struct ListRequest {
+    /// `--filter` queries; every term of every query must match.
+    pub filters: Vec<String>,
+    /// The newest matches to keep; 0 keeps every match.
+    pub limit: usize,
 }
 
 /// One stored note's header, RimZ's keys beside the caller's.
@@ -133,8 +141,13 @@ pub struct Note {
 
 #[derive(Debug, Default)]
 pub struct Listing {
-    /// Matching notes by write time, then path.
+    /// The newest matches the limit keeps, by write time, then path.
     pub notes: Vec<Note>,
+    /// Older matches the limit left out.
+    pub hidden: usize,
+    /// Filter keys that are no RimZ key and that no note read carries, once
+    /// each in query order; any one of them empties the listing.
+    pub unknown_keys: Vec<String>,
     /// `.md` files in the store that carry no readable RimZ header, with why.
     pub skipped: Vec<(PathBuf, String)>,
 }
@@ -163,9 +176,9 @@ pub fn add(request: &AddRequest) -> Result<Added, NotesErr> {
     })
 }
 
-/// Read every note in the store that `filter` keeps.
-pub fn list(filter: &ListFilter) -> Result<Listing, NotesErr> {
-    list_at(&paths::notes_dir(), filter)
+/// Read the newest notes in the store that `request` keeps.
+pub fn list(request: &ListRequest) -> Result<Listing, NotesErr> {
+    list_at(&paths::notes_dir(), request, Timestamp::now())
 }
 
 fn caller_facts(
@@ -393,50 +406,209 @@ fn claim(
     }
 }
 
-fn list_at(root: &Path, filter: &ListFilter) -> Result<Listing, NotesErr> {
-    let kinds = match &filter.kind {
-        Some(kind) => slug(kind)
-            .map(|kind| vec![root.join(kind)])
-            .ok_or_else(|| NotesErr::NoSlug {
-                what: "kind",
-                value: kind.clone(),
-            })?,
-        None => directories(root)?,
-    };
-    let author = filter
-        .author
-        .as_deref()
-        .map(|author| author.strip_prefix('@').unwrap_or(author));
-    let project = filter.project.as_deref().map(comparable);
+fn list_at(root: &Path, request: &ListRequest, now: Timestamp) -> Result<Listing, NotesErr> {
+    let conditions = parse_query(&request.filters)?;
     let mut listing = Listing::default();
-    for kind in kinds {
+    let mut read = Vec::new();
+    for kind in directories(root)? {
         for day in directories(&kind)? {
             for path in files(&day)? {
-                let note = match read_note(&path) {
-                    Ok(note) => note,
-                    Err(reason) => {
-                        listing.skipped.push((path, reason));
-                        continue;
-                    }
-                };
-                let keeps = filter.since.is_none_or(|since| note.written >= since)
-                    && author
-                        .is_none_or(|author| note.keys.get("author").is_some_and(|a| a == author))
-                    && project.as_ref().is_none_or(|project| {
-                        note.keys
-                            .get("project")
-                            .is_some_and(|value| comparable(Path::new(value)) == *project)
-                    });
-                if keeps {
-                    listing.notes.push(note);
+                match read_note(&path) {
+                    Ok(note) => read.push(note),
+                    Err(reason) => listing.skipped.push((path, reason)),
                 }
             }
         }
     }
+    for condition in &conditions {
+        let Key::Meta(key) = &condition.key else {
+            continue;
+        };
+        if !listing.unknown_keys.contains(key)
+            && !read.iter().any(|note| note.meta.contains_key(key))
+        {
+            listing.unknown_keys.push(key.clone());
+        }
+    }
+    if !listing.unknown_keys.is_empty() {
+        return Ok(listing);
+    }
+    listing.notes = read
+        .into_iter()
+        .filter(|note| {
+            conditions
+                .iter()
+                .all(|condition| condition.matches(note, now))
+        })
+        .collect();
     listing
         .notes
         .sort_by(|a, b| (a.written, &a.path).cmp(&(b.written, &b.path)));
+    if request.limit > 0 {
+        listing.hidden = listing.notes.len().saturating_sub(request.limit);
+        listing.notes.drain(..listing.hidden);
+    }
     Ok(listing)
+}
+
+/// One `--filter` term over a note's header.
+struct Condition {
+    key: Key,
+    op: Op,
+    values: Vec<Value>,
+}
+
+/// The header key a term names: `age`, derived from `written`, and the RimZ
+/// keys ignore ASCII case; any other name is a `--meta` key as written.
+enum Key {
+    Age,
+    Rimz(&'static str),
+    Meta(String),
+}
+
+enum Value {
+    None,
+    Any,
+    Text(String),
+    Seconds(i64),
+    Instant(Timestamp),
+}
+
+fn parse_query(filters: &[String]) -> Result<Vec<Condition>, NotesErr> {
+    let mut conditions = Vec::new();
+    for filter in filters {
+        let mut rest = filter.as_str();
+        if rest.trim().is_empty() {
+            return Err(NotesErr::EmptyFilter);
+        }
+        while let Some(term) = filter::next_term(&mut rest) {
+            conditions.push(Condition::parse(term?)?);
+        }
+    }
+    Ok(conditions)
+}
+
+impl Condition {
+    fn parse(term: filter::Term<'_>) -> Result<Self, NotesErr> {
+        let bad = |reason: String| NotesErr::BadTerm {
+            term: term.text.into(),
+            reason,
+        };
+        let lower = term.field.to_ascii_lowercase();
+        let key = match RIMZ_KEYS.iter().find(|key| **key == lower) {
+            _ if lower == "age" => Key::Age,
+            Some(key) => Key::Rimz(key),
+            None => Key::Meta(term.field.into()),
+        };
+        if term.op.ordered() && !key.ordered() {
+            return Err(bad(format!("{} is not ordered; use = or !=", key.name())));
+        }
+        let values = term
+            .values
+            .iter()
+            .map(|word| key.value(word).map_err(&bad))
+            .collect::<Result<Vec<_>, _>>()?;
+        if term.op.ordered()
+            && !matches!(values.as_slice(), [Value::Seconds(_) | Value::Instant(_)])
+        {
+            return Err(bad("a comparison takes one value".into()));
+        }
+        Ok(Self {
+            key,
+            op: term.op,
+            values,
+        })
+    }
+
+    fn matches(&self, note: &Note, now: Timestamp) -> bool {
+        let age = || now.duration_since(note.written).as_secs();
+        if self.op.ordered() {
+            return match self.values.as_slice() {
+                [Value::Seconds(want)] => self.op.compares(age(), *want),
+                [Value::Instant(want)] => self.op.compares(note.written, *want),
+                _ => false,
+            };
+        }
+        self.op.holds(&self.values, |value| match value {
+            Value::None => !self.key.present(note),
+            Value::Any => self.key.present(note),
+            Value::Seconds(want) => age() == *want,
+            Value::Instant(want) => note.written == *want,
+            Value::Text(want) => self
+                .key
+                .text(note)
+                .is_some_and(|have| self.key.holds(want, have)),
+        })
+    }
+}
+
+impl Key {
+    fn name(&self) -> &str {
+        match self {
+            Self::Age => "age",
+            Self::Rimz(key) => key,
+            Self::Meta(key) => key,
+        }
+    }
+
+    fn ordered(&self) -> bool {
+        matches!(self, Self::Age | Self::Rimz("written"))
+    }
+
+    fn present(&self, note: &Note) -> bool {
+        matches!(self, Self::Age) || self.text(note).is_some()
+    }
+
+    fn text<'n>(&self, note: &'n Note) -> Option<&'n str> {
+        match self {
+            Self::Age => None,
+            Self::Rimz(key) => note.keys.get(*key),
+            Self::Meta(key) => note.meta.get(key),
+        }
+        .map(String::as_str)
+    }
+
+    /// A value as this key compares it, or why it cannot be one.
+    fn value(&self, word: &Word) -> Result<Value, String> {
+        let raw = match word {
+            Word::Any => return Ok(Value::Any),
+            Word::None => return Ok(Value::None),
+            Word::Text(raw) => raw.as_str(),
+        };
+        let wildcard = raw.contains('*');
+        match self {
+            Self::Age => parse_compact_duration(raw)
+                .ok()
+                .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+                .map(Value::Seconds)
+                .ok_or_else(|| format!("`{raw}` is not a duration such as 30m or 2d")),
+            Self::Rimz("written") => raw.parse().map(Value::Instant).map_err(|_| {
+                format!("`{raw}` is not an RFC 3339 instant such as 2026-11-12T09:00:00Z")
+            }),
+            Self::Rimz("kind") if !wildcard => slug(raw)
+                .map(Value::Text)
+                .ok_or_else(|| format!("`{raw}` has no ASCII letter or digit to name a kind by")),
+            Self::Rimz("project") if !wildcard => Ok(Value::Text(
+                comparable(Path::new(raw)).display().to_string(),
+            )),
+            Self::Rimz("author") => Ok(Value::Text(raw.strip_prefix('@').unwrap_or(raw).into())),
+            Self::Rimz("title") => Ok(Value::Text(raw.to_lowercase())),
+            _ => Ok(Value::Text(raw.into())),
+        }
+    }
+
+    /// Whether the header text `have` matches the parsed value `want`.
+    fn holds(&self, want: &str, have: &str) -> bool {
+        let wildcard = want.contains('*');
+        match self {
+            Self::Rimz("kind") if !wildcard => slug(have).is_some_and(|have| have == want),
+            Self::Rimz("project") if !wildcard => {
+                comparable(Path::new(have)).display().to_string() == want
+            }
+            Self::Rimz("title") => glob(want, &have.to_lowercase()),
+            _ => glob(want, have),
+        }
+    }
 }
 
 fn comparable(path: &Path) -> PathBuf {

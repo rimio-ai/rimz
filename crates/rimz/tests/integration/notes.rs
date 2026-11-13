@@ -235,17 +235,22 @@ fn list_filters_a_store_under_a_symlinked_home() {
     assert_eq!(all[0]["author"], "otter");
     assert_eq!(all[0]["meta"], serde_json::json!({"topic": "a"}));
     let since = all[0]["written"].as_str().unwrap().to_owned();
-    assert_eq!(list(&["--since", &since]).as_array().unwrap().len(), 2);
+    let since = format!("written>={since}");
+    assert_eq!(list(&["--filter", &since]).as_array().unwrap().len(), 2);
     let one = list(&[
-        "--author",
-        "@otter",
-        "--project",
-        "/src/a",
-        "--kind",
-        "Reflection",
+        "--filter",
+        "author=@otter project=/src/a",
+        "--filter",
+        "kind=Reflection",
     ]);
     assert_eq!(one.as_array().unwrap().len(), 1);
     assert_eq!(Path::new(one[0]["path"].as_str().unwrap()), first);
+    let quiet = run(&mut with_home(&["list", "-q", "--filter", "topic=a"]), b"");
+    assert!(quiet.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&quiet.stdout),
+        format!("{}\n", first.display())
+    );
 
     let table = run(&mut with_home(&["list"]), b"");
     let stdout = String::from_utf8_lossy(&table.stdout);
@@ -307,4 +312,166 @@ fn a_title_with_a_line_break_stays_on_its_table_row() {
     let listed = run(&mut notes(&env, &["list", "--json"]), b"");
     let notes: Value = serde_json::from_slice(&listed.stdout).expect("json");
     assert_eq!(notes[0]["title"], "two\nlines\u{7}");
+}
+
+fn output_text(output: &Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn the_hidden_line_closes_the_table_and_goes_to_stderr_under_quiet_and_json() {
+    let env = Env::new();
+    let paths: Vec<PathBuf> = ["A", "B", "C"]
+        .into_iter()
+        .map(|title| added_path(&run(&mut notes(&env, &["add", "diary", title]), b"x\n")))
+        .collect();
+    let list = |args: &[&str]| {
+        let output = run(&mut notes(&env, &[&["list"], args].concat()), b"");
+        assert!(
+            output.status.success(),
+            "{args:?}: {:?}",
+            output_text(&output)
+        );
+        output_text(&output)
+    };
+
+    let (stdout, stderr) = list(&["-n", "2"]);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.last(),
+        Some(&"1 older note not shown; pass -n to see more"),
+        "{stdout}"
+    );
+    assert!(lines[1].contains(paths[1].to_str().unwrap()), "{stdout}");
+    assert!(lines[2].contains(paths[2].to_str().unwrap()), "{stdout}");
+    assert!(!stdout.contains(paths[0].to_str().unwrap()), "{stdout}");
+    assert!(stderr.is_empty(), "{stderr}");
+
+    let (stdout, stderr) = list(&["-q", "-n", "1"]);
+    assert_eq!(stdout, format!("{}\n", paths[2].display()));
+    assert_eq!(stderr, "2 older notes not shown; pass -n to see more\n");
+
+    let (stdout, stderr) = list(&["--json", "-n", "2"]);
+    let json: Value = serde_json::from_str(&stdout).expect("json");
+    let listed: Vec<_> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|note| PathBuf::from(note["path"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed, paths[1..]);
+    assert_eq!(stderr, "1 older note not shown; pass -n to see more\n");
+
+    for args in [&["-n", "0"][..], &["-n", "3"], &[]] {
+        let (stdout, stderr) = list(&[&["-q"], args].concat());
+        assert_eq!(stdout.lines().count(), 3, "{args:?}: {stdout}");
+        assert!(stderr.is_empty(), "{args:?}: {stderr}");
+    }
+    let (stdout, _) = list(&["-n", "0"]);
+    assert!(!stdout.contains("not shown"), "{stdout}");
+
+    let (stdout, stderr) = list(&["-q", "--filter", "kind=handoff"]);
+    assert!(stdout.is_empty() && stderr.is_empty(), "{stdout}{stderr}");
+}
+
+#[test]
+fn filter_help_lists_the_note_fields_without_reading_the_store() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home()).expect("mkdir home");
+    std::fs::write(env.rimz_home().join("notes"), "not a directory").expect("block store");
+    let broken = run(&mut notes(&env, &["list"]), b"");
+    assert_eq!(broken.status.code(), Some(1), "{:?}", output_text(&broken));
+
+    let help = run(
+        &mut notes(&env, &["list", "--filter", " help ", "--filter", "kind=x"]),
+        b"",
+    );
+    let (stdout, stderr) = output_text(&help);
+    assert!(help.status.success(), "{stderr}");
+    for field in [
+        "FIELD",
+        "kind",
+        "title",
+        "loop-task",
+        "workflow-run",
+        "age",
+        "written",
+    ] {
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some(field)),
+            "{field}: {stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("any other field is a --meta key"),
+        "{stdout}"
+    );
+    for agents_only in ["status", "ctx", "tokens", "live", "parent", "lane"] {
+        assert!(
+            !stdout
+                .split_whitespace()
+                .any(|word| word.trim_matches(',') == agents_only),
+            "{agents_only}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn a_malformed_term_exits_2_and_an_unknown_key_warns_and_lists_nothing() {
+    let env = Env::new();
+    added_path(&run(
+        &mut notes(&env, &["add", "diary", "Day", "--meta", "pr=482"]),
+        b"x\n",
+    ));
+    for (args, message) in [
+        (
+            &["--filter", "kind"][..],
+            "filter term `kind` has no operator: use one of = != > >= < <=",
+        ),
+        (
+            &["--filter", "title>a"],
+            "filter term `title>a`: title is not ordered; use = or !=",
+        ),
+        (
+            &["--filter", "kind=!!!"],
+            "filter term `kind=!!!`: `!!!` has no ASCII letter or digit to name a kind by",
+        ),
+        (&["-q", "--json"], "cannot be used with"),
+    ] {
+        let output = run(&mut notes(&env, &[&["list"], args].concat()), b"");
+        let (stdout, stderr) = output_text(&output);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(stderr.contains(message), "{args:?}: {stderr}");
+        assert!(!stderr.contains("status"), "{args:?}: {stderr}");
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+    }
+
+    let output = run(
+        &mut notes(
+            &env,
+            &[
+                "list",
+                "-q",
+                "--filter",
+                "nosuch=1 pr=482",
+                "--filter",
+                "nosuch=2",
+            ],
+        ),
+        b"",
+    );
+    let (stdout, stderr) = output_text(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "warning: no note carries the key `nosuch`, so nothing matches\n"
+    );
+    let output = run(&mut notes(&env, &["list", "-q", "--filter", "pr=482"]), b"");
+    assert_eq!(output_text(&output).0.lines().count(), 1);
 }

@@ -4,7 +4,7 @@
 
 ```sh
 rimz notes add <kind> <title> [--file <path>] [--fence] [--meta <key>=<value>]...
-rimz notes list [--kind <kind>] [--since <instant>] [--author <name>] [--project <path>] [--json]
+rimz notes list [--filter <query>]... [-n <count>] [-q | --json]
 ```
 
 Both commands are on the [routine list](../agent-support.md) an installed agent runs without asking.
@@ -75,17 +75,42 @@ These facts come from the writer's environment alone; RimZ reads no room record 
 
 ## List
 
-`list` prints the notes in the store by write time, oldest first, then by path. Every note is its own row: two notes with the same title or author never fold into one.
+`list` prints the newest 20 notes in the store that match its filter, by write time, oldest first, then by path, so the newest note is the last row. Every note is its own row: two notes with the same title or author never fold into one.
 
 | Flag | Meaning |
 | --- | --- |
-| `--kind <KIND>` | Keep notes of this kind. The kind is slugged the way `add` names its folder, so `Reflection` finds `reflection`. |
-| `--since <INSTANT>` | Keep notes written at or after this RFC 3339 instant (`2026-11-12T09:00:00Z`). |
-| `--author <NAME>` | Keep notes whose `author` is exactly this instance name. A leading `@` is ignored, so `@otter` and `otter` match the same notes. |
-| `--project <PATH>` | Keep notes whose `project` is this path. Both are made absolute and normalized (`.` and `..` resolved by text) before they are compared; symlinks are not resolved. |
+| `--filter <QUERY>` | Keep notes matching every term of the query. Repeat it to add terms. `--filter help` prints the fields and the grammar and reads no note. |
+| `-n, --limit <N>` | Show the newest `N` matches; default 20. `0` shows every match. |
+| `-q, --quiet` | Print one absolute path per listed note and nothing else. Conflicts with `--json`. |
 | `--json` | Print a JSON array instead of the table. |
 
-Filters combine: a note is listed only when it matches every filter given. A store that does not exist yet lists nothing and exits `0`.
+```sh
+rimz notes list --filter kind=handoff
+rimz notes list --filter 'kind=handoff author=otter age<2d' -q
+rimz notes list --filter pr=482 -q -n 1
+rimz notes list --filter 'kind=handoff title=*expiry* age<2d' -q -n 1
+```
+
+### Filter the list
+
+A query is terms separated by spaces, each `<field><op><value>`, in the grammar [`rimz agents list --filter`](./agents.md#filter-the-list) uses. Every term of every `--filter` must match. The operators are `=` and `!=` on every field, and `>`, `>=`, `<`, and `<=` on `age` and `written` alone. `=` takes a comma list and matches when any value does; `!=` matches when none does. `none` matches a note without the key and `*` any note that has it; a `*` inside a value stands for any run of characters. Quote a value holding a space, a comma, or a quote as a JSON string (`topic="two words"`); a value that is literally `none` is quoted too (`label="none"`). A `*` is a wildcard quoted or not: `label="*"` matches any note that has `label`, as `label=*` does, and no query matches a literal `*` alone.
+
+Each RimZ header key is a field under its own name, matched ignoring ASCII case (`kind`, `LOOP-TASK`). Any other field is a `--meta` key, written flat (`pr=482`, not `meta.pr=482`) and matched exactly as the header writes it. Values are compared case-sensitively, with these exceptions:
+
+| Field | Rule |
+| --- | --- |
+| `kind` | The value is slugged the way `add` names its folder, so `Reflection` finds `reflection`. A value with a `*` is matched as written. A value with no ASCII letter or digit is refused. The header's `kind` decides, not the folder the note sits in. |
+| `title` | Matched ignoring case. |
+| `author` | One leading `@` is ignored, so `@otter` and `otter` match the same notes. |
+| `project` | Both the value and the stored path are made absolute and normalized (`.` and `..` resolved by text) before they are compared; symlinks are not resolved. A value with a `*` is matched as written. |
+| `written` | An RFC 3339 instant (`2026-11-12T09:00:00Z`). `written>=<instant>` keeps a note written at that instant. |
+| `age` | How long ago the note was written, as a duration (`30s`, `5m`, `1h`, `2d`). `age` is no header key: it is not printed and shadows a `--meta` key of that name. |
+
+A term naming a field that is no RimZ key, not `age`, and carried by no note in the store matches nothing, under any operator: the listing is empty, one warning on stderr names each such key, and the command exits `0`. A malformed term, an ordered operator on another field, or a value its field cannot read exits `2` with a message naming the term.
+
+### What the limit hides
+
+When the limit leaves older matches out, a closing line says how many: `137 older notes not shown; pass -n to see more`. In the table it is the last line on stdout. Under `-q` and `--json` it goes to stderr, so stdout holds only the result. Nothing prints when nothing is hidden, and an empty result under `-q` prints nothing at all. A store that does not exist yet lists nothing and exits `0`.
 
 The table shows `WRITTEN`, `KIND`, `AUTHOR`, `TITLE`, and `PATH`, each value on one line: a line break or run of whitespace reads as one space and other control characters are dropped. `--json` keeps every value as written. Each `--json` element carries the note's `path`, every RimZ header key the note holds under its own name, and the `--meta` keys in a separate `meta` object:
 

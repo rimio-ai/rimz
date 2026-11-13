@@ -390,7 +390,7 @@ fn a_body_that_is_not_utf8_is_kept_byte_for_byte_and_still_lists() {
     let body = [0xff, 0xfe, b'\n', 0x80];
     let added = add_at(&root, &request("bin", "Raw", &body), &[], &noon()).unwrap();
     assert!(std::fs::read(&added.path).unwrap().ends_with(&body));
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     assert_eq!(listing.notes.len(), 1);
     assert!(listing.skipped.is_empty());
 }
@@ -415,7 +415,7 @@ fn characters_yaml_forbids_in_a_quoted_value_are_escaped_and_read_back() {
         text.contains("author: \"a\\u007Fb\\u0080c\\u009Fd\\uFFFEe\\uFFFFf\"\n"),
         "{text}"
     );
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     assert!(listing.skipped.is_empty(), "{:?}", listing.skipped);
     let note = &listing.notes[0];
     assert_eq!(note.keys["title"], title);
@@ -437,7 +437,7 @@ fn a_header_still_open_at_the_read_bound_is_skipped() {
         header.push_str(&format!("pad{line}: \"{pad}\"\n"));
     }
     std::fs::write(day.join("long.md"), header + "---\nbody\n").unwrap();
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     assert!(listing.notes.is_empty());
     let (path, reason) = &listing.skipped[0];
     assert_eq!(path, &day.join("long.md"));
@@ -447,7 +447,7 @@ fn a_header_still_open_at_the_read_bound_is_skipped() {
 #[test]
 fn a_store_that_does_not_exist_lists_nothing() {
     let (_temp, root) = store();
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     assert!(listing.notes.is_empty() && listing.skipped.is_empty());
 }
 
@@ -464,7 +464,7 @@ fn foreign_files_temp_siblings_and_headerless_notes_are_not_listed() {
         "partial",
     )
     .unwrap();
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     assert_eq!(
         listing
             .notes
@@ -491,7 +491,7 @@ fn a_symlinked_home_holds_the_store() {
     let root = home.join("notes");
     let added = add_at(&root, &request("diary", "Linked", b"x\n"), &[], &noon()).unwrap();
     assert!(real.join("notes/diary/20261112/linked.md").is_file());
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     assert_eq!(listing.notes[0].path, added.path);
 }
 
@@ -503,15 +503,40 @@ fn titles(listing: &Listing) -> Vec<&str> {
         .collect()
 }
 
+fn at(stamp: &str) -> Zoned {
+    stamp
+        .parse::<Timestamp>()
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::offset(-6)))
+}
+
+fn listed(root: &Path, filters: &[&str], now: Timestamp) -> Listing {
+    let request = ListRequest {
+        filters: filters.iter().map(|filter| (*filter).to_owned()).collect(),
+        limit: 0,
+    };
+    list_at(root, &request, now).unwrap()
+}
+
+fn refused(root: &Path, filters: &[&str]) -> String {
+    let request = ListRequest {
+        filters: filters.iter().map(|filter| (*filter).to_owned()).collect(),
+        limit: 0,
+    };
+    let error = list_at(root, &request, noon().timestamp()).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            NotesErr::EmptyFilter | NotesErr::Term(_) | NotesErr::BadTerm { .. }
+        ),
+        "{filters:?}: {error}"
+    );
+    error.to_string()
+}
+
 #[test]
 fn list_filters_alone_and_combined_in_write_order() {
     let (_temp, root) = store();
-    let at = |stamp: &str| {
-        stamp
-            .parse::<Timestamp>()
-            .unwrap()
-            .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::offset(-6)))
-    };
     let facts = |author: &str, project: &str| {
         vec![
             ("author", author.to_owned()),
@@ -550,56 +575,278 @@ fn list_filters_alone_and_combined_in_write_order() {
         )
         .unwrap();
     }
-    let all = list_at(&root, &ListFilter::default()).unwrap();
-    assert_eq!(titles(&all), ["Early", "Middle", "Same instant", "Late"]);
-
-    let filter = |filter: ListFilter| list_at(&root, &filter).unwrap();
-    let since: Timestamp = "2026-11-12T09:00:00-06:00".parse().unwrap();
+    // A hand-placed note whose folder and header disagree lists by its header.
+    let moved = root.join("diary/20261109");
+    std::fs::create_dir_all(&moved).unwrap();
+    std::fs::write(
+        moved.join("moved.md"),
+        "---\nkind: \"reflection\"\ntitle: \"Moved\"\nwritten: \"2026-11-09T15:00:00Z\"\n---\nx\n",
+    )
+    .unwrap();
+    let now = noon().timestamp();
+    let filter = |filters: &[&str]| listed(&root, filters, now);
     assert_eq!(
-        titles(&filter(ListFilter {
-            kind: Some("DIARY".into()),
-            ..ListFilter::default()
-        })),
-        ["Middle", "Same instant"]
+        titles(&filter(&[])),
+        ["Moved", "Early", "Middle", "Same instant", "Late"]
     );
     assert_eq!(
-        titles(&filter(ListFilter {
-            since: Some(since),
-            ..ListFilter::default()
-        })),
+        titles(&filter(&["kind=DIARY"])),
+        ["Middle", "Same instant"],
+        "a kind value is slugged as add names the folder"
+    );
+    assert_eq!(
+        titles(&filter(&["kind=reflection"])),
+        ["Moved", "Early", "Late"],
+        "kind reads the header, not the folder"
+    );
+    assert_eq!(
+        titles(&filter(&["written>=2026-11-12T09:00:00-06:00"])),
         ["Same instant", "Late"],
         "a note written at the bookmark's instant is kept"
     );
     assert_eq!(
-        titles(&filter(ListFilter {
-            author: Some("@otter".into()),
-            ..ListFilter::default()
-        })),
-        ["Early", "Late"]
+        titles(&filter(&["written<2026-11-12T09:00:00-06:00"])),
+        ["Moved", "Early", "Middle"]
     );
+    assert_eq!(titles(&filter(&["author=@otter"])), ["Early", "Late"]);
     assert_eq!(
-        titles(&filter(ListFilter {
-            project: Some("/src/b/../a".into()),
-            ..ListFilter::default()
-        })),
+        titles(&filter(&["project=/src/b/../a"])),
         ["Middle", "Same instant", "Late"]
     );
     assert_eq!(
-        titles(&filter(ListFilter {
-            kind: Some("reflection".into()),
-            since: Some(since),
-            author: Some("otter".into()),
-            project: Some("/src/a".into()),
-        })),
+        titles(&filter(&[
+            "kind=reflection written>=2026-11-12T09:00:00-06:00",
+            "author=otter project=/src/a"
+        ])),
         ["Late"]
     );
-    assert!(
-        filter(ListFilter {
-            kind: Some("missing".into()),
-            ..ListFilter::default()
-        })
-        .notes
-        .is_empty()
+    assert!(filter(&["kind=missing"]).notes.is_empty());
+    assert_eq!(
+        refused(&root, &["kind=!!!"]),
+        "filter term `kind=!!!`: `!!!` has no ASCII letter or digit to name a kind by"
+    );
+}
+
+/// Three notes a day apart, and the clock a day after the middle one.
+fn seeded() -> (tempfile::TempDir, PathBuf, Timestamp) {
+    let (temp, root) = store();
+    let notes = [
+        (
+            "handoff",
+            "Token expiry fix",
+            "2026-11-09T12:00:00Z",
+            vec![("author", "otter".to_owned())],
+            vec!["pr=482", "topic=two words"],
+        ),
+        (
+            "handoff",
+            "Other",
+            "2026-11-11T12:00:00Z",
+            vec![
+                ("author", "fox".to_owned()),
+                ("loop-task", "nightly".to_owned()),
+            ],
+            vec!["pr=483", "star=other"],
+        ),
+        (
+            "reflection",
+            "Mood",
+            "2026-11-12T11:00:00Z",
+            vec![],
+            vec!["literal=none", "star=*"],
+        ),
+    ];
+    for (kind, title, stamp, facts, meta) in notes {
+        add_at(
+            &root,
+            &AddRequest {
+                meta: meta.into_iter().map(String::from).collect(),
+                ..request(kind, title, b"x\n")
+            },
+            &facts,
+            &at(stamp),
+        )
+        .unwrap_or_else(|error| panic!("{title}: {error}"));
+    }
+    // `add` refuses an upper-case key; a hand-written header may hold one.
+    let mixed = root.join("handoff/20261111/other.md");
+    let text = std::fs::read_to_string(&mixed).unwrap();
+    std::fs::write(
+        &mixed,
+        text.replace("pr: \"483\"\n", "pr: \"483\"\nMixed: \"Case\"\n"),
+    )
+    .unwrap();
+    (temp, root, "2026-11-12T12:00:00Z".parse().unwrap())
+}
+
+#[test]
+fn every_operator_reads_text_meta_and_hyphenated_keys() {
+    let (_temp, root, now) = seeded();
+    let filter = |filters: &[&str]| titles(&listed(&root, filters, now)).join(", ");
+    for (filters, expected) in [
+        (&["kind=handoff"][..], "Token expiry fix, Other"),
+        (&["kind!=handoff"], "Mood"),
+        (&["kind=hand*"], "Token expiry fix, Other"),
+        (&["KIND=Reflection"], "Mood"),
+        (&["author=otter,fox"], "Token expiry fix, Other"),
+        (&["author!=otter,fox"], "Mood"),
+        (&["author=@fox"], "Other"),
+        (&["author=none"], "Mood"),
+        (&["author=*"], "Token expiry fix, Other"),
+        (&["title=*EXPIRY*"], "Token expiry fix"),
+        (&["title=other"], "Other"),
+        (&["pr=482"], "Token expiry fix"),
+        (&["pr!=482"], "Other, Mood"),
+        (&["pr=482,483"], "Token expiry fix, Other"),
+        (&["pr=none"], "Mood"),
+        (&["pr=*"], "Token expiry fix, Other"),
+        (&["pr=48*"], "Token expiry fix, Other"),
+        (&["loop-task=nightly"], "Other"),
+        (&["LOOP-TASK=nightly"], "Other"),
+        (&["workflow-run=none"], "Token expiry fix, Other, Mood"),
+        (&["topic=\"two words\""], "Token expiry fix"),
+        (&["literal=\"none\""], "Mood"),
+        (&["literal=none"], "Token expiry fix, Other"),
+        (&["star=\"*\""], "Other, Mood"),
+        (&["star=\"oth*\""], "Other"),
+        (&["Mixed=Case"], "Other"),
+        (&["kind=handoff", "pr=483"], "Other"),
+        (&["kind=handoff pr=483 author=otter"], ""),
+    ] {
+        assert_eq!(filter(filters), expected, "{filters:?}");
+    }
+}
+
+#[test]
+fn age_and_written_compare_on_the_pinned_clock() {
+    let (_temp, root, now) = seeded();
+    let filter = |filters: &[&str]| titles(&listed(&root, filters, now)).join(", ");
+    for (filters, expected) in [
+        (&["age<2d"][..], "Other, Mood"),
+        (&["age>=1d"], "Token expiry fix, Other"),
+        (&["age>1d"], "Token expiry fix"),
+        (&["age<=1h"], "Mood"),
+        (&["age<1h"], ""),
+        (&["age=1h"], "Mood"),
+        (&["age!=1h"], "Token expiry fix, Other"),
+        (&["AGE<2d"], "Other, Mood"),
+        (&["age=*"], "Token expiry fix, Other, Mood"),
+        (&["age=none"], ""),
+        (&["written>=2026-11-11T12:00:00Z"], "Other, Mood"),
+        (&["written>2026-11-11T12:00:00Z"], "Mood"),
+        (
+            &["written<=2026-11-11T06:00:00-06:00"],
+            "Token expiry fix, Other",
+        ),
+        (&["written=2026-11-11T12:00:00Z"], "Other"),
+    ] {
+        assert_eq!(filter(filters), expected, "{filters:?}");
+    }
+    let later: Timestamp = "2026-11-12T13:00:00Z".parse().unwrap();
+    assert_eq!(
+        titles(&listed(&root, &["age>=2h"], later)),
+        ["Token expiry fix", "Other", "Mood"],
+        "age moves with the clock passed in"
+    );
+}
+
+#[test]
+fn malformed_terms_refuse_naming_the_term_and_no_agents_field() {
+    let (_temp, root, _now) = seeded();
+    for (filters, expected) in [
+        (
+            &[""][..],
+            "empty filter: write <field><op><value>, such as kind=handoff; see `--filter help`",
+        ),
+        (
+            &["kind"],
+            "filter term `kind` has no operator: use one of = != > >= < <=",
+        ),
+        (
+            &["pr=\"open"],
+            "filter term `pr=\"open` has an unterminated quote",
+        ),
+        (
+            &["title>a"],
+            "filter term `title>a`: title is not ordered; use = or !=",
+        ),
+        (
+            &["pr<5"],
+            "filter term `pr<5`: pr is not ordered; use = or !=",
+        ),
+        (
+            &["age>soon"],
+            "filter term `age>soon`: `soon` is not a duration such as 30m or 2d",
+        ),
+        (
+            &["written>yesterday"],
+            "filter term `written>yesterday`: `yesterday` is not an RFC 3339 instant such as 2026-11-12T09:00:00Z",
+        ),
+        (
+            &["age>1h,2h"],
+            "filter term `age>1h,2h`: a comparison takes one value",
+        ),
+        (
+            &["age<none"],
+            "filter term `age<none`: a comparison takes one value",
+        ),
+    ] {
+        let message = refused(&root, filters);
+        assert_eq!(message, expected, "{filters:?}");
+        assert!(!message.contains("status"), "{message}");
+    }
+}
+
+#[test]
+fn a_key_no_note_carries_empties_the_listing_and_is_reported_once() {
+    let (_temp, root, now) = seeded();
+    for filters in [
+        &["nosuch=1"][..],
+        &["nosuch!=1"],
+        &["nosuch=none kind=handoff"],
+        &["nosuch=1", "nosuch=*"],
+    ] {
+        let listing = listed(&root, filters, now);
+        assert!(listing.notes.is_empty(), "{filters:?}");
+        assert_eq!(listing.unknown_keys, ["nosuch"], "{filters:?}");
+        assert_eq!(listing.hidden, 0, "{filters:?}");
+    }
+    let listing = listed(&root, &["PR=482 zz=1"], now);
+    assert_eq!(
+        listing.unknown_keys,
+        ["PR", "zz"],
+        "a --meta key is matched as written"
+    );
+    let known = listed(&root, &["pr=1 workflow-run=x"], now);
+    assert!(known.unknown_keys.is_empty() && known.notes.is_empty());
+    let (_empty, missing) = store();
+    let none = listed(&missing, &["kind=handoff age<1d"], now);
+    assert!(none.notes.is_empty() && none.unknown_keys.is_empty());
+}
+
+#[test]
+fn the_limit_keeps_the_newest_matches_oldest_first() {
+    let (_temp, root, now) = seeded();
+    std::fs::write(root.join("handoff/20261111/foreign.md"), "# none\n").unwrap();
+    let limited = |filters: &[&str], limit| {
+        let request = ListRequest {
+            filters: filters.iter().map(|filter| (*filter).to_owned()).collect(),
+            limit,
+        };
+        list_at(&root, &request, now).unwrap()
+    };
+    let two = limited(&[], 2);
+    assert_eq!(titles(&two), ["Other", "Mood"]);
+    assert_eq!(two.hidden, 1, "the skipped file is never counted");
+    assert_eq!(two.skipped.len(), 1);
+    let one = limited(&["kind=handoff"], 1);
+    assert_eq!((titles(&one), one.hidden), (vec!["Other"], 1));
+    let all = limited(&[], 0);
+    assert_eq!((all.notes.len(), all.hidden), (3, 0));
+    let roomy = limited(&["kind=handoff"], 10);
+    assert_eq!(
+        (titles(&roomy), roomy.hidden),
+        (vec!["Token expiry fix", "Other"], 0)
     );
 }
 
@@ -623,7 +870,7 @@ fn listed_json_keeps_caller_keys_apart_from_rimz_keys() {
         text.contains("\n\"null\": \"n\"\ntrue: \"t\"\nno: \"n\"\non: \"o\"\ny: \"y\"\n---\n"),
         "only `null` is quoted: {text}"
     );
-    let listing = list_at(&root, &ListFilter::default()).unwrap();
+    let listing = list_at(&root, &ListRequest::default(), noon().timestamp()).unwrap();
     let json = serde_json::to_value(&listing.notes[0]).unwrap();
     assert_eq!(
         json,
