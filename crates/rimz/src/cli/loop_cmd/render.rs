@@ -1072,7 +1072,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         out,
         &view.records,
         &attribution,
-        view.in_progress.is_some(),
+        view.in_progress.as_ref(),
         now,
     )?;
     let expr = worktree_expr(view);
@@ -2013,12 +2013,12 @@ fn write_verdict(
     out: &mut impl Write,
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
-    is_running: bool,
+    in_progress: Option<&InProgress<InFlightRun>>,
     now: Timestamp,
 ) -> std::io::Result<()> {
-    let verdict =
-        verdict_line(records, is_running, now).map(|(verdict, style)| ui::paint(style, &verdict));
-    let stale = stale_clause(records, attribution, is_running)
+    let verdict = verdict_line(records, in_progress.is_some(), now)
+        .map(|(verdict, style)| ui::paint(style, &verdict));
+    let stale = stale_clause(records, attribution, in_progress)
         .map(|clause| ui::paint(ui::palette::warn(), &clause));
     match (verdict, stale) {
         (Some(verdict), Some(stale)) => writeln!(out, "  {verdict} · {stale}")?,
@@ -2158,14 +2158,15 @@ fn refused_fire_attribution(records: &[LoopRunRecord]) -> Vec<FireAttribution> {
 /// newest run nor end a count of overlaps.
 /// Fires on a `no record` row are excluded: a later tenure already proves their holder gone.
 /// Counts on recorded rows stay on those rows; the warning names them without a number.
-/// With an active run, only rowless fires remain in the warning.
+/// With a run in progress, only rowless fires remain in the warning, which names the lock only
+/// when that run holds it.
 /// The `during` count leaves out overlaps the table shows on another row; an overlap no row
 /// takes still counts. A record that held the lock itself counts only when it folds onto the
 /// newest run's row, not when it has a row of its own or no row to fold onto.
-fn stale_clause(
+fn stale_clause<H>(
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
-    has_active_run: bool,
+    in_progress: Option<&InProgress<H>>,
 ) -> Option<String> {
     let newest_run = records.iter().rposition(|record| !is_refused_fire(record));
     let start = newest_run.map_or(0, |idx| idx + 1);
@@ -2173,18 +2174,17 @@ fn stale_clause(
         .iter()
         .zip(&attribution[start..])
         .filter(|(_, destination)| !matches!(destination, FireAttribution::NoRecord(..)));
-    if has_active_run {
+    if let Some(in_progress) = in_progress {
         let after = tail
             .filter(|(record, destination)| {
                 is_overlap(record) && matches!(destination, FireAttribution::Trailing)
             })
             .count();
-        return (after > 0).then(|| {
-            format!(
-                "{} skipped while the active run holds the lock",
-                fires(after)
-            )
-        });
+        let blocker = match in_progress {
+            InProgress::Locked(_) => "the active run holds the lock",
+            InProgress::Run { .. } => "a run is in progress",
+        };
+        return (after > 0).then(|| format!("{} skipped while {blocker}", fires(after)));
     }
     let after = tail
         .clone()
