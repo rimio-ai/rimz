@@ -31,7 +31,7 @@ Because state lives in the files and in git, a member that crashed, restarted, o
 
 **CI comes back to the coder.** Each fragment binds the `ci.failed` signal to its coder role, so a failing run after submission reaches the agent that can fix it, with its evidence, rather than whoever pushed.
 
-**The run ends in Reflect.** The final stage distills what the run learned into `.rimz/team/reflect-notes.md`: a ranked list of fixes, each marked landed, proposed, or yours to decide. That file is the one to read before the next run.
+**The run ends in Reflect.** Each team lists `consensus: [reflect]`, the piece RimZ ships for that stage. The final stage distills what the run learned into `.rimz/team/reflect-notes.md`: a ranked list of fixes, each marked landed, proposed, or yours to decide. That file is the one to read before the next run.
 
 ## Forge
 
@@ -92,7 +92,7 @@ Bundles include `claude.md` and `codex.md` base prompts as well as team-prefixed
 
 - RimZ installed with hooks set up ([installation](../../docs/guide/installation.md) · [setup](../../docs/guide/setup.md)).
 - The `claude` and `codex` CLIs on `PATH`, each logged in. Spot needs both too: its coder runs Codex, its reviewer Claude.
-- The crafts name helper skills for the mechanical steps: `commit`, `rebase`, `fix-ci`, `branch-diff`, `pr`, and `reflect`. They are not shipped here. Each mention states the outcome as well as the skill, so a role without one does the step with plain `git` or `gh`; install your own equivalents to make those steps sharper.
+- The crafts name helper skills for the mechanical steps: `commit`, `rebase`, `fix-ci`, `branch-diff`, and `pr`, and the `reflect` consensus piece each team lists names `rimz-reflect`. They are not shipped here. Each mention states the outcome as well as the skill, so a role without one does the step with plain `git` or `gh`; install your own equivalents to make those steps sharper.
 - Subagent delegation is optional. The prompts ask for exploration, design, and defect-hunting children where the work parallelizes, and `rimz subagents profiles` tells the role what is actually configured; with no `subagents/*.md` definitions, each role does that reading itself.
 
 ## Launch and work

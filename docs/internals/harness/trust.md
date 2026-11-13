@@ -28,7 +28,7 @@ The pin covers the surface itself because agents in the room can write `.rimz/co
 | `[[agents]]` | `name`, `launch_command`, `env` |
 | `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
-| `[agents.teams.<name>]` | `layout`, `consensus-file`, `append-system-prompt-files`. Per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
+| `[agents.teams.<name>]` | `layout`, `consensus-file`, `consensus` (the piece names), `append-system-prompt-files`. Per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[tasks.<name>]` | `agent`, `workflow`, `prompt`, `prompt-file`, `check` (a shell string), `judge` (one table or an array, each with `agent`, `prompt`, `prompt-file`, `recheck`, `timeout`), `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `fast`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`, `signal`, `match`. A task's short form compiles at fire time to an inline workflow graph ([loops.md](./loops.md#the-compiled-graph)) whose checks, judges, agent step, and prompt assets all come from these keys; the step settings it adds without them (`budget`, `notes`, `throttle`, `capacity-wait`, `account`) run no command |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
@@ -43,7 +43,7 @@ A field added to the projection after grants existed is left out of the JSON whi
 | --- | --- |
 | top level | `lsp_servers`, `subagent_profiles`, and `accounts` are empty |
 | profile and subagent profile | `skills`, `auto_compact`, and `fast` are unset |
-| team | `consensus_file` is unset, or `append_system_prompt_files` is empty |
+| team | `consensus_file` is unset, or `consensus` or `append_system_prompt_files` is empty |
 | team role | `signals` is empty, or `auto_compact` and `fast` are unset |
 | task | `workflow` and `fast` are unset, or `judge` is empty |
 | language server | `editor_check_on_save` is unset |

@@ -120,7 +120,7 @@ The merge itself starts from the shipped template and carries each value you set
 
 Two things do not survive that rebuild. Comments you wrote yourself are gone, because the file is rebuilt from the template and only the template's own comments come back. And a value whose template line sits inside a commented-out table (`[agents]`, `[agents.worktree]`, `[agents.attention]`, `[agents.subagents]`) returns in a table the merge appends rather than on that line, so it keeps working but moves.
 
-Markdown definitions are never touched. The one file setup overwrites outright is `teams/consensus.md`, the [read-only copy of the built-in team consensus](../reference/definitions.md#the-built-in-consensus-copy), which is generated output RimZ never reads back.
+Markdown definitions are never touched. The files setup overwrites outright are `teams/consensus.md`, the [read-only copy of the built-in team consensus](../reference/definitions.md#the-built-in-consensus-copy), and `teams/consensus/reflect.md`, the copy of the shipped [`reflect` consensus piece](../reference/definitions.md#consensus-pieces): generated output RimZ never reads back.
 
 Three paths replace a file wholesale with fresh templates: `rimz setup --reset` after you confirm it, `rimz config init --force`, and `rimz config init` on a machine with none of the three files. Plain `rimz config init` where one exists refuses and tells you to pass `--force`.
 
@@ -870,7 +870,7 @@ An `[agents.commands]` entry is a bare string, split into words and run as a pla
 
 #### Teams
 
-A team lives in `teams/<name>.md`. Its frontmatter declares the roles, the stages the work passes through, the leader, and an optional layout; its body is the pipeline every seat shares. Each role picks a direct definition with `agent:` and becomes the profile `<team>.<role>`. Every stage you declare names exactly one role that owns it, and the final `Done` stage is implicit, never declared. A seat's prompt composes in one order: the kind base, then each profile in the role's `agent:` chain, then the role's own craft, then the built-in consensus, then the team body.
+A team lives in `teams/<name>.md`. Its frontmatter declares the roles, the stages the work passes through, the leader, and an optional layout; its body is the pipeline every seat shares. Each role picks a direct definition with `agent:` and becomes the profile `<team>.<role>`. Every stage you declare names exactly one role that owns it, and the final `Done` stage is implicit, never declared. A seat's prompt composes in one order: the kind base, then each profile in the role's `agent:` chain, then the role's own craft, then the built-in consensus, then the [consensus pieces](../reference/definitions.md#consensus-pieces) the team lists, then the team body.
 
 Launch every seat with `rimz teams <name>`, or one seat with `rimz agents <team>.<role>`. The optional layout uses the same grammar as an [inline spec](#inline-specs-and-cell-resolution) and must place every role once. The built-in roleless `peer` team stays available unless a definition of that name replaces it. Designing a team is the [teams guide](./teams.md#define-your-own-team); every key and rule is the [definition reference](../reference/definitions.md#teams-and-seats).
 

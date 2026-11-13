@@ -3,6 +3,7 @@ name: forge
 leader: planner
 layout: planner,coder+reviewer
 stages: ["Explore","Plan","Implement","Review","Submit","Reflect"]
+consensus: [reflect]
 roles:
   - agent: forge-planner
     role: planner

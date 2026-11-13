@@ -172,6 +172,7 @@ name: forge
 leader: planner
 layout: planner,coder+reviewer
 stages: ["Explore","Plan","Implement","Review","Submit","Reflect"]
+consensus: [reflect]
 roles:
   - agent: forge-planner
     role: planner
@@ -197,6 +198,8 @@ The roster names the seats. `agent:` selects a [profile](./fleet.md#profiles-sha
 The stages decide who is woken when. `leader` names the seat that receives the launch prompt and keeps the question tool; the other seats lose it, which is what keeps one voice pointed at you. `owns` assigns stages, and the rules are strict enough to catch a broken roster at launch: every declared stage needs exactly one owner, Implement and Review need different owners, and `Done` is implicit, never declared and never owned. [The definition reference](../reference/definitions.md#teams-and-seats) lists every key and rule, and [configuration](./configuration.md#teams) covers where the files live.
 
 Put shared provider instructions in the kind base `agents/<kind>.md`, each role's craft in its own profile, and the workflow the seats share in the team's body. RimZ composes them in that order, slipping one layer of its own, a built-in consensus on how teammates cooperate, between each role's craft and the team's body. You can read that consensus in the copy RimZ writes to `~/.rimz/teams/consensus.md` ([read-only](../reference/definitions.md#the-built-in-consensus-copy); editing it changes nothing).
+
+Reflection is opt-in. `consensus: [reflect]` adds the piece RimZ ships after the consensus: every seat runs `Skill(rimz-reflect)` as it finishes a stage, and the owner of a last `Reflect` stage distills those notes. A team that lists `reflect` must declare that stage, and each seat with a skill list gains `rimz-reflect`. Leave the line out, and the `Reflect` stage with it, for a team that never reflects. Any other name in the list is a trait of yours, `~/.rimz/traits/<name>.md`, given to every seat in the order listed, so `consensus: [reflect, house-rules]` appends your house rules after the reflection text. To reword reflection for every team at once, copy `~/.rimz/teams/consensus/reflect.md` to `~/.rimz/traits/reflect.md` and edit it; your file then replaces the shipped text, and RimZ adds no skill or stage rule for it. [Consensus pieces](../reference/definitions.md#consensus-pieces) has the rules.
 
 Run `rimz agents validate` before launching: a definition that fails to resolve refuses the launch rather than quietly substituting a profile. Launching then opens every member in the layout. The leader starts with `rimz teams record Goal "<the request>"` to create `.rimz/team/blackboard.md`, then flips to the first stage; a flip can also bootstrap a missing board. `rimz agents forge.reviewer` launches or re-adds a single seat into the same channel, and a team launched by an agent is still a top-level peer cohort, not that agent's subagent.
 

@@ -3,6 +3,7 @@ name: mill
 leader: architect
 layout: architect,coder+reviewer
 stages: ["Explore","Plan","Implement","Review","Submit","Reflect"]
+consensus: [reflect]
 roles:
   - agent: mill-architect
     role: architect

@@ -25,6 +25,7 @@ Wrote /home/me/.rimz/theme.toml
 Wrote /home/me/.rimz/loop.toml
 Wrote /home/me/.rimz/remote.toml
 Wrote /home/me/.rimz/teams/consensus.md (read-only copy of the built-in team consensus)
+Wrote /home/me/.rimz/teams/consensus/reflect.md (read-only copy of the shipped `reflect` consensus piece)
 
 7 questions. Enter keeps the answer in [brackets].
 Hooks install when you say yes; your settings are written at the review.
@@ -38,7 +39,7 @@ Everything it writes goes under `~/.rimz/`. Three files carry the settings you w
 | `~/.rimz/theme.toml` | sidebar appearance: scheme, color depth, glyphs, pets |
 | `~/.rimz/loop.toml` | scheduled loop tasks: the recurring turns and watchdogs you configure by hand or with `rimz loop add` |
 
-Two generated files land beside them and need nothing from you: `~/.rimz/remote.toml`, a commented template for the [SSH aliases](./remote.md) you may add later, written only when it is missing, and `~/.rimz/teams/consensus.md`, a read-only copy of the prompt RimZ gives a [team](./teams.md) so you can read it. Nothing reads that copy back, and setup rewrites it only when the running build's text differs from it. Agent, subagent, and team definitions live under `~/.rimz/` too, as Markdown trees you write yourself; their shape is in [definitions](../reference/definitions.md).
+Three generated files land beside them and need nothing from you: `~/.rimz/remote.toml`, a commented template for the [SSH aliases](./remote.md) you may add later, written only when it is missing, and `~/.rimz/teams/consensus.md` with `~/.rimz/teams/consensus/reflect.md`, read-only copies of the prompt RimZ gives a [team](./teams.md) and of the reflection piece a team can add to it, so you can read them. Nothing reads those copies back, and setup rewrites each only when the running build's text differs from it. Agent, subagent, and team definitions live under `~/.rimz/` too, as Markdown trees you write yourself; their shape is in [definitions](../reference/definitions.md).
 
 The count covers only what this run will ask. Hooks are asked, and counted, only when an agent RimZ found needs an install or a refresh; the multiplexer only when both tmux and Zellij are installed and no `--mux`, `--tmux`, or `--zellij` flag chose one. The config files exist before the first question, so quitting leaves them holding the shipped defaults.
 
@@ -46,7 +47,7 @@ Rerun setup any time. When `~/.rimz/config.toml` already exists, setup merges ea
 
 `rimz setup --reset` starts over. It names `config.toml`, `theme.toml`, and `loop.toml`, warns that it keeps no backup, and asks `Reset them?`, which defaults to no. A no changes nothing. A yes overwrites all three with the shipped templates, your loop tasks included, and then asks every question as on a fresh machine. Without a terminal to ask from, `--reset` refuses, exits nonzero, and changes nothing.
 
-For a provisioning script that needs files but cannot answer questions, `rimz setup --config-only` prints the report, merges or writes the config files, reporting `Merged <file> - kept N setting(s)` for each one it merged, writes the missing remote template and the built-in consensus copy, and stops. No hooks are installed, no trust is granted, and no appearance, keys, or automation setting changes. Without `--config-only` and without a terminal to read from, setup prints the report, changes nothing, and names `rimz setup --config-only` for config. When agents lack hooks, it also names `rimz hooks install` and says how many need them.
+For a provisioning script that needs files but cannot answer questions, `rimz setup --config-only` prints the report, merges or writes the config files, reporting `Merged <file> - kept N setting(s)` for each one it merged, writes the missing remote template and the built-in consensus copies, and stops. No hooks are installed, no trust is granted, and no appearance, keys, or automation setting changes. Without `--config-only` and without a terminal to read from, setup prints the report, changes nothing, and names `rimz setup --config-only` for config. When agents lack hooks, it also names `rimz hooks install` and says how many need them.
 
 ## Install agent hooks
 
@@ -328,7 +329,7 @@ Skipping `rimz setup` entirely is also fine. The first `rimz` on a machine with 
 - **The multiplexer**, the same question as in setup, asked only when you run it from a terminal, both tmux and Zellij are installed, no `--mux`, `--tmux`, or `--zellij` flag chose one, you are not inside a multiplexer already, and no session of this project's name is live on either. Its answer picks the backend this room is born in, and it is written to `mux.default` at once when it differs from tmux, since no review follows. `q` here quits before the room opens and changes nothing.
 - **Reporting hooks**, the same screen as in setup, for the agents that need them. Every later `rimz` that starts a room not already running asks again while an agent's hooks are missing or stale.
 
-It writes `config.toml`, `theme.toml`, `loop.toml`, and `remote.toml` with their shipped defaults, but not the team consensus copy. In place of the other questions it prints one line naming the room keys, color, and glyphs your config holds, such as `Everything else is on defaults: your Zellij keys, auto color, plain glyphs.`, with `rimz setup` beside it to change any of it. Without a terminal it asks nothing and notes that it initialized the config.
+It writes `config.toml`, `theme.toml`, `loop.toml`, and `remote.toml` with their shipped defaults, but not the team consensus copies. In place of the other questions it prints one line naming the room keys, color, and glyphs your config holds, such as `Everything else is on defaults: your Zellij keys, auto color, plain glyphs.`, with `rimz setup` beside it to change any of it. Without a terminal it asks nothing and notes that it initialized the config.
 
 To take all of it back off the machine, `rimz uninstall --all` names every root, room, hook, and binary it is about to touch and waits for a `y` before removing them; [security and trust](./security.md#what-rimz-changes-on-your-machine) lists what it leaves behind on purpose.
 

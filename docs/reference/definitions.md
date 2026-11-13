@@ -113,7 +113,7 @@ Overriding a definition's kind with `--agent` does not discard its prompt. If th
 
 `traits: [careful, concise]` reads `traits/careful.md` then `traits/concise.md`, deduplicating first-seen names. Names cannot be empty, `.` or `..`, or contain path separators. These files are plain Markdown: their complete trimmed contents are joined with blank lines and replace the first `${traits}` in the body. Later tokens collapse to a blank line. With no traits, the token disappears. Naming traits without a token is an error. Other `${...}` placeholders survive unchanged; the team pipeline is not trait-substituted.
 
-Each trait comes from the merged trait tier. A home trait override reaches every definition that names it, including a qualified pack parent's body.
+Each trait comes from the merged trait tier. A home trait override reaches every definition that names it, including a qualified pack parent's body. A team's `consensus` key names traits too, composed after the consensus instead of into a craft; see [consensus pieces](#consensus-pieces).
 
 ## Tools to provider arguments
 
@@ -188,6 +188,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `leader` | Required declared role handle; receives the initial task and retains `AskUserQuestion`. |
 | `stages` | Required nonempty ordered list of unique, nonblank stage names. |
 | `traits` | Traits added to every seat's leaf craft. |
+| `consensus` | Trait names whose text every seat receives after the consensus, in list order; see [consensus pieces](#consensus-pieces). |
 | `roles` | Required nonempty list of role mappings. |
 | `keep-warm` | Default [keep-warm](#keep-warm) `max` and `while` for every role. |
 
@@ -204,21 +205,31 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `smart-compact` | [Smart compaction](#smart-compaction) threshold or `off`; inherited from the definition when omitted. |
 | `keep-warm` | [Keep-warm](#keep-warm) shorthand or `{ max, while }` block. Inherits each field from the team, never the definition. |
 
-Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. Every nonempty seat skill list gains `reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
+Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. When the team lists the shipped `reflect` [consensus piece](#consensus-pieces), every nonempty seat skill list gains `rimz-reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
 
-Prompt order is kind base → ancestor crafts → seat craft → built-in consensus → team pipeline, separated by blank lines. Markdown teams do not expose custom consensus or scratch-file keys. Their staged workflow keeps its board and stage notes through `.rimz/team/`, a link to the run's archive in room state; see [teams](../guide/teams.md).
+Prompt order is kind base → ancestor crafts → seat craft → built-in consensus → consensus pieces → team pipeline, separated by blank lines. Markdown teams cannot replace the consensus or set scratch files; `consensus` only adds pieces after it. Their staged workflow keeps its board and stage notes through `.rimz/team/`, a link to the run's archive in room state; see [teams](../guide/teams.md).
 
 ### The built-in consensus copy
 
-RimZ writes a read-only copy of the built-in consensus to `teams/consensus.md` under the definitions root, for reading and linking. `rimz setup` writes or refreshes it, and launching a team seat that runs under the built-in consensus refreshes it too, so an upgrade replaces a stale copy at the next team launch. A header line names the RimZ version that wrote it. RimZ never reads the file back: teams always run under the text compiled into the binary, and an edit to the copy changes nothing and is overwritten at the next refresh. To change a team's consensus, set `consensus-file` in a project TOML team. Every seat needs a base prompt, supplied by `system-prompt-file` on the role or its profile chain, or by its kind base (`agents/<kind>.md` under the definitions root). If a project profile named after the kind replaces that base, add `system-prompt-file` to that profile or remove it to inherit the kind base. A seat without a base refuses the team's launch; the project still loads.
+RimZ writes a read-only copy of the built-in consensus to `teams/consensus.md` under the definitions root, for reading and linking. `rimz setup` writes or refreshes it, and launching a team seat that runs under the built-in consensus refreshes it too, so an upgrade replaces a stale copy at the next team launch. A header line names the RimZ version that wrote it. RimZ never reads the file back: teams always run under the text compiled into the binary, and an edit to the copy changes nothing and is overwritten at the next refresh. To change a team's consensus, set `consensus-file` in a project TOML team; to add to it, list [consensus pieces](#consensus-pieces). Every seat needs a base prompt, supplied by `system-prompt-file` on the role or its profile chain, or by its kind base (`agents/<kind>.md` under the definitions root). If a project profile named after the kind replaces that base, add `system-prompt-file` to that profile or remove it to inherit the kind base. A seat without a base refuses the team's launch; the project still loads.
 
 Because the definitions loader skips it, `teams/consensus.md` is never a team definition, and `consensus` is not available as a Markdown team file name.
+
+### Consensus pieces
+
+`consensus: [reflect, house-rules]` gives every seat each named piece, in list order and each name once, after the consensus and before the team pipeline. A name is a trait name, read from the merged trait tier as `traits:` reads it (home over pack), and it needs no `${traits}` token. A name that is invalid, has no trait, cannot be read, or is claimed by two packs refuses the team with the trait wording. The pieces are scanned for `@` mentions with the pipeline. A team that lists no pieces gets none, so it gets no reflection text and no reflection skill.
+
+RimZ ships one piece, `reflect`: the reflection practice of running `Skill(rimz-reflect)` at the end of every stage and distilling those entries in a last `Reflect` stage. It is used only when no home or pack `traits/reflect.md` claims the name; such a file replaces its wording for every team that lists `reflect`. Two rules follow the shipped wording alone. A team that lists it must declare a stage named `Reflect`, or it is refused at load with both fixes: add the stage, or drop `reflect` from `consensus`. And every nonempty seat skill list gains `rimz-reflect`. A team whose `reflect` is a home or pack file gets neither: its seats list what that file names. Because the skill name starts with `rimz-`, a seat listing it also gets the launch reminder's skills section, and on Claude a routine `Skill(rimz-reflect)` allow, as every RimZ skill does.
+
+RimZ writes a read-only copy of the shipped piece to `teams/consensus/reflect.md` under the definitions root, with the consensus copy and by the same two writers: `rimz setup`, and a seat launch that composes the built-in consensus or the shipped piece. Nothing reads it back. To change the wording, copy its text to `traits/reflect.md`; a copy under `traits/` is itself the replacement, which is why RimZ keeps its own outside that tree.
+
+A project TOML team takes the same key, `consensus = ["reflect"]`, resolved against the same trait tier; its pieces follow the consensus or its `consensus-file` and come before its `append-system-prompt-files`. A refusal names the project config file. The list is part of the [project trust hash](../internals/harness/trust.md).
 
 ### Stages and handles
 
 Every declared stage must have exactly one owner. Ownership of an undeclared stage or duplicate ownership fails. `Implement` and `Review`, when both present, must have different owners. `Done` is implicit and cannot appear in `stages` or `owns`. Stage names match exactly; declaration order is not an enforced transition order.
 
-The leader must name a declared handle. Handles must satisfy the shared address grammar and cannot shadow broadcast, reserved sender, kind, or kind-ordinal addresses. A layout must place every declared role exactly once. The pipeline and built-in consensus are scanned for `@` mentions beginning with an ASCII letter; each must name a declared role, `all`, `rimz`, or a registered kind. See [addresses](./cli/agents.md#addressing-agents).
+The leader must name a declared handle. Handles must satisfy the shared address grammar and cannot shadow broadcast, reserved sender, kind, or kind-ordinal addresses. A layout must place every declared role exactly once. The pipeline, consensus pieces, and built-in consensus are scanned for `@` mentions beginning with an ASCII letter; each must name a declared role, `all`, `rimz`, or a registered kind. See [addresses](./cli/agents.md#addressing-agents).
 
 ### Signals
 
@@ -305,12 +316,12 @@ The loader collects independent errors rather than stopping at the first file, a
 | Resolution | Missing kind inference, unknown or failed parent, cross-namespace inheritance, cycles, excessive shared chain depth, model/kind mismatch, missing or failed kind base, or an unknown/failed seat definition. |
 | Prompt support | A kind base, definition craft, or team seat on a kind that takes no system prompt. Delete the base, remove the craft, or choose a kind that takes a system prompt. |
 | Model tiers | Both `tier` and `model` set, a tier name in `model`, an unknown tier (with a suggestion), relative effort, an unbuildable concrete model, or no eligible model at or above the requested tier. Tier exclusions identify each family's reason. Configure ordered lists in machine `config.toml`; project TOML cannot set `[tiers]`, `tier`, or tier-valued models. |
-| Traits | Invalid names, unreadable fragments, or named traits without a substitution token. |
+| Traits | Invalid, missing, or unreadable names in a definition's `traits:` or a team's `consensus:`, a conflicting pack claim included, or a definition that names traits without a substitution token. |
 | Tools | Required list missing, malformed entry, unknown Claude native child type, or an argument that cannot be rendered. |
 | Delegation | Empty/unknown child names, delegation on a child, native `Agent` combined with a RimZ child list, or a child reference rejected by final namespace validation. |
-| Skills | Invalid names or missing `Skill` tool; for enforced lists, a listed skill absent from the provider/library/pack chain or in conflict, invalid policy metadata, or a listed user-only skill (including automatically added `reflect`). |
+| Skills | Invalid names or missing `Skill` tool; for enforced lists, a listed skill absent from the provider/library/pack chain or in conflict, invalid policy metadata, or a listed user-only skill (including `rimz-reflect`, added with the shipped `reflect` consensus piece). |
 | Compaction and presets | Invalid native token count or handoff threshold; shared validation/launch rejects unsupported provider capabilities and invalid provider-specific values. |
-| Team topology | Duplicate/missing/invalid role handles; unknown leader; missing, duplicate, unknown, blank, or reserved stages/owners; same Implement/Review owner; undeclared prompt handle; invalid layout, missing or repeated role placement. |
+| Team topology | Duplicate/missing/invalid role handles; unknown leader; missing, duplicate, unknown, blank, or reserved stages/owners; same Implement/Review owner; the shipped `reflect` consensus piece without a `Reflect` stage; undeclared prompt handle; invalid layout, missing or repeated role placement. |
 | Signals | Empty list, invalid selector or map, blank match value/prompt, unscoped agent selector, or a binding rejected by the shared signal-selector checks. Worktree-dependent scope is checked at launch. |
 
 To check a definition by hand without touching your own home, validate it in a scratch one. Point `RIMZ_HOME` and `RIMZ_AGENTS_HOME` at a temporary directory, write nonempty [kind bases](#kind-bases) `agents/claude.md` and `agents/codex.md`, and give every Claude or Codex definition a `tools:` list such as `tools: [Bash]`. With no `packs/installed.json` there, this also isolates the pack tier; provider skill roots still come from the shell environment:
