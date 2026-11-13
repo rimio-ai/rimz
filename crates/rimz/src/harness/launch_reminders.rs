@@ -100,7 +100,9 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
     "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. The task is scoped to this one run, so do the work ",
     "yourself. Report the result in your final response: it is the answer your caller reads ",
-    "once this run settles."
+    "once this run settles. Send your caller no progress notes: each one stops its wait and ",
+    "costs it a turn. When you need its answer to go on, end your turn with the question as ",
+    "your final response."
 );
 
 const SKILLS_REMINDER_BODY: &str = concat!(
