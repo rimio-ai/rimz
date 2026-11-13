@@ -1098,6 +1098,126 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
     );
 }
 
+fn deployed(dir: &Path) -> DefinitionSource<'_> {
+    DefinitionSource::Deployed {
+        dir,
+        task: None,
+        surplus: None,
+        surplus_after: None,
+        fire: None,
+    }
+}
+
+#[test]
+fn a_deployed_run_seals_its_whole_directory_and_ignores_later_source_edits() {
+    let (home, state) = bare_room();
+    open_room(&state, home.path());
+    let dir = home.path().join("nightly");
+    fs::create_dir_all(dir.join("prompts/lib")).unwrap();
+    fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
+    fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
+    fs::write(
+        dir.join("prompts/lib/helper.py"),
+        "a sibling the TOML never names",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("fix.md", dir.join("prompts/alias.md")).unwrap();
+    let record = start_at(&state, home.path(), deployed(&dir)).unwrap();
+    let paths = state.workflow(&record.id);
+    assert_eq!(record.origin, RunOrigin::Deployed);
+    assert_eq!(record.spec_dir, paths.definition.canonicalize().unwrap());
+    assert_eq!(
+        ["workflow.toml", "prompts/lib/helper.py", "prompts/alias.md"]
+            .map(|name| fs::read_to_string(paths.definition.join(name)).unwrap()),
+        [ONE_TURN, "a sibling the TOML never names", "fix the build"]
+    );
+    fs::write(dir.join("prompts/fix.md"), "an edit after start").unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    let spec = spec::load(&paths.home).unwrap();
+    assert_eq!(
+        agent::compose(
+            &record,
+            &paths,
+            spec.step("fix").unwrap(),
+            &mut BTreeMap::new()
+        )
+        .unwrap(),
+        "fix the build",
+        "a deployed run reads its prompt from the copy sealed at start"
+    );
+}
+
+#[test]
+fn a_deployed_run_seals_internal_links_as_links_and_keeps_empty_directories() {
+    let (home, state) = bare_room();
+    open_room(&state, home.path());
+    let dir = home.path().join("nightly");
+    fs::create_dir_all(dir.join("prompts")).unwrap();
+    fs::create_dir_all(dir.join("lib")).unwrap();
+    fs::create_dir_all(dir.join("out/empty")).unwrap();
+    fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
+    fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
+    fs::write(dir.join("lib/main.py"), "the library").unwrap();
+    std::os::unix::fs::symlink("../lib/main.py", dir.join("prompts/link.py")).unwrap();
+    std::os::unix::fs::symlink("../lib", dir.join("prompts/lib")).unwrap();
+    std::os::unix::fs::symlink(dir.join("lib/main.py"), dir.join("absolute.py")).unwrap();
+    let record = start_at(&state, home.path(), deployed(&dir)).unwrap();
+    let sealed = state.workflow(&record.id).definition;
+    for (link, target) in [
+        ("prompts/link.py", "../lib/main.py"),
+        ("prompts/lib", "../lib"),
+        ("absolute.py", "lib/main.py"),
+    ] {
+        assert_eq!(
+            fs::read_link(sealed.join(link)).unwrap(),
+            std::path::Path::new(target),
+            "{link}"
+        );
+    }
+    assert!(
+        fs::symlink_metadata(sealed.join("prompts/lib"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(
+        sealed.join("out/empty").is_dir(),
+        "an empty directory is sealed"
+    );
+    fs::write(dir.join("lib/main.py"), "an edit after start").unwrap();
+    for link in ["prompts/link.py", "prompts/lib/main.py", "absolute.py"] {
+        assert_eq!(
+            fs::read_to_string(sealed.join(link)).unwrap(),
+            "the library",
+            "{link} reads the sealed target"
+        );
+    }
+}
+
+#[test]
+fn a_deployed_run_refuses_a_file_it_cannot_seal_with_its_path() {
+    let (home, state) = bare_room();
+    open_room(&state, home.path());
+    fs::write(home.path().join("secret.md"), "outside").unwrap();
+    for (link, target) in [
+        ("prompts/leak.md", home.path().join("secret.md")),
+        ("prompts/gone.md", home.path().join("missing.md")),
+    ] {
+        let dir = home.path().join("nightly");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("prompts")).unwrap();
+        fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
+        fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
+        std::os::unix::fs::symlink(&target, dir.join(link)).unwrap();
+        let error = start_at(&state, home.path(), deployed(&dir)).unwrap_err();
+        let shown = dir.canonicalize().unwrap().join(link);
+        assert!(
+            error.to_string().contains(&shown.display().to_string()),
+            "{link}: {error}"
+        );
+        assert!(workflow::list(&state).unwrap().is_empty(), "{link}");
+    }
+}
+
 #[test]
 fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
     let (home, state) = bare_room();

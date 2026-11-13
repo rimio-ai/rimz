@@ -146,7 +146,7 @@ fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
         )
         .unwrap();
         fs::write(
-            dir.join("checks/continue.sh"),
+            super::sealed(&room.env, &id).join("checks/continue.sh"),
             "printf '%s' '{\"outcome\":\"ready\"}'\n",
         )
         .unwrap();

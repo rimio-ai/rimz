@@ -158,33 +158,151 @@ pub fn create(
     )?;
     let prompt = prompt().map_err(WorkflowErr::Refused)?;
     let id = WorkflowRunId::new();
-    let record = match source {
-        DefinitionSource::Deployed { .. } => publish(state, id, start, roots, prompt, manual)?,
-        DefinitionSource::Inline { definition, .. } => {
-            let paths = state.workflow(&id);
-            let published =
-                workflow::seal_definition(&paths.definition, &definition.text, &definition.assets)
-                    .map_err(WorkflowErr::from)
-                    .and_then(|()| Ok(paths.definition.canonicalize()?))
-                    .and_then(|spec_dir| {
-                        publish(
-                            state,
-                            id,
-                            RunStart { spec_dir, ..start },
-                            roots,
-                            prompt,
-                            manual,
-                        )
-                    });
-            if published.is_err() {
-                // Nothing was published, so the sealed root has no record to keep it.
-                let _ = std::fs::remove_dir_all(&paths.home);
-            }
-            published?
-        }
+    // Every run seals its whole definition into its own root and reads only that copy, so an
+    // edit to a deployed directory after the start changes nothing the run does.
+    let tree = match source {
+        DefinitionSource::Deployed { .. } => read_definition_dir(&start.spec_dir)?,
+        DefinitionSource::Inline { definition, .. } => DeployedTree {
+            definition,
+            modes: BTreeMap::new(),
+            dirs: Vec::new(),
+            links: BTreeMap::new(),
+        },
     };
+    let paths = state.workflow(&id);
+    let published = workflow::seal_definition(
+        &paths.definition,
+        &tree.definition.text,
+        &tree.definition.assets,
+        &tree.modes,
+        &tree.dirs,
+        &tree.links,
+    )
+    .map_err(WorkflowErr::from)
+    .and_then(|()| Ok(paths.definition.canonicalize()?))
+    .and_then(|spec_dir| {
+        publish(
+            state,
+            id,
+            RunStart { spec_dir, ..start },
+            roots,
+            prompt,
+            manual,
+        )
+    });
+    if published.is_err() {
+        // Nothing was published, so the sealed root has no record to keep it.
+        let _ = std::fs::remove_dir_all(&paths.home);
+    }
+    let record = published?;
     spawn(&record)?;
     Ok(record)
+}
+
+/// A deployed definition directory as its run seals it: the definition, each asset's
+/// permission bits, every directory, and every internal symlink with its sealed target.
+struct DeployedTree {
+    definition: InlineDefinition,
+    modes: BTreeMap<String, u32>,
+    dirs: Vec<String>,
+    links: BTreeMap<String, std::path::PathBuf>,
+}
+
+/// Read a deployed definition directory whole: a script may import a sibling the TOML never
+/// names, and shell text names files nothing can discover. Every directory comes back, empty
+/// ones included. A symlink that resolves inside the directory comes back as a link, to a
+/// directory as well as a file and without walking through it, its target written relative to
+/// the link's own directory so it resolves to the same entry in the sealed copy. An entry that
+/// resolves outside the directory, or that is not a regular file or directory, refuses the
+/// start with its path. Each asset's permission bits come back beside it, so a sealed script
+/// stays executable.
+fn read_definition_dir(dir: &Path) -> Result<DeployedTree> {
+    use std::os::unix::fs::PermissionsExt;
+    let spec_file = crate::disk::paths::workflow_spec_file(dir);
+    let mut text = None;
+    let mut tree = DeployedTree {
+        definition: InlineDefinition {
+            text: String::new(),
+            assets: BTreeMap::new(),
+        },
+        modes: BTreeMap::new(),
+        dirs: Vec::new(),
+        links: BTreeMap::new(),
+    };
+    let mut pending = vec![dir.to_path_buf()];
+    let unsealable = |path: &Path, reason: &dyn std::fmt::Display| {
+        WorkflowErr::Refused(format!(
+            "{}: cannot seal it into the run: {reason}",
+            path.display()
+        ))
+    };
+    while let Some(at) = pending.pop() {
+        for entry in std::fs::read_dir(&at).map_err(|e| unsealable(&at, &e))? {
+            let path = entry.map_err(|e| unsealable(&at, &e))?.path();
+            let unsealable = |reason: &dyn std::fmt::Display| unsealable(&path, reason);
+            let real = path.canonicalize().map_err(|e| unsealable(&e))?;
+            if !real.starts_with(dir) {
+                return Err(unsealable(&"it resolves outside the workflow directory"));
+            }
+            let meta = std::fs::metadata(&real).map_err(|e| unsealable(&e))?;
+            if !meta.is_dir() && !meta.is_file() {
+                return Err(unsealable(&"it is not a regular file"));
+            }
+            let is_link = std::fs::symlink_metadata(&path)
+                .map_err(|e| unsealable(&e))?
+                .is_symlink();
+            if meta.is_file() && path == spec_file {
+                let bytes = std::fs::read(&real).map_err(|e| unsealable(&e))?;
+                text = Some(String::from_utf8(bytes).map_err(|e| unsealable(&e))?);
+                continue;
+            }
+            let name = path
+                .strip_prefix(dir)
+                .ok()
+                .and_then(Path::to_str)
+                .ok_or_else(|| unsealable(&"its name is not UTF-8"))?
+                .to_owned();
+            if is_link {
+                let target = relative_target(Path::new(&name), &real, dir);
+                tree.links.insert(name, target);
+            } else if meta.is_dir() {
+                tree.dirs.push(name);
+                pending.push(path);
+            } else {
+                let bytes = std::fs::read(&real).map_err(|e| unsealable(&e))?;
+                tree.modes
+                    .insert(name.clone(), meta.permissions().mode() & 0o777);
+                tree.definition.assets.insert(name, bytes);
+            }
+        }
+    }
+    tree.definition.text =
+        text.ok_or_else(|| WorkflowErr::Refused(format!("{}: no such file", spec_file.display())))?;
+    Ok(tree)
+}
+
+/// The path from link `name`'s own directory to `real`, both inside `dir`.
+fn relative_target(name: &Path, real: &Path, dir: &Path) -> std::path::PathBuf {
+    let from = name
+        .parent()
+        .unwrap_or(Path::new(""))
+        .components()
+        .collect::<Vec<_>>();
+    // `real` resolved inside `dir`, the walk's own canonical root.
+    let to = real
+        .strip_prefix(dir)
+        .unwrap_or(real)
+        .components()
+        .collect::<Vec<_>>();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let target = std::iter::repeat_n(std::path::Component::ParentDir, from.len() - common)
+        .chain(to[common..].iter().copied())
+        .collect::<std::path::PathBuf>();
+    if target.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        target
+    }
 }
 
 /// A run's identity before its record exists.

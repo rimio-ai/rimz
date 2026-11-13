@@ -13,13 +13,17 @@ fn tick_until(env: &Env, id: &str, state: &str) -> Value {
 #[test]
 fn tick_discovers_a_manual_run_and_drives_its_recheck() {
     let recheck = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(2);
-    let (env, dir) = fixture(
+    let (env, _) = fixture(
         &format!("{HEADER}{WAIT}"),
         &format!("printf '%s\\n' '{{\"outcome\":\"pending\",\"recheck_at\":\"{recheck}\"}}'"),
     );
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
-    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    fs::write(
+        super::sealed(&env, &id).join("checks/pr.sh"),
+        evaluation_script("done"),
+    )
+    .unwrap();
     tick_until(&env, &id, "done");
 }
 

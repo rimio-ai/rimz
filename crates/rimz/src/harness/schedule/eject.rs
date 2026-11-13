@@ -185,7 +185,14 @@ fn publish(
             return Err(error).with_context(|| format!("removing {}", staging.display()));
         }
     }
-    crate::store::workflow::seal_definition(&staging, &definition.text, &definition.assets)?;
+    crate::store::workflow::seal_definition(
+        &staging,
+        &definition.text,
+        &definition.assets,
+        &BTreeMap::new(),
+        &[],
+        &BTreeMap::new(),
+    )?;
     let published = validate(&staging, definitions, project_root).and_then(|()| {
         std::fs::rename(&staging, dir).with_context(|| format!("publishing {}", dir.display()))?;
         Ok(crate::disk::atomic::sync_dir(home)?)
