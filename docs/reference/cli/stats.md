@@ -220,7 +220,7 @@ In the timeline header, `N held` joins the detail. A line's mark names its kind:
 | `◷` | Cache keepalive (`forced cache keepalive` for the ping sent past the typing hold): idle duration (a range for repeats), the keep-warm horizon when one was holding, and newest pending-wait count, followed by agent, message, and delivery verdict. |
 | `■` | Idle stop: an agent stopped by its `--when-idle` request, with how long it rested, the threshold, and who asked; `idle stop failed` carries the error. |
 | `↶` | Idle stop withdrawn: a prompt from the user kept the session, with the withdrawn threshold and who asked for the stop. |
-| `⤳` | Molt: the predecessor moved into a fresh successor session. |
+| `⤳` | Molt: the agent moved into a fresh session under the same handle. |
 | `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code, how long it lived, and the attempt number; `relaunch failed` carries the error. |
 | `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`, with a duration range for repeats), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
 | `⌁` | Soft compaction: a mid-turn wrap-up steer (`soft compact`), or `soft compact held` when it missed. The subsequent compact command is a separate `auto-compact` event. |
@@ -244,7 +244,7 @@ Counts are of assists that took effect, in the order they print. The five `workf
 | `port_forwards` | Automatic forwards opened. |
 | `empty_dir_grants` | Automatic empty-root folder-trust writes. |
 | `untrusted_cwd_fallbacks` | Explicit undecided-cwd children started privately. |
-| `molts` | Fresh successor tabs opened. |
+| `molts` | Fresh sessions a molt started. |
 | `stall_notices` | Stall notices queued for a parent without an error. |
 | `stall_nudges` | Once-per-stage-visit team notices queued without an error, even when immediate delivery misses. |
 | `resident_launches` | Older records of scheduled tasks that opened their agents; loop-started runs count under `workflow_starts`. |
@@ -330,7 +330,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 
 `Idle stop withdrawn: N` counts requests withdrawn by a prompt from the user; `idle_after_secs` is the withdrawn threshold. These events count as recorded, never held; their `↶` line names the agent, threshold, and requester when an agent asked.
 
-`Molts: N` counts agents moved into fresh sessions by `rimz agents molt`. Each event names the predecessor (`kind`, `agent_id`, `label`), the successor (`successor_kind`, `successor_id`, `successor_label`), and optional inherited `generation`. The successor id is its launch id. A molt counts once its new tab opens, even if the successor later fails or arming the predecessor's idle stop fails. The line shows both handles, then both providers and ids.
+`Molts: N` counts agents moved into fresh sessions by `rimz agents molt`. Each event names the replaced session (`kind`, `agent_id`, `label`), the fresh one (`successor_kind`, `successor_id`, `successor_label`), and optional inherited `generation`. Both labels are the agent's one handle, and the successor id is the fresh session's reservation key. A molt counts once the fresh session's wrapper binds, even if that session later fails. The line shows both handles, then both providers and ids.
 
 `Launch retry: N` counts relaunches of agents whose CLI died before opening a session, one per [relaunch](./agents.md#launch-a-layout). `label` is the agent's handle, `run_id` is omitted for a launch without a supervised run, `attempt` counts relaunches of that launch from 1, `exit_code` is omitted when a signal killed the process, and `startup_ms` is how long the process that died lived. A relaunch that could not spawn appears with `--all` and `relaunched: false`.
 

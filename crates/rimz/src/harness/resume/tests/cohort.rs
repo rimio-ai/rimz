@@ -3693,3 +3693,39 @@ fn resumed_and_fresh_seats_record_their_postures_auto_compact_count() {
         .collect::<Vec<_>>();
     assert_eq!(actual, vec![(declared, Some(200_000)); 2]);
 }
+
+/// A swap's bound replacement that failed holds its agent, so the session it
+/// replaced is no cohort member: neither resume nor a fresh relaunch's check
+/// picks the conversation Runtime hides behind the failed card.
+#[test]
+fn a_failed_bound_replacement_hides_the_session_it_replaced_from_cohorts() {
+    let replaced = AgentState {
+        launch_id: Some("launch_coder".into()),
+        ended_at: Some(jiff::Timestamp::now()),
+        ..team_agent("codex", "sess-replaced", "coder", "/repo/forge", 20)
+    };
+    let failed = AgentState {
+        launch_id: replaced.launch_id.clone(),
+        epoch: 1,
+        launch_bound: true,
+        status: crate::agents::AgentStatus::Failed,
+        ..team_agent("codex", "launch_failed", "coder", "/repo/forge", 10)
+    };
+    let agents = [replaced, failed];
+    let cells = [cohort_cell("codex", Some("coder"))];
+    let plan = cohort_with(&agents, &cells, Some("forge"), dead, |_| true, |_| true);
+    assert!(
+        matches!(plan, Err(CohortResumeErr::NothingToResume { .. })),
+        "{plan:?}"
+    );
+    assert!(matches!(
+        inspect_cohort_relaunch(
+            &agents,
+            Path::new("/repo/forge"),
+            &cells,
+            Some("forge"),
+            None
+        ),
+        CohortRelaunchState::Absent
+    ));
+}

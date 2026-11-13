@@ -256,20 +256,8 @@ impl RetireFailure {
     }
 }
 
-/// Which of a session's rows a retirement takes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RetireScope {
-    /// Every row: the session is over and its identity will not come back.
-    Session,
-    /// Only the rows no later registration re-arms. A same-session
-    /// `agents restart` is a continuation, so team and resident-loop bindings
-    /// carry over rather than depending on an order nothing enforces.
-    UnrestorableOnly,
-}
-
-/// Retire the instance rows pinned to `(kind, session)` that `scope` selects,
-/// paused and disabled rows included, and clear each one's watcher, arming and
-/// strike overlays.
+/// Retire every instance row pinned to `(kind, session)`, paused and disabled
+/// rows included, and clear each one's watcher, arming and strike overlays.
 ///
 /// Returns how many of the removed rows nothing arms again: self waits and
 /// `loop add --wait` rows. Team and resident-loop bindings, restored at the
@@ -284,7 +272,6 @@ pub fn retire_session(
     project_root: &Path,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
-    scope: RetireScope,
 ) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
         .map_err(RetireFailure::before_removal)?;
@@ -296,9 +283,45 @@ pub fn retire_session(
         project_root,
         kind,
         session,
-        scope,
         Path::new("/sys/fs/cgroup"),
     )
+}
+
+/// Release what belonged to a session a swap replaced, leaving its agent's
+/// waits armed: thaw its hibernation and withdraw its pane's idle stop, and,
+/// when `conversation_over` (a fresh restart or molt), retire the
+/// conversation's raised attention. A resumed restart continues the
+/// conversation, so its raised attention stays.
+pub fn release_replaced_session(
+    project_root: &Path,
+    kind: &crate::ids::AgentKind,
+    session: &crate::ids::AgentSessionId,
+    conversation_over: bool,
+) -> Result<(), String> {
+    let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
+        .map_err(|err| err.to_string())?;
+    let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
+        .map_err(|err| err.to_string())?;
+    release_replaced_session_in(
+        &paths,
+        &runtime,
+        kind,
+        session,
+        conversation_over,
+        Path::new("/sys/fs/cgroup"),
+    )
+}
+
+fn release_replaced_session_in(
+    paths: &crate::disk::paths::StatePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
+    kind: &crate::ids::AgentKind,
+    session: &crate::ids::AgentSessionId,
+    conversation_over: bool,
+    cgroup_root: &Path,
+) -> Result<(), String> {
+    thaw_session(paths, kind, session, cgroup_root);
+    release_session(paths, runtime, kind, session, conversation_over)
 }
 
 fn retire_session_in(
@@ -307,11 +330,10 @@ fn retire_session_in(
     project_root: &Path,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
-    scope: RetireScope,
     cgroup_root: &Path,
 ) -> Result<usize, RetireFailure> {
     thaw_session(paths, kind, session, cgroup_root);
-    let retired = super::instances::retire_session(paths, kind, session, scope)
+    let retired = super::instances::retire_session(paths, kind, session)
         .map_err(RetireFailure::before_removal)?;
     let mut dropped = 0;
     for (name, entry) in &retired {
@@ -333,7 +355,7 @@ fn retire_session_in(
             tracing::warn!(task = name, error = %err, "retire: clearing the strike overlay");
         }
     }
-    release_session(paths, runtime, kind, session, scope == RetireScope::Session)
+    release_session(paths, runtime, kind, session, true)
         .map_err(|message| RetireFailure { message, dropped })?;
     Ok(dropped)
 }
@@ -470,8 +492,14 @@ fn retire_ended_sessions_in(
         // A replaced session's end leaves its agent's waits armed; only what
         // belonged to the session itself goes.
         if !agent_ended {
-            thaw_session(paths, kind, session, Path::new("/sys/fs/cgroup"));
-            if let Err(message) = release_session(paths, runtime, kind, session, true) {
+            if let Err(message) = release_replaced_session_in(
+                paths,
+                runtime,
+                kind,
+                session,
+                true,
+                Path::new("/sys/fs/cgroup"),
+            ) {
                 failures.push(message);
             }
             continue;
@@ -482,7 +510,6 @@ fn retire_ended_sessions_in(
             project_root,
             kind,
             session,
-            RetireScope::Session,
             Path::new("/sys/fs/cgroup"),
         ) {
             Ok(count) => dropped += count,
@@ -950,6 +977,28 @@ mod tests {
         (dir, paths, runtime)
     }
 
+    /// An ended agent's retirement when `retire`, else a replaced session's
+    /// release from a resumed restart, which keeps the conversation.
+    fn retire_or_release(
+        retire: bool,
+        paths: &crate::disk::paths::StatePaths,
+        runtime: &crate::disk::paths::RuntimePaths,
+        root: &Path,
+        kind: &crate::ids::AgentKind,
+        session: &crate::ids::AgentSessionId,
+        cgroup_root: &Path,
+    ) -> Result<usize, RetireFailure> {
+        if retire {
+            return retire_session_in(paths, runtime, root, kind, session, cgroup_root);
+        }
+        release_replaced_session_in(paths, runtime, kind, session, false, cgroup_root)
+            .map(|()| 0)
+            .map_err(|message| RetireFailure {
+                message,
+                dropped: 0,
+            })
+    }
+
     fn idle_stop_sessions(paths: &crate::disk::paths::StatePaths) -> Vec<String> {
         crate::store::idle_stop::read(paths)
             .into_iter()
@@ -958,8 +1007,8 @@ mod tests {
     }
 
     #[test]
-    fn raised_attention_survives_only_same_session_retirement() {
-        for scope in [RetireScope::Session, RetireScope::UnrestorableOnly] {
+    fn raised_attention_survives_only_a_resumed_release() {
+        for retire in [true, false] {
             let (dir, paths, runtime) = idle_stop_fixture();
             let record = serde_json::json!({"version": 1,
                 "asks": [{"kind": "claude", "agent_id": "stopping",
@@ -970,13 +1019,13 @@ mod tests {
                 "human_turns": [{"kind": "claude", "agent_id": "stopping",
                     "at": "1970-01-01T00:00:00Z"}]});
             crate::disk::atomic::write_temp_then_rename(&paths.raised, &record).unwrap();
-            retire_session_in(
+            retire_or_release(
+                retire,
                 &paths,
                 &runtime,
                 dir.path(),
                 &crate::ids::AgentKind::new_unchecked("claude"),
                 &"stopping".into(),
-                scope,
                 Path::new("/sys/fs/cgroup"),
             )
             .unwrap();
@@ -988,11 +1037,11 @@ mod tests {
                     record.human_turns.len()
                 ),
                 (
-                    usize::from(scope == RetireScope::UnrestorableOnly),
-                    usize::from(scope == RetireScope::UnrestorableOnly),
-                    usize::from(scope == RetireScope::UnrestorableOnly)
+                    usize::from(!retire),
+                    usize::from(!retire),
+                    usize::from(!retire)
                 ),
-                "{scope:?}"
+                "retire={retire}"
             );
         }
     }
@@ -1019,7 +1068,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn retiring_hibernating_session_thaws_and_withdraws() {
-        for retirement in [RetireScope::Session, RetireScope::UnrestorableOnly] {
+        for retire in [true, false] {
             let (dir, paths, runtime) = idle_stop_fixture();
             let uid = nix::unistd::Uid::current().as_raw();
             let scope = dir.path().join(format!(
@@ -1040,13 +1089,13 @@ mod tests {
                 reclaimed_bytes: 100,
             };
             crate::store::hibernate::record(&paths, entry.clone()).unwrap();
-            retire_session_in(
+            retire_or_release(
+                retire,
                 &paths,
                 &runtime,
                 dir.path(),
                 &entry.kind,
                 &entry.agent_id,
-                retirement,
                 dir.path(),
             )
             .unwrap();
@@ -1059,24 +1108,24 @@ mod tests {
         }
     }
 
-    /// Hard stop, a fresh restart, and a durable end retire under `Session`; a
-    /// resumed restart under `UnrestorableOnly`. Each takes the idle-stop request.
+    /// A hard stop or an agent's end retires the session; a swap releases the
+    /// session it replaced. Each takes the idle-stop request.
     #[test]
-    fn retiring_a_session_removes_its_idle_stop_request_under_either_scope() {
-        for scope in [RetireScope::Session, RetireScope::UnrestorableOnly] {
+    fn retiring_or_releasing_a_session_removes_its_idle_stop_request() {
+        for retire in [true, false] {
             let (dir, paths, runtime) = idle_stop_fixture();
-            let dropped = retire_session_in(
+            let dropped = retire_or_release(
+                retire,
                 &paths,
                 &runtime,
                 dir.path(),
                 &crate::ids::AgentKind::new_unchecked("claude"),
                 &"stopping".into(),
-                scope,
                 Path::new("/sys/fs/cgroup"),
             )
             .expect("retire");
             assert_eq!(dropped, 0, "a request is not a wait row");
-            assert_eq!(idle_stop_sessions(&paths), ["resting"], "{scope:?}");
+            assert_eq!(idle_stop_sessions(&paths), ["resting"], "retire={retire}");
         }
     }
 
@@ -1170,6 +1219,57 @@ mod tests {
                 .expect("reconcile");
         assert_eq!(dropped, 1);
         assert!(super::super::instances::pinned_sessions(&paths.root).is_empty());
+    }
+
+    /// A replacement that fails after binding ends the agent, in either order
+    /// against the old session's end: the waits go once both are over, and
+    /// not before the old session's own end.
+    #[test]
+    fn a_replacement_failing_after_bind_retires_the_agents_waits_in_either_order() {
+        for old_ends_first in [true, false] {
+            let (dir, paths, runtime) = idle_stop_fixture();
+            let entry = TaskEntry {
+                wait: Some(TaskTarget {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    session: "stopping".into(),
+                    handle: "@coder".to_owned(),
+                }),
+                root: dir.path().to_path_buf(),
+                ..TaskEntry::default()
+            };
+            super::super::instances::insert_delivery(&paths, None, &entry, &Default::default())
+                .expect("wait row");
+            let now = Timestamp::UNIX_EPOCH;
+            let mut old = crate::testkit::agent_state("claude", "stopping", now);
+            old.launch_id = Some("launch_a".into());
+            let mut replacement = crate::testkit::agent_state("claude", "launch_swap", now);
+            replacement.launch_id = Some("launch_a".into());
+            replacement.epoch = 1;
+            replacement.launch_bound = true;
+            let reconcile = |rows: Vec<crate::agents::AgentState>| {
+                retire_ended_sessions_in(&paths, &runtime, dir.path(), || rows.into())
+                    .expect("reconcile")
+            };
+            if old_ends_first {
+                old.ended_at = Some(now);
+            } else {
+                replacement.status = crate::agents::AgentStatus::Failed;
+            }
+            assert_eq!(reconcile(vec![old.clone(), replacement.clone()]), 0);
+            assert_eq!(
+                super::super::instances::pinned_sessions(&paths.root).len(),
+                1,
+                "old_ends_first={old_ends_first}"
+            );
+            old.ended_at = Some(now);
+            replacement.status = crate::agents::AgentStatus::Failed;
+            assert_eq!(
+                reconcile(vec![old, replacement]),
+                1,
+                "old_ends_first={old_ends_first}"
+            );
+            assert!(super::super::instances::pinned_sessions(&paths.root).is_empty());
+        }
     }
 
     /// The retirement predicate: a pinned session is retired on positive

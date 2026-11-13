@@ -215,15 +215,10 @@ pub(super) fn retire_session(
     paths: &StatePaths,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
-    scope: super::arm::RetireScope,
 ) -> Result<Vec<(String, TaskEntry)>> {
     mutate(paths, |tasks| {
         let names = tasks
             .iter()
-            .filter(|(_, entry)| {
-                (entry.team.is_none() && entry.loop_task.is_none())
-                    || scope == super::arm::RetireScope::Session
-            })
             .filter(|(_, entry)| {
                 entry.wait.as_ref().is_some_and(|target| {
                     target.kind == kind.as_str() && target.session == session.as_str()
@@ -254,7 +249,6 @@ pub(super) fn pinned_sessions(
 
 #[cfg(test)]
 mod tests {
-    use super::super::arm::RetireScope;
     use super::*;
 
     fn record_room(paths: &StatePaths, root: &Path) {
@@ -287,7 +281,6 @@ mod tests {
                 &paths,
                 &crate::ids::AgentKind::new_unchecked("claude"),
                 &"missing".into(),
-                RetireScope::Session,
             )
             .unwrap()
             .is_empty()
@@ -440,12 +433,10 @@ mod tests {
         }
     }
 
-    /// A same-session `agents restart` is a continuation, so its retirement
-    /// takes only what no later registration brings back. Everything the
-    /// caller reports — the dropped count included — is derived from the rows
-    /// this returns.
+    /// A retirement takes every row pinned to the session, declared or
+    /// self-armed, and nothing pinned elsewhere.
     #[test]
-    fn unrestorable_scope_keeps_the_declared_rows_of_the_same_session() {
+    fn retirement_takes_every_row_of_the_session_and_nothing_else() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = StatePaths::under(
             crate::ids::WorkspaceId::from_project_root(dir.path()),
@@ -473,23 +464,14 @@ mod tests {
             insert(&paths, name, &entry).expect("insert");
         }
 
-        let retired =
-            retire_session(&paths, &kind, &session, RetireScope::UnrestorableOnly).expect("retire");
+        let retired = retire_session(&paths, &kind, &session).expect("retire");
 
         assert_eq!(
             retired
                 .iter()
                 .map(|(name, _)| name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["self-armed"]
-        );
-        assert_eq!(
-            retired
-                .iter()
-                .filter(|(_, entry)| entry.team.is_none())
-                .count(),
-            1,
-            "the count the restart line reports"
+            vec!["declared", "self-armed"]
         );
         assert_eq!(
             load_from(&paths.root)
@@ -497,19 +479,7 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            vec!["declared", "other-session", "unpinned"]
-        );
-
-        let retired =
-            retire_session(&paths, &kind, &session, RetireScope::Session).expect("retire");
-
-        assert_eq!(
-            retired
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["declared"],
-            "the session scope takes the declared row a fresh identity leaves behind"
+            vec!["other-session", "unpinned"]
         );
     }
 

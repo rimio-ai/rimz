@@ -146,10 +146,6 @@ pub enum StoreErr {
     #[error("cannot tune agent: {0}")]
     AgentTune(String),
     #[error(
-        "molt refused: @{successor} already stands as successor; only one successor is allowed at a time. If it is stuck, `rimz agents stop @{successor}` frees the slot; do not retry this command"
-    )]
-    MoltSuccessor { successor: String },
-    #[error(
         "swap refused: the session of @{agent} named for the swap is not the one that holds it, or the agent has ended; nothing was changed"
     )]
     SwapNotHolder { agent: String },

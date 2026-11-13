@@ -172,7 +172,7 @@ The check reads the live queue and the message history together under the worksp
 
 An agent-launched team reports its leader to the launcher once per `Done`, with one `TEAM_REPORT` from `@rimz` (`HarnessNotice::TeamReport`). The report rides a team run: a `RunRecord` whose `team` field holds the leader's `launch_id` and the `<team>#<channel>` instance. [scripting.md](./scripting.md#completion-folding-lifecycle-observations) owns the record and its lifecycle fold.
 
-`run::create_peer_prompt` opens a team run for the seat that receives the launch prompt, the run's leader, when an agent launched it, the prompt is nonempty, and the leader's adapter has native root turn hooks. A user launch, a promptless launch, and a resume open none. While open, the run takes `fold_team_lifecycle`, which keeps the leader's newest final message at each turn end, follows the leader onto a new conversation row, and never settles the run. A molt moves the open run to the successor (`rekey_team_run`). Team seats open no per-turn peer runs, so launcher messages to them report nothing.
+`run::create_peer_prompt` opens a team run for the seat that receives the launch prompt, the run's leader, when an agent launched it, the prompt is nonempty, and the leader's adapter has native root turn hooks. A user launch, a promptless launch, and a resume open none. While open, the run takes `fold_team_lifecycle`, which keeps the leader's newest final message at each turn end, follows the leader onto a new conversation row, and never settles the run. A molt keeps the leader's launch, and moves the open run to the replacement's kind once it binds (`rekey_team_run`). Team seats open no per-turn peer runs, so launcher messages to them report nothing.
 
 ### Settlement
 

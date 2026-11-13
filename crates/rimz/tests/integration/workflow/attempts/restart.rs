@@ -276,12 +276,15 @@ fn agents_restart_keeps_the_pin_of_an_unreadable_run_but_drops_one_whose_run_is_
             .unwrap();
         let receipt = String::from_utf8_lossy(&output.stdout);
         let warning = String::from_utf8_lossy(&output.stderr);
-        let current = store.snapshot().unwrap();
-        let unchanged = current
-            .agents
+        // The fresh session carries the agent's pin; its stand-in pane is
+        // not in the fixture's pane list, so read the durable rows.
+        let unchanged = store
+            .audit_rows()
+            .unwrap()
             .iter()
-            .find(|agent| agent.agent_id == card.agent_id)
-            .is_some_and(|agent| agent.workflow == card.workflow);
+            .filter(|agent| agent.name == run.agent_name)
+            .max_by_key(|agent| agent.epoch)
+            .is_some_and(|agent| agent.epoch == 1 && agent.workflow == card.workflow);
         actual.push((
             output.status.success(),
             warning.contains(&format!("warning: cannot read run `{id}`"))

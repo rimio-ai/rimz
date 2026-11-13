@@ -169,7 +169,7 @@ impl SidebarSnapshot {
             }) else {
                 continue;
             };
-            if agent.yields_molt_seat() {
+            if agent.replaced {
                 pane.role = None;
             }
         }

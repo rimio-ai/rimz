@@ -522,6 +522,7 @@ mod agent_ref {
             command
                 .args(["--mux", "zellij", "agents"])
                 .args(args)
+                .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
                 .envs(rimz::workspace::pin_env(
                     &workspace.workspace_id,
                     &self.env.project_root,

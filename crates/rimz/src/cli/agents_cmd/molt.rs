@@ -1,11 +1,9 @@
-//! Agent-only fresh-session succession at the caller's recorded generation.
+//! Agent-only fresh-session swap: the agent keeps its handle and launch in a fresh session.
 
 use super::*;
 use rimz::config::effective::ProfileScope;
 use rimz::harness::ancestry::{LaunchFocus, resolve_caller, resolve_launch_caller};
 use rimz::harness::launch::ExecAction;
-
-use super::placement::{PlacementErrors, PlacementRequest};
 
 #[derive(Debug, Args)]
 pub(super) struct MoltArgs {
@@ -135,111 +133,89 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
             Some(store.runtime_paths()),
         )?;
     }
-    let room = RoomContext::live_tab(workspace, machine, globals.mux)?;
-    let mux = room.mux_name();
-    let batch = store.begin_agent_launch_batch(
-        &[molt_request(&agent, &posture, login.clone(), &note)?],
+    let old_pane = source
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone())
+        .context("molt needs the caller's own pane; nothing was changed")?;
+    let mut request = molt_request(&agent, &posture, login.clone())?;
+    request.prompt = restart::swap_briefing(
+        store,
+        source,
+        &snapshot.agents,
+        &workspace.project_root,
+        Some(&note),
+    )?;
+    let action = ExecAction::Launch {
+        prompt: request.prompt.clone(),
+        extra_args: Vec::new(),
+    };
+    let batch = restart::reserve_swap(
+        store,
+        source,
+        &request,
         AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: cwd.clone(),
             branch: None,
             description: None,
         },
+        "molt",
     )?;
     let launch = batch.single_identity()?;
-    let mut invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
-    invocation.identity.params.clone_from(&launch.launch);
-    let (title, pane_name) = molt_tab_names(&agent, &posture, launch);
-    let argv = rimz::harness::launch::exec_argv(
-        &rimz::proc::rimz_exe(),
-        store.runtime_paths(),
+    let invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
+    let backend = rimz::mux::backend_for(old_pane.mux());
+    let placed = restart::place_replacement(
+        &ctx,
+        backend.as_ref(),
+        &agent,
+        &old_pane,
         &invocation,
-    )
-    .inspect_err(|_| {
-        let _ = store.fail_agent_launch_batch(&batch);
-    })?;
-    placement::execute(
-        room.backend(),
-        store,
-        &batch,
-        PlacementRequest {
-            placement: Placement::NewTab,
-            mux,
-            tab_anchor: placement::resolve_tab_anchor(
-                Placement::NewTab,
-                false,
-                rimz::mux::own_pane_id(mux),
-                crate::cli::pinned_room_root().as_deref(),
-                &workspace.project_root,
-            ),
-            cwd: cwd.clone(),
-            title,
-            panes: LayoutPanes {
-                columns: vec![LayoutColumn {
-                    panes: vec![PaneCmd {
-                        argv,
-                        name: Some(pane_name),
-                    }],
-                    stacked: false,
-                }],
-                focused_pane: 0,
-            },
-            sidebar: room.sidebar_options(&cwd),
-            identity_env: restart::relaunch_identity_env(workspace, &cwd, &invocation),
-            focus: LaunchFocus::Keep,
-            errors: PlacementErrors {
-                new_tab: "opening molt successor tab",
-                new_pane: "opening molt successor pane",
-                same_pane: "opening molt successor",
-            },
-        },
-        || {
-            if args.agent.is_some() {
-                rimz::harness::assist_log::record_tier_fallbacks(batch.identities());
-            }
-        },
-    )?;
-    let predecessor = format!(
-        "@{}",
-        source.name.as_deref().unwrap_or(source.agent_id.as_str())
+        launch,
+        &snapshot.agents,
+        &cwd,
+        LaunchFocus::Keep,
+        None,
     );
-    let successor = format!("@{}", launch.name);
+    restart::settle_placement(store, &batch, launch, source, "molt", placed, || {})?;
+    if args.agent.is_some() {
+        rimz::harness::assist_log::record_tier_fallbacks(batch.identities());
+    }
+    let peers = snapshot
+        .agents
+        .iter()
+        .filter(|agent| !agent.is_provider_subagent())
+        .collect::<Vec<_>>();
+    let handle = rimz::address::agent_handle(source, &peers, true);
     rimz::harness::assist_log::append(&rimz::harness::assist_log::AssistRecord {
         at: jiff::Timestamp::now(),
         assist: rimz::harness::assist_log::Assist::Molt {
             kind: source.kind.clone(),
             agent_id: source.agent_id.clone(),
-            label: predecessor.clone(),
+            label: handle.clone(),
             successor_kind: kind,
             successor_id: launch.agent_id.clone(),
-            successor_label: successor.clone(),
+            successor_label: handle.clone(),
             generation: source.launch_depth,
         },
     });
-    let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    rimz::harness::run::rekey_team_run(store.paths(), source, launch, &audit.agents)
-        .with_context(|| format!("{successor} is live in a new tab, but its team run could not move; do not retry this command"))?;
-    let stop = rimz::store::idle_stop::IdleStopRequest {
-        kind: source.kind.clone(),
-        agent_id: source.agent_id.clone(),
-        stop: rimz::agents::state::IdleStop {
-            after_secs: 300,
-            requested_at: jiff::Timestamp::now(),
-            requested_by: Some(predecessor.clone()),
-        },
-    };
-    rimz::store::idle_stop::arm(store.paths(), stop).with_context(|| {
-        format!(
-            "{successor} is live in a new tab, but {predecessor}'s idle stop could not be armed; \
-             run `rimz agents stop {predecessor} --when-idle 5m`; do not retry this command"
-        )
-    })?;
-    let idle = rimz::harness::schedule::arm::duration_label(Duration::from_secs(300));
-    writeln!(
-        crate::cli::render::out(),
-        "molted {predecessor} into {successor} (new tab); {predecessor} stops once idle for {idle} with nothing owed; typing into it keeps it\nnext: rimz agents show {successor}"
-    )?;
-    Ok(())
+    if let Err(err) = rimz::harness::run::rekey_team_run(store.paths(), source, launch) {
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: {handle}'s team run could not follow it to the new provider: {err:#}"
+        )?;
+    }
+    let mut out = crate::cli::render::out();
+    // The replacement has bound, so a receipt that fails to print still lets
+    // the replaced session go.
+    let receipt = writeln!(
+        out,
+        "molted {handle} into a fresh session beside this one; this session closes now\nnext: rimz agents show {handle}"
+    )
+    .and_then(|()| out.flush());
+    restart::release_replaced(&ctx, source, &old_pane, true);
+    restart::close_replaced(&ctx, backend.as_ref(), &old_pane);
+    Ok(receipt?)
 }
 
 fn replacement_posture(
@@ -322,56 +298,16 @@ fn replacement_posture(
     ))
 }
 
-/// The successor's tab title and pane name, named as a fresh launch of the
-/// same seat would be.
-fn molt_tab_names(
-    agent: &AgentState,
-    posture: &ResumePosture,
-    launch: &AgentLaunchIdentity,
-) -> (String, rimz::pane::PaneTitle) {
-    let lane = agent.lane.clone();
-    let title = lane
-        .as_ref()
-        .and_then(rimz::ids::Lane::pin_name)
-        .map_or_else(
-            || {
-                rimz::harness::spec::default_tab_title(
-                    &LayoutSpec::single(restart::restart_cell(agent, posture)),
-                    None,
-                    agent.team.as_deref(),
-                )
-            },
-            |channel| format!("#{channel}"),
-        );
-    let pane_name = rimz::agents::pane_title::title(
-        rimz::agents::pane_title::Seat::from_launch(
-            &launch.kind,
-            Some(&launch.name),
-            &launch.launch,
-        ),
-        &[],
-    );
-    (title, pane_name)
-}
-
 fn molt_request(
     agent: &AgentState,
     posture: &ResumePosture,
     login: Option<rimz::ids::LoginName>,
-    note: &str,
 ) -> Result<AgentLaunchRequest> {
     let mut request = restart::fresh_launch_request(
         agent,
         restart::restart_cell(agent, posture),
         posture.launch.mode,
     )?;
-    request.launch.molted_from = Some(
-        agent
-            .launch_id
-            .clone()
-            .unwrap_or_else(|| agent.agent_id.clone()),
-    );
-    request.prompt = Some(note.into());
     request.login = rimz::store::writer::LaunchLogin::Pinned(login.unwrap_or_default());
     Ok(request)
 }
@@ -532,10 +468,7 @@ mod tests {
             launch: Default::default(),
             degraded: None,
         };
-        let request =
-            molt_request(&agent, &posture, Some("work".parse().unwrap()), "the note").unwrap();
-        assert_eq!(request.launch.molted_from, agent.launch_id);
-        assert_eq!(request.prompt.as_deref(), Some("the note"));
+        let request = molt_request(&agent, &posture, Some("work".parse().unwrap())).unwrap();
         assert_eq!(request.launch.launch_depth, agent.launch_depth);
         assert_eq!(
             request.launch.launched_by.as_deref(),
@@ -564,56 +497,5 @@ mod tests {
         assert_eq!(request.name, AgentLaunchName::Soft("fox".into()));
         assert!(request.run_id.is_none());
         assert_eq!(request.launch.profile_scope, Some(ProfileScope::Subagents));
-    }
-
-    #[test]
-    fn molt_tab_names_follow_a_fresh_launch_of_the_seat() {
-        let posture = ResumePosture {
-            launch: Default::default(),
-            degraded: None,
-        };
-        let names = |profile: Option<&str>, channel: Option<&str>, team: Option<&str>| {
-            let mut agent =
-                rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
-            agent.profile = profile.map(Into::into);
-            agent.worktree_path = Some("/repo".into());
-            if let Some(name) = channel {
-                rimz::testkit::set_lane(&mut agent, name);
-            }
-            agent.team = team.map(Into::into);
-            let launch = AgentLaunchIdentity {
-                kind: agent.kind.clone(),
-                agent_id: "successor".into(),
-                launch_id: None,
-                name: "bright-river".into(),
-                name_explicit: false,
-                launch: rimz::agents::LaunchParams {
-                    profile: agent.profile.clone(),
-                    team: agent.team.clone(),
-                    ..Default::default()
-                },
-                run_id: None,
-                prompt: None,
-            };
-            let (title, pane) = molt_tab_names(&agent, &posture, &launch);
-            (title, pane.to_string())
-        };
-        let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
-        assert_eq!(
-            names(Some("brainstormer"), None, None),
-            pair("brainstormer", "brainstormer (@bright-river)")
-        );
-        assert_eq!(
-            names(Some("brainstormer"), Some("lane"), None),
-            pair("#lane", "brainstormer (@bright-river)")
-        );
-        assert_eq!(
-            names(Some("worker"), None, Some("forge")),
-            pair("team:forge", "forge · worker (@bright-river)")
-        );
-        assert_eq!(
-            names(None, None, None),
-            pair("claude", "claude (@bright-river)")
-        );
     }
 }

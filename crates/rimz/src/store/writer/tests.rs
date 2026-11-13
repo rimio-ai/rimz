@@ -865,44 +865,6 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
 }
 
 #[test]
-fn molt_reservation_refuses_without_appending_and_failed_startup_frees_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let id = WorkspaceId::from_project_root(dir.path());
-    let store = Store::open(
-        StatePaths::under(id.clone(), dir.path()).unwrap(),
-        RuntimePaths::under(id, dir.path()).unwrap(),
-    )
-    .unwrap();
-    let scope = AgentLaunchScope {
-        session_name: "session".into(),
-        cwd: dir.path().into(),
-        branch: None,
-        description: None,
-    };
-    let mut request = launch_request("launch_first", AgentLaunchName::Mint);
-    request.launch.molted_from = Some("launch_predecessor".into());
-    let first = store
-        .begin_agent_launch_batch(&[request.clone()], scope.clone())
-        .unwrap();
-    request.agent_id = "launch_second".into();
-    let before = store.read_events().unwrap().len();
-    let refused = store.begin_agent_launch_batch(&[request.clone()], scope.clone());
-    assert!(
-        refused.is_err(),
-        "a standing successor must reserve its predecessor"
-    );
-    assert_eq!(store.read_events().unwrap().len(), before);
-    let message = refused.unwrap_err().to_string();
-    assert!(message.contains(&first.identities()[0].name), "{message}");
-    assert!(
-        message.contains("one successor") && message.contains("do not retry this command"),
-        "{message}"
-    );
-    store.fail_agent_launch_batch(&first).unwrap();
-    assert!(store.begin_agent_launch_batch(&[request], scope).is_ok());
-}
-
-#[test]
 fn cancelling_a_never_bound_launch_is_idempotent_and_refuses_a_bound_row() {
     let dir = tempfile::tempdir().unwrap();
     let id = WorkspaceId::from_project_root(dir.path());
@@ -987,51 +949,6 @@ fn cancelling_a_never_bound_launch_is_idempotent_and_refuses_a_bound_row() {
             .unwrap()
     );
     assert_eq!(store.read_events().unwrap(), before);
-}
-
-#[test]
-fn cancelled_unbound_molts_free_the_slot_and_cannot_bind_late() {
-    let dir = tempfile::tempdir().unwrap();
-    let id = WorkspaceId::from_project_root(dir.path());
-    let store = Store::open(
-        StatePaths::under(id.clone(), dir.path()).unwrap(),
-        RuntimePaths::under(id, dir.path()).unwrap(),
-    )
-    .unwrap();
-    let scope = AgentLaunchScope {
-        session_name: "session".into(),
-        cwd: dir.path().into(),
-        branch: None,
-        description: None,
-    };
-    let mut request = launch_request("launch_first", AgentLaunchName::Mint);
-    request.launch.molted_from = Some("launch_old".into());
-    let batch = store
-        .begin_agent_launch_batch(&[request.clone()], scope.clone())
-        .unwrap();
-    let identity = batch.single_identity().unwrap();
-    assert!(
-        store
-            .cancel_unbound_molt_launch(&identity.kind, &identity.agent_id, "session", dir.path())
-            .unwrap()
-    );
-    let pane = crate::ids::PaneId::parse("tmux:%1").unwrap();
-    assert!(
-        store
-            .bind_agent_launch(identity, "session", dir.path(), &pane, None)
-            .is_err()
-    );
-    request.agent_id = "launch_second".into();
-    let batch = store.begin_agent_launch_batch(&[request], scope).unwrap();
-    let bound = batch.single_identity().unwrap();
-    store
-        .bind_agent_launch(bound, "session", dir.path(), &pane, None)
-        .unwrap();
-    assert!(
-        !store
-            .cancel_unbound_molt_launch(&bound.kind, &bound.agent_id, "session", dir.path())
-            .unwrap()
-    );
 }
 
 #[test]
@@ -1962,7 +1879,7 @@ fn swap_reservations_keep_the_agent_and_refuse_what_cannot_stand() {
         .unwrap_err()
         .to_string();
     assert!(
-        late.contains("restart or molt launch was cancelled or failed before binding"),
+        late.contains("was cancelled or failed before its replacement bound"),
         "{late}"
     );
 
@@ -2009,4 +1926,121 @@ fn swap_reservations_keep_the_agent_and_refuse_what_cannot_stand() {
         )
         .unwrap();
     assert_eq!(next.single_identity().unwrap().launch.epoch, Some(3));
+}
+
+#[test]
+fn a_cancelled_or_abandoned_swap_frees_the_launch_and_cannot_bind_late() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        StatePaths::under(id.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let pane = |raw| crate::ids::PaneId::parse(raw).unwrap();
+    let audit_row = |key: &str| {
+        store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == key)
+            .unwrap_or_else(|| panic!("row {key}"))
+    };
+    let first = store
+        .begin_agent_launch_batch(
+            &[launch_request(
+                "launch_a",
+                AgentLaunchName::Explicit("coder".into()),
+            )],
+            scope.clone(),
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            first.single_identity().unwrap(),
+            "session",
+            dir.path(),
+            &pane("tmux:%1"),
+            None,
+        )
+        .unwrap();
+    let source = audit_row("launch_a");
+
+    let swap = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_b", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap();
+    let cancelled = swap.single_identity().unwrap();
+    assert!(
+        store
+            .cancel_unbound_swap(&audit_row("launch_b"), "session", dir.path())
+            .unwrap()
+    );
+    assert!(
+        store
+            .bind_agent_launch(cancelled, "session", dir.path(), &pane("tmux:%2"), None)
+            .is_err()
+    );
+
+    // The coordinator of this reservation dies before placing it.
+    let swap = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_c", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap();
+    let abandoned = swap.single_identity().unwrap();
+    let early = store
+        .begin_agent_swap(
+            &source,
+            &launch_request("launch_d", AgentLaunchName::Mint),
+            scope.clone(),
+        )
+        .unwrap_err();
+    assert!(matches!(early, StoreErr::SwapInFlight { .. }), "{early}");
+    let later = jiff::Timestamp::now() + SWAP_RESERVATION_OPEN + std::time::Duration::from_secs(1);
+    let swap = store
+        .begin_agent_swap_with(
+            &source,
+            &launch_request("launch_d", AgentLaunchName::Mint),
+            scope.clone(),
+            || later,
+        )
+        .unwrap();
+    assert_eq!(swap.single_identity().unwrap().launch.epoch, Some(3));
+    assert!(
+        audit_row("launch_c").session_over(),
+        "the abandoned reservation is failed"
+    );
+    assert!(
+        store
+            .bind_agent_launch(abandoned, "session", dir.path(), &pane("tmux:%3"), None)
+            .is_err(),
+        "a late wrapper of the abandoned reservation cannot take the agent"
+    );
+    assert!(
+        !audit_row("launch_a").replaced,
+        "the old session is still the agent"
+    );
+
+    let bound = swap.single_identity().unwrap();
+    store
+        .bind_agent_launch(bound, "session", dir.path(), &pane("tmux:%4"), None)
+        .unwrap();
+    assert!(
+        !store
+            .cancel_unbound_swap(&audit_row("launch_d"), "session", dir.path())
+            .unwrap()
+    );
 }

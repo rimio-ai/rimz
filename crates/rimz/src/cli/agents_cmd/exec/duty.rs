@@ -285,8 +285,16 @@ pub(super) fn run_card_evidence(
     launch_id: &AgentSessionId,
     name: &str,
 ) -> Result<bool> {
-    Ok(store.snapshot_cached()?.agents.iter().any(|agent| {
+    let card = |agent: &AgentState| {
         agent.kind == *kind && agent.agent_id == *launch_id && agent.name.as_deref() == Some(name)
+    };
+    if store.snapshot_cached()?.agents.iter().any(card) {
+        return Ok(true);
+    }
+    // The snapshot leaves out a swap's reservation until it binds, as replaced;
+    // the wrapper must still fail an open one, so it is read from Audit rows.
+    Ok(store.audit_rows()?.iter().any(|agent| {
+        card(agent) && agent.epoch > 0 && !agent.launch_bound && agent.ended_at.is_none()
     }))
 }
 

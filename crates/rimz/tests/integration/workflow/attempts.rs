@@ -1659,6 +1659,7 @@ impl Room {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         cmd.args(["--mux", "zellij"])
             .args(args)
+            .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
             .env("SHELL", &self.shell)
             .env("PATH", path_with_front(&self.bin))
             .env(

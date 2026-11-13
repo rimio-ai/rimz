@@ -219,8 +219,7 @@ A unit is separate from host `/tmp`, not hidden from the host. The state path st
 
 | Event | What happens to the unit |
 | --- | --- |
-| Resumed restart | Kept. |
-| Fresh restart | A new handle gets a new unit. A child launched before the restart keeps resolving the old row's unit. |
+| Restart or molt, resumed or fresh | Kept: the agent keeps its handle, which names the unit. |
 | Teardown, `rimz uninstall`, a plain session exit, soft reset | Kept. |
 | Hard reset | The processes still inside the room's views end, then `tmp/` is deleted ([below](#hard-reset-ends-the-processes-inside-a-view)). |
 | GC | Removed after the configurable temp-unit grace (default 1 day). A shared unit is kept while its parent or any launched child is live or has not ended ([store.md](./store.md#what-is-on-disk)). |

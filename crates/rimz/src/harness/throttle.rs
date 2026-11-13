@@ -1185,7 +1185,7 @@ fn provider_reported(agents: &[AgentState], reference: &AgentSessionId) -> bool 
 
 /// A full agent session still open, regardless of turn or compaction state.
 fn open(agent: &AgentState) -> bool {
-    crate::agents::state::molt_stands(agent)
+    !agent.session_over()
         && !agent.is_provider_subagent()
         && crate::store::runtime::agent_liveness(agent)
             != crate::store::runtime::AgentLiveness::Dead

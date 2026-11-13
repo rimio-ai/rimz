@@ -700,17 +700,25 @@ fn agent_restart_keeps_focus_on_another_pane() {
 #[cfg(unix)]
 #[test]
 fn agent_restart_warns_for_its_own_untrusted_repo() {
-    assert_restart_folder_trust(false);
+    assert_restart_folder_trust(false, false);
 }
 
 #[cfg(unix)]
 #[test]
 fn agent_restart_accepts_its_own_trusted_repo() {
-    assert_restart_folder_trust(true);
+    assert_restart_folder_trust(true, false);
+}
+
+/// After the replacement has bound, the swap has succeeded: a pane that will not close is a
+/// warning naming it, and the restart still reports success.
+#[cfg(unix)]
+#[test]
+fn agent_restart_that_cannot_close_the_old_pane_warns_and_succeeds() {
+    assert_restart_folder_trust(true, true);
 }
 
 #[cfg(unix)]
-fn assert_restart_folder_trust(agent_trusted: bool) {
+fn assert_restart_folder_trust(agent_trusted: bool, close_fails: bool) {
     if crate::common::git::git_missing() {
         return;
     }
@@ -775,9 +783,13 @@ fn assert_restart_folder_trust(agent_trusted: bool) {
         &workspace.session_name,
         serde_json::from_value(panes.clone()).unwrap(),
     );
-    let output = env
-        .rimz()
+    let mut command = env.rimz();
+    if close_fails {
+        command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1");
+    }
+    let output = command
         .args(["--mux", "zellij", "agents", "restart", "@planner"])
+        .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim))
         .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
@@ -792,6 +804,14 @@ fn assert_restart_folder_trust(agent_trusted: bool) {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        stderr.contains(
+            "warning: the replaced session's pane zellij:terminal_3 is still open: closing the \
+             replaced agent pane"
+        ),
+        close_fails,
+        "{stderr}"
+    );
     if agent_trusted {
         assert!(!stderr.contains("no trust decision"), "{stderr}");
     } else {
@@ -1566,6 +1586,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     let log = env.home_root.join("mux.log");
     let mut command = env.rimz();
     command.args(["--mux", "zellij"]).args(args)
+        .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
         .env("ZELLIJ_PANE_ID", "1")
         .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
         .env("PATH", path_with_front(&shim))
@@ -2302,8 +2323,15 @@ fn molt_refuses_children_unresolved_callers_and_empty_notes_without_appending() 
 
 #[cfg(unix)]
 #[test]
-fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_placement() {
-    for (placement_fails, fresh) in [(false, false), (false, true), (true, false), (true, true)] {
+fn molt_at_chain_cap_keeps_handle_generation_note_and_launcher_beside_the_caller() {
+    // `receipt_fails`: a failed receipt write still closes the replaced pane.
+    for (placement_fails, fresh, receipt_fails) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, false),
+        (false, false, true),
+    ] {
         let env = Env::new();
         env.install_agent_hooks("claude");
         env.install_agent_hooks("codex");
@@ -2351,33 +2379,32 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
             kind: AgentKind::new_unchecked("codex"),
             agent_id: "launch_root".into(),
         };
-        crate::common::wait::register_calling_agent_with_launch(
-            &env,
-            LaunchParams {
-                profile: Some("worker".into()),
-                tier: Some(Box::new(rimz::agents::TierStamp {
-                    tier: rimz::config::tiers::ModelTier::Senior,
-                    model: "opus[1m]".into(),
-                    used_tier: None,
-                    unbuildable: Vec::new(),
-                    skipped: vec![rimz::agents::TierSkip {
-                        model: "astra".into(),
-                        reason: rimz::agents::TierSkipReason::LoggedOut,
-                    }],
-                })),
-                launch_depth: Some(3),
-                launched_by: Some(Box::new(launcher.clone())),
-                record: Some(Box::new(rimz::agents::LaunchRecord {
-                    model: Some("opus[1m]".into()),
-                    ..Default::default()
-                })),
+        let launch = LaunchParams {
+            profile: Some("worker".into()),
+            tier: Some(Box::new(rimz::agents::TierStamp {
+                tier: rimz::config::tiers::ModelTier::Senior,
+                model: "opus[1m]".into(),
+                used_tier: None,
+                unbuildable: Vec::new(),
+                skipped: vec![rimz::agents::TierSkip {
+                    model: "astra".into(),
+                    reason: rimz::agents::TierSkipReason::LoggedOut,
+                }],
+            })),
+            launch_depth: Some(3),
+            launched_by: Some(Box::new(launcher.clone())),
+            record: Some(Box::new(rimz::agents::LaunchRecord {
+                model: Some("opus[1m]".into()),
                 ..Default::default()
-            },
-        );
+            })),
+            ..Default::default()
+        };
+        register_paned_planner(&env, launch, None);
+        arm_owed_to_planner(&env);
+        let workspace = env.resolve_workspace(&env.project_root);
         let shim = write_env_dump_shim(&env, "claude");
         write_env_dump_shim(&env, "codex");
         let shell = write_fake_login_shell(&env, "molt-shell", &[]);
-        let workspace = env.resolve_workspace(&env.project_root);
         crate::common::room::seed_live_zellij_room(
             &env.runtime_paths(),
             &workspace.session_name,
@@ -2388,6 +2415,7 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
             let mut command = crate::common::wait::agent_wait(&env);
             command
                 .args(["--mux", "zellij", "agents", "molt", "continue the work"])
+                .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
                 .env("PATH", path_with_front(&shim))
                 .env("SHELL", &shell)
                 .env("ZELLIJ_PANE_ID", "1")
@@ -2399,6 +2427,10 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
                 .env("RIMZ_TEST_ZELLIJ_LOG", &log)
                 .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
                 .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                    r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#,
+                )
+                .env(
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                     format!("{} [Created 1s ago]\n", workspace.session_name),
                 );
@@ -2406,14 +2438,20 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
                 command.args(["--agent", "claude"]);
             }
             if placement_fails {
-                command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
+                command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_PANE", "1");
+            }
+            if receipt_fails {
+                return command
+                    .stdout(std::fs::File::create("/dev/full").unwrap())
+                    .output()
+                    .unwrap();
             }
             command.bounded_output().unwrap()
         };
         let output = run();
         assert_eq!(
             output.status.success(),
-            !placement_fails,
+            !placement_fails && !receipt_fails,
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -2424,11 +2462,21 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
             .agents;
         let successor = agents
             .iter()
-            .find(|agent| agent.molted_from.as_deref() == Some("launch-session"))
-            .expect("molt successor recorded even on failed placement");
+            .find(|agent| agent.launch_id.as_deref() == Some("launch-session") && agent.epoch == 1)
+            .expect("the fresh session is recorded under the same launch even on failed placement");
+        assert_eq!(successor.name.as_deref(), Some("planner"));
         assert_eq!(successor.launch_depth, Some(3));
         assert_eq!(successor.launched_by.as_ref(), Some(&launcher));
-        assert_eq!(successor.first_prompt.as_deref(), Some("continue the work"));
+        // The note, then the briefing on the wait and the child it is owed.
+        assert!(
+            successor
+                .first_prompt
+                .as_deref()
+                .is_some_and(|prompt| prompt
+                    .starts_with("continue the work Type: SWAP_BRIEFING From: @rimz")),
+            "{:?}",
+            successor.first_prompt
+        );
         assert_eq!(
             successor.record.as_ref().unwrap().model.as_deref(),
             Some(if fresh { "astra" } else { "opus[1m]" })
@@ -2453,74 +2501,59 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
                 .count(),
             usize::from(!placement_fails)
         );
+        assert!(stops.is_empty(), "a molt arms no idle stop: {stops:?}");
+        let trace = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            trace.contains("new-pane") && !trace.contains("new-tab"),
+            "{trace}"
+        );
         if placement_fails {
             assert_eq!(successor.status, rimz::agents::AgentStatus::Failed);
             assert!(successor.agent_id.is_provisional());
-            assert!(stops.is_empty());
+            assert!(!trace.contains("close-pane"), "{trace}");
+            assert_eq!(crate::common::wait::wait_instances(&env).0.len(), 1);
+        } else if receipt_fails {
+            assert!(trace.contains("close-pane"), "{trace}");
         } else {
-            assert_eq!(stops.len(), 1);
-            assert_eq!(stops[0].agent_id.as_str(), "provider-session");
-            assert_eq!(stops[0].stop.after_secs, 300);
-            assert_eq!(stops[0].stop.requested_by.as_deref(), Some("@planner"));
-            let receipt = String::from_utf8_lossy(&output.stdout);
-            assert!(
-                receipt.contains("@planner")
-                    && receipt.contains(successor.name.as_deref().unwrap())
-                    && receipt.contains("new tab")
-                    && receipt.contains("typing into it keeps it")
-                    && receipt.contains("5m")
-                    && receipt.contains("next: rimz agents show"),
-                "{receipt}"
+            assert_planner_kept_what_it_was_owed(&env);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "molted @planner#main into a fresh session beside this one; this session \
+                 closes now\nnext: rimz agents show @planner#main\n"
             );
-            let before = env.store().read_events().unwrap().len();
-            let refused = run();
-            assert_eq!(refused.status.code(), Some(1));
-            assert!(String::from_utf8_lossy(&refused.stderr).contains("one successor"));
-            assert_eq!(env.store().read_events().unwrap().len(), before);
         }
     }
 }
 
-#[test]
-fn stopping_a_molt_launch_without_a_pane_frees_its_predecessor() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let store = env.store();
+/// Registers the calling agent `@planner` (session `provider-session`,
+/// launch `launch-session`) in pane `zellij:terminal_1`, beside which a swap
+/// opens its fresh session; `transcript` makes the session resumable.
+fn register_paned_planner(env: &Env, launch: LaunchParams, transcript: Option<&std::path::Path>) {
+    crate::common::wait::register_calling_agent_with_launch(env, launch.clone());
     let workspace = env.resolve_workspace(&env.project_root);
-    let batch = store
-        .begin_agent_launch_batch(
-            &[rimz::store::writer::AgentLaunchRequest {
-                kind: AgentKind::new_unchecked("claude"),
-                agent_id: "launch_molt".into(),
-                name: rimz::store::writer::AgentLaunchName::Mint,
-                login: rimz::store::writer::LaunchLogin::RoomDefault,
-                launch: LaunchParams {
-                    molted_from: Some("launch_old".into()),
-                    ..Default::default()
-                },
-                run_id: None,
-                prompt: None,
-            }],
-            rimz::store::writer::AgentLaunchScope {
-                session_name: workspace.session_name,
-                cwd: env.project_root.clone(),
-                branch: None,
-                description: None,
-            },
-        )
+    let mut observation = AgentLifecycleObservation::new(
+        Some("provider-session".into()),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("planner".to_owned());
+    observation.launch = launch;
+    observation.pane_id = Some(rimz::ids::PaneId::parse("zellij:terminal_1").unwrap());
+    observation.transcript_path = transcript.map(|path| path.display().to_string());
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
         .unwrap();
-    let output = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
-        .args([
-            "--mux",
-            "zellij",
-            "agents",
-            "stop",
-            &format!("@{}", batch.single_identity().unwrap().name),
-        ])
+}
+
+/// Arms a self wait for `@planner` and seeds its running child `@kit`.
+fn arm_owed_to_planner(env: &Env) {
+    let output = crate::common::wait::agent_wait(env)
+        .args(["wait", "--in", "30m"])
         .bounded_output()
         .unwrap();
     assert!(
@@ -2528,47 +2561,314 @@ fn stopping_a_molt_launch_without_a_pane_frees_its_predecessor() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let agents = store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .unwrap()
-        .agents;
-    assert!(rimz::agents::state::standing_successor(agents.iter(), &"launch_old".into()).is_none());
+    crate::common::wait::register_agent(
+        env,
+        "kit-session",
+        "launch_kit",
+        "kit",
+        LaunchParams {
+            parent_agent_id: Some("launch-session".into()),
+            parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+            launch_depth: Some(1),
+            ..Default::default()
+        },
+    );
+}
+
+/// What a swap of `@planner` must leave standing: one holder at epoch 1
+/// under the same handle and launch, its self wait, and its running child.
+fn assert_planner_kept_what_it_was_owed(env: &Env) {
+    let rows = env.store().audit_rows().unwrap();
+    let holders = rimz::agents::state::LaunchHolders::new(rows.iter());
+    let planner = rows
+        .iter()
+        .filter(|row| row.launch_id.as_deref() == Some("launch-session") && !holders.replaced(row))
+        .collect::<Vec<_>>();
+    assert_eq!(planner.len(), 1, "{planner:#?}");
+    assert_eq!(
+        (
+            planner[0].name.as_deref(),
+            planner[0].epoch,
+            planner[0].ended_at
+        ),
+        (Some("planner"), 1, None)
+    );
+    let waits = crate::common::wait::wait_instances(env);
+    assert_eq!(waits.0.len(), 1, "the self wait is still armed: {waits:?}");
+    let kit = rows
+        .iter()
+        .find(|row| row.agent_id == "kit-session")
+        .unwrap();
+    assert_eq!(kit.ended_at, None, "the child keeps running");
+}
+
+/// Restarts `@planner` with a self wait and a running child, `resumed` from
+/// a recorded conversation or fresh. `bound` stands in for the replacement's
+/// wrapper; without it nothing binds and the swap's bind wait runs out.
+#[cfg(unix)]
+fn restart_owed_planner(resumed: bool, bound: bool) -> (Env, std::process::Output) {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let transcript = env.home_root.join("planner.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    register_paned_planner(
+        &env,
+        LaunchParams::default(),
+        resumed.then_some(&*transcript),
+    );
+    arm_owed_to_planner(&env);
+    let shim = write_env_dump_shim(&env, "claude");
+    let shell = write_fake_login_shell(&env, "swap-shell", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"claude"}]"#;
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(panes).unwrap(),
+    );
+    let mut command = env.rimz();
+    command
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "restart",
+            "@planner",
+            "--no-continue",
+        ])
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        );
+    if bound {
+        command.env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1");
+    } else {
+        command.env("RIMZ_TEST_SWAP_BIND_WAIT_MS", "300");
+    }
+    let output = command.bounded_output().unwrap();
+    (env, output)
 }
 
 #[cfg(unix)]
 #[test]
-fn a_cancelled_molt_wrapper_never_starts_the_provider() {
+fn restart_keeps_the_agent_its_wait_and_its_child_fresh_or_resumed() {
+    for resumed in [false, true] {
+        let (env, output) = restart_owed_planner(resumed, true);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            receipt.starts_with("restarted @planner")
+                && receipt.contains(if resumed {
+                    " (resumed session provider-session)"
+                } else {
+                    " fresh — "
+                })
+                && !receipt.contains("dropped"),
+            "{receipt}"
+        );
+        let rows = env.store().audit_rows().unwrap();
+        let prompt = rows
+            .iter()
+            .find(|row| row.launch_id.as_deref() == Some("launch-session") && row.epoch == 1)
+            .and_then(|row| row.first_prompt.clone());
+        assert_eq!(
+            prompt
+                .as_deref()
+                .map(|prompt| prompt.starts_with("Type: SWAP_BRIEFING From: @rimz")),
+            (!resumed).then_some(true),
+            "a fresh session opens on the briefing, a resumed one on none: {prompt:?}"
+        );
+        if resumed {
+            // The new process registers under the same session; the old
+            // process's end, stamped with the epoch it ran under, comes late.
+            for (signal, epoch) in [
+                (LifecycleSignal::Registered, Some(1)),
+                (LifecycleSignal::Ended, None),
+            ] {
+                let mut observation =
+                    AgentLifecycleObservation::new(Some("provider-session".into()), signal);
+                observation.launch_id = Some("launch-session".into());
+                observation.launch.epoch = epoch;
+                observation.pane_id =
+                    Some(rimz::ids::PaneId::parse("zellij:terminal_9999").unwrap());
+                env.store()
+                    .append_event(&EventEnvelope::agent_lifecycle(
+                        workspace.workspace_id.clone(),
+                        &workspace.session_name,
+                        "claude",
+                        "seed",
+                        &observation,
+                    ))
+                    .unwrap();
+            }
+        }
+        assert_planner_kept_what_it_was_owed(&env);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_whose_replacement_never_binds_leaves_the_agent_in_its_old_session() {
+    let (env, output) = restart_owed_planner(false, false);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("restart of @planner")
+            && stderr.contains("failed: the replacement did not start (")
+            && stderr.contains(
+                "is still running in its old session, and nothing owed to it was touched"
+            ),
+        "{stderr}"
+    );
+    let rows = env.store().audit_rows().unwrap();
+    let reservation = rows
+        .iter()
+        .find(|row| row.launch_id.as_deref() == Some("launch-session") && row.epoch == 1)
+        .expect("the reservation is recorded");
+    assert!(
+        reservation.agent_id.is_provisional() && reservation.session_over(),
+        "{reservation:#?}"
+    );
+    let holders = rimz::agents::state::LaunchHolders::new(rows.iter());
+    let old = rows
+        .iter()
+        .find(|row| row.agent_id == "provider-session")
+        .unwrap();
+    assert!(!holders.replaced(old) && old.ended_at.is_none(), "{old:#?}");
+    assert_eq!(crate::common::wait::wait_instances(&env).0.len(), 1);
+    let kit = rows
+        .iter()
+        .find(|row| row.agent_id == "kit-session")
+        .unwrap();
+    assert_eq!(kit.ended_at, None);
+    let trace = std::fs::read_to_string(env.home_root.join("mux.log")).unwrap_or_default();
+    assert!(!trace.contains("close-pane"), "{trace}");
+}
+
+/// Seeds a bound codex agent `@pruner` (launch `launch_holder`) with an
+/// open swap reservation `launch_swap`, returning the reservation.
+fn seed_open_swap(env: &Env) -> rimz::store::writer::AgentLaunchIdentity {
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let scope = rimz::store::writer::AgentLaunchScope {
+        session_name: workspace.session_name.clone(),
+        cwd: env.project_root.clone(),
+        branch: None,
+        description: None,
+    };
+    let request = |key: &str| rimz::store::writer::AgentLaunchRequest {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: key.into(),
+        name: rimz::store::writer::AgentLaunchName::Explicit("pruner".into()),
+        login: rimz::store::writer::LaunchLogin::RoomDefault,
+        launch: LaunchParams::default(),
+        run_id: None,
+        prompt: None,
+    };
+    let first = store
+        .begin_agent_launch_batch(&[request("launch_holder")], scope.clone())
+        .unwrap();
+    store
+        .bind_agent_launch(
+            first.single_identity().unwrap(),
+            &workspace.session_name,
+            &env.project_root,
+            &rimz::ids::PaneId::parse("tmux:%1").unwrap(),
+            None,
+        )
+        .unwrap();
+    let holder = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.agent_id == "launch_holder")
+        .cloned()
+        .unwrap();
+    store
+        .begin_agent_swap(&holder, &request("launch_swap"), scope)
+        .unwrap()
+        .single_identity()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn stopping_an_agent_cancels_its_starting_swap() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_open_swap(&env);
+    let output = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .args(["--mux", "zellij", "agents", "stop", "@pruner"])
+        .bounded_output()
+        .unwrap();
+    let rows = env.store().audit_rows().unwrap();
+    let reservation = rows
+        .iter()
+        .find(|row| row.agent_id == "launch_swap")
+        .unwrap();
+    assert!(
+        reservation.session_over(),
+        "the stop must cancel the reservation; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cancelled_swap_wrapper_never_starts_the_provider() {
     let env = Env::new();
     env.record(&env.project_root);
     write_startup_relaunch_config(&env, "isolation = 'host'\nstartup-relaunches = 0");
-    let launch_id = "launch_cancelled";
-    let launch = LaunchParams {
-        molted_from: Some("launch_old".into()),
-        ..Default::default()
-    };
-    seed_launch(&env, launch_id, "pruner", launch.clone());
+    let reservation = seed_open_swap(&env);
     let workspace = env.resolve_workspace(&env.project_root);
-    assert!(
+    assert_eq!(
         env.store()
-            .cancel_unbound_molt_launch(
-                &AgentKind::new_unchecked("codex"),
-                &launch_id.into(),
-                &workspace.session_name,
-                &env.project_root,
+            .abort_agent_swap(
+                &reservation,
+                &rimz::store::writer::AgentLaunchScope {
+                    session_name: workspace.session_name,
+                    cwd: env.project_root.clone(),
+                    branch: None,
+                    description: None,
+                },
             )
-            .unwrap()
+            .unwrap(),
+        rimz::store::writer::SwapAbort::Aborted
     );
     let log = env.home_root.join("cancelled-provider.log");
     let shim = write_counting_dead_agent(&env, &log);
     let mut request = fresh_exec("codex", None);
     request.identity.name = Some("pruner".into());
-    request.identity.launch_id = Some(launch_id.into());
-    request.identity.params = launch;
+    request.identity.row_key = Some(reservation.agent_id.to_string());
+    request.identity.launch_id = Some(reservation.launch_id().to_string());
+    request.identity.params = reservation.launch.clone();
     let output = env
         .rimz()
         .args(exec_args(&env, &request))
         .env("PATH", path_with_front(&shim))
-        .env("TMUX_PANE", "%1")
+        .env("TMUX_PANE", "%2")
         .bounded_output()
         .unwrap();
     assert_eq!(
@@ -2578,10 +2878,179 @@ fn a_cancelled_molt_wrapper_never_starts_the_provider() {
     );
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("cancelled or failed before binding"),
+        String::from_utf8_lossy(&output.stderr)
+            .contains("was cancelled or failed before its replacement bound"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// A swap wrapper whose launch errors settles the agent in the same process
+/// once it has bound: the bound replacement was the agent, so its parked
+/// message is archived. One that errors before binding leaves the old
+/// session the agent and its message queued.
+#[cfg(unix)]
+#[test]
+fn a_swap_wrapper_error_settles_the_agent_only_after_its_bind() {
+    for bound in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        write_startup_relaunch_config(&env, "isolation = 'host'\nstartup-relaunches = 0");
+        let reservation = seed_open_swap(&env);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let parked = rimz::store::message::MessageRecord::new_for_card(
+            workspace.workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            "launch_holder".into(),
+            Some("pruner".into()),
+            "rebase first".into(),
+            true,
+            rimz::store::message::DeliveryGate::Done,
+        );
+        env.store()
+            .queue_message(&parked, &workspace.session_name)
+            .unwrap();
+        let mut request = fresh_exec("codex", Some("prompt"));
+        request.identity.name = Some("pruner".into());
+        request.identity.row_key = Some(reservation.agent_id.to_string());
+        request.identity.launch_id = Some(reservation.launch_id().to_string());
+        request.identity.params = reservation.launch.clone();
+        let argv = exec_args(&env, &request);
+        if !bound {
+            let payload = std::fs::read_to_string(argv.last().unwrap()).unwrap();
+            let wire: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            std::fs::remove_file(wire["prompt_file"].as_str().unwrap()).unwrap();
+        }
+        let output = env
+            .rimz()
+            .args(argv)
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", "/nonexistent")
+            .env("TMUX_PANE", "%2")
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        let rows = env.store().audit_rows().unwrap();
+        let replacement = rows
+            .iter()
+            .find(|row| row.agent_id == reservation.agent_id)
+            .unwrap();
+        assert_eq!(
+            (replacement.launch_bound, replacement.session_over()),
+            (bound, true),
+            "{stderr}\n{replacement:#?}"
+        );
+        let queued = env
+            .store()
+            .list_pending_messages()
+            .unwrap()
+            .iter()
+            .any(|message| message.text == "rebase first");
+        assert_eq!(queued, !bound, "bound={bound}: {stderr}");
+    }
+}
+
+/// A resumed restart's wrapper that errors once its bind and attach stand
+/// ends the resumed session at the new epoch and settles the agent: it reads
+/// ended, its wait retires, and its parked message is archived. One that
+/// errors before binding leaves the old session the agent, owed all of it.
+#[cfg(unix)]
+#[test]
+fn a_resumed_swap_wrapper_error_settles_the_agent_only_after_its_bind() {
+    for bound in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        write_startup_relaunch_config(&env, "isolation = 'host'\nstartup-relaunches = 0");
+        crate::common::trust_claude_project(&env, &env.project_root);
+        register_paned_planner(&env, LaunchParams::default(), None);
+        arm_owed_to_planner(&env);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let store = env.store();
+        let source = store
+            .audit_rows()
+            .unwrap()
+            .iter()
+            .find(|row| row.agent_id == "provider-session")
+            .cloned()
+            .unwrap();
+        let reservation = store
+            .begin_agent_swap(
+                &source,
+                &rimz::store::writer::AgentLaunchRequest {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: "launch_swap".into(),
+                    name: rimz::store::writer::AgentLaunchName::Explicit("planner".into()),
+                    login: rimz::store::writer::LaunchLogin::RoomDefault,
+                    launch: LaunchParams::default(),
+                    run_id: None,
+                    prompt: None,
+                },
+                rimz::store::writer::AgentLaunchScope {
+                    session_name: workspace.session_name.clone(),
+                    cwd: env.project_root.clone(),
+                    branch: None,
+                    description: None,
+                },
+            )
+            .unwrap()
+            .single_identity()
+            .unwrap()
+            .clone();
+        let mut request = fresh_exec("claude", None);
+        request.action = ExecAction::Resume {
+            session_id: "provider-session".into(),
+            extra_args: Vec::new(),
+        };
+        request.identity.name = Some("planner".into());
+        request.identity.row_key = Some(reservation.agent_id.to_string());
+        request.identity.launch_id = Some("launch-session".into());
+        request.identity.params = reservation.launch.clone();
+        if !bound {
+            request.worktree_path = Some(env.home_root.join("missing-checkout"));
+        }
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", "/nonexistent")
+            .env("TMUX_PANE", "%2")
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        let rows = store.audit_rows().unwrap();
+        let resumed = rows
+            .iter()
+            .find(|row| row.agent_id == "provider-session")
+            .unwrap();
+        assert_eq!(
+            (resumed.epoch, resumed.ended_at.is_some()),
+            (u32::from(bound), bound),
+            "bound={bound}: {stderr}\n{resumed:#?}"
+        );
+        assert_eq!(
+            rimz::agents::state::agent_end(
+                rows.iter(),
+                &AgentKind::new_unchecked("claude"),
+                &"launch-session".into(),
+            ) == rimz::agents::state::AgentEnd::Ended,
+            bound,
+            "bound={bound}: {stderr}"
+        );
+        let waits = crate::common::wait::wait_instances(&env);
+        assert_eq!(
+            waits.0.len(),
+            usize::from(!bound),
+            "bound={bound}: {waits:?}"
+        );
+        let queued = store
+            .list_pending_messages()
+            .unwrap()
+            .iter()
+            .any(|message| message.text == "rebase first");
+        assert_eq!(queued, !bound, "bound={bound}: {stderr}");
+    }
 }
 
 /// Seeds a bound `rimz subagents` child and returns the launch id its
@@ -3434,6 +3903,7 @@ impl RestartChild {
         let mut command = self.env.rimz();
         command
             .args(["--mux", "zellij", "agents", "restart", "@still-silver"])
+            .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
             .args(flags)
             .env("SHELL", &self.shell)
             .env("PATH", path_with_front(&self.shim))
@@ -3824,7 +4294,7 @@ fn restart_account_falls_back_to_a_fresh_launch_on_the_named_account() {
     );
     let receipt = String::from_utf8_lossy(&output.stdout);
     assert!(
-        receipt.starts_with("restarted fresh as @")
+        receipt.starts_with("restarted @still-silver fresh — ")
             && receipt.contains("; on account `second`")
             && !receipt.contains("continue queued"),
         "{receipt}"
@@ -3835,6 +4305,14 @@ fn restart_account_falls_back_to_a_fresh_launch_on_the_named_account() {
         Some("second".to_owned())
     );
     assert_eq!((request.run_id, request.continue_session), (None, false));
+    assert!(
+        matches!(
+            &request.action,
+            rimz::harness::launch::ExecAction::Launch { prompt: None, .. }
+        ),
+        "with nothing outstanding a fresh restart stays promptless: {:?}",
+        request.action
+    );
     let run = fixture.run_now();
     assert_eq!(run.status, rimz::store::run::RunStatus::Failed, "{run:?}");
     assert!(

@@ -1195,6 +1195,32 @@ fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
     assert_eq!(lanes[1].members, 1);
 }
 
+/// A swap leaves the agent's earlier session as an ended row of the same
+/// launch; the lane counts and restores its holder alone.
+#[test]
+fn lane_resume_offers_only_a_swapped_agents_holder() {
+    let mut agents = [
+        agent_on_pane("claude", "earlier", "/docs", 30, "docs-earlier"),
+        agent_on_pane("claude", "holder", "/docs", 10, "docs-holder"),
+    ];
+    for (epoch, agent) in agents.iter_mut().enumerate() {
+        agent.launch_id = Some("launch_a".into());
+        agent.epoch = u32::try_from(epoch).unwrap();
+        crate::testkit::set_own_lane(agent);
+    }
+    let action = LaneCase::new(LaneResumeSelector::List, &agents)
+        .restore(|| panic!("listing must not load restore config"))
+        .run()
+        .unwrap();
+    let LaneResumeAction::List { lanes } = action else {
+        panic!("expected listing");
+    };
+    assert_eq!(
+        lanes.iter().map(|lane| lane.members).collect::<Vec<_>>(),
+        [1]
+    );
+}
+
 #[test]
 fn lane_listing_discovers_only_worktrees_without_durable_members() {
     let durable = [agent("codex", "docs", "/repo-worktrees/docs", 5)].map(|mut agent| {

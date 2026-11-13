@@ -186,7 +186,7 @@ The stamp names the caller's launch, and falls back to its session id only for a
 Two operations copy a generation instead of launching:
 
 - A fork ([`cli/agents_cmd/fork.rs`](../../../crates/rimz/src/cli/agents_cmd/fork.rs)) copies its source's `launch_depth`, whether a user shell or another agent runs it, sets no `launched_by`, and is never refused by the chain cap. It records a child's [profile-table doorway](./fleet.md#posture) for later relaunches. A fork cannot restart a chain at generation 0, but the cap does not limit how many forks exist: an agent at the cap can fork itself, and so can each fork.
-- `rimz agents molt` is self-succession. It copies the recorded generation, launcher, and parent fields without resolving new ancestry, including at generation 3. A launched child cannot molt.
+- `rimz agents molt` swaps the calling agent into a fresh session under the same launch and handle. It copies the recorded generation, launcher, and parent fields without resolving new ancestry, including at generation 3. A launched child cannot molt.
 
 Ancestry failures are `LaunchAncestryError`, written for a reader that is itself an agent. Each message states the refusal, explains the limit, and ends with *do not retry this command*. The exception is `RoomMismatch`, which ends with the `--cwd` fix because that variation can succeed. An agent that reads "launch refused" without a terminal instruction tends to retry with a variation, so the phrasing is load-bearing.
 
