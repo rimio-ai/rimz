@@ -857,51 +857,73 @@ fn header_span_style(
         .map(|span| span.style)
 }
 
-/// The marker says what auto-redeem would do and never moves: the dashboard
-/// takes no animation phase, and each forecast keeps one glyph and one tone,
-/// even beside a spent window.
+/// The marker says who redeems and when it is worth it, and never moves: the
+/// dashboard takes no animation phase, and each forecast keeps one glyph and
+/// one tone for glyph and count, even beside a spent window. A panel with no
+/// forecast draws as the user's at rest.
 #[test]
 fn codex_reset_marker_reads_the_forecast_without_motion() {
     use crate::store::snapshot::RedeemForecast;
     let theme = Theme::fixed(false);
-    for (forecast, glyph, tone) in [
-        (None, "▬", theme.body()),
-        (Some(RedeemForecast::Manual), "▬", theme.body()),
+    let lit = theme.good(Modifier::BOLD);
+    for (forecast, glyph, glyph_style, count_style) in [
+        (None, "▬", theme.body(), theme.body()),
+        (
+            Some(RedeemForecast::Manual),
+            "▬",
+            theme.body(),
+            theme.body(),
+        ),
         (
             Some(RedeemForecast::Armed),
             "⟳",
             theme.good(Modifier::empty()),
+            theme.body(),
         ),
-        (Some(RedeemForecast::Holding), "⟳", theme.muted()),
+        (
+            Some(RedeemForecast::Holding),
+            "⟳",
+            theme.muted(),
+            theme.body(),
+        ),
+        (
+            Some(RedeemForecast::Soon),
+            "▬",
+            theme.good(Modifier::empty()),
+            theme.body(),
+        ),
+        (Some(RedeemForecast::Now), "▬", lit, lit),
+        (Some(RedeemForecast::NowWaiting), "▬", lit, lit),
     ] {
         let panel = codex_credit_panel(forecast, 36);
         assert_eq!(
             header_span_style(&theme, &panel, glyph),
-            Some(tone),
+            Some(glyph_style),
             "{forecast:?} shows a steady {glyph}"
+        );
+        assert_eq!(
+            header_span_style(&theme, &panel, " 2"),
+            Some(count_style),
+            "{forecast:?} count tone"
         );
     }
 }
 
-/// The expiry rides the marker within a week, floored to one unit, on a heat
-/// ramp while the user must act and a calm ramp while auto-redeem handles it.
+/// The expiry rides the marker at any distance, floored to one unit: muted
+/// from a week out on both shapes, then on a heat ramp while the user must act
+/// and a calm ramp while auto-redeem handles it.
 #[test]
-fn codex_reset_marker_shows_expiry_within_a_week() {
+fn reset_marker_shows_expiry_at_any_distance() {
     use crate::store::snapshot::RedeemForecast;
     let theme = Theme::fixed(false);
     for (hours, text) in [
-        (3, Some("▬ 2 · 3h")),
-        (6 * 24, Some("▬ 2 · 6d")),
-        (7 * 24, None),
+        (3, "▬ 2 · 3h"),
+        (6 * 24, "▬ 2 · 6d"),
+        (7 * 24, "▬ 2 · 7d"),
+        (400 * 24, "▬ 2 · 400d"),
     ] {
         let rendered = Dashboard::stacked(&theme, &[codex_credit_panel(None, hours)]).text();
-        match text {
-            Some(text) => assert!(rendered.contains(text), "{hours}h:\n{rendered}"),
-            None => assert!(
-                rendered.contains("▬ 2") && !rendered.contains("▬ 2 ·"),
-                "a week out hides the expiry:\n{rendered}"
-            ),
-        }
+        assert!(rendered.contains(text), "{hours}h:\n{rendered}");
     }
 
     let amount = reset_expiry_heat_amount(3.0).expect("heat amount");
@@ -917,6 +939,108 @@ fn codex_reset_marker_shows_expiry_within_a_week() {
         Some(theme.style(theme.calm_tone(amount), Modifier::empty())),
         "armed expiry stays calm"
     );
+    for forecast in [
+        None,
+        Some(RedeemForecast::Manual),
+        Some(RedeemForecast::Armed),
+        Some(RedeemForecast::Now),
+    ] {
+        let panel = codex_credit_panel(forecast, 7 * 24);
+        assert_eq!(
+            header_span_style(&theme, &panel, "7d"),
+            Some(theme.muted()),
+            "{forecast:?}: a week out is muted"
+        );
+    }
+}
+
+fn credit_header(panel: &crate::store::snapshot::SidebarProviderPanel, width: usize) -> String {
+    let theme = Theme::fixed(false);
+    Dashboard::stacked(&theme, std::slice::from_ref(panel))
+        .width(width)
+        .texts()
+        .into_iter()
+        .find(|line| line.contains("Codex"))
+        .expect("header line")
+}
+
+/// Where the header cannot hold both, an expiry a week or more out drops
+/// before the version does; a nearer expiry keeps its place and the version
+/// drops instead. Each case runs at the width where the element drops and one
+/// column either side.
+#[test]
+fn far_expiry_yields_before_the_version_at_narrow_widths() {
+    let artless = |hours| {
+        let mut panel = codex_credit_panel(None, hours);
+        panel.art.clear();
+        panel
+    };
+    let (far, near) = (artless(23 * 24), artless(3));
+    // Both sides and the one-cell gap between them, read off an ample pane.
+    let whole = |panel| {
+        let header = credit_header(panel, 200);
+        let (left, right) = header.split_once("  ").expect("pinned right side");
+        left.chars().count() + 1 + right.trim().chars().count()
+    };
+    let (far_whole, near_whole) = (whole(&far), whole(&near));
+    for width in [far_whole + 1, far_whole] {
+        let header = credit_header(&far, width);
+        assert!(
+            header.contains("v2.1.158") && header.contains("▬ 2 · 23d"),
+            "{width}: {header}"
+        );
+    }
+    let header = credit_header(&far, far_whole - 1);
+    assert!(
+        header.contains("v2.1.158") && header.contains("▬ 2") && !header.contains("23d"),
+        "a far expiry drops first:\n{header}"
+    );
+    for width in [near_whole + 1, near_whole] {
+        let header = credit_header(&near, width);
+        assert!(
+            header.contains("v2.1.158") && header.contains("▬ 2 · 3h"),
+            "{width}: {header}"
+        );
+    }
+    let header = credit_header(&near, near_whole - 1);
+    assert!(
+        !header.contains("v2.1.158") && header.contains("▬ 2 · 3h"),
+        "a near expiry keeps its place:\n{header}"
+    );
+    // Once the version is gone, the far expiry returns where it fits beside the
+    // short left side.
+    let short_left = header.split_once("  ").expect("pinned right side").0;
+    let returns = short_left.chars().count() + 1 + "▬ 2 · 23d".chars().count();
+    assert!(returns < far_whole - 1, "{returns} vs {far_whole}");
+    for width in [returns + 1, returns] {
+        let header = credit_header(&far, width);
+        assert!(
+            !header.contains("v2.1.158") && header.contains("▬ 2 · 23d"),
+            "{width}: {header}"
+        );
+    }
+    let header = credit_header(&far, returns - 1);
+    assert!(
+        !header.contains("v2.1.158") && header.contains("▬ 2") && !header.contains("23d"),
+        "{}: {header}",
+        returns - 1
+    );
+}
+
+/// With nothing pinned right (no credits, no `rc` badge) no gap is kept, so the
+/// version stays while the left side alone fits the pane.
+#[test]
+fn bare_header_keeps_its_version_until_the_left_side_overflows() {
+    let mut panel = codex_credit_panel(None, 3);
+    panel.reset_credits = None;
+    panel.art.clear();
+    let left = credit_header(&panel, 200).trim_end().chars().count();
+    for width in [left + 1, left] {
+        let header = credit_header(&panel, width);
+        assert!(header.contains("v2.1.158"), "{width}: {header}");
+    }
+    let header = credit_header(&panel, left - 1);
+    assert!(!header.contains("v2.1.158"), "{}: {header}", left - 1);
 }
 
 #[test]
