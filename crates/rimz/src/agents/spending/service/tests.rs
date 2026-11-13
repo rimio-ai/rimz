@@ -334,6 +334,9 @@ fn walk_panic_replies_internal_and_resets_walker() {
     let fulfil = |walker: &mut SpendingWalker| {
         assert!(!busy.swap(true, Ordering::AcqRel));
         let (client, server) = UnixStream::pair().unwrap();
+        // The walker never reads the request, so its end stays open until the client has written
+        // it: a client that starts after the reply would otherwise write to a closed peer.
+        let _open = server.try_clone().unwrap();
         std::thread::scope(|scope| {
             let client = scope.spawn(|| transact(client, &request));
             fulfil_request(
