@@ -536,7 +536,7 @@ fn redefinition_forgets_only_checkouts_whose_runs_have_not_reached_an_agent() {
                     "state":"active", "park":null, "node":visited[visited.len() - 1],
                     "entered_at":"2000-01-01T00:00:00Z", "input":null, "key":null,
                     "recheck_at":null, "wait":null,
-                    "visits":visited.iter().map(|step| (*step, serde_json::json!({"total":1,"outcomes":[]}))).collect::<BTreeMap<_, _>>(),
+                    "visits":visited.iter().map(|step| (*step, serde_json::json!(1))).collect::<BTreeMap<_, _>>(),
                     "visit_grant":0, "deadline":null, "deadline_fired":false,
                     "next_seq":1, "attempt":null, "prev_attempt":null, "terminal_at":null
                 }))

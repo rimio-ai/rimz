@@ -30,7 +30,6 @@ then = 'watch'
 timeout = '2h'
 takeover = true
 max-visits = 4
-max-visits-per-outcome = { limit = 2, reset-on = 'green' }
 capacity-wait = '6h'
 on.asked = 'watch'
 [checks.unused]
@@ -45,7 +44,7 @@ fn graph() -> (Env, PathBuf) {
 
 #[test]
 fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
-    let (env, dir) = graph();
+    let (env, _) = graph();
     seed(&env, &env.project_root, &env.project_root, "parked");
     let text = success(command(&env, &["workflow", "show", "review"]));
     for fragment in [
@@ -82,31 +81,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     assert!(!text.contains("never:"), "{text}");
     assert!(text.contains("invalid @failed"), "{text}");
     assert!(!text.contains("waits ≤1h"), "{text}");
-    let caps = [
-        (
-            "{ limit = 2, reset-on = 'green' }",
-            "max-visits-per-outcome 2 (reset-on green), then @failed",
-        ),
-        (
-            "{ limit = 2, reset-on = ['green', 'red'] }",
-            "max-visits-per-outcome 2 (reset-on green, red), then @failed",
-        ),
-        ("2", "max-visits-per-outcome 2, then @failed"),
-    ]
-    .map(|(cap, expected)| {
-        fs::write(
-            dir.join("workflow.toml"),
-            GRAPH.replace("{ limit = 2, reset-on = 'green' }", cap),
-        )
-        .unwrap();
-        let text = success(command(&env, &["workflow", "show", "review"]));
-        let line = text
-            .lines()
-            .find(|line| line.contains("max-visits-per-outcome"))
-            .unwrap();
-        (line.contains(expected), expected, line.to_owned())
-    });
-    assert!(caps.iter().all(|(matches, ..)| *matches), "{caps:#?}");
+    assert!(!text.contains("max-visits-per-outcome"), "{text}");
 }
 
 #[test]
@@ -305,7 +280,6 @@ throttle = 'off'
 capacity-wait = '6h'
 then = 'judge'
 max-visits = 4
-max-visits-per-outcome = { limit = 2, reset-on = ['green', 'ok'] }
 timeout = '2h'
 on.asked = 'watch'
 on.cap = '@failed'
@@ -363,9 +337,6 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "6h",
                 "max-visits:",
                 "4",
-                "max-visits-per-outcome:",
-                "2",
-                "reset-on green, ok",
                 "timeout:",
                 "2h",
                 "then → judge (explicit)",

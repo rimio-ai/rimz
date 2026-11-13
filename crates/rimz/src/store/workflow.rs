@@ -11,7 +11,7 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId, WorkflowRunId};
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -186,48 +186,6 @@ pub enum Key {
     String(String),
     Integer(i64),
     Unsigned(u64),
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct StepVisits {
-    pub total: u64,
-    pub outcomes: Vec<OutcomeVisits>,
-}
-
-impl StepVisits {
-    /// Visits in this outcome/key bucket since the last reset; 0 before its first visit.
-    pub fn for_bucket(&self, bucket: (Option<&str>, Option<&Key>)) -> u64 {
-        self.bucket_index(bucket)
-            .map_or(0, |index| self.outcomes[index].visits)
-    }
-
-    /// Count one visit in this bucket and in the total since the last full reset.
-    pub fn bump(&mut self, bucket: (Option<String>, Option<Key>)) {
-        self.total += 1;
-        let (outcome, key) = bucket;
-        if let Some(index) = self.bucket_index((outcome.as_deref(), key.as_ref())) {
-            self.outcomes[index].visits += 1;
-        } else {
-            self.outcomes.push(OutcomeVisits {
-                outcome,
-                key,
-                visits: 1,
-            });
-        }
-    }
-
-    fn bucket_index(&self, bucket: (Option<&str>, Option<&Key>)) -> Option<usize> {
-        self.outcomes
-            .iter()
-            .position(|row| (row.outcome.as_deref(), row.key.as_ref()) == bucket)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OutcomeVisits {
-    pub outcome: Option<String>,
-    pub key: Option<Key>,
-    pub visits: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -677,7 +635,8 @@ pub struct RunRecord {
     pub key: Option<Key>,
     pub recheck_at: Option<Timestamp>,
     pub wait: Option<Wait>,
-    pub visits: BTreeMap<String, StepVisits>,
+    /// Visits to each step since its last full reset.
+    pub visits: BTreeMap<String, u64>,
     pub visit_grant: u64,
     pub deadline: Option<Timestamp>,
     pub deadline_fired: bool,
@@ -736,19 +695,21 @@ impl RunRecord {
             .min_by_key(|agent| leader.is_none_or(|name| agent.name.as_deref() != Some(name)))
     }
 
-    /// The routed outcome and key, preserving a capped node's bucket across resume.
-    pub fn visit_bucket(&self) -> (Option<&str>, Option<&Key>) {
-        (
-            self.input.as_ref().and_then(|input| {
-                let field = if input["outcome"] == "cap" && input["step"] == self.node {
-                    "routed_by"
-                } else {
-                    "outcome"
-                };
-                input[field].as_str()
-            }),
-            self.key.as_ref(),
-        )
+    /// The outcome that routed the run into its node, kept across a cap at that node.
+    pub fn routed_by(&self) -> Option<&str> {
+        self.input.as_ref().and_then(|input| {
+            let field = if input["outcome"] == "cap" && input["step"] == self.node {
+                "routed_by"
+            } else {
+                "outcome"
+            };
+            input[field].as_str()
+        })
+    }
+
+    /// Visits to `node` since its last full reset.
+    pub fn visits_to(&self, node: &str) -> u64 {
+        self.visits.get(node).copied().unwrap_or_default()
     }
 
     /// Derive the lane without resolving or reading the checkout, which may be gone.
@@ -884,8 +845,6 @@ pub enum JournalEvent {
     VisitsReset {
         step: String,
         outcome: String,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        all: bool,
     },
     Restart {
         step: String,

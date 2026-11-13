@@ -144,12 +144,10 @@ fn timeout_edges_name_the_missing_clock() {
 }
 
 #[test]
-fn cap_edges_need_either_visit_bound() {
+fn cap_edges_need_a_visit_bound() {
     for (bounds, fires, because) in [
         ("", "never", Some("no-max-visits")),
         ("max-visits=4", "yes", None),
-        ("max-visits-per-outcome=2", "yes", None),
-        ("max-visits=4\nmax-visits-per-outcome=2", "yes", None),
     ] {
         let spec = spec(
             "run='true'\non.ready='work'",

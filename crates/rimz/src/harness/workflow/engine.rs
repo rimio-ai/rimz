@@ -1110,11 +1110,11 @@ fn prepare(
     let mut launch_error = None;
     let mut evict = None;
     if let Some(step) = spec.step(&t.record.node) {
-        if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
+        if let Some((visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
             }
-            let route = t.cap_route(bound, visits, max);
+            let route = t.cap_route(visits, max);
             t.route(&Target::parse(&route.target), route.object, route.reason)?;
             admission.capacity = None;
             persist(&mut t, &guard)?;
@@ -1236,13 +1236,7 @@ fn prepare(
     if step.is_some() {
         t.close_wait();
         seen.clear();
-        let bucket = t.record.visit_bucket();
-        let bucket = (bucket.0.map(str::to_owned), bucket.1.cloned());
-        t.record
-            .visits
-            .entry(t.record.node.clone())
-            .or_default()
-            .bump(bucket);
+        *t.record.visits.entry(t.record.node.clone()).or_default() += 1;
         t.record.entered_at = t.now;
     }
     let seq = t.record.next_seq;
@@ -1255,7 +1249,7 @@ fn prepare(
         lifecycle: step.map_or(workflow::StepLifecycle::Turn, Node::lifecycle),
         seq,
         node: t.record.node.clone(),
-        visit: step.map(|_| t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket())),
+        visit: step.map(|_| t.record.visits_to(&t.record.node)),
         started_past_limit: admission
             .capacity
             .as_ref()
@@ -1518,13 +1512,9 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
     let output_path = (attempt.kind == AttemptKind::Judge).then(|| paths.check_output(attempt.seq));
     let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "output_path":output_path, "retry":attempt.retry, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
     if step {
-        let visits = &record.visits[&record.node];
-        context["visits"] = json!(visits.total);
-        context["visit"] = json!(
-            attempt
-                .visit
-                .unwrap_or_else(|| visits.for_bucket(record.visit_bucket()))
-        );
+        let visits = record.visits_to(&record.node);
+        context["visits"] = json!(visits);
+        context["visit"] = json!(attempt.visit.unwrap_or(visits));
     }
     if let Some(session) = record
         .held
@@ -1535,11 +1525,11 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
             attempt.lifecycle == workflow::StepLifecycle::Until && attempt.ending.is_none()
         })
     {
-        let visits = &record.visits[&session.node];
+        let visits = record.visits_to(&session.node);
         context["live_attempt"] = json!({
             "step":session.node, "seq":session.seq,
-            "visit":session.visit.unwrap_or_else(|| visits.for_bucket(record.visit_bucket())),
-            "visits":visits.total,
+            "visit":session.visit.unwrap_or(visits),
+            "visits":visits,
             "key":record.key, "started_at":session.started_at,
             "handle":session.run.as_ref().map(|run| &run.handle),
             "run_id":session.run.as_ref().map(|run| &run.run_id),

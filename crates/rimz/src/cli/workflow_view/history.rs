@@ -460,12 +460,11 @@ impl History<'_> {
                         value(&input)
                     )?;
                 }
-                JournalEvent::VisitsReset { step, outcome, all } => {
-                    let scope = if *all { "all visits" } else { "visits" };
+                JournalEvent::VisitsReset { step, outcome } => {
                     if step != &entry.node {
                         write!(out, "{step} ")?;
                     }
-                    writeln!(out, "{scope} reset on {outcome}")?;
+                    writeln!(out, "all visits reset on {outcome}")?;
                 }
                 JournalEvent::Restart { continued, .. } => {
                     let mode = if *continued { "continued" } else { "fresh" };

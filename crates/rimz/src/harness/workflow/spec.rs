@@ -11,7 +11,7 @@ use crate::harness::signal::{
     SelectorErr, SignalSelector, is_match_wildcard, parse_signal_selector,
 };
 use crate::harness::throttle::Limit;
-use crate::store::workflow::{Key, RunRecord, StepLifecycle, StepVisits};
+use crate::store::workflow::{RunRecord, StepLifecycle};
 
 pub use crate::store::workflow::ScopeKind;
 
@@ -429,13 +429,12 @@ pub struct Step {
     pub capacity_wait: Option<crate::config::CapacityWait>,
     pub limit: Option<Limit>,
     #[serde(default, deserialize_with = "then_checks")]
-    #[schemars(required, with = "ResetOn", !default)]
+    #[schemars(required, with = "Then", !default)]
     pub then: Vec<String>,
     #[serde(default)]
     pub on: StepEdges,
     #[schemars(range(min = 1))]
     pub max_visits: Option<u64>,
-    pub max_visits_per_outcome: Option<OutcomeCap>,
     pub timeout: Option<String>,
     /// The account an agent step's launch runs on; unset follows the profile and the room.
     #[schemars(with = "Option<String>")]
@@ -468,104 +467,18 @@ pub struct LaunchOverrides {
     pub worktree: Option<String>,
 }
 
-#[derive(Clone, Debug, JsonSchema)]
-#[serde(untagged, rename_all = "kebab-case")]
-#[schemars(deny_unknown_fields)]
-pub enum OutcomeCap {
-    Count(#[schemars(range(min = 1))] u64),
-    Rule {
-        #[schemars(range(min = 1))]
-        limit: u64,
-        #[schemars(with = "Option<ResetOn>")]
-        #[serde(rename = "reset-on")]
-        reset_on: Option<Vec<String>>,
-    },
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
-enum ResetOn {
+enum Then {
     One(String),
     Many(#[schemars(length(min = 1))] Vec<String>),
 }
 
 fn then_checks<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    ResetOn::deserialize(deserializer).map(|checks| match checks {
-        ResetOn::One(check) => vec![check],
-        ResetOn::Many(checks) => checks,
+    Then::deserialize(deserializer).map(|checks| match checks {
+        Then::One(check) => vec![check],
+        Then::Many(checks) => checks,
     })
-}
-
-impl<'de> Deserialize<'de> for OutcomeCap {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = OutcomeCap;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a positive visit limit or a table with limit and optional reset-on")
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
-                Ok(OutcomeCap::Count(value))
-            }
-
-            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
-                self.visit_u64(u64::try_from(value).map_err(E::custom)?)
-            }
-
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                map: M,
-            ) -> Result<Self::Value, M::Error> {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "kebab-case")]
-                struct Rule {
-                    limit: u64,
-                    reset_on: Option<ResetOn>,
-                }
-                let rule = Rule::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                let reset_on = match rule.reset_on {
-                    None => None,
-                    Some(ResetOn::One(outcome)) => Some(vec![outcome]),
-                    Some(ResetOn::Many(outcomes)) if outcomes.is_empty() => {
-                        return Err(serde::de::Error::custom("reset-on must be nonempty"));
-                    }
-                    Some(ResetOn::Many(outcomes)) => Some(outcomes),
-                };
-                Ok(OutcomeCap::Rule {
-                    limit: rule.limit,
-                    reset_on,
-                })
-            }
-        }
-        deserializer.deserialize_any(Visitor)
-    }
-}
-
-impl OutcomeCap {
-    pub fn limit(&self) -> u64 {
-        match self {
-            Self::Count(limit) | Self::Rule { limit, .. } => *limit,
-        }
-    }
-
-    pub fn reset_on(&self) -> &[String] {
-        match self {
-            Self::Count(_) => &[],
-            Self::Rule { reset_on, .. } => reset_on.as_deref().unwrap_or_default(),
-        }
-    }
-}
-
-impl Display for OutcomeCap {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.limit())?;
-        if !self.reset_on().is_empty() {
-            write!(f, ", reset-on {}", self.reset_on().join(", "))?;
-        }
-        Ok(())
-    }
 }
 
 pub enum StepKind<'a> {
@@ -583,33 +496,17 @@ impl Step {
         })
     }
 
-    /// Configured bounds as (name, used, limit including grant), total before per-outcome.
-    pub fn visit_bounds(
-        &self,
-        visits: Option<&StepVisits>,
-        bucket: (Option<&str>, Option<&Key>),
-        grant: u64,
-    ) -> impl Iterator<Item = (&'static str, u64, u64)> {
-        [
-            ("max-visits", visits.map_or(0, |v| v.total), self.max_visits),
-            (
-                "max-visits-per-outcome",
-                visits.map_or(0, |v| v.for_bucket(bucket)),
-                self.max_visits_per_outcome.as_ref().map(OutcomeCap::limit),
-            ),
-        ]
-        .into_iter()
-        .filter_map(move |(bound, used, max)| Some((bound, used, max?.saturating_add(grant))))
+    /// The step's `max-visits` raised by the run's grant; none when the step sets no cap.
+    pub fn visit_cap(&self, grant: u64) -> Option<u64> {
+        Some(self.max_visits?.saturating_add(grant))
     }
 
-    /// The first exhausted bound for the record's current step and bucket.
-    pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(&'static str, u64, u64)> {
-        self.visit_bounds(
-            record.visits.get(&record.node),
-            record.visit_bucket(),
-            record.visit_grant,
-        )
-        .find(|(_, used, max)| used >= max)
+    /// The visits used and the cap, when the record's current step has spent its cap.
+    pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(u64, u64)> {
+        let used = record.visits_to(&record.node);
+        self.visit_cap(record.visit_grant)
+            .filter(|max| used >= *max)
+            .map(|max| (used, max))
     }
 
     /// The step's launch overrides, its system-prompt file resolved inside `dir`, with the
@@ -740,7 +637,6 @@ pub(crate) fn parse(text: &str) -> Result<Definition, SpecErr> {
                 capacity_wait: None,
                 limit: None,
                 max_visits: None,
-                max_visits_per_outcome: None,
                 timeout: None,
                 account: None,
                 mode: None,

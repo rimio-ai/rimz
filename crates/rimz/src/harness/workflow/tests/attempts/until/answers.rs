@@ -172,33 +172,29 @@ fn another_advance_between_persist_and_push_enqueues_once() {
     assert_eq!(host.push_calls.borrow().len(), 2);
     assert_eq!(host.push_calls.borrow()[0], host.push_calls.borrow()[1]);
     assert_eq!(host.pushes.borrow().len(), 1);
-    assert_eq!(pushed.visits["build"].total, 2);
+    assert_eq!(pushed.visits["build"], 2);
     assert_eq!(decisions(&state, &pushed).len(), 1);
 }
 
 #[test]
-fn a_push_over_either_visit_cap_closes_through_the_cap_route() {
-    let mut actual = Vec::new();
-    for cap in ["max-visits=1", "max-visits=5\nmax-visits-per-outcome=1"] {
-        let (dir, state, mut record) = setup(&UNTIL.replace("max-visits=2", cap));
-        record.input = Some(json!({"outcome":"pending"}));
-        update(&state, &record);
-        let host = FakeHost::new();
-        advance_ok(&state, &record.id, &host);
-        check(dir.path(), json!({"outcome":"pending"}));
-        host.observed.borrow_mut().turn = Some(turn());
-        let capped = advance_ok(&state, &record.id, &host);
-        actual.push((
+fn a_push_over_the_visit_cap_closes_through_the_cap_route() {
+    let (dir, state, mut record) = setup(&UNTIL.replace("max-visits=2", "max-visits=1"));
+    record.input = Some(json!({"outcome":"pending"}));
+    update(&state, &record);
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    check(dir.path(), json!({"outcome":"pending"}));
+    host.observed.borrow_mut().turn = Some(turn());
+    let capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        (
             capped.state,
             capped.node,
             capped.input.unwrap()["outcome"].clone(),
             host.stops.get(),
             host.pushes.borrow().len(),
-        ));
-    }
-    assert_eq!(
-        actual,
-        vec![(RunState::Failed, "build".into(), json!("cap"), 1, 0); 2]
+        ),
+        (RunState::Failed, "build".into(), json!("cap"), 1, 0)
     );
 }
 
@@ -242,7 +238,7 @@ fn a_held_wait_rechecks_on_a_signal_or_due_tick_and_can_push() {
         }
         let pushed = advance_ok(&state, &record.id, &host);
         assert!(pushed.held.is_none(), "signal={signal}: {pushed:?}");
-        assert_eq!(pushed.visits["build"].total, 2);
+        assert_eq!(pushed.visits["build"], 2);
         assert_eq!(host.pushes.borrow().len(), 1);
     }
 }

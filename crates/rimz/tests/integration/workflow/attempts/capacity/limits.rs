@@ -87,7 +87,7 @@ fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
         );
         actual.push((
             value["record"]["state"].as_str().unwrap().to_owned(),
-            value["record"]["visits"]["build"]["total"].clone(),
+            value["record"]["visits"]["build"].clone(),
             events(&value, "attempt")
                 .iter()
                 .find(|row| row["outcome"] == "died")
@@ -255,7 +255,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
         save(&room, &serde_json::to_value(&record).unwrap());
         let before = jiff::Timestamp::now().as_millisecond();
         let value = advance(&room, &record);
-        assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+        assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
         let skipped = "workflow review: 1 of 1 agents open (@codex)";
         assert_eq!(
             value["record"]["attempt"]["started_past_limit"], skipped,
@@ -327,7 +327,7 @@ fn limited_manual_starts_under_a_clear_cap_store_and_print_no_skip() {
     let room = Room::new("[steps.build.limit]\nmax-parallel=1\n");
     let record = pending(&room, None);
     let value = advance(&room, &record);
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+    assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
     assert!(
         value["record"]["attempt"]
             .get("started_past_limit")

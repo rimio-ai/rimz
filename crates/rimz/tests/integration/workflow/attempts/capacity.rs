@@ -290,11 +290,11 @@ fn capacity_manual_loop_workflows_launch_but_scheduled_workflows_wait() {
         let state = room.env.state_path_for(&room.env.project_root);
         let record = records::list(&state).unwrap().pop().unwrap();
         let value = until(&room.env, record.id.as_str(), |value| {
-            value["record"]["visits"]["build"]["total"] == 1
+            value["record"]["visits"]["build"] == 1
                 || value["record"]["wait"]["outcome"] == "capacity"
         });
         actual.push((
-            value["record"]["visits"]["build"]["total"] == 1,
+            value["record"]["visits"]["build"] == 1,
             value["record"]["manual"] == true,
             value["record"]["wait"]["outcome"] == "capacity",
         ));
@@ -544,7 +544,7 @@ fn capacity_manual_and_exempt_steps_bypass_the_door() {
         assert_eq!(throttle["check"], "exit 75", "{throttle:#}");
         let record = pending(&room, task);
         let value = advance(&room, &record);
-        actual.push(value["record"]["visits"]["build"]["total"] == 1);
+        actual.push(value["record"]["visits"]["build"] == 1);
         assert!(tickets(&room).is_empty());
         success(
             room.command(&["workflow", "cancel", record.id.as_str()])

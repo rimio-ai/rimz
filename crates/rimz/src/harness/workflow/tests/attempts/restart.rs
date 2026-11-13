@@ -26,7 +26,7 @@ fn continued_restart_failure_uses_the_sealed_failure_policy() {
             reason: "history pool changed".into(),
         });
         let failed = advance_ok(&state, &record.id, &host);
-        assert_eq!(failed.visits["build"].total, 1);
+        assert_eq!(failed.visits["build"], 1);
         if explicit {
             assert_eq!(failed.state, RunState::Failed);
         } else {
@@ -57,7 +57,7 @@ fn restart_during_launch_keeps_manual_intent_until_the_replacement_launches() {
     *host.occupancy.borrow_mut() = Occupancy::Free;
     let live = advance_ok(&state, &record.id, &host);
     assert!(live.restart.is_none());
-    assert_eq!(live.visits["build"].total, 1);
+    assert_eq!(live.visits["build"], 1);
     assert_eq!(host.launched.borrow().len(), 2);
 }
 
@@ -129,7 +129,7 @@ fn restart_replaces_active_and_held_agents_and_resets_all_visits() {
         }
         live.input = Some(json!({"outcome":"pending", "key":"lint"}));
         live.key = Some(Key::String("lint".into()));
-        live.visits.get_mut("build").unwrap().total = 20;
+        *live.visits.get_mut("build").unwrap() = 20;
         update(&state, &live);
         let session = "continued-session".into();
         let seq = live.session_attempt().unwrap().seq;
@@ -140,7 +140,7 @@ fn restart_replaces_active_and_held_agents_and_resets_all_visits() {
         let journal = records::journal(&state.workflow(&record.id)).unwrap();
         actual.push((
             current.node.clone(),
-            current.visits["build"].total,
+            current.visits["build"],
             current.attempt.as_ref().and_then(|attempt| attempt.visit),
             current.input == live.input,
             current.key == live.key,
@@ -189,13 +189,7 @@ fn restart_unparks_cap_and_asked_steps_without_extending_bounds() {
             at: record.entered_at,
             text: None,
         });
-        record.visits.insert(
-            "build".into(),
-            StepVisits {
-                total: 7,
-                outcomes: vec![],
-            },
-        );
+        record.visits.insert("build".into(), 7);
         update(&state, &record);
         let host = FakeHost::new();
         restart(&state, &record.id, None, &host).unwrap();
@@ -203,7 +197,7 @@ fn restart_unparks_cap_and_asked_steps_without_extending_bounds() {
         actual.push((
             live.state,
             live.node,
-            live.visits["build"].total,
+            live.visits["build"],
             live.visit_grant,
             host.launched.borrow().len(),
             host.stops.get(),

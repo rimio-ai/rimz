@@ -279,15 +279,9 @@ impl View<'_> {
     fn visit(&self) -> String {
         self.spec
             .step(&self.record.node)
-            .and_then(|step| {
-                step.visit_bounds(
-                    self.record.visits.get(&self.record.node),
-                    self.record.visit_bucket(),
-                    self.record.visit_grant,
-                )
-                .next()
-            })
-            .map_or_else(String::new, |(_, used, max)| {
+            .and_then(|step| step.visit_cap(self.record.visit_grant))
+            .map_or_else(String::new, |max| {
+                let used = self.record.visits_to(&self.record.node);
                 format!(" · visit {used} of {max}")
             })
     }
@@ -484,45 +478,16 @@ impl View<'_> {
     }
 
     fn visits(&self, out: &mut impl Write) -> Result<()> {
-        for (name, visits) in &self.record.visits {
-            let Some(step) = self.spec.step(name).filter(|_| visits.total > 0) else {
+        for (name, used) in &self.record.visits {
+            let Some(max) = self
+                .spec
+                .step(name)
+                .filter(|_| *used > 0)
+                .and_then(|step| step.visit_cap(self.record.visit_grant))
+            else {
                 continue;
             };
-            let total = step
-                .visit_bounds(Some(visits), (None, None), self.record.visit_grant)
-                .find(|(bound, _, _)| *bound == "max-visits");
-            if let Some((_, used, max)) = total {
-                writeln!(out, "visits  {name} {used} of {max}")?;
-            }
-            for (index, row) in visits.outcomes.iter().enumerate() {
-                let Some((_, used, max)) = step
-                    .visit_bounds(
-                        Some(visits),
-                        (row.outcome.as_deref(), row.key.as_ref()),
-                        self.record.visit_grant,
-                    )
-                    .find(|(bound, _, _)| *bound == "max-visits-per-outcome")
-                else {
-                    break;
-                };
-                let label = if total.is_none() && index == 0 {
-                    "visits"
-                } else {
-                    ""
-                };
-                let key = row
-                    .key
-                    .as_ref()
-                    .map(serde_json::to_string)
-                    .transpose()?
-                    .map(|key| format!(" key {key}"))
-                    .unwrap_or_default();
-                writeln!(
-                    out,
-                    "{label}  {name} {used} of {max} for {}{key}",
-                    row.outcome.as_deref().unwrap_or("null")
-                )?;
-            }
+            writeln!(out, "visits  {name} {used} of {max}")?;
         }
         Ok(())
     }
@@ -781,7 +746,7 @@ mod tests {
             "spec_dir":"/spec","spec_digest":"digest","project_root":"/repo",
             "scope":{"kind":"worktree","path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
-            "state":"active","node":"gate","visits":{"build":{"total":1,"outcomes":[]}},
+            "state":"active","node":"gate","visits":{"build":1},
             "visit_grant":0,"deadline_fired":false,"next_seq":3,
             "wait":{"node":"gate","outcome":"pending","first":Timestamp::UNIX_EPOCH,
                 "last":Timestamp::UNIX_EPOCH,"count":2},

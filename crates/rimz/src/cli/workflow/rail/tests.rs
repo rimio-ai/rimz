@@ -213,13 +213,7 @@ fn parks_and_needs_fix_holds_use_the_held_mark_and_warning_color() {
 #[test]
 fn horizontal_detours_hang_under_their_parent_and_follow_width_elision() {
     let mut record = record("triage");
-    record.visits.insert(
-        "fix".into(),
-        rimz::store::workflow::StepVisits {
-            total: 2,
-            ..Default::default()
-        },
-    );
+    record.visits.insert("fix".into(), 2);
     let mut hops = land_hops();
     hops.splice(
         2..2,
@@ -314,13 +308,7 @@ fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
     ]);
     let mut rendered = Vec::new();
     for visits in [0, 1] {
-        record.visits.insert(
-            "fix".into(),
-            rimz::store::workflow::StepVisits {
-                total: visits,
-                ..Default::default()
-            },
-        );
+        record.visits.insert("fix".into(), visits);
         for width in [None, Some(40)] {
             let mut out = Vec::new();
             horizontal(&mut out, &spec, &record, &hops, &[], width, 6).unwrap();
@@ -1330,13 +1318,13 @@ mod horizontal_sweep {
                 .chain(hop.target.as_ref().map(|target| target.as_str()))
         })) {
             if spec.step(name).is_some() {
-                base.visits.entry(name.into()).or_default().total = 1;
+                base.visits.insert(name.into(), 1);
             }
         }
         if repeated_detours {
             for row in spec.walk().nodes {
                 if row.hangs_under.is_some() {
-                    base.visits.entry(row.node).or_default().total = 12;
+                    *base.visits.entry(row.node).or_default() = 12;
                 }
             }
         }
@@ -1462,7 +1450,7 @@ mod horizontal_sweep {
                 {
                     continue;
                 }
-                let visits = record.visits.get(name).map_or(0, |visits| visits.total);
+                let visits = record.visits.get(name).map_or(0, |visits| *visits);
                 let repeat = if visits > 1 {
                     format!(" ×{visits}")
                 } else {

@@ -254,7 +254,7 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     assert!(value["record"]["prev_attempt"].is_null(), "{value:#}");
     assert!(value["record"]["wait"].is_null(), "{value:#}");
     assert_eq!(value["record"]["node"], "build");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }
 
@@ -369,8 +369,7 @@ fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
             .unwrap(),
     );
     let value = until(&room.env, &id, |value| {
-        value["record"]["visits"]["build"]["total"] == 2
-            && value["record"]["attempt"]["run"].is_object()
+        value["record"]["visits"]["build"] == 2 && value["record"]["attempt"]["run"].is_object()
     });
     assert_ne!(
         value["record"]["attempt"]["run"]["run_id"],
@@ -608,7 +607,7 @@ fn turn_error_wakes_and_holds_the_live_attempt_on_provider_limits() {
         assert!(value["record"]["prev_attempt"].is_null());
         assert!(value["record"]["wait"].is_null());
         assert!(events(&value, "attempt").is_empty());
-        assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+        assert_eq!(value["record"]["visits"]["build"], 1);
         let count = events(&value, "evaluation").len();
         success(
             room.command(&["workflow", "advance", &id])

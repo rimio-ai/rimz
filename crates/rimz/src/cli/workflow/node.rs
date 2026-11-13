@@ -269,9 +269,4 @@ fn step_facts(facts: &mut render::KeyVals, step: &Node) {
         step.capacity_wait().map(String::from),
     );
     field(facts, "max-visits", step.max_visits());
-    field(
-        facts,
-        "max-visits-per-outcome",
-        step.max_visits_per_outcome(),
-    );
 }

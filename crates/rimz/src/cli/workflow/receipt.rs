@@ -86,20 +86,8 @@ pub(super) fn resume(
         format!("extended {address}")
     };
     let step = spec.step(node);
-    if resumed
-        && let Some((_, used, max)) = step.and_then(|step| {
-            let mut destination = record.clone();
-            destination.node = node.into();
-            step.tripped_visit_bound(&destination).or_else(|| {
-                step.visit_bounds(
-                    destination.visits.get(node),
-                    destination.visit_bucket(),
-                    destination.visit_grant,
-                )
-                .next()
-            })
-        })
-    {
+    if resumed && let Some(max) = step.and_then(|step| step.visit_cap(record.visit_grant)) {
+        let used = record.visits_to(node);
         text.push_str(&format!(" · {node} {used} of {max} visits"));
     }
     if grant > 0 {

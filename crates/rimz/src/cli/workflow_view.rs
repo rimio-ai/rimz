@@ -192,7 +192,7 @@ pub(super) fn park(
         ParkReason::Cap => spec
             .and_then(|spec| spec.step(&record.node))
             .and_then(|step| step.tripped_visit_bound(record))
-            .map(|(_, used, max)| format!("{used} of {max} visits")),
+            .map(|(used, max)| format!("{used} of {max} visits")),
         ParkReason::Timeout => spec
             .and_then(|spec| {
                 spec.check(&record.node)
@@ -240,17 +240,15 @@ pub(super) fn detail(
         return wait;
     }
     if let Some(step) = spec.and_then(|spec| spec.step(&record.node)) {
-        return step
-            .visit_bounds(
-                record.visits.get(&record.node),
-                record.visit_bucket(),
-                record.visit_grant,
-            )
-            .next()
-            .map_or_else(
-                || "running".into(),
-                |(_, used, max)| format!("running · visit {used} of {max}"),
-            );
+        return step.visit_cap(record.visit_grant).map_or_else(
+            || "running".into(),
+            |max| {
+                format!(
+                    "running · visit {} of {max}",
+                    record.visits_to(&record.node)
+                )
+            },
+        );
     }
     "checking".into()
 }

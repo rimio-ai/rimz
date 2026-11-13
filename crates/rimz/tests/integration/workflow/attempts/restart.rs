@@ -306,7 +306,7 @@ fn fresh_restart_replaces_the_step_and_receipts_its_first_visit() {
             .as_str()
             .is_some_and(|run| run != old.run_id.as_str())
     });
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(value["record"]["attempt"]["visit"], 1);
     let handle = value["record"]["attempt"]["run"]["handle"]
         .as_str()

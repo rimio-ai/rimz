@@ -7,7 +7,7 @@ use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
 use crate::store::workflow::{
-    self, AttemptOutcome, JournalEvent, Key, RunFire, RunRecord, StepLifecycle, TurnEndAction,
+    self, AttemptOutcome, JournalEvent, RunFire, RunRecord, StepLifecycle, TurnEndAction,
 };
 
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
@@ -407,107 +407,21 @@ pub(super) fn push(
 }
 
 fn visits(spec: &Definition, step: &Node, record: &RunRecord) -> Option<String> {
-    let (outcome, key) = record.visit_bucket();
-    let mut counts = Vec::new();
-    let mut last = Vec::new();
-    let resets = step
-        .max_visits_per_outcome()
-        .map_or(&[][..], |cap| cap.reset_on())
-        .iter()
-        .map(|outcome| span(outcome))
-        .collect::<Vec<_>>()
-        .join(" or ");
-    for (bound, used, max) in step.visit_bounds(
-        record.visits.get(&record.node),
-        record.visit_bucket(),
-        record.visit_grant,
-    ) {
-        let next = if bound == "max-visits" {
-            counts.push(format!(
-                "This is visit {used} of {max} to {}",
-                span(&record.node)
-            ));
-            "one more visit".to_owned()
-        } else {
-            let Some(outcome) = outcome else {
-                continue;
-            };
-            let mut count = if counts.is_empty() {
-                format!(
-                    "This is the {} visit to {} for {}",
-                    ordinal(used),
-                    span(&record.node),
-                    span(outcome)
-                )
-            } else {
-                format!("the {} for {}", ordinal(used), span(outcome))
-            };
-            if let Some(key) = key {
-                let key = match key {
-                    Key::String(key) => key.clone(),
-                    Key::Integer(key) => key.to_string(),
-                    Key::Unsigned(key) => key.to_string(),
-                };
-                count.push_str(&format!(" with key {}", span(&key)));
-            }
-            let mut next = format!("one more {}", span(outcome));
-            if !resets.is_empty() {
-                count.push_str(&format!(" since the last {resets}"));
-                next.push_str(&format!(" before a {resets}"));
-            }
-            counts.push(count);
-            next
+    let max = step.visit_cap(record.visit_grant)?;
+    let used = record.visits_to(&record.node);
+    let mut text = format!("This is visit {used} of {max} to {}", span(&record.node));
+    if used == max {
+        // Every step has a cap destination, including an unfireable cap.
+        let target = spec.target(&record.node, "cap").expect("step cap target");
+        let destination = match &target {
+            Target::User => "parks the run for the user".into(),
+            Target::Done => "ends the run as done".into(),
+            Target::Failed => "ends the run as failed".into(),
+            target => format!("sends the run to {}", span(target.as_str())),
         };
-        if used == max {
-            // Every step has a cap destination, including an unfireable cap.
-            let target = spec.target(&record.node, "cap").expect("step cap target");
-            let destination = match &target {
-                Target::User => "parks the run for the user".into(),
-                Target::Done => "ends the run as done".into(),
-                Target::Failed => "ends the run as failed".into(),
-                target => format!("sends the run to {}", span(target.as_str())),
-            };
-            last.push(format!("{next} {destination}"));
-        }
-    }
-    if counts.is_empty() {
-        return None;
-    }
-    let mut text = counts.join(", and ");
-    if !last.is_empty() {
-        text.push_str(&format!(": {}", last.join("; ")));
+        text.push_str(&format!(": one more visit {destination}"));
     }
     Some(format!("{text}. Launches and push-backs count as visits."))
-}
-
-fn ordinal(count: u64) -> String {
-    match count {
-        1 => "first".into(),
-        2 => "second".into(),
-        3 => "third".into(),
-        4 => "fourth".into(),
-        5 => "fifth".into(),
-        6 => "sixth".into(),
-        7 => "seventh".into(),
-        8 => "eighth".into(),
-        9 => "ninth".into(),
-        10 => "tenth".into(),
-        11 => "eleventh".into(),
-        12 => "twelfth".into(),
-        _ => {
-            let suffix = if (11..=13).contains(&(count % 100)) {
-                "th"
-            } else {
-                match count % 10 {
-                    1 => "st",
-                    2 => "nd",
-                    3 => "rd",
-                    _ => "th",
-                }
-            };
-            format!("{count}{suffix}")
-        }
-    }
 }
 
 fn lifecycle(spec: &Definition, step: &Node, record: &RunRecord) -> (String, String) {

@@ -189,8 +189,8 @@ pub(super) fn prepare(
             .spec
             .step(&t.record.node)
             .expect("a held session sits at its step");
-        if let Some((bound, visits, max)) = step.tripped_visit_bound(&t.record) {
-            let route = t.cap_route(bound, visits, max);
+        if let Some((visits, max)) = step.tripped_visit_bound(&t.record) {
+            let route = t.cap_route(visits, max);
             t.stage_agent_end(
                 Ending {
                     outcome: AttemptOutcome::Ended,
@@ -204,14 +204,9 @@ pub(super) fn prepare(
             persist(t, guard)?;
             return Ok(Some(Decision::End(Box::new(t.record.clone()))));
         }
-        let bucket = t.record.visit_bucket();
-        let bucket = (bucket.0.map(str::to_owned), bucket.1.cloned());
-        t.record
-            .visits
-            .entry(t.record.node.clone())
-            .or_default()
-            .bump(bucket);
-        let visit = t.record.visits[&t.record.node].for_bucket(t.record.visit_bucket());
+        let visit = t.record.visits.entry(t.record.node.clone()).or_default();
+        *visit += 1;
+        let visit = *visit;
         let attempt = t
             .record
             .attempt

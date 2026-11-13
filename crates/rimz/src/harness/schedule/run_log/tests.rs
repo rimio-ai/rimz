@@ -1113,10 +1113,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         }))
         .unwrap()
     };
-    let failed = run(
-        "failed",
-        serde_json::json!({"agent": {"total": 1, "outcomes": []}}),
-    );
+    let failed = run("failed", serde_json::json!({"agent": 1}));
     for _ in 0..2 {
         report_run(&failed, &ended(RunEnding::Failed, Some(0.75), true)).unwrap();
         assert_eq!(

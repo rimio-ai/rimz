@@ -386,7 +386,7 @@ impl Definition {
         let Some(step) = authored.steps.get(node) else {
             return (Fireability::Yes, None);
         };
-        if outcome == "cap" && step.max_visits.is_none() && step.max_visits_per_outcome.is_none() {
+        if outcome == "cap" && step.max_visits.is_none() {
             return (Fireability::Never, Some(NeverReason::NoMaxVisits));
         }
         if outcome != "capacity" {

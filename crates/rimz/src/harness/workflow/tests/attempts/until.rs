@@ -125,7 +125,7 @@ fn reread_then_type_error_returns_an_error_without_panicking() {
 }
 
 #[test]
-fn same_step_pushes_once_updates_input_and_counts_the_answer_bucket() {
+fn same_step_pushes_once_updates_input_and_counts_the_push_as_a_visit() {
     let (dir, state, mut record) = setup(UNTIL);
     record.key = Some(Key::Integer(7));
     update(&state, &record);
@@ -137,8 +137,8 @@ fn same_step_pushes_once_updates_input_and_counts_the_answer_bucket() {
     );
     host.observed.borrow_mut().turn = Some(turn());
     let pushed = advance_ok(&state, &record.id, &host);
-    assert_eq!(pushed.visits["build"].total, 2);
-    assert_eq!(pushed.attempt.as_ref().unwrap().visit, Some(1));
+    assert_eq!(pushed.visits["build"], 2);
+    assert_eq!(pushed.attempt.as_ref().unwrap().visit, Some(2));
     assert_eq!(pushed.key, Some(Key::String("lint".into())));
     assert_eq!(pushed.input.as_ref().unwrap()["reason"], "CI is red");
     assert_eq!(
@@ -178,59 +178,8 @@ fn wait_holds_the_session_at_its_check_without_a_visit() {
     assert_eq!(kept.node, "pr");
     assert!(kept.held.is_some());
     assert!(kept.held.unwrap().verdict.is_none());
-    assert_eq!(kept.visits["build"].total, 1);
+    assert_eq!(kept.visits["build"], 1);
     assert!(host.pushes.borrow().is_empty());
-}
-
-#[test]
-fn pushed_visits_use_the_post_reset_bucket_without_resetting_the_total() {
-    let text = UNTIL.replace(
-        "max-visits=2",
-        "max-visits=3\nmax-visits-per-outcome={limit=2,reset-on=['pending','done']}",
-    );
-    let (dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    advance_ok(&state, &record.id, &host);
-    let paths = state.workflow(&record.id);
-    let context: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
-    let mut visits = vec![
-        context["visit"].as_u64().unwrap(),
-        context["live_attempt"]["visit"].as_u64().unwrap(),
-    ];
-    for (index, outcome) in ["pending", "pending", "done"].into_iter().enumerate() {
-        check(dir.path(), json!({"outcome":outcome}));
-        let mut observed = turn();
-        observed.end.ended_at += std::time::Duration::from_secs(index as u64);
-        host.observed.borrow_mut().turn = Some(observed);
-        let current = advance_ok(&state, &record.id, &host);
-        assert_eq!(current.visits["build"].total, (index as u64 + 2).min(3));
-        if outcome == "done" {
-            assert!(current.visits["build"].outcomes.is_empty());
-        } else {
-            assert_eq!(current.visits["build"].outcomes[0].visits, 1);
-        }
-        let checking: Value =
-            serde_json::from_slice(&fs::read(paths.work.join("check-view.json")).unwrap()).unwrap();
-        visits.push(checking["live_attempt"]["visit"].as_u64().unwrap());
-        if outcome == "done" {
-            assert_eq!(current.state, RunState::Done);
-            visits.push(current.prev_attempt.unwrap().visit);
-        } else {
-            let restored: Value =
-                serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
-            visits.push(restored["visit"].as_u64().unwrap());
-            visits.push(restored["live_attempt"]["visit"].as_u64().unwrap());
-        }
-    }
-    visits.extend(records::journal(&paths).unwrap().into_iter().filter_map(
-        |row| match row.event {
-            JournalEvent::Attempt { visit, .. } => Some(visit),
-            _ => None,
-        },
-    ));
-    assert!(visits.iter().all(|visit| *visit >= 1), "{visits:?}");
-    assert_eq!(visits, [1; 11]);
-    assert_eq!(host.launched.borrow().len(), 1);
 }
 
 fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {

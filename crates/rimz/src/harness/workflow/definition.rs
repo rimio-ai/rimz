@@ -10,9 +10,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::graph::Edge;
-use super::spec::{
-    self, Check, Issue, LaunchOverrides, OutcomeCap, SpecErr, Step, Wake, WorkflowSpec,
-};
+use super::spec::{self, Check, Issue, LaunchOverrides, SpecErr, Step, Wake, WorkflowSpec};
 use crate::harness::budget::{BudgetParseError, BudgetSpec};
 use crate::harness::signal::SignalSelector;
 use crate::harness::signal::default_signal_match_key;
@@ -493,10 +491,6 @@ impl Node {
         self.step_table()?.max_visits
     }
 
-    pub fn max_visits_per_outcome(&self) -> Option<&OutcomeCap> {
-        self.step_table()?.max_visits_per_outcome.as_ref()
-    }
-
     pub fn mode(&self) -> Option<crate::agents::PermissionMode> {
         self.step_table()?.mode
     }
@@ -522,21 +516,14 @@ impl Node {
         self.step_table()?.session.as_ref()
     }
 
-    /// A step's configured visit bounds as (name, used, limit including grant), total before
-    /// per-outcome; a check has none.
-    pub fn visit_bounds(
-        &self,
-        visits: Option<&crate::store::workflow::StepVisits>,
-        bucket: (Option<&str>, Option<&crate::store::workflow::Key>),
-        grant: u64,
-    ) -> impl Iterator<Item = (&'static str, u64, u64)> {
-        self.step_table()
-            .into_iter()
-            .flat_map(move |step| step.visit_bounds(visits, bucket, grant))
+    /// A step's `max-visits` raised by the run's grant; a check, or a step without a cap, has
+    /// none.
+    pub fn visit_cap(&self, grant: u64) -> Option<u64> {
+        self.step_table()?.visit_cap(grant)
     }
 
-    /// The first exhausted bound for the record's current step and bucket.
-    pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(&'static str, u64, u64)> {
+    /// The visits used and the cap, when the record's current step has spent its cap.
+    pub fn tripped_visit_bound(&self, record: &RunRecord) -> Option<(u64, u64)> {
         self.step_table()?.tripped_visit_bound(record)
     }
 

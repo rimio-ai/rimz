@@ -37,7 +37,7 @@ pub use inspect::{
 pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse;
-pub use spec::{Issue, LaunchOverrides, OutcomeCap, ScopeKind, SpecErr, load, schema};
+pub use spec::{Issue, LaunchOverrides, ScopeKind, SpecErr, load, schema};
 pub use validate::{NodeRow, Validation, validate};
 
 pub struct ScopeRoots {

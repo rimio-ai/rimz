@@ -327,7 +327,7 @@ fn a_lost_message_host_resends_the_same_notice_once() {
         queued.message_id.as_str(),
         "{value:#}"
     );
-    assert_eq!(value["record"]["visits"]["tell"]["total"], 1, "{value:#}");
+    assert_eq!(value["record"]["visits"]["tell"], 1, "{value:#}");
     let notices = room
         .env
         .store()

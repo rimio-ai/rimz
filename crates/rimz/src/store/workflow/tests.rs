@@ -9,7 +9,7 @@ fn record() -> RunRecord {
         "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
-        "wait":null, "visits":{"build":{"total":2,"outcomes":[{"outcome":null,"key":42,"visits":1},{"outcome":null,"key":"42","visits":1}]}},
+        "wait":null, "visits":{"build":2},
         "visit_grant":0, "deadline":null, "deadline_fired":false, "next_seq":2,
         "attempt":{"kind":"script","seq":1,"node":"pr","started_at":"2026-01-01T00:00:00Z","host":{"pid":123,"start":"token"}},
         "prev_attempt":null, "terminal_at":null
@@ -63,7 +63,7 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
     assert_eq!(load(&paths).unwrap(), record);
     let id = record.id.as_str();
     let fix = format!("`rimz workflow cancel {id}`, then start the workflow again");
-    for version in [1, 2, 3, 4, VERSION + 1] {
+    for version in [1, 2, 3, 4, 5, VERSION + 1] {
         let mut value = serde_json::to_value(&record).unwrap();
         value["version"] = json!(version);
         // A version-2 body this binary no longer decodes still meets the refusal first.
@@ -483,14 +483,6 @@ fn durable_record_round_trip_and_json_shape() {
     .unwrap();
     let mut value = serde_json::to_value(seed).unwrap();
     value["notes"] = json!(relative);
-    assert_eq!(
-        value["visits"]["build"],
-        json!({"total":2,"outcomes":[
-            {"outcome":null,"key":42,"visits":1},
-            {"outcome":null,"key":"42","visits":1}
-        ]}),
-        "keyed rows without an outcome serialize as null-outcome buckets"
-    );
     value["prev_attempt"] = json!({
         "step":"merge", "outcome":"died", "seq":1, "visit":1, "key":null, "routed_by":"red",
         "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",

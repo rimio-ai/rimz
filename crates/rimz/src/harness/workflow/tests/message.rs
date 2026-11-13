@@ -233,7 +233,7 @@ fn a_lost_message_host_retries_the_same_notice_id() {
         super::super::script::digest(b"Build it again"),
         "the retry's digests describe the text it sent"
     );
-    assert_eq!(ended.visits["tell"].total, 1, "a retry is the same visit");
+    assert_eq!(ended.visits["tell"], 1, "a retry is the same visit");
 }
 
 #[test]
