@@ -332,7 +332,7 @@ fn current_channel_uses_callers_card_before_worktree() {
     let root = workspace("/repo", "/repo", None);
     let worktree = workspace("/repo", "/repo-worktrees/other", Some("other"));
     let mut agent = rimz::testkit::agent_state("claude", "caller", jiff::Timestamp::UNIX_EPOCH);
-    agent.channel = Some("card".to_owned());
+    rimz::testkit::set_lane(&mut agent, "card");
     let caller = rimz::harness::ancestry::CallerIdentity {
         kind: agent.kind.clone(),
         launch_id: Some(agent.agent_id.clone()),
@@ -368,10 +368,13 @@ fn current_channel_uses_callers_card_before_worktree() {
     );
     agent.channel = None;
     agent.worktree_path = Some("/elsewhere/own-card".to_owned());
-    assert_eq!(
-        current_channel_with(&root, Some(String::new()), || Some((caller, vec![agent])))
-            .into_name(),
-        Some("own-card".parse().unwrap())
+    agent.lane = None;
+    rimz::testkit::set_own_lane(&mut agent);
+    let foreign = current_channel_with(&root, Some(String::new()), || Some((caller, vec![agent])));
+    assert!(
+        matches!(&foreign, CurrentChannel::Derived(name) if name.as_str() == "own-card"),
+        "a foreign checkout's own lane is a derived channel: {:?}",
+        foreign.as_deref()
     );
 }
 
@@ -386,13 +389,24 @@ fn an_explicit_trunk_alias_scopes_the_context_to_trunk() {
     design.lane = Some(lane(
         serde_json::json!({"home": "trunk", "path": "/repo", "name": "design"}),
     ));
-    for alias in ["main", "repo", "/repo"] {
-        let lane = current_channel_with(&root, Some(alias.to_owned()), || None)
+    let scoped = |alias: &str| {
+        current_channel_with(&root, Some(alias.to_owned()), || None)
             .address_context()
             .lane()
-            .unwrap();
-        assert!(rimz::address::agent_in_lane(&trunk, &lane), "{alias}");
-        assert!(!rimz::address::agent_in_lane(&design, &lane), "{alias}");
+    };
+    let lane = scoped("main").unwrap();
+    assert!(rimz::address::agent_in_lane(&trunk, &lane));
+    assert!(!rimz::address::agent_in_lane(&design, &lane));
+    // Trunk's lane is `main` alone: its directory and its path name no lane of trunk's.
+    for alias in ["repo", "/repo"] {
+        let lane = scoped(alias);
+        assert!(
+            lane.as_ref().is_none_or(|lane| {
+                !rimz::address::agent_in_lane(&trunk, lane)
+                    && !rimz::address::agent_in_lane(&design, lane)
+            }),
+            "{alias}: {lane:?}"
+        );
     }
 }
 
@@ -497,20 +511,6 @@ fn explicit_root_avoids_cross_repo_confirmation() {
     .expect("equal roots");
 
     assert!(proceed);
-}
-
-#[test]
-fn room_channel_stamps_in_place_team_members() {
-    let workspace = workspace("/code/team-channel", "/code/team-channel", None);
-
-    assert_eq!(
-        rimz::harness::lanes::in_place_team_name(&workspace.project_root, "forge").as_str(),
-        "team-channel/forge"
-    );
-    assert_eq!(
-        rimz::harness::lanes::directory_channel(&workspace.project_root, &workspace.worktree_root),
-        None
-    );
 }
 
 #[test]

@@ -180,8 +180,6 @@ pub(super) struct TimelineReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PlacementReport {
-    #[serde(skip)]
-    pub lane_label: Option<String>,
     pub channel: Option<String>,
     pub worktree: Option<String>,
     pub branch: Option<String>,
@@ -500,7 +498,6 @@ pub(super) fn build_entry(
             idle_since: agent_idle_since(agent, row),
         },
         placement: PlacementReport {
-            lane_label: rimz::address::lane_label(agent),
             channel: agent.lane_name().map(String::from),
             worktree: agent.worktree_path.clone(),
             branch: agent.worktree_branch.clone(),

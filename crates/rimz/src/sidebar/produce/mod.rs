@@ -486,7 +486,9 @@ fn fold_resolution_frame(
     snapshot.wired_default_models = wired.default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
     snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
-    snapshot.with_live_panes(frame.to_pane_refs(), exclude)
+    let panes = frame.to_pane_refs();
+    super::enrich::fill_own_lanes(&mut snapshot, &panes, &[]);
+    snapshot.with_live_panes(panes, exclude)
 }
 
 /// The `RIMZ_TEST_PANE_LIST` fixture: a JSON pane list standing in for the

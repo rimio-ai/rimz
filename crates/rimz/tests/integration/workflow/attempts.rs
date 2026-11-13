@@ -636,7 +636,7 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
     assert_eq!(
         list,
         json!([{
-            "id":id, "address":"review#project", "workflow":"review",
+            "id":id, "address":"review#main", "workflow":"review",
             "scope":room.env.project_root,
             "state":"active", "node":"build", "since":value["record"]["entered_at"],
             "detail":"with you"
@@ -1061,14 +1061,14 @@ fn condition_workflow_finishes_once_and_manual_fire_replaces_the_run() {
     assert_ne!(second, first.id.as_str());
     assert!(
         manual.contains(&format!("launched {second}"))
-            && manual.contains("  → rimz workflow show 'review#project'\n"),
+            && manual.contains("  → rimz workflow show 'review#main'\n"),
         "{manual}"
     );
     let logs = success(room.command(&["loop", "logs", "review"]).output().unwrap());
     assert!(
         logs.contains(&format!("  run: {} · canceled at ", first.id))
             && logs.contains(&format!("  run: {second} · active at "))
-            && logs.contains("  → rimz workflow show 'review#project'\n")
+            && logs.contains("  → rimz workflow show 'review#main'\n")
             && logs.contains(&format!("  → rimz workflow show {}\n", first.id)),
         "{logs}"
     );
@@ -1583,7 +1583,7 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
     assert_eq!(history()["workflow_runs"][0]["id"], id);
     let show = success(room.command(&["loop", "show", "review"]).output().unwrap());
     assert!(
-        show.contains("RUNS") && show.contains("review#project"),
+        show.contains("RUNS") && show.contains("review#main"),
         "{show}"
     );
     // The run holding the scope wins before a broken definition is read.

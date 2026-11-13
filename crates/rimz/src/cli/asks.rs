@@ -342,7 +342,13 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
             "{}",
             render::paint(
                 render::palette::faint(),
-                &empty_ask_digest(all, ctx.address_context().lane_label().as_deref())
+                &empty_ask_digest(
+                    all,
+                    ctx.address_context()
+                        .channel
+                        .as_ref()
+                        .map(rimz::ids::LaneName::as_str)
+                )
             )
         ));
     }

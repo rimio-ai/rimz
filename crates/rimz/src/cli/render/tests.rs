@@ -34,7 +34,7 @@ fn ambiguity_rows_are_ranked_runnable_and_offer_stop_all() {
     ] {
         let mut agent = rimz::testkit::agent_state("claude", id, now);
         agent.role = Some("coder".into());
-        agent.channel = Some(id.into());
+        rimz::testkit::set_lane(&mut agent, id);
         agent.status = state;
         agents.push(agent);
     }
@@ -156,7 +156,7 @@ fn message_fanout_rows_keep_recorded_status_and_distinct_addresses() {
     );
     let matches = ["session-a", "session-b"].map(|id| {
         let mut agent = rimz::testkit::agent_state("claude", id, now);
-        agent.channel = Some("B".to_owned());
+        rimz::testkit::set_lane(&mut agent, "B");
         agent.status = rimz::agents::AgentStatus::Idle;
         agent.last_activity = now - std::time::Duration::from_secs(3600);
         rimz::message::dispatch::FanoutMatch {
@@ -387,7 +387,7 @@ fn channel_miss_prints_a_shell_runnable_corrected_command() {
         rimz::agents::AgentState::stub("codex", "root-session", rimz::agents::AgentStatus::Idle);
     agent.name = Some("reader".into());
     agent.worktree_path = Some(root.into());
-    agent.root_lane = true;
+    rimz::testkit::set_trunk(&mut agent);
     let scope = rimz::address::AddressContext {
         channel: Some("scratch".parse().unwrap()),
         origin: rimz::address::ChannelOrigin::Directory,

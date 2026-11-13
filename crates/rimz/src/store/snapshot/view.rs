@@ -56,7 +56,6 @@ pub use reap::RuntimeReapInputs;
 
 #[cfg(test)]
 pub(super) use aggregate::{attach_sub_agents, sub_agent_from_state};
-pub(super) use live::legacy_root_lane;
 #[cfg(test)]
 pub(crate) use live::row_identity_violations;
 #[cfg(test)]
@@ -138,7 +137,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 97;
+pub const SNAPSHOT_VERSION: u32 = 98;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -237,6 +236,14 @@ pub struct SidebarSnapshot {
     /// reducer leaves it empty and falls back to definition defaults.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub wired_default_models: BTreeMap<String, String>,
+    /// Each live directory's own checkout lane, keyed by the path text a row
+    /// records as its `worktree_path`, filled by the producer before the
+    /// live-pane and local-session folds. A sessionless wired pane and a new
+    /// provider-local session take their lane from it; a directory absent from
+    /// it leaves the row lane-less, as the pure reducer does. Environment, not
+    /// store: never persisted, since every fold refills it.
+    #[serde(skip)]
+    pub(crate) own_lanes: BTreeMap<String, crate::ids::Lane>,
     /// Every live agent pane the producer bound during the pane fold, built at
     /// the binding site — the authoritative source for command resolution
     /// (`message --steer`), so a target reaches exactly the agent panes the
@@ -476,6 +483,7 @@ impl SidebarSnapshot {
             wired_kinds: Vec::new(),
             untracked_kinds: BTreeMap::new(),
             wired_default_models: BTreeMap::new(),
+            own_lanes: BTreeMap::new(),
             agent_panes: Vec::new().into(),
             own_view: None,
             only_daemon_view_remains: false,

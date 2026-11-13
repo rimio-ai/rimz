@@ -228,11 +228,11 @@ fn child_notices_fold_only_with_the_same_recorded_run() {
 fn repeat_adjacency_is_within_the_rendered_lane() {
     let newest = machine_row("newest notice");
     let older = machine_row("older notice");
-    let outputs = [None, Some("ops")].map(|channel| {
+    let outputs = [rimz::ids::LaneName::TRUNK, "ops"].map(|channel| {
         render_digest(
             vec![
                 newest.clone(),
-                message_row("interleaved", channel, "conversation"),
+                message_row("interleaved", Some(channel), "conversation"),
                 older.clone(),
             ],
             LaneScope::All,
@@ -259,7 +259,6 @@ fn message_limit_keeps_a_whole_repeat_and_counts_hidden_messages() {
         vec![newest, older, hidden],
         &[],
         &LaneScope::Root,
-        Some(Path::new("/work/project")),
         1,
         0,
         "empty",
@@ -287,7 +286,6 @@ fn message_limit_counts_members_of_hidden_folds() {
         vec![newest.clone(), newest, hidden.clone(), hidden],
         &[],
         &LaneScope::All,
-        Some(Path::new("/work/project")),
         1,
         0,
         "empty",
@@ -355,7 +353,7 @@ fn message_snippet_preserves_fold_span_and_marker_at_narrow_width() {
 fn machine_row(text: &str) -> MessageListRow {
     message_row_with_sender(
         "receiver",
-        None,
+        Some(rimz::ids::LaneName::TRUNK),
         text,
         MessageSender::Harness {
             notice: HarnessNotice::CacheKeepalive,
@@ -388,7 +386,7 @@ fn message_target_keeps_single_sigil() {
     );
     let message = MessageListRow::from_record(message);
     let agents = rimz::address::addressable_agents(&snapshot);
-    assert_eq!(message_target(&message, &agents, None), "@coder#project");
+    assert_eq!(message_target(&message, &agents), "@coder#main");
 }
 
 #[test]
@@ -443,7 +441,7 @@ fn message_target_uses_stored_address_before_fallbacks() {
     .with_address(Some("@saved#project".to_owned()));
     let message = MessageListRow::from_record(message);
 
-    assert_eq!(message_target(&message, &[], None), "@saved#project");
+    assert_eq!(message_target(&message, &[]), "@saved#project");
 }
 
 #[test]
@@ -457,10 +455,7 @@ fn message_target_falls_back_to_agent_name_and_channel_when_agent_is_gone() {
     .with_channel(Some(rimz::ids::LaneName::dashed("project")));
     let message = MessageListRow::from_record(message);
 
-    assert_eq!(
-        message_target(&message, &[], None),
-        "@sess-coder-name#project"
-    );
+    assert_eq!(message_target(&message, &[]), "@sess-coder-name#project");
 }
 
 #[test]
@@ -475,37 +470,41 @@ fn message_target_falls_back_to_kind_id_for_nameless_records() {
     );
     let message = MessageListRow::from_record(message);
 
-    assert_eq!(message_target(&message, &[], None), "claude:sess-coder");
+    assert_eq!(message_target(&message, &[]), "claude:sess-coder");
 }
 
 #[test]
 fn scoped_handle_drops_matching_lane_suffix() {
     assert_eq!(
-        scoped_handle("@coder#project".to_owned(), Some("project"), None),
+        scoped_handle("@coder#project".to_owned(), Some("project")),
         "@coder"
     );
     // Lane membership is exact: a team lane keeps its suffix under the
     // directory filter.
     assert_eq!(
-        scoped_handle("@coder#project/forge".to_owned(), Some("project"), None),
+        scoped_handle("@coder#project/forge".to_owned(), Some("project")),
         "@coder#project/forge"
     );
     assert_eq!(
-        scoped_handle("@coder#ops".to_owned(), Some("project"), None),
+        scoped_handle("@coder#ops".to_owned(), Some("project")),
         "@coder#ops"
     );
+    assert_eq!(scoped_handle("you".to_owned(), Some("project")), "you");
+    // Trunk's lane is `main` alone: the project directory's name is another lane.
     assert_eq!(
-        scoped_handle("you".to_owned(), Some("project"), None),
-        "you"
+        scoped_handle("@coder#main".to_owned(), Some("project")),
+        "@coder#main"
     );
-    // One lane spelled two ways still drops the suffix.
-    let root = Some(Path::new("/w/project"));
     assert_eq!(
-        scoped_handle("@coder#main".to_owned(), Some("project"), root),
+        scoped_handle("@coder#main".to_owned(), Some("main")),
         "@coder"
     );
     assert_eq!(
-        scoped_handle("@coder#feat-x".to_owned(), Some("feat/x"), root),
+        scoped_handle("@coder#project".to_owned(), Some("main")),
+        "@coder#project"
+    );
+    assert_eq!(
+        scoped_handle("@coder#feat-x".to_owned(), Some("feat/x")),
         "@coder"
     );
 }
@@ -545,30 +544,34 @@ fn message_digest_groups_all_lanes_once_by_latest_activity() {
 }
 
 #[test]
-fn root_scope_includes_legacy_and_basename_records() {
-    assert!(LaneScope::Root.contains_channel(None, Some(Path::new("/work/project"))));
-    assert!(LaneScope::Root.contains_channel(
-        Some(&rimz::ids::LaneName::dashed("project")),
-        Some(Path::new("/work/project"))
-    ));
-    assert!(!LaneScope::Root.contains_channel(
-        Some(&rimz::ids::LaneName::dashed("docs")),
-        Some(Path::new("/work/project"))
-    ));
+fn lane_scopes_hold_no_lane_less_record_and_root_holds_main_alone() {
+    let lane = |name: &str| Some(rimz::ids::LaneName::dashed(name));
+    assert!(LaneScope::Root.contains_channel(lane(rimz::ids::LaneName::TRUNK).as_ref()));
+    for channel in [None, lane("project"), lane("docs")] {
+        assert!(
+            !LaneScope::Root.contains_channel(channel.as_ref()),
+            "{channel:?}"
+        );
+    }
+    assert!(!LaneScope::All.contains_channel(None));
+    assert!(!LaneScope::Named(rimz::ids::LaneName::dashed("docs")).contains_channel(None));
 }
 
 #[test]
-fn all_digest_groups_root_records_under_main_once() {
+fn all_digest_drops_lane_less_records_and_keeps_trunks_old_spelling_apart() {
     let output = render_digest(
         vec![
-            message_row("root", Some("project"), "root text"),
+            message_row("root", Some("main"), "root text"),
             message_row("legacy", None, "legacy text"),
+            message_row("basename", Some("project"), "basename text"),
         ],
         LaneScope::All,
         None,
     );
     assert_eq!(output.matches("#main").count(), 1, "{output}");
-    assert!(!output.contains("#project"), "{output}");
+    assert_eq!(output.matches("#project").count(), 1, "{output}");
+    assert!(!output.contains("legacy text"), "{output}");
+    assert!(output.find("root text").unwrap() < output.find("#project").unwrap());
 }
 
 #[test]
@@ -629,7 +632,6 @@ fn message_digest_reports_hidden_system_rows() {
             rows,
             &[],
             &LaneScope::Root,
-            None,
             0,
             2,
             &empty_message_digest(&LaneScope::Root, None),
@@ -699,40 +701,28 @@ fn other_lanes_line_counts_only_queued_as_undelivered() {
     claimed.status = MessageStatus::Claimed;
     let queued = message_row("sess-b", Some("ops"), "queued");
     assert_eq!(
-        other_lanes_line(
-            &[claimed.clone(), queued],
-            &LaneScope::Root,
-            Some(Path::new("/work/project")),
-            false
-        )
-        .as_deref(),
+        other_lanes_line(&[claimed.clone(), queued], &LaneScope::Root, false).as_deref(),
         Some(
             "no messages in #main. 2 in 1 other lane, 1 not yet delivered — rimz message list --all --status queued"
         )
     );
     assert_eq!(
-        other_lanes_line(
-            &[claimed],
-            &LaneScope::Root,
-            Some(Path::new("/work/project")),
-            false
-        )
-        .as_deref(),
+        other_lanes_line(&[claimed], &LaneScope::Root, false).as_deref(),
         Some("no messages in #main. 1 in 1 other lane — rimz message list --all")
     );
     assert_eq!(
         other_lanes_line(
             &[
                 message_row("legacy", None, "legacy root"),
-                message_row("current", Some("project"), "current root"),
+                message_row("current", Some("main"), "current root"),
+                message_row("basename", Some("project"), "basename root"),
             ],
             &LaneScope::Named(rimz::ids::LaneName::dashed("ops")),
-            Some(Path::new("/work/project")),
-            false,
+            false
         )
         .as_deref(),
         Some(
-            "no messages in #ops. 2 in 1 other lane, 2 not yet delivered — rimz message list --all --status queued"
+            "no messages in #ops. 2 in 2 other lanes, 2 not yet delivered — rimz message list --all --status queued"
         )
     );
 }
@@ -766,7 +756,6 @@ fn render_digest(
         messages,
         &[],
         &lane_scope,
-        Some(Path::new("/work/project")),
         0,
         0,
         &empty_message_digest(&lane_scope, status),
@@ -815,6 +804,7 @@ fn agent(id: &str, status: AgentStatus) -> AgentState {
     )));
     agent.worktree_path = Some("/repo/project".to_owned());
     agent.worktree_branch = Some("project".to_owned());
+    rimz::testkit::set_trunk(&mut agent);
     agent
 }
 

@@ -45,6 +45,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         wired_kinds: vec!["codex".to_owned()],
         untracked_kinds: std::collections::BTreeMap::new(),
         wired_default_models: std::collections::BTreeMap::new(),
+        own_lanes: std::collections::BTreeMap::new(),
         agent_panes: Vec::new().into(),
         own_view: None,
         only_daemon_view_remains: false,

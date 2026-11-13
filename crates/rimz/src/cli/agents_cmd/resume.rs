@@ -228,7 +228,7 @@ fn resume_selected(
             if agent.checkout.is_some() {
                 rimz::agents::empty_dir::prepare_reentry(store.paths(), cwd)?;
             }
-            let lane = rimz::harness::lanes::row_lane(agent, &workspace.project_root);
+            let lane = agent.lane.clone();
             (&agent.kind, cwd, lane)
         }
         ResumeSource::Provider(observation, _) => {
@@ -246,7 +246,11 @@ fn resume_selected(
         ResumeSource::Provider(..) => cwd,
     };
     let outside_launch_dir = placement::resume_outside_launch_dir(
-        stored_lane.as_ref().and_then(rimz::ids::Lane::stored_name),
+        stored_lane
+            .as_ref()
+            .and_then(rimz::ids::Lane::pin_name)
+            .as_ref()
+            .map(rimz::ids::LaneName::as_str),
         cwd,
         lane_path,
         &workspace.project_root,
@@ -529,14 +533,10 @@ pub(super) fn resume_lane(
     ) {
         Ok(action) => action,
         Err(LaneResumeError::Unknown { scope }) if scoped => {
-            let lanes = rimz::harness::resume::check_lane_scope(
-                &scope,
-                &projection.agents,
-                &worktrees,
-                &workspace.project_root,
-            )
-            .err()
-            .unwrap_or_default();
+            let lanes =
+                rimz::harness::resume::check_lane_scope(&scope, &projection.agents, &worktrees)
+                    .err()
+                    .unwrap_or_default();
             let lanes = super::list::known_lanes_suffix(&lanes);
             if fresh || !session_id_shaped(&scope) {
                 bail!(

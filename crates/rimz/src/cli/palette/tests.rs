@@ -71,8 +71,10 @@ fn agent(id: u32, profile: Option<&str>, lane: Option<&str>) -> AgentState {
     agent.pane = row(id, None).pane;
     agent.profile = profile.map(str::to_owned);
     agent.name = Some(format!("pet-{id}"));
-    agent.channel = lane.map(str::to_owned);
-    agent.root_lane = lane.is_none();
+    match lane {
+        Some(name) => rimz::testkit::set_lane(&mut agent, name),
+        None => rimz::testkit::set_trunk(&mut agent),
+    }
     agent
 }
 

@@ -293,22 +293,13 @@ impl<'a> RoomHarness<'a> {
     /// Run an installed hook with one role's full team identity, after the
     /// launch that names its in-place team lane.
     pub fn agent_hook_as_team(&self, role: &str, team: &str, source: &str, payload: &Value) {
-        let channel = format!(
-            "{}/{}",
-            self.env
-                .project_root
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("project"),
-            team
-        );
         if let Some(session) = payload["session_id"].as_str() {
             crate::common::wait::seed_launch_lane_as(
                 self.env,
                 source,
                 session,
                 role,
-                crate::common::wait::stamped_lane(self.env, &self.env.project_root, &channel),
+                crate::common::wait::stamped_lane(self.env, &self.env.project_root, team),
                 Some(team),
             );
         }

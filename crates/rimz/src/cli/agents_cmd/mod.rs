@@ -1630,7 +1630,6 @@ pub(super) fn create_on_miss(
         target,
         channel_filter,
         current_channel.as_deref().map(rimz::ids::LaneName::as_str),
-        Some(&workspace.project_root),
     )?
     else {
         bail!(
@@ -1657,7 +1656,6 @@ pub(super) fn create_on_miss(
             channel_flag,
             current_channel,
             text,
-            Some(&workspace.project_root),
         ),
         globals,
         false,
@@ -1671,7 +1669,6 @@ fn create_launch_args(
     channel_flag: Option<&str>,
     current_channel: &super::CurrentChannel,
     text: &str,
-    project_root: Option<&Path>,
 ) -> AgentsArgs {
     // `--worktree` keeps the historical worktree create-on-miss path. `--channel`
     // and inline `#name` launch into a named lane.
@@ -1681,7 +1678,7 @@ fn create_launch_args(
     let current_lane = current_channel.address_context().lane();
     let is_current = |channel: &str| {
         current_lane.as_ref().is_some_and(|current| {
-            rimz::address::LaneSelector::parse(Some(channel), project_root).same_lane(current)
+            rimz::address::LaneSelector::parse(Some(channel)).same_lane(current)
         })
     };
     let named = channel_flag.is_some()

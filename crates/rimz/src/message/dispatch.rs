@@ -344,9 +344,6 @@ pub fn dispatch(
             .channel
             .as_ref()
             .map(LaneName::as_str))
-        .and_then(|channel| {
-            crate::address::record_lane_label(Some(channel), Some(&workspace.project_root))
-        })
         .map(str::to_owned);
     exclude_broadcast_caller(
         &request.target,

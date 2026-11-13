@@ -16,7 +16,7 @@ use rimz::store::message::{
     MessageStatus, WhenCondition,
 };
 
-use crate::common::wait::stamped_lane;
+use crate::common::wait::{stamp_hook_lane, stamped_lane};
 use crate::common::{
     DeliveryRendezvous, Env, TRACE_PANE, is_enter_key, is_paste, trace_lines,
     trust_codex_preflight_hooks, wait_for_text_then_enter, zellij_trace_shim,
@@ -1118,7 +1118,7 @@ fn message_list_inline_channel_matches_flag_and_all_keeps_other_rows() {
     env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
     let docs = seed_channel_message(&env, 1, 100, Some("docs"), "docs text");
-    let main = seed_channel_message(&env, 2, 200, None, "main text");
+    let main = seed_channel_message(&env, 2, 200, Some("main"), "main text");
     let inline = list_message_ids(&env, &["message", "list", "@claude#docs", "--json"], None);
     assert_eq!(inline, vec![docs.clone()]);
     assert_eq!(
@@ -1151,7 +1151,7 @@ fn message_list_scopes_orders_and_limits_records() {
     let env = Env::new();
     env.record(&env.project_root);
     register_running_agent(&env, "sess-docs", "docs", &[]);
-    let main = seed_channel_message(&env, 1, 100, None, "main task");
+    let main = seed_channel_message(&env, 1, 100, Some("main"), "main task");
     let archived_docs = seed_channel_message(&env, 2, 200, Some("docs"), "old docs task");
     env.store()
         .archive_channel_messages(
@@ -1215,7 +1215,7 @@ fn message_list_root_address_correction_lists_the_agents_rows() {
 }
 
 #[test]
-fn message_list_main_from_root_shell_includes_root_routing_keys() {
+fn message_list_main_alone_scopes_to_trunks_records() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -1236,13 +1236,22 @@ fn message_list_main_from_root_shell_includes_root_routing_keys() {
         list_message_ids(&env, &["message", "list", "--json"], Some("main")),
         [current.clone(), named.clone()]
     );
-    for channel in ["main", "project", env.project_root.to_str().unwrap()] {
-        let ids = list_message_ids(
+    assert_eq!(
+        list_message_ids(
             &env,
-            &["message", "list", "--channel", channel, "--json"],
-            None,
-        );
-        assert_eq!(ids, [current.clone(), named.clone()], "{channel}");
+            &["message", "list", "--channel", "main", "--json"],
+            None
+        ),
+        [current.clone(), named.clone()]
+    );
+    // Neither trunk's old spelling nor its path names trunk.
+    for channel in ["project", env.project_root.to_str().unwrap()] {
+        let out = env
+            .rimz()
+            .args(["message", "list", "--channel", channel, "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{channel}");
     }
     let rows = env.store().list_messages().unwrap();
     let root = rows
@@ -1251,7 +1260,7 @@ fn message_list_main_from_root_shell_includes_root_routing_keys() {
         .unwrap();
     assert_eq!(
         root.channel.as_ref().map(rimz::ids::LaneName::as_str),
-        Some("project")
+        Some("main")
     );
     let miss = env
         .rimz()
@@ -1266,7 +1275,7 @@ fn message_list_main_from_root_shell_includes_root_routing_keys() {
 }
 
 #[test]
-fn message_clear_root_aliases_cancel_the_same_records_as_list() {
+fn message_clear_main_cancels_trunks_records_and_no_old_alias_does() {
     for scope in ["main", "project", "path", "caller"] {
         let env = Env::new();
         env.record(&env.project_root);
@@ -1285,7 +1294,7 @@ fn message_clear_root_aliases_cancel_the_same_records_as_list() {
         queue_add(&env, "@reader#main", "root message");
         seed_channel_message(&env, 1, 100, None, "legacy root message");
         seed_channel_message(&env, 2, 200, Some("main"), "named main message");
-        let other = seed_channel_message(&env, 3, 300, Some("feature"), "other message");
+        seed_channel_message(&env, 3, 300, Some("feature"), "other message");
         let mut command = env.rimz();
         command.args(["message", "clear"]);
         match scope {
@@ -1301,13 +1310,27 @@ fn message_clear_root_aliases_cancel_the_same_records_as_list() {
                 command.args(["--channel", channel]);
             }
         }
+        if matches!(scope, "project" | "path") {
+            // Neither trunk's old spelling nor its path names trunk now.
+            command.output().unwrap();
+            let rows = env.store().list_messages().unwrap();
+            assert_eq!(rows.len(), 4, "{scope}: {rows:?}");
+            continue;
+        }
         let output = run_success(&mut command, "clear root lane");
-        let rows = env.store().list_messages().unwrap();
-        assert_eq!(rows.len(), 1, "{scope}: {rows:?}");
-        assert_eq!(rows[0].message_id.as_str(), other);
+        // A record with no lane is in no lane, trunk's included.
+        let mut rows = env
+            .store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .map(|row| row.text)
+            .collect::<Vec<_>>();
+        rows.sort();
+        assert_eq!(rows, ["legacy root message", "other message"], "{scope}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("in #main"));
         let history = env.store().list_message_history().unwrap();
-        assert_eq!(history.len(), 3);
+        assert_eq!(history.len(), 2);
         assert!(
             history
                 .iter()
@@ -1367,7 +1390,8 @@ fn message_list_root_correction_case(flag: bool) {
         .iter()
         .map(|row| row["message_id"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(ids, [current.as_str(), legacy.as_str()], "{correction}");
+    // The record with no lane is in no inbox, trunk's included.
+    assert_eq!(ids, [current.as_str()], "{correction}: {legacy}");
     let digest = run_success(
         env.rimz()
             .env(rimz::workspace::ENV_CHANNEL, "scratch")
@@ -1731,6 +1755,7 @@ fn message_json_preserves_soft_compaction_tags_and_omits_absent_tags() {
                 DeliveryGate::Any,
             );
             record.soft_compact = tag;
+            record.channel = Some(rimz::ids::LaneName::dashed(rimz::ids::LaneName::TRUNK));
             if terminal {
                 record.status = MessageStatus::Canceled;
                 env.store()
@@ -2078,6 +2103,7 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
         "due".to_owned(),
         DeliveryGate::Done,
     )
+    .with_channel(agent.lane_name())
     .with_when(vec![condition(60)]);
     let future = MessageRecord::new(
         env.workspace_id.clone(),
@@ -2085,6 +2111,7 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
         "future".to_owned(),
         DeliveryGate::Done,
     )
+    .with_channel(agent.lane_name())
     .with_when(vec![condition(3_600)]);
     env.store().queue_message(&due, "rimz-test").unwrap();
     env.store().queue_message(&future, "rimz-test").unwrap();
@@ -5858,6 +5885,15 @@ fn assert_parent_follow_up_case(
                     },
                     untrusted_checkout: case == ResumeFollowUpCase::Fallback,
                     channel: channel.map(str::to_owned),
+                    // The launcher decides the lane at the checkout an empty-dir child
+                    // was placed for, else at its cwd.
+                    lane: Some(
+                        rimz::worktree::own_lane(
+                            &env.project_root,
+                            checkout.as_deref().map_or(cwd.as_path(), Path::new),
+                        )
+                        .adopt(channel),
+                    ),
                     parent_agent_id: Some("parent".into()),
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
                     launch_depth: Some(1),
@@ -7277,7 +7313,7 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
     assert_eq!(message.text, "ping");
 
     let rendered = run_success(
-        env.rimz().args(["transcript", "#project"]),
+        env.rimz().args(["transcript", "#main"]),
         "receiver transcript",
     );
     let rendered = String::from_utf8_lossy(&rendered.stdout);
@@ -12734,6 +12770,7 @@ fn expired_automatic_command_releases_fifo_without_a_sweep_and_is_audited() {
         "/compact".to_owned(),
         DeliveryGate::Done,
     )
+    .with_channel(receiver.lane_name())
     .with_sender(MessageSender::System)
     .with_body(MessageBody::Command)
     .with_automated(true);
@@ -14718,6 +14755,7 @@ fn register_old_idle_role_agent(
     observation.launch.role = Some(role.to_owned());
     observation.worktree_branch = Some(format!("feature-{role}"));
     observation.worktree_path = Some(env.project_root.display().to_string());
+    stamp_hook_lane(env, &mut observation);
     let mut event = EventEnvelope::agent_lifecycle(
         workspace.workspace_id,
         workspace.session_name,
@@ -15134,6 +15172,7 @@ fn append_lifecycle(
         AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
     observation.worktree_path = Some(env.project_root.display().to_string());
     configure(&mut observation);
+    stamp_hook_lane(env, &mut observation);
     let event = EventEnvelope::agent_lifecycle(
         workspace.workspace_id,
         workspace.session_name,

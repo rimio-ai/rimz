@@ -632,7 +632,7 @@ pub(super) fn render_identity_section(
     }
     kv.push(
         "channel",
-        render::cell(agent.placement.lane_label.as_deref().unwrap_or("-")).dash(),
+        render::cell(agent.placement.channel.as_deref().unwrap_or("-")).dash(),
     );
     kv.push(
         "worktree",

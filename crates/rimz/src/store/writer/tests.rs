@@ -251,7 +251,9 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             .launch
             .lane
             .as_ref()
-            .and_then(crate::ids::Lane::stored_name),
+            .and_then(crate::ids::Lane::pin_name)
+            .as_ref()
+            .map(crate::ids::LaneName::as_str),
         Some("identity-channel")
     );
     assert_eq!(starting.state, AgentLaunchState::Starting);
@@ -275,7 +277,9 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             .launch
             .lane
             .as_ref()
-            .and_then(crate::ids::Lane::stored_name),
+            .and_then(crate::ids::Lane::pin_name)
+            .as_ref()
+            .map(crate::ids::LaneName::as_str),
         Some("identity-channel")
     );
     assert_eq!(
@@ -310,7 +314,9 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             .launch
             .lane
             .as_ref()
-            .and_then(crate::ids::Lane::stored_name),
+            .and_then(crate::ids::Lane::pin_name)
+            .as_ref()
+            .map(crate::ids::LaneName::as_str),
         Some("identity-channel")
     );
 }

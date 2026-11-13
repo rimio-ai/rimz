@@ -15,7 +15,7 @@ use crate::agents::{
 };
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::ContextMeterScale;
-use crate::ids::{AgentKind, AgentSessionId, Lane, LaneName, PaneId, legacy_lane_name};
+use crate::ids::{AgentKind, AgentSessionId, Lane, LaneName, PaneId};
 use crate::pane::PaneRef;
 
 /// One frame-admitted sidebar row. The base names the row and pane; [`RowCard`]
@@ -419,7 +419,7 @@ pub struct PaneAgent {
     /// Routing lane copied from the bound session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// Copied from the bound row, or derived from the snapshot's project root for a sessionless pane.
+    /// The lane's is-trunk reading; a pane without a lane is not in trunk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
     /// The bound session's stored lane, or the sessionless pane's row lane.
@@ -474,16 +474,13 @@ impl PaneAgent {
     /// The pane's lane name, read as
     /// [`AgentState::lane_name`](crate::agents::AgentState::lane_name) reads it.
     pub fn lane_name(&self) -> Option<LaneName> {
-        match &self.lane {
-            Some(lane) => Some(lane.routing_name()),
-            None => legacy_lane_name(self.channel.as_deref(), self.lane_path()),
-        }
+        self.lane.as_ref().map(Lane::routing_name)
     }
 
     /// Whether the pane is in trunk's own lane, read as
     /// [`AgentState::in_trunk`](crate::agents::AgentState::in_trunk) reads it.
     pub fn in_trunk(&self) -> bool {
-        self.lane.as_ref().map_or(self.root_lane, Lane::is_trunk)
+        self.lane.as_ref().is_some_and(Lane::is_trunk)
     }
 }
 

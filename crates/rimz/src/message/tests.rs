@@ -101,7 +101,7 @@ fn draft_record_uses_recipient_identity_and_live_pane_context() {
 fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
     let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
     let mut bound = agent("sess-a", Some("lucid-atlas"));
-    bound.channel = Some("bound-channel".to_owned());
+    crate::testkit::set_lane(&mut bound, "bound-channel");
     let bound_pane = pane(
         "claude",
         Some("pane-session"),
@@ -712,10 +712,18 @@ fn pane(
     worktree_path: Option<&str>,
     raw: &str,
 ) -> PaneAgent {
+    let own = worktree_path.map(|path| crate::ids::Lane::own(crate::ids::LaneHome::Worktree, path));
+    let lane = match channel {
+        Some(channel) => Some(
+            own.unwrap_or_else(|| crate::ids::Lane::own(crate::ids::LaneHome::Worktree, ""))
+                .named(channel.parse().expect("lane name")),
+        ),
+        None => own,
+    };
     PaneAgent {
         checkout: None,
         root_lane: false,
-        lane: None,
+        lane,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: name.map(ToOwned::to_owned),

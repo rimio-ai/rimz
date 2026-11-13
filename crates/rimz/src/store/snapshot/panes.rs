@@ -189,6 +189,7 @@ pub(super) enum PaneBindingDisposition<'a> {
     NotTracked {
         kind: Option<AgentKind>,
         row: Box<SidebarRow>,
+        lane: Option<crate::ids::Lane>,
     },
     DuplicatePane,
     Conflict {
@@ -205,6 +206,7 @@ pub(super) struct PaneWiring<'a> {
     pub(super) kinds: &'a [String],
     pub(super) default_models: &'a BTreeMap<String, String>,
     pub(super) untracked: &'a BTreeMap<String, crate::agents::NotTracked>,
+    pub(super) own_lanes: &'a BTreeMap<String, crate::ids::Lane>,
 }
 
 pub(super) struct PaneBinder<'a> {
@@ -259,8 +261,8 @@ impl<'a> PaneBinder<'a> {
             return match bind {
                 lazy::AgentPaneRow::Agent(agent) => self.bind(agent, pane),
                 lazy::AgentPaneRow::Idle(row) => PaneBindingDisposition::Idle(row),
-                lazy::AgentPaneRow::NotTracked { kind, row } => {
-                    PaneBindingDisposition::NotTracked { kind, row }
+                lazy::AgentPaneRow::NotTracked { kind, row, lane } => {
+                    PaneBindingDisposition::NotTracked { kind, row, lane }
                 }
                 lazy::AgentPaneRow::SuppressedDuplicate { kind, agent_id } => {
                     self.conflict(kind, agent_id)

@@ -27,7 +27,7 @@ fn default_view_never_opens_expired_buckets() {
 #[test]
 fn empty_live_focus_explains_launch_age_and_turn_state() {
     let now = ts("2026-06-01T12:00:00Z");
-    let mut scope = Scope::for_channel(None, None);
+    let mut scope = Scope::for_channel(None);
     scope.focus = Some("@fresh".to_owned());
     for (registered_at, turn_started_at, expected) in [
         (
@@ -165,9 +165,9 @@ fn entry_origin_and_rendered_author_cover_kind_and_sender_vocabulary() {
             log.push(entry);
         }
     }
-    let identities = build_identities(&log, None);
+    let identities = build_identities(&log);
     for entry in &log {
-        let chat = chat_entry_for_log_entry(entry, &identities, false, None);
+        let chat = chat_entry_for_log_entry(entry, &identities, false);
         assert_eq!(chat.origin, entry.origin());
         if chat.origin == Human {
             assert_eq!(chat.from, "user", "{entry:?}");
@@ -188,10 +188,10 @@ fn human_answers_project_one_label_in_human_and_json_views() {
         rimz::transcript::append(&paths, &answer).unwrap();
     }
     let log = rimz::transcript::read_all(&paths).unwrap();
-    let identities = build_identities(&log, None);
+    let identities = build_identities(&log);
     let view = follow_view(
         log.iter()
-            .map(|entry| render_entry_for_log_entry(entry, &identities, false, None))
+            .map(|entry| render_entry_for_log_entry(entry, &identities, false))
             .collect(),
     );
     for line in selected_chat_lines(&view) {
@@ -231,7 +231,7 @@ fn writer_produced_shapes_preserve_harness_classification() {
 #[test]
 fn transcript_target_channel_precedence_and_errors() {
     assert_eq!(
-        scope::reconcile_transcript_channel("@codex#a", Some("a"), Some("b"), None, None)
+        scope::reconcile_transcript_channel("@codex#a", Some("a"), Some("b"), None)
             .unwrap_err()
             .to_string(),
         "target `@codex#a` names channel `#a` but --worktree names `b`"
@@ -244,7 +244,7 @@ fn transcript_target_channel_precedence_and_errors() {
         (None, None, None, None),
     ] {
         assert_eq!(
-            scope::reconcile_transcript_channel("@codex", inline, flag, fallback, None).unwrap(),
+            scope::reconcile_transcript_channel("@codex", inline, flag, fallback).unwrap(),
             expected.map(str::to_owned)
         );
     }
@@ -1970,9 +1970,9 @@ fn message_entry_projects_structured_sender_and_receiver() {
     );
     entry.message_id = Some(rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap());
     entry.reply_to = vec![rimz::ids::MessageId::parse("msg_123456789abcdef0").unwrap()];
-    let identities = build_identities(std::slice::from_ref(&entry), None);
+    let identities = build_identities(std::slice::from_ref(&entry));
 
-    let chat = chat_entry_for_log_entry(&entry, &identities, false, None);
+    let chat = chat_entry_for_log_entry(&entry, &identities, false);
 
     assert_eq!(chat.from, "@planner");
     assert_eq!(chat.to.as_deref(), Some("@claude"));
@@ -1989,28 +1989,26 @@ fn root_sender_keeps_its_cross_lane_suffix_in_a_scoped_transcript() {
     let mut focal = log_entry("claude", "local", TranscriptKind::Assistant, None, "local");
     focal.name = Some("planner".to_owned());
     focal.channel = Some(rimz::ids::LaneName::dashed("feature"));
-    let mut sent = log_entry(
-        "codex",
-        "receiver",
-        TranscriptKind::Message,
-        Some("@planner#project"),
-        "cross-lane message",
-    );
-    sent.channel = Some(rimz::ids::LaneName::dashed("feature"));
-    let identities = build_identities(
-        &[focal.clone(), sent.clone()],
-        Some(Path::new("/work/project")),
-    );
-    let chat =
-        chat_entry_for_log_entry(&sent, &identities, false, Some(Path::new("/work/project")));
-    assert_eq!(chat.from, "@planner#main");
-    assert!(!sender_matches_focus(
-        &chat.from,
-        &BTreeSet::from([entry_key(&focal)]),
-        &identities,
-        Some("feature"),
-        Some(Path::new("/work/project")),
-    ));
+    // Trunk's old spelling, the project directory's name, is another lane's.
+    for sender in ["@planner#main", "@planner#project"] {
+        let mut sent = log_entry(
+            "codex",
+            "receiver",
+            TranscriptKind::Message,
+            Some(sender),
+            "cross-lane message",
+        );
+        sent.channel = Some(rimz::ids::LaneName::dashed("feature"));
+        let identities = build_identities(&[focal.clone(), sent.clone()]);
+        let chat = chat_entry_for_log_entry(&sent, &identities, false);
+        assert_eq!(chat.from, sender);
+        assert!(!sender_matches_focus(
+            &chat.from,
+            &BTreeSet::from([entry_key(&focal)]),
+            &identities,
+            Some("feature")
+        ));
+    }
 }
 
 #[test]
@@ -2024,19 +2022,17 @@ fn focus_keeps_messages_sent_by_the_focal_agent() {
         "ack",
     );
     let local = log_entry("codex", "receiver", TranscriptKind::Prompt, None, "local");
-    let identities = build_identities(&[focal.clone(), sent.clone()], None);
+    let identities = build_identities(&[focal.clone(), sent.clone()]);
     let scope = Scope {
-        project_root: None,
         channel: Some("chat".to_owned()),
-        channel_filter: Some("chat".to_owned()),
         focus: Some("@claude".to_owned()),
         focus_keys: Some(BTreeSet::from([entry_key(&focal)])),
         live_focus: None,
         include_channel: false,
     };
 
-    let sent_chat = chat_entry_for_log_entry(&sent, &identities, false, None);
-    let local_chat = chat_entry_for_log_entry(&local, &identities, false, None);
+    let sent_chat = chat_entry_for_log_entry(&sent, &identities, false);
+    let local_chat = chat_entry_for_log_entry(&local, &identities, false);
 
     assert!(entry_matches_focus(&sent, &sent_chat, &scope, &identities));
     assert!(!entry_matches_focus(
@@ -2059,20 +2055,18 @@ fn focus_and_speaker_use_petname_sender_address() {
         Some("@calm-fox"),
         "ack",
     );
-    let identities = build_identities(&[focal.clone(), sent.clone()], None);
+    let identities = build_identities(&[focal.clone(), sent.clone()]);
     let scope = Scope {
-        project_root: None,
         channel: Some("chat".to_owned()),
-        channel_filter: Some("chat".to_owned()),
         focus: Some("@calm-fox".to_owned()),
         focus_keys: Some(BTreeSet::from([entry_key(&focal)])),
         live_focus: None,
         include_channel: false,
     };
-    let sent_chat = chat_entry_for_log_entry(&sent, &identities, false, None);
+    let sent_chat = chat_entry_for_log_entry(&sent, &identities, false);
     assert!(entry_matches_focus(&sent, &sent_chat, &scope, &identities));
     assert_eq!(
-        chat_entry_for_log_entry(&focal, &identities, false, None).from,
+        chat_entry_for_log_entry(&focal, &identities, false).from,
         "@calm-fox"
     );
 }
@@ -2163,23 +2157,13 @@ fn message_json_uses_created_time_and_preserves_delivery() {
     );
     entry.at = ts("2026-06-28T16:45:00Z");
     entry.enqueued_at = Some(ts("2026-06-28T16:41:00Z"));
-    let json = serde_json::to_value(chat_entry_for_log_entry(
-        &entry,
-        &HashMap::new(),
-        false,
-        None,
-    ))
-    .unwrap();
+    let json =
+        serde_json::to_value(chat_entry_for_log_entry(&entry, &HashMap::new(), false)).unwrap();
     assert_eq!(json["at"], "2026-06-28T16:41:00Z");
     assert_eq!(json["delivered_at"], "2026-06-28T16:45:00Z");
     entry.enqueued_at = None;
-    let json = serde_json::to_value(chat_entry_for_log_entry(
-        &entry,
-        &HashMap::new(),
-        false,
-        None,
-    ))
-    .unwrap();
+    let json =
+        serde_json::to_value(chat_entry_for_log_entry(&entry, &HashMap::new(), false)).unwrap();
     assert_eq!(json["at"], "2026-06-28T16:45:00Z");
     assert!(json.get("delivered_at").is_none());
     assert!(json.get("enqueued_at").is_none());
@@ -2640,7 +2624,7 @@ fn identified_ask_entry(kind: TranscriptKind, at: &str, text: &str, id: u64) -> 
     if kind == TranscriptKind::Answer {
         log.from = Some("user".to_owned());
     }
-    render_entry_for_log_entry(&log, &HashMap::new(), false, None)
+    render_entry_for_log_entry(&log, &HashMap::new(), false)
 }
 
 fn recorded_answer_question(mut answer: RenderEntry, question: &str) -> RenderEntry {
@@ -3134,9 +3118,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     assert_eq!(
         live_boundary(
             &Scope {
-                project_root: None,
                 channel: Some("chat".to_owned()),
-                channel_filter: Some("chat".to_owned()),
                 focus: Some("@claude".to_owned()),
                 focus_keys: Some(BTreeSet::from([other])),
                 live_focus: None,
@@ -3153,9 +3135,7 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     assert_eq!(
         live_boundary(
             &Scope {
-                project_root: None,
                 channel: Some("chat".to_owned()),
-                channel_filter: Some("chat".to_owned()),
                 focus: Some("@codex".to_owned()),
                 focus_keys: Some(BTreeSet::from([child])),
                 live_focus: None,
@@ -3169,39 +3149,31 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
 
 #[test]
 fn channel_filter_matches_exact_lanes() {
-    assert!(channel_matches(
-        Some(&rimz::ids::LaneName::dashed("project")),
-        Some("main"),
-        Some(Path::new("/work/project"))
-    ));
-    assert!(channel_matches(
-        None,
-        Some("main"),
-        Some(Path::new("/work/project"))
-    ));
+    let lane = rimz::ids::LaneName::dashed;
+    assert!(channel_matches(Some(&lane("main")), Some("main")));
+    assert!(channel_matches(Some(&lane("main")), Some("")));
+    assert!(!channel_matches(Some(&lane("project")), Some("main")));
+    assert!(!channel_matches(None, Some("main")));
+    assert!(!channel_matches(Some(&lane("main")), Some("project")));
+    assert!(channel_matches(Some(&lane("project")), Some("project")));
     assert!(channel_matches(
         Some(&rimz::ids::LaneName::dashed("web-token")),
-        Some("web-token"),
-        None
+        Some("web-token")
     ));
     assert!(!channel_matches(
         Some(&rimz::ids::LaneName::dashed("web-token/forge")),
-        Some("web-token"),
-        None
+        Some("web-token")
     ));
     assert!(!channel_matches(
         Some(&rimz::ids::LaneName::dashed("web-token-other/forge")),
-        Some("web-token"),
-        None
+        Some("web-token")
     ));
     assert!(!channel_matches(
         Some(&rimz::ids::LaneName::dashed("web-token/forge")),
-        Some("web-token/ops"),
-        None
+        Some("web-token/ops")
     ));
     assert!(channel_matches(
         Some(&rimz::ids::LaneName::dashed("web-token/forge")),
-        None,
         None
     ));
 }
@@ -3228,7 +3200,7 @@ fn child_entries_require_child_focus() {
     unstamped_child.parent_agent_id = None;
     unstamped_child.parent_agent_kind = None;
     unstamped_child.at = ts("2026-06-01T00:00:01Z");
-    let identities = build_identities(&[parent.clone(), unstamped_child, child.clone()], None);
+    let identities = build_identities(&[parent.clone(), unstamped_child, child.clone()]);
 
     assert!(identities[&entry_key(&child)].child);
     assert!(!entry_in_scope(
@@ -3239,9 +3211,7 @@ fn child_entries_require_child_focus() {
     assert!(!entry_in_scope(
         &child,
         &Scope {
-            project_root: None,
             channel: Some("chat".to_owned()),
-            channel_filter: Some("chat".to_owned()),
             focus: Some("@claude".to_owned()),
             focus_keys: Some(BTreeSet::from([entry_key(&parent)])),
             live_focus: None,
@@ -3252,9 +3222,7 @@ fn child_entries_require_child_focus() {
     assert!(entry_in_scope(
         &child,
         &Scope {
-            project_root: None,
             channel: Some("chat".to_owned()),
-            channel_filter: Some("chat".to_owned()),
             focus: Some("@codex".to_owned()),
             focus_keys: Some(BTreeSet::from([entry_key(&child)])),
             live_focus: None,

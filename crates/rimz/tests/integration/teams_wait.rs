@@ -20,7 +20,7 @@ struct Fixture {
 }
 
 #[test]
-fn teams_show_root_alias_misses_use_main() {
+fn teams_show_misses_read_main_alone_as_trunk() {
     let fixture = Fixture::new();
     fixture.lane("a");
     for alias in [
@@ -36,7 +36,12 @@ fn teams_show_root_alias_misses_use_main() {
             .unwrap();
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let text = String::from_utf8_lossy(&output.stderr);
-        assert!(text.contains("no live cohort in #main"), "{text}");
+        // Neither trunk's old spelling nor its path names trunk.
+        assert_eq!(
+            text.contains("no live cohort in #main"),
+            alias == "main",
+            "{alias}: {text}"
+        );
         assert!(text.contains("live cohorts: #a"), "{text}");
     }
 }

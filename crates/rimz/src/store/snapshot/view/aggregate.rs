@@ -99,7 +99,6 @@ type GroupSeed = (
 fn row_entry(row: &SidebarRow) -> GroupEntry<'_> {
     GroupEntry {
         lane: row.lane.as_ref(),
-        stamp: row.channel.as_deref(),
         path: row.lane_path(),
         branch: row.worktree_branch.as_deref(),
     }
@@ -206,7 +205,6 @@ impl SidebarSnapshot {
         for run in workflows.iter().filter(|run| !run.state.is_terminal()) {
             let identity = resolver.resolve(GroupEntry {
                 lane: None,
-                stamp: None,
                 path: Some(&run.scope_path),
                 branch: None,
             });
@@ -237,7 +235,6 @@ impl SidebarSnapshot {
         for root in open_pr_roots {
             let identity = resolver.resolve(GroupEntry {
                 lane: None,
-                stamp: None,
                 path: Some(root),
                 branch: None,
             });

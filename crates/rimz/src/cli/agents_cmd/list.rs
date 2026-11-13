@@ -80,9 +80,9 @@ pub(super) fn list_agents(
         let closed = selector::closed_rows(audit, &snapshot, &rows, &demotion, &reader, now);
         rows.extend(closed);
     }
-    let lane = channel.as_deref().map(|filter| {
-        rimz::address::LaneSelector::parse(Some(filter), Some(&workspace.project_root))
-    });
+    let lane = channel
+        .as_deref()
+        .map(|filter| rimz::address::LaneSelector::parse(Some(filter)));
     rows.retain(|row| {
         lane.as_ref()
             .is_none_or(|lane| rimz::address::agent_in_lane(row.agent(), lane))
@@ -335,7 +335,7 @@ fn group_header_cells(
     if let Some(qualifier) = qualifier {
         cells.push(render::cell(format!("· {qualifier}")).fg(render::palette::meta()));
     }
-    let group_lane = rimz::address::LaneSelector::parse(Some(&group.label), None);
+    let group_lane = rimz::address::LaneSelector::parse(Some(&group.label));
     if !group
         .agents
         .iter()
@@ -347,8 +347,9 @@ fn group_header_cells(
     {
         cells.push(render::cell(format!("· #{lane}")).fg(render::palette::meta()));
     }
+    // An in-place team's lane is named after the team, so its header names it once.
     if let Some(team) = group.team()
-        && !group.label.ends_with(&format!("/{team}"))
+        && group.label != rimz::harness::lanes::team_lane(team).as_str()
     {
         cells.push(render::cell(format!("· {team} team")).fg(render::palette::meta()));
     }
@@ -437,9 +438,7 @@ pub(super) fn refuse_unknown_lane(
         .context("reading audit agent rollup")?
         .agents;
     let worktrees = super::resume::local_worktrees(workspace)?;
-    let Err(lanes) =
-        rimz::harness::resume::check_lane_scope(scope, &audit, &worktrees, &workspace.project_root)
-    else {
+    let Err(lanes) = rimz::harness::resume::check_lane_scope(scope, &audit, &worktrees) else {
         return Ok(());
     };
     let lane = format!("#{}", scope.trim_start_matches('#'));

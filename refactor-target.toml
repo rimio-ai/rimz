@@ -77,13 +77,12 @@ path = "crates/rimz/src/address.rs"
 # share one membership test instead of spelling the pair five times.
 # Shared ambiguity construction also serves transcript's historical candidates.
 # AddressContext and ChannelOrigin carry room identity and lane provenance
-# from the binary into the shared resolver and library dispatch callers;
-# record_lane_label keeps CLI readers of a record's lane on the selector's rule.
+# from the binary into the shared resolver and library dispatch callers.
 # Reader-relative paste addresses share the resolver's verified selector chain (+1).
 # launch_rows narrows Prompt sender context reads to launch members (+1).
 # LaneSelector with parse, trunk, named, is_trunk, name, label and same_lane is the one
-# reading of typed lane text and holds the only trunk alias list; AddressContext::lane,
-# agent_in_lane, lane_label and trunk_lane_name share it with CLI and harness readers (+8).
+# reading of typed lane text, which reads trunk only from nothing or `main`;
+# AddressContext::lane, agent_in_lane and lane_label share it with CLI and harness readers.
 # LaneSelector::holds_record matches a durable record's lane, and TeamCohort::team and channel
 # read the cohort's typed instance (+3).
 # `selector` gives agents list one flat row, field table, and --filter match (+1).
@@ -93,17 +92,12 @@ allowed-dependencies = ["agents", "ids", "store"]
 [[verdict]]
 kind = "item"
 key = "address::LaneSelector"
-reason = "The one parser of user and record lane text: trunk's aliases live only in LaneSelector::parse, so every reader matches lanes by one rule."
+reason = "The one parser of user and record lane text: LaneSelector::parse reads trunk only from nothing or `main`, and holds_record keeps a lane-less record out of every lane, so every reader matches lanes by one rule."
 
 [[verdict]]
 kind = "item"
 key = "address::lane_label"
-reason = "One display label for a row's lane, `main` for trunk's own lane, read by the CLI and harness views."
-
-[[verdict]]
-kind = "item"
-key = "address::trunk_lane_name"
-reason = "The routing name trunk's records carry, shared by the selector's alias list and the transcript scope."
+reason = "A row's lane routing name as text, `main` for trunk's own lane and none for a lane-less row, read by the CLI and harness views."
 
 [[verdict]]
 kind = "item"
@@ -395,8 +389,8 @@ upward-dependencies = ["address"]
 # AgentState::lane_checkout and project_lane keep derived rows and the fold on the stored lane (+2).
 # AgentState::working_path keeps occupancy, removal protection and activity on the checkout (+1).
 # ToolEffect and TransitionMode type the tool flags and the transition mode at the store seam (+1).
-# AgentState::lane_name, in_trunk, own_lane_path and stamp_label replace channel, lane_label and
-# is_root_lane as the one reading of a row's lane, lane-less rows included (+1).
+# AgentState::lane_name and in_trunk replace channel, lane_label and is_root_lane as the one
+# reading of a row's stored lane; a lane-less row reads as in no lane.
 # AgentState::team_instance is the one reading of a seat's team cohort for every record (+1).
 # PriorTurn and AgentState::prior_turn_for_next carry the turn a limit-refused prompt opened
 # over from the fold to the cache clock's read (+2).
@@ -2370,7 +2364,7 @@ path = "crates/rimz/src/harness"
 # workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
 # workflow::{Cohort, stop_cohort, detach_cohort, without_excluded, leader} pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot workflow::leader_turn left (+4).
 # AttemptHost::{orphan, leader_session, start_groups}, workflow::{orphan, launch_groups}, and throttle::StartGroup close the engine's reads around the attempt host (+6).
-# harness::lanes and its LaneErr, CallerLane, LaneRequest, decide, own_lane, row_lane, in_place_team_name, directory_channel and admit_worktree_name replace spec::resolve_room_channel and the channel module as the one lane constructor (+9).
+# harness::lanes and its LaneErr, CallerLane, LaneRequest, decide, team_lane, directory_channel and admit_worktree_name replace spec::resolve_room_channel and the channel module as the one lane constructor.
 # deadline::interrupt_expired and run::{hold_interrupted_turn, expire_interrupt} let the timeout helper stamp, expire and settle an interrupted subagent turn's hold (+3).
 # deadline::stop_interrupts tells the timeout helper to send a Claude or Codex stop rung as an interrupt (+1).
 # run::release_rung gives back a stop rung the helper's interrupt could not deliver (+1).
@@ -2803,8 +2797,7 @@ path = "crates/rimz/src/ids.rs"
 # HoldKind and needs_fix share typed throttle causes across records and renderers (+2).
 # HoldKind::deserialize_optional keeps unknown durable hold kinds readable (+1).
 # Lane, LaneHome, LaneName, InvalidLane, and their readings, builders, and adoption type the stored lane (+18).
-# LaneName::dashed makes a directory name a lane name for every reader, and legacy_lane_name
-# is the one reading of a lane-less row's old stamp in place of compose_channel (+2).
+# LaneName::dashed makes a directory name a lane name for every reader.
 # TeamInstanceId::new, team, lane and lane_text build and read team#lane as team plus lane name,
 # and serialize_lane, deserialize_lane and lenient_lane_name decode a record's stored lane
 # without failing it (+7).
@@ -4851,7 +4844,8 @@ path = "crates/rimz/src/worktree"
 # create_for_loop_fire names and marks a loop fire's fresh tree for the scheduler (+1).
 # worktree_paths shares the lossless `git worktree list` decoder with the sidebar (+1).
 # admit_fresh_name gives the launcher, CLI and palette the create branch's `main` refusal (+1).
-surface-budget = 90
+# own_lane moves here from harness::lanes as the one checkout classifier, so the sidebar producer can fill its own-lane table (+1).
+surface-budget = 91
 
 [[verdict]]
 kind = "item"
@@ -11099,18 +11093,13 @@ reason = "The one constructor of a fresh launch's lane; relaunches copy the stor
 
 [[verdict]]
 kind = "item"
-key = "harness::lanes::own_lane"
-reason = "A directory's own checkout lane, shared by the constructor, pane pins, team holds and resume."
+key = "worktree::own_lane"
+reason = "A directory's own checkout lane, the one classifier, shared by the lane constructor, pane pins, team holds, resume and the sidebar producer's own-lane table."
 
 [[verdict]]
 kind = "item"
-key = "harness::lanes::row_lane"
-reason = "A row's stored lane, or its pre-change checkout's own lane, read by caller attribution, fork, resume and team holds."
-
-[[verdict]]
-kind = "item"
-key = "harness::lanes::in_place_team_name"
-reason = "The `<repo>/<team>` lane name an in-place team takes at trunk, shared by launch, workflow team holds and `teams show`."
+key = "harness::lanes::team_lane"
+reason = "The one name of an in-place team's lane at trunk, read by the constructor, the workflow engine's cohort default, `teams show`'s resume hint and `agents list`'s team badge."
 
 [[verdict]]
 kind = "item"

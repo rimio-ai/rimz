@@ -41,7 +41,7 @@ impl CurrentChannel {
 }
 
 /// The current channel a command runs in: the lane `RIMZ_CHANNEL` names, read
-/// as typed input so trunk's aliases mean trunk, else the caller's stored card
+/// as typed input so `main` means trunk, else the caller's stored card
 /// channel, else the worktree rule. A human shell at the project root has no
 /// current channel. The value keeps its provenance, so create-on-miss launches
 /// in place on a derived one.
@@ -70,11 +70,11 @@ pub fn current_channel_with(
     caller: impl FnOnce() -> Option<(crate::harness::ancestry::CallerIdentity, Vec<AgentState>)>,
 ) -> CurrentChannel {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        let project_root = &workspace.project_root;
-        if crate::address::LaneSelector::parse(Some(&channel), Some(project_root)).is_trunk() {
-            return CurrentChannel::Root(crate::address::trunk_lane_name(project_root));
-        }
-        return CurrentChannel::Named(LaneName::dashed(&channel));
+        let lane = crate::address::LaneSelector::parse(Some(&channel));
+        return match lane.name() {
+            None => CurrentChannel::Root(LaneName::trunk()),
+            Some(name) => CurrentChannel::Named(name.clone()),
+        };
     }
     if let Some((caller, rows)) = caller()
         && let Ok(agent) = crate::harness::ancestry::resolve_launch_caller(&rows, &caller)
@@ -82,7 +82,11 @@ pub fn current_channel_with(
     {
         return if agent.in_trunk() {
             CurrentChannel::Root(channel)
-        } else if agent.own_lane_path().is_some() {
+        } else if agent
+            .lane
+            .as_ref()
+            .is_some_and(|lane| lane.name().is_none())
+        {
             CurrentChannel::Derived(channel)
         } else {
             CurrentChannel::Named(channel)
@@ -104,9 +108,9 @@ pub fn caller_lane(
     caller: Option<&AgentState>,
     harness_owned: bool,
 ) -> Option<crate::harness::lanes::CallerLane> {
-    use crate::harness::lanes::{CallerLane, row_lane};
+    use crate::harness::lanes::CallerLane;
     if let Some(caller) = caller {
-        return row_lane(caller, project_root).map(CallerLane::Agent);
+        return caller.lane.clone().map(CallerLane::Agent);
     }
     if harness_owned {
         return None;
@@ -119,10 +123,8 @@ pub fn caller_lane(
 /// when `dir` is in the pin's checkout, else none.
 pub fn pin_channel_at(project_root: &Path, dir: &Path) -> Option<String> {
     let pin = pane_pin(project_root)?;
-    let same_checkout = crate::harness::lanes::own_lane(project_root, dir).path() == pin.path();
-    same_checkout
-        .then(|| pin.stored_name().map(ToOwned::to_owned))
-        .flatten()
+    let same_checkout = crate::worktree::own_lane(project_root, dir).path() == pin.path();
+    same_checkout.then(|| pin.pin_name())?.map(Into::into)
 }
 
 /// The calling pane's pin: its `RIMZ_CHANNEL` adopted at the checkout its
@@ -130,7 +132,7 @@ pub fn pin_channel_at(project_root: &Path, dir: &Path) -> Option<String> {
 fn pane_pin(project_root: &Path) -> Option<crate::ids::Lane> {
     let name = std::env::var(crate::workspace::ENV_CHANNEL).ok()?;
     let home = std::env::var_os(crate::workspace::ENV_WORKTREE_PATH)?;
-    Some(crate::harness::lanes::own_lane(project_root, Path::new(&home)).adopt(Some(&name)))
+    Some(crate::worktree::own_lane(project_root, Path::new(&home)).adopt(Some(&name)))
 }
 
 /// The caller identity for `message`. `--no-from` is deliberately unattributed

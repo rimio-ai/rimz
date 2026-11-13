@@ -1,6 +1,4 @@
-#[cfg(test)]
-use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,7 +22,6 @@ use super::layout::refresh_overlay_group;
 use super::{SidebarRow, SidebarSnapshot};
 
 mod projection;
-pub(in crate::store::snapshot) use projection::legacy_root_lane;
 
 #[cfg(test)]
 pub(crate) use projection::row_identity_violations;
@@ -226,6 +223,7 @@ impl SidebarSnapshot {
                 Arc::make_mut(&mut self.agents),
                 &observations[observation_index],
                 &pane,
+                &self.own_lanes,
             );
         }
         (self, diagnostics)
@@ -410,6 +408,7 @@ impl SidebarSnapshot {
             kinds: &self.wired_kinds,
             default_models: &self.wired_default_models,
             untracked: &self.untracked_kinds,
+            own_lanes: &self.own_lanes,
         };
         for index in 0..self.worktree_groups.len() {
             if !self.worktree_groups[index].rows.iter().any(stale) {
@@ -795,6 +794,7 @@ fn merge_bound_local_session(
     agents: &mut Vec<AgentState>,
     observation: &LocalSessionObservation,
     pane: &PaneRef,
+    own_lanes: &BTreeMap<String, crate::ids::Lane>,
 ) {
     let exact_index = agents.iter().position(|agent| {
         agent.kind == observation.kind && agent.agent_id == observation.session_id
@@ -813,7 +813,7 @@ fn merge_bound_local_session(
     agents.retain(|agent| {
         !(agent.kind == observation.kind && agent.agent_id == observation.session_id)
     });
-    let mut state = prior.unwrap_or_else(|| empty_local_agent(observation));
+    let mut state = prior.unwrap_or_else(|| empty_local_agent(observation, own_lanes));
     state.agent_id = observation.session_id.clone();
     state.kind = observation.kind.clone();
     state.pane = Some(pane.clone());
@@ -881,7 +881,12 @@ fn apply_local_lifecycle(
     state.last_activity = observation.last_activity;
 }
 
-fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
+/// A new row for a session seen only through provider files, in the
+/// producer's own lane for its workspace.
+fn empty_local_agent(
+    observation: &LocalSessionObservation,
+    own_lanes: &BTreeMap<String, crate::ids::Lane>,
+) -> AgentState {
     let status = match &observation.projection {
         LocalSessionProjection::IdentityOnly => AgentStatus::Idle,
         LocalSessionProjection::Lifecycle(projection) => projection.status,
@@ -894,6 +899,10 @@ fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
     );
     state.registered_at = Some(observation.created_at);
     state.login.clone_from(&observation.login);
+    state.lane = own_lanes
+        .get(observation.workspace.to_string_lossy().as_ref())
+        .cloned();
+    state.project_lane();
     state
 }
 

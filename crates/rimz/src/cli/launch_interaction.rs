@@ -103,7 +103,7 @@ impl Interaction for CliInteraction {
                 &result.compacted,
             )?,
             Notice::PickerReceipt { kind, lane } => {
-                write_picker_receipt(&mut render::out(), kind, Some(&lane.label()))?
+                write_picker_receipt(&mut render::out(), kind, Some(lane.routing_name().as_str()))?
             }
             Notice::ResumeAnnouncement(plan) => {
                 write_resume_announcement(&mut render::out(), plan)?
@@ -143,9 +143,13 @@ impl LayoutReceipt for LaunchedLayout {
             return Ok(());
         }
         let paths = store.paths();
-        let lane_label = self.lane.label();
+        let lane_label = self.lane.routing_name();
         if self.pick_session {
-            return write_picker_receipt(w, self.identities[0].kind.as_str(), Some(&lane_label));
+            return write_picker_receipt(
+                w,
+                self.identities[0].kind.as_str(),
+                Some(lane_label.as_str()),
+            );
         }
         // The agents are already launched, so an unreadable snapshot only
         // costs the receipt its list handles.
@@ -155,7 +159,7 @@ impl LayoutReceipt for LaunchedLayout {
             w,
             &LaunchReceipt {
                 team: self.team.as_ref().map(|(name, team)| (name.as_str(), team)),
-                channel: Some(&lane_label),
+                channel: Some(lane_label.as_str()),
                 cwd: &self.cwd,
                 identities: &self.identities,
                 handles: &handles,
@@ -168,7 +172,7 @@ impl LayoutReceipt for LaunchedLayout {
             w,
             &self.identities,
             self.peer.as_ref(),
-            self.lane.stored_name().and(Some(&lane_label)),
+            (!self.lane.is_trunk()).then_some(lane_label.as_str()),
             paths,
         )
     }
@@ -507,7 +511,7 @@ fn write_resume_receipt(
     write_launch_hints(
         w,
         instance.as_ref(),
-        Some(&lane.label()),
+        Some(lane.routing_name().as_str()),
         resume_hint_handle(plan, fresh_identities),
         leader,
     )

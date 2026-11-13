@@ -138,6 +138,7 @@ pub fn cached_alive_snapshot(
     if let Some(frame_panes) = frame_panes {
         let (panes, projection) =
             read_published_agent_projection(&base, frame_panes, runtime, session, None);
+        super::enrich::fill_own_lanes(&mut base, &panes, &projection.local_sessions);
         base = base.with_local_sessions(&panes, projection.local_sessions);
     }
     base

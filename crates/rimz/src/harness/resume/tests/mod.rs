@@ -40,6 +40,51 @@ fn agent(kind: &str, id: &str, worktree: &str, secs_ago: i64) -> AgentState {
     }
 }
 
+/// The own lane of the fixture checkout at `path`, as a launch there stamps it:
+/// the project root `/repo` is trunk, any other checkout a worktree.
+fn checkout_lane(path: &str) -> crate::ids::Lane {
+    let home = if path == "/repo" {
+        crate::ids::LaneHome::Trunk
+    } else {
+        crate::ids::LaneHome::Worktree
+    };
+    crate::ids::Lane::own(home, path)
+}
+
+/// `agent` in the named lane `name`, homed at its checkout.
+fn in_lane(mut agent: AgentState, name: &str) -> AgentState {
+    set_lane(&mut agent, name);
+    agent
+}
+
+/// Put `agent` in the named lane `name`, homed at its checkout.
+fn set_lane(agent: &mut AgentState, name: &str) {
+    let home = agent
+        .lane
+        .take()
+        .unwrap_or_else(|| checkout_lane(launch_checkout(agent)));
+    agent.lane = Some(home.named(name.parse().expect("lane name")));
+    agent.channel = Some(name.to_owned());
+    agent.root_lane = false;
+}
+
+/// Put `agent` in trunk's own lane at its checkout.
+fn set_trunk(agent: &mut AgentState) {
+    let path = launch_checkout(agent).to_owned();
+    agent.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Trunk, path));
+    agent.root_lane = true;
+}
+
+/// The checkout a launch of `agent` stamped its lane at: an empty-dir row's
+/// displaced checkout, else its worktree.
+fn launch_checkout(agent: &AgentState) -> &str {
+    agent
+        .checkout
+        .as_deref()
+        .or(agent.worktree_path.as_deref())
+        .unwrap_or("/repo")
+}
+
 /// As [`agent`], but stamped on an explicit pane id so a test can model two
 /// sessions sharing one pane (a relaunch in place) rather than the default
 /// one-pane-per-id.
@@ -426,7 +471,6 @@ fn cohort_with(
         liveness,
         cells,
         team,
-        Path::new("/repo"),
         worktree_exists,
         session_backed,
     )

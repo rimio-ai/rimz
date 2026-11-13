@@ -373,7 +373,7 @@ fn hook_only_registration_takes_and_keeps_its_checkouts_own_lane() {
     let foreign = env.home_root.join("elsewhere");
     std::fs::create_dir_all(&foreign).unwrap();
     crate::common::git::init_repo(&foreign);
-    let own = |dir: &std::path::Path| rimz::harness::lanes::own_lane(&env.project_root, dir);
+    let own = |dir: &std::path::Path| rimz::worktree::own_lane(&env.project_root, dir);
 
     for (pane, session, dir) in [
         ("3", "trunk-hook", &env.project_root),
@@ -438,6 +438,56 @@ fn a_named_lane_agents_transcript_entries_carry_its_lane_name() {
             entry.channel.as_ref().map(rimz::ids::LaneName::as_str),
             Some("design"),
             "{entry:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_sessionless_wired_pane_is_addressed_in_its_checkouts_own_lane() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    env.rimz()
+        .args(["worktree", "new", "auth"])
+        .assert()
+        .success();
+    let worktree = rimz::utils::path::normalize_path_lexical(
+        &rimz::worktree::worktree_path(&env.project_root, &Default::default(), "auth").unwrap(),
+    );
+
+    for (dir, lane) in [(&worktree, "auth"), (&env.project_root, "main")] {
+        let mut pane = agent_pane(&env, "claude");
+        pane.cwd = Some(dir.display().to_string());
+        let own = rimz::worktree::own_lane(&env.project_root, dir);
+        let snapshot = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
+        assert_eq!(
+            snapshot["agent_panes"][0]["lane"],
+            serde_json::to_value(&own).unwrap(),
+            "#{lane}: {:#}",
+            snapshot["agent_panes"]
+        );
+
+        let pane_fixture = env.write_pane_fixture(&[pane]);
+        let sent = env
+            .rimz()
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env(
+                "RIMZ_TEST_ZELLIJ_LOG",
+                env.project_root.join(format!("zellij-{lane}-trace.log")),
+            )
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "--steer", &format!("@claude#{lane}"), "--", "hi"])
+            .output()
+            .expect("message the sessionless pane");
+        assert!(
+            sent.status.success(),
+            "#{lane}: {}",
+            String::from_utf8_lossy(&sent.stderr)
         );
     }
 }

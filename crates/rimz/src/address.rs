@@ -22,21 +22,20 @@
 //! audit records, but a pane-bearing snapshot exposes one recipient: only the
 //! launch occupant claims live addresses.
 //!
-//! The channel is the workspace segment the room groups by — an explicit named
-//! lane, else a worktree name, else an in-place named team stamped at launch as
-//! `<dir>/<team>`, else the lane-path basename (checkout before process cwd). Callers pass the *current*
-//! channel; an explicit `#name`, `--channel name`, or `--worktree name` overrides it. A
-//! `None` current channel means **all
+//! The channel is the lane the room groups by, named by its one name: an
+//! explicit named lane (an in-place team at trunk is the lane of the team), else
+//! a worktree's directory, else `main` for trunk. Callers pass the *current*
+//! channel; an explicit `#name`, `--channel name`, or `--worktree name` overrides
+//! it. A `None` current channel means **all
 //! channels** — it never silently narrows to "only worktree-less agents", so
 //! addressing the room from a bare directory workspace still reaches every
 //! agent.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::agents::petname::{sender_handle, sender_label};
-use crate::ids::{AgentKind, AgentSessionId, Lane, LaneHome, LaneName, PaneId, TeamInstanceId};
+use crate::ids::{AgentKind, AgentSessionId, LaneName, PaneId, TeamInstanceId};
 use crate::store::message::{MessageRecord, MessageSender, REPLY_WANTED_MARK};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, find_agent};
 
@@ -64,21 +63,12 @@ impl AddressContext {
         }
         self.channel.clone().map(LaneSelector::named)
     }
-
-    /// The ambient human lane name, without changing its routing key.
-    pub fn lane_label(&self) -> Option<String> {
-        let trunk = self.origin == ChannelOrigin::Root;
-        self.channel
-            .as_ref()
-            .map(|name| name.label(trunk).to_owned())
-    }
 }
 
-/// A lane named by user input (`#name`, `--channel`, a listing filter) or by an
-/// older record's lane string: trunk's own lane, or a lane name.
+/// A lane named by user input (`#name`, `--channel`, a listing filter) or by a
+/// record's lane string: trunk's own lane, or a lane name.
 ///
-/// [`LaneSelector::parse`] is the one place such a string becomes a lane, and
-/// it alone holds trunk's aliases.
+/// [`LaneSelector::parse`] is the one place such a string becomes a lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaneSelector {
     trunk: bool,
@@ -86,21 +76,12 @@ pub struct LaneSelector {
 }
 
 impl LaneSelector {
-    /// Read `raw` as a lane. Trunk's aliases are an absent or empty value,
-    /// `main`, the project directory's name, and the project root's path; any
-    /// text is also a lane name, made one the way a directory's name is, so
-    /// `main` still reaches an older row stamped with it.
-    pub fn parse(raw: Option<&str>, project_root: Option<&Path>) -> Self {
-        let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
-            return Self::trunk();
-        };
-        let trunk = raw == LaneName::TRUNK_LABEL
-            || project_root.is_some_and(|root| {
-                Path::new(raw) == root || trunk_lane_name(root).as_str() == raw
-            });
-        Self {
-            trunk,
-            name: Some(LaneName::dashed(raw)),
+    /// Read `raw` as a lane: absent, empty, or `main` is trunk's own lane, and
+    /// any other text is a lane name, made one the way a directory's name is.
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw.filter(|raw| !raw.is_empty()) {
+            None | Some(LaneName::TRUNK) => Self::trunk(),
+            Some(raw) => Self::named(LaneName::dashed(raw)),
         }
     }
 
@@ -124,17 +105,14 @@ impl LaneSelector {
         self.trunk
     }
 
-    /// The lane name the text spelled, absent for trunk read from no text.
+    /// The lane name the text spelled, absent for trunk.
     pub fn name(&self) -> Option<&LaneName> {
         self.name.as_ref()
     }
 
-    /// How the lane reads to a person: `main` for trunk, else the name.
+    /// The lane's name: `main` for trunk, else the name.
     pub fn label(&self) -> &str {
-        match &self.name {
-            Some(name) => name.label(self.trunk),
-            None => LaneName::TRUNK_LABEL,
-        }
+        self.name.as_ref().map_or(LaneName::TRUNK, LaneName::as_str)
     }
 
     /// Whether two selectors name one lane, a slash name and its dashed form
@@ -147,67 +125,41 @@ impl LaneSelector {
             other
                 .name
                 .as_ref()
-                .is_some_and(|name| lane.holds(Some(name), false, None))
+                .is_some_and(|name| lane.holds(Some(name), false))
         };
         holds(self, other) || holds(other, self)
     }
 
     /// Whether a durable record stamped with lane name `recorded` is in the
-    /// lane: a trunk selector holds every record that spells trunk (no name,
-    /// `main`, or the project directory's name), any other one holds records
-    /// of every name it accepts for a row (the dashed slash form), a checkout's
-    /// path holding records of that checkout's own lane.
-    pub fn holds_record(&self, recorded: Option<&LaneName>, project_root: Option<&Path>) -> bool {
-        let reading = Self::parse(recorded.map(LaneName::as_str), project_root);
+    /// lane: a trunk selector holds records stamped `main`, any other one
+    /// holds records of every name it accepts for a row (the dashed slash
+    /// form). A record with no lane is in none.
+    pub fn holds_record(&self, recorded: Option<&LaneName>) -> bool {
+        let Some(recorded) = recorded else {
+            return false;
+        };
         if self.trunk {
-            return reading.trunk;
+            return recorded.as_str() == LaneName::TRUNK;
         }
-        let path_lane = self
-            .name
-            .as_ref()
-            .filter(|filter| Path::new(filter.as_str()).is_absolute())
-            .map(|path| Lane::own(LaneHome::Worktree, path.as_str()).routing_name());
-        self.holds(reading.name.as_ref(), false, None)
-            || path_lane.is_some_and(|name| reading.name.as_ref() == Some(&name))
+        self.holds(Some(recorded), false)
     }
 
-    /// Whether a row of this lane name and trunk reading, homed at `own_path`
-    /// when it is its checkout's own lane, is in the lane: trunk's own lane for
-    /// a trunk alias, a lane of the name or its dashed slash form, or the own
-    /// lane of the checkout the text names by path.
-    fn holds(&self, name: Option<&LaneName>, trunk: bool, own_path: Option<&str>) -> bool {
-        if self.trunk && trunk {
-            return true;
+    /// Whether a row of this lane name and trunk reading is in the lane:
+    /// trunk's own lane for trunk, else a lane of the name or its dashed slash
+    /// form that is not trunk's.
+    fn holds(&self, name: Option<&LaneName>, trunk: bool) -> bool {
+        if self.trunk || trunk {
+            return self.trunk && trunk;
         }
         let Some(filter) = &self.name else {
             return false;
         };
         let dashed = crate::ids::dashed_name(filter.as_str());
         name.is_some_and(|name| name == filter || name.as_str() == dashed)
-            || own_path.is_some_and(|path| path == filter.as_str())
     }
 }
 
-/// The routing name trunk's own lane at `project_root` carries in records.
-pub fn trunk_lane_name(project_root: &Path) -> LaneName {
-    Lane::own(LaneHome::Trunk, project_root.to_string_lossy()).routing_name()
-}
-
-/// How a durable record's lane string reads to a person, against the project
-/// at `project_root`: `main` when it spells trunk's own lane, else as stored.
-pub fn record_lane_label<'a>(
-    channel: Option<&'a str>,
-    project_root: Option<&Path>,
-) -> Option<&'a str> {
-    if LaneSelector::parse(channel, project_root).is_trunk() {
-        Some(LaneName::TRUNK_LABEL)
-    } else {
-        channel
-    }
-}
-
-/// How `agent`'s lane reads to a person: `main` for trunk's own lane, else
-/// its lane name.
+/// `agent`'s lane name as text.
 pub fn lane_label(agent: &AgentState) -> Option<String> {
     Candidate::lane_label(agent)
 }
@@ -316,10 +268,6 @@ trait Candidate<'a>: Copy {
     fn role(self) -> Option<&'a str>;
     fn lane_name(self) -> Option<LaneName>;
     fn in_trunk(self) -> bool;
-    /// The row's checkout path while the row is its checkout's own lane.
-    fn own_lane_path(self) -> Option<&'a str>;
-    /// A lane-less row's stamp no lane name can hold, shown as written.
-    fn stamp_label(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
@@ -327,14 +275,9 @@ trait Candidate<'a>: Copy {
         prefer_claimed(candidates)
     }
 
-    /// The human lane label, else a placeholder.
+    /// The lane name as text.
     fn lane_label(self) -> Option<String> {
-        if self.in_trunk() {
-            return Some(LaneName::TRUNK_LABEL.to_owned());
-        }
-        self.stamp_label()
-            .map(ToOwned::to_owned)
-            .or_else(|| self.lane_name().map(String::from))
+        self.lane_name().map(String::from)
     }
 
     /// The human lane label, else a placeholder.
@@ -344,11 +287,7 @@ trait Candidate<'a>: Copy {
     }
 
     fn in_lane(self, lane: &LaneSelector) -> bool {
-        lane.holds(
-            self.lane_name().as_ref(),
-            self.in_trunk(),
-            self.own_lane_path(),
-        )
+        lane.holds(self.lane_name().as_ref(), self.in_trunk())
     }
 }
 
@@ -388,12 +327,6 @@ impl<'a> Candidate<'a> for &'a AgentState {
     }
     fn in_trunk(self) -> bool {
         AgentState::in_trunk(self)
-    }
-    fn own_lane_path(self) -> Option<&'a str> {
-        AgentState::own_lane_path(self)
-    }
-    fn stamp_label(self) -> Option<&'a str> {
-        AgentState::stamp_label(self)
     }
     fn session_id(self) -> Option<&'a str> {
         (!self.agent_id.is_provisional()).then(|| self.agent_id.as_str())
@@ -451,17 +384,6 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn in_trunk(self) -> bool {
         PaneAgent::in_trunk(self)
-    }
-    fn own_lane_path(self) -> Option<&'a str> {
-        let own = match &self.lane {
-            Some(lane) => lane.name().is_none(),
-            None => self.channel.as_deref().is_none_or(str::is_empty),
-        };
-        own.then(|| self.lane_path()).flatten()
-    }
-    fn stamp_label(self) -> Option<&'a str> {
-        let stamp = self.channel.as_deref().filter(|_| self.lane.is_none())?;
-        stamp.parse::<LaneName>().is_err().then_some(stamp)
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
@@ -557,7 +479,6 @@ impl<'a> Roster<'a> {
             current_channel,
             &self.candidates,
             &self.launch_candidates,
-            self.snapshot.project_root.as_deref(),
             |lane| self.in_lane(lane),
         )
     }
@@ -602,10 +523,6 @@ pub(crate) fn resolve_agents<'a>(
         current_channel,
         candidates,
         &launch_candidates,
-        candidates
-            .iter()
-            .filter(|agent| agent.in_trunk())
-            .find_map(|agent| agent.lane_path().map(Path::new)),
     )
 }
 
@@ -638,13 +555,7 @@ pub fn resolve_targets<'a>(
     current_channel: &AddressContext,
 ) -> Result<Vec<&'a PaneAgent>, TargetErr> {
     let candidates: Vec<&PaneAgent> = snapshot.agent_panes.iter().collect();
-    resolve_mentions(
-        raw,
-        worktree_flag,
-        current_channel,
-        &candidates,
-        snapshot.project_root.as_deref(),
-    )
+    resolve_mentions(raw, worktree_flag, current_channel, &candidates)
 }
 
 /// One resolved live pane and any lifecycle card it represents.
@@ -756,7 +667,6 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
     worktree_flag: Option<&str>,
     current_channel: &AddressContext,
     candidates: &[C],
-    project_root: Option<&Path>,
 ) -> Result<Vec<C>, TargetErr> {
     resolve_mentions_with_launch_candidates(
         raw,
@@ -764,7 +674,6 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
         current_channel,
         candidates,
         candidates,
-        project_root,
     )
 }
 
@@ -787,7 +696,6 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
     current_channel: &AddressContext,
     candidates: &[C],
     launch_candidates: &[C],
-    project_root: Option<&Path>,
 ) -> Result<Vec<C>, TargetErr> {
     resolve_in_lanes(
         raw,
@@ -795,7 +703,6 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
         current_channel,
         candidates,
         launch_candidates,
-        project_root,
         |lane| {
             (
                 channel_candidates(candidates, lane),
@@ -813,7 +720,6 @@ fn resolve_in_lanes<'a, C: Candidate<'a>>(
     current_channel: &AddressContext,
     candidates: &[C],
     launch_candidates: &[C],
-    project_root: Option<&Path>,
     in_lane: impl FnOnce(Option<&LaneSelector>) -> (Vec<C>, Vec<C>),
 ) -> Result<Vec<C>, TargetErr> {
     match parse_target(raw)? {
@@ -829,11 +735,10 @@ fn resolve_in_lanes<'a, C: Candidate<'a>>(
                 channel.as_deref(),
                 worktree_flag,
                 current_channel.channel.as_ref().map(LaneName::as_str),
-                project_root,
             )?;
             let lane = channel
                 .as_deref()
-                .map(|channel| LaneSelector::parse(Some(channel), project_root));
+                .map(|channel| LaneSelector::parse(Some(channel)));
             // A full session id is a pinned instance address, so it resolves
             // across channels like a pane id. Short prefixes still use the
             // channel-scoped selector path below.
@@ -933,7 +838,6 @@ pub fn create_mention(
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
-    project_root: Option<&Path>,
 ) -> Result<Option<CreateMention>, TargetErr> {
     match parse_target(raw)? {
         Target::Pane(_)
@@ -942,13 +846,8 @@ pub fn create_mention(
             ..
         } => Ok(None),
         Target::Mention { channel, .. } => {
-            let channel = reconcile_channel(
-                raw,
-                channel.as_deref(),
-                worktree_flag,
-                current_channel,
-                project_root,
-            )?;
+            let channel =
+                reconcile_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
             Ok(Some(CreateMention {
                 selector: selector_of(raw).to_owned(),
                 channel,
@@ -975,7 +874,6 @@ pub fn reconcile_channel(
     inline: Option<&str>,
     flag: Option<&str>,
     current: Option<&str>,
-    project_root: Option<&Path>,
 ) -> Result<Option<String>, TargetErr> {
     if let Some(channel) = inline.filter(|channel| channel.contains('#')) {
         return Err(TargetErr::InvalidChannel {
@@ -984,8 +882,7 @@ pub fn reconcile_channel(
         });
     }
     let same_lane = |channel: &str, flag: &str| {
-        LaneSelector::parse(Some(channel), project_root)
-            .same_lane(&LaneSelector::parse(Some(flag), project_root))
+        LaneSelector::parse(Some(channel)).same_lane(&LaneSelector::parse(Some(flag)))
     };
     let reconciled = match (inline, flag) {
         (Some(channel), Some(flag)) if !same_lane(channel, flag) => {
@@ -1581,9 +1478,9 @@ fn by_registration(mut children: Vec<&AgentState>) -> Vec<&AgentState> {
 
 /// The team whose members occupy this lane, from the durable rollup.
 ///
-/// A team launch stamps its lane three ways — an explicit channel name, a
-/// worktree basename, or `<dir>/<team>` in place — so the channel string does
-/// not name the team. The stamped `team` on the lane's agents does. `None` when
+/// A team launch takes an explicit channel name, a worktree's own lane, or the
+/// team's own name in place at trunk, so the channel string need not name the
+/// team. The stamped `team` on the lane's agents does. `None` when
 /// the lane holds no team members, or holds members of more than one team.
 pub fn channel_team<'a>(agents: &'a [AgentState], channel: &LaneName) -> Option<&'a str> {
     let mut found: Option<&str> = None;
@@ -1665,17 +1562,12 @@ pub fn paste_address(
 /// taking live identity when visible and launch identity otherwise, and ends its
 /// `From:` line with [`REPLY_WANTED_MARK`] when the sender wants a reply.
 /// System-authored text stays verbatim.
-pub(crate) fn record_header(
-    record: &MessageRecord,
-    peers: &[&AgentState],
-    project_root: Option<&Path>,
-) -> Option<String> {
+pub(crate) fn record_header(record: &MessageRecord, peers: &[&AgentState]) -> Option<String> {
     header(
         &record.sender,
         record.reply_wanted,
         peers,
         record.channel.as_ref(),
-        project_root,
     )
 }
 
@@ -1685,9 +1577,8 @@ pub(crate) fn message_header(
     sender: &MessageSender,
     peers: &[&AgentState],
     target_channel: Option<&LaneName>,
-    project_root: Option<&Path>,
 ) -> Option<String> {
-    header(sender, false, peers, target_channel, project_root)
+    header(sender, false, peers, target_channel)
 }
 
 fn header(
@@ -1695,7 +1586,6 @@ fn header(
     reply_wanted: bool,
     peers: &[&AgentState],
     target_channel: Option<&LaneName>,
-    project_root: Option<&Path>,
 ) -> Option<String> {
     if matches!(sender, MessageSender::Human) {
         return Some("Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned());
@@ -1709,7 +1599,7 @@ fn header(
             notice.header_type()
         ));
     }
-    let handle = agent_sender_handle(sender, peers, target_channel, project_root)?;
+    let handle = agent_sender_handle(sender, peers, target_channel)?;
     let MessageSender::Agent { kind, profile, .. } = sender else {
         return None;
     };
@@ -1739,12 +1629,10 @@ fn live_sender<'a>(sender: &MessageSender, peers: &[&'a AgentState]) -> Option<&
 }
 
 /// The canonical handle used in an agent-authored message header.
-/// An absent sender's recorded channel is labelled as a lane of the project at `project_root`.
 pub fn agent_sender_handle(
     sender: &MessageSender,
     peers: &[&AgentState],
     target_channel: Option<&LaneName>,
-    project_root: Option<&Path>,
 ) -> Option<String> {
     let MessageSender::Agent {
         kind,
@@ -1770,12 +1658,7 @@ pub fn agent_sender_handle(
         },
     );
     let include_channel = channel != target_channel;
-    let lane_label = live.and_then(Candidate::lane_label).or_else(|| {
-        channel
-            .and_then(|channel| record_lane_label(Some(channel.as_str()), project_root))
-            .map(str::to_owned)
-    });
-    let channel = lane_label.as_deref();
+    let channel = channel.map(LaneName::as_str);
     let mut handle = sender_handle(role, name, kind);
     if include_channel && let Some(channel) = channel.filter(|value| !value.is_empty()) {
         handle.push('#');

@@ -323,6 +323,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         wired_kinds,
         untracked_kinds,
         wired_default_models,
+        own_lanes,
         agent_panes,
         own_view,
         only_daemon_view_remains,
@@ -375,6 +376,7 @@ pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnaps
         && wired_kinds == &right.wired_kinds
         && untracked_kinds == &right.untracked_kinds
         && wired_default_models == &right.wired_default_models
+        && own_lanes == &right.own_lanes
         && own_view == &right.own_view
         && only_daemon_view_remains == &right.only_daemon_view_remains
         && project_root == &right.project_root

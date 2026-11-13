@@ -601,8 +601,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_loop_booking_chain_contract_is_version_97() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 97);
+fn snapshot_lane_group_contract_is_version_98() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 98);
+}
+
+#[test]
+fn pre_98_trunk_basename_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(97);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views that read trunk's basename or a lane-less row as trunk must refold"
+    );
 }
 
 #[test]

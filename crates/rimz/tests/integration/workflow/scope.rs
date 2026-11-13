@@ -69,7 +69,7 @@ fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
         show(&env, id)["record"]["scope"]["path"],
         json!(env.project_root)
     );
-    assert!(success(command(&env, &["workflow", "show", id])).starts_with("review#project"));
+    assert!(success(command(&env, &["workflow", "show", id])).starts_with("review#main"));
     success(command(&env, &["workflow", "cancel", id]));
 }
 

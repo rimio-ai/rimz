@@ -5,7 +5,10 @@ use std::borrow::Borrow;
 fn root_lane_stamp_copies_only_changed_rows() {
     let stable = agent("claude", "stable", AgentStatus::Idle, 1_000);
     let mut root = agent("claude", "root", AgentStatus::Idle, 1_000);
-    root.worktree_path = Some("/tmp/root".to_owned());
+    root.lane = Some(crate::ids::Lane::own(
+        crate::ids::LaneHome::Trunk,
+        "/tmp/root",
+    ));
     let original = FoldCarryover {
         agents: vec![stable.into(), root.into()],
         ..Default::default()

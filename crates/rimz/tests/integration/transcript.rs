@@ -292,12 +292,12 @@ fn transcript_cli_bounds_human_stdout_but_not_json_or_zero() {
 }
 
 #[test]
-fn main_transcript_filter_stays_in_current_workspace_and_matches_root_records() {
+fn main_transcript_filter_stays_in_current_workspace_and_holds_trunks_records_alone() {
     let env = Env::new();
     env.record(&env.project_root);
     let paths = env.store().paths().clone();
     for (id, channel, text) in [
-        ("root", Some("project"), "root record"),
+        ("root", Some("project"), "old spelling record"),
         ("legacy", None, "legacy record"),
         ("named", Some("main"), "named main record"),
         ("other", Some("feature"), "other record"),
@@ -313,32 +313,32 @@ fn main_transcript_filter_stays_in_current_workspace_and_matches_root_records() 
         entry.from = Some("@sender#project".to_owned());
         rimz::transcript::append(&paths, &entry).unwrap();
     }
-    for channel in ["main", "project", env.project_root.to_str().unwrap()] {
+    let filtered = |channel: &str| {
         let output = env
             .rimz()
             .args(["transcript", &format!("#{channel}"), "--all"])
             .output()
             .unwrap();
-        let text = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            text.contains("root record") && text.contains("legacy record"),
-            "{text}"
-        );
-        assert!(!text.contains("other record"), "{text}");
-        assert!(text.contains("named main record"), "{text}");
-        assert!(text.contains("#main"), "{text}");
-        assert!(!text.contains("@sender#project"), "{text}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // An entry with no lane, or with trunk's old spelling, is not trunk's.
+    let text = filtered("main");
+    assert!(text.contains("named main record"), "{text}");
+    for absent in ["old spelling record", "legacy record", "other record"] {
+        assert!(!text.contains(absent), "{absent}: {text}");
+    }
+    assert!(text.contains("#main"), "{text}");
+    // Neither trunk's old spelling nor its path names trunk.
+    for channel in ["project", env.project_root.to_str().unwrap()] {
+        let text = filtered(channel);
+        for absent in ["named main record", "legacy record"] {
+            assert!(!text.contains(absent), "{channel}: {absent}: {text}");
+        }
     }
     let text = env.rimz().args(["transcript", "--all"]).output().unwrap();
     assert!(text.status.success());
     let text = String::from_utf8_lossy(&text.stdout);
-    assert!(text.contains("@sender#main"), "{text}");
-    assert!(!text.contains("@sender#project"), "{text}");
+    assert!(text.contains("@sender#project"), "{text}");
 }
 
 #[test]

@@ -4,7 +4,7 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::AgentStatus;
-use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, Lane, LaneHome, MuxName, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::store::message::{
     HarnessNotice, HeaderKind, MessageRecord, MessageSender, parse_message_header,
@@ -287,7 +287,7 @@ fn ambiguity_lists_round_tripping_addresses_and_full_count() {
         peer.name = Some(format!("peer-{n}"));
         peer.role = Some("coder".to_owned());
         if n == 0 {
-            peer.channel = Some("docs".to_owned());
+            in_lane(&mut peer, "docs");
         }
         std::sync::Arc::make_mut(&mut snapshot.agents).push(peer);
     }
@@ -360,14 +360,8 @@ fn ambiguity_for_unbound_panes_uses_pane_addresses() {
         "2 agents: zellij:terminal_1, zellij:terminal_2"
     );
     for pane in &peers {
-        let matches = resolve_mentions(
-            &pane.pane_id.to_string(),
-            None,
-            &context(None),
-            &candidates,
-            None,
-        )
-        .unwrap();
+        let matches =
+            resolve_mentions(&pane.pane_id.to_string(), None, &context(None), &candidates).unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].pane_id, pane.pane_id);
     }
@@ -447,13 +441,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
         channel: Some(crate::ids::LaneName::dashed("main")),
     };
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("main")),
-            None
-        )
-        .as_deref(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("main"))).as_deref(),
         Some("Type: AGENT_MESSAGE\nFrom: @coder (codex)\nContent:\n")
     );
 }
@@ -523,13 +511,13 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     let mut snapshot = empty_snapshot();
     let mut planner = agent("claude", "session-planner", None, "terminal_1");
     planner.worktree_path = Some("/code/team-channel".to_owned());
-    planner.channel = Some("team-channel/forge".to_owned());
+    in_lane(&mut planner, "team-channel/forge");
     let mut coder = agent("codex", "session-coder", None, "terminal_2");
     coder.worktree_path = Some("/code/team-channel".to_owned());
-    coder.channel = Some("team-channel/forge".to_owned());
+    in_lane(&mut coder, "team-channel/forge");
     let mut other = agent("codex", "session-other", None, "terminal_3");
     other.worktree_path = Some("/code/team-channel".to_owned());
-    other.channel = Some("team-channel/docs".to_owned());
+    in_lane(&mut other, "team-channel/docs");
     snapshot.agents = vec![planner, coder, other].into();
 
     assert_eq!(
@@ -540,8 +528,8 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
         Some("team-channel/forge")
     );
     assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/forge");
-    assert!((&snapshot.agents[0]).in_lane(&LaneSelector::parse(Some("team-channel/forge"), None)));
-    assert!(!(&snapshot.agents[0]).in_lane(&LaneSelector::parse(Some("team-channel"), None)));
+    assert!((&snapshot.agents[0]).in_lane(&LaneSelector::parse(Some("team-channel/forge"))));
+    assert!(!(&snapshot.agents[0]).in_lane(&LaneSelector::parse(Some("team-channel"))));
 
     let ids: Vec<&str> = resolve_many(
         &snapshot,
@@ -558,34 +546,31 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
 
 #[test]
 fn channel_team_reads_the_stamped_team_of_each_lane_shape() {
-    // In place: the lane is `<dir>/<team>`.
+    // In place at trunk: the lane is the team's name.
     let mut planner = agent("claude", "session-planner", None, "terminal_1");
     planner.worktree_path = Some("/code/team-channel".to_owned());
-    planner.channel = Some("team-channel/forge".to_owned());
+    in_lane(&mut planner, "forge");
     planner.team = Some("forge".to_owned());
     // Worktree: the lane is the directory basename, which names no team at all.
     let mut scout = agent("codex", "session-scout", None, "terminal_2");
     scout.worktree_path = Some("/code/feat-x".to_owned());
-    scout.channel = Some("feat-x".to_owned());
+    in_lane(&mut scout, "feat-x");
     scout.team = Some("forge".to_owned());
     // A teamless agent contributes nothing.
     let mut solo = agent("claude", "session-solo", None, "terminal_3");
     solo.worktree_path = Some("/code/team-channel".to_owned());
-    solo.channel = Some("team-channel/docs".to_owned());
+    in_lane(&mut solo, "docs");
     let agents = vec![planner, scout, solo];
 
     assert_eq!(
-        channel_team(&agents, &"team-channel/forge".parse().unwrap()),
+        channel_team(&agents, &"forge".parse().unwrap()),
         Some("forge")
     );
     assert_eq!(
         channel_team(&agents, &"feat-x".parse().unwrap()),
         Some("forge")
     );
-    assert_eq!(
-        channel_team(&agents, &"team-channel/docs".parse().unwrap()),
-        None
-    );
+    assert_eq!(channel_team(&agents, &"docs".parse().unwrap()), None);
     assert_eq!(
         channel_team(&agents, &"unknown-lane".parse().unwrap()),
         None
@@ -595,10 +580,10 @@ fn channel_team_reads_the_stamped_team_of_each_lane_shape() {
 #[test]
 fn channel_team_declines_a_lane_holding_two_teams() {
     let mut forge = agent("claude", "session-forge", None, "terminal_1");
-    forge.channel = Some("shared".to_owned());
+    in_lane(&mut forge, "shared");
     forge.team = Some("forge".to_owned());
     let mut docs = agent("codex", "session-docs", None, "terminal_2");
-    docs.channel = Some("shared".to_owned());
+    in_lane(&mut docs, "shared");
     docs.team = Some("docs".to_owned());
     let agents = vec![forge, docs];
 
@@ -609,15 +594,15 @@ fn channel_team_declines_a_lane_holding_two_teams() {
 fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("forge".to_owned());
-    team_agent.channel = Some("auth".to_owned());
+    in_lane(&mut team_agent, "auth");
 
     assert_eq!(
         team_agent.lane_name().as_ref().map(LaneName::as_str),
         Some("auth")
     );
     assert_eq!((&team_agent).channel_label(), "auth");
-    assert!((&team_agent).in_lane(&LaneSelector::parse(Some("auth"), None)));
-    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("auth/forge"), None)));
+    assert!((&team_agent).in_lane(&LaneSelector::parse(Some("auth"))));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("auth/forge"))));
 }
 
 #[test]
@@ -631,10 +616,10 @@ fn lane_name_and_in_lane_use_directory_not_branch() {
         Some("auth")
     );
     assert_eq!((&team_agent).channel_label(), "auth");
-    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("auth/forge"), None)));
-    assert!((&team_agent).in_lane(&LaneSelector::parse(Some("auth"), None)));
-    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("scratch"), None)));
-    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("feat/auth"), None)));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("auth/forge"))));
+    assert!((&team_agent).in_lane(&LaneSelector::parse(Some("auth"))));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("scratch"))));
+    assert!(!(&team_agent).in_lane(&LaneSelector::parse(Some("feat/auth"))));
 }
 
 #[test]
@@ -646,7 +631,7 @@ fn branch_style_worktree_filter_matches_dashed_channel() {
         agent.lane_name().as_ref().map(LaneName::as_str),
         Some("feat-great")
     );
-    assert!((&agent).in_lane(&LaneSelector::parse(Some("feat/great"), None)));
+    assert!((&agent).in_lane(&LaneSelector::parse(Some("feat/great"))));
 }
 
 #[test]
@@ -654,15 +639,15 @@ fn explicit_named_channel_wins_over_worktree_and_team() {
     let mut agent = agent("claude", "session-design", Some("feat/auth"), "terminal_1");
     agent.worktree_path = Some("/code/repo".to_owned());
     agent.team = Some("forge".to_owned());
-    agent.channel = Some("design".to_owned());
+    in_lane(&mut agent, "design");
 
     assert_eq!(
         agent.lane_name().as_ref().map(LaneName::as_str),
         Some("design")
     );
     assert_eq!((&agent).channel_label(), "design");
-    assert!((&agent).in_lane(&LaneSelector::parse(Some("design"), None)));
-    assert!(!(&agent).in_lane(&LaneSelector::parse(Some("feat/auth"), None)));
+    assert!((&agent).in_lane(&LaneSelector::parse(Some("design"))));
+    assert!(!(&agent).in_lane(&LaneSelector::parse(Some("feat/auth"))));
 }
 
 #[test]
@@ -688,9 +673,9 @@ fn main_addresses_the_unstamped_project_root() {
     let mut snapshot = empty_snapshot();
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
-    root.root_lane = true;
+    at_trunk(&mut root);
     let mut stamped = agent("codex", "stamped-session", Some("checkout"), "terminal_2");
-    stamped.channel = Some("design".into());
+    in_lane(&mut stamped, "design");
     let other = agent("codex", "other-session", Some("auth"), "terminal_3");
     snapshot.agents = vec![root, stamped, other].into();
     let scope = context(Some("scratch"));
@@ -707,16 +692,17 @@ fn main_addresses_the_unstamped_project_root() {
             .collect::<Vec<_>>(),
         ["root-session"]
     );
-    std::sync::Arc::make_mut(&mut snapshot.agents)[1].channel = Some("main".into());
+    at_trunk(&mut std::sync::Arc::make_mut(&mut snapshot.agents)[1]);
     assert_eq!(
         resolve_many(&snapshot, "@all#main", None, &scope)
             .unwrap()
             .len(),
         2,
-        "main remains available as a stamped lane as well as the root alias"
+        "main reaches every row in trunk's lane"
     );
     let mut root_pane = lazy_pane("codex", "/repo/checkout", "terminal_4");
     root_pane.root_lane = true;
+    root_pane.lane = Some(Lane::own(LaneHome::Trunk, "/repo/checkout"));
     assert_eq!(
         resolve_targets(
             &SidebarSnapshot {
@@ -734,41 +720,42 @@ fn main_addresses_the_unstamped_project_root() {
 }
 
 #[test]
-fn root_lane_handle_round_trips_and_keeps_legacy_aliases() {
+fn root_lane_handle_round_trips_and_only_main_names_trunk() {
     let mut root = agent("codex", "root-roundtrip", Some("checkout"), "terminal_1");
-    root.root_lane = true;
+    at_trunk(&mut root);
     let peers = [&root];
     let rendered = agent_handle(&root, &peers, true);
     assert_eq!(rendered, "@codex#main");
     let scope = context(None);
-    for target in [
-        rendered.as_str(),
-        "@codex#checkout",
-        "@codex#/repo/checkout",
-    ] {
-        assert!(std::ptr::eq(
-            resolve_agent(target, None, &scope, &peers).unwrap(),
-            &root
-        ));
+    assert!(std::ptr::eq(
+        resolve_agent(&rendered, None, &scope, &peers).unwrap(),
+        &root
+    ));
+    for target in ["@codex#checkout", "@codex#/repo/checkout"] {
+        assert!(
+            resolve_agent(target, None, &scope, &peers).is_err(),
+            "{target}"
+        );
     }
-    assert!(agent_in_lane(
+    assert!(agent_in_lane(&root, &LaneSelector::parse(Some("main"))));
+    assert!(!agent_in_lane(
         &root,
-        &LaneSelector::parse(Some("main"), None)
+        &LaneSelector::parse(Some("checkout"))
     ));
     assert_eq!(
         root.lane_name().as_ref().map(LaneName::as_str),
-        Some("checkout")
+        Some("main")
     );
 }
 
 #[test]
-fn explicit_root_alias_misses_use_the_main_header() {
+fn an_explicit_trunk_miss_uses_the_main_header_and_an_old_spelling_its_own() {
     let mut snapshot = empty_snapshot();
     snapshot.project_root = Some(std::path::PathBuf::from("/repo/project"));
     let mut fox = agent("claude", "fox-session", Some("feature"), "terminal_1");
     fox.name = Some("fox".to_owned());
     snapshot.agents = vec![fox].into();
-    for alias in ["main", "project", "/repo/project"] {
+    for alias in ["main", "project"] {
         for (raw, flag) in [
             (format!("@fox#{alias}"), None),
             ("@fox".to_owned(), Some(alias)),
@@ -777,7 +764,7 @@ fn explicit_root_alias_misses_use_the_main_header() {
             let TargetErr::NoMatchInChannel { channel, .. } = error else {
                 panic!("expected scoped miss: {error}");
             };
-            assert_eq!(channel, "main", "{raw} {flag:?}");
+            assert_eq!(channel, alias, "{raw} {flag:?}");
         }
     }
 }
@@ -787,10 +774,10 @@ fn channel_miss_names_origin_root_and_resolving_correction() {
     let mut snapshot = empty_snapshot();
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
-    root.root_lane = true;
+    at_trunk(&mut root);
     let mut design = root.clone();
     design.agent_id = "design-session".into();
-    design.channel = Some("design".into());
+    in_lane(&mut design, "design");
     design.root_lane = false;
     snapshot.agents = vec![root, design].into();
     let mut scope = context(Some("scratchpad"));
@@ -824,6 +811,7 @@ fn channel_miss_names_origin_root_and_resolving_correction() {
     std::sync::Arc::make_mut(&mut snapshot.agents).pop();
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].worktree_path = None;
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].root_lane = false;
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].lane = None;
     let message = resolve_one(&snapshot, "@root-reader", None, &scope)
         .unwrap_err()
         .to_string();
@@ -839,7 +827,7 @@ fn channel_miss_drops_ambient_origin_for_explicit_scopes() {
     let mut snapshot = empty_snapshot();
     let mut root = agent("codex", "root-session", Some("checkout"), "terminal_1");
     root.name = Some("root-reader".into());
-    root.root_lane = true;
+    at_trunk(&mut root);
     snapshot.agents = vec![root].into();
     let mut scope = context(Some("ambient"));
     scope.origin = ChannelOrigin::Directory;
@@ -1049,7 +1037,7 @@ fn message_header_parser_round_trips_attributed_senders() {
             role: role.map(str::to_owned),
             channel: None,
         };
-        let prompt = message_header(&sender, &[], None, None).unwrap() + body;
+        let prompt = message_header(&sender, &[], None).unwrap() + body;
         assert_eq!(
             prompt,
             format!("Type: AGENT_MESSAGE\nFrom: {expected}\nContent:\n{body}")
@@ -1072,27 +1060,15 @@ fn message_header_parser_round_trips_attributed_senders() {
         channel: Some(crate::ids::LaneName::dashed("design")),
     };
 
-    let same_channel = message_header(
-        &sender,
-        &[],
-        Some(&crate::ids::LaneName::dashed("design")),
-        None,
-    )
-    .unwrap()
-        + body;
+    let same_channel =
+        message_header(&sender, &[], Some(&crate::ids::LaneName::dashed("design"))).unwrap() + body;
     assert_eq!(
         parse_message_header(&same_channel),
         Some((HeaderKind::Agent, "@codex".to_owned(), body.to_owned()))
     );
 
-    let cross_channel = message_header(
-        &sender,
-        &[],
-        Some(&crate::ids::LaneName::dashed("main")),
-        None,
-    )
-    .unwrap()
-        + body;
+    let cross_channel =
+        message_header(&sender, &[], Some(&crate::ids::LaneName::dashed("main"))).unwrap() + body;
     assert_eq!(
         parse_message_header(&cross_channel),
         Some((
@@ -1102,20 +1078,17 @@ fn message_header_parser_round_trips_attributed_senders() {
         ))
     );
 
-    let human = message_header(&MessageSender::Human, &[], None, None).unwrap() + body;
+    let human = message_header(&MessageSender::Human, &[], None).unwrap() + body;
     assert_eq!(
         parse_message_header(&human),
         Some((HeaderKind::User, "@user".to_owned(), body.to_owned()))
     );
-    assert_eq!(
-        message_header(&MessageSender::System, &[], None, None),
-        None
-    );
+    assert_eq!(message_header(&MessageSender::System, &[], None), None);
 
     let subagent = MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
     };
-    let report = message_header(&subagent, &[], None, None).unwrap() + body;
+    let report = message_header(&subagent, &[], None).unwrap() + body;
     assert_eq!(
         parse_message_header(&report),
         Some((
@@ -1147,7 +1120,7 @@ fn message_header_parser_round_trips_attributed_senders() {
         ),
     ] {
         let sender = MessageSender::Harness { notice };
-        let prompt = message_header(&sender, &[], None, None).unwrap() + body;
+        let prompt = message_header(&sender, &[], None).unwrap() + body;
         assert_eq!(
             prompt,
             format!("Type: {header_type}\nFrom: @rimz\nContent:\n{body}")
@@ -1199,17 +1172,17 @@ fn marked_record_headers_round_trip_through_the_parser() {
             role: role.map(str::to_owned),
             channel: channel.map(lane),
         });
-        let unmarked = record_header(&record, &[], None).unwrap();
+        let unmarked = record_header(&record, &[]).unwrap();
         assert_eq!(
             unmarked,
-            message_header(&record.sender, &[], Some(&lane("main")), None).unwrap()
+            message_header(&record.sender, &[], Some(&lane("main"))).unwrap()
         );
         assert_eq!(
             unmarked,
             format!("Type: AGENT_MESSAGE\nFrom: {from}\nContent:\n")
         );
         record.reply_wanted = true;
-        let prompt = record_header(&record, &[], None).unwrap() + &record.text;
+        let prompt = record_header(&record, &[]).unwrap() + &record.text;
         assert_eq!(
             prompt,
             format!("Type: AGENT_MESSAGE\nFrom: {from}, wants a reply\nContent:\nDid it land?")
@@ -1244,8 +1217,7 @@ fn unknown_harness_notice_header_and_ack_agree() {
         crate::store::message::DeliveryGate::Done,
     )
     .with_sender(sender);
-    let prompt =
-        message_header(&record.sender, &[], None, None).expect("harness header") + &record.text;
+    let prompt = message_header(&record.sender, &[], None).expect("harness header") + &record.text;
     assert_eq!(
         prompt,
         "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nship it"
@@ -1552,23 +1524,11 @@ fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
     };
 
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("docs")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("docs"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (claude)\nContent:\n"
     );
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("main")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("main"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#docs (claude)\nContent:\n"
     );
 }
@@ -1592,13 +1552,7 @@ fn message_header_uses_explicit_live_handle() {
     };
 
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("docs")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("docs"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @writer (claude)\nContent:\n"
     );
 }
@@ -1665,14 +1619,14 @@ fn message_header_uses_recipient_channel_for_same_lane_fresh_pane() {
         Some(&crate::ids::LaneName::dashed("bandwidth-profiling")),
     );
     assert_eq!(
-        message_header(&sender, &[], same_channel.as_ref(), None).unwrap(),
+        message_header(&sender, &[], same_channel.as_ref()).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\n"
     );
 
     let cross_channel =
         recipient_channel(&target, None, Some(&crate::ids::LaneName::dashed("other")));
     assert_eq!(
-        message_header(&sender, &[], cross_channel.as_ref(), None).unwrap(),
+        message_header(&sender, &[], cross_channel.as_ref()).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @claude#bandwidth-profiling\nContent:\n"
     );
 }
@@ -1698,13 +1652,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
     };
 
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("main")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("main"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @bright-lark (claude)\nContent:\n"
     );
 }
@@ -1722,45 +1670,35 @@ fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
     };
 
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("main")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("main"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#docs (reviewer)\nContent:\n"
     );
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("docs")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("docs"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (reviewer)\nContent:\n"
     );
     let MessageSender::Agent { channel, .. } = &mut sender else {
         unreachable!();
     };
+    *channel = Some(crate::ids::LaneName::dashed("main"));
+    assert_eq!(
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("docs"))).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#main (reviewer)\nContent:\n"
+    );
+    // The project directory's name is trunk's old spelling, read as any lane.
+    let MessageSender::Agent { channel, .. } = &mut sender else {
+        unreachable!();
+    };
     *channel = Some(crate::ids::LaneName::dashed("project"));
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("docs")),
-            Some(std::path::Path::new("/repo/project"))
-        )
-        .unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#main (reviewer)\nContent:\n"
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("docs"))).unwrap(),
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#project (reviewer)\nContent:\n"
     );
     assert_eq!(
         message_header(
             &sender,
             &peers,
-            Some(&crate::ids::LaneName::dashed("project")),
-            Some(std::path::Path::new("/repo/project"))
+            Some(&crate::ids::LaneName::dashed("project"))
         )
         .unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (reviewer)\nContent:\n"
@@ -1788,7 +1726,6 @@ fn message_header_omits_redundant_team_profile() {
                 &sender,
                 &peers,
                 Some(&crate::ids::LaneName::dashed(channel)),
-                None,
             )
             .unwrap();
             assert_eq!(
@@ -1824,13 +1761,7 @@ fn message_header_uses_live_petname_and_profile_label() {
     };
 
     assert_eq!(
-        message_header(
-            &sender,
-            &peers,
-            Some(&crate::ids::LaneName::dashed("auth")),
-            None
-        )
-        .unwrap(),
+        message_header(&sender, &peers, Some(&crate::ids::LaneName::dashed("auth"))).unwrap(),
         "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\n"
     );
 }
@@ -1901,31 +1832,27 @@ fn pane_binding_rejects_wrong_channel_and_stale_panes() {
 #[test]
 fn create_mention_extracts_type_handles_but_not_panes_or_broadcast() {
     // A kind/profile mention yields its selector and resolved channel.
-    let create = create_mention("@planner#auth", None, None, None)
+    let create = create_mention("@planner#auth", None, None)
         .unwrap()
         .expect("creatable mention");
     assert_eq!(create.selector, "planner");
     assert_eq!(create.channel.as_deref(), Some("auth"));
     // The current channel fills in when none is named.
-    let create = create_mention("@codex", None, Some("main"), None)
+    let create = create_mention("@codex", None, Some("main"))
         .unwrap()
         .expect("creatable mention");
     assert_eq!(create.selector, "codex");
     assert_eq!(create.channel.as_deref(), Some("main"));
     // An instance handle still returns its selector — the CLI refuses it by
     // recognising it is neither a kind nor an profile.
-    let create = create_mention("@claude-2", None, Some("main"), None)
+    let create = create_mention("@claude-2", None, Some("main"))
         .unwrap()
         .expect("mention");
     assert_eq!(create.selector, "claude-2");
     // A pane address and the broadcast handle cannot create.
+    assert!(create_mention("tmux:%1", None, None).unwrap().is_none());
     assert!(
-        create_mention("tmux:%1", None, None, None)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        create_mention("@all", None, Some("main"), None)
+        create_mention("@all", None, Some("main"))
             .unwrap()
             .is_none()
     );
@@ -1950,7 +1877,39 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
     )));
     agent.worktree_path = branch.map(|branch| format!("/repo/{branch}"));
     agent.worktree_branch = branch.map(ToOwned::to_owned);
+    agent.lane = agent.worktree_path.as_deref().map(checkout_lane);
     agent
+}
+
+/// The own lane of the fixture checkout at `path`: `/repo/main` is trunk.
+fn checkout_lane(path: &str) -> Lane {
+    let home = if path.ends_with("/main") {
+        LaneHome::Trunk
+    } else {
+        LaneHome::Worktree
+    };
+    Lane::own(home, path)
+}
+
+/// Put `row` in trunk's own lane at its checkout, as a launch there stamps it.
+fn at_trunk(row: &mut AgentState) {
+    let path = row
+        .worktree_path
+        .clone()
+        .unwrap_or_else(|| "/repo".to_owned());
+    row.lane = Some(Lane::own(LaneHome::Trunk, path));
+    row.root_lane = true;
+}
+
+/// Put `row` in the named lane `name` homed at its checkout.
+fn in_lane(row: &mut AgentState, name: &str) {
+    let home = row
+        .lane
+        .take()
+        .unwrap_or_else(|| Lane::own(LaneHome::Trunk, "/repo"));
+    row.lane = Some(home.named(name.parse().expect("lane name")));
+    row.channel = Some(name.to_owned());
+    row.root_lane = false;
 }
 
 /// A lazy (sessionless) agent pane as the producer would emit it into
@@ -1959,7 +1918,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
     PaneAgent {
         checkout: None,
         root_lane: false,
-        lane: None,
+        lane: Some(checkout_lane(worktree_path)),
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
@@ -2009,7 +1968,7 @@ fn bound_pane(
     PaneAgent {
         checkout: None,
         root_lane: false,
-        lane: None,
+        lane: Some(checkout_lane(&format!("/repo/{branch}"))),
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: Some(ordinal),
         name: Some(name.to_owned()),
@@ -2140,19 +2099,19 @@ fn at_all_fans_to_in_channel_panes_only() {
 fn team_cohorts_group_live_root_members_by_team_and_lane() {
     let mut planner = agent("claude", "planner", Some("auth"), "terminal_1");
     planner.team = Some("forge".to_owned());
-    planner.channel = Some("auth".to_owned());
+    in_lane(&mut planner, "auth");
     let mut coder = agent("codex", "coder", Some("auth"), "terminal_2");
     coder.team = Some("forge".to_owned());
-    coder.channel = Some("auth".to_owned());
+    in_lane(&mut coder, "auth");
     let mut docs = agent("codex", "docs", Some("docs"), "terminal_3");
     docs.team = Some("forge".to_owned());
-    docs.channel = Some("docs".to_owned());
+    in_lane(&mut docs, "docs");
     let mut child = agent("codex", "child", Some("auth"), "terminal_4");
     child.team = Some("forge".to_owned());
     child.parent_agent_id = Some(planner.agent_id.clone());
     let mut launched = agent("codex", "launched", Some("auth"), "terminal_6");
     launched.team = Some("forge".to_owned());
-    launched.channel = Some("auth".to_owned());
+    in_lane(&mut launched, "auth");
     launched.parent_agent_id = Some(planner.agent_id.clone());
     launched.parent_agent_kind = Some(planner.kind.clone());
     launched.launch_depth = Some(1);
@@ -2179,7 +2138,7 @@ fn team_cohorts_keep_only_the_owner_of_an_inherited_launch_identity() {
     rested.launch_id = Some(AgentSessionId::from("launch_coder"));
     rested.team = Some("forge".to_owned());
     rested.role = Some("coder".to_owned());
-    rested.channel = Some("auth".to_owned());
+    in_lane(&mut rested, "auth");
     rested.origin = Some(crate::agents::SessionOrigin::Fresh);
     rested.status = AgentStatus::Success;
     rested.runtime_owner = Some(crate::pane::RuntimeOwner::new(
@@ -2192,7 +2151,7 @@ fn team_cohorts_keep_only_the_owner_of_an_inherited_launch_identity() {
     successor.launch_id = Some(AgentSessionId::from("launch_coder"));
     successor.team = Some("forge".to_owned());
     successor.role = Some("coder".to_owned());
-    successor.channel = Some("auth".to_owned());
+    in_lane(&mut successor, "auth");
     successor.origin = Some(crate::agents::SessionOrigin::Fresh);
     successor.status = AgentStatus::Running;
     successor.runtime_owner = Some(crate::pane::RuntimeOwner::new(
@@ -2638,7 +2597,7 @@ fn claimed_and_unclaimed_reviewers() -> (AgentState, AgentState) {
     registered.kind_ordinal = Some(85);
     registered.role = Some("reviewer".to_owned());
     registered.profile = Some("forge.reviewer".to_owned());
-    registered.channel = Some("attribution-counts".to_owned());
+    in_lane(&mut registered, "attribution-counts");
     registered.launch_id = Some(AgentSessionId::from("launch_01a0bc87a5"));
 
     let mut unclaimed = agent(
@@ -2653,7 +2612,7 @@ fn claimed_and_unclaimed_reviewers() -> (AgentState, AgentState) {
     unclaimed.kind_ordinal = Some(76);
     unclaimed.role = Some("reviewer".to_owned());
     unclaimed.profile = Some("forge.reviewer".to_owned());
-    unclaimed.channel = Some("attribution-counts".to_owned());
+    in_lane(&mut unclaimed, "attribution-counts");
     unclaimed.launch_id = Some(AgentSessionId::from("launch_01a0bc81e1"));
     (registered, unclaimed)
 }
@@ -2952,7 +2911,7 @@ fn live_role_delivery_yields_to_the_molt_successor_and_back_after_startup_failur
 fn the_yield_never_crosses_lanes() {
     let mut snapshot = empty_snapshot();
     let (registered, mut elsewhere) = claimed_and_unclaimed_reviewers();
-    elsewhere.channel = Some("other-lane".to_owned());
+    in_lane(&mut elsewhere, "other-lane");
     elsewhere.worktree_path = Some("/repo/other-lane".to_owned());
     snapshot.agents = vec![registered, elsewhere].into();
 
@@ -3007,26 +2966,13 @@ fn the_yield_never_crosses_lanes() {
 }
 
 #[test]
-fn the_lane_selector_reads_every_trunk_alias_and_the_dashed_slash_form() {
+fn the_lane_selector_reads_only_main_as_trunk_and_the_dashed_slash_form() {
     use crate::ids::{Lane, LaneHome};
-    let root = std::path::Path::new("/repo/checkout");
-    for alias in [
-        None,
-        Some(""),
-        Some("main"),
-        Some("checkout"),
-        Some("/repo/checkout"),
-    ] {
-        assert!(
-            LaneSelector::parse(alias, Some(root)).is_trunk(),
-            "{alias:?}"
-        );
+    for alias in [None, Some(""), Some("main")] {
+        assert!(LaneSelector::parse(alias).is_trunk(), "{alias:?}");
     }
-    for name in ["design", "feat/x", "auth"] {
-        assert!(
-            !LaneSelector::parse(Some(name), Some(root)).is_trunk(),
-            "{name}"
-        );
+    for name in ["design", "feat/x", "auth", "checkout", "/repo/checkout"] {
+        assert!(!LaneSelector::parse(Some(name)).is_trunk(), "{name}");
     }
     let row = |lane: Lane| {
         let mut row = agent("codex", "session", Some("checkout"), "terminal_1");
@@ -3037,56 +2983,73 @@ fn the_lane_selector_reads_every_trunk_alias_and_the_dashed_slash_form() {
     let trunk = Lane::own(LaneHome::Trunk, "/repo/checkout");
     let own = row(trunk.clone());
     let design = row(trunk.clone().named("design".parse().unwrap()));
-    let docs = row(trunk.named("docs".parse().unwrap()));
+    let docs = row(trunk.clone().named("docs".parse().unwrap()));
+    let checkout = row(trunk.named("checkout".parse().unwrap()));
     let feat = row(Lane::own(
         LaneHome::Worktree,
         "/repo/.rimz/worktrees/feat-x",
     ));
-    let lane = |raw: &str| LaneSelector::parse(Some(raw), Some(root));
-    for raw in ["main", "checkout", "/repo/checkout"] {
-        assert!(agent_in_lane(&own, &lane(raw)), "{raw}");
-        assert!(!agent_in_lane(&design, &lane(raw)), "{raw}");
+    let lane = |raw: &str| LaneSelector::parse(Some(raw));
+    assert!(agent_in_lane(&own, &lane("main")));
+    assert!(!agent_in_lane(&design, &lane("main")));
+    assert!(!agent_in_lane(&checkout, &lane("main")));
+    for raw in ["checkout", "/repo/checkout"] {
+        assert!(!agent_in_lane(&own, &lane(raw)), "{raw}");
     }
+    assert!(agent_in_lane(&checkout, &lane("checkout")));
     assert!(agent_in_lane(&design, &lane("design")));
     assert!(!agent_in_lane(&own, &lane("design")));
     assert!(!agent_in_lane(&docs, &lane("design")));
     assert!(agent_in_lane(&feat, &lane("feat/x")));
     assert!(agent_in_lane(&feat, &lane("feat-x")));
+    assert!(!agent_in_lane(&feat, &lane("/repo/.rimz/worktrees/feat-x")));
     assert!(!agent_in_lane(&feat, &lane("design")));
 }
 
 #[test]
 fn reconcile_reads_both_channels_through_the_lane_selector() {
-    let root = Some(std::path::Path::new("/repo/checkout"));
-    for (inline, flag) in [
-        ("main", "checkout"),
-        ("main", "/repo/checkout"),
-        ("feat/x", "feat-x"),
-    ] {
+    for (inline, flag) in [("main", "main"), ("feat/x", "feat-x")] {
         let raw = format!("@x#{inline}");
         assert_eq!(
-            reconcile_channel(&raw, Some(inline), Some(flag), None, root),
+            reconcile_channel(&raw, Some(inline), Some(flag), None),
             Ok(Some(inline.to_owned())),
             "{inline} {flag}"
         );
     }
-    assert!(matches!(
-        reconcile_channel("@x#main", Some("main"), Some("docs"), None, root),
-        Err(TargetErr::ChannelMismatch { .. })
-    ));
+    for flag in ["docs", "checkout", "/repo/checkout"] {
+        assert!(
+            matches!(
+                reconcile_channel("@x#main", Some("main"), Some(flag), None),
+                Err(TargetErr::ChannelMismatch { .. })
+            ),
+            "{flag}"
+        );
+    }
 }
 
 #[test]
 fn a_record_selector_holds_every_form_a_row_selector_holds() {
-    let root = Some(std::path::Path::new("/repo/checkout"));
     let feat = LaneName::dashed("feat-x");
-    for raw in ["feat-x", "feat/x", "/repo/.rimz/worktrees/feat-x"] {
+    for raw in ["feat-x", "feat/x"] {
         assert!(
-            LaneSelector::parse(Some(raw), root).holds_record(Some(&feat), root),
+            LaneSelector::parse(Some(raw)).holds_record(Some(&feat)),
             "{raw}"
         );
     }
-    assert!(!LaneSelector::parse(Some("design"), root).holds_record(Some(&feat), root));
+    for raw in ["design", "/repo/.rimz/worktrees/feat-x"] {
+        assert!(
+            !LaneSelector::parse(Some(raw)).holds_record(Some(&feat)),
+            "{raw}"
+        );
+    }
+    let main = LaneName::dashed("main");
+    let trunk = LaneSelector::parse(Some("main"));
+    assert!(trunk.holds_record(Some(&main)));
+    assert!(!trunk.holds_record(Some(&LaneName::dashed("checkout"))));
+    assert!(
+        !trunk.holds_record(None),
+        "a record with no lane is in no lane"
+    );
 }
 
 #[test]
@@ -3100,7 +3063,7 @@ fn a_typed_lane_with_a_second_hash_is_refused() {
         })
     );
     assert!(matches!(
-        create_mention("@claude#lane#part", None, None, None),
+        create_mention("@claude#lane#part", None, None),
         Err(TargetErr::InvalidChannel { .. })
     ));
 }

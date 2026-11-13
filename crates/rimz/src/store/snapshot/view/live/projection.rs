@@ -73,6 +73,7 @@ impl SidebarSnapshot {
                 kinds: &self.wired_kinds,
                 default_models: &self.wired_default_models,
                 untracked: &self.untracked_kinds,
+                own_lanes: &self.own_lanes,
             },
             self.panes_observed_at_ms.or(self.panes_produced_at_ms),
             now,
@@ -81,13 +82,7 @@ impl SidebarSnapshot {
         for pane in panes {
             match binder.resolve(pane) {
                 PaneBindingDisposition::Agent(agent) => {
-                    agent_panes.push(push_agent_row(
-                        &mut rows,
-                        agent,
-                        pane,
-                        now,
-                        self.project_root.as_deref(),
-                    ));
+                    agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
                     if !pane.is_floating {
                         rendered_agents.push(agent);
                     }
@@ -99,21 +94,21 @@ impl SidebarSnapshot {
                     let row = *row;
                     agent_panes.push(pane_agent_from_sessionless(
                         &row,
+                        row.lane.as_ref(),
                         pane,
                         &row.name,
-                        self.project_root.as_deref(),
                     ));
                     if !pane.is_floating {
                         rows.push(row);
                     }
                 }
-                PaneBindingDisposition::NotTracked { kind, row } => {
+                PaneBindingDisposition::NotTracked { kind, row, lane } => {
                     if let Some(kind) = kind {
                         agent_panes.push(pane_agent_from_sessionless(
                             &row,
+                            lane.as_ref(),
                             pane,
                             kind.as_str(),
-                            self.project_root.as_deref(),
                         ));
                     }
                     if !pane.is_floating {
@@ -153,22 +148,12 @@ impl SidebarSnapshot {
         for (agent, pane) in nested_agents {
             let parent_rendered = rendered_agents.iter().any(|parent| agent.parent_is(parent));
             if parent_rendered {
-                agent_panes.push(pane_agent_from_agent(
-                    agent,
-                    pane,
-                    self.project_root.as_deref(),
-                ));
+                agent_panes.push(pane_agent_from_agent(agent, pane));
             } else {
                 // A pane-backed child can outlive its launching parent. Keep the
                 // normal nested rendering while that parent has a row, but promote
                 // the live child rather than making its pane disappear with it.
-                agent_panes.push(push_agent_row(
-                    &mut rows,
-                    agent,
-                    pane,
-                    now,
-                    self.project_root.as_deref(),
-                ));
+                agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
                 if !pane.is_floating {
                     rendered_agents.push(agent);
                 }
@@ -196,37 +181,25 @@ impl SidebarSnapshot {
     }
 }
 
-/// Whether a row with no stored lane is in trunk's own lane: unstamped, at the
-/// project root. The fold stamps rows with it too. Link 3 deletes it with the
-/// lane-less rows.
-pub(in crate::store::snapshot) fn legacy_root_lane(
-    channel: Option<&str>,
-    lane_path: Option<&str>,
-    project_root: Option<&std::path::Path>,
-) -> bool {
-    channel.is_none_or(str::is_empty)
-        && project_root.is_some_and(|root| lane_path.map(std::path::Path::new) == Some(root))
-}
-
 fn pane_agent_from_sessionless(
     row: &SidebarRow,
+    lane: Option<&crate::ids::Lane>,
     pane: &PaneRef,
     kind: &str,
-    project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
-    // A wired pane carries only its kind and pane — no session, pet name, or
-    // ordinal until a lifecycle hook binds one.
+    // A wired pane carries only its kind, pane, and directory's lane — no
+    // session, pet name, or ordinal until a lifecycle hook binds one.
     PaneAgent {
         checkout: row.checkout.clone(),
-        root_lane: legacy_root_lane(row.channel.as_deref(), row.lane_path(), project_root),
-        lane: row.lane.clone(),
+        root_lane: lane.is_some_and(crate::ids::Lane::is_trunk),
+        lane: lane.cloned(),
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
         name_explicit: false,
         profile: None,
         role: None,
-        channel: row.channel.clone(),
+        channel: lane.and_then(crate::ids::Lane::pin_name).map(Into::into),
         agent_id: None,
         pane_id: pane.pane_id.clone(),
         pane_pid: pane.pane_pid,
@@ -243,7 +216,6 @@ fn push_agent_row(
     agent: &AgentState,
     pane: &PaneRef,
     now: Timestamp,
-    project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
     if !pane.is_floating {
@@ -252,36 +224,22 @@ fn push_agent_row(
         row.pane = Some(pane.clone());
         rows.push(row);
     }
-    pane_agent_from_agent_with_worktree(agent, pane, worktree_path, project_root)
+    pane_agent_from_agent_with_worktree(agent, pane, worktree_path)
 }
 
-fn pane_agent_from_agent(
-    agent: &AgentState,
-    pane: &PaneRef,
-    project_root: Option<&std::path::Path>,
-) -> PaneAgent {
+fn pane_agent_from_agent(agent: &AgentState, pane: &PaneRef) -> PaneAgent {
     let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
-    pane_agent_from_agent_with_worktree(agent, pane, worktree_path, project_root)
+    pane_agent_from_agent_with_worktree(agent, pane, worktree_path)
 }
 
 fn pane_agent_from_agent_with_worktree(
     agent: &AgentState,
     pane: &PaneRef,
     worktree_path: Option<String>,
-    project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     PaneAgent {
         checkout: agent.lane_checkout().map(ToOwned::to_owned),
-        root_lane: agent.lane.as_ref().map_or_else(
-            || {
-                legacy_root_lane(
-                    agent.channel.as_deref(),
-                    agent.lane_path().or(worktree_path.as_deref()),
-                    project_root,
-                )
-            },
-            crate::ids::Lane::is_trunk,
-        ),
+        root_lane: agent.in_trunk(),
         lane: agent.lane.clone(),
         kind: agent.kind.clone(),
         kind_ordinal: agent.kind_ordinal,

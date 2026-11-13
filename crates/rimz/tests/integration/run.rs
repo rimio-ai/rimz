@@ -2535,11 +2535,10 @@ fn assert_subagent_checkout_case(
             matches!(empty, Some("root" | "revoked" | "stubs"))
         );
         // The child keeps the lane of its checkout, the project root's or a
-        // foreign directory's, and neither carries a name.
-        assert_eq!(
-            child.lane.as_ref().map(rimz::ids::Lane::path),
-            lane_path.to_str()
-        );
+        // foreign directory's, and neither carries a name or pins a channel.
+        let lane = child.lane.as_ref().unwrap();
+        assert_eq!(Some(lane.path()), lane_path.to_str());
+        assert_eq!(lane.name(), None);
         assert_eq!(child.channel.as_deref(), None);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -6383,6 +6382,7 @@ fn bare_word_naming_a_live_agent_launches_without_reading_the_room() {
     observation.launch.profile = Some("worker".to_owned());
     observation.launch.role = Some("planner".to_owned());
     observation.launch.team = Some("forge".to_owned());
+    crate::common::wait::stamp_hook_lane(&env, &mut observation);
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
@@ -7114,6 +7114,7 @@ fn register_list_agent(
     observation.worktree_path = Some(env.home_root.join(branch).display().to_string());
     observation.worktree_branch = Some(branch.to_owned());
     observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane_raw));
+    crate::common::wait::stamp_hook_lane(env, &mut observation);
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
@@ -7539,6 +7540,7 @@ fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, sessi
         AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Registered);
     registered.agent_name = Some(name.to_owned());
     registered.worktree_path = Some(env.project_root.display().to_string());
+    crate::common::wait::stamp_hook_lane(env, &mut registered);
     registered.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_11"));
     store
         .append_event(&EventEnvelope::agent_lifecycle(
@@ -8160,6 +8162,7 @@ fn wait_agent_timeout_keeps_typed_address_name_and_reason() {
     );
     registered.agent_name = Some("quiet-fox".to_owned());
     registered.worktree_path = Some(env.project_root.display().to_string());
+    crate::common::wait::stamp_hook_lane(&env, &mut registered);
     store
         .append_event(&EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
@@ -8261,6 +8264,7 @@ fn wait_stream_run_reports_its_agents_blocker() {
     );
     registered.agent_name = Some("quiet-fox".to_owned());
     registered.worktree_path = Some(env.project_root.display().to_string());
+    crate::common::wait::stamp_hook_lane(&env, &mut registered);
     store
         .append_event(&EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),

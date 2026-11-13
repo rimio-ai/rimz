@@ -301,7 +301,7 @@ fn create_from_main_checkout_derived_card_launches_in_place() {
 fn create_from_named_channel_preserves_the_lane() {
     let mut agent = rimz::testkit::agent_state("claude", "caller", Timestamp::UNIX_EPOCH);
     agent.worktree_path = Some("/repo".to_owned());
-    agent.channel = Some("team-lane".to_owned());
+    rimz::testkit::set_lane(&mut agent, "team-lane");
     let args = create_args_for_current_channel("/repo", None, Some(agent));
     assert_eq!(args.launch.cohort.worktree, None);
     assert_eq!(args.launch.cohort.channel.as_deref(), Some("team-lane"));
@@ -309,6 +309,28 @@ fn create_from_named_channel_preserves_the_lane() {
         create_args_for_current_channel("/repo-worktrees/feat-x", Some("explicit-lane"), None);
     assert_eq!(args.launch.cohort.worktree, None);
     assert_eq!(args.launch.cohort.channel.as_deref(), Some("explicit-lane"));
+}
+
+#[test]
+fn create_from_a_foreign_checkout_launches_in_its_own_lane() {
+    let mut agent = rimz::testkit::agent_state("claude", "caller", Timestamp::UNIX_EPOCH);
+    agent.worktree_path = Some("/code/other".to_owned());
+    agent.lane = Some(rimz::worktree::own_lane(
+        std::path::Path::new("/repo"),
+        std::path::Path::new("/code/other"),
+    ));
+    let pinned = agent.lane.as_ref().and_then(rimz::ids::Lane::pin_name);
+    assert_eq!(pinned, None, "a foreign own lane exports no RIMZ_CHANNEL");
+    let args = create_args_for_current_channel(
+        "/code/other",
+        pinned.as_ref().map(rimz::ids::LaneName::as_str),
+        Some(agent),
+    );
+    assert_eq!(args.launch.cohort.worktree, None);
+    assert_eq!(
+        args.launch.cohort.channel, None,
+        "no named lane `other` is opened"
+    );
 }
 
 fn create_args_for_current_channel(
@@ -343,11 +365,10 @@ fn create_args_for_current_channel(
         "@codex",
         None,
         current.as_deref().map(rimz::ids::LaneName::as_str),
-        None,
     )
     .unwrap()
     .unwrap();
-    let args = create_launch_args(create, "@codex", None, None, &current, "hi", None);
+    let args = create_launch_args(create, "@codex", None, None, &current, "hi");
     assert_eq!(args.launch.spec.as_deref(), Some("codex"));
     assert_eq!(args.launch.prompt.as_deref(), Some("hi"));
     args
@@ -1539,16 +1560,16 @@ fn refresh_targets_honor_channel_filter() {
     let now = Timestamp::from_second(2_000).unwrap();
     let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let mut auth = rimz::testkit::agent_state("claude", "auth", now);
-    auth.channel = Some("auth-refresh".to_owned());
     auth.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
+    rimz::testkit::set_lane(&mut auth, "auth-refresh");
     auth.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
     let mut auth_shadow = rimz::testkit::agent_state("claude", "auth-shadow", now);
     auth_shadow.channel = auth.channel.clone();
     auth_shadow.worktree_path = auth.worktree_path.clone();
     auth_shadow.pane = auth.pane.clone();
     let mut docs = rimz::testkit::agent_state("codex", "docs", now);
-    docs.channel = Some("docs".to_owned());
     docs.worktree_path = Some("/repo/main".to_owned());
+    rimz::testkit::set_lane(&mut docs, "docs");
     let mut child = rimz::testkit::agent_state("claude", "child", now);
     child.channel = auth.channel.clone();
     child.parent_agent_id = Some(AgentSessionId::from("auth"));
@@ -2429,12 +2450,8 @@ mod render {
                 agent_in_lane("stray", Some("auth-refresh"), auth_path, None),
                 agent_in_lane("docs", Some("docs"), Some("/repo/main"), None),
                 external,
-                agent_in_lane(
-                    "repeated",
-                    Some("rimz/forge"),
-                    Some("/repo/main"),
-                    Some("forge"),
-                ),
+                agent_in_lane("repeated", Some("forge"), Some("/repo/main"), Some("forge")),
+                agent_in_lane("ops", Some("ops-v2"), Some("/repo/main"), Some("ops v2")),
                 agent_in_lane(
                     "mixed-one",
                     Some("mixed"),
@@ -2487,7 +2504,8 @@ mod render {
             text.contains("⑂ auth-refresh · main · forge team #91 ✓"),
             "{text}"
         );
-        assert!(text.contains("# docs"), "{text}");
+        // A named lane is homed at its checkout, so it heads with that place.
+        assert!(text.contains("⑂ docs · main"), "{text}");
         assert!(text.contains("external"), "{text}");
         // A foreign checkout's lane is its folder, so no qualifier repeats it.
         assert!(
@@ -2499,7 +2517,7 @@ mod render {
             !text.lines().next().unwrap_or_default().contains("CHANNEL"),
             "{text}"
         );
-        for lane in ["rimz/forge", "# mixed"] {
+        for lane in ["⑂ forge", "⑂ mixed", "⑂ ops-v2"] {
             let header = text.lines().find(|line| line.contains(lane)).unwrap();
             assert!(!header.contains("team"), "{text}");
         }
@@ -2514,7 +2532,7 @@ mod render {
         let text = render_agents_text_with_theme(&snapshot, now, 120, &theme);
         assert!(text.contains("\u{e0a0} auth-refresh"), "{text}");
         assert!(text.contains("#91 \u{f058}"), "{text}");
-        assert!(text.contains("\u{f292} docs"), "{text}");
+        assert!(text.contains("\u{e0a0} docs"), "{text}");
     }
 
     #[test]
@@ -3089,9 +3107,23 @@ fn agent_in_lane(
     team: Option<&str>,
 ) -> AgentState {
     let mut agent = agent_with_status(id, AgentStatus::Idle, TurnPhase::Idle, 1_000);
-    agent.channel = channel.map(ToOwned::to_owned);
     agent.worktree_path = worktree.map(ToOwned::to_owned);
     agent.worktree_branch = worktree.map(|_| "main".to_owned());
+    // The render fixtures' project root is `/repo/main`.
+    if worktree == Some("/repo/main") {
+        rimz::testkit::set_trunk(&mut agent);
+    }
+    match (channel, worktree) {
+        (Some(name), _) => rimz::testkit::set_lane(&mut agent, name),
+        (None, Some(path)) if path.starts_with("/home/") => {
+            agent.lane = Some(
+                serde_json::from_value(serde_json::json!({"home": "foreign", "path": path}))
+                    .unwrap(),
+            );
+        }
+        (None, Some(_)) => rimz::testkit::set_own_lane(&mut agent),
+        (None, None) => {}
+    }
     agent.team = team.map(ToOwned::to_owned);
     agent
 }

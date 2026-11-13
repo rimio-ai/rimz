@@ -397,7 +397,7 @@ fn launch_receipt_names_each_agent_by_its_list_handle() {
         );
         agent.name = Some(name.to_owned());
         agent.profile = Some("coder".to_owned());
-        agent.channel = Some("auth".to_owned());
+        rimz::testkit::set_lane(&mut agent, "auth");
         agent
     };
     let receipt_for = |identities: &[AgentLaunchIdentity], handles: &[String]| {
@@ -472,7 +472,7 @@ fn assert_receipt_handle_round_trip_beside_launched_child(ended_at: Option<jiff:
     let mut launched = test_agent(identity.agent_id.as_str());
     launched.name = Some(identity.name.clone());
     launched.profile = Some("gatekeeper".to_owned());
-    launched.channel = Some("auth".to_owned());
+    rimz::testkit::set_lane(&mut launched, "auth");
     let parent = test_agent("parent");
     let mut child = launched.clone();
     child.agent_id = "child".into();
@@ -695,7 +695,10 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
             output.contains(&format!("--match instance={signalled} --once")),
             "{output}"
         );
-        assert!(output.contains(&format!("Check: rimz teams show forge#{}", lane.label())));
+        assert!(output.contains(&format!(
+            "Check: rimz teams show forge#{}",
+            lane.routing_name()
+        )));
     }
 }
 

@@ -564,11 +564,13 @@ fn team_resume_without_rows_names_a_team_launch() {
 fn team_resume_lists_other_existing_lanes() {
     let mut member = test_agent("sess-forge");
     member.team = Some("forge".into());
-    member.channel = Some("project/forge".into());
     member.worktree_path = Some("/repo".into());
+    crate::testkit::set_trunk(&mut member);
+    crate::testkit::set_lane(&mut member, "forge");
     let mut removed = member.clone();
-    removed.channel = Some("removed".into());
     removed.worktree_path = Some("/removed".into());
+    removed.lane = None;
+    crate::testkit::set_lane(&mut removed, "removed");
     let error = team_resume_error(
         crate::harness::resume::CohortResumeErr::NothingToResume {
             spec: "forge".into(),
@@ -586,9 +588,9 @@ fn team_resume_lists_other_existing_lanes() {
         error.starts_with("nothing to resume for `forge#typo`;"),
         "{error}"
     );
-    assert!(error.contains("cohorts are in #project/forge"), "{error}");
+    assert!(error.contains("cohorts are in #forge"), "{error}");
     assert!(
-        error.contains("`rimz teams resume 'forge#project/forge'`"),
+        error.contains("`rimz teams resume 'forge#forge'`"),
         "{error}"
     );
     assert!(!error.contains("removed"), "{error}");
@@ -691,6 +693,32 @@ fn team_resume_keeps_account_refusals() {
         crate::store::runtime::agent_liveness,
     );
     assert_eq!(error.to_string(), "use `rimz accounts use claude work`");
+}
+
+#[test]
+fn team_resume_lists_a_board_held_trunk_cohort_as_main() {
+    let root = tempfile::tempdir().unwrap();
+    let board = root.path().join(".rimz/team/blackboard.md");
+    std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+    std::fs::write(&board, "Stage: Plan").unwrap();
+    let mut held = test_agent("launch_unregistered");
+    held.team = Some("forge".into());
+    held.worktree_path = Some(root.path().display().to_string());
+    crate::testkit::set_trunk(&mut held);
+    let error = team_resume_error(
+        crate::harness::resume::CohortResumeErr::NothingToResume {
+            spec: "forge".into(),
+        },
+        "forge",
+        Some("typo"),
+        &[],
+        &[held],
+        &crate::config::TeamsConfig::default(),
+        |_| true,
+        |_| crate::store::runtime::AgentLiveness::Unknown,
+    )
+    .to_string();
+    assert!(error.contains("cohorts are in #main"), "{error}");
 }
 
 #[test]

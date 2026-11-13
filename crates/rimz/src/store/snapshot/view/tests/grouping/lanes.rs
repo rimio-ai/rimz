@@ -244,14 +244,14 @@ fn an_in_place_team_names_its_lane_at_trunk_and_takes_a_worktrees_own() {
             ]
         ),
         BTreeSet::from([
-            group("channel:repo/forge", &["joiner", "leader"]),
+            group("channel:forge", &["joiner", "leader"]),
             group("channel:auth", &["wtteam"]),
         ])
     );
 }
 
 #[test]
-fn a_stamped_main_row_from_before_lanes_merges_into_trunk_at_its_registration() {
+fn a_stamped_main_row_from_before_lanes_takes_no_lane_group_before_or_after_registration() {
     let room = room();
     let plain = decided(&request(&room, &room.root));
     let (mut old, old_pane) = seat("old", plain.clone(), &room.root);
@@ -267,13 +267,12 @@ fn a_stamped_main_row_from_before_lanes_merges_into_trunk_at_its_registration() 
                 seat("desk", plain.clone(), &room.root)
             ]
         ),
-        BTreeSet::from([
-            group("channel:main", &["old"]),
-            group(key(&room.root), &["desk"]),
-        ])
+        // The lane-less row's `main` stamp names no lane: it groups by its
+        // path, as a process pane there does.
+        BTreeSet::from([group(key(&room.root), &["desk", "old"])])
     );
 
-    old.lane = Some(crate::harness::lanes::own_lane(&room.root, &room.root).adopt(Some("main")));
+    old.lane = Some(crate::worktree::own_lane(&room.root, &room.root).adopt(Some("main")));
     old.project_lane();
     assert_eq!(
         groups(

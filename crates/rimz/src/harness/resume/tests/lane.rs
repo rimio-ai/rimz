@@ -8,6 +8,11 @@ fn empty_dir_lane_listing_uses_checkout_instead_of_process_cwd() {
     for checkout in ["/repo", "/repo/feature"] {
         let mut agent = agent("claude", "searcher", "/rimz/empty/room/searcher", 1);
         agent.checkout = Some(checkout.to_owned());
+        assert!(
+            lane_summaries(std::slice::from_ref(&agent), |_| AgentLiveness::Dead).is_empty(),
+            "a lane-less row is in no lane an address selects"
+        );
+        agent.lane = Some(checkout_lane(checkout));
         let lanes = lane_summaries(&[agent], |_| AgentLiveness::Dead);
         assert_eq!(lanes.len(), 1);
         assert_eq!(lanes[0].path, Path::new(checkout));
@@ -18,7 +23,7 @@ fn empty_dir_lane_listing_uses_checkout_instead_of_process_cwd() {
 fn empty_dir_lane_resume_keeps_missing_process_cwd() {
     let mut closed = agent("claude", "searcher", "/empty/room/searcher", 1);
     closed.checkout = Some("/repo".into());
-    closed.root_lane = true;
+    set_trunk(&mut closed);
     let action = LaneCase::new(
         LaneResumeSelector::Scope("#main".into()),
         std::slice::from_ref(&closed),
@@ -49,9 +54,9 @@ fn empty_dir_lane_resume_keeps_missing_process_cwd() {
 fn mixed_lane_resume_uses_checkout_for_tab_and_each_panes_recorded_cwd() {
     let mut empty = agent("claude", "searcher", "/empty/room/searcher", 1);
     empty.checkout = Some("/repo".into());
-    empty.root_lane = true;
+    set_trunk(&mut empty);
     let mut ordinary = agent("claude", "coder", "/repo", 10);
-    ordinary.root_lane = true;
+    set_trunk(&mut ordinary);
     let agents = [empty, ordinary];
     let action = LaneCase::new(LaneResumeSelector::Scope("#main".into()), &agents)
         .current_root("/repo")
@@ -85,7 +90,7 @@ fn mixed_lane_resume_uses_checkout_for_tab_and_each_panes_recorded_cwd() {
 fn discovered_sessions_carry_the_account_they_were_discovered_under() {
     let mut observation = local_session("claude", "local", 1, 2);
     observation.login = Some("work".parse().expect("login name"));
-    let candidate = ResumeCandidate::from_observation(&observation).unwrap();
+    let candidate = ResumeCandidate::from_observation(&observation, None).unwrap();
     assert_eq!(
         candidate
             .identity
@@ -266,7 +271,10 @@ fn fresh_lane_refusal_explains_each_failed_team() {
 
 #[test]
 fn fresh_lane_refuses_when_no_team_can_be_restored() {
-    let agents = [agent("opencode", "flat", "/lane", 1)];
+    let agents = [AgentState {
+        lane: Some(checkout_lane("/lane")),
+        ..agent("opencode", "flat", "/lane", 1)
+    }];
     let error = LaneCase::new(LaneResumeSelector::Current, &agents)
         .current_root("/lane")
         .fresh()
@@ -292,15 +300,18 @@ fn fresh_lane_relaunch_specs_are_distinct_and_preserve_place() {
             agent("opencode", "new", path, 2),
         ];
         for agent in &mut agents {
-            agent.channel = channel.map(str::to_owned);
-            agent.root_lane = path == "/repo" && channel.is_none();
+            match channel {
+                Some(channel) => set_lane(agent, channel),
+                None if path == "/repo" => set_trunk(agent),
+                None => agent.lane = Some(checkout_lane(path)),
+            }
         }
         let selector = LaneResumeSelector::Scope(channel.map_or_else(
             || {
                 if path == "/repo" {
                     "#main".to_owned()
                 } else {
-                    path.to_owned()
+                    "#lane".to_owned()
                 }
             },
             |channel| format!("#{channel}"),
@@ -311,7 +322,7 @@ fn fresh_lane_relaunch_specs_are_distinct_and_preserve_place() {
             .run()
             .unwrap_err();
         let LaneResumeError::FreshNoTeam { specs, .. } = error else {
-            panic!("expected no team")
+            panic!("expected no team, got {error:?}")
         };
         assert_eq!(specs, vec![command], "{path} {channel:?}");
     }
@@ -412,7 +423,7 @@ fn fresh_lane_materializes_new_team_launches() {
         team_agent("codex", "coder", "coder", lane, 2),
     ];
     for agent in &mut agents {
-        agent.channel = Some("saved-channel".to_owned());
+        set_lane(agent, "saved-channel");
     }
     let action = LaneCase::new(LaneResumeSelector::Current, &agents)
         .current_root(lane)
@@ -476,7 +487,9 @@ fn fresh_lane_materializes_new_team_launches() {
                 .params
                 .lane
                 .as_ref()
-                .and_then(crate::ids::Lane::stored_name),
+                .and_then(crate::ids::Lane::pin_name)
+                .as_ref()
+                .map(crate::ids::LaneName::as_str),
             Some("saved-channel")
         );
         assert_eq!(request.identity.params.channel, None);
@@ -524,11 +537,11 @@ fn concurrent_session_set_selects_the_newest_overlap_cluster() {
 fn discovered_candidate_requires_session_and_workspace() {
     let mut observation = local_session("claude", "only", 9, 10);
     observation.session_id = AgentSessionId::from("");
-    assert!(ResumeCandidate::from_observation(&observation).is_none());
+    assert!(ResumeCandidate::from_observation(&observation, None).is_none());
 
     observation.session_id = AgentSessionId::from("only");
     observation.workspace = PathBuf::new();
-    assert!(ResumeCandidate::from_observation(&observation).is_none());
+    assert!(ResumeCandidate::from_observation(&observation, None).is_none());
 }
 
 /// Lane selectors resolve to a place before anything is planned. A durable
@@ -537,10 +550,12 @@ fn discovered_candidate_requires_session_and_workspace() {
 /// `pr-<n>` naming. Each case reports the resolved worktree through `Removed`.
 #[test]
 fn lane_selectors_resolve_to_a_place() {
-    let durable = AgentState {
-        channel: Some("docs".to_owned()),
-        ..agent("codex", "durable", "/other/agent-lane", 1)
-    };
+    let durable = in_lane(
+        AgentState {
+            ..agent("codex", "durable", "/other/agent-lane", 1)
+        },
+        "docs",
+    );
     let agent_lane = [durable];
     let review = [LaneWorktree {
         name: "review".to_owned(),
@@ -572,13 +587,6 @@ fn lane_selectors_resolve_to_a_place() {
         (
             "scope by branch",
             scope("feat/docs"),
-            &[],
-            &review,
-            "review",
-        ),
-        (
-            "scope by full path",
-            scope("/repo-worktrees/docs"),
             &[],
             &review,
             "review",
@@ -703,13 +711,15 @@ fn split_member(id: &str, role: &str, secs_ago: i64) -> AgentState {
     } else {
         ("claude", "claude-plan")
     };
-    AgentState {
-        profile: Some(profile.into()),
-        name: Some(id.into()),
-        name_explicit: true,
-        channel: Some("lane".into()),
-        ..team_agent(kind, id, role, "/lane", secs_ago)
-    }
+    in_lane(
+        AgentState {
+            profile: Some(profile.into()),
+            name: Some(id.into()),
+            name_explicit: true,
+            ..team_agent(kind, id, role, "/lane", secs_ago)
+        },
+        "lane",
+    )
 }
 
 fn split_lane<'a>(agents: &'a [AgentState], restore: LaneRestoreConfig) -> LaneCase<'a> {
@@ -1076,7 +1086,10 @@ fn lane_split_notices_exclude_members_skipped_for_unsupported_prompts() {
 
 #[test]
 fn lane_rejects_provisional_or_unbacked_conversations() {
-    let provisional = [agent("codex", "launch_pending", "/lane", 1)];
+    let provisional = [AgentState {
+        lane: Some(checkout_lane("/lane")),
+        ..agent("codex", "launch_pending", "/lane", 1)
+    }];
     let provisional_error = LaneCase::new(LaneResumeSelector::Current, &provisional)
         .current_root("/lane")
         .run()
@@ -1088,7 +1101,10 @@ fn lane_rejects_provisional_or_unbacked_conversations() {
         }
     );
 
-    let durable = [agent("codex", "durable", "/lane", 1)];
+    let durable = [AgentState {
+        lane: Some(checkout_lane("/lane")),
+        ..agent("codex", "durable", "/lane", 1)
+    }];
     let no_conversation = LaneCase::new(LaneResumeSelector::Current, &durable)
         .current_root("/lane")
         .session_backed(|_| false)
@@ -1108,7 +1124,11 @@ fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
         agent_on_pane("codex", "old", "/docs", 30, "docs"),
         agent_on_pane("codex", "new", "/docs", 10, "docs"),
         agent_on_pane("claude", "api", "/api", 2, "api"),
-    ];
+    ]
+    .map(|mut agent| {
+        crate::testkit::set_own_lane(&mut agent);
+        agent
+    });
     let action = LaneCase::new(LaneResumeSelector::List, &agents)
         .liveness(|agent| {
             if agent.agent_id.as_str() == "api" {
@@ -1132,7 +1152,10 @@ fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
 
 #[test]
 fn lane_listing_discovers_only_worktrees_without_durable_members() {
-    let durable = [agent("codex", "docs", "/repo-worktrees/docs", 5)];
+    let durable = [agent("codex", "docs", "/repo-worktrees/docs", 5)].map(|mut agent| {
+        crate::testkit::set_own_lane(&mut agent);
+        agent
+    });
     let worktrees = [
         lane_worktree("docs", "feat/docs", None),
         lane_worktree("native", "feat/native", None),
@@ -1229,10 +1252,7 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
 #[test]
 fn lane_restore_gives_a_team_and_a_standalone_agent_in_one_channel_distinct_tabs() {
     let (teams, profiles, commands) = team_configs();
-    let in_auth = |agent: AgentState| AgentState {
-        channel: Some("auth".to_owned()),
-        ..agent
-    };
+    let in_auth = |agent: AgentState| in_lane(AgentState { ..agent }, "auth");
     let agents = [
         in_auth(team_agent("claude", "planner", "planner", "/lane", 1)),
         in_auth(team_agent("codex", "coder", "coder", "/lane", 2)),
@@ -1423,7 +1443,11 @@ fn lane_listing_excludes_closed_and_live_launched_children() {
         child_agent("codex", "closed-child-two", "closed-root", "/closed", 12),
         agent("claude", "live-root", "/live", 1),
         child_agent("codex", "live-child", "live-root", "/live", 2),
-    ];
+    ]
+    .map(|mut agent| {
+        crate::testkit::set_own_lane(&mut agent);
+        agent
+    });
     let action = LaneCase::new(LaneResumeSelector::List, &agents)
         .liveness(|agent| {
             if agent.worktree_path.as_deref() == Some("/live") {
@@ -1639,11 +1663,11 @@ fn lane_resumes_a_pooled_member_under_the_rooms_account() {
 #[test]
 fn lane_scope_check_agrees_with_resume_and_names_known_lanes() {
     let agents = [
-        agent_on_pane("claude", "api", "/api", 2, "api"),
         AgentState {
-            channel: Some("docs".to_owned()),
-            ..agent("codex", "docs", "/docs", 30)
+            lane: Some(checkout_lane("/api")),
+            ..agent_on_pane("claude", "api", "/api", 2, "api")
         },
+        in_lane(agent("codex", "docs", "/docs", 30), "docs"),
     ];
     let worktrees = [
         lane_worktree("review", "feat/review", None),
@@ -1654,10 +1678,9 @@ fn lane_scope_check_agrees_with_resume_and_names_known_lanes() {
             from_pr: None,
         },
     ];
-    let root = Path::new("/repo");
     for scope in ["#api", "docs", "#review", "feat/review"] {
         assert_eq!(
-            check_lane_scope(scope, &agents, &worktrees, root),
+            check_lane_scope(scope, &agents, &worktrees),
             Ok(()),
             "{scope}"
         );
@@ -1672,8 +1695,16 @@ fn lane_scope_check_agrees_with_resume_and_names_known_lanes() {
             "resume must know `{scope}` too"
         );
     }
+    // A path is a second name for a lane, so a managed worktree's path selects none.
+    assert!(check_lane_scope("/docs", &agents, &worktrees).is_err());
+    assert!(matches!(
+        LaneCase::new(LaneResumeSelector::Scope("/docs".to_owned()), &agents)
+            .worktrees(&worktrees)
+            .run(),
+        Err(LaneResumeError::Unknown { .. })
+    ));
     assert_eq!(
-        check_lane_scope("#nope", &agents, &worktrees, root),
+        check_lane_scope("#nope", &agents, &worktrees),
         Err(vec![
             "#api".to_owned(),
             "#docs".to_owned(),

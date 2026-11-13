@@ -2105,3 +2105,28 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
     assert_eq!(entries[0].text, "safe final");
     assert_eq!(entries[0].reply_to, vec![opener]);
 }
+
+#[test]
+fn an_entry_takes_the_rows_lane_and_the_checkouts_only_without_a_row() {
+    let workspace = ResolvedWorkspace {
+        worktree_root: workspace().project_root,
+        ..workspace()
+    };
+    let mut row = rimz::testkit::agent_state("claude", "sess-1", recent_at());
+    row.channel = Some("design".to_owned());
+    row.lane = None;
+    assert_eq!(entry_lane_name(&workspace, Some(&row), None), None);
+    rimz::testkit::set_lane(&mut row, "design");
+    assert_eq!(
+        entry_lane_name(&workspace, Some(&row), None)
+            .as_ref()
+            .map(|lane| lane.as_str()),
+        Some("design")
+    );
+    assert_eq!(
+        entry_lane_name(&workspace, None, None)
+            .as_ref()
+            .map(|lane| lane.as_str()),
+        Some("main")
+    );
+}

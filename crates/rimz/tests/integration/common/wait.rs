@@ -58,6 +58,14 @@ pub fn register_agent_with_owner(
     launch: LaunchParams,
     runtime_owner: Option<RuntimeOwner>,
 ) {
+    let mut launch = launch;
+    // A launch records the lane it decided, a stamped channel's at trunk.
+    launch.lane = launch.lane.take().or_else(|| {
+        Some(match launch.channel.as_deref() {
+            Some(channel) => stamped_lane(env, &env.project_root, channel),
+            None => rimz::worktree::own_lane(&env.project_root, &env.project_root),
+        })
+    });
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     store
@@ -109,10 +117,24 @@ pub fn lane(home: &str, path: &std::path::Path, name: Option<&str>) -> rimz::ids
     serde_json::from_value(wire).expect("lane wire form")
 }
 
+/// The lane a root's registration hook stamps: its checkout's own lane, or the
+/// lane its stamped channel names there. A fixture that appends a registration
+/// straight to the store calls it in place of the hook.
+pub fn stamp_hook_lane(env: &Env, observation: &mut AgentLifecycleObservation) {
+    if observation.parent_agent_id.is_some() || observation.launch.lane.is_some() {
+        return;
+    }
+    let Some(path) = observation.worktree_path.as_deref() else {
+        return;
+    };
+    let own = rimz::worktree::own_lane(&env.project_root, std::path::Path::new(path));
+    observation.launch.lane = Some(own.adopt(observation.launch.channel.as_deref()));
+}
+
 /// The lane an old `channel` stamp means at the checkout holding `path`: the
 /// value a launch event now carries where a fixture used to stamp `channel`.
 pub fn stamped_lane(env: &Env, path: &std::path::Path, stamp: &str) -> rimz::ids::Lane {
-    rimz::harness::lanes::own_lane(&env.project_root, path).adopt(Some(stamp))
+    rimz::worktree::own_lane(&env.project_root, path).adopt(Some(stamp))
 }
 
 /// Seeds the Bound launch of `session_id` in `lane`, the durable launch record

@@ -664,7 +664,8 @@ fn pipeline_completion_styles_and_width_admission() {
         .as_mut()
         .unwrap()
         .stage = "Implement".to_owned();
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].label = "pipeline/forge".to_owned();
+    // An in-place team's lane is named after the team, so its pipeline line drops the badge.
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].label = "forge".to_owned();
     let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
     assert!(
         lines[1]
@@ -919,8 +920,11 @@ fn render_named_channel_header_uses_hash_glyph_and_bare_label() {
         Some("main"),
         Some("design API"),
     );
-    design.channel = Some("design".to_owned());
-    let rendered = snapshot_to_screen(&snapshot_with(vec![design]), 36, 18);
+    crate::testkit::set_lane(&mut design, "design");
+    let mut snapshot = snapshot_with(vec![design]);
+    // A channel group with no checkout of its own.
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place = None;
+    let rendered = snapshot_to_screen(&snapshot, 36, 18);
 
     assert!(
         rendered.contains("# design"),
@@ -991,6 +995,30 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
         narrow.contains("⑂ main"),
         "git verdict stays pinned: {narrow}"
     );
+    // An in-place team's lane is named after the team, so its header names it once.
+    let wide_badges = |snapshot: &SidebarSnapshot, team: &str| {
+        group_lines_at_width(snapshot, &theme, 0, 120)[0]
+            .spans
+            .iter()
+            .filter(|span| span.content.as_ref() == format!(" · {team}"))
+            .count()
+    };
+    assert_eq!(
+        wide_badges(&snapshot, "forge"),
+        1,
+        "a wide header shows the team"
+    );
+    for (lane, team) in [("forge", "forge"), ("ops-v2", "ops v2")] {
+        let mut in_place = snapshot.clone();
+        let group = &mut std::sync::Arc::make_mut(&mut in_place.worktree_groups)[0];
+        group.label = lane.to_owned();
+        group.team = Some(team.to_owned());
+        assert_eq!(
+            wide_badges(&in_place, team),
+            0,
+            "lane {lane} names team {team} once"
+        );
+    }
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pipeline =
         pipeline_snapshot().worktree_groups[0].pipeline.clone();
     assert!(
@@ -1373,7 +1401,7 @@ fn render_worktree_channel_leads_with_merge_glyph() {
         Some("codex-resets"),
         Some("reset flow"),
     );
-    design.channel = Some("codex-resets".to_owned());
+    crate::testkit::set_lane(&mut design, "codex-resets");
     let mut snapshot = snapshot_with(vec![design]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
         Some(crate::store::snapshot::SidebarPlace {
@@ -1406,7 +1434,7 @@ fn render_worktree_channel_uses_fork_glyph_before_git_facts() {
         Some("codex-resets"),
         Some("reset flow"),
     );
-    design.channel = Some("codex-resets".to_owned());
+    crate::testkit::set_lane(&mut design, "codex-resets");
     let mut snapshot = snapshot_with(vec![design]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
         Some(crate::store::snapshot::SidebarPlace {
@@ -1436,7 +1464,7 @@ fn render_worktree_channel_carries_pr_badge() {
         Some("codex-resets"),
         Some("reset flow"),
     );
-    design.channel = Some("codex-resets".to_owned());
+    crate::testkit::set_lane(&mut design, "codex-resets");
     let mut snapshot = snapshot_with(vec![design]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
         Some(crate::store::snapshot::SidebarPlace {
@@ -1463,7 +1491,7 @@ fn render_worktree_channel_leads_with_fork_glyph() {
         Some("codex-resets"),
         Some("reset flow"),
     );
-    design.channel = Some("codex-resets".to_owned());
+    crate::testkit::set_lane(&mut design, "codex-resets");
     let mut snapshot = snapshot_with(vec![design]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].place =
         Some(crate::store::snapshot::SidebarPlace {

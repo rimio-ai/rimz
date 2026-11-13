@@ -71,7 +71,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "unreachable from begin",
         "◇ unused",
         "NEEDS YOU",
-        "review#project",
+        "review#main",
     ] {
         assert!(text.contains(fragment), "missing {fragment:?}:\n{text}");
     }
@@ -161,7 +161,7 @@ fn the_by_hand_hint_starts_in_the_selected_room() {
             other.to_str().unwrap(),
             "workflow",
             "show",
-            "review#project",
+            "review#main",
             "--json",
         ],
     );
@@ -432,7 +432,7 @@ fn condition_case_note_agrees_in_definition_and_node_views() {
 fn node_view_refuses_run_targets_with_the_definition_form() {
     let (env, _) = graph();
     let run = seed(&env, &env.project_root, &env.project_root, "parked");
-    for target in ["review#project", run.id.as_str()] {
+    for target in ["review#main", run.id.as_str()] {
         let output = command(&env, &["workflow", "show", target, "fix"]);
         let text = String::from_utf8(output.stderr).unwrap();
         assert_eq!(output.status.code(), Some(2), "{text}");

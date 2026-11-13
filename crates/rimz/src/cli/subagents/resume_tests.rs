@@ -87,7 +87,6 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
             },
             Some("work".parse().unwrap()),
             None,
-            Path::new("/tmp/project"),
         );
         assert_eq!(
             request,
@@ -128,7 +127,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                         login: Some("work".parse().unwrap()),
                         mode: posture.launch.mode,
                         record: posture.launch.record.clone(),
-                        lane: rimz::harness::lanes::row_lane(&child, Path::new("/tmp/project")),
+                        lane: child.lane.clone(),
                         ..Default::default()
                     },
                 },

@@ -30,7 +30,6 @@ fn fork_validation_refuses_a_source_from_another_account() {
 
     let seed = validate_fork_source(
         &agent,
-        Path::new("/repo"),
         None,
         &room("codex", "personal"),
         &codex_accounts("shared"),
@@ -42,7 +41,6 @@ fn fork_validation_refuses_a_source_from_another_account() {
 
     let err = validate_fork_source(
         &agent,
-        Path::new("/repo"),
         None,
         &room("codex", "personal"),
         &codex_accounts("standalone"),
@@ -280,16 +278,8 @@ fn fork_validation_refuses_subagents() {
     let mut agent = source("session-1");
     agent.parent_agent_id = Some(AgentSessionId::from("parent-1"));
 
-    let err = validate_fork_source(
-        &agent,
-        Path::new("/repo"),
-        None,
-        &NO_LOGINS,
-        &NO_ACCOUNTS,
-        |_| true,
-        |_| true,
-    )
-    .expect_err("subagent");
+    let err = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        .expect_err("subagent");
 
     assert!(err.to_string().contains("fork its parent"));
 }
@@ -298,16 +288,8 @@ fn fork_validation_refuses_subagents() {
 fn fork_validation_refuses_provisional_sessions() {
     let agent = source("launch_123");
 
-    let err = validate_fork_source(
-        &agent,
-        Path::new("/repo"),
-        None,
-        &NO_LOGINS,
-        &NO_ACCOUNTS,
-        |_| true,
-        |_| true,
-    )
-    .expect_err("provisional");
+    let err = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        .expect_err("provisional");
 
     assert!(err.to_string().contains("has not registered"));
 }
@@ -316,16 +298,8 @@ fn fork_validation_refuses_provisional_sessions() {
 fn fork_validation_refuses_missing_session_file() {
     let agent = source("session-1");
 
-    let err = validate_fork_source(
-        &agent,
-        Path::new("/repo"),
-        None,
-        &NO_LOGINS,
-        &NO_ACCOUNTS,
-        |_| false,
-        |_| true,
-    )
-    .expect_err("session file");
+    let err = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| false, |_| true)
+        .expect_err("session file");
 
     assert!(err.to_string().contains("conversation file is gone"));
 }
@@ -336,7 +310,6 @@ fn fork_validation_refuses_missing_worktree() {
     unrecorded.worktree_path = None;
     let err = validate_fork_source(
         &unrecorded,
-        Path::new("/repo"),
         None,
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -349,7 +322,6 @@ fn fork_validation_refuses_missing_worktree() {
     let missing = source("session-1");
     let err = validate_fork_source(
         &missing,
-        Path::new("/repo"),
         None,
         &NO_LOGINS,
         &NO_ACCOUNTS,
@@ -392,7 +364,6 @@ fn fork_validation_inherits_lane_identity_and_drops_cohort_identity() {
     agent.login = Some("work".parse().unwrap());
     let seed = validate_fork_source(
         &agent,
-        Path::new("/repo"),
         None,
         &room("codex", "work"),
         &NO_ACCOUNTS,
@@ -429,16 +400,8 @@ fn fork_keeps_the_sources_stored_lane_when_its_path_has_moved() {
     agent.lane = Some(stored.clone());
     agent.channel = Some("other".to_owned());
 
-    let seed = validate_fork_source(
-        &agent,
-        Path::new("/repo"),
-        None,
-        &NO_LOGINS,
-        &NO_ACCOUNTS,
-        |_| true,
-        |_| true,
-    )
-    .expect("valid fork");
+    let seed = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        .expect("valid fork");
 
     assert_eq!(seed.cwd, PathBuf::from("/repo/worktree"));
     assert_eq!(seed.launch.lane, Some(stored));
@@ -460,7 +423,6 @@ fn fork_validation_inherits_the_callers_automation_not_the_sources() {
         caller.automation = automation.clone();
         let seed = validate_fork_source(
             &agent,
-            Path::new("/repo"),
             Some(&caller),
             &NO_LOGINS,
             &NO_ACCOUNTS,
@@ -470,16 +432,8 @@ fn fork_validation_inherits_the_callers_automation_not_the_sources() {
         .unwrap();
         assert_eq!(seed.launch.automation, automation);
     }
-    let seed = validate_fork_source(
-        &agent,
-        Path::new("/repo"),
-        None,
-        &NO_LOGINS,
-        &NO_ACCOUNTS,
-        |_| true,
-        |_| true,
-    )
-    .unwrap();
+    let seed =
+        validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true).unwrap();
     assert_eq!(seed.launch.automation, None);
 }
 
@@ -492,16 +446,8 @@ fn fork_validation_inherits_the_source_chain_generation() {
         agent_id: AgentSessionId::from("launcher"),
     });
 
-    let seed = validate_fork_source(
-        &agent,
-        Path::new("/repo"),
-        None,
-        &NO_LOGINS,
-        &NO_ACCOUNTS,
-        |_| true,
-        |_| true,
-    )
-    .expect("valid fork");
+    let seed = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+        .expect("valid fork");
 
     assert_eq!(seed.launch.launch_depth, Some(3));
     assert_eq!(seed.launch.launched_by, None);
@@ -532,16 +478,8 @@ fn fork_validation_records_the_source_profile_doorway_transitively() {
         if recorded {
             agent.profile_scope = Some(ProfileScope::Subagents);
         }
-        let seed = validate_fork_source(
-            &agent,
-            Path::new("/repo"),
-            None,
-            &NO_LOGINS,
-            &NO_ACCOUNTS,
-            |_| true,
-            |_| true,
-        )
-        .unwrap();
+        let seed = validate_fork_source(&agent, None, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+            .unwrap();
         actual.push(seed.launch.profile_scope);
     }
     assert_eq!(

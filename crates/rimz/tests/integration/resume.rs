@@ -1244,7 +1244,10 @@ mod agent_ref {
                     .params
                     .lane
                     .as_ref()
-                    .and_then(rimz::ids::Lane::stored_name),
+                    .filter(|lane| !lane.is_trunk())
+                    .map(rimz::ids::Lane::routing_name)
+                    .as_ref()
+                    .map(rimz::ids::LaneName::as_str),
                 Some("saved")
             );
             assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));
@@ -1630,7 +1633,10 @@ mod agent_ref {
                     .params
                     .lane
                     .as_ref()
-                    .and_then(rimz::ids::Lane::stored_name),
+                    .filter(|lane| !lane.is_trunk())
+                    .map(rimz::ids::Lane::routing_name)
+                    .as_ref()
+                    .map(rimz::ids::LaneName::as_str),
                 Some("saved")
             );
             assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));

@@ -651,16 +651,12 @@ fn write_text(
             let peers = crate::address::addressable_agents(snapshot);
             let payload = batch
                 .iter()
-                .map(|message| {
-                    match crate::address::record_header(
-                        message,
-                        &peers,
-                        Some(&workspace.project_root),
-                    ) {
+                .map(
+                    |message| match crate::address::record_header(message, &peers) {
                         Some(header) => format!("{header}{}", message.text),
                         None => message.text.clone(),
-                    }
-                })
+                    },
+                )
                 .collect::<Vec<_>>()
                 .join("\n\n");
             writer.paste(&payload)?;

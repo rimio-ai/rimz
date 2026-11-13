@@ -290,11 +290,13 @@ fn recipient_miss(
                 Err(err) => resume_error = Some(format!("{err:#}")),
             }
         }
+        // A caller with no current channel is at trunk, so its bounce is trunk's.
+        let trunk = LaneName::trunk();
         store.record_unresolved_message(rimz::store::writer::UnresolvedMessage {
             workspace_id: workspace.workspace_id.clone(),
             session_name: &workspace.session_name,
             address: miss.target,
-            channel: miss.current_channel,
+            channel: miss.current_channel.or(Some(&trunk)),
             sender: miss.sender,
             text_len: miss.text.len(),
             reason: refusal
@@ -412,7 +414,7 @@ pub(super) fn message_miss(
             channel.is_none_or(|filter| {
                 rimz::address::agent_in_lane(
                     agent,
-                    &rimz::address::LaneSelector::parse(Some(filter), None),
+                    &rimz::address::LaneSelector::parse(Some(filter)),
                 )
             })
         })

@@ -2277,6 +2277,7 @@ fn seed_lost_tmux_agent(env: &Env) -> (LostAgent, std::ffi::OsString) {
     observation.agent_name = Some("alpha".into());
     observation.worktree_path = Some(worktree.display().to_string());
     observation.worktree_branch = Some("alpha".into());
+    observation.launch.lane = Some(crate::common::wait::stamped_lane(env, &worktree, "alpha"));
     observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
         rimz::pane::RuntimeOwnerKind::Agent,
         "alpha",

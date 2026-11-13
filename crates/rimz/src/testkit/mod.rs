@@ -139,6 +139,48 @@ pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::ag
     )
 }
 
+/// The checkout a launch of `agent` stamps its lane at: an empty-dir row's
+/// displaced checkout, else its worktree.
+fn lane_checkout(agent: &crate::agents::AgentState) -> String {
+    agent
+        .checkout
+        .clone()
+        .or_else(|| agent.worktree_path.clone())
+        .unwrap_or_default()
+}
+
+/// Put `agent` in its own worktree lane at its checkout, named after the
+/// checkout's directory.
+pub fn set_own_lane(agent: &mut crate::agents::AgentState) {
+    let path = lane_checkout(agent);
+    agent.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Worktree, path));
+}
+
+/// Put `agent` in trunk's own lane `main` at its checkout.
+pub fn set_trunk(agent: &mut crate::agents::AgentState) {
+    let path = lane_checkout(agent);
+    agent.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Trunk, path));
+    agent.root_lane = true;
+}
+
+/// Put `agent` in the named lane `name`, homed at its own lane, or at its
+/// checkout as a worktree when it has none, and stamp `name` as its channel.
+pub fn set_lane(agent: &mut crate::agents::AgentState, name: &str) {
+    if agent.lane.is_none() {
+        set_own_lane(agent);
+    }
+    let own = agent.lane.take().map(|lane| lane.own_lane());
+    agent.lane = own.map(|lane| lane.named(name.parse().expect("fixture lane name")));
+    agent.channel = Some(name.to_owned());
+    agent.root_lane = false;
+}
+
+/// [`set_lane`] by value.
+pub fn in_lane(mut agent: crate::agents::AgentState, name: &str) -> crate::agents::AgentState {
+    set_lane(&mut agent, name);
+    agent
+}
+
 /// Provider-local changed-session fixture used only by allocation/time benches.
 pub struct ChangedSessionRefreshFixture {
     adapter: &'static crate::agents::AgentDefinition,

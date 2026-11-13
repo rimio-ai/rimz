@@ -672,6 +672,35 @@ fn project_due_messages(snapshot: &mut SidebarSnapshot, state: &StatePaths) {
     }
 }
 
+/// Fill the snapshot's own-lane table for the directories this pass folds:
+/// each pane's and each provider-local session's, classified once apiece. A
+/// snapshot with no project root leaves the table empty.
+pub(super) fn fill_own_lanes(
+    snapshot: &mut SidebarSnapshot,
+    panes: &[crate::pane::PaneRef],
+    sessions: &[crate::agents::LocalSessionObservation],
+) {
+    let Some(root) = snapshot.project_root.clone() else {
+        return;
+    };
+    let mut lanes = BTreeMap::new();
+    let dirs = panes
+        .iter()
+        .filter_map(crate::store::snapshot::pane_worktree_path)
+        .map(str::to_owned)
+        .chain(
+            sessions
+                .iter()
+                .map(|session| session.workspace.to_string_lossy().into_owned()),
+        );
+    for dir in dirs {
+        lanes
+            .entry(dir)
+            .or_insert_with_key(|dir| crate::worktree::own_lane(&root, Path::new(dir)));
+    }
+    snapshot.own_lanes = lanes;
+}
+
 fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
@@ -734,7 +763,9 @@ fn enrich_core(
     // enrichment. Discovery belongs to the room producer; every renderer keeps
     // the strict live-pane binding and discards paneless observations.
     if let Some(frame) = frame {
-        let panes = snapshot.card_admitted_live_panes(frame.to_pane_refs(), None);
+        let panes = frame.to_pane_refs();
+        fill_own_lanes(&mut snapshot, &panes, &opts.agent_projection.local_sessions);
+        let panes = snapshot.card_admitted_live_panes(panes, None);
         let (next_snapshot, diagnostics) = snapshot
             .with_local_sessions_and_diagnostics(&panes, opts.agent_projection.local_sessions);
         snapshot = next_snapshot;

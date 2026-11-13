@@ -9,7 +9,6 @@ use super::list::{
 };
 use rimz::harness::schedule::run_log::LoopRunResult;
 use rimz::store::snapshot::{WorktreeCi, WorktreePrState};
-use rimz::workspace::WorkspaceResolver;
 
 pub(super) fn run(
     name: Option<&str>,
@@ -20,35 +19,18 @@ pub(super) fn run(
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     let reports = super::list::load_catalog(globals, lane, &machine)?;
     let selected = select_reports(&reports, name)?;
-    let (lane, resume_lane) = if let Some(lane) = lane {
-        let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-            .context("resolving current workspace")?;
-        let selector =
-            rimz::address::LaneSelector::parse(Some(lane), Some(&workspace.project_root));
-        if selector.is_trunk() {
-            (
-                Some(rimz::ids::LaneName::TRUNK_LABEL),
-                name.map(|team| {
-                    rimz::harness::lanes::in_place_team_name(&workspace.project_root, team)
-                        .to_string()
-                }),
-            )
-        } else {
-            (Some(lane), None)
+    let lane = match lane {
+        Some(lane) if rimz::address::LaneSelector::parse(Some(lane)).is_trunk() => {
+            Some(rimz::ids::LaneName::TRUNK)
         }
-    } else {
-        (None, None)
+        lane => lane,
     };
     if let (Some(name), Some(lane)) = (name, lane)
         && selected[0].instances.is_empty()
     {
         let all = super::list::load_catalog(globals, None, &machine)?;
         let report = select_reports(&all, Some(name))?[0];
-        return Err(missing_cohort(
-            report,
-            lane,
-            resume_lane.as_deref().unwrap_or(lane),
-        ));
+        return Err(missing_cohort(report, lane));
     }
     if json {
         return if name.is_some() {
@@ -110,8 +92,14 @@ fn select_reports<'a>(
     Ok(vec![report])
 }
 
-fn missing_cohort(report: &TeamReport, lane: &str, resume_lane: &str) -> anyhow::Error {
+fn missing_cohort(report: &TeamReport, lane: &str) -> anyhow::Error {
     let team = &report.name;
+    // An in-place team at trunk runs in the named lane of the team.
+    let resume_lane = if lane == rimz::ids::LaneName::TRUNK {
+        rimz::harness::lanes::team_lane(team).into()
+    } else {
+        lane.to_owned()
+    };
     let lanes = report
         .instances
         .iter()
@@ -850,10 +838,16 @@ mod tests {
 
     #[test]
     fn human_show_without_live_instance() {
-        let error = missing_cohort(&report(Vec::new()), "ended-lane", "ended-lane");
+        let error = missing_cohort(&report(Vec::new()), "ended-lane");
         assert_eq!(
             error.to_string(),
             "forge has no live cohort in #ended-lane; resume: rimz teams resume 'forge#ended-lane'"
+        );
+        let mut in_place = report(Vec::new());
+        in_place.name = "ops v2".to_owned();
+        assert_eq!(
+            missing_cohort(&in_place, "main").to_string(),
+            "ops v2 has no live cohort in #main; resume: rimz teams resume 'ops v2#ops-v2'"
         );
     }
 

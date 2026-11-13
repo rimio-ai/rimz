@@ -136,10 +136,11 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
             },
         );
     let pipeline = group.pipeline.as_ref().filter(|_| !folded);
+    // An in-place team's lane is named after the team, so its header names it once.
     let team = group
         .team
         .as_deref()
-        .filter(|team| !group.label.ends_with(&format!("/{team}")));
+        .filter(|team| group.label != crate::ids::LaneName::dashed(team).as_str());
     let header_team = if pipeline.is_some() || folded {
         None
     } else {

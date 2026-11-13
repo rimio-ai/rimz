@@ -218,15 +218,7 @@ fn resume_resolved(
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
-    let mut request = resume_request(
-        child,
-        run,
-        &posture,
-        action.clone(),
-        login.clone(),
-        None,
-        &workspace.project_root,
-    );
+    let mut request = resume_request(child, run, &posture, action.clone(), login.clone(), None);
     request.identity.params.isolation = capped.isolation;
     if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
@@ -301,7 +293,6 @@ fn resume_resolved(
             action,
             login,
             Some(message_id.clone()),
-            &workspace.project_root,
         );
         request.identity.params.isolation = capped.isolation;
         let pane = rimz::mux::PaneCmd {
@@ -334,7 +325,9 @@ fn resume_resolved(
                 .params
                 .lane
                 .as_ref()
-                .and_then(rimz::ids::Lane::stored_name),
+                .and_then(rimz::ids::Lane::pin_name)
+                .as_ref()
+                .map(rimz::ids::LaneName::as_str),
             Some(parent_pane.pane_id.clone()),
             &run.run_id,
         ) {
@@ -374,10 +367,8 @@ fn resume_request(
     action: ExecAction,
     login: Option<rimz::ids::LoginName>,
     follow_up_message: Option<rimz::ids::MessageId>,
-    project_root: &std::path::Path,
 ) -> ExecRequest {
-    let mut request =
-        agents_cmd::relaunch_request(child, posture, action, login, None, project_root);
+    let mut request = agents_cmd::relaunch_request(child, posture, action, login, None);
     request.identity.name_explicit = true;
     ExecRequest {
         follow_up_message,

@@ -682,7 +682,7 @@ fn prepare(
                 machine: machine_config,
                 mux: context.mux,
                 root: context.root,
-                channel: room_lane.stored_name().map(LaneName::dashed),
+                channel: room_lane.pin_name(),
             },
             layout,
             launch,

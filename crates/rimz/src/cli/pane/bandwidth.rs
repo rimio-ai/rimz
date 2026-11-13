@@ -543,6 +543,7 @@ mod tests {
         let mut agent = rimz::testkit::agent_state("codex", "sess-1", jiff::Timestamp::now());
         agent.worktree_branch = Some("auth".to_owned());
         agent.worktree_path = Some("/repo/auth".to_owned());
+        rimz::testkit::set_own_lane(&mut agent);
         agent.role = Some("coder".to_owned());
         assert_eq!(pane_label(&pane, Some(&agent), &[&agent]), "@coder#auth");
         pane.command = Some(rimz::pane::SIDEBAR_CHROME_TITLE.to_owned());

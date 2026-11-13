@@ -1148,10 +1148,16 @@ impl ResumeCandidate {
         }
     }
 
-    fn from_observation(observation: &LocalSessionObservation) -> Option<Self> {
+    /// A provider-discovered session, in the own lane of its cwd under
+    /// `project_root`: the lane registration would give it.
+    fn from_observation(
+        observation: &LocalSessionObservation,
+        project_root: Option<&Path>,
+    ) -> Option<Self> {
         if observation.session_id.is_empty() || observation.workspace.as_os_str().is_empty() {
             return None;
         }
+        let lane = project_root.map(|root| crate::worktree::own_lane(root, &observation.workspace));
         Some(Self {
             identity: ResumeLaunchIdentity {
                 record: None,
@@ -1169,7 +1175,7 @@ impl ResumeCandidate {
                 launch_group: None,
                 launch_ordinal: None,
                 channel: None,
-                lane: None,
+                lane,
                 launch_depth: None,
                 launched_by: None,
                 isolation: None,
@@ -1397,12 +1403,9 @@ fn resolve_lane(request: &LaneResumeRequest<'_>) -> Result<ResolvedLane, LaneRes
     match &request.selector {
         LaneResumeSelector::List => unreachable!("list returns before lane resolution"),
         LaneResumeSelector::PullRequest(number) => resolve_pr_lane(*number, request.worktrees),
-        LaneResumeSelector::Scope(scope) => resolve_scope_lane(
-            scope,
-            request.agents,
-            request.worktrees,
-            request.project_root,
-        ),
+        LaneResumeSelector::Scope(scope) => {
+            resolve_scope_lane(scope, request.agents, request.worktrees)
+        }
         LaneResumeSelector::Current => resolve_current_lane(
             request.current_root,
             request.project_root,
@@ -1419,9 +1422,8 @@ pub fn check_lane_scope(
     scope: &str,
     agents: &[AgentState],
     worktrees: &[LaneWorktree],
-    project_root: &Path,
 ) -> Result<(), Vec<String>> {
-    if resolve_scope_lane(scope, agents, worktrees, project_root).is_ok() {
+    if resolve_scope_lane(scope, agents, worktrees).is_ok() {
         return Ok(());
     }
     let mut lanes = lane_summaries(agents, |_| AgentLiveness::Unknown);
@@ -1459,10 +1461,9 @@ fn resolve_scope_lane(
     raw_scope: &str,
     agents: &[AgentState],
     worktrees: &[LaneWorktree],
-    project_root: &Path,
 ) -> Result<ResolvedLane, LaneResumeError> {
     let scope = raw_scope.strip_prefix('#').unwrap_or(raw_scope);
-    let selector = crate::address::LaneSelector::parse(Some(scope), Some(project_root));
+    let selector = crate::address::LaneSelector::parse(Some(scope));
     if let Some(agent) = agents
         .iter()
         .filter(|agent| root_session(agent))
@@ -1562,7 +1563,6 @@ fn lane_from_worktree(worktree: &LaneWorktree) -> ResolvedLane {
 fn worktree_matches_scope(worktree: &LaneWorktree, scope: &str) -> bool {
     worktree.name == scope
         || worktree.branch.as_deref() == Some(scope)
-        || worktree.path == Path::new(scope)
         || worktree.path.file_name().is_some_and(|name| name == scope)
 }
 
@@ -1646,9 +1646,10 @@ fn plan_discovered_lane(
         });
     }
     let (resume, discovery_skipped) = concurrent_session_set(observations);
+    let project_root = Some(request.project_root);
     let candidates = resume
         .iter()
-        .filter_map(ResumeCandidate::from_observation)
+        .filter_map(|observation| ResumeCandidate::from_observation(observation, project_root))
         .collect::<Vec<_>>();
     let (flat, _) = plan_resume_candidates_detailed(
         candidates,
@@ -1790,8 +1791,11 @@ fn plan_closed_lane(
                     {
                         format!(" -w {}", lane.worktree_name)
                     } else {
-                        super::lanes::stored_channel(agent)
-                            .map(|channel| format!(" --channel {channel}"))
+                        agent
+                            .lane
+                            .as_ref()
+                            .and_then(crate::ids::Lane::pin_name)
+                            .map(|name| format!(" --channel {name}"))
                             .unwrap_or_default()
                     };
                     let spec = format!(
@@ -1869,7 +1873,11 @@ fn lane_summaries(
     liveness: impl Fn(&AgentState) -> AgentLiveness,
 ) -> Vec<LaneSummary> {
     let mut groups = BTreeMap::<(PathBuf, Option<LaneName>), Vec<AgentState>>::new();
-    for agent in agents.iter().filter(|agent| root_session(agent)) {
+    // A lane-less row is in no lane an address can select, so it lists none.
+    for agent in agents
+        .iter()
+        .filter(|agent| root_session(agent) && agent.lane.is_some())
+    {
         let Some(path) = normalized_agent_worktree(agent) else {
             continue;
         };
@@ -2148,7 +2156,6 @@ fn plan_team_restore_tabs(
                 &liveness,
                 &cells,
                 Some(&team),
-                project_root,
                 |path| worktree_exists(path),
                 &session_backed,
             ) else {
@@ -2180,20 +2187,25 @@ fn plan_team_restore_tabs(
                 continue;
             }
         };
-        let lane = project_root
-            .and_then(|project_root| crate::harness::lanes::row_lane(newest, project_root));
-        let channel = match &lane {
-            Some(lane) => lane.stored_name().map(ToOwned::to_owned),
+        let channel = match &newest.lane {
+            Some(lane) => lane.pin_name().map(Into::into),
             None => cohort.channel.clone(),
         };
         cohort.channel = channel.clone();
-        let label = channel_label(channel.as_deref(), &cwd);
+        let lane_name = newest.lane_name();
+        let label = channel_label(
+            lane_name
+                .as_ref()
+                .map(LaneName::as_str)
+                .or(channel.as_deref()),
+            &cwd,
+        );
         let env = tab_pin_env(workspace_id, project_root, &cwd, channel.as_deref());
         plan.tabs.push(PlannedTeamTab {
             warnings,
             label,
             cwd,
-            lane,
+            lane: newest.lane.clone(),
             env,
             team,
             layout,
@@ -2384,7 +2396,7 @@ pub fn plan_provider_resume(
             .iter()
             .any(|agent| agent.name.as_deref() == Some(name))
     });
-    let candidates = ResumeCandidate::from_observation(observation)
+    let candidates = ResumeCandidate::from_observation(observation, ctx.project_root)
         .map(|mut candidate| {
             candidate.identity.name = Some(name.clone());
             candidate.identity.profile = profile.map(str::to_owned);
@@ -2526,16 +2538,14 @@ fn plan_resume_candidates_detailed(
         if !seen.insert(candidate.key()) {
             continue;
         }
-        candidate.identity.lane = candidate_lane(ctx.project_root, &candidate);
-        let channel = candidate_room_channel(candidate.identity.lane.as_ref(), &candidate);
-        let lane_label =
+        let channel = candidate_room_channel(candidate.identity.lane.as_ref());
+        let lane_label = candidate.lane_label.clone().or_else(|| {
             candidate
-                .lane_label
-                .clone()
-                .or_else(|| match candidate.identity.lane.as_ref() {
-                    Some(lane) if lane.is_trunk() => Some(lane.label()),
-                    _ => channel.clone(),
-                });
+                .identity
+                .lane
+                .as_ref()
+                .map(|lane| lane.routing_name().into())
+        });
         let label = build_label(
             &candidate.identity.kind,
             lane_label.as_deref(),
@@ -2730,7 +2740,12 @@ fn plan_resume_candidates_detailed(
             }
         }
         let lane_path = candidate.lane_path();
-        let tab_label = channel_label(channel.as_deref(), lane_path);
+        let lane_name = candidate
+            .identity
+            .lane
+            .as_ref()
+            .map(crate::ids::Lane::routing_name);
+        let tab_label = channel_label(lane_name.as_ref().map(LaneName::as_str), lane_path);
         let identity = resume_tab_identity(channel.as_deref(), lane_path);
         let resumed_key = (
             candidate.identity.kind.clone(),
@@ -2819,31 +2834,10 @@ fn tab_pin_env(
     })
 }
 
-/// A candidate's lane: its stored lane, else its old stamp adopted at the
-/// checkout its lane path classifies into; tests plan without a project root.
-fn candidate_lane(
-    project_root: Option<&Path>,
-    candidate: &ResumeCandidate,
-) -> Option<crate::ids::Lane> {
-    candidate.identity.lane.clone().or_else(|| {
-        let own = crate::harness::lanes::own_lane(project_root?, candidate.lane_path());
-        Some(own.adopt(candidate.identity.channel.as_deref()))
-    })
-}
-
-fn candidate_room_channel(
-    lane: Option<&crate::ids::Lane>,
-    candidate: &ResumeCandidate,
-) -> Option<String> {
-    match lane {
-        Some(lane) => lane.stored_name().map(ToOwned::to_owned),
-        None => candidate
-            .identity
-            .channel
-            .as_deref()
-            .filter(|channel| !channel.is_empty())
-            .map(ToOwned::to_owned),
-    }
+/// The lane name a candidate's tab and pane identity carry: its lane's pin
+/// name, absent for a row with no lane.
+fn candidate_room_channel(lane: Option<&crate::ids::Lane>) -> Option<String> {
+    lane?.pin_name().map(Into::into)
 }
 
 /// Plan one explicit cohort relaunch from the durable agent rollup.
@@ -2864,7 +2858,6 @@ pub fn plan_cohort_resume(
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
-    project_root: &Path,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
@@ -2875,7 +2868,6 @@ pub fn plan_cohort_resume(
         liveness,
         cells,
         team,
-        Some(project_root),
         &worktree_exists,
         session_backed,
     );
@@ -2931,7 +2923,6 @@ fn plan_cohort_members(
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
-    project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
@@ -2978,7 +2969,11 @@ fn plan_cohort_members(
         })
         .expect("matched_any guarantees one matched member");
     let cwd = agent_worktree(newest);
-    let channel = super::lanes::stored_channel(newest).map(ToOwned::to_owned);
+    let channel = newest
+        .lane
+        .as_ref()
+        .and_then(crate::ids::Lane::pin_name)
+        .map(Into::into);
     // cohort_candidates admits only agents with an existing working directory.
     let lane_label = lane_label(
         Some(newest),
@@ -3025,10 +3020,6 @@ fn plan_cohort_members(
             Some(agent) if supports_agent_resume(agent) && session_backed(agent) => {
                 CohortSeed::Resume(Box::new(AgentState {
                     login: relaunch_logins[index].clone().flatten(),
-                    lane: project_root.map_or_else(
-                        || agent.lane.clone(),
-                        |root| crate::harness::lanes::row_lane(agent, root),
-                    ),
                     ..agent.clone()
                 }))
             }
@@ -3482,7 +3473,7 @@ pub fn inspect_channel_hold(agents: &[AgentState], channel: &LaneName) -> Option
 /// Find the team holding a named lane, matched as the drive verbs match one
 /// (lane, worktree name, or the root lane's `main`), by the channel hold rules.
 pub fn inspect_cohort_hold(agents: &[AgentState], team: &str, lane: &str) -> Option<TeamHold> {
-    let lane = crate::address::LaneSelector::parse(Some(lane), None);
+    let lane = crate::address::LaneSelector::parse(Some(lane));
     lane_hold(agents, |agent| crate::address::agent_in_lane(agent, &lane))
         .filter(|hold| hold.instance.team() == team)
 }
@@ -4202,9 +4193,9 @@ fn channel_short(channel: Option<&str>, worktree: &Path) -> String {
         .unwrap_or_else(|| "agent".to_owned())
 }
 
-/// A channel tab label from the worktree directory name, matching live
-/// worktree-launch tabs. A main-repo non-worktree agent falls back to
-/// `#<repo-name>` because resume groups by cwd.
+/// A restored tab's label: `#<lane>` from the row's lane name, so a trunk tab
+/// reads `#main`. Only a row with no lane, which no lane address selects,
+/// falls back to its checkout directory's name.
 fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
     format!("#{}", channel_short(channel, worktree))
 }

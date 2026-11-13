@@ -412,12 +412,12 @@ fn stop_receipt_resume_command_reopens_the_unregistered_cohort() {
 }
 
 #[test]
-fn team_show_root_alias_resume_command_reopens_registered_cohort() {
+fn team_show_main_resume_command_reopens_registered_cohort() {
     assert_root_show_resume(true);
 }
 
 #[test]
-fn team_show_root_alias_resume_command_reopens_unregistered_cohort() {
+fn team_show_main_resume_command_reopens_unregistered_cohort() {
     assert_root_show_resume(false);
 }
 
@@ -426,11 +426,12 @@ fn assert_root_show_resume(registered: bool) {
         let fixture = Fixture::new();
         let root = &fixture.env.project_root;
         let directory = root.file_name().unwrap().to_str().unwrap();
-        let lane = format!("{directory}/forge");
+        // An in-place team on trunk is the named lane of the team's name.
+        let lane = "forge";
         if registered {
-            fixture.ended_in("claude", "coder", &lane);
+            fixture.ended_in("claude", "coder", lane);
         } else {
-            fixture.seed_member("claude", "coder", "coder", None, &lane, root);
+            fixture.seed_member("claude", "coder", "coder", None, lane, root);
             let workspace = fixture.env.resolve_workspace(root);
             let ended =
                 AgentLifecycleObservation::new(Some("launch_coder".into()), LifecycleSignal::Ended);
@@ -459,6 +460,11 @@ fn assert_root_show_resume(registered: bool) {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
+        if root_alias != "main" {
+            // Neither trunk's directory name nor its path names trunk.
+            assert!(!stderr.contains("#main"), "{root_alias}: {stderr}");
+            continue;
+        }
         assert!(stderr.contains("no live cohort in #main"), "{stderr}");
         let command = stderr
             .lines()
@@ -486,8 +492,29 @@ fn team_resume_resolves_a_lane_outside_the_worktree_charset() {
 }
 
 #[test]
-fn team_resume_resolves_a_lane_with_spaces() {
-    assert_resume_lane("my repo/forge");
+fn team_resume_reads_a_lane_less_cohort_under_a_spaced_name_as_absent() {
+    let fixture = Fixture::new();
+    let lane = "my repo/forge";
+    fixture.seed_member(
+        "claude",
+        "coder",
+        "coder",
+        None,
+        lane,
+        &fixture.env.project_root,
+    );
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let output = fixture
+        .launch_command()
+        .args(["teams", "resume", &format!("forge#{lane}")])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("nothing to resume for `forge#my repo/forge`"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -784,7 +811,7 @@ fn addressed_board_commands_match_lanes_like_the_drive_verbs() {
         "coder",
         "coder",
         None,
-        "",
+        "main",
         &fixture.env.project_root,
     );
     std::fs::write(fixture.board(), BOARD).unwrap();

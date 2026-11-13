@@ -176,7 +176,7 @@ impl FoldCarryover {
         self.project_root = project_root.map(Path::to_path_buf);
         self.reborn = OnceLock::new();
         for agent in &mut self.agents {
-            stamp_root_lane(agent, project_root);
+            stamp_root_lane(agent);
         }
     }
 
@@ -205,12 +205,8 @@ impl FoldCarryover {
     }
 }
 
-fn stamp_root_lane(agent: &mut Arc<AgentState>, project_root: Option<&Path>) {
-    let root_lane = if let Some(lane) = &agent.lane {
-        lane.is_trunk()
-    } else {
-        super::view::legacy_root_lane(agent.channel.as_deref(), agent.lane_path(), project_root)
-    };
+fn stamp_root_lane(agent: &mut Arc<AgentState>) {
+    let root_lane = agent.lane.as_ref().is_some_and(crate::ids::Lane::is_trunk);
     if agent.root_lane != root_lane {
         agent_mut(agent).root_lane = root_lane;
     }
@@ -348,7 +344,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`AgentState::normalize_prompt_labels`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 67;
+const ROLLUP_CACHE_VERSION: u32 = 68;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -571,7 +567,7 @@ fn fold_delta(
         agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
     }
     for agent in &mut raw_agents {
-        stamp_root_lane(agent, carryover.project_root.as_deref());
+        stamp_root_lane(agent);
     }
     let merged = AgentRollup::layered(carryover, &raw_agents);
 

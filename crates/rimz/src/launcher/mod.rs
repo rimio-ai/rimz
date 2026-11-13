@@ -1037,6 +1037,11 @@ fn settle_layout(
         launch.cwd.clone_from(&prepared.cwd);
         launch.repo_root = None;
     }
+    // The lane refuses before the team's notes are written.
+    let room_lane = lane_request(
+        checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
+        &projection.agents,
+    )?;
     if let (Some(name), Some(team)) = (team_name.as_deref(), team) {
         crate::harness::team_notes::register(
             store,
@@ -1047,10 +1052,6 @@ fn settle_layout(
         )?;
     }
     lsp_admission::admit(&launch.cwd, &machine_config, interaction)?;
-    let room_lane = lane_request(
-        checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
-        &projection.agents,
-    )?;
     Ok(SettledLayout::Fresh(Box::new(FreshLaunch {
         context: ctx.clone(),
         layout,
@@ -1465,7 +1466,7 @@ fn launch_resume_layout(
     let agents = match &scope {
         ResumeScope::Worktree(target) => {
             // A directory inside a checkout resumes that checkout's lane.
-            let lane = crate::harness::lanes::own_lane(&workspace.project_root, target);
+            let lane = crate::worktree::own_lane(&workspace.project_root, target);
             let target = PathBuf::from(lane.path());
             projection
                 .agents
@@ -1478,8 +1479,7 @@ fn launch_resume_layout(
             .agents
             .iter()
             .filter(|agent| {
-                let lane =
-                    crate::address::LaneSelector::parse(Some(lane), Some(&workspace.project_root));
+                let lane = crate::address::LaneSelector::parse(Some(lane));
                 crate::address::agent_in_lane(agent, &lane)
             })
             .cloned()
@@ -1505,7 +1505,6 @@ fn launch_resume_layout(
         crate::store::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),
-        &workspace.project_root,
         |path| path.is_dir(),
         crate::harness::resume::resume_session_present,
     )
@@ -1645,28 +1644,19 @@ fn launch_resume_layout(
         })
         .unwrap_or(&cwd);
     // A resumed cohort keeps its members' lane; one with no member row left
-    // reads its old stamp, or an in-place team's name, at its checkout.
+    // reads the plan's lane name back at its checkout.
     let lane = plan
         .seeds
         .iter()
         .find_map(|seed| match seed {
-            crate::harness::plan::CohortSeed::Resume(agent) => {
-                crate::harness::lanes::row_lane(agent, &workspace.project_root)
-            }
+            crate::harness::plan::CohortSeed::Resume(agent) => agent.lane.clone(),
             crate::harness::plan::CohortSeed::Fresh => None,
         })
         .unwrap_or_else(|| {
-            let own = crate::harness::lanes::own_lane(&workspace.project_root, lane_path);
-            let team_lane = team_name.as_deref().filter(|_| own.is_trunk()).map(|team| {
-                crate::harness::lanes::in_place_team_name(&workspace.project_root, team)
-            });
-            own.adopt(
-                plan.channel
-                    .as_deref()
-                    .or(team_lane.as_ref().map(crate::ids::LaneName::as_str)),
-            )
+            crate::worktree::own_lane(&workspace.project_root, lane_path)
+                .adopt(plan.channel.as_deref())
         });
-    let channel = lane.stored_name().map(ToOwned::to_owned);
+    let channel: Option<String> = lane.pin_name().map(Into::into);
     plan.channel = channel.clone();
     let scoped_resume = resume_outside_launch_dir(
         channel.as_deref(),
@@ -1997,7 +1987,7 @@ fn team_resume_error(
                 let (Some(lane), Some(checkout)) = (agent.lane_name(), agent.lane_path()) else {
                     return false;
                 };
-                let lane = crate::address::LaneSelector::named(lane);
+                let lane = crate::address::LaneSelector::parse(Some(lane.as_str()));
                 let lane_rows = room_agents
                     .iter()
                     .filter(|row| crate::address::agent_in_lane(row, &lane))

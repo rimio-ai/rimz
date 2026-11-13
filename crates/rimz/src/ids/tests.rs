@@ -80,41 +80,50 @@ fn named_lane(home: LaneHome, path: &str, name: &str) -> Lane {
 #[test]
 fn lane_readings_follow_the_home_and_name() {
     let cases = [
-        (
-            Lane::own(LaneHome::Trunk, "/p/rimz"),
-            true,
-            None,
-            "rimz",
-            "main",
-        ),
+        (Lane::own(LaneHome::Trunk, "/p/rimz"), true, "main", None),
+        (Lane::own(LaneHome::Trunk, "/p/main"), true, "main", None),
         (
             Lane::own(LaneHome::Worktree, "/w/auth"),
             false,
+            "auth",
             Some("auth"),
-            "auth",
-            "auth",
         ),
         (
-            Lane::own(LaneHome::Foreign, "/tmp/x"),
+            Lane::own(LaneHome::Worktree, "/w/rimz"),
             false,
-            None,
-            "x",
-            "x",
+            "rimz",
+            Some("rimz"),
         ),
+        (Lane::own(LaneHome::Foreign, "/tmp/x"), false, "x", None),
         (
             named_lane(LaneHome::Trunk, "/p/rimz", "design"),
             false,
+            "design",
             Some("design"),
+        ),
+        (
+            named_lane(LaneHome::Trunk, "/p/rimz", "rimz"),
+            false,
+            "rimz",
+            Some("rimz"),
+        ),
+        (
+            named_lane(LaneHome::Foreign, "/tmp/x", "design"),
+            false,
             "design",
-            "design",
+            Some("design"),
         ),
     ];
-    for (lane, trunk, stored, routing, label) in cases {
+    for (lane, trunk, routing, pin) in cases {
         assert_eq!(lane.is_trunk(), trunk, "{lane:?}");
-        assert_eq!(lane.stored_name(), stored, "{lane:?}");
         assert_eq!(lane.routing_name().as_str(), routing, "{lane:?}");
-        assert_eq!(lane.label(), label, "{lane:?}");
+        assert_eq!(
+            lane.pin_name().as_ref().map(LaneName::as_str),
+            pin,
+            "{lane:?}"
+        );
     }
+    assert_eq!(LaneName::TRUNK, "main");
     assert_eq!(
         named_lane(LaneHome::Worktree, "/w/auth", "x").path(),
         "/w/auth"
@@ -136,7 +145,11 @@ fn adoption_reads_an_old_stamp_at_its_checkout() {
         (worktree.clone(), Some(""), worktree.clone()),
         (worktree.clone(), Some("auth"), worktree.clone()),
         (trunk.clone(), Some("main"), trunk.clone()),
-        (trunk.clone(), Some("rimz"), trunk.clone()),
+        (
+            trunk.clone(),
+            Some("rimz"),
+            named_lane(LaneHome::Trunk, "/p/rimz", "rimz"),
+        ),
         (
             trunk.clone(),
             Some("design"),
@@ -177,19 +190,6 @@ fn lane_names_refuse_hash_and_whitespace_and_flatness_is_narrower() {
     for name in ["", "a.b", "a/b", "#ops", "two words"] {
         assert!(!LaneName::is_flat(name), "{name}");
     }
-}
-
-#[test]
-fn a_legacy_lane_name_is_the_stamp_then_the_lane_paths_directory() {
-    let name = |stamp, path| legacy_lane_name(stamp, path).map(String::from);
-    assert_eq!(
-        name(Some("design"), Some("/w/auth")).as_deref(),
-        Some("design")
-    );
-    assert_eq!(name(Some(""), Some("/w/auth")).as_deref(), Some("auth"));
-    assert_eq!(name(None, Some("/w/my dir")).as_deref(), Some("my-dir"));
-    assert_eq!(name(None, Some("/")), None);
-    assert_eq!(name(None, None), None);
 }
 
 #[test]

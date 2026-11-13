@@ -96,14 +96,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &cwd,
         )?;
         (
-            restart::relaunch_request(
-                &agent,
-                &posture,
-                action,
-                login,
-                None,
-                &workspace.project_root,
-            ),
+            restart::relaunch_request(&agent, &posture, action, login, None),
             cwd,
             note.map(str::to_owned),
             agent.system_prompt_digest.clone(),

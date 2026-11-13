@@ -1296,7 +1296,7 @@ impl RunFixture {
 }
 
 #[test]
-fn a_subagent_zone_is_titled_after_the_launch_lanes_stored_name() {
+fn a_subagent_zone_is_titled_after_the_launch_lanes_name_and_none_for_trunk() {
     let lane = |name: Option<&str>| {
         let own = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo".to_owned());
         match name {
@@ -1310,7 +1310,13 @@ fn a_subagent_zone_is_titled_after_the_launch_lanes_stored_name() {
     };
     assert_eq!(
         zone_lane_name(&launch(lane(Some("design")))),
-        Some("design")
+        Some("design".parse().unwrap())
     );
     assert_eq!(zone_lane_name(&launch(lane(None))), None);
+    let foreign = crate::ids::Lane::own(crate::ids::LaneHome::Foreign, "/code/other".to_owned());
+    assert_eq!(
+        zone_lane_name(&launch(foreign)),
+        None,
+        "a foreign checkout's own lane"
+    );
 }

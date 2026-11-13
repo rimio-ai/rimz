@@ -2172,12 +2172,10 @@ fn delivers(
                 .get("team")
                 .and_then(serde_json::Value::as_str)
             {
-                let own = crate::harness::lanes::own_lane(project_root, checkout);
+                let own = crate::worktree::own_lane(project_root, checkout);
+                // An in-place team at trunk is the named lane of the team.
                 let lane = if own.is_trunk() {
-                    Some(crate::harness::lanes::in_place_team_name(
-                        project_root,
-                        team,
-                    ))
+                    Some(crate::harness::lanes::team_lane(team))
                 } else {
                     Path::new(own.path())
                         .file_name()

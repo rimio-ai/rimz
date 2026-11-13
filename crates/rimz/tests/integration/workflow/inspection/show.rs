@@ -31,7 +31,7 @@ fn active_break_resume_receipt_counts_the_destination_step_visits() {
             .unwrap(),
     );
     assert!(
-        receipt.starts_with("resumed review#project at build · build 1 of 2 visits\n"),
+        receipt.starts_with("resumed review#main at build · build 1 of 2 visits\n"),
         "{receipt}"
     );
 }
@@ -69,7 +69,7 @@ fn active_break_resume_receipts_its_source_instead_of_an_extension() {
             let target = at.unwrap_or("gate");
             let receipt = success(command(&env, &args));
             assert!(
-                receipt.starts_with(&format!("resumed review#project at {target}\n")),
+                receipt.starts_with(&format!("resumed review#main at {target}\n")),
                 "{receipt}"
             );
             let value = until(&env, record.id.as_str(), |value| {
@@ -308,7 +308,7 @@ fn copied_commands_select_the_shown_run_across_rooms_and_reused_addresses() {
                 other.to_str().unwrap(),
                 "workflow",
                 "show",
-                "review#project",
+                "review#main",
             ],
         )),
     ] {
@@ -340,12 +340,7 @@ fn copied_commands_select_the_shown_run_across_rooms_and_reused_addresses() {
     let mut older = seed(&env, &env.project_root, &env.project_root, "done");
     older.terminal_at = Some(AT.parse().unwrap());
     save(&env, &older);
-    let collision = seed(
-        &env,
-        &env.project_root,
-        &env.home_root.join("linked/project"),
-        "parked",
-    );
+    let collision = seed(&env, &env.project_root, &env.project_root, "parked");
     let list = success(command(&env, &["workflow", "list"]));
     let hint = list
         .lines()
@@ -376,7 +371,7 @@ fn history_hint_keeps_flags_before_a_hyphen_leading_target() {
         .find_map(|line| line.strip_prefix("all of it: "))
         .unwrap();
     let history = success(copied(&env, hint, false));
-    assert!(history.starts_with("-review#project"), "{history}");
+    assert!(history.starts_with("-review#main"), "{history}");
 }
 
 #[test]
@@ -461,10 +456,7 @@ fn timeout_shows_the_flushed_wait_and_shell_log() {
             "last log /tmp/check.log",
         ],
     );
-    commands(
-        &text,
-        &["resume 'review#project'", "cancel 'review#project'"],
-    );
+    commands(&text, &["resume 'review#main'", "cancel 'review#main'"]);
 }
 
 #[test]
@@ -485,10 +477,7 @@ fn invalid_shows_the_durable_reason_and_stderr() {
             "  cannot read input\n  missing token",
         ],
     );
-    commands(
-        &text,
-        &["resume 'review#project'", "cancel 'review#project'"],
-    );
+    commands(&text, &["resume 'review#main'", "cancel 'review#main'"]);
 }
 
 #[test]
@@ -501,18 +490,15 @@ fn user_check_offers_each_named_target_but_step_does_not() {
     commands(
         &text,
         &[
-            "resume 'review#project'",
-            "resume 'review#project' --at build",
-            "cancel 'review#project'",
+            "resume 'review#main'",
+            "resume 'review#main' --at build",
+            "cancel 'review#main'",
         ],
     );
     record.node = "build".into();
     save(&env, &record);
     let text = human(&env, &record, false);
-    commands(
-        &text,
-        &["resume 'review#project'", "cancel 'review#project'"],
-    );
+    commands(&text, &["resume 'review#main'", "cancel 'review#main'"]);
     assert!(!text.contains("--at"), "{text}");
 }
 
@@ -537,10 +523,7 @@ fn asked_names_the_closed_pane_and_sign_to_write_before_resuming() {
             "write the answer",
         ],
     );
-    commands(
-        &text,
-        &["resume 'review#project'", "cancel 'review#project'"],
-    );
+    commands(&text, &["resume 'review#main'", "cancel 'review#main'"]);
 }
 
 #[test]
@@ -554,9 +537,9 @@ fn deadline_offers_plain_resume_as_well_as_rearming() {
     commands(
         &text,
         &[
-            "resume 'review#project'",
-            "resume 'review#project' --extend 'deadline=<when>'",
-            "cancel 'review#project'",
+            "resume 'review#main'",
+            "resume 'review#main' --extend 'deadline=<when>'",
+            "cancel 'review#main'",
         ],
     );
 }
@@ -575,10 +558,7 @@ fn check_failure_offers_a_cleared_retry() {
             "retry cleared",
         ],
     );
-    commands(
-        &text,
-        &["resume 'review#project'", "cancel 'review#project'"],
-    );
+    commands(&text, &["resume 'review#main'", "cancel 'review#main'"]);
 }
 
 #[test]
@@ -614,7 +594,7 @@ fn history_renders_typed_facts_without_json_and_default_trail_is_bounded() {
     contains(
         &text,
         &[
-            "review#project",
+            "review#main",
             "said ok → build",
             "ci=passed",
             "pr=unread",
@@ -652,13 +632,13 @@ fn history_renders_typed_facts_without_json_and_default_trail_is_bounded() {
             "resumed → gate",
             "canceled",
             "work dir ~/",
-            "all of it: rimz workflow show 'review#project' --history",
+            "all of it: rimz workflow show 'review#main' --history",
         ],
     );
     assert!(!text.contains(" · now"), "{text}");
     assert_eq!(
         json_show(&env, record.id.as_str())["address"],
-        "review#project"
+        "review#main"
     );
 }
 
@@ -823,7 +803,7 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
         ],
     );
     assert!(!text.contains("history:"), "{text}");
-    assert_eq!(text.lines().next(), Some("review#project"), "{text}");
+    assert_eq!(text.lines().next(), Some("review#main"), "{text}");
     assert!(
         text.contains(&format!("last checked {}", historical_clock(AT)))
             && !text.contains("checked ×"),
@@ -945,14 +925,13 @@ fn with_you_header_names_the_room_pr_and_check_without_repeating_status() {
         actual,
         [
             (
-                "review#project  PR #1517\n⢿ build is with you · @pet · gate: pending".into(),
+                "review#main  PR #1517\n⢿ build is with you · @pet · gate: pending".into(),
                 1,
                 0,
                 1
             ),
             (
-                "review#project  PR #1517\n⢿ build is with you · @pet · checking gate: pending"
-                    .into(),
+                "review#main  PR #1517\n⢿ build is with you · @pet · checking gate: pending".into(),
                 1,
                 0,
                 1
@@ -1030,7 +1009,7 @@ fn terminal_headline_uses_terminal_time_and_ignores_a_stale_park() {
         save(&env, &record);
         let text = human(&env, &record, false);
         assert!(
-            text.starts_with(&format!("review#project\n{glyph} {word} 3m\n")),
+            text.starts_with(&format!("review#main\n{glyph} {word} 3m\n")),
             "{text}"
         );
         assert!(

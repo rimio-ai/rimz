@@ -42,14 +42,7 @@ pub(super) fn live_boundary(scope: &Scope, live: &[LiveAgent]) -> Option<jiff::T
 fn live_agent_in_scope(agent: &LiveAgent, scope: &Scope) -> bool {
     match &scope.focus_keys {
         Some(keys) => keys.contains(&agent.key),
-        None => {
-            agent.root
-                && channel_matches(
-                    agent.channel.as_ref(),
-                    scope.channel_filter.as_deref(),
-                    scope.project_root.as_deref(),
-                )
-        }
+        None => agent.root && channel_matches(agent.channel.as_ref(), scope.channel.as_deref()),
     }
 }
 
@@ -62,13 +55,10 @@ pub(super) fn entry_in_scope(
         .focus_keys
         .as_ref()
         .is_some_and(|focus| focus.contains(&entry_key(entry)))
-        || (channel_matches(
-            entry.channel.as_ref(),
-            scope.channel_filter.as_deref(),
-            scope.project_root.as_deref(),
-        ) && !identities
-            .get(&entry_key(entry))
-            .is_some_and(|identity| identity.child))
+        || (channel_matches(entry.channel.as_ref(), scope.channel.as_deref())
+            && !identities
+                .get(&entry_key(entry))
+                .is_some_and(|identity| identity.child))
 }
 
 pub(super) fn compare_optional_timestamps(
@@ -91,13 +81,7 @@ pub(super) fn entry_matches_focus(
 ) -> bool {
     scope.focus_keys.as_ref().is_none_or(|focus| {
         focus.contains(&entry_key(entry))
-            || sender_matches_focus(
-                &chat.from,
-                focus,
-                identities,
-                scope.channel_filter.as_deref(),
-                scope.project_root.as_deref(),
-            )
+            || sender_matches_focus(&chat.from, focus, identities, scope.channel.as_deref())
     })
 }
 
@@ -106,9 +90,8 @@ pub(super) fn sender_matches_focus(
     focus: &BTreeSet<AgentKey>,
     identities: &HashMap<AgentKey, Identity>,
     channel_filter: Option<&str>,
-    project_root: Option<&Path>,
 ) -> bool {
-    let matches = matching_handle_keys(sender, channel_filter, identities, project_root);
+    let matches = matching_handle_keys(sender, channel_filter, identities);
     matches.len() == 1 && focus.contains(matches[0])
 }
 
@@ -116,18 +99,13 @@ pub(super) fn matching_handle_keys<'a>(
     handle: &str,
     channel_filter: Option<&str>,
     identities: &'a HashMap<AgentKey, Identity>,
-    project_root: Option<&Path>,
 ) -> Vec<&'a AgentKey> {
     let (base, channel) = split_rendered_handle(handle);
     let mut matches: Vec<_> = identities
         .iter()
         .filter_map(|(key, identity)| {
             (identity.base_handle == base
-                && channel_matches(
-                    identity.channel.as_ref(),
-                    channel.or(channel_filter),
-                    project_root,
-                ))
+                && channel_matches(identity.channel.as_ref(), channel.or(channel_filter)))
             .then_some(key)
         })
         .collect();
@@ -179,16 +157,10 @@ pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> 
         .collect()
 }
 
-pub(super) fn build_identities(
-    entries: &[TranscriptEntry],
-    project_root: Option<&Path>,
-) -> HashMap<AgentKey, Identity> {
+pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> {
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
-            root_lane: project_root.is_some()
-                && LaneSelector::parse(entry.channel.as_ref().map(LaneName::as_str), project_root)
-                    .is_trunk(),
             base_handle: rimz::agents::petname::sender_handle(
                 entry.role.as_deref(),
                 entry.name.as_deref(),
@@ -208,7 +180,6 @@ pub(super) fn build_identities(
                 existing.last_at = existing.last_at.max(candidate.last_at);
                 if existing.channel.is_none() {
                     existing.channel = candidate.channel.clone();
-                    existing.root_lane = candidate.root_lane;
                 }
                 existing.child |= candidate.child;
                 if candidate.rich && !existing.rich {
@@ -237,46 +208,31 @@ pub(super) fn resolve_scope(
     match target {
         None => {
             let channel = worktree.or(current).map(ToOwned::to_owned);
-            Ok(Scope::for_channel(
-                channel,
-                snapshot.project_root.as_deref(),
-            ))
+            Ok(Scope::for_channel(channel))
         }
         Some(raw) if raw.starts_with('#') => {
             let channel = raw.trim_start_matches('#');
             if channel.is_empty() {
                 bail!("channel target must be `#<name>`");
             }
-            reconcile_transcript_channel(raw, Some(channel), worktree, None, project_root)?;
-            Ok(Scope::for_channel(
-                Some(channel.to_owned()),
-                snapshot.project_root.as_deref(),
-            ))
+            reconcile_transcript_channel(raw, Some(channel), worktree, None)?;
+            Ok(Scope::for_channel(Some(channel.to_owned())))
         }
         Some(raw) if raw == "@all" || raw.starts_with("@all#") => {
             let (_, inline) = parse_transcript_target(raw)?;
-            let channel =
-                reconcile_transcript_channel(raw, inline.as_deref(), worktree, None, project_root)?;
-            Ok(Scope::for_channel(
-                channel,
-                snapshot.project_root.as_deref(),
-            ))
+            let channel = reconcile_transcript_channel(raw, inline.as_deref(), worktree, None)?;
+            Ok(Scope::for_channel(channel))
         }
         Some(raw) => {
             let (selector, inline) = parse_transcript_target(raw)?;
-            let requested_channel = reconcile_transcript_channel(
-                raw,
-                inline.as_deref(),
-                worktree,
-                current,
-                project_root,
-            )?;
+            let requested_channel =
+                reconcile_transcript_channel(raw, inline.as_deref(), worktree, current)?;
             let live_error = match crate::cli::resolve_agent_one_unhinted(
                 store, snapshot, raw, worktree, context,
             ) {
                 Ok(agent) => {
                     let channel = agent.lane_name().map(String::from);
-                    let mut scope = Scope::for_channel(channel, snapshot.project_root.as_deref());
+                    let mut scope = Scope::for_channel(channel);
                     let handle = rimz::agents::petname::sender_handle(
                         agent.role.as_deref(),
                         agent.name.as_deref(),
@@ -305,16 +261,13 @@ pub(super) fn resolve_scope(
                 .then_some(requested_channel.as_deref())
                 .flatten();
             let normalized_channel = resolution_channel.map(|channel| {
-                if project_root.is_some()
-                    && LaneSelector::parse(Some(channel), project_root).is_trunk()
-                {
-                    LaneName::TRUNK_LABEL
+                if project_root.is_some() && LaneSelector::parse(Some(channel)).is_trunk() {
+                    LaneName::TRUNK
                 } else {
                     channel
                 }
             });
-            let mut matches =
-                matching_identities(&selector, normalized_channel, identities, project_root);
+            let mut matches = matching_identities(&selector, normalized_channel, identities);
             matches.sort_by(|left, right| {
                 (&left.1.base_handle, &left.1.channel)
                     .cmp(&(&right.1.base_handle, &right.1.channel))
@@ -355,7 +308,7 @@ pub(super) fn resolve_scope(
             } else {
                 requested_channel.or_else(|| identity.channel.as_ref().map(LaneName::to_string))
             };
-            let mut scope = Scope::for_channel(channel, snapshot.project_root.as_deref());
+            let mut scope = Scope::for_channel(channel);
             scope.focus = Some(render_handle(
                 &identity.base_handle,
                 identity.lane_label(),
@@ -369,7 +322,7 @@ pub(super) fn resolve_scope(
 
 #[cfg(test)]
 pub(super) fn single_channel_scope(channel: String) -> Scope {
-    Scope::for_channel(Some(channel), None)
+    Scope::for_channel(Some(channel))
 }
 
 pub(super) fn parse_transcript_target(raw: &str) -> Result<(String, Option<String>)> {
@@ -397,9 +350,8 @@ pub(super) fn reconcile_transcript_channel(
     inline: Option<&str>,
     flag: Option<&str>,
     fallback: Option<&str>,
-    project_root: Option<&Path>,
 ) -> Result<Option<String>> {
-    match rimz::address::reconcile_channel(raw, inline, flag, fallback, project_root) {
+    match rimz::address::reconcile_channel(raw, inline, flag, fallback) {
         Ok(channel) => Ok(channel),
         Err(rimz::address::TargetErr::ChannelMismatch {
             target,
@@ -414,7 +366,6 @@ pub(super) fn matching_identities<'a>(
     selector: &str,
     channel: Option<&str>,
     identities: &'a HashMap<AgentKey, Identity>,
-    project_root: Option<&Path>,
 ) -> Vec<(&'a AgentKey, &'a Identity)> {
     let selector = selector.strip_prefix('@').unwrap_or(selector);
     let mut exact: Vec<_> = identities
@@ -438,7 +389,7 @@ pub(super) fn matching_identities<'a>(
                 || identity.role.as_deref() == Some(selector)
                 || key.1.as_str() == selector
                 || key.1.as_str().starts_with(selector))
-                && channel_matches(identity.channel.as_ref(), channel, project_root)
+                && channel_matches(identity.channel.as_ref(), channel)
         })
         .collect();
     matches.sort_by(|left, right| {
@@ -460,14 +411,8 @@ pub(super) fn candidate_label(key: &AgentKey, identity: &Identity) -> String {
     format!("{handle} ({})", key.1.as_str())
 }
 
-pub(super) fn channel_matches(
-    entry_channel: Option<&LaneName>,
-    filter: Option<&str>,
-    project_root: Option<&Path>,
-) -> bool {
-    filter.is_none_or(|filter| {
-        LaneSelector::parse(Some(filter), project_root).holds_record(entry_channel, project_root)
-    })
+pub(super) fn channel_matches(entry_channel: Option<&LaneName>, filter: Option<&str>) -> bool {
+    filter.is_none_or(|filter| LaneSelector::parse(Some(filter)).holds_record(entry_channel))
 }
 
 pub(super) fn entry_key(entry: &TranscriptEntry) -> AgentKey {

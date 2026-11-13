@@ -339,9 +339,9 @@ pub fn run_tab_title(
     }
 }
 
-/// The lane name a subagent zone is titled after: the launch lane's stored name.
-fn zone_lane_name(launch: &crate::agents::LaunchParams) -> Option<&str> {
-    launch.lane.as_ref().and_then(crate::ids::Lane::stored_name)
+/// The lane name a subagent zone is titled after: the launch lane's pin name.
+fn zone_lane_name(launch: &crate::agents::LaunchParams) -> Option<crate::ids::LaneName> {
+    launch.lane.as_ref()?.pin_name()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -372,7 +372,9 @@ pub(super) fn execute_run(
                 request.identity_env,
                 request.sidebar,
                 single_pane(&request.panes)?,
-                zone_lane_name(&identity.launch),
+                zone_lane_name(&identity.launch)
+                    .as_ref()
+                    .map(crate::ids::LaneName::as_str),
                 request.tab_anchor,
                 run_id,
             ) {
