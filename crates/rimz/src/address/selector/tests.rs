@@ -587,3 +587,40 @@ fn rows_in_scope_reads_the_current_lane_until_the_query_names_one() {
     assert_eq!(LaneScope::Current("feat").lane(&query(&[])), Some("feat"));
     assert_eq!(LaneScope::<&str>::Room.lane(&query(&[])), None);
 }
+
+#[test]
+fn a_closed_provisional_row_never_prints_a_live_agents_name() {
+    let mut holder = agent("s-live", "%1");
+    holder.name = Some("otter".into());
+    let live = snapshot(vec![holder], &["s-live"]);
+    // A card that ended before its session registered: without a pane, or in
+    // the pane the live agent now holds, no Audit form beyond the name is left.
+    for pane in [None, Some("%1")] {
+        let mut closed = agent("launch_abc", "%9");
+        closed.pane = pane.map(|pane| PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, pane)));
+        closed.name = Some("otter".into());
+        closed.name_explicit = true;
+        closed.ended_at = Some(now());
+        assert!(closed.agent_id.is_provisional());
+        let mut audit_agents = live.agents.to_vec();
+        audit_agents.push(closed);
+        let audit = snapshot(audit_agents, &[]);
+        let demotion = ParkDemotion::default();
+        let listed = live_rows(&live, &demotion, &reader(), now());
+        let closed = closed_rows(&audit, &live, &listed, &demotion, &reader(), now());
+        let [row] = closed.as_slice() else {
+            panic!("{pane:?}: one closed row: {closed:?}");
+        };
+        assert_eq!(row.agent().agent_id.as_str(), "launch_abc");
+        let live_matches = resolve_many(&live, row.handle(), None, &reader()).unwrap_or_default();
+        assert!(
+            live_matches.is_empty(),
+            "{pane:?}: {} resolves to live {:?}",
+            row.handle(),
+            live_matches
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+}
