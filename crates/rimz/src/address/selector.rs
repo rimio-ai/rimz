@@ -507,6 +507,68 @@ pub fn closed_rows<'a>(
         .collect()
 }
 
+/// Which lanes a selection reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneScope<L> {
+    /// Every lane of the room.
+    Room,
+    /// The caller's current lane, which a query naming `lane` replaces.
+    Current(L),
+    /// A lane the caller named, which holds beside any lane the query names.
+    Named(L),
+}
+
+impl<L> LaneScope<L> {
+    /// The one lane `query` reads under this scope, or `None` for every lane.
+    pub fn lane(self, query: &Query) -> Option<L> {
+        match self {
+            Self::Current(_) if query.names(Field::Lane) => None,
+            Self::Current(lane) | Self::Named(lane) => Some(lane),
+            Self::Room => None,
+        }
+    }
+
+    pub fn as_ref(&self) -> LaneScope<&L> {
+        match self {
+            Self::Room => LaneScope::Room,
+            Self::Current(lane) => LaneScope::Current(lane),
+            Self::Named(lane) => LaneScope::Named(lane),
+        }
+    }
+
+    pub fn map<M>(self, f: impl FnOnce(L) -> M) -> LaneScope<M> {
+        match self {
+            Self::Room => LaneScope::Room,
+            Self::Current(lane) => LaneScope::Current(f(lane)),
+            Self::Named(lane) => LaneScope::Named(f(lane)),
+        }
+    }
+}
+
+/// The rows `query` admits within `scope`: [`live_rows`], then `audit`'s
+/// [`closed_rows`] when the query reads closed sessions, kept to the lane the
+/// scope reads and to the query's default set and terms.
+pub fn rows_in_scope<'a>(
+    live: &'a SidebarSnapshot,
+    audit: Option<&'a SidebarSnapshot>,
+    scope: LaneScope<&LaneSelector>,
+    query: &Query,
+    demotion: &ParkDemotion,
+    reader: &AddressContext,
+    now: Timestamp,
+) -> Vec<AgentRow<'a>> {
+    let mut rows = live_rows(live, demotion, reader, now);
+    if let Some(audit) = audit.filter(|_| query.reads_closed()) {
+        let closed = closed_rows(audit, live, &rows, demotion, reader, now);
+        rows.extend(closed);
+    }
+    let lane = scope.lane(query);
+    rows.retain(|row| {
+        lane.is_none_or(|lane| agent_in_lane(row.agent, lane)) && query.admits(row, reader)
+    });
+    rows
+}
+
 /// The short Audit address, or `@<agent_id>` when the short one also names a
 /// live agent and the id resolves in Audit to exactly this agent.
 fn closed_address(

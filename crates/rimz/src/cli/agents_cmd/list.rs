@@ -7,7 +7,10 @@ use super::report::{
 #[cfg(test)]
 use super::report::{ReportOverrides, build_entry};
 use crate::cli::render;
-use rimz::address::selector::{self, AgentRow, Field, Query};
+use crate::cli::select::FILTER_DEFAULTS;
+#[cfg(test)]
+use rimz::address::selector::Field;
+use rimz::address::selector::{self, AgentRow, LaneScope, Query};
 use rimz::config::{GlyphRole, ThemeConfig};
 #[cfg(test)]
 use rimz::store::snapshot::{AgentCard, PaneAgent, RowCard, SidebarRow};
@@ -25,7 +28,7 @@ pub(super) fn list_agents(
     filters: &[String],
     globals: &GlobalFlags,
 ) -> Result<()> {
-    if filters.iter().any(|filter| filter.trim() == "help") {
+    if crate::cli::select::is_filter_help(filters) {
         return Ok(render::filter_help(&mut render::out(), FILTER_DEFAULTS)?);
     }
     let query = Query::parse(filters).map_err(|err| UsageError::new(err.to_string()))?;
@@ -44,25 +47,17 @@ pub(super) fn list_agents(
     .read(&state)
     .context("reading the room snapshot")?;
 
-    // A query that names `lane` replaces the current-lane default; explicit
-    // scope still applies first.
-    let channel = list_channel_filter(
-        all || query.names(Field::Lane),
-        scope.as_deref(),
-        &workspace,
-    );
+    let channel = list_channel_filter(all, scope.as_deref(), &workspace);
+    let lane_scope = match channel {
+        None => LaneScope::Room,
+        Some(lane) if scope.is_some() => LaneScope::Named(lane),
+        Some(lane) => LaneScope::Current(lane),
+    };
+    let channel = lane_scope.clone().lane(&query);
     let reader = crate::cli::current_channel(&workspace, Some(&store)).address_context();
     let now = jiff::Timestamp::now();
     let machine_config = crate::cli::machine_config();
-    let demotion = rimz::harness::park_demotion(
-        Some(&store),
-        &state,
-        &runtime,
-        &machine_config,
-        &snapshot.agents,
-        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
-        now,
-    );
+    let demotion = crate::cli::select::park_demotion(&store, &state, &runtime, &snapshot, now);
     let audit = if json || query.reads_closed() {
         store
             .runtime_projection(rimz::RuntimeScope::Audit)
@@ -71,23 +66,19 @@ pub(super) fn list_agents(
     } else {
         Vec::new()
     };
-    let audit_snapshot = query.reads_closed().then(|| {
-        SidebarSnapshot::build_with_agents(workspace.workspace_id.clone(), audit.clone(), now)
-            .with_agent_context(rimz::store::agent_context::read_all(&runtime))
-    });
-    let mut rows = selector::live_rows(&snapshot, &demotion, &reader, now);
-    if let Some(audit) = &audit_snapshot {
-        let closed = selector::closed_rows(audit, &snapshot, &rows, &demotion, &reader, now);
-        rows.extend(closed);
-    }
-    let lane = channel
-        .as_deref()
-        .map(|filter| rimz::address::LaneSelector::parse(Some(filter)));
-    rows.retain(|row| {
-        lane.as_ref()
-            .is_none_or(|lane| rimz::address::agent_in_lane(row.agent(), lane))
-            && query.admits(row, &reader)
-    });
+    let audit_snapshot = query
+        .reads_closed()
+        .then(|| crate::cli::select::closed_snapshot(&workspace, &runtime, audit.clone(), now));
+    let lane = lane_scope.map(|lane| rimz::address::LaneSelector::parse(Some(&lane)));
+    let rows = selector::rows_in_scope(
+        &snapshot,
+        audit_snapshot.as_ref(),
+        lane.as_ref(),
+        &query,
+        &demotion,
+        &reader,
+        now,
+    );
     let agents: Vec<&AgentState> = rows.iter().map(AgentRow::agent).collect();
     let row_refs: Vec<&AgentRow<'_>> = rows.iter().collect();
     if agents.is_empty() {
@@ -186,8 +177,7 @@ pub(super) fn list_agents(
 fn empty_list_line(lane: Option<&str>, filters: &[String]) -> String {
     match lane {
         // A filter that matches nothing is no sign the lane is closed.
-        Some(lane) if !filters.is_empty() => format!("no agent in '#{lane}' matches the filter"),
-        None if !filters.is_empty() => "no agent in this room matches the filter".to_owned(),
+        lane if !filters.is_empty() => crate::cli::select::no_match_line(lane),
         Some(lane) => {
             let lane = format!("#{lane}");
             format!(
@@ -198,10 +188,6 @@ fn empty_list_line(lane: Option<&str>, filters: &[String]) -> String {
         None => "no live agents in this room".to_owned(),
     }
 }
-
-/// What `agents list` lists until a term names the field.
-const FILTER_DEFAULTS: &str =
-    "naming lane, live, or parent replaces its default: the current lane, live=yes, parent=none";
 
 pub(super) fn agent_pr(snapshot: &SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
     snapshot

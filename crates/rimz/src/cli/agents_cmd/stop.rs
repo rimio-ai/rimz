@@ -205,7 +205,7 @@ pub(super) fn stop_agent(
         crate::cli::resolve_agent_one(store, &snapshot, &reference, None, current_channel).map_err(
             |mut err| {
                 if let Some(ambiguity) = err.downcast_mut::<render::AmbiguousAgents>() {
-                    ambiguity.offer_stop_all();
+                    ambiguity.offer_all("stop");
                 }
                 err
             },

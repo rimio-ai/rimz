@@ -525,3 +525,65 @@ fn a_hyphenated_field_name_is_an_unknown_field() {
         "filter term `foo-bar=x`: unknown field `foo-bar`; see `--filter help`"
     );
 }
+
+#[test]
+fn rows_in_scope_reads_the_current_lane_until_the_query_names_one() {
+    let feat = agent("feat", "%1");
+    let mut docs = agent("docs", "%2");
+    docs.worktree_path = Some("/repo/docs".to_owned());
+    docs.worktree_branch = Some("docs".to_owned());
+    crate::testkit::set_own_lane(&mut docs);
+    let live = snapshot(vec![feat, docs], &["feat", "docs"]);
+    let mut closed = agent("gone", "%3");
+    closed.ended_at = Some(now());
+    let mut audit_agents = live.agents.to_vec();
+    audit_agents.push(closed);
+    let audit = snapshot(audit_agents, &[]);
+    let feat_lane = LaneSelector::parse(Some("feat"));
+    let ids =
+        |audit: Option<&SidebarSnapshot>, scope: LaneScope<&LaneSelector>, filters: &[&str]| {
+            rows_in_scope(
+                &live,
+                audit,
+                scope,
+                &query(filters),
+                &ParkDemotion::default(),
+                &reader(),
+                now(),
+            )
+            .iter()
+            .map(|row| row.agent().agent_id.to_string())
+            .collect::<Vec<_>>()
+        };
+    assert_eq!(ids(None, LaneScope::Current(&feat_lane), &[]), ["feat"]);
+    assert_eq!(ids(None, LaneScope::Room, &[]), ["feat", "docs"]);
+    assert_eq!(
+        ids(None, LaneScope::Current(&feat_lane), &["lane=docs"]),
+        ["docs"],
+        "a query naming lane replaces the current lane"
+    );
+    assert_eq!(
+        ids(None, LaneScope::Current(&feat_lane), &["lane=*"]),
+        ["feat", "docs"]
+    );
+    assert!(
+        ids(None, LaneScope::Named(&feat_lane), &["lane=docs"]).is_empty(),
+        "a named lane holds beside the query's"
+    );
+    assert_eq!(
+        ids(Some(&audit), LaneScope::Current(&feat_lane), &["live=no"]),
+        ["gone"]
+    );
+    assert_eq!(
+        ids(Some(&audit), LaneScope::Current(&feat_lane), &[]),
+        ["feat"],
+        "closed rows join only a query that reads them"
+    );
+    assert_eq!(LaneScope::Current("feat").lane(&query(&["lane=*"])), None);
+    assert_eq!(
+        LaneScope::Named("feat").lane(&query(&["lane=*"])),
+        Some("feat")
+    );
+    assert_eq!(LaneScope::Current("feat").lane(&query(&[])), Some("feat"));
+    assert_eq!(LaneScope::<&str>::Room.lane(&query(&[])), None);
+}
