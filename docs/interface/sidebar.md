@@ -665,7 +665,7 @@ No selection, compact cards:
 
 Panes with no channel or known containing place (scripts, CI, stray shells) collect under the dim `external` divider, after active project groups and before the inactive chip. An agent launched outside the project groups at its own checkout's root, or at its directory when no repository holds it. An agent's git root can make a foreign place outside the project; shells beneath it join that group. The external divider keeps a `? n` or `! n` count so an untethered ask still shows.
 
-A room opened on a plain directory groups git-backed agents by their checkout, each under a full header. The panes the directory itself holds sit under a bold header with the directory's name, with no glyph or git figures, because a plain directory has no trunk to compare against.
+A room opened on a plain directory groups git-backed agents by their checkout, each under a full header. The panes the directory itself holds sit under a bold `main` header, the root's channel, with no glyph or git figures, because a plain directory has no trunk to compare against.
 
 ```
 ▎⑂ query-engine · main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
@@ -674,7 +674,7 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
 ▌  ▢ ──────────────────────────────────────  0.0%      ▐
 ▌  ▤ 0                                                 ▐
 
- agents                                                     ← the directory's own group: name only
+ main                                                       ← the directory's own group: name only
  ○ zsh
 ```
 

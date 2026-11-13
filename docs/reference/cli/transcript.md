@@ -22,7 +22,7 @@ The target names a channel or one agent, using the [agent-address grammar](./age
 | --- | --- |
 | none | The current channel. Outside a channel, every channel in the workspace. |
 | `'#<channel>'` | That channel. |
-| `'#main'` | The root lane, labelled `#main`. The project's own channel name and its root path select it too. |
+| `'#main'` | The root lane, labelled `#main`. The project's directory name and its root path are ordinary channel text and do not select it, and an entry recorded with no lane is in no channel. |
 | `@all` | Every channel in the workspace, with each handle suffixed by its channel. With `-w <channel>`, that channel. |
 | `@all#<channel>` | That channel. |
 | `@<handle>` | One agent, looked up in the current channel. |
@@ -62,7 +62,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 #cli-docs has conversations in several workspaces: /home/me/api, /home/me/web; run from one of them or pass --root <path>
 ```
 
-`--root <path>` pins the workspace and skips the search. The root lane (`#main` and its aliases) is never searched for elsewhere.
+`--root <path>` pins the workspace and skips the search. The root lane (`#main`) is never searched for elsewhere.
 
 ## Flags
 

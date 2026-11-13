@@ -27,7 +27,7 @@ The moment an agent asks to run a command is the moment a human can stop somethi
 
 ## A fleet run like a team
 
-A channel is a named lane where a human and a few agent colleagues work one line of work. It is backed by a bare name, a Git worktree, an in-place team as `<dir>/<team>`, or the room's directory itself. Spawning separates three independent choices, agents (which tools), layout (the shape on screen), and channel (which lane), so a planner-and-reviewer pair in any lane is one command.
+A channel is a named lane where a human and a few agent colleagues work one line of work. It is backed by a bare name, a Git worktree, a team launched in place (named after the team), or the room's directory itself (`main`). Spawning separates three independent choices, agents (which tools), layout (the shape on screen), and channel (which lane), so a planner-and-reviewer pair in any lane is one command.
 
 - A member is addressed as `@handle#channel`: `@claude` the kind, `@planner` the role, `@swift-otter` the one instance, `@all` the lane. Addresses resolve against live presence: one match delivers, many ask you to pick (or `--all` fans out), and `--create` launches the member straight from its address. Identity stays light on purpose, enough to name who needs you; the weight is on the cooperation inside the lane.
 - `message` reaches a member in either tense: `--steer` types into the live pane now, the default parks text for the next open turn, `--schedule` sets a delivery floor, and `--on done|any` picks the boundary gate. Every mode routes through the one pane-send primitive and records an audit event that omits the message text.

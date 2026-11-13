@@ -215,13 +215,13 @@ The last seven are final. A final record keeps its text in `audit/messages/<buck
 
 ### List messages
 
-Bare `rimz message` is `rimz message list` for the current lane. A shell at the project root lists `#main`: both channel-less historical messages and messages routed under the project's directory name.
+Bare `rimz message` is `rimz message list` for the current lane. A shell at the project root lists `#main`: the messages recorded under the lane `main`. A message recorded with no lane shows in no lane view.
 
 | Flag | Effect |
 | --- | --- |
 | `[TARGET]` | Only messages to that agent. An inline lane (`@coder#auth`) scopes the list like `--channel auth`; with `--all`, it only selects the agent. A conflicting `--channel` is refused. |
 | `--all` | Every lane, including archived messages. |
-| `--channel <NAME>` | One known lane. `main`, the project's directory name, and the root path always select the root lane, with or without a target. An unknown explicit channel, including an inline lane, exits 1 and lists up to 20 known channels. Message history, live agents, and owned worktrees supply the names. The ambient lane is not checked. |
+| `--channel <NAME>` | One known lane. `main` always selects the root lane, with or without a target; the project's directory name and the root path are ordinary lane text. An unknown explicit channel, including an inline lane, exits 1 and lists up to 20 known channels. Message history, live agents, and owned worktrees supply the names. The ambient lane is not checked. |
 | `--status <STATUS>` | Exactly one status. Also accepts `pending`, `cancelled`, and `removed`. Selecting `archived` shows archived messages. |
 | `--system` | Include system traffic: waits, signals, subagent digests, stage notices, automatic compaction commands, and `--no-from` text. |
 | `--limit <N>` | At most N rows in human output, a folded repeat counting as one row, or N messages with `--json`, newest first. Default 200; `0` shows all. |
@@ -245,7 +245,7 @@ The limit keeps whole folded rows. Use `show <id>` to inspect an individual mess
 
 An unfiltered empty lane reports counts from other lanes, not their rows. These counts exclude archived messages and, unless `--system` is passed, system traffic. Only queued messages count as not yet delivered, so the number matches what `--status queued` lists. The hint offers `rimz message list --all --status queued` when any are undelivered, otherwise `rimz message list --all`. A target or status filter keeps the scoped empty-state line, and JSON stays an array of the selected lane's rows. A row whose text is no longer retained and has no reason or condition shows `(text no longer kept)`. An invalid status lists all accepted status names.
 
-The sender reads `user` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under `#channel` headers, lanes with the newest message first. Channel-less messages and messages under the root directory's name share one `#main` header. Previously recorded recipient addresses retain their original spelling; JSON `channel` values remain the stored routing keys.
+The sender reads `user` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under `#channel` headers, lanes with the newest message first. Root-lane messages sit under `#main`, and a message recorded with no lane sits under no header. Previously recorded recipient addresses retain their original spelling; JSON `channel` values are the stored lane names, `main` for the root lane.
 
 Trailing lines report what the view left out:
 

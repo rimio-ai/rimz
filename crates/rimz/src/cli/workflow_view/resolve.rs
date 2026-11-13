@@ -36,8 +36,8 @@ enum Picked {
     Workflow(Vec<usize>),
 }
 
-/// Whether a requested address names `record`'s workflow and lane, each lane
-/// read through the one lane parser against the run's project.
+/// Whether a requested address names `record`'s workflow and lane, the
+/// requested lane read through the one lane parser.
 fn address_selects(address: &RunAddress, record: &RunRecord) -> bool {
     address.workflow == record.workflow
         && rimz::address::LaneSelector::parse(Some(address.lane.as_str()))
