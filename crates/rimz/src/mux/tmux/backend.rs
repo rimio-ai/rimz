@@ -98,6 +98,30 @@ fn run_session_command(spec: CommandSpec) -> Result<std::process::Output> {
     Err(spec.command_error(stderr))
 }
 
+/// A named session that is gone, or a server that is absent, lists as
+/// `SessionNotFound`, as Zellij reports it; a denied socket stays an error.
+fn list_session_panes(
+    spec: CommandSpec,
+    session: &str,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    let output = spec.output_raw_with_timeout(timeout)?;
+    if output.status.success() {
+        return Ok(output);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("can't find session")
+        || lower.contains("can't find window")
+        || server_is_absent(&stderr)?
+    {
+        return Err(MuxErr::SessionNotFound {
+            session: session.to_owned(),
+        });
+    }
+    Err(spec.command_error(stderr))
+}
+
 impl TmuxBackend {
     fn pin_background_window(&self, window: &str) {
         if let Err(err) = self
@@ -764,8 +788,12 @@ impl MuxBackend for TmuxBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let observed_at_ms = crate::utils::time::unix_now_ms();
-        let spec = self.list_panes_command(opts.session_name.as_deref());
-        let output = spec.run_with_timeout(timeout)?;
+        let output = match opts.session_name.as_deref() {
+            Some(session) => {
+                list_session_panes(self.list_panes_command(Some(session)), session, timeout)?
+            }
+            None => self.list_panes_command(None).run_with_timeout(timeout)?,
+        };
         let mut panes = Vec::new();
         let mut views = BTreeMap::new();
         let mut positions = BTreeMap::new();

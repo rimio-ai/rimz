@@ -1278,6 +1278,52 @@ fn kill_session_only_tolerates_missing_sessions_and_servers() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn list_panes_reports_a_missing_session_or_server_as_session_not_found() {
+    let cases = [
+        ("can't find session: rimz-test", "absent"),
+        ("can't find window: rimz-test", "absent"),
+        ("no server running on /test/socket", "absent"),
+        (
+            "error connecting to /test/socket (No such file or directory)",
+            "absent",
+        ),
+        (
+            "error connecting to /test/socket (Permission denied)",
+            "denied",
+        ),
+        ("server exited unexpectedly", "command"),
+    ];
+    let results: Vec<_> = cases
+        .into_iter()
+        .map(|(stderr, expected)| {
+            let (_temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+                "#!/bin/sh\nprintf '%s\\n' \"{stderr}\" >&2\nexit 1\n"
+            ));
+            let mut backend = TmuxBackend::with_socket("/test/socket");
+            backend.program = Some(shim);
+            let result = backend.list_panes(crate::mux::PaneListOptions {
+                session_name: Some("rimz-test".to_owned()),
+                ..crate::mux::PaneListOptions::default()
+            });
+            let correct = match &result {
+                Err(MuxErr::SessionNotFound { session }) => {
+                    expected == "absent" && session == "rimz-test"
+                }
+                Err(MuxErr::SocketConnectDenied { .. }) => expected == "denied",
+                Err(MuxErr::Command { .. }) => expected == "command",
+                _ => false,
+            };
+            (stderr, correct, result.err())
+        })
+        .collect();
+    assert!(
+        results.iter().all(|(_, correct, _)| *correct),
+        "{results:?}"
+    );
+}
+
 #[test]
 fn rename_tab_targets_the_anchor_pane_and_encodes_the_name() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");

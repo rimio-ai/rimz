@@ -147,7 +147,9 @@ fn requested_pidless_pane_keeps_its_cached_binding_across_topology_frames() {
         resolve_ttys: &mut |_| {},
     };
     for _ in 0..2 {
-        let (fresh, _) = context.candidate(Some(&prior), true, None, false).unwrap();
+        let (fresh, _) = context
+            .candidate(Some(&prior), true, None, PaneReadConsistency::Cached)
+            .unwrap();
         assert_eq!(first(&fresh).current.pid, Some(u32::MAX));
         assert_eq!(
             first(&fresh).previous,

@@ -4015,7 +4015,10 @@ path = "crates/rimz/src/sidebar"
 # PaneFrame::work_panes gives the CLI and the return key each tab's remembered work pane (+1).
 # mount_missing_sidebars gives bare reload the mount reconcile pass (+1).
 # timing::REPAIR_HEARTBEAT_HOLD_CAP bounds reload --repair's heartbeat hold (+1).
-surface-budget = 249
+# produce::hosting is the point-of-use lookup every stop reads: the module, Hosting,
+# HostingRead, HostingErr, read_hosting, and HostingRead::{hosting, agent, agents, mux,
+# take_notices} (+10).
+surface-budget = 259
 
 [[verdict]]
 kind = "item"
@@ -8007,6 +8010,31 @@ reason = "Two outputs on purpose: the fetch worker retains the workspace fold an
 kind = "item"
 key = "sidebar::produce::resolution_snapshot"
 reason = "The mux: Option<MuxName> parameter is real: seven callers pass five distinct sources (resolved workspace, ctx, CLI flag, auto-detect, fixture); not a one-caller flag (pass 17a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::hosting"
+reason = "The point-of-use agent lookup: the mux's own required-authoritative listing at call time, folded over a fresh store rollup, never a stored, cached, carried, or held pane."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::hosting::Hosting"
+reason = "Where one agent is hosted now: a listed pane or nowhere, the only answer a stop closes by."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::hosting::HostingRead"
+reason = "One read of the room: callers re-read after each action instead of carrying a pane."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::hosting::HostingErr"
+reason = "A failed lookup names the mux failure and carries the backend pick's notices for the CLI to print."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::hosting::read_hosting"
+reason = "The lookup's entry for the CLI stop and its callers; later slices route restart, focus, and delivery through it."
 
 [[verdict]]
 kind = "item"
