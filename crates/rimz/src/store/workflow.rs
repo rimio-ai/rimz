@@ -609,8 +609,8 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fire_tree: bool,
     /// When a loop fire's default capacity wait gives up: a second before the task's next clock
-    /// fire, never past its deadline. An agent step that sets no `capacity-wait` holds until
-    /// then, however late in the run its first hold comes.
+    /// fire, never past its deadline. An agent step that sets no `admission.give-up` holds
+    /// until then, however late in the run its first hold comes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity_until: Option<Timestamp>,
     /// The loop task row's `surplus` value as written when its fire started the run. The run's

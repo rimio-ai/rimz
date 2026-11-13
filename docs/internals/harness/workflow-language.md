@@ -33,9 +33,9 @@ The field table. A `*` marks a required field. Every node also takes `summary`, 
 | `[condition.<n>]` | `cases`* (`when`, `outcome`, `for`), `else`*, `timeout`*, `on.<outcome>`*, `on.unknown`*, `wake`, `provider`, `account` |
 | `[sleep.<n>]` | `sleep`*, `then`*, `when`, `for`, `provider`, `account` |
 
-Shipped fields with no place in the table, and where each went: `on-break` and `workflow.on.deadline` (the fallback chain, R13); `takeover` and `share` (`admission.occupancy`); `window`, `throttle`, the step `limit` and `capacity-wait` (the `admission` table, where `capacity-wait` is `give-up`); `on.cap` (`on.visits`); `max-visits-per-outcome` with `reset-on` (gone, R40); route `delay` and `default` (gone); lifecycle values `stay` and `until` (`session`); a `then` list (`rest-check`). `else` and `timeout` are required on a condition because R6 requires every outcome routed and R27 requires every wait without an agent pane to be bounded.
+Shipped fields with no place in the table, and where each goes: `on-break` and `workflow.on.deadline` (the fallback chain, R13); `on.cap` (`on.visits`); lifecycle values `stay` and `until` (`session`); a `then` list (`rest-check`). Already shipped as here: the eight kind tables, the `admission` table (`window`, `throttle`, `max-parallel`, `stagger`, `give-up`, and `occupancy` in place of `takeover` and `share`), and the removal of `max-visits-per-outcome` with `reset-on` (R40) and of route `delay` and `default`. `else` and `timeout` are required on a condition because R6 requires every outcome routed and R27 requires every wait without an agent pane to be bounded.
 
-The shipped tables are `crates/rimz/src/harness/workflow/spec.rs::Header`, `crates/rimz/src/harness/workflow/spec.rs::Check`, `crates/rimz/src/harness/workflow/spec.rs::Step` and `crates/rimz/src/harness/workflow/spec.rs::StepEdges`. A judge check reads neither `account` nor `provider` today (only a condition or a sleep does, in `crates/rimz/src/harness/workflow/script/condition.rs::reading`), so `[judge.<n>]` takes neither.
+The shipped tables are `crates/rimz/src/harness/workflow/spec/kinds.rs::WorkflowFile` and the kind tables it holds, lowered into `crates/rimz/src/harness/workflow/spec.rs::Check` and `crates/rimz/src/harness/workflow/spec.rs::Step`. A judge check reads neither `account` nor `provider` today (only a condition or a sleep does, in `crates/rimz/src/harness/workflow/script/condition.rs::reading`), so `[judge.<n>]` takes neither.
 
 ## Failures
 
@@ -220,7 +220,7 @@ then = "pr"
 on = { died = "pr", timeout = "pr", limited = "pr" }
 ```
 
-Differs from shipped: `max-visits-per-outcome = { limit = 2, reset-on = "queued" }` is gone, so the recipe loses "two sweeps per red streak" and keeps its total of five (R40). `unknown` is routed explicitly (R6).
+Differs from shipped: `unknown` is routed explicitly (R6).
 
 ### Example 2: the guide's fix-tests
 
@@ -340,7 +340,7 @@ admission = { occupancy = "share" }
 then = "@done"
 ```
 
-Differs from shipped: "run the agent anyway" when the judge fails is three explicit routes, not `on.failed`, which would also send a `limited` judge and the deadline to the agent. The session shares its checkout because the definition says so, where the compiler set `share` whenever `--takeover` was absent.
+Differs from shipped: "run the agent anyway" when the judge fails is three explicit routes, not `on.failed`, which would also send a `limited` judge and the deadline to the agent. The session shares its checkout because the definition says so, where the compiler sets `occupancy = "share"` whenever `--takeover` is absent.
 
 The agent sets no `prompt-file` because the shape's prompt is the row's, so the run is started by a row that sets `prompt`, as in example 4, or by `rimz workflow run --prompt` (R44, R46), and a start that passes none refuses.
 
