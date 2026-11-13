@@ -791,12 +791,18 @@ pub enum TaskBudgetError {
     SurplusNeedsAgent { task: String },
 }
 
-/// A loop delivery target pinned to the exact live agent session that scheduled
-/// it. The handle is display-only; `session` is the durable address.
+/// A loop delivery target pinned to the agent that scheduled it. The handle is
+/// display-only; `session` is the durable address.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TaskTarget {
+    /// The kind the agent ran as when it armed the target; a molt can change
+    /// the kind of the session that receives the wake.
     pub kind: AgentKind,
+    /// The agent's launch id, which every session of the agent carries across
+    /// a restart or molt. A target armed before targets held launch ids holds
+    /// the session id of the arming session instead, and follows only a swap
+    /// within `kind`.
     pub session: AgentSessionId,
     pub handle: String,
 }

@@ -602,22 +602,23 @@ fn wake_ups(
     if !all {
         return Ok(());
     }
-    let snapshot = if rows
+    let ctx = rows
         .iter()
         .any(|row| row.owner_class() == schedule::DeliveryOwner::SelfWait)
-    {
-        StatePaths::for_project_root(&room.root)
-            .ok()
-            .and_then(|paths| crate::cli::ctx::Ctx::for_workspace(paths.workspace_id, mux).ok())
-            .and_then(|ctx| ctx.resolution_snapshot().ok())
-    } else {
-        None
-    };
+        .then(|| StatePaths::for_project_root(&room.root).ok())
+        .flatten()
+        .and_then(|paths| crate::cli::ctx::Ctx::for_workspace(paths.workspace_id, mux).ok());
+    let snapshot = ctx.as_ref().and_then(|ctx| ctx.resolution_snapshot().ok());
+    let audit = ctx.as_ref().and_then(|ctx| ctx.store.audit_rows().ok());
+    let agents = audit
+        .iter()
+        .flat_map(|audit| audit.iter())
+        .collect::<Vec<_>>();
     let wakes = rows
         .iter()
         .filter_map(|row| {
             let task = row.task.as_ref()?;
-            Some(WakeRow::new(
+            let wake = WakeRow::new(
                 &row.name,
                 task.entry(),
                 row.timing
@@ -625,15 +626,17 @@ fn wake_ups(
                     .map_or(ArmState::Live, |timing| timing.arm_state()),
                 row.watcher_pid,
                 snapshot.as_ref(),
+                &agents,
                 now,
-            ))
+            );
+            Some((row.you, wake))
         })
         .collect::<Vec<_>>();
-    let caller = rows
+    let caller = wakes
         .iter()
-        .find(|row| row.you)
-        .and_then(|row| row.task.as_ref()?.entry().wait.as_ref())
-        .map(|target| (target.kind.clone(), target.session.clone()));
+        .find(|(you, _)| *you)
+        .and_then(|(_, wake)| wake.target_key());
+    let wakes = wakes.into_iter().map(|(_, wake)| wake).collect::<Vec<_>>();
     wake_view::write_room(
         out,
         &wakes,

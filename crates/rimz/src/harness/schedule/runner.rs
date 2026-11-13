@@ -132,10 +132,23 @@ pub enum DeliveryIntent {
 #[derive(Clone, Debug)]
 pub struct PreparedDelivery {
     pub root: PathBuf,
+    /// The room the task was armed in, where [`Self::holder`] reads its rows.
+    task_root: PathBuf,
+    /// The agent the wake is for, as the task's target names it: a swap can
+    /// move it to another session before the wake is sent.
     pub target: TaskTarget,
     pub prompt: String,
     pub supersedes: Vec<MessageId>,
     pub intent: DeliveryIntent,
+}
+
+impl PreparedDelivery {
+    /// The session the wake goes to now: the holder of the agent the target
+    /// names, read at the call, or `None` once the agent has ended. Its handle
+    /// is the holder's own name while the holder is still starting.
+    pub fn holder(&self) -> Result<Option<TaskTarget>> {
+        catalog::delivery_holder(&self.task_root, &self.target)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1744,7 +1757,7 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_delivery(&mut self, target: TaskTarget) -> Result<TaskFirePlan> {
-        if !catalog::delivery_target_alive(&self.entry, &target)? {
+        if catalog::delivery_holder(&self.entry.resolved_root(), &target)?.is_none() {
             if self.mode == LoopRunMode::Scheduled {
                 self.remove_schedule()?;
             }
@@ -1768,6 +1781,7 @@ impl<'a> TaskFire<'a> {
         self.pending = Some(target.clone());
         Ok(TaskFirePlan::Deliver(PreparedDelivery {
             root: self.context_root()?,
+            task_root: self.entry.resolved_root(),
             target,
             prompt,
             supersedes: self.superseded_check_ins(),

@@ -2391,7 +2391,9 @@ path = "crates/rimz/src/harness"
 # schedule::attention::read_catalog, when::forge_branch and CiSource::branch_pr give the sidebar's bookings lane the loop's verdicts and a booking's pull request reading (+3).
 # launch::ENV_AGENT_EPOCH names the epoch key the launch writes and the hook and ttyd strip read (+1).
 # schedule::arm::release_replaced_session releases what a swapped-out session held while its agent's waits stay armed (+1).
-surface-budget = 1229
+# schedule::pending::{wait_for, wait_of, same_target, target_holder, take_waits} and SessionWaits::contains_session give every wait reader one launch-or-session target rule (+6).
+# schedule::pending::holder_key files a wait under its holder's kind and launch, so a swap keeps the target (+1).
+surface-budget = 1236
 
 [[verdict]]
 kind = "item"

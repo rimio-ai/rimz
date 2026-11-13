@@ -1290,14 +1290,14 @@ fn resolve_delivery_target(
         .unwrap_or(agent);
     let target = TaskTarget {
         kind: agent.kind.clone(),
-        session: agent.agent_id.clone(),
+        session: agent.launch_key().clone(),
         handle: rimz::address::agent_handle(agent, &peers, true),
     };
     let mut matches = parse_matches(&args.matches)?;
     let selector = if let Some(raw) = args.signal.as_deref() {
         let selector = parse_signal_selector(&args.name, raw, Some(&matches))?;
         arm::default_signal_matches(workspace, &snapshot.agents, scope, &selector, &mut matches)?;
-        arm::validate_self_signal(&selector, &matches, &target)?;
+        arm::validate_self_signal(&selector, &matches, &target, Some(agent))?;
         Some(selector)
     } else {
         None

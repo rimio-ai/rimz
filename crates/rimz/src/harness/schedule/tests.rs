@@ -1982,3 +1982,112 @@ fn trigger_clauses_word_each_trigger_as_a_runs_brief_names_it() {
         Some("on the signal `deploy.done`")
     );
 }
+
+/// A store holding one agent's swap: launch `launch_a` registered as `s1`,
+/// then swapped to a replacement registered as `s2` at epoch 1.
+pub(super) fn swapped_store(dir: &std::path::Path) -> (crate::StatePaths, crate::Store) {
+    swapped_store_with(dir, |_| {})
+}
+
+/// [`swapped_store`], calling `at` once `s1` registers (`"registered"`) and
+/// once the replacement binds, still provisional (`"bound"`).
+pub(super) fn swapped_store_with(
+    dir: &std::path::Path,
+    mut at: impl FnMut(&str),
+) -> (crate::StatePaths, crate::Store) {
+    use crate::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+    let paths = crate::StatePaths::for_project_root(dir).unwrap();
+    let store = crate::Store::open(
+        paths.clone(),
+        crate::RuntimePaths::for_state(&paths).unwrap(),
+    )
+    .unwrap();
+    let resolved = crate::workspace::WorkspaceResolver::resolve(dir, None).unwrap();
+    crate::workspace::record::write(
+        &paths,
+        &crate::workspace::record::WorkspaceRecord::from_resolved(&resolved),
+    )
+    .unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let request = |id: &str, name| AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
+        kind: kind.clone(),
+        agent_id: id.into(),
+        name,
+        launch: Default::default(),
+        run_id: None,
+        prompt: None,
+    };
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.into(),
+        branch: None,
+        description: None,
+    };
+    let register = |session: &str, epoch: u32| {
+        let mut registered = crate::agents::AgentLifecycleObservation::new(
+            Some(session.into()),
+            crate::agents::LifecycleSignal::Registered,
+        );
+        registered.agent_name = Some("coder".into());
+        registered.launch_id = Some("launch_a".into());
+        registered.launch.epoch = (epoch > 0).then_some(epoch);
+        store
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: "session",
+                agent_kind: kind.clone(),
+                event_name: "fixture",
+                observation: &registered,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    };
+    let row = |id: &str| {
+        let rows = store.audit_rows().unwrap();
+        rows.iter()
+            .find(|agent| agent.agent_id == id)
+            .cloned()
+            .unwrap()
+    };
+    let pane = |raw| crate::ids::PaneId::parse(raw).unwrap();
+    let first = store
+        .begin_agent_launch_batch(
+            &[request(
+                "launch_a",
+                AgentLaunchName::Explicit("coder".into()),
+            )],
+            scope.clone(),
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            first.single_identity().unwrap(),
+            "session",
+            dir,
+            &pane("tmux:%1"),
+            None,
+        )
+        .unwrap();
+    register("s1", 0);
+    at("registered");
+    let swap = store
+        .begin_agent_swap(
+            &row("s1"),
+            &request("launch_b", AgentLaunchName::Mint),
+            scope,
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            swap.single_identity().unwrap(),
+            "session",
+            dir,
+            &pane("tmux:%2"),
+            None,
+        )
+        .unwrap();
+    at("bound");
+    register("s2", 1);
+    assert_eq!(row("s2").launch_id.as_deref(), Some("launch_a"));
+    (paths, store)
+}

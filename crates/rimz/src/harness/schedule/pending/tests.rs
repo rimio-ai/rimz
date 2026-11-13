@@ -270,7 +270,12 @@ fn runs_are_read_only_when_an_agent_launched_children_or_a_team() {
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
-    assert!(has_launched_work(&[parent.clone(), child]));
+    assert!(has_launched_work(&[parent.clone(), child.clone()]));
+    // A child stamped with its parent's launch keeps it after the parent molts to another kind.
+    let mut molted = AgentState::stub("codex", "molted", AgentStatus::Idle);
+    molted.launch_id = Some("parent-launch".into());
+    child.parent_agent_id = molted.launch_id.clone();
+    assert!(has_launched_work(&[molted, child]));
 
     peer.team = Some("forge".into());
     assert!(
@@ -712,4 +717,174 @@ fn fire_at_due_is_its_instant_even_when_armed_at_it() {
             delay: None,
         },
     );
+}
+
+/// A swap from `old` to `new` within one launch, with `new` running as `kind`.
+fn swapped(kind: &str) -> [AgentState; 2] {
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let mut old = crate::testkit::agent_state("claude", "old-session", at);
+    old.launch_id = Some("launch-one".into());
+    old.ended_at = Some(at);
+    let mut new = crate::testkit::agent_state(kind, "new-session", at);
+    new.launch_id = Some("launch-one".into());
+    new.epoch = 1;
+    [old, new]
+}
+
+fn target(kind: &str, session: &str) -> crate::config::TaskTarget {
+    crate::config::TaskTarget {
+        kind: AgentKind::new_unchecked(kind),
+        session: session.into(),
+        handle: "@planner".into(),
+    }
+}
+
+#[test]
+fn a_launch_target_follows_every_swap_and_a_session_target_only_one_within_its_kind() {
+    for kind in ["claude", "codex"] {
+        let rows = swapped(kind);
+        let [old, new] = &rows;
+        let claude = AgentKind::new_unchecked("claude");
+        let holder = |session| target_holder(rows.iter(), &target("claude", session));
+        assert_eq!(holder("launch-one"), Some(new), "{kind}");
+        assert!(wait_for(&claude, &"launch-one".into(), new));
+        assert!(wait_for(&claude, &"old-session".into(), old));
+        assert!(!wait_for(&claude, &"old-session".into(), new));
+        let molted = kind != "claude";
+        assert_eq!(holder("old-session"), (!molted).then_some(new), "{kind}");
+        let rows = rows.iter().collect::<Vec<_>>();
+        let legacy = target("claude", "old-session");
+        assert_eq!(wait_of(&rows, &legacy, new), !molted, "{kind}");
+        assert_eq!(
+            wait_of(&rows, &legacy, old),
+            molted,
+            "{kind}: the holder's alone"
+        );
+        assert!(wait_of(&rows, &target("claude", "launch-one"), new));
+    }
+}
+
+#[test]
+fn take_waits_takes_the_launch_key_and_the_holder_session_but_not_a_replaced_session() {
+    let [_, new] = swapped("claude");
+    let wait = |name: &str| PendingWait {
+        name: name.into(),
+        trigger: PendingWaitTrigger::Timer {
+            due: jiff::Timestamp::UNIX_EPOCH,
+            delay: None,
+        },
+        armed_at: None,
+        class: PendingWaitClass::Sleeping,
+    };
+    let mut waits = BTreeMap::new();
+    for (session, name) in [
+        ("launch-one", "by-launch"),
+        ("new-session", "by-session"),
+        ("old-session", "replaced"),
+    ] {
+        waits.insert(
+            (AgentKind::new_unchecked("claude"), session.into()),
+            vec![wait(name)],
+        );
+    }
+    let mut taken = take_waits(&mut waits, &new)
+        .into_iter()
+        .map(|wait| wait.name)
+        .collect::<Vec<_>>();
+    taken.sort();
+    assert_eq!(taken, ["by-launch", "by-session"]);
+    assert_eq!(waits.len(), 1);
+}
+
+#[test]
+fn same_target_keys_a_launch_across_kinds_and_a_session_within_its_kind() {
+    let rows = swapped("claude");
+    let rows = rows.iter().collect::<Vec<_>>();
+    let same =
+        |a: (&str, &str), b: (&str, &str)| same_target(&rows, &target(a.0, a.1), &target(b.0, b.1));
+    assert!(same(("claude", "launch-one"), ("codex", "launch-one")));
+    assert!(same(("claude", "old-session"), ("claude", "launch-one")));
+    assert!(same(("claude", "old-session"), ("claude", "new-session")));
+    assert!(!same(("codex", "old-session"), ("claude", "old-session")));
+    assert!(!same_target(
+        &[],
+        &target("plugin-a", "shared"),
+        &target("plugin-b", "shared")
+    ));
+    let molted = swapped("codex");
+    let molted = molted.iter().collect::<Vec<_>>();
+    assert!(
+        !same_target(
+            &molted,
+            &target("claude", "old-session"),
+            &target("claude", "launch-one")
+        ),
+        "an older session target follows no swap across kinds"
+    );
+}
+
+#[test]
+fn an_older_session_wait_follows_its_holder_within_its_kind_only() {
+    for kind in ["claude", "codex"] {
+        let rows = swapped(kind);
+        let [old, new] = &rows;
+        let mut waits = SessionWaits {
+            waits: BTreeMap::new(),
+            paths: None,
+        };
+        waits.waits.insert(
+            (AgentKind::new_unchecked("claude"), "old-session".into()),
+            vec![PendingWait {
+                name: "older".into(),
+                trigger: PendingWaitTrigger::Timer {
+                    due: jiff::Timestamp::UNIX_EPOCH,
+                    delay: None,
+                },
+                armed_at: None,
+                class: PendingWaitClass::Sleeping,
+            }],
+        );
+        let mut waits = waits.following(&[old, new]).waits;
+        let taken = take_waits(&mut waits, new).len();
+        let molted = kind != "claude";
+        assert_eq!(taken, usize::from(!molted), "{kind}: the holder's");
+        assert_eq!(
+            take_waits(&mut waits, old).len(),
+            usize::from(molted),
+            "{kind}"
+        );
+    }
+}
+
+/// A Runtime snapshot drops the replaced session's row, so an older wait on
+/// that session is placed through the room's Audit rows.
+#[test]
+fn an_older_session_wait_follows_its_holder_past_a_runtime_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, store) = super::super::tests::swapped_store(dir.path());
+    let holder = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id == "s2")
+        .cloned()
+        .unwrap();
+    let mut waits = SessionWaits {
+        waits: BTreeMap::new(),
+        paths: Some(paths),
+    };
+    waits.waits.insert(
+        (AgentKind::new_unchecked("claude"), "s1".into()),
+        vec![PendingWait {
+            name: "older".into(),
+            trigger: PendingWaitTrigger::Timer {
+                due: jiff::Timestamp::UNIX_EPOCH,
+                delay: None,
+            },
+            armed_at: None,
+            class: PendingWaitClass::Sleeping,
+        }],
+    );
+    let mut waits = waits.following(&[&holder]).waits;
+    assert_eq!(take_waits(&mut waits, &holder).len(), 1);
 }

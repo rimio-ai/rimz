@@ -1331,7 +1331,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert!(entry.wait_meta.is_some());
     let target = entry.wait.as_ref().expect("pinned wait target");
     assert_eq!(target.kind.as_str(), "claude");
-    assert_eq!(target.session.as_str(), "provider-session");
+    assert_eq!(target.session.as_str(), "launch-session");
     assert_eq!(target.handle, "@planner#main");
 
     for signal in [
@@ -3017,6 +3017,125 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
     }
 }
 
+/// A signal fired from another channel while the subscriber's swap replacement is still
+/// starting wakes that replacement under its own channel's handle, not a namesake in the
+/// firing channel.
+#[test]
+fn a_signal_from_another_channel_wakes_a_starting_holder_and_not_a_namesake() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent_with_launch(
+        &env,
+        LaunchParams {
+            channel: Some("beta".into()),
+            ..LaunchParams::default()
+        },
+    );
+    wait_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "deploy",
+            "--signal",
+            "deploy.done",
+            "--wait",
+            "@me",
+            "--once",
+        ],
+    );
+    assert_eq!(
+        wait_instances(&env).0["deploy"]
+            .wait
+            .as_ref()
+            .unwrap()
+            .handle,
+        "@planner#beta"
+    );
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let source = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.agent_id == "provider-session")
+        .cloned()
+        .unwrap();
+    let reservation = store
+        .begin_agent_swap(
+            &source,
+            &rimz::store::writer::AgentLaunchRequest {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "launch_swap".into(),
+                name: rimz::store::writer::AgentLaunchName::Explicit("planner".into()),
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                launch: LaunchParams {
+                    lane: source.lane.clone(),
+                    ..LaunchParams::default()
+                },
+                run_id: None,
+                prompt: None,
+            },
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap()
+        .single_identity()
+        .unwrap()
+        .clone();
+    store
+        .bind_agent_launch(
+            &reservation,
+            &workspace.session_name,
+            &env.project_root,
+            &PaneId::from_parts(MuxName::Tmux, "%9"),
+            None,
+        )
+        .unwrap();
+    crate::common::wait::register_agent(
+        &env,
+        "sess-alpha",
+        "launch-alpha",
+        "planner",
+        LaunchParams {
+            channel: Some("alpha".into()),
+            ..LaunchParams::default()
+        },
+    );
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &workspace.session_name,
+        "deploy",
+    );
+    let emitted = env
+        .rimz()
+        .args(["events", "emit", "deploy.done"])
+        .env(rimz::workspace::ENV_CHANNEL, "alpha")
+        .output()
+        .unwrap();
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let messages = wait_for_wait_messages(&env, 1);
+    let receivers = messages
+        .iter()
+        .map(|message| (message.agent_id.as_str(), message.launch_id.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        receivers,
+        [(reservation.agent_id.as_str(), Some("launch-session"))],
+        "{messages:#?}"
+    );
+}
+
 #[test]
 fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
     let env = Env::new();
@@ -3502,7 +3621,7 @@ fn wait_at_after_reset_and_when_arm_one_shot_self_waits_in_the_arming_checkout()
         let entry = &tasks.0[&name];
         assert_eq!(
             entry.wait.as_ref().unwrap().session.as_str(),
-            "provider-session"
+            "launch-session"
         );
         assert!(
             entry

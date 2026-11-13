@@ -672,9 +672,9 @@ impl TaskCatalog {
                     continue;
                 }
             };
-            match delivery_target_alive(task.entry(), &target) {
-                Ok(true) => {}
-                Ok(false) => {
+            match delivery_holder(&task.entry().resolved_root(), &target) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
                     self.reap_scheduled(&name, &task)?;
                     reaped += 1;
                 }
@@ -833,28 +833,43 @@ fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
     }
 }
 
-pub(super) fn delivery_target_alive(
-    entry: &TaskEntry,
+/// Where a wake for `target`, armed in the room at `root`, goes now: the
+/// session its agent's holder runs as, read on Audit rows so a session a
+/// restart or molt replaced still resolves, or `None` once the agent has ended
+/// or its room is gone. A provisional session is a holder still starting,
+/// which a wake can only queue for under the handle the holder's row carries.
+pub(super) fn delivery_holder(
+    root: &Path,
     target: &crate::config::TaskTarget,
-) -> Result<bool> {
-    let root = entry.resolved_root();
-    let project_root = WorkspaceResolver::persisted_project_root(&root)
+) -> Result<Option<crate::config::TaskTarget>> {
+    let project_root = WorkspaceResolver::persisted_project_root(root)
         .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
     let paths = StatePaths::for_project_root(&project_root)?;
     if crate::workspace::record::read(&paths.workspace_record).is_err() {
-        return Ok(false);
+        return Ok(None);
     }
     let runtime = RuntimePaths::for_state(&paths)?;
     let Some(store) = Store::open_existing(paths, runtime) else {
-        return Ok(false);
+        return Ok(None);
     };
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    Ok(snapshot.agents.iter().any(|agent| {
-        !agent.is_provider_subagent()
-            && agent.ended_at.is_none()
-            && agent.kind == target.kind
-            && agent.agent_id == target.session
-    }))
+    let rows = store.audit_rows().context("reading agent rows")?;
+    Ok(super::pending::target_holder(rows.iter(), target)
+        .filter(|holder| !holder.session_over())
+        .map(|holder| crate::config::TaskTarget {
+            kind: holder.kind.clone(),
+            session: holder.agent_id.clone(),
+            handle: holder
+                .name
+                .as_ref()
+                .filter(|_| holder.agent_id.is_provisional())
+                .map_or_else(
+                    || target.handle.clone(),
+                    |name| match crate::address::lane_label(holder) {
+                        Some(lane) => format!("@{name}#{lane}"),
+                        None => format!("@{name}"),
+                    },
+                ),
+        }))
 }
 
 #[cfg(test)]
@@ -998,9 +1013,14 @@ mod tests {
             None,
             Some(Path::new("/repo")),
         );
+        let agent = crate::testkit::agent_state(
+            target.kind.as_str(),
+            target.session.as_str(),
+            jiff::Timestamp::UNIX_EPOCH,
+        );
         let session = (target.kind, target.session);
         assert_eq!(
-            session_deliveries(&catalog, Path::new("/repo"), Some(&session))
+            session_deliveries(&catalog, Path::new("/repo"), Some(&agent), &[])
                 .map(|(name, _)| name)
                 .collect::<Vec<_>>(),
             vec![
@@ -1231,6 +1251,10 @@ mod tests {
             handle: "@claude".to_owned(),
         };
 
-        assert!(!delivery_target_alive(&entry, &target).expect("check vanished target"));
+        assert!(
+            delivery_holder(&entry.resolved_root(), &target)
+                .expect("check vanished target")
+                .is_none()
+        );
     }
 }

@@ -135,6 +135,16 @@ pub(super) fn insert_delivery(
     let mut tasks = load_strict_from(&paths.root)?.0;
     let arming = super::arming::load();
     let now = Timestamp::now();
+    // Rows place an older target under the launch its session belongs to; a
+    // room whose rows cannot be read compares targets as written.
+    let audit = std::cell::OnceCell::new();
+    let rows = || {
+        audit.get_or_init(|| {
+            crate::store::runtime::audit_rows(paths)
+                .inspect_err(|error| tracing::debug!(%error, "failed to read rows for wait dedupe"))
+                .ok()
+        })
+    };
     if (entry.signal.is_some() || entry.when.is_some())
         && let Some((name, _)) = tasks.iter().find(|(name, current)| {
             let key = super::arming::TaskKey::for_task(
@@ -154,7 +164,13 @@ pub(super) fn insert_delivery(
                     .wait
                     .as_ref()
                     .zip(entry.wait.as_ref())
-                    .is_some_and(|(a, b)| a.kind == b.kind && a.session == b.session)
+                    .is_some_and(|(a, b)| {
+                        let rows = rows()
+                            .iter()
+                            .flat_map(|rows| rows.iter())
+                            .collect::<Vec<_>>();
+                        super::pending::same_target(&rows, a, b)
+                    })
                 && current
                     .signal
                     .as_deref()
@@ -431,6 +447,46 @@ mod tests {
             assert_eq!(&actual, expected);
             assert!(duplicate);
         }
+    }
+
+    /// A subscription stored before targets held launch ids names the agent's
+    /// first session: re-adding it for the agent's launch after a swap is
+    /// already subscribed, while two kinds sharing a session string are two
+    /// agents.
+    #[test]
+    fn subscription_dedupe_reads_an_older_session_as_its_launch_and_keeps_kinds_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _store) = crate::harness::schedule::tests::swapped_store(dir.path());
+
+        let subscriber = |kind: &str, session: &str| TaskEntry {
+            root: dir.path().to_owned(),
+            signal: Some("ci.failed".into()),
+            wait: Some(crate::config::TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked(kind),
+                session: session.into(),
+                handle: "@coder".into(),
+            }),
+            ..Default::default()
+        };
+        insert(&paths, "older", &subscriber("claude", "s1")).unwrap();
+        let readd = insert_delivery(
+            &paths,
+            None,
+            &subscriber("claude", "launch_a"),
+            &BTreeSet::new(),
+        );
+        assert_eq!(readd.unwrap(), ("older".to_owned(), true));
+        for plugin in ["plugin-a", "plugin-b"] {
+            let (_, duplicate) = insert_delivery(
+                &paths,
+                None,
+                &subscriber(plugin, "shared"),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+            assert!(!duplicate, "{plugin}");
+        }
+        assert_eq!(load_from(&paths.root).0.len(), 3);
     }
 
     /// A retirement takes every row pinned to the session, declared or

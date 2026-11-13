@@ -48,6 +48,7 @@ pub fn queue(
     // Read waits before the rows and queue: consuming a wait publishes its wake first.
     let waits = SessionWaits::load(store.paths());
     let (agents, now) = read_agents()?;
+    let waits = waits.following(&agents.iter().collect::<Vec<_>>());
     let Some(members) = request
         .members
         .iter()
@@ -59,7 +60,7 @@ pub fn queue(
     if members.iter().any(|member| {
         member.ended_at.is_some()
             || member.last_activity > request.stalled_since
-            || waits.contains(&member.kind, &member.agent_id)
+            || waits.contains(member)
             || !matches!(
                 member.display_rest_status(member.effective_status(now)),
                 AgentStatus::Idle | AgentStatus::Success

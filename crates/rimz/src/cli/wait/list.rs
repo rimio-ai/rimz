@@ -35,12 +35,13 @@ pub(super) fn pending_rows(
     agent: Option<&AgentState>,
     snapshot: &SidebarSnapshot,
 ) -> Result<Vec<WakeRow>> {
-    let session = agent.map(|agent| (agent.kind.clone(), agent.agent_id.clone()));
     let root = &ctx.workspace.project_root;
     let catalog = TaskCatalog::load(Some(root))?;
     let arming = arming::load();
     let now = jiff::Timestamp::now();
-    session_deliveries(&catalog, root, session.as_ref())
+    let audit = ctx.store.audit_rows()?;
+    let rows = audit.iter().collect::<Vec<_>>();
+    session_deliveries(&catalog, root, agent, &rows)
         .map(|(name, task)| {
             let entry = task.entry();
             let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
@@ -61,7 +62,15 @@ pub(super) fn pending_rows(
             } else {
                 None
             };
-            Ok(WakeRow::new(name, entry, state, pid, Some(snapshot), now))
+            Ok(WakeRow::new(
+                name,
+                entry,
+                state,
+                pid,
+                Some(snapshot),
+                &rows,
+                now,
+            ))
         })
         .collect()
 }
@@ -71,6 +80,8 @@ fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
     let catalog = TaskCatalog::load_room(root)?;
     let arming = arming::load();
     let now = jiff::Timestamp::now();
+    let audit = ctx.store.audit_rows()?;
+    let rows = audit.iter().collect::<Vec<_>>();
     Ok(catalog
         .visible()
         .iter()
@@ -85,7 +96,7 @@ fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
                 .as_ref()
                 .and_then(|_| watcher_info(ctx.runtime(), name).ok().flatten())
                 .map(|info| info.pid);
-            WakeRow::new(name, entry, state, pid, Some(snapshot), now)
+            WakeRow::new(name, entry, state, pid, Some(snapshot), &rows, now)
         })
         .collect())
 }

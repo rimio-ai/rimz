@@ -2436,3 +2436,42 @@ fn a_runs_trigger_sentence_stays_as_fired_when_its_task_is_edited_renamed_or_rem
         }
     }
 }
+
+/// A wake prepared before a swap goes to the session holding the agent when
+/// it is sent: the provisional replacement by its own name, then the session
+/// it registers as. An older target naming the first session follows too.
+#[test]
+fn a_prepared_delivery_resolves_its_holder_when_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = |session: &str| TaskTarget {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        session: session.into(),
+        handle: "@stored".to_owned(),
+    };
+    let prepared = |session: &str| PreparedDelivery {
+        root: dir.path().to_owned(),
+        task_root: dir.path().to_owned(),
+        target: target(session),
+        prompt: "wake".to_owned(),
+        supersedes: Vec::new(),
+        intent: DeliveryIntent::SelfWait,
+    };
+    let holder = |session: &str| {
+        let holder = prepared(session).holder().unwrap().expect("a holder");
+        (holder.session.to_string(), holder.handle)
+    };
+    let mut seen = Vec::new();
+    super::super::tests::swapped_store_with(dir.path(), |stage| {
+        seen.push((stage.to_owned(), holder("launch_a")));
+    });
+    seen.push(("registered s2".to_owned(), holder("launch_a")));
+    seen.push(("older target".to_owned(), holder("s1")));
+    let expected = [
+        ("registered", "s1", "@stored"),
+        ("bound", "launch_b", "@coder"),
+        ("registered s2", "s2", "@stored"),
+        ("older target", "s2", "@stored"),
+    ]
+    .map(|(stage, session, handle)| (stage.to_owned(), (session.to_owned(), handle.to_owned())));
+    assert_eq!(seen, expected);
+}

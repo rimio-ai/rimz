@@ -37,25 +37,30 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
         model.rooms.retain(|room| !room.here);
         model.caller_root = None;
     }
-    let caller_session = workspace
+    let caller = workspace
         .as_ref()
         .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten())
         .and_then(|store| {
             let caller = super::super::send::resolve_caller(&store).ok().flatten()?;
             let projection = store.runtime_projection(rimz::RuntimeScope::Audit).ok()?;
-            rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &caller)
+            let agent = rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &caller)
                 .ok()
                 .filter(|agent| agent.ended_at.is_none())
-                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                .cloned()?;
+            Some((agent, projection.agents))
         });
+    let rows = caller
+        .as_ref()
+        .map(|(_, agents)| agents.iter().collect::<Vec<_>>())
+        .unwrap_or_default();
     for row in model.rooms.iter_mut().flat_map(|room| &mut room.tasks) {
         row.you = row
             .task
             .as_ref()
             .and_then(|task| task.entry().wait.as_ref())
-            .zip(caller_session.as_ref())
-            .is_some_and(|(target, (kind, session))| {
-                kind == &target.kind && session == &target.session
+            .zip(caller.as_ref())
+            .is_some_and(|(target, (agent, _))| {
+                rimz::harness::schedule::pending::wait_of(&rows, target, agent)
             });
         if row.you && row.attention == Some(Attention::Lost) {
             row.reason.push_str(" (you)");

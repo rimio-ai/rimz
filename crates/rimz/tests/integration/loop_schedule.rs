@@ -4056,7 +4056,7 @@ fn resident_takeover_case(case: Takeover) {
             .unwrap()
             .session
             .as_str(),
-        "sibling-coder"
+        "launch_sibling-coder"
     );
     stamp_session_ended(&env, "old-coder");
     let output = command().args(["teams", "stop", "forge"]).output().unwrap();
@@ -4617,7 +4617,7 @@ fn team_signal_binding_registers_delivers_and_retires() {
     );
     assert_eq!(
         entry.wait.as_ref().unwrap().session.as_str(),
-        "sess-team-coder"
+        "launch_sess-team-coder"
     );
     team_signal_hook(&env, &cwd, "sess-team-coder", "SessionStart");
     assert_eq!(read_loop_instances(&env), armed);
@@ -4797,7 +4797,7 @@ fn team_signal_binding_resume_keeps_session_rows_separate() {
             .unwrap()
             .session
             .as_str(),
-        "sess-team-new"
+        "launch_sess-team-new"
     );
     team_signal_hook(&env, &cwd, "sess-team-new", "UserPromptSubmit");
     loop_ok(

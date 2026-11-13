@@ -1009,12 +1009,15 @@ impl Stopper<'_> {
             let members = agent.map_or_else(Vec::new, |agent| {
                 rimz::agents::state::launch_members(rows.iter(), &agent.kind, agent.launch_key())
             });
+            // A wait armed since targets hold launch ids is pinned to the launch, under
+            // the kind its arming session ran as.
             let sessions = std::iter::once((&ending.asked.0, &ending.asked.1))
-                .chain(
-                    members
-                        .iter()
-                        .map(|member| (&member.kind, &member.agent_id)),
-                )
+                .chain(members.iter().flat_map(|member| {
+                    [
+                        (&member.kind, &member.agent_id),
+                        (&member.kind, member.launch_key()),
+                    ]
+                }))
                 .collect::<std::collections::BTreeSet<_>>();
             for (kind, session) in sessions {
                 if let Err(err) = rimz::harness::schedule::arm::retire_session(
