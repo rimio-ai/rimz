@@ -18,6 +18,13 @@ mod tasks;
 mod ticks;
 mod wakes;
 
+/// A run's sealed definition root: an edit there, unlike one to the source, reaches the run.
+fn sealed(env: &Env, id: &str) -> PathBuf {
+    env.state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap())
+        .definition
+}
+
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     let env = Env::new();
     env.record(&env.project_root);
@@ -476,7 +483,7 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
 #[test]
 fn wait_is_merged_clamped_and_cleared_by_signal() {
     let script = format!("printf x >> \"$RIMZ_WORKFLOW_DIR/count\"\n{PENDING}");
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &script);
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &script);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"]["count"] == 1);
     let recheck: jiff::Timestamp = value["record"]["recheck_at"]
@@ -511,7 +518,11 @@ fn wait_is_merged_clamped_and_cleared_by_signal() {
         b"x",
         "early advance must not run the script"
     );
-    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    fs::write(
+        sealed(&env, &id).join("checks/pr.sh"),
+        evaluation_script("done"),
+    )
+    .unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     let value = settled(&env, &id, "done");
     assert_eq!(events(&value, "wake")[0]["signal"], "review.ready");
@@ -661,7 +672,14 @@ fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
         rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
     let first_id = rimz::ids::WorkflowRunId::parse(&first).unwrap();
     fs::write(state.workflow(&first_id).spec, "bad sealed spec").unwrap();
-    fs::write(second_dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    // A run reads only the copy sealed at its start; an edit to the source changes nothing.
+    let second_id = rimz::ids::WorkflowRunId::parse(second).unwrap();
+    fs::write(second_dir.join("checks/pr.sh"), "exit 3\n").unwrap();
+    fs::write(
+        state.workflow(&second_id).definition.join("checks/pr.sh"),
+        evaluation_script("done"),
+    )
+    .unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     let deadline = Instant::now() + Duration::from_secs(30);
     while show(&env, second)["record"]["state"] != "done" {
@@ -679,12 +697,12 @@ fn signal_wake_survives_the_emitters_process_group_exiting() {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     // The woken advance is still evaluating when the emitter's group is killed.
     let script = format!("sleep 1\n{}", evaluation_script("done"));
-    fs::write(dir.join("checks/pr.sh"), script).unwrap();
+    fs::write(sealed(&env, &id).join("checks/pr.sh"), script).unwrap();
     let emitter = env
         .rimz()
         .args(["events", "emit", "review.ready"])
@@ -743,8 +761,8 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
     for id in [first.as_str(), second] {
         until(&env, id, |v| v["record"]["wait"].is_object());
     }
-    for dir in [first_dir, second_dir] {
-        fs::write(dir.join("checks/pr.sh"), "exec sleep 60").unwrap();
+    for id in [first.as_str(), second] {
+        fs::write(sealed(&env, id).join("checks/pr.sh"), "exec sleep 60").unwrap();
     }
     success(command(&env, &["events", "emit", "review.ready"]));
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -770,7 +788,7 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
 }
 
 #[test]
-fn sealed_spec_live_scripts_and_hot_loop_guard() {
+fn sealed_definition_ignores_source_edits_and_hot_loop_guard() {
     let spec = format!(
         "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ again = 'next', pause = '@wait' }}\ntimeout = '1h'\n[script.next]\nrun = 'sh checks/pr.sh'\non.again = 'pr'\n"
     );
@@ -782,13 +800,37 @@ fn sealed_spec_live_scripts_and_hot_loop_guard() {
     assert_eq!(value["record"]["state"], "active");
     assert_eq!(value["record"]["node"], "pr");
     fs::write(dir.join("workflow.toml"), "not valid TOML").unwrap();
-    fs::write(dir.join("checks/pr.sh"), evaluation_script("pause")).unwrap();
+    fs::write(dir.join("checks/pr.sh"), "exit 3\n").unwrap();
+    let sealed = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap())
+        .definition;
+    fs::write(sealed.join("checks/pr.sh"), evaluation_script("pause")).unwrap();
     success(command(&env, &["workflow", "advance", &id]));
     let value = show(&env, &id);
     let rows = events(&value, "evaluation");
     assert_eq!(rows.len(), 3);
     assert_ne!(rows[0]["digests"], rows[2]["digests"]);
     assert_eq!(value["record"]["wait"]["outcome"], "pause");
+}
+
+#[test]
+fn sealed_scripts_keep_their_executable_bit() {
+    use std::os::unix::fs::PermissionsExt;
+    let spec = format!(
+        "{HEADER}[command.pr]\nrun = 'checks/ok.sh'\nthen = 'check'\ntimeout = '1h'\n[test.check]\nrun = 'checks/ok.sh'\non = {{ pass = '@done', fail = '@failed' }}\n"
+    );
+    let (env, dir) = fixture(&spec, "");
+    let script = dir.join("checks/ok.sh");
+    fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let id = start(&env);
+    settled(&env, &id, "done");
+    let mode = fs::metadata(sealed(&env, &id).join("checks/ok.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755);
 }
 
 #[test]
@@ -819,10 +861,10 @@ fn malformed_and_unrouted_objects_are_invalid() {
 
 #[test]
 fn invalid_defaults_fail_and_deleted_script_is_invalid() {
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
-    fs::remove_file(dir.join("checks/pr.sh")).unwrap();
+    fs::remove_file(sealed(&env, &id).join("checks/pr.sh")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     let value = settled(&env, &id, "failed");
     assert_eq!(
@@ -893,7 +935,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
         "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[script.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
     );
-    let (env, dir) = fixture(&spec, PENDING);
+    let (env, _) = fixture(&spec, PENDING);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     assert_eq!(
@@ -931,7 +973,11 @@ fn deadline_routes_once_and_can_be_rearmed() {
     });
     assert_eq!(events(&value, "route").len(), 2);
     assert_eq!(value["record"]["deadline_fired"], true);
-    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    fs::write(
+        sealed(&env, &id).join("checks/pr.sh"),
+        evaluation_script("done"),
+    )
+    .unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     let value = settled(&env, &id, "done");
     success(command(&env, &["workflow", "advance", &id]));
@@ -1391,7 +1437,7 @@ fn human_show_wait_and_journal_are_readable() {
             "recheck_at":"2099-01-01T00:00:00Z",
         })
     );
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &pending);
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &pending);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let text = success(command(&env, &["workflow", "show", &id]));
@@ -1463,7 +1509,7 @@ fn human_show_wait_and_journal_are_readable() {
         waiting.lines().any(|line| line.contains(": pending")),
         "{waiting}"
     );
-    fs::write(dir.join("checks/pr.sh"), "printf 'not-json'").unwrap();
+    fs::write(sealed(&env, &id).join("checks/pr.sh"), "printf 'not-json'").unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     settled(&env, &id, "failed");
     let failed = success(command(&env, &["workflow", "show", &id]));
@@ -1489,7 +1535,7 @@ fn human_show_wait_and_journal_are_readable() {
 
 #[test]
 fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
-    let (env, dir) = fixture(
+    let (env, _) = fixture(
         &format!("{HEADER}{WAIT}"),
         &PENDING.replace("2099-01-01", "2000-01-01"),
     );
@@ -1506,7 +1552,11 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
     assert_eq!(waiting["record"]["wait"]["count"], 3);
     let text = success(command(&env, &["workflow", "show", &id, "--history"]));
 
-    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    fs::write(
+        sealed(&env, &id).join("checks/pr.sh"),
+        evaluation_script("done"),
+    )
+    .unwrap();
     success(command(&env, &["workflow", "advance", &id]));
     let done = settled(&env, &id, "done");
     let evaluations = events(&done, "evaluation");

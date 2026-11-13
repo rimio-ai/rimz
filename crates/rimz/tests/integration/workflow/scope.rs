@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn project_scope_is_unique_across_checkouts_and_reports_the_override() {
+fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
     let (env, _) = fixture(
         &format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
         PENDING,
@@ -40,33 +40,23 @@ fn project_scope_is_unique_across_checkouts_and_reports_the_override() {
         value["record"]["scope"],
         json!({"kind":"project", "path":env.project_root})
     );
-    for args in [
-        vec!["workflow", "run", "review"],
-        vec!["workflow", "run", "review", "-w", "one"],
-    ] {
-        let duplicate = command(&env, &args);
-        assert_eq!(duplicate.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&duplicate.stderr).contains(&id));
-    }
+    let duplicate = command(&env, &["workflow", "run", "review"]);
+    assert_eq!(duplicate.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains(&id));
     success(command(&env, &["workflow", "cancel", &id]));
     let output = command(&env, &["workflow", "run", "review", "-w", "one"]);
-    let notice = format!(
-        "note: review has scope = project; the run is at {}, not {}",
-        env.project_root.display(),
-        checkout.display()
+    assert_eq!(output.status.code(), Some(1));
+    let refusal = format!(
+        "review has scope = project, so it runs at {}; start it without -w",
+        env.project_root.display()
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains(&notice),
+        String::from_utf8_lossy(&output.stderr).contains(&refusal),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let receipt = success(output);
-    let id = receipt.lines().next().unwrap();
-    let value = until(&env, id, |v| v["record"]["wait"].is_object());
-    assert_eq!(value["record"]["scope"]["path"], json!(env.project_root));
-    assert_eq!(value["record"]["scope"]["kind"], "project");
-    assert!(success(command(&env, &["workflow", "show", id])).starts_with("review#project"));
-    success(command(&env, &["workflow", "cancel", id]));
+    let state = env.state_path_for(&env.project_root);
+    assert_eq!(rimz::store::workflow::list(&state).unwrap().len(), 1);
     let receipt = success(
         env.rimz()
             .current_dir(checkout)
@@ -79,6 +69,7 @@ fn project_scope_is_unique_across_checkouts_and_reports_the_override() {
         show(&env, id)["record"]["scope"]["path"],
         json!(env.project_root)
     );
+    assert!(success(command(&env, &["workflow", "show", id])).starts_with("review#project"));
     success(command(&env, &["workflow", "cancel", id]));
 }
 

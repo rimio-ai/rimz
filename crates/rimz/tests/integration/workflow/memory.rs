@@ -34,13 +34,13 @@ fn terminal_runs_keep_history_and_overwrite_an_existing_copy() {
         let spec = format!(
             "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.ok='{target}'\nwake=['memory.ready']\ntimeout='1h'\n"
         );
-        let (env, dir) = fixture(&spec, PENDING);
+        let (env, _) = fixture(&spec, PENDING);
         let id = start(&env);
         until(&env, &id, |value| value["record"]["wait"].is_object());
         let path = history_path(&env, &id);
         fs::write(&path, "previous end").unwrap();
         fs::write(
-            dir.join("checks/pr.sh"),
+            super::sealed(&env, &id).join("checks/pr.sh"),
             "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
         )
         .unwrap();
@@ -85,14 +85,14 @@ fn cancel_keeps_history_but_runs_without_notes_do_not_write_a_copy() {
 #[test]
 fn history_copy_failures_warn_without_failing_committed_transitions() {
     for verb in ["advance", "cancel"] {
-        let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+        let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
         let id = start(&env);
         until(&env, &id, |value| value["record"]["wait"].is_object());
         let history = history_path(&env, &id);
         fs::create_dir(&history).unwrap();
         if verb == "advance" {
             fs::write(
-                dir.join("checks/pr.sh"),
+                super::sealed(&env, &id).join("checks/pr.sh"),
                 "printf '%s\\n' '{\"outcome\":\"done\"}'\n",
             )
             .unwrap();

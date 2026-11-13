@@ -263,10 +263,6 @@ fn step_facts(facts: &mut render::KeyVals, step: &Node) {
         }),
     );
     field(facts, "limit", step.limit().map(limit_text));
-    field(
-        facts,
-        "capacity-wait",
-        step.capacity_wait().map(String::from),
-    );
+    field(facts, "give-up", step.capacity_wait().map(String::from));
     field(facts, "max-visits", step.max_visits());
 }

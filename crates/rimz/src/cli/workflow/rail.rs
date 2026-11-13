@@ -516,8 +516,7 @@ impl Row {
             if let Some(wait) = step.capacity_wait()
                 && wait != rimz::config::CapacityWait::Forever
             {
-                row.details
-                    .push(format!("capacity-wait {}", String::from(wait)));
+                row.details.push(format!("give-up {}", String::from(wait)));
             }
             for edge in live {
                 match edge.outcome.as_str() {

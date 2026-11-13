@@ -298,6 +298,13 @@ fn start(
 ) -> Result<()> {
     let dir = workflow_view::deployed_definition(&name, validation_root(globals).as_deref())?;
     let ctx = super::ctx::Ctx::open(globals)?;
+    if worktree.is_some() && workflow::load(&dir)?.scope() == workflow::ScopeKind::Project {
+        bail!(
+            "{} has scope = project, so it runs at {}; start it without -w",
+            dir.file_name().unwrap_or(dir.as_os_str()).to_string_lossy(),
+            ctx.workspace.project_root.display()
+        );
+    }
     let scope = if let Some(name) = &worktree {
         rimz::worktree::resolve_owned(
             &ctx.workspace.project_root,
@@ -325,15 +332,6 @@ fn start(
         || Ok(prompt),
         false,
     )?;
-    if worktree.is_some() && record.scope.kind == records::ScopeKind::Project {
-        writeln!(
-            render::err(),
-            "note: {} has scope = project; the run is at {}, not {}",
-            record.workflow,
-            record.scope.path.display(),
-            scope.display()
-        )?;
-    }
     writeln!(
         render::out(),
         "{}\n{}",

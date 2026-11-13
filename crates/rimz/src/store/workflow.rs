@@ -11,6 +11,9 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId, WorkflowRunId};
 
+/// The workflow language version, which is also the run record's: a sealed definition means
+/// what the binary of this version reads it to mean, so a change to what one means raises it,
+/// and `load` refuses a record of any other version before decoding it.
 pub const VERSION: u32 = 6;
 
 #[derive(Debug, thiserror::Error)]
@@ -930,42 +933,80 @@ pub fn remove_refused(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<b
     Ok(true)
 }
 
-/// Write an inline definition's text and assets into a definition root: a run's own, before
-/// `initialize` publishes the record, or an ejected task's staging directory. Each asset name
-/// is a relative path inside that root.
-pub fn seal_definition(root: &Path, text: &str, assets: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+/// Write a definition's text and assets into a definition root: a run's own, sealed before
+/// `initialize` publishes the record, or an ejected task's staging directory. Each asset,
+/// directory and link name is a relative path inside that root. An asset named in `modes` is
+/// written with those permission bits, as a deployed directory's scripts keep their executable
+/// bit; the rest take the default mode. Each of `dirs` is created even when no asset sits under
+/// it, and each of `links` is written as a symlink to its target as given, which a deployed
+/// directory's caller makes relative to the link's own directory so the link resolves inside
+/// the root.
+pub fn seal_definition(
+    root: &Path,
+    text: &str,
+    assets: &BTreeMap<String, Vec<u8>>,
+    modes: &BTreeMap<String, u32>,
+    dirs: &[String],
+    links: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
     std::fs::create_dir_all(root).map_err(WorkflowStoreErr::io(root))?;
     crate::disk::atomic::write_bytes_atomically(
         &crate::disk::paths::workflow_spec_file(root),
         text.as_bytes(),
     )?;
+    for name in dirs {
+        let dir = sealed_entry(root, name)?;
+        std::fs::create_dir_all(&dir).map_err(WorkflowStoreErr::io(&dir))?;
+        sync_up(root, dir.parent())?;
+    }
     for (name, bytes) in assets {
-        let relative = Path::new(name);
-        if !relative
-            .components()
-            .all(|part| matches!(part, std::path::Component::Normal(_)))
-        {
-            return Err(WorkflowStoreErr::Io {
-                path: root.join(relative),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "a definition asset must be a relative path inside its root",
-                ),
-            });
-        }
-        let file = root.join(relative);
+        let file = sealed_entry(root, name)?;
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent).map_err(WorkflowStoreErr::io(parent))?;
         }
-        crate::disk::atomic::write_bytes_atomically(&file, bytes)?;
-        // Publish each new subdirectory entry down from the root.
-        for dir in file
-            .ancestors()
-            .skip(2)
-            .take_while(|dir| dir.starts_with(root))
-        {
-            crate::disk::atomic::sync_dir(dir)?;
+        match modes.get(name) {
+            Some(&mode) => crate::disk::atomic::write_bytes_atomically_mode(&file, bytes, mode)?,
+            None => crate::disk::atomic::write_bytes_atomically(&file, bytes)?,
         }
+        sync_up(root, file.parent().and_then(Path::parent))?;
+    }
+    for (name, target) in links {
+        let link = sealed_entry(root, name)?;
+        if let Some(parent) = link.parent() {
+            std::fs::create_dir_all(parent).map_err(WorkflowStoreErr::io(parent))?;
+        }
+        crate::disk::atomic::symlink_atomically(target, &link)?;
+        sync_up(root, link.parent().and_then(Path::parent))?;
+    }
+    Ok(())
+}
+
+/// Entry `name` of a definition root, refusing a name that leaves it.
+fn sealed_entry(root: &Path, name: &str) -> Result<PathBuf> {
+    let relative = Path::new(name);
+    if relative
+        .components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Ok(root.join(relative));
+    }
+    Err(WorkflowStoreErr::Io {
+        path: root.join(relative),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a definition asset must be a relative path inside its root",
+        ),
+    })
+}
+
+/// Publish each new subdirectory entry down from the root, syncing `from` and every directory
+/// above it inside the root.
+fn sync_up(root: &Path, from: Option<&Path>) -> Result<()> {
+    let Some(from) = from else {
+        return Ok(());
+    };
+    for dir in from.ancestors().take_while(|dir| dir.starts_with(root)) {
+        crate::disk::atomic::sync_dir(dir)?;
     }
     Ok(())
 }

@@ -251,7 +251,8 @@ pub struct WorkflowPaths {
     pub record: PathBuf,
     pub journal: PathBuf,
     pub spec: PathBuf,
-    /// An inline run's definition root: its source text and the assets it names.
+    /// A run's sealed definition root: its source text and every file beside it, copied at
+    /// the start and read in place of the source for the rest of the run.
     pub definition: PathBuf,
     pub work: PathBuf,
     pub context: PathBuf,
