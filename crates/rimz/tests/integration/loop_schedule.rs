@@ -13321,7 +13321,8 @@ fn seed_loop_watch_room(env: &Env) {
     );
 }
 
-/// Run `loop watch --hold` in a pty until the expected content paints, and return the visible frame.
+/// Run `loop watch --hold` in a pty until the expected content and a frame's closing clear
+/// paint, and return the visible frame.
 fn loop_watch_frames(env: &Env, expected: &'static [&'static str]) -> String {
     let (output, _) = loop_watch_pty(env, false, false, expected);
     assert!(
@@ -13379,8 +13380,11 @@ fn loop_watch_pty(
                 let marker = b"or use `rimz loop list`";
                 output.windows(marker.len()).any(|bytes| bytes == marker)
             } else {
+                // The screen writes its clear just before a frame's last line, so text in
+                // the middle of a frame can paint before it: wait for both.
                 let frame = terminal.screen().contents();
-                expected.iter().all(|text| frame.contains(*text))
+                output.windows(3).any(|bytes| bytes == b"\x1b[J")
+                    && expected.iter().all(|text| frame.contains(*text))
             };
             if ready {
                 let _ = ready_tx.send(());

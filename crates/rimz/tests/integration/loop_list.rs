@@ -2751,12 +2751,7 @@ fn show_logs_and_watch_read_a_lock_free_run_as_list_does() {
             && !line.contains("▸ running")),
         "{show}"
     );
-    // The row sits mid-frame, so the read can stop before the frame's closing clear that
-    // `loop_watch_frames` requires: read the painted screen instead.
-    let (output, _) = loop_watch_pty(&env, false, false, &["consumed", "▸ running 4m"]);
-    let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
-    terminal.process(output.as_bytes());
-    let watch = terminal.screen().contents();
+    let watch = loop_watch_frames(&env, &["consumed", "▸ running 4m"]);
     assert!(
         watch
             .lines()
