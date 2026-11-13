@@ -9,7 +9,7 @@ const TURN: &str = "This is one turn. When it ends cleanly with nothing owed, Ri
 const STOPS: &str =
     "Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn.";
 const CHECK: &str = "The check `watch` runs `cat answer.json`. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.";
-const EXIT: &str = "When your provider process exits, as when the user closes your pane, RimZ closes every cell and runs the check `watch`.";
+const EXIT: &str = "When your provider process exits, as when the user closes your pane, RimZ closes every cell and runs the check `watch`; an exit mid-turn or before your first turn fails this step instead.";
 const RESTS: &str = "After each of your turns that rests cleanly with nothing owed, RimZ runs the check `watch`. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn.";
 const LATER: &str =
     "The user may answer in this pane later; a question goes in your final message.";

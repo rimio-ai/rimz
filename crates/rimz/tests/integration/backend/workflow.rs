@@ -216,6 +216,27 @@ pub(super) fn check_layout(
             );
             let output = command().args(["workflow", "list"]).output().unwrap();
             assert!(String::from_utf8_lossy(&output.stdout).contains("with you"));
+            // A session that exits at rest ended cleanly; one that never took a turn died.
+            for signal in [
+                LifecycleSignal::TurnStarted { turn_id: None },
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ] {
+                let observation =
+                    AgentLifecycleObservation::new(Some(leader.agent_id.clone()), signal);
+                store
+                    .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                        state.workspace_id.clone(),
+                        session,
+                        "claude",
+                        "test",
+                        &observation,
+                    ))
+                    .unwrap();
+            }
             nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(run.provider_pid.unwrap().try_into().unwrap()),
                 nix::sys::signal::Signal::SIGTERM,

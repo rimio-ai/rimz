@@ -490,11 +490,11 @@ fn lifecycle(spec: &Definition, step: &Node, record: &RunRecord) -> (String, Str
     });
     let exit = if kept {
         format!(
-            "When your provider process exits, RimZ leaves your pane open outside this run and {next}."
+            "When your provider process exits, RimZ leaves your pane open outside this run and {next}; an exit mid-turn or before your first turn fails this step instead."
         )
     } else {
         format!(
-            "When your provider process exits, as when the user closes your pane, RimZ closes every cell and {next}."
+            "When your provider process exits, as when the user closes your pane, RimZ closes every cell and {next}; an exit mid-turn or before your first turn fails this step instead."
         )
     };
     let mut after = match step.rest_check() {
