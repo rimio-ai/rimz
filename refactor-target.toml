@@ -4765,7 +4765,8 @@ surface-budget = 18
 path = "crates/rimz/src/utils.rs"
 # `tokens` and `env` join `path` and `time` as cross-domain helpers.
 # `parallel` shares the sidebar's bounded fan-out with worktree inspection (+1).
-surface-budget = 7
+# `filter` is the one --filter term grammar the agents and notes field tables share (+1).
+surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/web"

@@ -487,3 +487,11 @@ fn a_child_stamped_with_a_launch_id_finds_its_parent_and_nested_card() {
     assert_eq!(selected(&live, &["parent=@root"]), ["kid", "old"]);
     assert_eq!(selected(&live, &["parent=*"]), ["kid", "old"]);
 }
+
+#[test]
+fn a_hyphenated_field_name_is_an_unknown_field() {
+    assert_eq!(
+        error(&["foo-bar=x"]),
+        "filter term `foo-bar=x`: unknown field `foo-bar`; see `--filter help`"
+    );
+}
