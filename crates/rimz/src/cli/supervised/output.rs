@@ -120,9 +120,13 @@ pub(super) fn print_run_forensics<W: Write + ?Sized>(
     err: &mut W,
 ) -> Result<()> {
     if record.status != RunStatus::Completed {
+        let reason = record
+            .cancel_reason
+            .filter(|_| record.status == RunStatus::Canceled)
+            .map_or(String::new(), |reason| format!("; {}", reason.label()));
         writeln!(
             err,
-            "rimz: run {} (exit {})",
+            "rimz: run {} (exit {}){reason}",
             render::paint(render::status::run(record.status), record.status.label()),
             record.status.exit_code()
         )?;
@@ -420,6 +424,28 @@ mod tests {
         assert!(err.contains("rimz: run failed (exit 1)"));
         assert!(err.contains("agent died\nfatal error"));
         assert!(err.contains("transcript: /tmp/transcript.jsonl"));
+    }
+
+    #[test]
+    fn a_run_canceled_because_its_parent_ended_says_so() {
+        let mut record = record(RunStatus::Canceled);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        print_run_output(&record, &mut out, &mut err, Prose::Raw, 100).unwrap();
+        let stopped = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
+        assert!(
+            stopped.contains("rimz: run canceled (exit 130)\n"),
+            "{stopped}"
+        );
+
+        record.cancel_reason = Some(rimz::store::run::CancelReason::ParentEnded);
+        let mut err = Vec::new();
+        print_run_output(&record, &mut out, &mut err, Prose::Raw, 100).unwrap();
+        let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
+        assert!(
+            err.contains("rimz: run canceled (exit 130); its parent agent ended\n"),
+            "{err}"
+        );
     }
 
     #[test]

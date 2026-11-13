@@ -40,6 +40,8 @@ pub struct OrphanedSubagent {
     pub child: AgentState,
     pub run: Option<RunRecord>,
     pub orphaned_at: Timestamp,
+    /// The parent's row was found ended, rather than missing from the fold.
+    pub parent_ended: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -127,9 +129,9 @@ fn orphaned_child<'a>(
         return None;
     }
     let run = newest_run(child, runs);
-    let parent = crate::address::launched_parent(agents, child);
+    let parent = crate::address::launched_parent(agents.clone(), child);
     let orphaned_at = match parent {
-        Some(parent) => parent.ended_at?,
+        Some(parent) => parent_ended_at(agents, parent)?,
         None => child
             .registered_at
             .or_else(|| run.map(|run| run.started_at))?,
@@ -141,7 +143,20 @@ fn orphaned_child<'a>(
         child: child.clone(),
         run: run.cloned(),
         orphaned_at,
+        parent_ended: parent.is_some(),
     })
+}
+
+/// When the agent `parent` holds ended, as [`crate::agents::state::agent_end`] reads it: its
+/// end stamp, or, for a replacement that failed after binding and so stamps no end, its last
+/// activity.
+fn parent_ended_at<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState> + Clone,
+    parent: &AgentState,
+) -> Option<Timestamp> {
+    let end = crate::agents::state::agent_end(agents, &parent.kind, parent.launch_key());
+    (end == crate::agents::state::AgentEnd::Ended)
+        .then(|| parent.ended_at.unwrap_or(parent.last_activity))
 }
 
 fn digest_parents_from<'a>(
@@ -365,7 +380,7 @@ mod tests {
                 &[child_run.clone()],
                 now
             )
-            .is_some()
+            .is_some_and(|orphan| orphan.parent_ended)
         );
 
         child_run.keep = true;
@@ -398,7 +413,11 @@ mod tests {
         assert!(
             orphaned_child(&child, &[parent, child.clone()], &[child_run.clone()], now).is_none()
         );
-        assert!(orphaned_child(&child, &[child.clone()], &[child_run], now).is_some());
+        assert!(
+            orphaned_child(&child, &[child.clone()], &[child_run], now)
+                .is_some_and(|orphan| !orphan.parent_ended),
+            "a missing parent row is not read as an ended parent"
+        );
 
         child.registered_at = Some(now);
         assert!(orphaned_child(&child, &[child.clone()], &[], now).is_none());
@@ -424,6 +443,32 @@ mod tests {
                 assert_eq!(orphaned_child(&child, &agents, &[], now).is_some(), ended);
             }
         }
+    }
+
+    /// A replacement that failed after binding ends the agent with no end stamp of its own:
+    /// the sweep orphans the children from its failure, as it would from an ended row.
+    #[test]
+    fn a_parent_whose_replacement_failed_after_binding_orphans_its_children() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        let at = now - Duration::from_secs(601);
+        let mut old = crate::testkit::agent_state("codex", "OLD", at);
+        old.launch_id = Some(AgentSessionId::from("L"));
+        old.ended_at = Some(at);
+        let mut new = crate::testkit::agent_state("codex", "launch_replacement", at);
+        new.launch_id = old.launch_id.clone();
+        new.epoch = 1;
+        new.launch_bound = true;
+        new.status = crate::agents::AgentStatus::Failed;
+        new.last_activity = at;
+        assert!(new.session_over() && new.ended_at.is_none());
+        let mut child = crate::testkit::agent_state("codex", "child", at);
+        child.launch_depth = Some(1);
+        child.registered_at = Some(at);
+        child.parent_agent_id = Some(AgentSessionId::from("L"));
+        let agents = [old, new, child.clone()];
+        let orphan = orphaned_child(&child, &agents, &[], now).expect("orphaned");
+        assert!(orphan.parent_ended);
+        assert_eq!(orphan.orphaned_at, at);
     }
 
     #[test]

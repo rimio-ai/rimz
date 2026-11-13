@@ -114,6 +114,30 @@ fn digest_lists_a_single_result_without_a_trailing_command() {
 }
 
 #[test]
+fn a_child_canceled_because_its_parent_ended_says_so() {
+    let mut canceled = run(RunStatus::Canceled);
+    let stopped = run(RunStatus::Canceled);
+    canceled.cancel_reason = Some(rimz::store::run::CancelReason::ParentEnded);
+    let orphan = child("orphan", None);
+    let stopped_child = child("stopped", None);
+
+    assert_eq!(
+        compose_digest(
+            &[
+                (&orphan, &canceled, None, None, ResumeAccount::Same),
+                (&stopped_child, &stopped, None, None, ResumeAccount::Same),
+            ],
+            &[],
+            true,
+            &Clock::local()
+        ),
+        "All 2 subagents settled:\n\
+         - @orphan: canceled in 4m12s; its parent agent ended, task: \"map it\", no response\n\
+         - @stopped: canceled in 4m12s, task: \"map it\", no response"
+    );
+}
+
+#[test]
 fn digest_sizes_non_completed_results_and_appends_reason() {
     let mut completed = run(RunStatus::Completed);
     completed.last_message = Some("Done.\nSecond line.\n".to_owned());
@@ -1486,4 +1510,55 @@ fn an_interrupted_sibling_holds_the_digest_until_its_window_expires() {
         .find(|line| line.starts_with("- @b"))
         .expect("b is listed");
     assert!(line.contains("canceled"), "{digest}");
+}
+
+#[test]
+fn a_digest_reaches_the_holder_after_a_cross_kind_molt_of_the_parent() {
+    use rimz::store::event::{AgentLaunchPayload, EventEnvelope};
+    let (_dir, workspace, store) = fixture();
+    let launch = |kind: &str, id: &str, epoch: u32| {
+        let payload: AgentLaunchPayload = serde_json::from_value(serde_json::json!({
+            "agent_id": id, "agent_name": "lead", "launch_id": "L", "state": "bound",
+            "epoch": epoch,
+        }))
+        .unwrap();
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                "report-test",
+                &AgentKind::new_unchecked(kind),
+                payload,
+            ))
+            .unwrap();
+    };
+    launch("codex", "OLD", 0);
+    append_agent(&store, "a", Some("L"));
+    launch("claude", "NEW", 1);
+    let ended = AgentLifecycleObservation::new(Some("OLD".into()), LifecycleSignal::Ended);
+    store
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "report-test",
+            agent_kind: AgentKind::new_unchecked("codex"),
+            event_name: "test",
+            observation: &ended,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let mut a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    a.last_message = Some("answer".into());
+    run::create(store.paths(), &a).unwrap();
+    assert!(matches!(
+        report_settled_child(&workspace, &store, &a).unwrap(),
+        ReportOutcome::Queued { .. }
+    ));
+    let messages = store.list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        (messages[0].kind.as_str(), messages[0].agent_id.as_str()),
+        ("claude", "NEW")
+    );
+    assert_eq!(
+        messages[0].launch_id.as_ref().map(|id| id.as_str()),
+        Some("L")
+    );
 }

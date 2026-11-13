@@ -30,7 +30,7 @@ type AgentKey = (AgentKind, AgentSessionId);
 #[derive(Hash, PartialEq, Eq)]
 enum RunMatchKey {
     Session(AgentKind, AgentSessionId),
-    Launch(AgentKind, AgentSessionId),
+    Launch(AgentSessionId),
     Name(AgentKind, String),
 }
 
@@ -106,7 +106,11 @@ impl<'a> FleetRunIndex<'a> {
         let mut children: HashMap<AgentKey, Vec<usize>> = HashMap::new();
         let mut children_by_id: HashMap<&AgentSessionId, Vec<usize>> = HashMap::new();
         let mut launchers: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+        let mut launchers_by_launch: HashMap<&AgentSessionId, Vec<usize>> = HashMap::new();
         for (index, agent) in agents.iter().enumerate() {
+            if let Some(launch) = &agent.launch_id {
+                launchers_by_launch.entry(launch).or_default().push(index);
+            }
             if !agent.is_team_seat()
                 && let Some((kind, id)) = agent.launcher()
             {
@@ -193,18 +197,12 @@ impl<'a> FleetRunIndex<'a> {
         for (run_index, run) in runs.iter().enumerate() {
             let mut keys = Vec::new();
             if let Some(peer) = &run.peer {
-                keys.push(RunMatchKey::Launch(
-                    run.kind.clone(),
-                    peer.launch_id.clone(),
-                ));
+                keys.push(RunMatchKey::Launch(peer.launch_id.clone()));
                 if let Some(id) = &run.agent_id {
                     keys.push(RunMatchKey::Session(run.kind.clone(), id.clone()));
                 }
             } else if let Some(team) = &run.team {
-                keys.push(RunMatchKey::Launch(
-                    run.kind.clone(),
-                    team.launch_id.clone(),
-                ));
+                keys.push(RunMatchKey::Launch(team.launch_id.clone()));
             } else {
                 if let Some(id) = &run.agent_id {
                     keys.push(RunMatchKey::Session(run.kind.clone(), id.clone()));
@@ -240,8 +238,19 @@ impl<'a> FleetRunIndex<'a> {
                             &team.launch_id,
                         )
                         .and_then(|leader| leader.launcher())
-                        .and_then(|(kind, id)| launchers.get(&(kind.clone(), id.clone())))
-                        .cloned()
+                        // `AgentState::launcher_is` matches a current launch id across kinds.
+                        .map(|(kind, id)| {
+                            let mut owners: Vec<usize> = launchers
+                                .get(&(kind.clone(), id.clone()))
+                                .into_iter()
+                                .chain(launchers_by_launch.get(id))
+                                .flatten()
+                                .copied()
+                                .collect();
+                            owners.sort_unstable();
+                            owners.dedup();
+                            owners
+                        })
                         .unwrap_or_default()
                     });
                 for index in owners {
@@ -265,12 +274,12 @@ impl<'a> FleetRunIndex<'a> {
             let child = &self.agents[*index];
             let mut keys = vec![
                 RunMatchKey::Session(child.kind.clone(), child.agent_id.clone()),
-                RunMatchKey::Launch(child.kind.clone(), child.agent_id.clone()),
+                RunMatchKey::Launch(child.agent_id.clone()),
             ];
             if let Some(id) = &child.launch_id
                 && id != &child.agent_id
             {
-                keys.push(RunMatchKey::Launch(child.kind.clone(), id.clone()));
+                keys.push(RunMatchKey::Launch(id.clone()));
             }
             if let Some(name) = &child.name {
                 keys.push(RunMatchKey::Name(child.kind.clone(), name.clone()));
@@ -559,8 +568,9 @@ mod tests {
         child.launch_id = None;
         child.agent_id = "launch".into();
         assert!(newest_run(&child, &runs).is_some());
+        // A launch id holds across a cross-kind molt.
         child.kind = AgentKind::new_unchecked("claude");
-        assert!(newest_run(&child, &runs).is_none());
+        assert!(newest_run(&child, &runs).is_some());
     }
 
     #[test]
@@ -680,6 +690,13 @@ mod tests {
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
         runs[0].status = crate::store::run::RunStatus::Running;
+        // The launcher molted to another kind: its launch id still owns the team.
+        let mut molted = agents.clone();
+        molted[0].launch_id = Some("parent-launch".into());
+        molted[0].kind = AgentKind::new_unchecked("claude");
+        molted[0].agent_id = "molted".into();
+        molted[1].launched_by.as_mut().unwrap().agent_id = "parent-launch".into();
+        assert_eq!(owed_runs(&molted, &runs, &molted[0]).len(), 1);
         agents[1].launched_by.as_mut().unwrap().agent_id = "someone-else".into();
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());

@@ -31,6 +31,15 @@ pub fn repair_orphan(request: OrphanSubagentRequest, globals: &super::GlobalFlag
     );
     let repair = (|| -> Result<()> {
         if let Some(run) = orphan.run.as_ref() {
+            if orphan.parent_ended && !run.status.is_terminal() {
+                rimz::harness::run::cancel_and_wake_paths(
+                    ctx.store.paths(),
+                    ctx.store.runtime_paths(),
+                    &run.run_id,
+                    rimz::store::run::CancelReason::ParentEnded,
+                )
+                .context("canceling orphaned subagent run")?;
+            }
             super::supervised::stop_supervised_run(&ctx.workspace, &ctx.store, globals, run)
                 .context("reclaiming orphaned subagent run pane")
         } else {

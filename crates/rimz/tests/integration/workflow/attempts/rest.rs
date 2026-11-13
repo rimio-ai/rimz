@@ -285,7 +285,7 @@ fn a_kept_session_ending_on_its_own_retires_its_unacknowledged_push_back() {
     #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     // The session exits with the push-back unread: a natural ending, which a kept step detaches.
-    rimz::harness::run::settle_session_exit(&store, &run.run_id, || None).unwrap();
+    rimz::harness::run::settle_session_exit(&store, &run.run_id, None, || None).unwrap();
     success(
         room.command(&["workflow", "advance", &id])
             .output()

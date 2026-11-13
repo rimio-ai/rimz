@@ -141,7 +141,7 @@ To stop a child yourself, stop it like any agent. The parent's report lists it a
 rimz agents stop @calm-fox
 ```
 
-Stopping a parent, with `rimz agents stop` or `rimz teams stop`, stops its live children first. A parent that ends any other way takes its children with it: each child watches its parent and cancels itself when the parent's session ends, and the room sweeps up any child still running ten minutes after its parent ended.
+Stopping a parent, with `rimz agents stop` or `rimz teams stop`, stops its live children first. A parent that ends any other way takes its children with it: each child watches its parent and cancels itself when the parent's session ends, and the room sweeps up any child still running ten minutes after its parent ended. Either way the child's run reads `canceled`, with `its parent agent ended` beside it in the report, `rimz subagents list`, and `rimz subagents wait`.
 
 For work that must outlive its launcher, use a [detached peer run](../reference/cli/agents.md#supervised-runs--p): `rimz agents <spec> "<prompt>" -p --bg --detach`.
 

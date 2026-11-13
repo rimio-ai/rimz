@@ -945,6 +945,7 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         turn_error_label: None,
         run_id: None,
         run_status: None,
+        cancel_reason: None,
         started_at: None,
         elapsed_secs: None,
         row: serde_json::Map::new(),
@@ -1062,6 +1063,39 @@ fn child_reports_list_live_children_first_then_settled_then_runless() {
             "zz-runless-registered-first",
             "runless"
         ]
+    );
+}
+
+#[test]
+fn a_child_canceled_because_its_parent_ended_says_so_in_the_list() {
+    use rimz::store::run::{CancelReason, RunStatus};
+    let at = Timestamp::from_second(1_700_000_000).expect("valid timestamp");
+    let planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    let agents = [
+        planner.clone(),
+        launched_child(&planner, "orphan"),
+        launched_child(&planner, "stopped"),
+    ];
+    let mut orphan = child_run(&agents[1], RunStatus::Canceled, at);
+    orphan.cancel_reason = Some(CancelReason::ParentEnded);
+    let runs = [orphan, child_run(&agents[2], RunStatus::Canceled, at)];
+
+    let reports = reports_for(&rimz::agents::ParkDemotion::default(), &agents, &runs, at);
+
+    let by_name = |name: &str| reports.iter().find(|report| report.name == name).unwrap();
+    assert_eq!(
+        by_name("orphan").detail().as_deref(),
+        Some("canceled: its parent agent ended")
+    );
+    assert_eq!(by_name("stopped").detail(), None);
+    let json = serde_json::to_value(by_name("orphan")).unwrap();
+    assert_eq!(json["cancel_reason"], "parent_ended");
+    assert!(
+        serde_json::to_value(by_name("stopped"))
+            .unwrap()
+            .get("cancel_reason")
+            .is_none()
     );
 }
 

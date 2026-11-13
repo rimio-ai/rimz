@@ -87,15 +87,19 @@ pub fn seed(
     let members = agents
         .iter()
         .filter(|agent| {
-            agent.kind == parent.kind
-                && !agent.is_provider_subagent()
-                && (parent_refs.contains(&agent.agent_id)
+            !agent.is_provider_subagent()
+                && ((agent.kind == parent.kind && parent_refs.contains(&agent.agent_id))
                     || agent
                         .launch_id
                         .as_ref()
                         .is_some_and(|id| parent_refs.contains(id)))
         })
-        .map(|agent| (agent.agent_id.clone(), agent.ended_at.is_some()))
+        .collect::<Vec<_>>();
+    // The holder's rows alone, so the seed's verdict is `agent_end`'s: a
+    // replaced session that never ended does not keep the parent alive.
+    let members = crate::agents::state::launch_holder(&members)
+        .into_iter()
+        .map(|agent| (agent.agent_id.clone(), agent.session_over()))
         .collect();
     let child_pane = child_pane.or_else(|| child.pane.as_ref().map(|pane| pane.pane_id.clone()));
     let parent_pane = parent
@@ -138,6 +142,11 @@ pub struct ParentWatchdog {
     next_probe: Instant,
     next_tail: Instant,
     tail_uncertain: bool,
+    /// A member ended in the tail beside a member still live since the last
+    /// probe. Which of them holds the agent is the agent-ended check's to
+    /// read: a swap's failed replacement ends the agent while its old session
+    /// stays open.
+    member_over: bool,
     strikes: u8,
     last_observed_at_ms: Option<u64>,
 }
@@ -205,6 +214,7 @@ impl ParentWatchdog {
             next_probe,
             next_tail: next_probe,
             tail_uncertain,
+            member_over: false,
             strikes: 0,
             last_observed_at_ms: None,
         }
@@ -274,10 +284,15 @@ impl ParentWatchdog {
         }
         let seed = &mut self.seed;
         let changed = &self.changed;
+        let member_over = &mut self.member_over;
         match self.tail.poll(|event| {
+            let over = |seed: &WatchdogSeed| seed.members.values().filter(|ended| **ended).count();
+            let before = over(seed);
             if observe_frame(seed, event) {
                 changed.store(true, Ordering::Release);
             }
+            let after = over(seed);
+            *member_over |= after > before && after < seed.members.len();
         }) {
             Ok(warnings) => {
                 self.tail_uncertain |= !warnings.is_empty();
@@ -299,7 +314,10 @@ impl ParentWatchdog {
             return false;
         }
         self.next_probe = now + probe_interval();
-        let probe = if self.seed.parent_ended() || self.tail_uncertain {
+        let probe = if self.seed.parent_ended()
+            || self.tail_uncertain
+            || std::mem::take(&mut self.member_over)
+        {
             ParentProbe::Ended
         } else {
             pane_probe(&self.seed, &self.paths.workspace_id)
@@ -327,6 +345,7 @@ impl ParentWatchdog {
                 self.tail = LaunchTail::from_cursor(self.paths.clone(), seed.cursor);
                 self.seed = *seed;
                 self.tail_uncertain = false;
+                self.member_over = false;
                 self.strikes = 0;
                 self.last_observed_at_ms = None;
                 false
@@ -356,27 +375,28 @@ impl ParentWatchdog {
     }
 }
 
+/// A frame names the parent when its launch id is the parent's, whatever its
+/// kind (a cross-kind molt keeps the launch), or when the parent's kind
+/// reports a session id the watch knows; session ids are kind-scoped.
 fn observe_frame(seed: &mut WatchdogSeed, event: EventEnvelope) -> bool {
-    if event.source != seed.parent_kind.as_str() {
-        return false;
-    }
+    let parent_kind = event.source == seed.parent_kind.as_str();
+    let parent_launch = |launch_id: Option<&AgentSessionId>| {
+        launch_id.is_some_and(|id| seed.parent_refs.contains(id))
+    };
     match event.kind() {
         EventKind::AgentLaunch(payload)
-            if seed.parent_refs.contains(&payload.agent_id)
-                || payload
-                    .launch_id
-                    .as_ref()
-                    .is_some_and(|id| seed.parent_refs.contains(id)) =>
+            if parent_launch(payload.launch_id.as_ref())
+                || (parent_kind && seed.parent_refs.contains(&payload.agent_id)) =>
         {
-            seed.members.insert(payload.agent_id, false);
+            // A failed provisional launch stamps no end, so its failure is its end.
+            let failed = payload.state == crate::store::event::AgentLaunchState::Failed;
+            seed.members.insert(payload.agent_id, failed);
         }
         EventKind::AgentAttach(payload)
-            if seed.members.contains_key(&payload.agent_id)
-                || seed.parent_refs.contains(&payload.agent_id)
-                || payload
-                    .launch_id
-                    .as_ref()
-                    .is_some_and(|id| seed.parent_refs.contains(id)) =>
+            if parent_launch(payload.launch_id.as_ref())
+                || (parent_kind
+                    && (seed.members.contains_key(&payload.agent_id)
+                        || seed.parent_refs.contains(&payload.agent_id))) =>
         {
             seed.members.entry(payload.agent_id).or_insert(false);
             if Some(&payload.pane_id) != seed.child_pane.as_ref() {

@@ -109,13 +109,17 @@ fn fixture() -> (tempfile::TempDir, StatePaths, RuntimePaths, WatchdogSeed) {
 }
 
 fn append(paths: &StatePaths, id: &str, signal: LifecycleSignal) {
+    append_as(paths, "codex", id, signal);
+}
+
+fn append_as(paths: &StatePaths, kind: &str, id: &str, signal: LifecycleSignal) {
     let observation = AgentLifecycleObservation::new(Some(id.into()), signal);
     event_log::append(
         &paths.events_log,
         &EventEnvelope::agent_lifecycle(
             paths.workspace_id.clone(),
             "room",
-            "codex",
+            kind,
             "test",
             &observation,
         ),
@@ -286,6 +290,13 @@ fn alive_successor_reseeds_and_later_end_is_confirmed_with_a_probe_floor() {
 
 #[test]
 fn attach_adds_the_parent_member_before_its_end_counts() {
+    // A cross-kind molt's replacement joins the same launch.
+    for kind in ["codex", "claude"] {
+        attach_adds_a_member_of(kind);
+    }
+}
+
+fn attach_adds_a_member_of(kind: &str) {
     let (_dir, paths, _rt, seed) = fixture();
     append(&paths, "OLD", LifecycleSignal::Ended);
     let pane = crate::ids::PaneId::parse("tmux:%77").unwrap();
@@ -311,7 +322,7 @@ fn attach_adds_the_parent_member_before_its_end_counts() {
         &EventEnvelope::agent_attached(
             paths.workspace_id.clone(),
             "room",
-            &AgentKind::new_unchecked("codex"),
+            &AgentKind::new_unchecked(kind),
             payload,
         ),
     )
@@ -324,10 +335,10 @@ fn attach_adds_the_parent_member_before_its_end_counts() {
     });
     let before = crate::store::snapshot::fold_testkit::carryover_bytes_parsed();
     let due = watch.next_probe;
-    assert!(!probe_without_fold(&mut watch, due));
+    assert!(!probe_without_fold(&mut watch, due), "{kind}");
     assert_eq!(*calls.lock().unwrap(), 0);
     assert_eq!(watch.seed.parent_pane, Some(pane));
-    append(&paths, "NEW", LifecycleSignal::Ended);
+    append_as(&paths, kind, "NEW", LifecycleSignal::Ended);
     let due = watch.next_probe;
     assert!(probe_without_fold(&mut watch, due));
     assert_eq!(
@@ -557,4 +568,101 @@ fn an_attach_does_not_revive_an_ended_parent_member() {
         Some(&true),
         "attach changes placement, not lifecycle"
     );
+}
+
+#[test]
+fn a_failed_replacement_launch_counts_as_an_ended_member() {
+    let (_dir, _paths, _rt, mut seed) = fixture();
+    seed.members.insert("OLD".into(), true);
+    let launch = |state: &str| {
+        let payload: crate::store::event::AgentLaunchPayload =
+            serde_json::from_value(serde_json::json!({
+                "agent_id": "launch_new", "agent_name": "lead", "launch_id": "L",
+                "state": state, "epoch": 1,
+            }))
+            .unwrap();
+        EventEnvelope::agent_launched(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            "room",
+            &AgentKind::new_unchecked("codex"),
+            payload,
+        )
+    };
+    observe_frame(&mut seed, launch("bound"));
+    assert!(!seed.parent_ended());
+    observe_frame(&mut seed, launch("failed"));
+    assert!(seed.parent_ended());
+}
+
+/// The old session of a swapped parent stays open while its bound
+/// replacement fails: a member ending in the tail nominates the agent-ended
+/// check, which decides, even though the old member never ended.
+#[test]
+fn a_member_ending_in_the_tail_asks_the_agent_ended_check() {
+    let (_dir, paths, _rt, seed) = fixture();
+    let confirms = Arc::new(Mutex::new(0));
+    let seen = confirms.clone();
+    let watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_, _| {
+        *seen.lock().unwrap() += 1;
+        ProbeConfirm::Ended
+    })
+    .start();
+    for state in ["bound", "failed"] {
+        let payload: crate::store::event::AgentLaunchPayload =
+            serde_json::from_value(serde_json::json!({
+                "agent_id": "launch_new", "agent_name": "lead", "launch_id": "L",
+                "state": state, "epoch": 1,
+            }))
+            .unwrap();
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::agent_launched(
+                paths.workspace_id.clone(),
+                "room",
+                &AgentKind::new_unchecked("codex"),
+                payload,
+            ),
+        )
+        .unwrap();
+    }
+
+    watch.probe_now();
+
+    assert!(watch.parent_ended(), "the failed holder ends the parent");
+    assert_eq!(*confirms.lock().unwrap(), 1);
+}
+
+/// A seed taken after the swap's replacement failed reads the parent ended,
+/// as `agent_end` does, while the replaced first session is still open.
+#[test]
+fn a_seed_after_a_failed_bound_replacement_reads_the_parent_ended() {
+    let at = jiff::Timestamp::from_second(1_000).unwrap();
+    let mut old = crate::testkit::agent_state("codex", "OLD", at);
+    old.launch_id = Some(AgentSessionId::from("L"));
+    let mut new = crate::testkit::agent_state("codex", "launch_new", at);
+    new.launch_id = old.launch_id.clone();
+    new.epoch = 1;
+    new.launch_bound = true;
+    new.status = crate::agents::AgentStatus::Failed;
+    let mut child = crate::testkit::agent_state("codex", "child", at);
+    child.launch_depth = Some(1);
+    child.parent_agent_id = Some(AgentSessionId::from("L"));
+    let agents = [old, new, child];
+    assert_eq!(
+        crate::agents::state::agent_end(&agents, &agents[0].kind, &AgentSessionId::from("L")),
+        crate::agents::state::AgentEnd::Ended
+    );
+    let seed = seed(
+        &agents,
+        agents[2].kind.clone(),
+        "child".into(),
+        None,
+        "room".into(),
+        LogExtent {
+            generation: 0,
+            offset: 0,
+        },
+    )
+    .unwrap();
+    assert!(seed.parent_ended(), "{:?}", seed.members);
 }

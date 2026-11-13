@@ -652,6 +652,8 @@ struct ChildReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     run_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    cancel_reason: Option<rimz::store::run::CancelReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     started_at: Option<jiff::Timestamp>,
     #[serde(skip)]
     elapsed_secs: Option<u64>,
@@ -669,8 +671,9 @@ struct ChildTurnError {
 impl ChildReport {
     /// The muted line under a row: why the child stopped, else what it is doing.
     fn detail(&self) -> Option<String> {
-        self.turn_error_label
-            .clone()
+        self.cancel_reason
+            .map(|reason| format!("canceled: {}", reason.label()))
+            .or_else(|| self.turn_error_label.clone())
             .or_else(|| self.description.clone())
     }
 
@@ -913,6 +916,9 @@ fn child_reports(
                     }),
                 run_id: run.map(|run| run.run_id.to_string()),
                 run_status: run.map(|run| run.status.as_str().to_owned()),
+                cancel_reason: run
+                    .filter(|run| run.status == rimz::store::run::RunStatus::Canceled)
+                    .and_then(|run| run.cancel_reason),
                 started_at: run.map(rimz::store::run::RunRecord::answer_started_at),
                 elapsed_secs: run.map(|run| {
                     let end = if run.status.is_terminal() {

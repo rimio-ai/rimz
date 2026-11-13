@@ -64,75 +64,133 @@ struct StagedLifecycleEvent {
 
 impl Store {
     /// Recover reactor inputs without appending the ingress lifecycle again.
-    pub fn recover_hook_lifecycle(envelope: &EventEnvelope) -> Option<AgentLifecycleReceipt> {
+    pub fn recover_hook_lifecycle(
+        &self,
+        envelope: &EventEnvelope,
+    ) -> Result<Option<AgentLifecycleReceipt>> {
+        let Some(mut receipt) = recover_receipt(envelope) else {
+            return Ok(None);
+        };
         let event::EventKind::AgentLifecycle(payload) = envelope.kind() else {
-            return None;
+            return Ok(Some(receipt));
         };
-        let observation = payload.observation;
-        let mut receipt = AgentLifecycleReceipt {
-            primary_event_id: Some(envelope.event_id.clone()),
-            ..Default::default()
+        let Some(agent_id) = payload.observation.agent_id.as_ref() else {
+            return Ok(Some(receipt));
         };
-        if observation.origin == Some(SessionOrigin::SideConversation) {
-            receipt.side_conversation = Some(SideConversation::default());
-            return Some(receipt);
+        if receipt.side_conversation.is_some() {
+            return Ok(Some(receipt));
         }
-        let agent_id = observation.agent_id?;
-        let transition = if let Some(replay) = payload.replay.as_ref() {
-            receipt.prior_status = replay.prior_status;
-            receipt.waiting_cleared = replay.waiting_cleared;
-            let transition = Transition {
-                next: lifecycle::LifecycleState {
-                    status: replay.status,
-                    phase: replay.phase,
-                    compacting: replay.compacting,
-                },
-                kind: match &replay.transition {
-                    crate::agents::LifecycleTransition::Normal => TransitionKind::Normal,
-                    crate::agents::LifecycleTransition::Reconciled { from, .. } => {
-                        TransitionKind::Reconciled {
-                            from: *from,
-                            reason: "recovered hook transition",
-                        }
-                    }
-                    crate::agents::LifecycleTransition::Ignored { .. } => TransitionKind::Ignored {
-                        reason: "recovered hook transition",
-                    },
-                },
-                compaction_closed: replay.compaction_closed,
-                waiting_cleared: replay.waiting_cleared,
-                opened_turn: replay.opened_turn,
-                ping: replay.ping,
-            };
-            receipt.transition = Some(transition);
-            transition
-        } else {
-            lifecycle::step(
-                None,
-                None,
-                lifecycle::PriorTurnIds::default(),
-                &observation.signal,
-            )
-        };
-        let mut event = LifecycleEvent::new(
-            envelope.event_id.clone(),
-            envelope.timestamp,
-            envelope.workspace_id.clone(),
-            AgentKind::new_unchecked(envelope.source.clone()),
-            agent_id,
-            observation.agent_name,
-            observation.parent_agent_id,
-            observation.signal,
-            receipt.prior_status,
-            transition,
-        );
-        if let Some(replay) = payload.replay {
-            event.transition = replay.transition;
+        let rollup = self.pending_rollup()?;
+        let kind = AgentKind::new_unchecked(envelope.source.clone());
+        let row = rollup.agents.find(&kind, agent_id);
+        (receipt.stale, receipt.replaced) =
+            session_place(&rollup.agents, row, &payload.observation);
+        if receipt.stale {
+            receipt.transition = None;
+            receipt.waiting_cleared = false;
+            receipt.events.clear();
         }
-        receipt.events.push(event);
-        Some(receipt)
+        Ok(Some(receipt))
     }
+}
 
+/// Whether an observation on `row` is stale (from a process a swap moved
+/// past) and whether `row` is a session another session of its agent
+/// replaced. An event stamped with the holder's epoch is that holder
+/// continuing in this row, not a late one. Neither answer moves when the
+/// fold applies the event: a stale event folds to nothing, and an event
+/// that makes its row the holder is its continuation.
+fn session_place(
+    agents: &crate::store::snapshot::AgentRollup,
+    row: Option<&AgentState>,
+    observation: &AgentLifecycleObservation,
+) -> (bool, bool) {
+    let Some(row) = row else {
+        return (false, false);
+    };
+    let stale = crate::store::snapshot::observation_stale_on(observation, row);
+    let members = crate::agents::state::launch_members(agents.iter(), &row.kind, row.launch_key());
+    let held_at = members
+        .iter()
+        .filter(|member| member.stands())
+        .map(|member| member.epoch)
+        .max();
+    let continues = observation.launch_id.as_ref() == Some(row.launch_key())
+        && held_at <= Some(observation.launch.epoch.unwrap_or(0));
+    let replaced = crate::agents::state::LaunchHolders::new(members).replaced(row) && !continues;
+    (stale, replaced)
+}
+
+fn recover_receipt(envelope: &EventEnvelope) -> Option<AgentLifecycleReceipt> {
+    let event::EventKind::AgentLifecycle(payload) = envelope.kind() else {
+        return None;
+    };
+    let observation = payload.observation;
+    let mut receipt = AgentLifecycleReceipt {
+        primary_event_id: Some(envelope.event_id.clone()),
+        ..Default::default()
+    };
+    if observation.origin == Some(SessionOrigin::SideConversation) {
+        receipt.side_conversation = Some(SideConversation::default());
+        return Some(receipt);
+    }
+    let agent_id = observation.agent_id?;
+    let transition = if let Some(replay) = payload.replay.as_ref() {
+        receipt.prior_status = replay.prior_status;
+        receipt.waiting_cleared = replay.waiting_cleared;
+        let transition = Transition {
+            next: lifecycle::LifecycleState {
+                status: replay.status,
+                phase: replay.phase,
+                compacting: replay.compacting,
+            },
+            kind: match &replay.transition {
+                crate::agents::LifecycleTransition::Normal => TransitionKind::Normal,
+                crate::agents::LifecycleTransition::Reconciled { from, .. } => {
+                    TransitionKind::Reconciled {
+                        from: *from,
+                        reason: "recovered hook transition",
+                    }
+                }
+                crate::agents::LifecycleTransition::Ignored { .. } => TransitionKind::Ignored {
+                    reason: "recovered hook transition",
+                },
+            },
+            compaction_closed: replay.compaction_closed,
+            waiting_cleared: replay.waiting_cleared,
+            opened_turn: replay.opened_turn,
+            ping: replay.ping,
+        };
+        receipt.transition = Some(transition);
+        transition
+    } else {
+        lifecycle::step(
+            None,
+            None,
+            lifecycle::PriorTurnIds::default(),
+            &observation.signal,
+        )
+    };
+    let mut event = LifecycleEvent::new(
+        envelope.event_id.clone(),
+        envelope.timestamp,
+        envelope.workspace_id.clone(),
+        AgentKind::new_unchecked(envelope.source.clone()),
+        agent_id,
+        observation.agent_name,
+        observation.parent_agent_id,
+        observation.signal,
+        receipt.prior_status,
+        transition,
+    );
+    if let Some(replay) = payload.replay {
+        event.transition = replay.transition;
+    }
+    receipt.events.push(event);
+    Some(receipt)
+}
+
+impl Store {
     /// Apply lifecycle append policy and report whether the CLI should launch
     /// the existing detached event-log rotation command.
     #[must_use = "durability barrier; check the result"]
@@ -199,26 +257,8 @@ impl Store {
                     .as_ref()
                     .and_then(|agent_id| agents.find(&intent.agent_kind, agent_id));
                 let prior_status = row.map(|agent| agent.status);
-                let stale = row.is_some_and(|row| {
-                    crate::store::snapshot::observation_stale_on(intent.observation, row)
-                });
-                // Read before the fold: an event stamped with the holder's
-                // epoch is that holder continuing in this row, not a late one.
-                let replaced = row.is_some_and(|row| {
-                    let members = crate::agents::state::launch_members(
-                        agents.iter(),
-                        &row.kind,
-                        row.launch_key(),
-                    );
-                    let held_at = members
-                        .iter()
-                        .filter(|member| member.stands())
-                        .map(|member| member.epoch)
-                        .max();
-                    let continues = intent.observation.launch_id.as_ref() == Some(row.launch_key())
-                        && held_at <= Some(intent.observation.launch.epoch.unwrap_or(0));
-                    crate::agents::state::LaunchHolders::new(members).replaced(row) && !continues
-                });
+                // Read before the fold.
+                let (stale, replaced) = session_place(agents, row, intent.observation);
                 let transition =
                     lifecycle_transition(agents, &intent.agent_kind, intent.observation);
                 // Only hook-first roots take the room default; launched rows and children keep their account.

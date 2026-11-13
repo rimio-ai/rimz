@@ -200,12 +200,31 @@ pub struct EarlierAnswer {
     pub failure_tail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_failure: Option<LimitFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_reason: Option<CancelReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub opened_by: Vec<crate::ids::MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_message_id: Option<crate::ids::MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joined_at: Option<Timestamp>,
+}
+
+/// Why a run was canceled, when something other than a person's stop did it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelReason {
+    /// The agent that launched the child ended, so nothing was left to report to.
+    ParentEnded,
+}
+
+impl CancelReason {
+    /// The clause every run view appends to a canceled run's status.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ParentEnded => "its parent agent ended",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -312,6 +331,10 @@ pub struct RunRecord {
     /// and moved into the earlier answer with it on a reopen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_failure: Option<LimitFailure>,
+    /// Set with a `Canceled` status by a parent-ended cancel, and moved into
+    /// the earlier answer with it on a reopen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_reason: Option<CancelReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_of: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -526,18 +549,19 @@ impl RunRecord {
 
     // `harness::fleet::FleetRunIndex` mirrors these branches as `RunMatchKey`
     // hash keys; a new matching branch here changes that index too.
+    // A launch id matches across kinds, since a cross-kind molt keeps the agent.
     pub fn matches_agent(&self, agent: &crate::agents::AgentState) -> bool {
-        if self.kind != agent.kind {
-            return false;
-        }
         if let Some(peer) = &self.peer {
             return agent.launch_id.as_ref() == Some(&peer.launch_id)
                 || agent.agent_id == peer.launch_id
-                || self.agent_id.as_ref() == Some(&agent.agent_id);
+                || (self.kind == agent.kind && self.agent_id.as_ref() == Some(&agent.agent_id));
         }
         if let Some(team) = &self.team {
             return agent.launch_id.as_ref() == Some(&team.launch_id)
                 || agent.agent_id == team.launch_id;
+        }
+        if self.kind != agent.kind {
+            return false;
         }
         self.agent_id.as_ref() == Some(&agent.agent_id)
             || agent
@@ -578,6 +602,7 @@ impl RunRecord {
             earlier_sessions: Vec::new(),
             failure_tail: None,
             limit_failure: None,
+            cancel_reason: None,
             retry_of: None,
             loop_task: None,
             workflow: None,

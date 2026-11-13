@@ -62,35 +62,11 @@ pub fn open_team_run(paths: &StatePaths, seat: &AgentState) -> Result<Option<Run
     let launch_id = seat.launch_id.as_ref().unwrap_or(&seat.agent_id);
     Ok(super::list(paths)?.into_iter().find(|record| {
         !record.status.is_terminal()
-            && record.kind == seat.kind
             && record
                 .team
                 .as_ref()
                 .is_some_and(|team| &team.launch_id == launch_id)
     }))
-}
-
-/// Move an open leader run to the provider a swap's replacement runs on. The
-/// swap keeps the launch id and handle, so only a cross-provider molt changes
-/// the record: its kind follows the replacement once that has bound.
-pub fn rekey_team_run(
-    paths: &StatePaths,
-    predecessor: &AgentState,
-    successor: &crate::store::writer::AgentLaunchIdentity,
-) -> Result<()> {
-    if predecessor.kind == successor.kind {
-        return Ok(());
-    }
-    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
-    let Some(mut record) = super::list(paths)?.into_iter().find(|record| {
-        !record.status.is_terminal() && record.team.is_some() && record.matches_agent(predecessor)
-    }) else {
-        return Ok(());
-    };
-    record.kind.clone_from(&successor.kind);
-    record.agent_id = None;
-    crate::store::run::write(&paths.runs_dir, &record)?;
-    Ok(())
 }
 
 /// The open team run of the cohort `instance`.

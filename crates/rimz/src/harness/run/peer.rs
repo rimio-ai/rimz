@@ -54,7 +54,6 @@ pub fn open_peer_run(paths: &StatePaths, peer: &AgentState) -> Result<Option<Run
     };
     Ok(super::list(paths)?.into_iter().find(|record| {
         !record.status.is_terminal()
-            && record.kind == peer.kind
             && record
                 .peer
                 .as_ref()
@@ -189,11 +188,25 @@ fn stamp_subagent_delivery(
     Ok(Some(record))
 }
 
+/// Fail `peer`'s open peer turn, never its team's run: a restart swaps the
+/// session under the same seat, and the team run stays open for the holder.
+pub fn fail_peer_turn(store: &Store, peer: &AgentState, reason: &str) -> Result<Option<RunRecord>> {
+    fail_open_run(store, open_peer_run(store.paths(), peer)?, reason)
+}
+
 pub fn fail_peer_run(store: &Store, peer: &AgentState, reason: &str) -> Result<Option<RunRecord>> {
     let open = match open_peer_run(store.paths(), peer)? {
         Some(record) => Some(record),
         None => super::team::open_team_run(store.paths(), peer)?,
     };
+    fail_open_run(store, open, reason)
+}
+
+fn fail_open_run(
+    store: &Store,
+    open: Option<RunRecord>,
+    reason: &str,
+) -> Result<Option<RunRecord>> {
     let Some(record) = open else {
         return Ok(None);
     };

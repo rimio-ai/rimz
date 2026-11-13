@@ -39,6 +39,19 @@ fn restarting_peer_fails_only_its_open_turn() {
         || None,
     )
     .unwrap();
+    // The seat's team run stays open for the session that holds it next.
+    let mut team = rimz::store::run::RunRecord::new(
+        store.paths().workspace_id.clone(),
+        peer.kind.clone(),
+        PermissionMode::Auto,
+        "ship the feature".to_owned(),
+        dir.path().to_path_buf(),
+    );
+    team.team = Some(rimz::store::run::TeamRun {
+        launch_id: "peer-launch".into(),
+        instance: "forge#x".parse().unwrap(),
+    });
+    rimz::harness::run::create(store.paths(), &team).unwrap();
     settle_peer_before_restart(&store, &peer).unwrap();
     let failed = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
     assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
@@ -48,10 +61,9 @@ fn restarting_peer_fails_only_its_open_turn() {
         "failed turn remains eligible for the fleet reporter"
     );
     settle_peer_before_restart(&store, &peer).unwrap();
-    assert_eq!(
-        rimz::harness::run::list(store.paths()).unwrap(),
-        vec![failed]
-    );
+    let mut runs = rimz::harness::run::list(store.paths()).unwrap();
+    runs.sort_by_key(|run| run.team.is_some());
+    assert_eq!(runs, vec![failed, team]);
 }
 
 #[test]
@@ -69,8 +81,8 @@ fn resume_classification_names_each_fresh_reason() {
 
 #[test]
 fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
-    assert_eq!(briefing_section(&[], &[], 0, 0), None);
-    let section = briefing_section(&["@otter".into()], &["ci-green".into()], 2, 1).unwrap();
+    assert_eq!(briefing_section(&[], &[], &[], 0, 0), None);
+    let section = briefing_section(&["@otter".into()], &[], &["ci-green".into()], 2, 1).unwrap();
     assert_eq!(
         section,
         "Type: SWAP_BRIEFING\nFrom: @rimz\nContent:\nThis is a fresh session of the same agent; \
@@ -91,6 +103,169 @@ fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
         [rimz::transcript::SectionOrigin::Notice("@rimz".into())],
         "the briefing reads as an @rimz notice, never as the user"
     );
+}
+
+#[test]
+fn a_briefing_counts_owed_child_answers_and_only_conversation_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+    let store = rimz::Store::open(
+        rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap(),
+        rimz::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap(),
+    )
+    .unwrap();
+    let parent = rimz::testkit::agent_state("claude", "parent", jiff::Timestamp::now());
+    let child = ended_child(&store, "child", "kit", "parent", 1);
+    let mut run = child_run(&child);
+    run.status = rimz::store::run::RunStatus::Completed;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let message = |text: &str| {
+        rimz::store::message::MessageRecord::new_for_card(
+            workspace_id.clone(),
+            parent.kind.clone(),
+            parent.agent_id.clone(),
+            None,
+            text.to_owned(),
+            true,
+            rimz::store::message::DeliveryGate::Done,
+        )
+    };
+    let mut notice = message("a system notice");
+    notice.sender = rimz::store::message::MessageSender::System;
+    for queued in [message("rebase first"), notice] {
+        store.queue_message(&queued, "session").unwrap();
+    }
+    let briefing = swap_briefing(
+        &store,
+        &parent,
+        std::slice::from_ref(&parent),
+        dir.path(),
+        None,
+    )
+    .unwrap()
+    .unwrap();
+    let lines = briefing.lines().filter(|line| line.starts_with("- "));
+    assert_eq!(
+        lines.collect::<Vec<_>>(),
+        [
+            "- 1 subagent finished with its answer still owed to you (@kit): \
+             `rimz subagents list`",
+            "- 1 message queued for your next turn: `rimz message list`",
+        ]
+    );
+}
+
+/// A depth-1 subagent's Runtime rows drop its ended grandchild, whose parent
+/// is not a visible root; the briefing still lists the answer it owes.
+#[test]
+fn a_subagents_briefing_lists_an_ended_grandchilds_owed_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+    let store = rimz::Store::open(
+        rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap(),
+        rimz::RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap(),
+    )
+    .unwrap();
+    observe_child(
+        &store,
+        "sub",
+        "otter",
+        "root",
+        1,
+        0,
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    let parent = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id == "sub")
+        .unwrap()
+        .clone();
+    let grandchild = ended_child(&store, "grand", "kit", "sub", 2);
+    let mut run = child_run(&grandchild);
+    run.status = rimz::store::run::RunStatus::Completed;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let briefing = swap_briefing(
+        &store,
+        &parent,
+        std::slice::from_ref(&parent),
+        dir.path(),
+        None,
+    )
+    .unwrap()
+    .unwrap_or_default();
+    assert!(
+        briefing.contains("answer still owed to you (@kit)"),
+        "{briefing}"
+    );
+}
+
+/// A child swapped under its launch keeps its replaced row beside its holder,
+/// and both match its run by name: the run's answer is owed by a finished
+/// child only once the holder has ended too.
+#[test]
+fn a_briefing_lists_a_swapped_childs_answer_as_owed_only_once_its_holder_ended() {
+    use rimz::agents::LifecycleSignal::{Ended, Registered};
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+    let store = rimz::Store::open(
+        rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap(),
+        rimz::RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap(),
+    )
+    .unwrap();
+    let parent = rimz::testkit::agent_state("claude", "parent", jiff::Timestamp::now());
+    let launch = |session: &str, epoch: u32| {
+        let payload = serde_json::from_value(serde_json::json!({
+            "agent_id": session, "agent_name": "kit", "launch_id": "launch-kit",
+            "state": "bound", "epoch": epoch, "parent_agent_id": "parent",
+            "parent_agent_kind": "claude", "launch_depth": 1,
+        }))
+        .unwrap();
+        store
+            .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+                store.paths().workspace_id.clone(),
+                "session",
+                &rimz::ids::AgentKind::new_unchecked("claude"),
+                payload,
+            ))
+            .unwrap();
+    };
+    launch("replaced", 0);
+    observe_child(&store, "replaced", "kit", "parent", 1, 0, Registered);
+    observe_child(&store, "replaced", "kit", "parent", 1, 0, Ended);
+    launch("holder", 1);
+    observe_child(&store, "holder", "kit", "parent", 1, 1, Registered);
+    let holder = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id == "holder")
+        .unwrap()
+        .clone();
+    let mut run = child_run(&holder);
+    run.agent_name = Some("kit".into());
+    run.status = rimz::store::run::RunStatus::Completed;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let owed = || {
+        swap_briefing(
+            &store,
+            &parent,
+            std::slice::from_ref(&parent),
+            dir.path(),
+            None,
+        )
+        .unwrap()
+        .unwrap_or_default()
+        .contains("answer still owed to you (@kit)")
+    };
+    assert!(
+        !owed(),
+        "the live holder's answer is not a finished child's"
+    );
+    observe_child(&store, "holder", "kit", "parent", 1, 1, Ended);
+    assert!(owed(), "once its holder ended, the child's answer is owed");
 }
 
 #[test]
@@ -289,6 +464,59 @@ fn relaunch_request_replays_loop_sections_without_replaying_supervision() {
     );
 }
 
+/// Append one lifecycle observation of a launched child of `parent`.
+fn observe_child(
+    store: &rimz::Store,
+    session: &str,
+    name: &str,
+    parent: &str,
+    depth: u8,
+    epoch: u32,
+    signal: rimz::agents::LifecycleSignal,
+) {
+    let kind = rimz::ids::AgentKind::new_unchecked("claude");
+    let mut observation =
+        rimz::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+    observation.agent_name = Some(name.into());
+    observation.launch_id = Some(format!("launch-{name}").into());
+    observation.launch.epoch = Some(epoch);
+    observation.launch.parent_agent_id = Some(parent.into());
+    observation.launch.parent_agent_kind = Some(kind.clone());
+    observation.launch.launch_depth = Some(depth);
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: "session",
+            agent_kind: kind,
+            event_name: "SessionStart",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+}
+
+/// A launched child of `parent` that registered and ended, as the store holds it.
+fn ended_child(
+    store: &rimz::Store,
+    session: &str,
+    name: &str,
+    parent: &str,
+    depth: u8,
+) -> AgentState {
+    for signal in [
+        rimz::agents::LifecycleSignal::Registered,
+        rimz::agents::LifecycleSignal::Ended,
+    ] {
+        observe_child(store, session, name, parent, depth, 0, signal);
+    }
+    store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.agent_id == session)
+        .unwrap()
+        .clone()
+}
+
 fn child_run(child: &AgentState) -> rimz::store::run::RunRecord {
     let mut run = rimz::store::run::RunRecord::new(
         rimz::ids::WorkspaceId::from_project_root(Path::new("/tmp")),
@@ -326,7 +554,8 @@ fn a_handed_over_child_carries_its_run_and_a_settled_one_carries_none() {
             request.follow_up_message.clone(),
         )
     };
-    // Explain and molt build this request and never hand a run over.
+    // Explain builds this request and never hands a run over; a molt adds only a leader's
+    // workflow session run (`open_session_run`).
     assert_eq!(summary(&request), (true, None, true, false, None));
 
     let mut run = child_run(&child);
@@ -365,6 +594,54 @@ fn newest_child_run_requires_kind_and_present_names() {
     assert!(newest_run_for_child(&[run.clone()], &child).is_some());
     run.kind = rimz::ids::AgentKind::new_unchecked("claude");
     assert!(newest_run_for_child(&[run], &child).is_none());
+}
+
+#[test]
+fn a_swap_hands_over_only_the_open_session_run_its_agent_leads() {
+    use rimz::store::run::{RunLifecycle, RunStatus};
+
+    let mut leader = AgentState::stub("codex", "new", rimz::agents::AgentStatus::Running);
+    leader.name = Some("lead".to_owned());
+    let attempt = rimz::agents::WorkflowAttemptRef {
+        run: rimz::ids::WorkflowRunId::new(),
+        seq: 2,
+        role: rimz::agents::WorkflowAttemptRole::Step,
+    };
+    leader.workflow = Some(attempt.clone());
+    // The run still names the session a molt to another kind replaced.
+    let mut run = child_run(&AgentState::stub(
+        "claude",
+        "old",
+        rimz::agents::AgentStatus::Idle,
+    ));
+    run.lifecycle = RunLifecycle::Session;
+    run.status = RunStatus::Running;
+    run.workflow = Some(attempt.clone());
+    run.agent_name = leader.name.clone();
+    let found = |run: &rimz::store::run::RunRecord, agent: &AgentState| {
+        open_session_run(std::slice::from_ref(run), agent).is_some()
+    };
+    assert!(found(&run, &leader));
+    let mut companion = leader.clone();
+    companion.name = Some("helper".to_owned());
+    assert!(
+        !found(&run, &companion),
+        "a companion shares the pin, not the run"
+    );
+    let mut other = leader.clone();
+    other.workflow = Some(rimz::agents::WorkflowAttemptRef { seq: 3, ..attempt });
+    assert!(!found(&run, &other), "another attempt's run");
+    let mut turn = run.clone();
+    turn.lifecycle = RunLifecycle::Turn;
+    assert!(
+        !found(&turn, &leader),
+        "a turn step ends in its own session"
+    );
+    run.status = RunStatus::Completed;
+    assert!(
+        !found(&run, &leader),
+        "a settled run stays where it settled"
+    );
 }
 
 #[test]

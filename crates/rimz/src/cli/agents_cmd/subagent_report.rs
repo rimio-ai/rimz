@@ -553,7 +553,13 @@ fn compose_answer_row(
     let limit_failure = answer.map_or(run.limit_failure.as_ref(), |answer| {
         answer.limit_failure.as_ref()
     });
-    if status != RunStatus::Completed
+    let cancel_reason = answer.map_or(run.cancel_reason, |answer| answer.cancel_reason);
+    if status == RunStatus::Canceled
+        && let Some(reason) = cancel_reason
+    {
+        row.push_str("; ");
+        row.push_str(reason.label());
+    } else if status != RunStatus::Completed
         && let Some(failure) = limit_failure
     {
         row.push_str("; ");

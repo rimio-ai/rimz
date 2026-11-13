@@ -524,3 +524,149 @@ fn parent_probe_confirms_ended_launch_but_preserves_live_successor_and_legacy_al
         );
     }
 }
+
+#[test]
+fn parent_probe_rereads_the_parent_after_its_pane_goes_missing() {
+    use rimz::store::event::{AgentAttachPayload, AgentLaunchPayload, EventEnvelope};
+    for swapped in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = test_workspace(dir.path());
+        let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let rt = rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let store = rimz::Store::open(paths, rt).unwrap();
+        let launch = |kind: &str, id: &str, launch_id: &str, epoch: u32, parent: Option<&str>| {
+            let payload: AgentLaunchPayload = serde_json::from_value(serde_json::json!({
+                "agent_id": id, "agent_name": "lead", "launch_id": launch_id, "state": "bound",
+                "epoch": epoch, "parent_agent_id": parent,
+                "parent_agent_kind": parent.map(|_| "codex"), "launch_depth": parent.map(|_| 1),
+            }))
+            .unwrap();
+            store
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id.clone(),
+                    "room",
+                    &AgentKind::new_unchecked(kind),
+                    payload,
+                ))
+                .unwrap();
+        };
+        let attach = |kind: &str, id: &str, epoch: u32, pane: &str| {
+            store
+                .append_event(&EventEnvelope::agent_attached(
+                    workspace.workspace_id.clone(),
+                    "room",
+                    &AgentKind::new_unchecked(kind),
+                    AgentAttachPayload {
+                        epoch: Some(epoch),
+                        agent_id: id.into(),
+                        launch_id: Some("L".into()),
+                        pane_id: PaneId::parse(pane).unwrap(),
+                        record: None,
+                        tier: None,
+                        mode: None,
+                        isolation: None,
+                        effective_isolation: None,
+                        login: None,
+                        pane_pid: None,
+                        runtime_owner: rimz::store::runtime::current_process_owner(
+                            rimz::pane::RuntimeOwnerKind::Agent,
+                            id,
+                        ),
+                    },
+                ))
+                .unwrap();
+        };
+        launch("codex", "OLD", "L", 0, None);
+        attach("codex", "OLD", 0, "tmux:%77");
+        launch("codex", "child", "child-launch", 0, Some("L"));
+        let child = ParentProbeChild {
+            kind: AgentKind::new_unchecked("codex"),
+            launch_id: "child-launch".into(),
+            pane: None,
+            session_name: "room".into(),
+        };
+        let (ended, answer) = parent_probe(&store, &child, true, |seed, pane| {
+            assert_eq!(seed.parent_pane.as_ref(), Some(pane));
+            if swapped {
+                // A cross-kind molt lands between the first read and the listing.
+                launch("claude", "NEW", "L", 1, None);
+                attach("claude", "NEW", 1, "tmux:%78");
+            }
+            Ok(false)
+        })
+        .unwrap();
+        assert_eq!(ended, !swapped, "swapped: {swapped}");
+        if swapped {
+            assert_eq!(answer.parent_pane, Some(PaneId::parse("tmux:%78").unwrap()));
+        }
+    }
+}
+
+#[test]
+fn a_replacement_that_fails_after_bound_ends_the_parent_in_either_order() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::{AgentLaunchPayload, EventEnvelope};
+    for old_ends_first in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = test_workspace(dir.path());
+        let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let rt = rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let store = rimz::Store::open(paths, rt).unwrap();
+        let kind = AgentKind::new_unchecked("codex");
+        let launch = |id: &str, launch_id: &str, state: &str, epoch: u32, parent: Option<&str>| {
+            let payload: AgentLaunchPayload = serde_json::from_value(serde_json::json!({
+                "agent_id": id, "agent_name": "lead", "launch_id": launch_id, "state": state,
+                "epoch": epoch, "parent_agent_id": parent,
+                "parent_agent_kind": parent.map(|_| "codex"), "launch_depth": parent.map(|_| 1),
+            }))
+            .unwrap();
+            store
+                .append_event(&EventEnvelope::agent_launched(
+                    workspace.workspace_id.clone(),
+                    "room",
+                    &kind,
+                    payload,
+                ))
+                .unwrap();
+        };
+        let old_ends = || {
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    "room",
+                    "codex",
+                    "test",
+                    &AgentLifecycleObservation::new(Some("OLD".into()), LifecycleSignal::Ended),
+                ))
+                .unwrap();
+        };
+        launch("OLD", "L", "bound", 0, None);
+        launch("child", "child-launch", "bound", 0, Some("L"));
+        launch("launch_new", "L", "bound", 1, None);
+        let probe = || {
+            run_parent_probe(
+                &store,
+                kind.clone(),
+                "child-launch".into(),
+                None,
+                "room".into(),
+                false,
+            )
+            .unwrap()
+            .0
+        };
+        if old_ends_first {
+            old_ends();
+            assert!(!probe(), "the bound replacement holds the agent");
+            launch("launch_new", "L", "failed", 1, None);
+        } else {
+            launch("launch_new", "L", "failed", 1, None);
+            assert!(
+                probe(),
+                "a failed holder ends the agent before the old row's end"
+            );
+            old_ends();
+        }
+        assert!(probe(), "old_ends_first: {old_ends_first}");
+    }
+}

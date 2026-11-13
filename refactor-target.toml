@@ -2251,7 +2251,7 @@ path = "crates/rimz/src/harness"
 # LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
 # workflow::{schema, validate, Validation, SpecErr} and report vocabulary cross the CLI boundary (+6).
 # workflow::{WorkflowErr, create, advance, cancel, resume, wake} expose run control to the CLI (+6).
-# run::rekey_team_run, the trunk's molt re-export, takes the slack the workflow budget assumed (+1).
+# The trunk's molt re-export is gone; its slack stays in the workflow budget.
 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
 # headless shares HeadlessProfile, its resolve/prepare stages, typed errors, admit and AdmittedLaunch::execute_hosted (+10).
 # Workflow AttemptHost, StepLaunch, Occupancy, Observed, LaunchFailure and wake_run cross the CLI seam (+6).
@@ -2393,7 +2393,8 @@ path = "crates/rimz/src/harness"
 # schedule::arm::release_replaced_session releases what a swapped-out session held while its agent's waits stay armed (+1).
 # schedule::pending::{wait_for, wait_of, same_target, target_holder, take_waits} and SessionWaits::contains_session give every wait reader one launch-or-session target rule (+6).
 # schedule::pending::holder_key files a wait under its holder's kind and launch, so a swap keeps the target (+1).
-surface-budget = 1236
+# run::fail_peer_turn lets a restart fail a peer's open turn without the team-run fallback (+1).
+surface-budget = 1237
 
 [[verdict]]
 kind = "item"
@@ -4514,7 +4515,8 @@ path = "crates/rimz/src/store"
 # reservation's scope to its abort (+2).
 # MessageRecord::with_launch_id stamps which agent a record is for, so it follows a restart
 # or molt (+1).
-surface-budget = 647
+# store::run::CancelReason and its label record and print why RimZ canceled a run (+1).
+surface-budget = 648
 
 [[verdict]]
 kind = "item"
@@ -5650,7 +5652,7 @@ allowed-dependencies = [
 # A silent-child notice is claimed once per run and released only after a failed queue write (+2).
 # Thin exec supervision cancels runs through paths without a Store (+1).
 # Host readers share the crate-private cached listing wrapper (+1).
-# rekey_team_run moves a molting leader's open team run once its replacement binds (+1).
+# A molting leader's open team run follows its launch id, its kind set where the fold rebinds it.
 # settle_session_exit settles provider-exit spend before waking a session run (+1).
 # cancel_unserved_workflow_run rechecks rebirth liveness at the locked mutation (+1).
 # describes_latest_turn decides when `agents wait` reads a live peer's ended run (+1).
@@ -5694,8 +5696,8 @@ reason = "Session runs retain outgoing conversation bindings so provider-exit se
 
 [[verdict]]
 kind = "item"
-key = "harness::run::team::rekey_team_run"
-reason = "Molt moves the leader run to the replacement's kind under the workspace lock once it binds."
+key = "store::run::CancelReason"
+reason = "A parent-ended cancel records its cause on the run so the digest, subagents list and run status line can say why the child was canceled."
 
 [[verdict]]
 kind = "item"
@@ -9220,6 +9222,11 @@ reason = "Field of PaneObservation, floored with PresenceTransition (pass 20b)."
 kind = "item"
 key = "harness::launch::ENV_AGENT_ID"
 reason = "Read by the integration crate (26 sites) and in-crate ancestry and schedule runner; the key is a cross-crate test contract (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::run::fail_peer_turn"
+reason = "Restart fails the peer's open turn alone, so a team leader's restart keeps its team run open for the board's Done; rebirth and launch failure keep fail_peer_run's team fallback."
 
 [[verdict]]
 kind = "item"
