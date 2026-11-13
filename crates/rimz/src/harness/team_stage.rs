@@ -287,6 +287,15 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     })
 }
 
+/// Whether `record` is a Stage notice to `member`'s card.
+fn is_stage_notice(record: &MessageRecord, member: &AgentState) -> bool {
+    record.sender
+        == MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        }
+        && record.same_agent_card(member)
+}
+
 /// What re-wakes a stage owner, which decides the Stage notices that already cover it.
 #[derive(Clone, Copy, Debug)]
 enum RewakeCause {
@@ -317,20 +326,13 @@ impl RewakeCause {
         member: &AgentState,
         now: Timestamp,
     ) -> bool {
-        let stage_notice = |record: &&MessageRecord| {
-            record.sender
-                == MessageSender::Harness {
-                    notice: HarnessNotice::Stage,
-                }
-                && record.same_agent_card(member)
-        };
-        if live.iter().any(|record| stage_notice(&record)) {
+        if live.iter().any(|record| is_stage_notice(record, member)) {
             return true;
         }
         let cutoff = self.cutoff(now);
         history
             .iter()
-            .filter(stage_notice)
+            .filter(|record| is_stage_notice(record, member))
             .any(|record| match record.status {
                 MessageStatus::Delivered => record
                     .delivered_at
@@ -356,17 +358,23 @@ impl RewakeCause {
 
     /// Whether `member` was prompted since this re-wake's cause, so the prompt stands in for a
     /// recovery notice: after the wrapper's pre-spawn copy of its stamp, or for a registration
-    /// within the window `cutoff` reads.
-    fn prompted(self, member: &AgentState, now: Timestamp) -> bool {
+    /// within the window `cutoff` reads and after `newest_notice`, when the member's card has
+    /// a Stage notice recorded: a prompt that predates the notice cannot stand in for it.
+    fn prompted(
+        self,
+        member: &AgentState,
+        newest_notice: Option<Timestamp>,
+        now: Timestamp,
+    ) -> bool {
         match self {
             Self::Resume {
                 last_prompt_at: Some(copy),
                 ..
             } => member.last_prompt_at > copy,
             Self::Resume { .. } => false,
-            Self::Registration => member
-                .last_prompt_at
-                .is_some_and(|at| at >= self.cutoff(now)),
+            Self::Registration => member.last_prompt_at.is_some_and(|at| {
+                at >= self.cutoff(now) && newest_notice.is_none_or(|notice| at > notice)
+            }),
         }
     }
 
@@ -416,10 +424,16 @@ fn with_rewake<T>(
     {
         return Ok(None);
     }
-    if cause.prompted(member, now) {
+    let (live, history) = store.list_messages_and_history()?;
+    let newest_notice = live
+        .iter()
+        .chain(&history)
+        .filter(|record| is_stage_notice(record, member))
+        .map(|record| record.enqueued_at)
+        .max();
+    if cause.prompted(member, newest_notice, now) {
         return Ok(None);
     }
-    let (live, history) = store.list_messages_and_history()?;
     if cause.already_woken(&live, &history, member, now) {
         return Ok(None);
     }
@@ -1526,21 +1540,31 @@ mod tests {
             since: copy,
             last_prompt_at,
         };
+        let (early, late) = (now - window / 2, now - window / 4);
         let cases = [
-            (resume(Some(Some(copy))), Some(copy), false),
-            (resume(Some(Some(copy))), Some(now), true),
-            (resume(Some(None)), Some(copy), true),
-            (resume(Some(None)), None, false),
-            (resume(None), Some(now), false),
-            (RewakeCause::Registration, Some(now - window / 2), true),
-            (RewakeCause::Registration, Some(now - window * 2), false),
-            (RewakeCause::Registration, None, false),
+            (resume(Some(Some(copy))), Some(copy), None, false),
+            (resume(Some(Some(copy))), Some(now), None, true),
+            (resume(Some(None)), Some(copy), None, true),
+            (resume(Some(None)), None, None, false),
+            (resume(None), Some(now), None, false),
+            (RewakeCause::Registration, Some(early), None, true),
+            (
+                RewakeCause::Registration,
+                Some(now - window * 2),
+                None,
+                false,
+            ),
+            (RewakeCause::Registration, None, None, false),
+            // A prompt that predates the member's newest Stage notice cannot stand in for it.
+            (RewakeCause::Registration, Some(early), Some(late), false),
+            (RewakeCause::Registration, Some(late), Some(late), false),
+            (RewakeCause::Registration, Some(late), Some(early), true),
         ];
-        let actual = cases.map(|(cause, last_prompt_at, _)| {
+        let actual = cases.map(|(cause, last_prompt_at, newest_notice, _)| {
             member.last_prompt_at = last_prompt_at;
-            cause.prompted(&member, now)
+            cause.prompted(&member, newest_notice, now)
         });
-        assert_eq!(actual, cases.map(|(_, _, expected)| expected));
+        assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
 
         let mut withdrawn = MessageRecord::new(
             crate::ids::WorkspaceId::from_project_root(Path::new("/tmp/rimz-rewake")),
