@@ -1,5 +1,6 @@
 use super::*;
 
+mod bookings;
 mod card;
 mod compaction;
 mod context;

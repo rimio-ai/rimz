@@ -18,7 +18,7 @@ use crate::store::snapshot::{
 };
 use crate::{SpendTally, SpendWindow};
 
-fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
+pub(super) fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     let now = super::fixed_now();
     SidebarSubAgent {
         pane: None,
