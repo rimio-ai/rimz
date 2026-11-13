@@ -38,9 +38,13 @@ use crate::mux::{
     SidebarWidth, backend_for,
 };
 use crate::proc::ProcInfo;
-use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
+use crate::sidebar::timing::{
+    RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, REPAIR_HEARTBEAT_HOLD_CAP,
+};
 use crate::utils::time::unix_now_ms;
-use crate::wakeup::heartbeat::{SidebarHeartbeat, fresh_foreign_protocol_claims};
+use crate::wakeup::heartbeat::{
+    SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, fresh_foreign_protocol_claims,
+};
 use crate::workspace::{self, KnownWorkspace, record};
 
 mod report;
@@ -504,7 +508,8 @@ impl ReloadOutcome {
 /// has none, docked beside that view's work panes, closing or replacing no pane
 /// and touching no existing sidebar or other view. Retire outdated
 /// language-server brokers without interrupting their servers or dropping
-/// leases. Optional structural repair runs before returning each room's report.
+/// leases. Optional structural repair runs before returning each room's report,
+/// after a build change only once the room's sidebars report again.
 pub fn reload_user_sidebars(repair: bool) -> Result<ReloadReport, StageBuildErr> {
     let staged = stage_current_build()?;
     let brokers = crate::lsp::retire::run();
@@ -533,8 +538,18 @@ pub fn reload_user_sidebars(repair: bool) -> Result<ReloadReport, StageBuildErr>
                 let staged = &staged;
                 let machine_config = &machine_config;
                 scope.spawn(move || {
-                    let mut room = upgrade_live(target, staged, machine_config, !repair);
+                    let UpgradedRoom {
+                        mut room,
+                        build_changed,
+                    } = upgrade_live(target, staged, machine_config, !repair);
                     if repair {
+                        if build_changed {
+                            hold_for_heartbeats(
+                                &target.runtime,
+                                target.mux,
+                                &target.workspace.session_name,
+                            );
+                        }
                         let repair = repair_live(target, machine_config);
                         let heartbeats = session_heartbeats(
                             &target.runtime,
@@ -690,7 +705,7 @@ fn upgrade_live(
     staged: &StagedBuild,
     machine_config: &MachineConfig,
     mount: bool,
-) -> RoomReload {
+) -> UpgradedRoom {
     let LiveTarget {
         mux,
         workspace: ws,
@@ -720,9 +735,12 @@ fn upgrade_live(
             }
         }
     }
+    // A room whose build could not be recorded may have restarted anything.
+    let mut build_changed = true;
     let room_bin = match recorded {
         Ok(recorded) => {
             room.claude_restarts = recorded.claude_restarts;
+            build_changed = recorded.build_changed;
             recorded.bin
         }
         Err(error) => {
@@ -815,7 +833,17 @@ fn upgrade_live(
     let foreign_protocol =
         heartbeats.is_empty() && foreign_protocol_heartbeat(runtime, *mux, &ws.session_name);
     room.record_upgrade(&awaiting, &heartbeats, build, foreign_protocol);
-    room
+    UpgradedRoom {
+        room,
+        build_changed,
+    }
+}
+
+struct UpgradedRoom {
+    room: RoomReload,
+    /// The room recorded a build other than the staged one, so its sidebars and
+    /// drainer may be restarting.
+    build_changed: bool,
 }
 
 /// Bare reload's mount pass: a sidebar for each occupied view that has none,
@@ -1103,6 +1131,7 @@ enum RecordRoomErr {
 struct RecordedRoom {
     bin: PathBuf,
     claude_restarts: bool,
+    build_changed: bool,
 }
 
 fn record_live_room_bin(
@@ -1128,7 +1157,8 @@ fn record_live_room_bin_at(
     let record = record::read(&paths.workspace_record)?;
     let enabled =
         crate::remote_control::room_config(&config.remote_control, &record).enabled_for("claude");
-    let liveness = if enabled && record.rimz_build.as_deref() != Some(staged.build.as_str()) {
+    let build_changed = record.rimz_build.as_deref() != Some(staged.build.as_str());
+    let liveness = if enabled && build_changed {
         let envs = HostLoginEnvs::for_room(&paths.workspace_record, config).ok();
         envs.as_ref()
             .and_then(|envs| envs.for_host(RemoteControlHost::Claude).ok())
@@ -1160,6 +1190,7 @@ fn record_live_room_bin_at(
     Ok(RecordedRoom {
         bin: paths.room_bin.clone(),
         claude_restarts,
+        build_changed,
     })
 }
 
@@ -1238,6 +1269,49 @@ fn wait_for_convergence_with(
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         std::thread::sleep(remaining.min(poll));
+    }
+}
+
+/// Hold until the session's fresh heartbeat count is non-zero and has not
+/// changed, up or down, for one [`SIDEBAR_HEARTBEAT_TTL`], or
+/// [`REPAIR_HEARTBEAT_HOLD_CAP`] passes, so repair replaces no view whose
+/// restarted renderer is still re-attaching. A drop restarts the window: it is
+/// a pane that just went silent, which the full pass would replace.
+fn hold_for_heartbeats(runtime: &RuntimePaths, mux: MuxName, session_name: &str) {
+    hold_for_heartbeats_with(
+        SIDEBAR_HEARTBEAT_TTL,
+        REPAIR_HEARTBEAT_HOLD_CAP,
+        RELOAD_CONVERGE_POLL,
+        Instant::now,
+        std::thread::sleep,
+        || session_heartbeats(runtime, mux, session_name).len(),
+    );
+}
+
+fn hold_for_heartbeats_with(
+    stable_for: Duration,
+    cap: Duration,
+    poll: Duration,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
+    mut count: impl FnMut() -> usize,
+) {
+    let deadline = now() + cap;
+    let mut last = 0;
+    let mut stable_since = None;
+    loop {
+        let read_at = now();
+        let reporting = count();
+        if reporting != last {
+            last = reporting;
+            stable_since = (reporting > 0).then_some(read_at);
+        }
+        if stable_since.is_some_and(|since| read_at.duration_since(since) >= stable_for)
+            || read_at >= deadline
+        {
+            return;
+        }
+        sleep(deadline.saturating_duration_since(read_at).min(poll));
     }
 }
 
