@@ -1267,7 +1267,13 @@ mod runs {
             root: None,
             color: crate::cli::ColorWhen::Auto,
         };
-        let grace = Duration::from_secs(1);
+        // Only the clock tells the grace path from the session path for a
+        // `Pending` record: both settle it `Failed`. The first call pays the
+        // process's cold page faults and lazy loads (the embedded price book,
+        // the agent registry), about 0.1 s idle and over 1 s on a starved
+        // host, so the grace sits far above that cost: a call that enters
+        // the grace wait sleeps it out in full.
+        let grace = Duration::from_secs(30);
         let mut outcomes = Vec::new();
         for status in [RunStatus::Pending, RunStatus::Running, RunStatus::Canceled] {
             record.status = status;
