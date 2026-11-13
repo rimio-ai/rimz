@@ -14,8 +14,8 @@ use winnow::token::{any, none_of, take_while};
 use winnow::{ModalResult, Parser};
 
 use super::{
-    AddressContext, LaneSelector, addressable_agents, agent_in_lane, lane_label, launched_parent,
-    parse_selector, paste_address, resolve_many,
+    AddressContext, LaneSelector, Roster, agent_in_lane, lane_label, launched_parent,
+    parse_selector, resolve_many,
 };
 use crate::agents::{AgentState, AgentStatus, ParkDemotion, TurnErrorClass, TurnPhase};
 use crate::ids::AgentKind;
@@ -294,9 +294,19 @@ impl<'a> AgentRow<'a> {
         reader: &AddressContext,
         now: Timestamp,
     ) -> Self {
-        let live = agent.ended_at.is_none() && pane_bound(source, agent);
-        let handle = paste_address(agent, source, reader);
-        Self::new(agent, source, handle, live, demotion, reader, now)
+        Self::live_in(agent, &Roster::of(source), demotion, reader, now)
+    }
+
+    fn live_in(
+        agent: &'a AgentState,
+        roster: &Roster<'a>,
+        demotion: &ParkDemotion,
+        reader: &AddressContext,
+        now: Timestamp,
+    ) -> Self {
+        let live = agent.ended_at.is_none() && pane_bound(roster.snapshot, agent);
+        let handle = roster.paste_address(agent, reader);
+        Self::new(agent, roster, handle, live, demotion, reader, now)
     }
 
     pub fn agent(&self) -> &'a AgentState {
@@ -326,13 +336,14 @@ impl<'a> AgentRow<'a> {
 
     fn new(
         agent: &'a AgentState,
-        source: &'a SidebarSnapshot,
+        roster: &Roster<'a>,
         handle: String,
         live: bool,
         demotion: &ParkDemotion,
         reader: &AddressContext,
         now: Timestamp,
     ) -> Self {
+        let source = roster.snapshot;
         let card_row = card_row(source, agent);
         let (status, phase) =
             card_status(agent, card_row, child_card(source, agent), demotion, now);
@@ -355,7 +366,7 @@ impl<'a> AgentRow<'a> {
             lane: lane_label(agent),
             team: agent.team.clone(),
             role: agent.role.clone(),
-            parent: parent_agent.map(|parent| paste_address(parent, source, reader)),
+            parent: parent_agent.map(|parent| roster.paste_address(parent, reader)),
             status,
             phase,
             error: agent
@@ -452,11 +463,14 @@ pub fn live_rows<'a>(
     reader: &AddressContext,
     now: Timestamp,
 ) -> Vec<AgentRow<'a>> {
-    addressable_agents(snapshot)
-        .into_iter()
+    let roster = Roster::of(snapshot);
+    roster
+        .candidates
+        .iter()
+        .copied()
         .filter(|agent| agent.is_launched_child() || pane_bound(snapshot, agent))
         .filter(|agent| agent.parent_agent_id.is_none() || agent.is_launched_child())
-        .map(|agent| AgentRow::of(agent, snapshot, demotion, reader, now))
+        .map(|agent| AgentRow::live_in(agent, &roster, demotion, reader, now))
         .collect()
 }
 
@@ -472,8 +486,12 @@ pub fn closed_rows<'a>(
     reader: &AddressContext,
     now: Timestamp,
 ) -> Vec<AgentRow<'a>> {
-    addressable_agents(audit)
-        .into_iter()
+    let roster = Roster::of(audit);
+    let live_roster = Roster::of(live);
+    roster
+        .candidates
+        .iter()
+        .copied()
         .filter(|agent| agent.parent_agent_id.is_none() || agent.is_launched_child())
         .filter(|agent| {
             let same =
@@ -486,8 +504,8 @@ pub fn closed_rows<'a>(
                 && !listed.iter().any(|row| same(row.agent))
         })
         .map(|agent| {
-            let handle = closed_address(agent, audit, live, reader);
-            AgentRow::new(agent, audit, handle, false, demotion, reader, now)
+            let handle = closed_address(agent, &roster, &live_roster, reader);
+            AgentRow::new(agent, &roster, handle, false, demotion, reader, now)
         })
         .collect()
 }
@@ -496,16 +514,17 @@ pub fn closed_rows<'a>(
 /// live agent and the id resolves in Audit to exactly this agent.
 fn closed_address(
     agent: &AgentState,
-    audit: &SidebarSnapshot,
-    live: &SidebarSnapshot,
+    audit: &Roster<'_>,
+    live: &Roster<'_>,
     reader: &AddressContext,
 ) -> String {
-    let short = paste_address(agent, audit, reader);
-    if resolve_many(live, &short, None, reader).is_err() || agent.agent_id.is_provisional() {
+    let short = audit.paste_address(agent, reader);
+    if live.resolve_many(&short, None, reader).is_err() || agent.agent_id.is_provisional() {
         return short;
     }
     let by_id = format!("@{}", agent.agent_id);
-    let exact = resolve_many(audit, &by_id, None, reader)
+    let exact = audit
+        .resolve_many(&by_id, None, reader)
         .is_ok_and(|matches| matches.len() == 1 && std::ptr::eq(matches[0], agent));
     if exact { by_id } else { short }
 }
