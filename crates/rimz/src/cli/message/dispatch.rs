@@ -92,10 +92,15 @@ pub(super) fn send_message_to(
         Recipients::Selected(selected) => (String::new(), selected),
     };
     let selecting = !selected.is_empty();
-    let selected = selected
-        .into_iter()
-        .map(|target| self_address(&ctx, target))
-        .collect::<Result<Vec<_>>>()?;
+    let mut unresolved = Vec::new();
+    let mut resolved = Vec::new();
+    for target in selected {
+        match self_address(&ctx, target)? {
+            Ok(target) => resolved.push(target),
+            Err(miss) => unresolved.push(miss),
+        }
+    }
+    let selected = resolved;
     let target = if target == "@me" {
         let snapshot = ctx.cached_snapshot()?;
         let agent = crate::cli::resolve_agent_one(
@@ -148,10 +153,16 @@ pub(super) fn send_message_to(
         create,
     };
     if selecting {
+        let mut out = crate::cli::render::out();
+        for (address, reason) in &unresolved {
+            writeln!(out, "error {address}: {reason}")?;
+        }
+        if selected.is_empty() {
+            return crate::cli::select::batch_result(unresolved.len());
+        }
         let result = rimz::message::dispatch::dispatch(workspace, store, request())
             .map_err(|err| map_dispatch_err(err, &ctx))?;
         // A reporter can refuse on a skip, so it runs after the misses print.
-        let mut out = crate::cli::render::out();
         for (address, reason) in &result.missed {
             writeln!(out, "error {address}: {reason}")?;
         }
@@ -163,7 +174,7 @@ pub(super) fn send_message_to(
                 &result.compacted,
             )?;
         }
-        return crate::cli::select::batch_result(result.missed.len());
+        return crate::cli::select::batch_result(unresolved.len() + result.missed.len());
     }
     let result = match rimz::message::dispatch::dispatch(workspace, store, request()) {
         Ok(result) => result,
@@ -189,21 +200,30 @@ pub(super) fn send_message_to(
 }
 
 /// A stdin `@me` line as the caller's own address, which the library resolver
-/// cannot read, pinned to the caller; any other line as it came.
+/// cannot read, pinned to the caller; any other line as it came. An `@me` that
+/// names no caller is that line's miss: its address and the resolver's reason.
 fn self_address(
     ctx: &Ctx,
     target: crate::cli::select::Selected,
-) -> Result<crate::cli::select::Selected> {
+) -> Result<Result<crate::cli::select::Selected, (String, String)>> {
     if target.address != "@me" {
-        return Ok(target);
+        return Ok(Ok(target));
     }
     let snapshot = ctx.cached_snapshot()?;
-    let agent =
-        crate::cli::resolve_agent_one(&ctx.store, &snapshot, "@me", None, &ctx.address_context())?;
-    Ok(crate::cli::select::Selected {
+    let agent = match crate::cli::resolve_agent_one(
+        &ctx.store,
+        &snapshot,
+        "@me",
+        None,
+        &ctx.address_context(),
+    ) {
+        Ok(agent) => agent,
+        Err(err) => return Ok(Err((target.address, format!("{err:#}")))),
+    };
+    Ok(Ok(crate::cli::select::Selected {
         address: format!("@{}", agent.agent_id),
         agent: Some((agent.kind.clone(), agent.agent_id.clone())),
-    })
+    }))
 }
 
 /// Refuse `--reply-wanted` where no header would carry the mark: `--create` may
