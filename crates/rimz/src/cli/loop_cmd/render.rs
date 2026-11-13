@@ -1672,39 +1672,47 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ShowThrottle::Off
     };
     let runs_workflows = runs_workflows(&task);
-    let (workflow_runs, capacity, records) = if runs_workflows {
-        let (paths, records) = workflow_records(&root)?;
-        let capacity = list::capacity_waits(&records, &args.name, &root)
-            .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
-            .collect();
-        let specs = crate::cli::workflow_view::sealed_specs(&paths, &records);
-        let mut rows = list::WorkflowRunRow::for_show(
-            &records,
-            &args.name,
-            &root,
-            workflow_ledger
-                .tasks
-                .get(&args.name)
-                .unwrap_or(&BTreeMap::new()),
-            &specs,
-            now_zoned.timestamp(),
-        );
-        name_workflow_runs(&mut rows, &records, globals);
-        // LAST RUN reads its run's checks and attempts from the journal.
-        let detail =
-            detail_index(&history.fires).and_then(|index| history.fires[index].run_id.as_deref());
-        for row in rows
-            .iter_mut()
-            .filter(|row| Some(row.id.as_str()) == detail)
-        {
-            if let Some(record) = records.iter().find(|record| record.id == row.id) {
-                row.read_evidence(&paths, record);
-            }
-        }
-        (rows, capacity, records)
+    // Every row reads the room's runs, as `loop list` does: a row edited mid-run may no longer
+    // compile to a workflow while the run it started still goes.
+    let listed = if runs_workflows {
+        Some(workflow_records(&root)?)
     } else {
-        (Vec::new(), BTreeMap::new(), Vec::new())
+        workflow_records(&root).ok()
     };
+    let (workflow_runs, capacity) =
+        if let Some((paths, records)) = listed.as_ref().filter(|_| runs_workflows) {
+            let capacity = list::capacity_waits(records, &args.name, &root)
+                .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
+                .collect();
+            let specs = crate::cli::workflow_view::sealed_specs(paths, records);
+            let mut rows = list::WorkflowRunRow::for_show(
+                records,
+                &args.name,
+                &root,
+                workflow_ledger
+                    .tasks
+                    .get(&args.name)
+                    .unwrap_or(&BTreeMap::new()),
+                &specs,
+                now_zoned.timestamp(),
+            );
+            name_workflow_runs(&mut rows, records, globals);
+            // LAST RUN reads its run's checks and attempts from the journal.
+            let detail = detail_index(&history.fires)
+                .and_then(|index| history.fires[index].run_id.as_deref());
+            for row in rows
+                .iter_mut()
+                .filter(|row| Some(row.id.as_str()) == detail)
+            {
+                if let Some(record) = records.iter().find(|record| record.id == row.id) {
+                    row.read_evidence(paths, record);
+                }
+            }
+            (rows, capacity)
+        } else {
+            (Vec::new(), BTreeMap::new())
+        };
+    let records = listed.map(|(_, records)| records).unwrap_or_default();
     let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
     let in_progress = attention::run_in_progress(in_flight, &records, &args.name, &root, acting_at);
     let view = ShowView {
@@ -2356,23 +2364,27 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     if entry.is_none() && history.records.is_empty() && in_flight.is_none() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
-    let workflow_root = match &task {
-        Some(task) => runs_workflows(task).then(|| task.entry().resolved_root()),
-        None => root.clone(),
+    // Every row reads the room's runs, as `loop list` does; only a workflow row, or a task
+    // with no row, joins them to its history.
+    let joins_runs = task.as_ref().is_none_or(runs_workflows);
+    let records = match root.as_deref() {
+        Some(root) if joins_runs => Some(workflow_records(root)?),
+        Some(root) => workflow_records(root).ok(),
+        None => None,
     };
-    let records = workflow_root.as_deref().map(workflow_records).transpose()?;
     let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
     let running = attention::run_in_progress(
         in_flight,
         records.as_ref().map_or(&[][..], |(_, records)| records),
         &args.name,
-        workflow_root.as_deref().unwrap_or(Path::new("")),
+        root.as_deref().unwrap_or(Path::new("")),
         acting_at,
     )
     .filter(|_| !args.failed)
     .and_then(|run| in_progress_text(&run, Timestamp::now()));
-    let workflow_runs =
-        records.map(|(paths, records)| workflow_log_runs(&paths, records, &history.fires, globals));
+    let workflow_runs = records
+        .filter(|_| joins_runs)
+        .map(|(paths, records)| workflow_log_runs(&paths, records, &history.fires, globals));
     let mut out = ui::out();
     let attribution = refused_fire_attribution(&history.fires);
     let shown = write_log_records(

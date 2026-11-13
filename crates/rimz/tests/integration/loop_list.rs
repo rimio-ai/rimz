@@ -2765,6 +2765,70 @@ fn show_logs_and_watch_read_a_lock_free_run_as_list_does() {
     );
 }
 
+/// A row edited mid-run so it no longer compiles to a workflow (here `workflow` beside
+/// `agent`, or an unguarded `--wait`) still has the run it started: `loop show` text and
+/// `--json` and `loop logs` read it as `loop list` does.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_row_edited_mid_run_reads_its_run_alike_in_list_show_and_logs() {
+    let env = Env::new();
+    let root = env.project_root.clone();
+    env.record(&root);
+    let invalid = TaskEntry {
+        workflow: Some("review".into()),
+        agent: Some("claude".into()),
+        ..task(&root)
+    };
+    let wait = TaskEntry {
+        check: None,
+        wait: Some(TaskTarget {
+            kind: AgentKind::new_unchecked("codex"),
+            session: "session".into(),
+            handle: "coder".into(),
+        }),
+        ..task(&root)
+    };
+    config(
+        &env,
+        BTreeMap::from([("invalid".to_owned(), invalid), ("wait".to_owned(), wait)]),
+    );
+    let created = Timestamp::now() - SignedDuration::from_mins(2);
+    write_loop_run_records(
+        &env,
+        &["invalid", "wait"].map(|name| record(name, &root, LoopRunResult::Failed, 5)),
+    );
+    for name in ["invalid", "wait"] {
+        seed_room_run_at(&env, &root, name, ("active", created), None, None);
+    }
+    let list: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--all", "--json"])).unwrap();
+    for name in ["invalid", "wait"] {
+        let row = list["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|room| room["tasks"].as_array().unwrap())
+            .find(|row| row["name"] == name)
+            .unwrap_or_else(|| panic!("{name}: not listed\n{list:#}"));
+        assert_eq!(row["state"], "running", "{name}: {row}");
+        let show: serde_json::Value =
+            serde_json::from_str(&loop_ok(&env, &["loop", "show", name, "--json"])).unwrap();
+        assert_eq!(
+            show["running"],
+            json!({"pid": null, "started_at": row["running_since"], "run_id": null}),
+            "{name}: {row}"
+        );
+        let text = loop_ok(&env, &["loop", "show", name]);
+        assert!(
+            text.lines().next().unwrap().ends_with(" · ▸ running 2m"),
+            "{name}:\n{text}"
+        );
+        assert!(!text.contains("failing"), "{name}:\n{text}");
+        let logs = loop_ok(&env, &["loop", "logs", name]);
+        assert!(logs.trim_end().ends_with("▸ running 2m"), "{name}:\n{logs}");
+    }
+}
+
 /// The re-exec half: read each room's task through the library reader, with the run-log
 /// stats of the library's own fold over the same log.
 #[cfg(target_os = "linux")]
