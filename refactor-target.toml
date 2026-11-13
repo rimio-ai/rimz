@@ -401,7 +401,9 @@ upward-dependencies = ["address"]
 # a spent window for idle and smart compaction and compact-first (+2).
 # CreditsCache::current and paid_usage_carries share the current-entry filter with the spend ladder (+2).
 # emblems::shipped_logo gives the theme core each built-in's embedded SVG logo (+1).
-surface-budget = 1265
+# RedeemRefusal, RedeemRefusal::of, ResetCredits::refusal and ResetGrant::clears_window are the one
+# claim rule the Claude redemption hold and the cached credits read (+4).
+surface-budget = 1269
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -9599,6 +9601,11 @@ reason = "The shared credits reader owns its evidence lifetime; sidebar tests pi
 kind = "item"
 key = "agents::credits::ResetGrant"
 reason = "One provider grant inside ResetCredits, stored in credits.json and printed by the binary's accounts renderers, whose tests build it."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::RedeemRefusal"
+reason = "The provider's claim refusal over a reset grant: the Claude adapter's redemption hold and the cached credits read the one rule."
 
 [[verdict]]
 kind = "item"

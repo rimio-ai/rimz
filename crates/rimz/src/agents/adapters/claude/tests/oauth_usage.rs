@@ -555,6 +555,11 @@ fn redemption_holds_follow_the_provider_selected_grant_and_precedence() {
             .as_object_mut()
             .unwrap()
             .insert(field.to_owned(), value);
+        let cached = parse_usage_response(&body.to_string())
+            .unwrap()
+            .reset_credits
+            .unwrap();
+        assert!(cached.refusal(false, now).is_some(), "cached {pointer}");
         let usage: UsageWire = serde_json::from_value(body).unwrap();
         let hold = redemption_hold(&usage, now).expect(pointer);
         assert_eq!(hold.code, code, "{pointer}");
@@ -568,6 +573,19 @@ fn redemption_holds_follow_the_provider_selected_grant_and_precedence() {
         redemption_hold(&usage, now).unwrap().reason,
         "usable only while at the limit"
     );
+    let cached = parse_usage_response(&body.to_string())
+        .unwrap()
+        .reset_credits
+        .unwrap();
+    assert_eq!(
+        cached.refusal(false, now),
+        Some(crate::agents::credits::RedeemRefusal::LimitOnly)
+    );
+    assert_eq!(
+        cached.refusal(true, now),
+        Some(crate::agents::credits::RedeemRefusal::NotUsable),
+        "a stale usable flag still refuses at the limit"
+    );
     body["cedar_ember"]["eligible"] = false.into();
     body["cedar_ember"]["ineligible_reason"] = "surface".into();
     body["cedar_ember"]["cooldown_until"] = "2026-09-27T12:00:00Z".into();
@@ -577,8 +595,59 @@ fn redemption_holds_follow_the_provider_selected_grant_and_precedence() {
     assert!(hold.reason.contains("surface"));
     let mut body = base;
     body["cedar_ember"]["cooldown_until"] = "2026-09-25T12:00:00Z".into();
+    let cached = parse_usage_response(&body.to_string())
+        .unwrap()
+        .reset_credits
+        .unwrap();
+    assert_eq!(
+        cached.refusal(false, now),
+        None,
+        "the cache accepts as the provider does"
+    );
     let usage: UsageWire = serde_json::from_value(body).unwrap();
     assert!(redemption_hold(&usage, now).is_none());
+}
+
+#[test]
+fn reset_credits_keep_the_selected_grant_cooldown_and_usability() {
+    let usage = parse_usage_response(
+        r#"{"cedar_ember":{"eligible":true,"at_limit":false,"next_grant_id":"b",
+            "cooldown_until":"2026-09-26T13:00:00Z","grants":[
+            {"id":"a","resets_left":1,"usable_now":true,"clears":["five_hour"]},
+            {"id":"b","resets_left":2,"usable_now":false,"use_requires_limit":true,
+             "ends_at":"2026-10-01T00:00:00Z","clears":["seven_day"]}
+        ]}}"#,
+    )
+    .unwrap();
+    let credits = usage.reset_credits.unwrap();
+    let cooldown = "2026-09-26T13:00:00Z".parse::<Timestamp>().unwrap();
+    assert_eq!(
+        credits.grants,
+        vec![
+            crate::agents::ResetGrant {
+                count: 2,
+                expiry: Some("2026-10-01T00:00:00Z".parse().unwrap()),
+                clears: vec!["seven_day".to_owned()],
+                selected: true,
+                cooldown_until: Some(cooldown),
+                use_requires_limit: true,
+                ..Default::default()
+            },
+            crate::agents::ResetGrant {
+                count: 1,
+                clears: vec!["five_hour".to_owned()],
+                usable_now: true,
+                ..Default::default()
+            },
+        ]
+    );
+    let selected = &credits.grants[0];
+    assert!(selected.clears_window(10_080) && !selected.clears_window(300));
+    let now = "2026-09-26T12:00:00Z".parse::<Timestamp>().unwrap();
+    assert_eq!(
+        credits.refusal(true, now),
+        Some(crate::agents::credits::RedeemRefusal::Cooldown(cooldown))
+    );
 }
 
 #[test]
@@ -1033,6 +1102,8 @@ fn limit_reset_grants_keep_the_provider_label_clears_and_deadline() {
         ],
         paused: false,
         starts_at: Some(starts_at.parse().unwrap()),
+        usable_now: true,
+        ..Default::default()
     };
     assert_eq!(
         reset.grants,
@@ -1050,6 +1121,8 @@ fn limit_reset_grants_keep_the_provider_label_clears_and_deadline() {
                 ],
                 paused: false,
                 starts_at: Some("2026-11-09T18:00:00Z".parse().unwrap()),
+                usable_now: true,
+                ..Default::default()
             },
             free_grant(2, "2026-11-03T02:37:00Z"),
             free_grant(1, "2026-10-21T00:45:00Z"),

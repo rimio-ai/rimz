@@ -28,7 +28,7 @@ use crate::agents::account::{
 use crate::agents::capabilities::{AccountProfileProbe, LaunchCapability};
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{
-    AccountUsageFault, OAuthHttpErr, oauth_http_get, oauth_http_get_once,
+    AccountUsageFault, OAuthHttpErr, RedeemRefusal, oauth_http_get, oauth_http_get_once,
     oauth_http_post_json_once, trusted_usage_url, url_host,
 };
 use crate::agents::payload::non_empty_trimmed;
@@ -183,37 +183,31 @@ fn redemption_hold(usage: &UsageWire, now: Timestamp) -> Option<RedeemHold> {
             ),
         );
     };
-    if let Some(until) = parse_reset(resets.cooldown_until.as_deref()).filter(|until| *until > now)
-    {
-        return held(
-            RedemptionCode::Cooldown,
-            format!("cooldown until {}", format_local_timestamp(until)),
-        );
-    }
-    let Some(grant) = resets.next_grant_id.as_deref().and_then(|id| {
+    let selected = resets.next_grant_id.as_deref().and_then(|id| {
         resets
             .grants
             .iter()
             .find(|grant| grant.id.as_deref() == Some(id))
-    }) else {
-        return held(RedemptionCode::NoCredit, "no grant selected".to_owned());
-    };
-    let reason = if grant.paused {
-        "selected grant is paused"
-    } else if grant.resets_left == 0 {
-        "selected grant has no resets left"
-    } else if parse_reset(grant.starts_at.as_deref()).is_some_and(|start| start > now) {
-        "selected grant has not started"
-    } else if parse_reset(grant.ends_at.as_deref()).is_some_and(|end| end < now) {
-        "selected grant has expired"
-    } else if !grant.usable_now {
-        if grant.use_requires_limit && !resets.at_limit {
-            "usable only while at the limit"
-        } else {
-            "selected grant is not usable now"
+    });
+    let reason = match RedeemRefusal::of(
+        parse_reset(resets.cooldown_until.as_deref()),
+        selected.map(ResetGrantWire::to_grant).as_ref(),
+        resets.at_limit,
+        now,
+    )? {
+        RedeemRefusal::Cooldown(until) => {
+            return held(
+                RedemptionCode::Cooldown,
+                format!("cooldown until {}", format_local_timestamp(until)),
+            );
         }
-    } else {
-        return None;
+        RedeemRefusal::NoGrantSelected => "no grant selected",
+        RedeemRefusal::Paused => "selected grant is paused",
+        RedeemRefusal::Empty => "selected grant has no resets left",
+        RedeemRefusal::NotStarted => "selected grant has not started",
+        RedeemRefusal::Expired => "selected grant has expired",
+        RedeemRefusal::LimitOnly => "usable only while at the limit",
+        RedeemRefusal::NotUsable => "selected grant is not usable now",
     };
     held(RedemptionCode::NoCredit, reason.to_owned())
 }
@@ -294,14 +288,17 @@ struct ResetGrantWire {
 }
 
 impl ResetGrantWire {
-    fn into_grant(self) -> crate::agents::ResetGrant {
+    fn to_grant(&self) -> crate::agents::ResetGrant {
         crate::agents::ResetGrant {
             count: self.resets_left,
             expiry: parse_reset(self.ends_at.as_deref()),
-            label: self.label,
-            clears: self.clears,
+            label: self.label.clone(),
+            clears: self.clears.clone(),
             paused: self.paused,
             starts_at: parse_reset(self.starts_at.as_deref()),
+            usable_now: self.usable_now,
+            use_requires_limit: self.use_requires_limit,
+            ..Default::default()
         }
     }
 }
@@ -805,19 +802,23 @@ fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
 
 impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
-        let grants = self
-            .cedar_ember
-            .filter(|resets| resets.eligible)
-            .map(|resets| resets.grants)
-            .unwrap_or_default()
-            .into_iter()
-            .map(ResetGrantWire::into_grant)
-            .collect();
+        let resets = self.cedar_ember.filter(|resets| resets.eligible);
+        let grants = resets.iter().flat_map(|resets| {
+            resets.grants.iter().map(|grant| {
+                let selected = grant.id.is_some() && grant.id == resets.next_grant_id;
+                crate::agents::ResetGrant {
+                    selected,
+                    cooldown_until: parse_reset(resets.cooldown_until.as_deref())
+                        .filter(|_| selected),
+                    ..grant.to_grant()
+                }
+            })
+        });
         AccountUsageSnapshot {
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day, self.limits),
             extra_credits: collect_extra_usage(self.extra_usage),
             reset_credits: Some(crate::agents::ResetCredits::from_grants(
-                grants,
+                grants.collect(),
                 crate::agents::RedeemEffect::KeepsSchedule,
             )),
             ..Default::default()

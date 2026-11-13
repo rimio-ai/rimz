@@ -74,6 +74,35 @@ fn reset_credits_serde_keeps_old_caches_compatible_and_adds_expiries() {
             ]
         })
     );
+    assert_eq!(
+        old_build.refusal(true, first),
+        Some(RedeemRefusal::NoGrantSelected),
+        "a grant cached before the claim facts is never claimable"
+    );
+
+    let claimable = ResetGrant {
+        count: 1,
+        selected: true,
+        cooldown_until: Some(first),
+        usable_now: true,
+        use_requires_limit: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&claimable).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "count": 1,
+            "selected": true,
+            "cooldown_until": "2026-07-06T06:30:00Z",
+            "usable_now": true,
+            "use_requires_limit": true
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ResetGrant>(json).unwrap(),
+        claimable
+    );
 }
 
 fn at(raw: &str) -> Timestamp {
