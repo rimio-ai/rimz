@@ -34,6 +34,7 @@ fn paths(room: &Room, id: &str) -> rimz::disk::paths::WorkflowPaths {
         .workflow(&id.parse().unwrap())
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn wait_for_advances_to_exit(env: &Env, id: &str) {
     let spec = rimz::testkit::sandbox::SandboxSpec {
         home_root: env.home_root.clone(),
@@ -183,6 +184,7 @@ fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
         })
         .unwrap();
     assert_eq!(message.status, rimz::store::message::MessageStatus::Sent);
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     fs::write(paths(&room, &id).work.join("close"), "").unwrap();
     room.hook(
@@ -191,6 +193,7 @@ fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
         json!({"hook_event_name":"UserPromptSubmit", "prompt":"Live workflow probe"}),
     );
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     assert_eq!(
         rimz::store::message::read_status(store.paths(), &message.message_id).unwrap(),
@@ -261,6 +264,7 @@ fn restart_after_pending_push(continued: bool) {
         rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
         Some(rimz::store::message::MessageStatus::Sent),
     );
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     let mut args = vec!["workflow", "restart", &id];
     if continued {
@@ -352,6 +356,7 @@ fn restart_abandons_an_inflight_until_answer_before_relaunching() {
         owner.id(),
         json!({"hook_event_name":"UserPromptSubmit"}),
     );
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     let socket = room.env.runtime_root.join("restart-result.sock");
     let listener = UnixListener::bind(&socket).unwrap();
@@ -427,6 +432,7 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     let (id, run) = room.launch();
     fs::write(paths(&room, &id).work.join("close"), "").unwrap();
     opened_turn(&room, &id, &run);
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     let socket = room.env.runtime_root.join("until-result.sock");
     let listener = UnixListener::bind(&socket).unwrap();
@@ -453,6 +459,7 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     assert!(events(&value, "attempt").is_empty(), "{value:#}");
     assert_eq!(value["record"]["node"], "build");
     waiting.write_all(&[1]).unwrap();
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     assert_eq!(
         events(&show(&room.env, &id), "evaluation"),
@@ -486,6 +493,7 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     .unwrap();
     let (id, run) = room.launch();
     opened_turn(&room, &id, &run);
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     let socket = room.env.runtime_root.join("until-context.sock");
     let listener = UnixListener::bind(&socket).unwrap();
@@ -613,6 +621,7 @@ fn delayed_close_views(target: &str) {
             .unwrap(),
     );
     until(&room.env, &id, |value| !events(value, "wake").is_empty());
+    #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
     success(
         room.command(&["workflow", "advance", &id])

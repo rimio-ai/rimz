@@ -81,6 +81,7 @@ fn cancel_during_restart_keeps_the_terminal_history_copy() {
         r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
     )
     .unwrap();
+    #[cfg(target_os = "linux")]
     super::until::wait_for_advances_to_exit(&room.env, &id);
     let state = room.env.state_path_for(&room.env.project_root);
     let paths = state.workflow(&id.parse().unwrap());

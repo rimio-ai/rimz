@@ -9199,6 +9199,7 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
         let before = read_loop_run_records(&env).len();
         loop_ok(&env, &["loop", "fire", "nightly"]);
         reports.push(wait_for_loop_report_after(&env, "nightly", before));
+        #[cfg(target_os = "linux")]
         wait_for_fire_tree_helpers(&env);
     }
 
@@ -9299,6 +9300,7 @@ fn a_declined_guard_in_a_fresh_tree_leaves_no_tree_behind() {
         std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
         tree.display().to_string()
     );
+    #[cfg(target_os = "linux")]
     wait_for_fire_tree_helpers(&env);
     assert!(!tree.exists());
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
@@ -9374,6 +9376,7 @@ fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
     std::fs::write(&release, "").unwrap();
     let report = wait_for_loop_report(&env, "nightly");
     assert_eq!(report.result, LoopRunResult::Completed);
+    #[cfg(target_os = "linux")]
     wait_for_fire_tree_helpers(&env);
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
 }
@@ -9440,6 +9443,7 @@ fn a_declined_run_the_backstop_reports_removes_its_fresh_tree() {
         (report.result, report.acted, report.checkout.as_deref()),
         (LoopRunResult::Failed, Some(false), Some(root.as_path()))
     );
+    #[cfg(target_os = "linux")]
     wait_for_fire_tree_helpers(&env);
     assert!(!tree.exists());
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
@@ -9530,6 +9534,14 @@ impl LaunchedTurn {
             .expect("fire the launched turn");
         assert!(output.status.success(), "{output:?}");
         let report = wait_for_loop_report_after(env, task, before);
+        #[cfg(target_os = "linux")]
+        Self::wait_for_wrappers(env);
+        (output, report)
+    }
+
+    /// Wait for the fire's pane wrapper and its tree's cleanup helpers to exit.
+    #[cfg(target_os = "linux")]
+    fn wait_for_wrappers(env: &Env) {
         let spec = rimz::testkit::sandbox::SandboxSpec {
             home_root: env.home_root.clone(),
             runtime_root: env.runtime_root.clone(),
@@ -9544,7 +9556,6 @@ impl LaunchedTurn {
             std::thread::sleep(Duration::from_millis(50));
         }
         wait_for_fire_tree_helpers(env);
-        (output, report)
     }
 
     /// The row the fire wrote when its run started, which names the fire's tree.
@@ -12896,6 +12907,7 @@ fn wait_for_loop_reports_sent(env: &Env, task: &str, runs: usize) {
 }
 
 /// Wait for the detached `rimz worktree` helpers a fire tree's report spawned to exit.
+#[cfg(target_os = "linux")]
 fn wait_for_fire_tree_helpers(env: &Env) {
     let spec = rimz::testkit::sandbox::SandboxSpec {
         home_root: env.home_root.clone(),
