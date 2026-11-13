@@ -400,7 +400,8 @@ upward-dependencies = ["address"]
 # ProviderCapacity::compaction_blocked and login_compaction_blocked let usable paid extra usage carry
 # a spent window for idle and smart compaction and compact-first (+2).
 # CreditsCache::current and paid_usage_carries share the current-entry filter with the spend ladder (+2).
-surface-budget = 1264
+# emblems::shipped_logo gives the theme core each built-in's embedded SVG logo (+1).
+surface-budget = 1265
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -1105,7 +1106,8 @@ upward-dependencies = [
 # TaskWorktree and TaskEntry::task_worktree are the one reader of a task's worktree placement (+2).
 # RoomStyle's export lets setup's room-keys question name the stored style (+1).
 # ConsensusPieces carries the definitions' trait claims on MachineConfig to project teams' `consensus` (+1).
-surface-budget = 295
+# read_logo_file and parse_logo_svg give the sidebar's logo worker the checks config validates with (+2).
+surface-budget = 297
 
 [[verdict]]
 kind = "item"
@@ -2661,6 +2663,26 @@ reason = "The read-only, path-explicit verdict reader the sidebar calls once per
 kind = "item"
 key = "harness::schedule::run_log::ProcessExit"
 reason = "How a fire's process ended, shared by the verdict's failing reason and loop show's exit cells."
+
+[[verdict]]
+kind = "item"
+key = "theme::provider::ProviderLogo"
+reason = "A pixel logo source (user file or shipped SVG) the renderer interns and the sidebar's raster worker reads."
+
+[[verdict]]
+kind = "item"
+key = "theme::provider::resolve_provider_logos"
+reason = "One place decides the logo tier order beside provider identity: user logo, user ascii_art, shipped logo, emblem."
+
+[[verdict]]
+kind = "item"
+key = "config::logo::read_logo_file"
+reason = "The sidebar's logo worker reads a user logo under the same byte cap config validation applies."
+
+[[verdict]]
+kind = "item"
+key = "config::logo::parse_logo_svg"
+reason = "The sidebar's logo worker parses a user logo with the same untrusted-SVG options config validation applies."
 
 [[verdict]]
 kind = "item"
@@ -4699,7 +4721,8 @@ upward-dependencies = ["agents"]
 # fmt::held_start shares held ages and local give-up clocks across loop and workflow surfaces.
 # fmt::local_clock gives workflow and capacity instants one day-qualified clock (+1).
 # fmt::one_line and fmt::checkout_name move with the loop verdict's reason text out of the CLI, whose copies delegate (+2).
-surface-budget = 43
+# ProviderLogo and resolve_provider_logos put the logo tier order beside provider identity (+2).
+surface-budget = 45
 
 [[verdict]]
 kind = "item"
@@ -10464,6 +10487,11 @@ reason = "Emblem's public field tints: Vec<EmblemTint> (emblems.rs:21-26) floors
 kind = "item"
 key = "agents::emblems::emblem_for"
 reason = "Scenario presets, the theme core, and renderer tests resolve emblems inside the library; binary preview callers are retired."
+
+[[verdict]]
+kind = "item"
+key = "agents::emblems::shipped_logo"
+reason = "The theme core's logo tiers and the sidebar's raster worker read the embedded SVG for a built-in kind."
 
 [[verdict]]
 kind = "item"

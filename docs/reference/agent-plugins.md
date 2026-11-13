@@ -188,7 +188,7 @@ Keys are kebab-case. RimZ ignores keys it does not recognise in every table, so 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `emblem` | the shared fallback emblem | Short text shown as the agent's emblem. |
+| `emblem` | the shared fallback emblem | Short text shown as the agent's emblem. A plugin ships no pixel logo; a user's `[theme.providers.<kind>] logo` can give it one. |
 | `color` | `141` | Terminal 256-color index. |
 | `color-rgb` | `[175, 135, 255]` | Truecolor value. |
 

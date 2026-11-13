@@ -304,6 +304,46 @@ fn slot_snapshot() -> crate::store::snapshot::SidebarSnapshot {
     snapshot
 }
 
+/// The slot dashboard without the pet, whose block holds the emblem column at
+/// this width, with an emblem and a truecolor brand: it draws the codex logo.
+fn logo_snapshot() -> crate::store::snapshot::SidebarSnapshot {
+    let mut snapshot = slot_snapshot();
+    snapshot.theme.pets.enabled = false;
+    let panel = &mut snapshot.providers[0];
+    panel.art = crate::agents::emblem_for("codex").lines;
+    panel.color_rgb = Some((0x10, 0xa3, 0x7f));
+    snapshot
+}
+
+/// Paint until the logo's mark has landed and the frame draws it.
+fn paint_landed_logo(
+    painter: &mut paint::FramePainter,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    ui: &mut UiState,
+    now: Instant,
+) -> (SlotFrame, u32) {
+    paint_slot_frame(painter, snapshot, ui, ROUTED, now);
+    let pixels = ui.meter_pixels.as_mut().expect("meter pixels");
+    assert!(pixels.logos.settle(std::time::Duration::from_secs(10)));
+    let frame = paint_slot_frame(painter, snapshot, ui, ROUTED, now);
+    let logo = frame
+        .placeholders()
+        .map(|(_, id)| id)
+        .find(|id| (0x520080..0x5200c0).contains(id))
+        .expect("the codex logo is drawn");
+    (frame, logo)
+}
+
+fn transmits(frame: &SlotFrame, image_id: u32) -> usize {
+    kitty_commands(frame.bytes.as_bytes())
+        .into_iter()
+        .filter(|command| {
+            command.get("a").is_some_and(|action| action == "t")
+                && command.get("i") == Some(&image_id.to_string())
+        })
+        .count()
+}
+
 fn slot_painter(
     pool: &crate::disk::paths::RuntimePaths,
     caps: PixelRenderCaps,
@@ -350,6 +390,19 @@ impl SlotFrame {
             .collect()
     }
 
+    /// The first row whose text holds `needle`.
+    fn row_of(&self, needle: &str) -> Option<u16> {
+        let rows = self.cells.iter().map(|((_, y), ..)| *y).max()?;
+        (0..=rows).find(|row| {
+            self.cells
+                .iter()
+                .filter(|((_, y), ..)| y == row)
+                .map(|(_, symbol, _)| symbol.as_str())
+                .collect::<String>()
+                .contains(needle)
+        })
+    }
+
     fn symbol(&self, at: (u16, u16)) -> &str {
         &self.cells.iter().find(|(cell, ..)| *cell == at).unwrap().1
     }
@@ -373,10 +426,21 @@ fn paint_slot_frame(
     kind: paint::PaintKind<'_>,
     now: Instant,
 ) -> SlotFrame {
+    paint_slot_frame_wide(painter, snapshot, ui, kind, now, 44)
+}
+
+fn paint_slot_frame_wide(
+    painter: &mut paint::FramePainter,
+    snapshot: &crate::store::snapshot::SidebarSnapshot,
+    ui: &mut UiState,
+    kind: paint::PaintKind<'_>,
+    now: Instant,
+    width: u16,
+) -> SlotFrame {
     let mut view = render::ViewState::default();
     painter.refresh_view(ui, &view, snapshot, false, kind, now);
     let output = SharedBuffer::default();
-    let area = ratatui::layout::Rect::new(0, 0, 44, 40);
+    let area = ratatui::layout::Rect::new(0, 0, width, 40);
     let mut terminal = Terminal::with_options(
         PaneBackend::headless(output.clone()),
         ratatui::TerminalOptions {
@@ -649,12 +713,12 @@ fn a_denied_pane_warns_once_across_hidden_frames() {
 #[test]
 fn pixels_turned_off_return_the_slot_after_a_written_frame_of_deletes() {
     let (_root, pool) = slot_pool();
-    let mut snapshot = slot_snapshot();
+    let mut snapshot = logo_snapshot();
     let mut painter = slot_painter(&pool, FULL_CAPS);
     let mut ui = UiState::default();
     let now = Instant::now();
     let routed = ROUTED;
-    let pixels = paint_slot_frame(&mut painter, &snapshot, &mut ui, routed, now);
+    let (pixels, logo) = paint_landed_logo(&mut painter, &snapshot, &mut ui, now);
     assert!(pixels.bytes.contains("a=t"));
     snapshot.theme.display.pixel = crate::config::PixelMode::Off;
     let view = render::ViewState::default();
@@ -667,11 +731,113 @@ fn pixels_turned_off_return_the_slot_after_a_written_frame_of_deletes() {
     );
     let deletes = paint_slot_frame(&mut painter, &snapshot, &mut ui, routed, now);
     assert!(deletes.bytes.contains("a=d"), "the frame deletes the ids");
+    assert!(
+        deletes.bytes.contains(&format!("a=d,d=I,i={logo}")),
+        "the logo goes with the rest of the slot"
+    );
     assert!(painter.holds_slot());
     assert_eq!(first_free_base(&pool), Some(0x520200));
     painter.refresh_view(&mut ui, &view, &snapshot, false, routed, now);
     assert!(!painter.holds_slot(), "the next routed frame returns it");
     assert_eq!(first_free_base(&pool), Some(0x520000));
+}
+
+#[test]
+fn an_arrival_draws_a_landed_logo_in_its_first_frame_with_the_mirrors_rows() {
+    if crate::tui::no_color() {
+        return;
+    }
+    let (_root, pool) = slot_pool();
+    let mut snapshot = logo_snapshot();
+    snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
+        "codex",
+        [300, 10_080]
+            .map(|duration_mins| crate::agents::RateLimitWindow {
+                used_percentage: Some(50),
+                duration_mins: Some(duration_mins),
+                resets_at: Some(Timestamp::from_second(3600).unwrap()),
+                ..Default::default()
+            })
+            .to_vec(),
+    )];
+    let panel = &mut snapshot.providers[0];
+    panel.art = crate::agents::emblem_for("codex").lines;
+    panel.color_rgb = Some((0x10, 0xa3, 0x7f));
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let now = Instant::now();
+    let wide = |painter: &mut paint::FramePainter, ui: &mut UiState, kind| {
+        paint_slot_frame_wide(painter, &snapshot, ui, kind, now, 54)
+    };
+    let logo_in = |frame: &SlotFrame| {
+        frame
+            .placeholders()
+            .any(|(_, id)| (0x80..0xc0).contains(&((id - 0x520000) % 0x200)))
+    };
+    wide(&mut painter, &mut ui, ROUTED);
+    let pixels = ui.meter_pixels.as_mut().expect("meter pixels");
+    assert!(pixels.logos.settle(std::time::Duration::from_secs(10)));
+    let landed = wide(&mut painter, &mut ui, ROUTED);
+    assert!(logo_in(&landed), "the routed frame draws the logo");
+
+    let grant = mirror_queue::Grant::for_test(PaneId::from_parts(crate::MuxName::Tmux, "%1"));
+    let mirror = wide(&mut painter, &mut ui, paint::PaintKind::Mirror(&grant));
+    painter.release_slot(&mut ui);
+    painter.clear_slot_retry();
+    assert!(!mirror.graphics() && mirror.placeholders().next().is_none());
+    let emblem = crate::agents::emblem_for("codex").lines[1]
+        .trim()
+        .to_owned();
+    assert!(
+        mirror.row_of(&emblem).is_some(),
+        "the mirror draws the text emblem"
+    );
+    let arrival = wide(&mut painter, &mut ui, ROUTED);
+    assert!(
+        logo_in(&arrival),
+        "the first routed frame after the retake draws the logo"
+    );
+    let unpermitted = wide(&mut painter, &mut ui, paint::PaintKind::Routed(None));
+    for (name, frame) in [("mirror", &mirror), ("unpermitted", &unpermitted)] {
+        for needle in ["Codex", "5h", "7d"] {
+            assert_eq!(
+                frame.row_of(needle),
+                arrival.row_of(needle),
+                "the {name} frame keeps {needle} on its arrival row"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_landed_logo_leaves_with_its_slot_on_permit_loss_and_teardown() {
+    if crate::tui::no_color() {
+        return;
+    }
+    let (_root, pool) = slot_pool();
+    let snapshot = logo_snapshot();
+    let now = Instant::now();
+
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    paint_landed_logo(&mut painter, &snapshot, &mut ui, now);
+    let unpermitted = paint::PaintKind::Routed(None);
+    let lost = paint_slot_frame(&mut painter, &snapshot, &mut ui, unpermitted, now);
+    assert!(!lost.graphics(), "no graphics without a permit");
+    assert_eq!(lost.placeholders().count(), 0, "no logo cell either");
+    assert!(!painter.holds_slot(), "the slot goes back unwritten");
+    assert_eq!(first_free_base(&pool), Some(0x520000));
+
+    let mut painter = slot_painter(&pool, FULL_CAPS);
+    let mut ui = UiState::default();
+    let (_, logo) = paint_landed_logo(&mut painter, &snapshot, &mut ui, now);
+    let mut teardown = Vec::new();
+    painter.clear(&mut teardown, Some(&PERMIT)).unwrap();
+    assert!(
+        String::from_utf8_lossy(&teardown).contains(&format!("a=d,d=I,i={logo}")),
+        "teardown deletes the logo"
+    );
+    assert!(!painter.holds_slot());
 }
 
 #[test]
@@ -1208,6 +1374,13 @@ fn dashboard_budget_bars_reach_the_visible_set_and_transmit_once() {
 
     let steady = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
     assert_eq!(transmitted(&steady), 0, "a resident bar is not resent");
+
+    let snapshot = logo_snapshot();
+    let (landed, logo) = paint_landed_logo(&mut painter, &snapshot, &mut ui, now);
+    assert_eq!(transmits(&landed, logo), 1, "the logo is transmitted once");
+    let steady = paint_slot_frame(&mut painter, &snapshot, &mut ui, ROUTED, now);
+    assert_eq!(transmits(&steady, logo), 0, "a resident logo is not resent");
+    assert!(steady.placeholders().any(|(_, id)| id == logo));
 }
 
 #[test]

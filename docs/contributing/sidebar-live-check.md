@@ -795,9 +795,9 @@ Four more traps cost a run each:
 
 ## Capture kitty graphics
 
-A held room draws cell bars, never pixel meters, pixel budget bars or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
+A held room draws cell bars and text emblems, never pixel meters, pixel budget bars, provider logos or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
 
-Start the room with `env -u NO_COLOR`: with `NO_COLOR` set, pets, meters and pixel budget bars are suppressed by design. Zellij renders pets, meters and budget bars on the cell tier only, so pixel checks are tmux-only.
+Start the room with `env -u NO_COLOR`: with `NO_COLOR` set, pets, meters, pixel budget bars and provider logos are suppressed by design. Zellij renders pets, meters, budget bars and provider emblems on the cell tier only, so pixel checks are tmux-only.
 
 A held room shows no pet until one is configured. To check pixel pets, turn one on in the room's theme file, `$ROOT/home/.rimz/theme.toml`, under its `[theme.pets]` table (pets are a theme setting, so a `[pets]` table in `config.toml` does nothing): set `enabled = true`, `glyphs = "pixel"`, and `pet` to the path of a local 1536x1872 PNG sheet, which avoids a network fetch. The running sidebar picks the change up within a few seconds.
 

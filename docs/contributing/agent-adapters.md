@@ -181,7 +181,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported), explicit `Unsupported` / `FullScan` / `PerPane` discovery mode with readers and cost/equivalence tests for `PerPane`
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
-- [ ] Curated art for the kind in `crates/rimz/src/agents/emblems.toml`
+- [ ] Curated art for the kind in `crates/rimz/src/agents/emblems.toml` · its logo in `crates/rimz/logos/<kind>.svg` on a transparent ground, marks without colors of their own drawn in `currentColor`, its source and license recorded in that directory's README, and an entry in `SHIPPED_LOGOS` in `crates/rimz/src/agents/emblems.rs`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed` · machine and login-home refusals through `install_blocker` · provider paths checked under the tmux-pinned and inherited pane env
 - [ ] Complete `wiring_input_paths` for detection, managed disabled/trust checks, and default models · optional pure `untracked_mode_fix` only for proven command-line gaps, with action-first fix text

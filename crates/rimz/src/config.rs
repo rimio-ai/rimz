@@ -44,6 +44,7 @@ mod gc;
 mod glyphs;
 mod harness;
 pub mod keys;
+mod logo;
 mod loop_;
 mod lsp;
 mod mux;
@@ -103,6 +104,7 @@ pub use harness::{
     CompactSeat, ConfiguredLifetime, DayCap, HarnessConfig, IdleCompact, KeepWarm, KeepWarmFields,
     KeepWarmPolicy, LifetimeSource,
 };
+pub(crate) use logo::{parse_logo_svg, read_logo_file};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
@@ -1112,11 +1114,12 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
     let theme_path = files.path(MachineConfigFileKind::Theme);
     match load_optional(&theme_path, parse_theme_text) {
         Ok(Some(theme)) => {
-            errors.extend(scheme::validate_theme(&theme).into_iter().map(|message| {
-                ConfigErr::Theme {
-                    path: theme_path.clone(),
-                    message,
-                }
+            let messages = scheme::validate_theme(&theme)
+                .into_iter()
+                .chain(logo::validate_logos(&theme));
+            errors.extend(messages.map(|message| ConfigErr::Theme {
+                path: theme_path.clone(),
+                message,
             }))
         }
         Ok(None) => {}

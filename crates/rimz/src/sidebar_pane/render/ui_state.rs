@@ -50,6 +50,9 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Pane-local context-meter interning state, persisted across frames so a
     /// quantized raster keeps its image id while ratatui diffs placeholders.
     pub(in crate::sidebar_pane) meter_pixels: Option<MeterPixels>,
+    /// Set for a frame drawn without image ids on a pane that draws logos once
+    /// it holds a slot, so each block keeps its logo's rows.
+    pub(in crate::sidebar_pane) logo_reserve: Option<crate::sidebar_pane::pixel::logo::LogoReserve>,
     pub(in crate::sidebar_pane) card_heights: super::heights::CardHeights,
     /// Renderer-local status for a successful fetch that the regression gate is
     /// holding behind the last good frame. It is display-only evidence for the

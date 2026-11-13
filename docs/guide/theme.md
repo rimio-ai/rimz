@@ -233,7 +233,7 @@ provider_list = ["claude", "codex", "all"]
 
 Sidebar width is the one setting here a running sidebar does not pick up. `width_percent`, `max_cols`, and `max_percent` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `<` and `>` resize it immediately and outrank the default percentage and column cap, but never `max_percent` ([sidebar](./sidebar.md#setting-the-width)).
 
-The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Its compaction end-stop shares the text wall's tone and position. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. The provider dashboard's budget bars follow the same rule: on that path each bar is one continuous slanted pixel bar in the cells of its `▰▱` text bar, and anywhere else, or when your theme overrides a mana glyph, it stays the text bar. Setting `pixel = "off"` opts out of the pixel meter, the pixel budget bars, and pixel pets.
+The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Its compaction end-stop shares the text wall's tone and position. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. The provider dashboard's budget bars follow the same rule: on that path each bar is one continuous slanted pixel bar in the cells of its `▰▱` text bar, and anywhere else, or when your theme overrides a mana glyph, it stays the text bar. Each dashboard block's emblem follows it too: on that path the provider's logo replaces the text emblem, and anywhere else the text emblem stays ([provider logos](#provider-logos)). Setting `pixel = "off"` opts out of the pixel meter, the pixel budget bars, the provider logos, and pixel pets.
 
 ### Meter color stops
 
@@ -299,7 +299,7 @@ max_cols = 140
 
 ## Provider styling
 
-`[theme.providers.<kind>]` restyles one provider's dashboard block over the built-in defaults: its display name, ASCII emblem, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code grey `#a0a0a0`). The brand color also styles agent titles in RimZ-owned tmux pane borders. Border colors update on the next room open, reattach, or `rimz reload`; newly opened windows take a changed theme after open, reattach, or sidebar reconcile refreshes their defaults. Set `[tmux] pane_border_status = "inherit"` to keep your tmux theme's labels instead.
+`[theme.providers.<kind>]` restyles one provider's dashboard block over the built-in defaults: its display name, ASCII emblem, pixel logo, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code grey `#a0a0a0`). The brand color also styles agent titles in RimZ-owned tmux pane borders. Border colors update on the next room open, reattach, or `rimz reload`; newly opened windows take a changed theme after open, reattach, or sidebar reconcile refreshes their defaults. Set `[tmux] pane_border_status = "inherit"` to keep your tmux theme's labels instead.
 
 ```toml
 [theme.providers.claude]
@@ -313,6 +313,21 @@ ascii_art = """
 ```
 
 `color` takes a palette role, a `#rrggbb` hex, or a raw index. Every field is optional, so a color override leaves the shipped art and its built-in tints intact; an `ascii_art` override paints your replacement in the single brand color. A provider RimZ ships art for uses its own emblem, and every other kind gets the shared fallback.
+
+### Provider logos
+
+Where the dashboard draws pixel budget bars (`pixel = "auto"`, truecolor, a kitty or Ghostty client, and a pane wide enough for the emblem column), each block draws its provider's logo in the emblem's place: a square mark four rows tall, centred on the block's detail lines. RimZ ships a logo for every built-in provider. Point `logo` at your own SVG to replace it:
+
+```toml
+[theme.providers.claude]
+logo = "~/.config/rimz/claude.svg"
+```
+
+The path is read as `theme.scheme`'s is, with `~` expanded; give it as an absolute or `~` path. The block picks the first of these that applies: your `logo`, then your `ascii_art` (a text emblem you set keeps the text emblem on the pixel path too), then the shipped logo, then the text emblem. A kind with no shipped logo, such as a plugin, keeps its emblem.
+
+`currentColor` in the SVG takes the provider's brand color as your theme resolves it, a `color` override included, and every other color in the file is drawn as written. The file is treated as untrusted: RimZ reads at most 256 KiB, loads no image, file, or URL the SVG names, and rasterizes it off the paint path. Until the image is ready the block shows the next choice in the list. A `logo` RimZ cannot read, that is over the cap, or that is not valid SVG warns at `rimz start` with the file and the cause, shows in `rimz doctor`, and the block draws as if `logo` were unset until you fix the file or remove the key.
+
+The sidebar reads the file when it first draws the logo, and again whenever a setting under `[theme]` changes or the sidebar restarts. An SVG rewritten in place at the same path keeps its old image until one of those happens; pointing `logo` at a new path picks up the new file at once.
 
 Which blocks appear and in what order is a [Display](#display) setting; how RimZ finds the providers to show is in [configuration → Provider dashboard](./configuration.md#provider-dashboard).
 

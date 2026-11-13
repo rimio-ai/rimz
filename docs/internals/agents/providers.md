@@ -134,7 +134,7 @@ Each panel field has one source:
 | `extra_credits`, `reset_credits` | the `credits.json` entry, or a local API spend projection |
 | `redeem_forecast` | [`project_redeem_forecasts`](../../../crates/rimz/src/harness/auto_redeem.rs) over the cached capacity and burn rate, only on a Codex panel carrying `reset_credits` ([Auto-redeem](#auto-redeem)) |
 | `spending` | the [`SpendTally`](./spending.md#what-reads-the-totals) of the login's history pool (`by_login`, keyed by pool) from `provider-spending.json`, so `default` and every shared login of a kind show one figure. `rimz accounts` falls back to the same entry when a login has no panel. Its table prints the default pool once in the heading and standalone pools in the spend column. Its JSON carries explicit pool identity and separates local-day spend from the headline. |
-| brand art and color | `AgentSpec` color and name, the embedded emblem catalog, and `[theme.providers.<kind>]` overrides. An unknown kind gets neutral grey ([theme.md](../../guide/theme.md#provider-styling)) |
+| brand art and color | `AgentSpec` color and name, the embedded emblem catalog, and `[theme.providers.<kind>]` overrides. An unknown kind gets neutral grey ([theme.md](../../guide/theme.md#provider-styling)). The pixel logo is not a panel field: the renderer resolves it from the kind and the theme ([provider logos](../../guide/theme.md#provider-logos)) |
 
 A color override keeps the catalog's tint runs, while an `ascii_art` override paints its art in the single brand color.
 
@@ -399,7 +399,7 @@ A new agent gets an account block and balance bars by filling these types from i
 1. Fill `AgentAccount` on the session's `AgentContext` from the transport, override `probe_account` for the idle case, or both.
 2. Fill `AgentRateLimits` from the transport: each window with `used_percentage`, a reset instant, and either `duration_mins` or a stable scope id and label.
 3. Where a read-only account-usage surface exists, implement `probe_account_usage`, declare `direct_account_usage`, and fill `ExtraCredits`. If the account identifies a sub-provider, override `has_quota_surface` for those with readable quotas (default `false`). Use `Disabled` only when the provider says paid usage is off.
-4. Set the spec's color and name, and add curated art to [`emblems.toml`](../../../crates/rimz/src/agents/emblems.toml). Every built-in must have art distinct from the fallback.
+4. Set the spec's color and name, add curated art to [`emblems.toml`](../../../crates/rimz/src/agents/emblems.toml), and add the provider's logo as `crates/rimz/logos/<kind>.svg` with its source in that directory's README. Every built-in must have art distinct from the fallback, and a logo on a transparent ground (`agents::emblems` tests both).
 5. Implement the transcript spend parser ([spending.md](./spending.md#per-provider-parsing)).
 6. Keep every step best-effort: a missing fact is an omitted label, a `v?`, or an unknown track, never an error.
 

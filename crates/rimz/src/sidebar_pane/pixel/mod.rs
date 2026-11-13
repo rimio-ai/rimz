@@ -1,5 +1,6 @@
 //! Shared kitty graphics transport for pane-resident pixel surfaces.
 
+pub(super) mod logo;
 pub(super) mod meter;
 mod pacing;
 mod permit;
@@ -25,6 +26,8 @@ const CHUNK_SIZE: usize = 4096;
 const MAX_PIXEL_SLOTS: usize = 256;
 const SLOT_ORIGIN: u32 = 0x520000;
 const SLOT_STRIDE: u32 = 0x200;
+pub(super) const LOGO_ID_OFFSET: u32 = 0x80;
+pub(super) const LOGO_ID_CAPACITY: u32 = 64;
 pub(super) const METER_ID_OFFSET: u32 = 0x100;
 pub(super) const METER_ID_CAPACITY: u32 = 256;
 pub(super) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
@@ -193,6 +196,28 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
         Ok(true)
     }
 
+    /// Delete every resident image whose key `keep` refuses.
+    pub(super) fn delete_absent<W: Write>(
+        &mut self,
+        writer: &mut W,
+        keep: impl Fn(&K) -> bool,
+        _permit: &ImagePermit,
+    ) -> io::Result<()> {
+        let mut gone = Vec::new();
+        self.images.retain(|key, resident| {
+            let kept = keep(key);
+            if !kept {
+                gone.push(resident.image_id);
+            }
+            kept
+        });
+        for image_id in gone {
+            self.resident_ids.remove(&image_id);
+            write_graphics(writer, &wrap_pixel_payload(&delete(image_id), self.wrap))?;
+        }
+        Ok(())
+    }
+
     /// Forget content without deleting terminal IDs, allowing in-place image
     /// replacement for a new pet and payload release while disabled.
     pub(super) fn invalidate(&mut self) {
@@ -279,6 +304,10 @@ pub fn write_synchronized_pixel_output<W: Write>(
 
 pub(super) fn meter_image_id(id_base: u32, index: u32) -> u32 {
     id_base + METER_ID_OFFSET + index
+}
+
+pub(super) fn logo_image_id(id_base: u32, index: u32) -> u32 {
+    id_base + LOGO_ID_OFFSET + index
 }
 
 pub(super) fn sprite_image_id(id_base: u32, sprite_index: usize) -> u32 {

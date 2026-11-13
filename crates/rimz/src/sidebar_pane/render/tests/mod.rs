@@ -153,6 +153,7 @@ impl<'a> Dashboard<'a> {
             zones: &crate::config::BudgetBarConfig::default(),
             now: fixed_now(),
             pixels,
+            logo_reserve: None,
         })
     }
 

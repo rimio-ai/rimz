@@ -739,6 +739,7 @@ fn dashboard_chrome(
         zones: &snapshot.theme.display.budget_bar,
         now: snapshot.now,
         pixels,
+        logo_reserve: ui.logo_reserve,
     });
     panel.map_lines(pad_chrome);
     panel.translate_columns(1);

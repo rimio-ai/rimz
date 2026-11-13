@@ -159,7 +159,7 @@ fn resolve_external_scheme_path(name_or_path: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-fn expand_home(path: &Path) -> PathBuf {
+pub(super) fn expand_home(path: &Path) -> PathBuf {
     let raw = path.as_os_str().to_string_lossy();
     if raw == "~" {
         return std::env::var_os("HOME")

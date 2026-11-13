@@ -4,7 +4,9 @@
 use crate::agents::{BudgetWindow, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
+use crate::sidebar_pane::pixel::logo::{LogoBox, LogoReserve};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
+use crate::sidebar_pane::pixel::{image_id_color, placeholder_cluster};
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::store::snapshot::{
     CreditDisplay, ProviderBar, ProviderBudget, RedeemForecast, RemoteControlBadge,
@@ -20,8 +22,8 @@ use crate::sidebar_pane::render::fmt::{
     compact_count, dollars_cap, dollars2, expiry_label, reset_countdown, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    ManaTick, TokenColumns, TokenDetail, budget_bar_spans, mana_style, pace_style,
-    token_breakdown_spans,
+    ManaTick, TokenColumns, TokenDetail, budget_bar_spans, mana_glyphs_overridden, mana_style,
+    pace_style, token_breakdown_spans,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -463,6 +465,10 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) now: Timestamp,
     /// The frame's meter images: lent, every budget bar draws in pixels.
     pub(in crate::sidebar_pane::render) pixels: Option<&'a mut MeterPixels>,
+    /// A frame without image ids on a pane that draws logos once it holds a
+    /// slot: a block whose logo has landed keeps its rows and draws its text
+    /// emblem in them.
+    pub(in crate::sidebar_pane::render) logo_reserve: Option<LogoReserve>,
 }
 
 pub(in crate::sidebar_pane::render) fn dashboard_block(
@@ -482,15 +488,21 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
 
     if context.mode == DashboardMode::Stacked {
         let providers = context.providers;
+        let mut lines = Vec::new();
+        let mut logos = Vec::new();
         for (index, panel) in providers.iter().enumerate() {
-            output.push_inert(if index == 0 {
+            lines.push(if index == 0 {
                 super::super::hairline_rule(context.theme, context.width)
             } else {
                 Line::from("")
             });
             let width = context.width;
-            output.extend_inert(provider_block_lines(&mut context, panel, width, None));
+            let block = provider_block_lines(&mut context, panel, width, None);
+            logos.extend(block.logo.map(|logo| logo.below(lines.len())));
+            lines.extend(block.lines);
         }
+        place_logos(&mut lines, logos);
+        output.extend_inert(lines);
         return output;
     }
 
@@ -524,7 +536,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
         let pet_w = pet.width;
         let block_w = context.width.saturating_sub(pet_w + PET_COLUMN_GAP);
         output.push_inert(pet.caption);
-        let block = provider_block_lines(&mut context, active, block_w, None);
+        let block = provider_block_lines(&mut context, active, block_w, None).placed();
         let footer_rows = usize::from(context.folded_footer.is_some());
         let block_rows = block.len() + footer_rows;
         let pet_rows = pet.body.len();
@@ -549,15 +561,171 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
     }
 
     // A blank line below the rail sets tabs apart from the active account.
-    output.push_inert(Line::from(""));
+    let mut lines = vec![Line::from("")];
     let (width, folded_footer) = (context.width, context.folded_footer.clone());
-    output.extend_inert(provider_block_lines(
-        &mut context,
-        active,
-        width,
-        folded_footer,
-    ));
+    let block = provider_block_lines(&mut context, active, width, folded_footer);
+    let logo = block.logo.map(|logo| logo.below(lines.len()));
+    lines.extend(block.lines);
+    place_logos(&mut lines, logo);
+    output.extend_inert(lines);
     output
+}
+
+/// One provider block, and where its logo goes when it draws one.
+struct ProviderBlock {
+    lines: Vec<Line<'static>>,
+    logo: Option<BlockLogo>,
+}
+
+impl ProviderBlock {
+    /// The block with its logo placed inside its own lines.
+    fn placed(self) -> Vec<Line<'static>> {
+        let mut lines = self.lines;
+        place_logos(&mut lines, self.logo);
+        lines
+    }
+}
+
+/// A logo beside `detail_rows` rows starting at line `detail_top`.
+#[derive(Clone)]
+struct BlockLogo {
+    detail_top: usize,
+    detail_rows: usize,
+    mark: LogoMark,
+    logo_box: LogoBox,
+}
+
+/// What fills a logo's box: the image's placeholder cells, or, in a frame
+/// without image ids, the text emblem's rows centred in the same box.
+#[derive(Clone)]
+enum LogoMark {
+    Image(u32),
+    Text(Vec<Vec<Span<'static>>>),
+}
+
+impl BlockLogo {
+    fn below(self, lines_above: usize) -> Self {
+        Self {
+            detail_top: self.detail_top + lines_above,
+            ..self
+        }
+    }
+}
+
+/// Draw each logo over the rows its box covers, top to bottom. A box row past
+/// the detail rows takes a blank line there that no earlier logo holds, or the
+/// block gains one, so the mark keeps one size beside any number of rows.
+fn place_logos(lines: &mut Vec<Line<'static>>, logos: impl IntoIterator<Item = BlockLogo>) {
+    let mut gained = 0;
+    for logo in logos {
+        gained += place_logo(lines, logo.below(gained));
+    }
+}
+
+fn place_logo(lines: &mut Vec<Line<'static>>, logo: BlockLogo) -> usize {
+    let BlockLogo {
+        detail_top,
+        detail_rows,
+        mark,
+        logo_box,
+    } = logo;
+    let blank = |line: &Line<'_>| line.spans.iter().all(|span| span.content.trim().is_empty());
+    let above = logo_box.top.unsigned_abs() * usize::from(logo_box.top < 0);
+    let free_above = (1..=above)
+        .take_while(|row| detail_top >= *row && blank(&lines[detail_top - row]))
+        .count();
+    let at = detail_top - free_above;
+    let gained_above = above - free_above;
+    lines.splice(at..at, std::iter::repeat_n(Line::default(), gained_above));
+    let top = detail_top + gained_above;
+    let box_end = logo_box.top + logo_box.rows as isize;
+    let below = usize::try_from(box_end).map_or(0, |end| end.saturating_sub(detail_rows));
+    let end = top + detail_rows;
+    let free_below = (0..below)
+        .take_while(|row| lines.get(end + row).is_some_and(blank))
+        .count();
+    let at = end + free_below;
+    let gained_below = below - free_below;
+    lines.splice(at..at, std::iter::repeat_n(Line::default(), gained_below));
+    let first = top.saturating_add_signed(logo_box.top);
+    match mark {
+        LogoMark::Image(image_id) => {
+            let style = Style::default().fg(image_id_color(image_id));
+            for row in 0..logo_box.rows {
+                let cells = (0..PROVIDER_ART_WIDTH as u16)
+                    .map(|col| Span::styled(placeholder_cluster(row, col), style))
+                    .collect();
+                art_column_row(&mut lines[first + usize::from(row)], cells);
+            }
+        }
+        LogoMark::Text(rows) => {
+            let offset = usize::from(logo_box.rows).saturating_sub(rows.len()) / 2;
+            for (row, art) in rows.into_iter().enumerate() {
+                if let Some(line) = lines.get_mut(first + offset + row) {
+                    art_column_row(line, art);
+                }
+            }
+        }
+    }
+    gained_above + gained_below
+}
+
+/// Put `cells` in place of the art column's leading blank cells.
+fn art_column_row(line: &mut Line<'static>, cells: Vec<Span<'static>>) {
+    let mut skip = PROVIDER_ART_WIDTH;
+    let rest = std::mem::take(&mut line.spans)
+        .into_iter()
+        .filter_map(|span| {
+            let cells = span.content.chars().count();
+            let kept = span.content.chars().skip(skip).collect::<String>();
+            skip = skip.saturating_sub(cells);
+            (!kept.is_empty()).then(|| Span::styled(kept, span.style))
+        })
+        .collect::<Vec<_>>();
+    let pad = PROVIDER_ART_WIDTH.saturating_sub(spans_width(&cells));
+    line.spans = cells
+        .into_iter()
+        .chain((pad > 0).then(|| Span::raw(" ".repeat(pad))))
+        .chain(rest)
+        .collect();
+}
+
+/// The block's logo, where the pane paints pixels, its budget bars are not all
+/// kept as text by a user's mana glyph, its brand resolves to a truecolor tone,
+/// a logo tier is ready, and a logo id is free. A frame without image ids on a
+/// pane that draws logos reserves the box for a block whose logo has landed and
+/// fills it with the text emblem, so its rows match the frame on arrival.
+fn block_logo(
+    context: &mut DashboardContext<'_>,
+    panel: &SidebarProviderPanel,
+    detail_rows: usize,
+) -> Option<(LogoMark, LogoBox)> {
+    if (context.pixels.is_none() && context.logo_reserve.is_none())
+        || mana_glyphs_overridden(context.theme)
+    {
+        return None;
+    }
+    let rgb = context.theme.pixel_rgb(context.theme.brand_tone(panel))?;
+    let logo_box = LogoBox::centred_on(detail_rows);
+    let cols = PROVIDER_ART_WIDTH as u16;
+    let mut sources = context.theme.provider_logos(&panel.kind).into_iter();
+    let mark = match (context.pixels.as_deref_mut(), context.logo_reserve) {
+        (Some(pixels), _) => LogoMark::Image(
+            sources.find_map(|source| pixels.logos.intern(source, rgb, cols, logo_box))?,
+        ),
+        (None, Some(reserve)) => {
+            if !sources.any(|source| reserve.landed(source, rgb, cols)) {
+                return None;
+            }
+            LogoMark::Text(
+                (0..panel.art.len())
+                    .map(|row| art_row_spans(context.theme, panel, row))
+                    .collect(),
+            )
+        }
+        (None, None) => return None,
+    };
+    Some((mark, logo_box))
 }
 
 fn provider_block_lines(
@@ -565,7 +733,7 @@ fn provider_block_lines(
     panel: &SidebarProviderPanel,
     width: usize,
     folded_footer: Option<super::super::chrome::FooterParts>,
-) -> Vec<Line<'static>> {
+) -> ProviderBlock {
     let panel = context
         .selected_sub_provider
         .as_ref()
@@ -591,7 +759,12 @@ fn provider_block_lines(
         context.now,
         context.pixels.as_deref_mut(),
     ));
-    let crest = art_crest_row(panel, rights.len()).filter(|_| show_art);
+    let header_holds_art = context.mode.tabbed() || layout.inline_art();
+    let detail_rows = rights.len() + usize::from(header_holds_art);
+    let logo = show_art
+        .then(|| block_logo(context, panel, detail_rows))
+        .flatten();
+    let crest = art_crest_row(panel, rights.len()).filter(|_| show_art && logo.is_none());
     let mut lines = vec![provider_header_line(
         context.theme,
         panel,
@@ -609,12 +782,18 @@ fn provider_block_lines(
                 .unwrap_or_else(|| Line::from("")),
         );
     }
+    let detail_top = if header_holds_art { 0 } else { lines.len() };
+    let body = if logo.is_some() {
+        BodyArt::Logo
+    } else {
+        BodyArt::Text(crest)
+    };
     lines.extend(provider_body_lines(
         context.theme,
         panel,
         width,
         rights,
-        crest,
+        body,
     ));
     if context.mode == DashboardMode::Pet {
         lines.extend(total_spend_lines(
@@ -627,7 +806,15 @@ fn provider_block_lines(
     if let Some(footer) = folded_footer {
         lines.push(folded_footer_line(footer, width));
     }
-    lines
+    ProviderBlock {
+        lines,
+        logo: logo.map(|(mark, logo_box)| BlockLogo {
+            detail_top,
+            detail_rows,
+            mark,
+            logo_box,
+        }),
+    }
 }
 
 fn folded_footer_line(parts: super::super::chrome::FooterParts, width: usize) -> Line<'static> {
@@ -987,8 +1174,18 @@ fn provider_body_lines(
     panel: &SidebarProviderPanel,
     width: usize,
     rights: Vec<Vec<Span<'static>>>,
-    crest: Option<usize>,
+    art: BodyArt,
 ) -> Vec<Line<'static>> {
+    let BodyArt::Text(crest) = art else {
+        let column = " ".repeat(PROVIDER_ART_WIDTH + 1);
+        return rights
+            .into_iter()
+            .map(|right| {
+                let spans = std::iter::once(Span::raw(column.clone())).chain(right);
+                Line::from(trim_spans_to_width(spans.collect(), width))
+            })
+            .collect();
+    };
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     let art_start = crest.map_or(0, |row| row + 1);
 
@@ -1011,6 +1208,13 @@ fn provider_body_lines(
         lines.push(Line::from(trim_spans_to_width(spans, width)));
     }
     lines
+}
+
+/// What the body's art column holds: text art below an optional crest row, or
+/// the blank cells a logo is drawn over.
+enum BodyArt {
+    Text(Option<usize>),
+    Logo,
 }
 
 fn art_crest_row(panel: &SidebarProviderPanel, right_rows: usize) -> Option<usize> {

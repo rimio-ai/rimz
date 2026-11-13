@@ -12,6 +12,7 @@ use crate::config::{CellAspect, PixelMode};
 use crate::sidebar_pane::pets::{
     PetAssets, PetBody, PetRenderTier, PetViewFrame, PixelPainter, effective_render_tier,
 };
+use crate::sidebar_pane::pixel::logo::{LogoPainter, LogoReserve};
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::pixel::probe::CAPS_REFRESH_INTERVAL;
 use crate::sidebar_pane::pixel::{
@@ -34,6 +35,7 @@ struct HeldSlot {
     _lease: Option<PixelLease>,
     pet: PixelPainter,
     meter: MeterPainter,
+    logo: LogoPainter,
     swept: bool,
     retire: Retire,
 }
@@ -59,6 +61,7 @@ impl HeldSlot {
             _lease: lease,
             pet: PixelPainter::with_slot(slot, wrap),
             meter: MeterPainter::new(wrap),
+            logo: LogoPainter::new(wrap),
             swept: false,
             retire: Retire::Kept,
         }
@@ -397,12 +400,16 @@ impl FramePainter {
         }
         match id_base.filter(|_| meter_surface) {
             Some(base) => {
-                ui.meter_pixels
-                    .get_or_insert_with(|| MeterPixels::new(base))
-                    .begin_frame();
+                let pixels = ui
+                    .meter_pixels
+                    .get_or_insert_with(|| MeterPixels::new(base));
+                pixels.begin_frame();
+                pixels.logos.prepare(&snapshot.theme, cell_aspect.ratio());
             }
             None => ui.meter_pixels = None,
         }
+        ui.logo_reserve =
+            (meter_surface && permit.is_none()).then(|| LogoReserve::new(cell_aspect.ratio()));
     }
 
     #[cfg(test)]
@@ -502,6 +509,7 @@ impl FramePainter {
             return Ok(());
         };
         let Some(pixels) = &ui.meter_pixels else {
+            held.logo.clear(writer, permit)?;
             return held.meter.clear(writer, permit);
         };
         held.sweep_once(writer, self.pixel_wrap, permit)?;
@@ -509,7 +517,8 @@ impl FramePainter {
             held.meter
                 .ensure_transmitted(writer, image_id, raster, now_ms, permit)?;
         }
-        Ok(())
+        held.logo
+            .ensure_transmitted(writer, &pixels.logos, now_ms, permit)
     }
 
     /// Delete every resident image under a permit, then return the slot. Without
@@ -527,6 +536,7 @@ impl FramePainter {
         if let Some(permit) = permit {
             held.pet.clear(&mut graphics, permit)?;
             held.meter.clear(&mut graphics, permit)?;
+            held.logo.clear(&mut graphics, permit)?;
         }
         self.slot = SlotState::Free {
             retry_at: None,

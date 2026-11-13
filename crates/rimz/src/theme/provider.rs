@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::agents::{EmblemTint, emblem_for, spec_by_kind};
+use crate::agents::{EmblemTint, emblem_for, shipped_logo, spec_by_kind};
 use crate::config::{ColorDepth, PaletteRole, ThemeColor, ThemeProviderStyle, nearest_xterm_index};
 
 use super::{Palette, Tone};
@@ -113,6 +113,37 @@ pub fn resolve_provider_identity(
     resolved
 }
 
+/// One source of a provider's pixel logo.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum ProviderLogo {
+    /// The user's `[theme.providers.<kind>] logo` path, as configured.
+    File(String),
+    /// The SVG shipped for a built-in kind.
+    Shipped(&'static str),
+}
+
+/// A provider's pixel logos in the order the dashboard tries them: the user's
+/// `logo` file, then the shipped logo unless the user set `ascii_art`, which
+/// outranks a shipped logo. A source that is loading or failed passes to the
+/// next; past the last, the block keeps its text emblem.
+pub(crate) fn resolve_provider_logos(
+    kind: &str,
+    styles: &BTreeMap<String, ThemeProviderStyle>,
+) -> Vec<ProviderLogo> {
+    let style = styles.get(kind);
+    let file = style
+        .and_then(|style| style.logo.as_deref())
+        .filter(|path| !path.is_empty())
+        .map(|path| ProviderLogo::File(path.to_owned()));
+    let user_art = style
+        .and_then(|style| style.ascii_art.as_deref())
+        .is_some_and(|art| !art.is_empty());
+    let shipped = shipped_logo(kind)
+        .filter(|_| !user_art)
+        .map(ProviderLogo::Shipped);
+    file.into_iter().chain(shipped).collect()
+}
+
 /// Title-case a `-`/`_`/space-delimited token.
 pub(crate) fn provider_title_case(value: &str) -> String {
     value
@@ -143,6 +174,7 @@ mod tests {
                 product_name: Some("Anthropic".to_owned()),
                 ascii_art: Some("A\nA".to_owned()),
                 color: Some(ThemeColor::Indexed(42)),
+                ..ThemeProviderStyle::default()
             },
         );
         let identity = resolve_provider_identity("claude", &styles);
@@ -150,6 +182,46 @@ mod tests {
         assert_eq!(identity.art, ["A", "A"]);
         assert!(identity.art_tints.is_empty());
         assert_eq!(identity.brand, BrandColor::Indexed(42));
+    }
+
+    #[test]
+    fn logo_tiers_run_user_file_user_art_shipped_then_emblem() {
+        let style = |logo: Option<&str>, art: Option<&str>| ThemeProviderStyle {
+            logo: logo.map(ToOwned::to_owned),
+            ascii_art: art.map(ToOwned::to_owned),
+            ..ThemeProviderStyle::default()
+        };
+        let shipped = ProviderLogo::Shipped(shipped_logo("claude").expect("claude ships a logo"));
+        let file = ProviderLogo::File("~/claude.svg".to_owned());
+        for (style, expected) in [
+            (None, vec![shipped.clone()]),
+            (
+                Some(style(Some("~/claude.svg"), None)),
+                vec![file.clone(), shipped.clone()],
+            ),
+            (
+                Some(style(Some("~/claude.svg"), Some("A"))),
+                vec![file.clone()],
+            ),
+            (Some(style(None, Some("A"))), Vec::new()),
+            (Some(style(Some(""), Some(""))), vec![shipped.clone()]),
+        ] {
+            let styles = style
+                .clone()
+                .map(|style| BTreeMap::from([("claude".to_owned(), style)]))
+                .unwrap_or_default();
+            assert_eq!(
+                resolve_provider_logos("claude", &styles),
+                expected,
+                "{style:?}"
+            );
+        }
+        let plugin = BTreeMap::from([("plug".to_owned(), style(Some("/p.svg"), None))]);
+        assert_eq!(resolve_provider_logos("plug", &BTreeMap::new()), Vec::new());
+        assert_eq!(
+            resolve_provider_logos("plug", &plugin),
+            vec![ProviderLogo::File("/p.svg".to_owned())]
+        );
     }
 
     #[test]
