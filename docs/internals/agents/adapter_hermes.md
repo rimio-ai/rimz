@@ -37,7 +37,7 @@ Hermes launches carry no RimZ text outside the user's prompt:
 
 - No launch reminder. The adapter keeps the default `LaunchCapability::append_system_text_channel` of `None`, so `harness/launch.rs` renders the reminder but adds it to no argv, environment variable, or prompt. `HERMES_EPHEMERAL_SYSTEM_PROMPT` is Hermes's only system-text input, and a nonempty value replaces the user's `display.personality` and `agent.system_prompt` ([reference](../../externals/agent-adapter/hermes-reference.md#planning-and-added-system-text)).
 - No system-prompt replacement. The spec has no `SystemPromptFile` matcher, so a profile's system-prompt fields fail with `PromptComposeErr::Unsupported` (`crates/rimz/src/harness/prompt_compose.rs::plan_system_prompt`).
-- No headless command. `LaunchSpec.headless` is unset, so a workflow judge or a loop agent check on Hermes fails with `AgentProcessCompileErr::NoHeadless`.
+- No headless command. `LaunchSpec.headless` is unset, so a workflow judge on Hermes fails with `AgentProcessCompileErr::NoHeadless`.
 
 Every interactive launch checks the binary against `install::MIN_VERSION` (0.22.2) after the shell rc resolves the program (`crates/rimz/src/agents/version.rs::check_launch_version_floor`, called from `crates/rimz/src/launcher/mod.rs::check_cell` and `crates/rimz/src/cli/agents_cmd/exec.rs::launch_and_supervise`). An unreadable version passes.
 

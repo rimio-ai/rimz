@@ -332,7 +332,7 @@ In text mode, stdout carries only the final assistant answer, rendered by the sh
 | `--stdin` | Read stdin to EOF as prompt content. With a positional prompt, the prompt comes first and stdin follows inside `<stdin>…</stdin>` tags. |
 | `--timeout <DURATION>` | Cap the run; exceeding it exits `124`. |
 | `--bg` | Print the run's pet name on stdout and return immediately, with a receipt on stderr. Use that name with `agents wait`, `agents show`, `agents stop`, or `message --steer`. Launched from an agent, the run joins that agent's [fleet report](./subagents.md#the-fleet-report), and the receipt says so. Refuses `--output-format stream-json`. |
-| `--keep` | Leave the pane open after the run completes; `rimz agents stop` reclaims it. |
+| `--keep` | Leave the pane open after the run completes; `rimz agents stop` reclaims it. A canceled run's agent is stopped all the same, and its pane stays until Ctrl-C in it or `rimz agents stop`. |
 | `--detach` | With `--bg`, from an agent: keep the run out of that agent's fleet report and do not hold the agent for it. `agents wait` still reads the answer. Refused without `--bg`. |
 | `--max-turns <N>` | Cap agentic turns through the CLI's native limit (Claude and Grok `--max-turns`, Qwen `--max-session-turns`). Other kinds refuse the run with `<agent> does not support --max-turns`. |
 | `--retries <N>` | Rerun a failed (exit `1`) run up to `N` more times, appending the previous failure tail to the prompt. `--timeout` and `--budget` apply per attempt, timeout, budget, and cancel never retry, and the last attempt sets the exit code. |

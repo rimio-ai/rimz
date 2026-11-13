@@ -76,10 +76,10 @@ Read that as: ready for personal, daily use today; for production workflows that
 ### Keep it running without you
 
 - `rimz agents -p` is `claude -p` for every agent that can run headless, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows.
-- `rimz loop` schedules workflow runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
+- `rimz loop` runs a command on a clock (calendar, interval, or cron), on a signal, or when a condition holds: a test suite, a script, or a `rimz agents` launch that starts an agent. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
 - `rimz wait` lets an agent arm its own timer, clock time, window reset, state condition, command, process, polled check, or file watch and end its turn instead of sleeping.
 - A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction asks a filling turn to wrap up before compacting and continuing, so agents keep working while you are gone.
-- Dollar budgets cap one turn, one agent, one loop task, the room, or a provider account. A turn that crosses a cap is stopped and parked.
+- Dollar budgets cap one turn, one agent, the room, or a provider account. A turn that crosses a cap is stopped and parked.
 - Notification handlers run your own command the moment a row needs eyes: a push to your phone, or a script that answers the routine prompt for you.
 
 ### Work from anywhere
@@ -243,16 +243,16 @@ rimz subagents fanout --wait <<'JSON'
 JSON
 ```
 
-**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. Each fire starts a [workflow](./docs/guide/workflows.md) run: the loop decides when, the workflow decides what, and `rimz workflow show <task>` draws the graph a task compiles to. There is no scheduler daemon: an open room keeps time, and `rimz loop timer install` adds a systemd or launchd timer for the hours when none is open. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget-per-day 20` to bound what hands-off work costs.
+**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) runs the command after `--` on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. The command can be anything you would type in a shell; a `rimz agents` launch in it starts an agent, and the fire ends when that agent's turn does. A fire that exits nonzero or outruns its `--timeout` counts a strike. There is no scheduler daemon: an open room keeps time, and `rimz loop timer install` adds a systemd or launchd timer for the hours when none is open. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; put `--budget 5` on the launch to bound what each run costs.
 
 ```sh
 # 07:00 every weekday: overnight changes, summarized before you sit down
-rimz loop add standup --agent claude --every weekday --at 07:00 \
-    --prompt "Summarize what landed on main since yesterday and flag anything that needs review"
+rimz loop add standup --every weekday --at 07:00 -- \
+    rimz agents claude "Summarize what landed on main since yesterday and flag anything that needs review"
 
-# Watchdog: run the check first, wake the agent only on failure
-rimz loop add watchdog --check "cargo test" --on fail \
-    --agent codex --prompt "fix the failing test" --every 15m
+# Every 15 minutes: run the tests, and start an agent only when they fail
+rimz loop add watchdog --every 15m -- \
+    sh -c 'cargo test || rimz agents codex "Fix the failing test."'
 ```
 
 **Wait without a pane.** [`rimz wait`](./docs/reference/cli/wait.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and when the delay elapses, the command finishes, or the file changes, RimZ delivers a message back into the same conversation naming what fired and on what.
@@ -265,18 +265,19 @@ rimz wait --pid 16776                        # an existing process exits
 rimz wait --run 'gh run watch --exit-status' # a command exits, with its output in the message
 ```
 
-**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#signals-the-rooms-event-bus) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, and agent and team lifecycle signals from what the room already watches, and anything can emit its own. A CI or pull request subscription follows the calling agent's own worktree branch.
+**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#signals-the-rooms-event-bus) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, and agent and team lifecycle signals from what the room already watches, and anything can emit its own. Narrow a task to one branch with `--match branch=<name>`.
 
 The GitHub-only signals `pr.behind` and `pr.conflicted` report an open PR falling behind its base or gaining confirmed conflicts, including on first sight. They fire on entry or a changed PR head while the state persists, not on repeated readings of the same head. Their PR payload has `state: "open"` and adds `pr_head`, `base` when known, and `behind_by` for `pr.behind`.
 
 GitHub's merge queue runs CI on its own commit, so a PR it rejects stays green. `pr.queued` and `pr.dequeued`, also GitHub-only, report an open PR entering the queue and leaving it without merging; `pr.dequeued` carries GitHub's `reason` and a `queue_checks_url` to the queue commit's checks when GitHub provides them.
 
 ```sh
-# Wake me when CI fails on the branch this agent is working on
-rimz loop add ci-red --signal ci.failed --wait
+# Start a fixer each time CI fails on the feature branch
+rimz loop add ci-red --signal ci.failed --match branch=feature --repeat -- \
+    rimz agents codex -w ci-red "Fix the failing checks."
 
-# Wake me once, on the next merge
-rimz loop add merged --signal pr.merged --wait --once
+# Run a script once, on the next merge
+rimz loop add merged --signal pr.merged -- ./scripts/announce-release.sh
 
 # Your own signal: a git hook, a deploy script, or another agent emits it
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
@@ -329,7 +330,7 @@ rimz config set remote_control.codex true
 What each group does, with the depth one link away:
 
 - The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. The color scheme defaults to TokyoNight Night; `rimz config set theme "Catppuccin Mocha"` picks any bundled scheme from `rimz list-themes`. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
-- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction asks a filling turn to wrap up, compacts at rest, and continues, or compacts ahead of a message to an already-resting agent. Between them the pauses that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you. The room budget caps what that freedom costs, and the same cap exists per turn, per agent, per loop task, and per provider account. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
+- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction asks a filling turn to wrap up, compacts at rest, and continues, or compacts ahead of a message to an already-resting agent. Between them the pauses that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you. The room budget caps what that freedom costs, and the same cap exists per turn, per agent, and per provider account. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
 - The remote-control toggles are the [answer-from-your-phone move](#step-away) above; the [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each one runs.
 
 Two more settings change what a room launches under:
@@ -340,7 +341,7 @@ rimz start --account claude=work              # a room whose Claude agents all r
 rimz config set agents.isolation scoped       # Linux: a bubblewrap mount view for every agent pane
 ```
 
-- A [provider account](./docs/guide/accounts.md) has its own login and limits; its sessions, spend, and budget are shared with the provider's own account unless you declare it standalone. Pin a room's account with `rimz start --account` or `rimz accounts use`, or leave it unpinned to follow trusted project and machine defaults live. `rimz accounts use --reset claude` unpins Claude; `rimz accounts use claude default` pins Claude's own home instead. Agents already running keep their account; the guide covers child, loop-task, and one-launch (`rimz agents --account`) overrides.
+- A [provider account](./docs/guide/accounts.md) has its own login and limits; its sessions, spend, and budget are shared with the provider's own account unless you declare it standalone. Pin a room's account with `rimz start --account` or `rimz accounts use`, or leave it unpinned to follow trusted project and machine defaults live. `rimz accounts use --reset claude` unpins Claude; `rimz accounts use claude default` pins Claude's own home instead. Agents already running keep their account; the guide covers child and one-launch (`rimz agents --account`) overrides.
 - [Scoped isolation](./docs/guide/security.md#scoped-isolation) gives each agent the room's own `/tmp` and the RimZ library and pack skills merged below its provider's own skills, with a profile's `skills:` list deciding which skills the model may call on its own. It is a mount view and not containment: the host filesystem stays writable and your credentials stay readable. `rimz start` warns when bubblewrap is missing or unusable, while a scoped agent launch refuses; `--isolation host|scoped` overrides the setting for one launch.
 
 The [setup guide](./docs/guide/setup.md) walks the whole first pass, agent hooks included; the [Zellij and tmux guide](./docs/guide/multiplexer.md) has a modern baseline with [ready-to-adopt example configs](./examples/README.md), and the full key catalog is the [configuration guide](./docs/guide/configuration.md).

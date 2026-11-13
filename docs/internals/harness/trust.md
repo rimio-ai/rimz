@@ -29,7 +29,7 @@ The pin covers the surface itself because agents in the room can write `.rimz/co
 | `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
 | `[agents.teams.<name>]` | `layout`, `consensus-file`, `consensus` (the piece names), `append-system-prompt-files`. Per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `fast`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
-| `[tasks.<name>]` | `agent`, `workflow`, `prompt`, `prompt-file`, `check` (a shell string), `judge` (one table or an array, each with `agent`, `prompt`, `prompt-file`, `recheck`, `timeout`), `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `fast`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`, `signal`, `match`. A task's short form compiles at fire time to an inline workflow graph ([loops.md](./loops.md#the-compiled-graph)) whose checks, judges, agent step, and prompt assets all come from these keys; the step settings it adds without them (`budget`, `notes`, `throttle`, `capacity-wait`, `account`) run no command |
+| `[tasks.<name>]` | `command` (the argv each fire runs), `fresh-worktree`, `timeout`, `at`, `every`, `cron`, `signal`, `match`, `repeat`. A fire runs the hashed argv as the one check of an inline workflow run ([loops.md](./loops.md#the-compiled-graph)). `command`, `fresh-worktree`, `timeout` and `repeat` are hashed as written, so a value of the wrong type still changes the hash and leaves the rest of the file loading; the loop loader refuses that row alone |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
 | `[lsp.servers.<name>]` | `command` argv, `init-options` as canonical JSON with every object's keys sorted, and `editor-check-on-save` when set |
@@ -45,7 +45,7 @@ A field added to the projection after grants existed is left out of the JSON whi
 | profile and subagent profile | `skills`, `auto_compact`, and `fast` are unset |
 | team | `consensus_file` is unset, or `consensus` or `append_system_prompt_files` is empty |
 | team role | `signals` is empty, or `auto_compact` and `fast` are unset |
-| task | `workflow` and `fast` are unset, or `judge` is empty |
+| task | `fresh_worktree` and `repeat` are unset |
 | language server | `editor_check_on_save` is unset |
 
 A profile's and a role's `append-system-prompt-files` serialize under the singular key `append_system_prompt_file`. A team's list keeps the plural key. An explicit `fast = false` hashes differently from an unset `fast`, because it shapes provider argv and cost.
@@ -60,11 +60,11 @@ Every other key deserializes leniently and never touches the hash. `trust::Proje
 | team | `keep-warm`, `leader`, `scratch-files`, `stages` |
 | team role | `owns`, `budget`, `keep-warm`, `flip-compact`, `idle-compact`, `smart-compact` |
 | profile and subagent profile | `budget`, `keep-warm`, `idle-compact`, `smart-compact`, `empty-dir`, `description`, `subagents`, `model-reminder` |
-| task | `label`, `notes`, `team`, `check-timeout`, `max-strikes`, `once-per-checkout`, `account`, `budget`, `budget-per-day`, `surplus`, `surplus-after`, `throttle`, `capacity-wait`, `overlap`, `overlap-limit` |
+| task | `label`, `team`, `max-strikes`, `once-per-checkout`, `provider`, `account`, `overlap`, `overlap-limit` |
 | language server | `kind`, `extensions`, `root-markers`, `policy`, `wait-timeout`, `memory-estimate` |
 | `[packs]` | `expect` |
 
-The overlap keys decide how many already-approved triggers run the approved command. They do not change the command, so editing them does not re-key a grant. Two rows depart from that rule. A task's `account` picks which machine account each fire runs on, while the `[accounts]` table, which does the same for the room, is hashed. A task's `check-timeout` bounds its shell check, while the task's `timeout` is hashed. The `Profile` rustdoc in `crates/rimz/src/config/agents.rs` states the rule for a new profile field: hash it, mark it `#[serde(skip)]`, or keep it off every command.
+The overlap keys decide how many already-approved triggers run the approved command. They do not change the command, so editing them does not re-key a grant. A task's `provider` and `account` name whose usage windows its conditions read; the account a fire's launch runs on is the command's own (`--account` on `rimz agents`), and the command is hashed. The `Profile` rustdoc in `crates/rimz/src/config/agents.rs` states the rule for a new profile field: hash it, mark it `#[serde(skip)]`, or keep it off every command.
 
 `crates/rimz/src/trust.rs::project_packs` reads `[packs]` through the same project reader in every trust state, preserving the exclusion of a `.rimz` that is the machine home. The table is retained as a lenient TOML value, so malformed expectations never fail the trust read. `crates/rimz/src/packs/mod.rs::expectation_warnings` checks the source grammar and installed names, and `crates/rimz/src/room/judgment.rs::judge` records its messages under `packs.expect` after definition warnings. An unreadable project config or installed-packs record adds no expectation warnings. Expectations execute nothing, and installing remains a separate reviewed command. The user-facing contract is [expected packs](../../guide/configuration.md#expected-packs).
 

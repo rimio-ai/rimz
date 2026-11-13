@@ -28,7 +28,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Loops](./guide/loops.md): start workflow runs on a clock or a room signal, guard an agent turn with a shell check, let agents set their own alarms, and keep the fleet moving through rate limits and full contexts.
 - [Workflows](./guide/workflows.md): shepherd long work such as a PR to merge as a durable graph of checks, agent steps, and command steps that survives dead agents and restarts, started by hand or from a loop, and parked for you when it needs a human; keep notes and history, and add a reflection step before failure.
 - [Notifications](./guide/notifications.md): the banner and bell you get for free, a handler that pushes to your phone or runs any command you like, and handlers that answer the routine prompt for you.
-- [Budgets](./guide/budget.md): enforce dollar caps on one turn, one agent, one loop task, a room's fleet, or a provider account, resume the work a cap parked, and gate background tasks on the subscription window's surplus.
+- [Budgets](./guide/budget.md): enforce dollar caps on one turn, one agent (a loop task's launch included), a room's fleet, or a provider account, and resume the work a cap parked.
 - [Shared LSP](./guide/lsp.md): share one language server per checkout with every agent and your editor, within a memory budget, and see, query, and stop it from your shell.
 
 ## Customization

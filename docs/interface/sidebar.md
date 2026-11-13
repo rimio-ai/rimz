@@ -515,7 +515,7 @@ A subagent's `▤` glyph heats from green to red on the worse of window percent 
 
 ### Booked launches
 
-A booked launch is a one-off [loop task](../reference/cli/loop.md) that an agent booked to start an agent or a team later. It shows on the card of the agent that booked it, or the nearest living agent up its booking chain, as the last half of the subagents and waits line and as entries below the card's own ones. This [46-column frame](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__booked_selected_ended_upstream_46.snap) shows a selected card whose team stage ended without a pull request:
+A booked launch is a one-off [loop task](../reference/cli/loop.md) that an agent booked and whose command starts an agent or a team later (`rimz agents <spec> ...` or `rimz teams [launch] <team> ...`, blocking or `--detach`). It shows on the card of the agent that booked it, or the nearest living agent up its booking chain, as the last half of the subagents and waits line and as entries below the card's own ones. This [46-column frame](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__booked_selected_ended_upstream_46.snap) shows a selected card whose team stage ended without a pull request:
 
 ```text
 ▌  ▷ booked (8)    1 running · 2 ended, no PR▐
@@ -546,7 +546,7 @@ While a card holds an unfinished plan, a line carrying only that half stays on e
 
 A fired launch is finished once its branch's pull request merged; once its team's board, in the checkout the team launched in, reads `Done` while no unfired launch on the card waits on it, which stays true after the team's panes and checkout close and stops being true when the board moves on from `Done`; or once nothing it started is alive, nothing waits on it, and it runs in no worktree at all, so it has no branch whose pull request could be read. A launch into a fresh tree per fire reads the branch that fire's checkout was cut on, and keeps that branch after the tree is removed. An ended launch with a branch and no pull request stays unfinished, counted in `K ended, no PR`. An unfired launch, and a fired one still starting, is never finished.
 
-A timed or one-shot booking (`--in`, `--at`, `--after-reset`, `--once`) leaves the loop's task list when it fires, and its entry stays: while anything it launched is alive; then, for a launch into a worktree, until its pull request merges or its checkout is removed (an ended launch with no pull request stays as `ended, no PR`), and for a launch with no worktree, for 15 minutes after its end. A booking removed with `rimz loop remove` before it fires has no entry. When every launch is finished, the line goes; the entries still list in the open section.
+A timed or one-shot booking (`--in`, `--at`, `--after-reset`, or a `--signal` or `--when` without `--repeat`) leaves the loop's task list when it fires, and its entry stays: while anything it launched is alive; then, for a launch into a worktree, until its pull request merges or its checkout is removed (an ended launch with no pull request stays as `ended, no PR`), and for a launch with no worktree, for 15 minutes after its end. A booking removed with `rimz loop remove` before it fires has no entry. When every launch is finished, the line goes; the entries still list in the open section.
 
 Entries follow the subagents and waits and use the same layout. A waiting launch has no right side; a fired launch's runtime counts from its fire and freezes at its end.
 
@@ -758,7 +758,7 @@ The stage duration sits immediately after the stage name, such as `Implement 4h1
 
 ### Workflow strips
 
-A strip belongs to a run of a deployed workflow. An Active or Parked run keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, other cohort blocks, then solo cards and process rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it unless its PR is open. If several workflows share a checkout, the newest run supplies the strip. A run compiled from a loop task's own fields (a task without `workflow =`) draws no strip and keeps no group: its agents show as ordinary cards in their lane, and the run itself shows in `rimz loop list` and `rimz loop show`.
+A strip belongs to a run of a deployed workflow. An Active or Parked run keeps its worktree group, header, PR, CI and queue facts even between steps with no pane. Its strip heads the workflow section: header, workflow strip, current step's card, team strip, team cards, other cohort blocks, then solo cards and process rows. A team without live panes leaves no cards behind. When the run ends, its strip disappears; a group with no rows disappears with it unless its PR is open. If several workflows share a checkout, the newest run supplies the strip. A loop task's own fire, the one-check run of its command, draws no strip and keeps no group: an agent its command launches shows as an ordinary card in its lane, and the run itself shows in `rimz loop list` and `rimz loop show`.
 
 ```text
  ⑂ merge-lane ✓ #91                            ⇉ main

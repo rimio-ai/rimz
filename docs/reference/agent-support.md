@@ -137,7 +137,7 @@ These are the gaps you will notice, per agent in matrix order, beyond what the m
 ### Qwen
 
 - Qwen's quota is scoped to the exact provider account (region and API key), not to the CLI. A fresh supervised or loop launch reads only that account's cached Coding Plan windows: a spent window stops the launch before any pane or run record exists, and another account's window cannot stop it.
-- Interactive launches, resume, fork, wait, and auto-continue ignore the quota. See [budgets: one model, five scopes](../guide/budget.md#one-model-five-scopes).
+- Interactive launches, resume, fork, wait, and auto-continue ignore the quota. See [budgets: one model, four scopes](../guide/budget.md#one-model-four-scopes).
 
 ### Qoder
 

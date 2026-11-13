@@ -1,12 +1,12 @@
 # Workflows
 
-A [loop task](./loops.md) decides *when*: on a clock, a signal, or a condition it fires. A workflow decides *what* that fire does. The loop's short forms cover the common cases with flags, and each compiles to a small workflow of its own: one agent turn, a check that guards it, a `--verify` command that re-prompts it until it passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as prompts, that plan lives in an agent's context, and a dead or compacted agent loses it.
+A [loop task](./loops.md) decides *when*: on a clock, a signal, or a condition it fires. Its command decides *what* that fire does, and one command covers the common cases: an agent turn with `rimz agents`, or a `--verify` command on that launch that re-prompts it until it passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as prompts, that plan lives in an agent's context, and a dead or compacted agent loses it.
 
 A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a table named by its kind, one of eight. Three do work: `agent` launches a fresh agent, optionally with companions, `command` runs a command, and `message` hands work to an agent already running. Four decide, reading the world and answering with an outcome word: `test` answers `pass` or `fail` from a command's exit code, `script` answers with the JSON object a command prints, `judge` asks a headless model, and `condition` reads ordered cases. `sleep` waits. Each kind takes only its own fields, so a field another kind owns refuses with its path. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues from that record. An interrupted check can run again; a command step whose host died fails as `died` rather than repeating the action.
 
 ## Write a workflow
 
-The smallest useful workflow runs the test suite, sends an agent to fix it when it fails, and gives up after three tries. A loop task's `--verify` could do this one alone. It is shown first because every larger graph uses the same parts. Create two files:
+The smallest useful workflow runs the test suite, sends an agent to fix it when it fails, and gives up after three tries. A launch's `--verify` could do this one alone. It is shown first because every larger graph uses the same parts. Create two files:
 
 ```text
 ~/.rimz/workflows/fix-tests/
@@ -109,7 +109,7 @@ Before starting a larger workflow, read its routes without jumping between TOML 
 ```console
 $ rimz workflow show fix-tests
 fix-tests
-one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow=fix-tests --each-worktree --every '<duration>' · by hand: rimz workflow run fix-tests -w '<worktree>'
+one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --each-worktree --every '<duration>' -- rimz workflow run fix-tests · by hand: rimz workflow run fix-tests -w '<worktree>'
 
 ◇ tests  check  sh: cargo test · waits ≤30m, then @failed
 │   fail → fix · pass @done
@@ -247,7 +247,7 @@ then = "verdict"
 
 This step routes no failure, so a reviewer that dies or hits a budget limit ends the run as failed; add `on.died = "verdict"` to let the check decide instead.
 
-Agent steps also wait for [capacity](./loops.md#limit-agent-starts) before stopping any occupant, however the run started: by hand, by `rimz loop fire`, on a loop's schedule, or by a restart. A held step uses no visit and retries about once a minute. `list` separates its reason and held age; `show` prints `held 4m` and a bounded wait's give-up time. In the agent's `admission` table, set `give-up = "6h"` to give up after six hours of holding, or `forever` to never give up. Without it the step gives up at the run's give-up instant, `rimz workflow run --give-up 2026-11-14T06:00`, or the one a loop task's scheduled fire sets (just before a repeating schedule's next fire, or at the task's deadline) unless the task runs a deployed workflow, and waits as long as it takes when the run has none. Giving up fails the step with cause `capacity`, which takes the failure routes like any other failure. A capacity failure counts no visit, so validation refuses a `capacity` route that can lead back to the step. A window or occupancy wait restarts this clock, and the run deadline still applies. `admission.throttle = "off"` skips the machine turn, stagger, resource limits, and capacity check, not the machine caps or workflow and step limits below. Start a run with `rimz workflow run --skip-capacity` to launch its steps past every capacity hold instead; they still count and restart the stagger gaps. When the machine's start queue stays busy for 30 seconds (many starts at once, or a slow host), a step waits as `held` with that reason, uses no visit, and retries on the next tick, unless it sets `admission.throttle = "off"` with no machine cap and no limit, since it then never joins the queue. A step already held for capacity keeps its reason and its place in line. Command steps, checks, and an already-open session never ask for admission.
+Agent steps also wait for [capacity](./configuration.md#agent-start-limits) before stopping any occupant, however the run started: by `rimz workflow run`, typed by hand or run by a loop task's command, or by a restart. A held step uses no visit and retries about once a minute. `list` separates its reason and held age; `show` prints `held 4m` and a bounded wait's give-up time. In the agent's `admission` table, set `give-up = "6h"` to give up after six hours of holding, or `forever` to never give up. Without it the step gives up at the run's give-up instant, `rimz workflow run --give-up 2026-11-14T06:00`, and waits as long as it takes when the run has none. Giving up fails the step with cause `capacity`, which takes the failure routes like any other failure. A capacity failure counts no visit, so validation refuses a `capacity` route that can lead back to the step. A window or occupancy wait restarts this clock, and the run deadline still applies. `admission.throttle = "off"` skips the machine turn, stagger, resource limits, and capacity check, not the machine caps or workflow and step limits below. Start a run with `rimz workflow run --skip-capacity` to launch its steps past every capacity hold instead; they still count and restart the stagger gaps. When the machine's start queue stays busy for 30 seconds (many starts at once, or a slow host), a step waits as `held` with that reason, uses no visit, and retries on the next tick, unless it sets `admission.throttle = "off"` with no machine cap and no limit, since it then never joins the queue. A step already held for capacity keeps its reason and its place in line. Command steps, checks, and an already-open session never ask for admission.
 
 A judge runs headless, with no pane, and [the judge section](#let-a-model-decide) covers what it may touch.
 
@@ -477,7 +477,7 @@ A blocking question or permission prompt from an agent step's leader or its suba
 
 Blocking questions and capacity holds needing a fix appear under NEEDS YOU in `rimz workflow list`; a session that is simply `with you` stays in its workflow group.
 
-Active and parked runs of a deployed workflow keep their checkout's sidebar group even while no agent pane exists. A [workflow strip](../interface/sidebar.md#workflow-strips) heads its own section above the team: workflow badge, rail with the current node named, a state word when no step card stands for it, that state's duration, and the run total pinned right. Click it to reach the current step's card when present. The header keeps PR, CI and queue facts live, including the cockpit's open-PR count. The strip vanishes when the run ends, and a rowless group with it unless its pull request is open; a team whose panes closed leaves no finished cards. A run compiled from a loop task's own fields (a task without `workflow =`) draws no strip and keeps no group: its agents show as ordinary cards in their lane, and the run shows in `rimz loop list` and `rimz loop show`.
+Active and parked runs of a deployed workflow keep their checkout's sidebar group even while no agent pane exists. A [workflow strip](../interface/sidebar.md#workflow-strips) heads its own section above the team: workflow badge, rail with the current node named, a state word when no step card stands for it, that state's duration, and the run total pinned right. Click it to reach the current step's card when present. The header keeps PR, CI and queue facts live, including the cockpit's open-PR count. The strip vanishes when the run ends, and a rowless group with it unless its pull request is open; a team whose panes closed leaves no finished cards. A loop task's own fire, the one-check run of its command, draws no strip and keeps no group: an agent its command launches shows as an ordinary card in its lane, and the run shows in `rimz loop list` and `rimz loop show`.
 
 A handler step you route failures to, or you, send a live run on with `resume`:
 
@@ -501,7 +501,7 @@ rimz workflow cancel "$RUN"
 
 `cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, a command step's process group, or every cell of an agent step's layout and its subagents. Its receipt names the address and gives a `show` hint. An already-finished run id prints `<address> is already <state>; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
 
-A run started by a condition loop task stays finished, even while its condition holds. To start another, run `rimz loop fire <name>` from that worktree, or start an independent run with `rimz workflow run`. Schedule, signal, and watch tasks can start another run on their next fire; disable the task with `rimz loop disable <name>` to prevent that.
+A run a loop task started is an ordinary run, so it stays finished until something starts another: the task's next fire, `rimz loop fire <name>` from that worktree, or `rimz workflow run`. Disable the task with `rimz loop disable <name>` to stop it starting more.
 
 An active or parked workflow run holds its checkout even between steps with no agent there, so automatic cleanup and sweeping leave it in place. When you are done with the run and worktree, `rimz worktree remove feat-x` removes the tree. It refuses while an unfinished run holds it, while the tree has uncommitted changes, while the branch holds commits that have not landed, or while an agent or pane is still in the tree, and names the fix. For a run, the fix is `rimz workflow cancel <run-id>`, or `--force`, which also cancels unfinished runs after removing their checkout. Their history records `worktree removed`. A failed cancellation prints the fix and exits non-zero; the tree stays removed. A check runs in the checkout, so files your suite writes there (a `__pycache__/`, a coverage report) count as changes unless `.gitignore` covers them. `--force` removes it anyway and deletes those commits with the branch. `rimz worktree merge` can still land a run's work without removing its checkout. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
 
@@ -509,28 +509,28 @@ A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. A
 
 ## Start runs from a loop
 
-A loop task can start the runs for you. This one starts a `babysit-pr` run in every RimZ worktree of one project that has an open PR:
+A loop task can start the runs for you: its command is the `rimz workflow run` you would type. This one starts a `babysit-pr` run in every RimZ worktree of one project once its PR has been open for three minutes:
 
-```console
-$ rimz loop add babysit-pr --workflow babysit-pr --each-worktree --when pr=open --for 3m
+```sh
+rimz loop add babysit-pr --each-worktree --when pr=open --for 3m --repeat -- rimz workflow run babysit-pr
 ```
 
-`loop add` checks the definition the way `rimz workflow run` does and writes this row to `~/.rimz/loop.toml`:
+`loop add` writes this row to `~/.rimz/loop.toml`:
 
 ```toml
 [tasks.babysit-pr]
-root          = "/home/you/code/app"
-workflow      = "babysit-pr"
+command = ["rimz", "workflow", "run", "babysit-pr"]
 each-worktree = true
-when          = ["pr=open"]
-for           = "3m"
+root = "/home/you/code/app"
+timeout = "2h"
+when = ["pr=open"]
+for = "3m"
+repeat = true
 ```
 
-This condition task starts its workflow once per checkout. A live run prevents another automatic launch there, and so does an ended run that acted or was canceled, even if the condition turns false and true again, the room restarts, or you edit the task under the same name; a run that failed or ended on its own without acting frees the checkout ([launch memory](../reference/cli/loop.md#launch-memory)). Editing or removing the task cancels its runs that have not reached an agent or message step yet, and an edit lets their checkouts launch again under the new definition. Use `rimz loop fire babysit-pr` from the worktree to start another run after it ends, or `rimz workflow run babysit-pr` for an independent run. A workflow with project scope covers every checkout of the task, including new ones. Schedule, signal, and watch workflow tasks instead admit a new run on each fire unless a live run holds the scope or the row sets `once-per-checkout = true`, and the task's `overlap` policy decides what that fire does. `--each-worktree` fans out a `--when`, `--every`, or `--cron` trigger; `loop add` refuses it with a signal or a one-shot. `loop add` also refuses the flags a workflow fire would ignore, such as `--budget` or `--timeout`, and names where each lives in the workflow instead. The task's `--budget-per-day` and `--surplus` gate each run it starts: the daily cap counts the day's finished runs plus what each live run's agent steps reserve with their `budget`, and the surplus gate reads the account of every agent step and judge. A run keeps the surplus gate its row had when it started, so an edit to `--surplus` applies from the next fire. Agent steps also run under the room's budgets, and command steps use no provider. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
+Each fire runs `rimz workflow run` in the checkout that met the condition. That command starts the run and returns, so the fire ends `completed` as soon as the run exists, and the run goes on as its own: the loop does not wait for it, `rimz loop stop` does not cancel it, and the task's overlap policy does not see it. `--repeat` fires the checkout again only after its condition turns false and true again. A fire whose `rimz workflow run` finds the workflow's scope already held by a live run fails, and counts a [strike](./loops.md#strikes), so give a repeating task a trigger that does not outpace its runs. `rimz workflow list` and `rimz workflow show babysit-pr` follow the runs themselves.
 
-Every other loop task runs a workflow too, compiled from its row: `rimz workflow show <task>` draws that graph before the task ever fires, and [`rimz loop eject <task>`](./loops.md#outgrow-the-short-form) writes it here as a workflow you can edit.
-
-You never need to know which engine ran a fire. `rimz loop show babysit-pr` lists the task's runs under `RUNS`: live runs first, then finished ones newest first with the node each stopped at, repeats folded as `done ×3`, and a `→ rimz workflow show <run>` line that opens the first. `rimz loop logs babysit-pr` gives each launch its run's state and the same command, `--failed` keeps the launches whose run failed, and `rimz loop fire` prints the command under its receipt.
+The fire is a workflow run too, a run of one check that runs the task's command: `rimz workflow show <task>` draws it, and `rimz loop show <task>` lists the fires under `RUNS`, live runs first, then finished ones newest first, repeats folded as `done ×3`, with a `→ rimz workflow show <run>` line that opens the first. `rimz loop logs <task>` prints each fire's command output, `--failed` keeps the fires that failed, and `rimz loop fire` prints the command under its receipt.
 
 ## One run per project
 

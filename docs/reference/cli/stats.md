@@ -314,7 +314,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 
 `Untrusted cwd: N` counts fresh explicit-cwd children started privately instead of stopping at an undecided folder-trust screen. `target` is the original directory and `cwd` the private one. The line names the provider, account, target, and profile, then the private cwd. Explicit `--empty-dir` launches do not count as fallbacks.
 
-`Judge declines: N` counts each judge decline in a run a loop task started, once: a run that then waits out the decline adds none until its judge answers again. The line names the task, profile, reason, checkout, and recorded cost. A new true condition edge or an elapsed recheck asks the judge again, and a manual fire starts a fresh run ([guard declines](./loop.md#waits-and-checks)).
+`Judge declines: N` counts each judge decline in a workflow run that carries a loop task, once: a run that then waits out the decline adds none until its judge answers again. The line names the task, profile, reason, checkout, and recorded cost.
 
 `Tier fallback: N` counts one per fresh tier move, whether it passed an unbuildable family, a spent account, or both. Replayed stamps, including a molt without `--agent`, are not counted again. The line names the first pass (`not buildable` or the usage reason); the event retains all usage `skipped` entries and optional `unbuildable` entries with their full build errors.
 

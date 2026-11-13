@@ -81,7 +81,7 @@ rimz loop logs <task>                # full forensics for recent runs
 rimz wait --in 30m                   # wake me once, 30 minutes from now
 rimz wait --when pr=merged           # wake me once when my PR merges
 rimz wait --run 'cargo test'         # wake me when the command exits
-rimz loop add merged --signal pr.merged --wait --once # deliver the next merge signal to me
+rimz loop add tests --every 1h -- cargo test # run a command on a schedule
 rimz events emit deploy.done         # fire a signal for whoever is listening
 ```
 
@@ -265,4 +265,4 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 - [atlas.md](./docs/contributing/atlas.md) — operating guide for `cargo xtask atlas`: the five verbs (including raw index diagnosis), the pass contract, and the `refactor-target.toml` schema.
 - [refactor-program.md](./docs/contributing/refactor-program.md) — the whole-repository refactor as rounds of passes: the pass kinds (seam, module, complexity, tooling) and the edge-layer rule, running a round, running a pass, what a pass records, and merging; [refactor-ledger.md](./docs/contributing/refactor-ledger.md) is the memory between passes and the program's current status.
 - [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor scenario playback and PNG capture workflow for sidebar frames.
-- [sidebar-live-check.md](./docs/contributing/sidebar-live-check.md) — live sidebar clock, stage-flip, and click-routing checks in disposable tmux and Zellij rooms, an unresponsive-sidebar repair, a faked pull request state behind a `gh` shim, the native-subagent replay, a CLI frame capture at a chosen size, a recorded kitty-graphics capture with its Ghostty parser replay, and a loop agent check against a real provider.
+- [sidebar-live-check.md](./docs/contributing/sidebar-live-check.md) — live sidebar clock, stage-flip, and click-routing checks in disposable tmux and Zellij rooms, an unresponsive-sidebar repair, a faked pull request state behind a `gh` shim, the native-subagent replay, a CLI frame capture at a chosen size, and a recorded kitty-graphics capture with its Ghostty parser replay.
