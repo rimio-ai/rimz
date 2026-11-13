@@ -411,6 +411,7 @@ fn canonical_or_owned(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn environment_marker_requires_a_path_boundary() {
         let root = Path::new("/tmp/rrABC123");

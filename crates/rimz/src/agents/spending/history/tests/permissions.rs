@@ -43,6 +43,7 @@ fn hook_append_keeps_ancestors_private_under_restrictive_umask() {
     }
 }
 
+#[cfg(not(target_vendor = "apple"))]
 #[test]
 #[expect(clippy::print_stderr, reason = "report an unavailable test group")]
 fn append_and_migration_repair_a_racing_directory_group() {

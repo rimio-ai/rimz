@@ -3,7 +3,7 @@ use std::cell::Cell;
 use serde_json::json;
 
 use super::*;
-use crate::agents::{AgentLifecycleObservation, AgentState, LifecycleSignal};
+use crate::agents::AgentState;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::store::event::MessageEventMethod;
@@ -1472,6 +1472,8 @@ fn rotation_persists_generation_before_archive_prune_error() {
 #[cfg(target_os = "linux")]
 #[test]
 fn rotation_carryover_keeps_live_and_recently_ended_agents() {
+    use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
+
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
