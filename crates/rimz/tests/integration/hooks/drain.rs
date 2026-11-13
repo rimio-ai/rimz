@@ -265,6 +265,11 @@ fn reload_command(env: &Env, binary: &std::path::Path) -> Command {
             env.project_root.join("reload.trace"),
         )
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        // Bare reload's mount pass lists the room; it already has its sidebar.
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        )
         .env("RIMZ_TEST_SKIP_STATS_RELOAD", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -4003,7 +4003,8 @@ path = "crates/rimz/src/sidebar"
 # stall and stall::read share classified host PSI with the host and CLI producers (+2).
 # marks shares target resolution, typed errors, and runtime read/unread operations (+5).
 # PaneFrame::work_panes gives the CLI and the return key each tab's remembered work pane (+1).
-surface-budget = 247
+# mount_missing_sidebars gives bare reload the mount reconcile pass (+1).
+surface-budget = 248
 
 [[verdict]]
 kind = "item"
@@ -4054,6 +4055,11 @@ reason = "Pane, observer, enrichment, heavy lanes and transcript watches share o
 kind = "item"
 key = "sidebar::reconcile_session_sidebars"
 reason = "Explicit repair uses the same lock-before-liveness reconcile entry as attachment."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::mount_missing_sidebars"
+reason = "Bare reload adds missing sidebars through the shared reconcile lock, touching no existing sidebar or other view and rebirthing no session."
 
 [[verdict]]
 kind = "item"
@@ -4810,7 +4816,9 @@ reason = "Added-directory preflights use the same Git main-repository root as ex
 [[module]]
 path = "crates/rimz/src/wakeup"
 # broadcast_with_observation carries accepted topology evidence from the CLI (+1).
-surface-budget = 28
+# ForeignProtocolClaim and fresh_foreign_protocol_claims give reload the rooms that
+# fresh heartbeats on another protocol claim (+2).
+surface-budget = 30
 
 [[verdict]]
 kind = "item"
@@ -6182,6 +6190,16 @@ reason = "Stays the mux control engine; domain callers that need a bounded subpr
 kind = "item"
 key = "address::agent_handle"
 reason = "Attribution's canonical routable address; the renderer is inseparable from target resolution, so agents keeps this one upward call (pass 3)"
+
+[[verdict]]
+kind = "item"
+key = "wakeup::heartbeat::ForeignProtocolClaim"
+reason = "A lenient read of the room a heartbeat on another protocol claims, so reload names a renderer it cannot signal without parsing the wire itself."
+
+[[verdict]]
+kind = "item"
+key = "wakeup::heartbeat::fresh_foreign_protocol_claims"
+reason = "The fresh heartbeat files fresh_sidebar_heartbeats drops for their protocol, scanned beside it under the same TTL."
 
 [[verdict]]
 kind = "item"

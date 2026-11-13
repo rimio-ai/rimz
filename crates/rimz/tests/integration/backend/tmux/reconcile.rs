@@ -406,6 +406,43 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
 }
 
 #[test]
+fn mount_scope_leaves_an_off_width_sidebar_alone_with_a_client_attached() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-mount-keeps-width";
+    ensure_rimz_session(&server, session, Some((240, 50)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = sidebar_opts(server._tempdir.path(), session, stub, Some(240));
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    let sidebar = wait_for_sidebar_pane(&server, session, None);
+    let _client = AttachedTmuxClient::attach(&server.socket, session, 240, 50);
+    server.tmux(&["resize-pane", "-t", sidebar.raw(), "-x", "90"]);
+    assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "90");
+    let silent = rimz::mux::SidebarLiveness::default();
+
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &silent, rimz::mux::ReconcileScope::MountMissing)
+        .expect("mount pass");
+    assert_eq!(report, rimz::mux::SidebarRecovery::default());
+    assert_eq!(
+        server.display(sidebar.raw(), "#{pane_width}"),
+        "90",
+        "bare reload's pass moves no sidebar it did not add",
+    );
+
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &silent, rimz::mux::ReconcileScope::AddMissing)
+        .expect("launch add pass");
+    assert_eq!(report.redocked, 1, "the launch's add pass still converges");
+    assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "60");
+}
+
+#[test]
 fn reconcile_sidebars_ignores_other_tmux_sessions() {
     require_tmux!();
     let session_a = "rimz-reconcile-scope-a";

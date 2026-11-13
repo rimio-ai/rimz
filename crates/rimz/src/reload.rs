@@ -2,8 +2,10 @@
 //!
 //! `rimz reload` stages the invoking binary, writes it as each live room's
 //! durable target, restarts running hook drainers, nudges supervisors,
-//! hash-gates Zellij plugin convergence, re-applies tmux room options, and
-//! reports the bounded convergence window without changing terminal panes.
+//! hash-gates Zellij plugin convergence, re-applies tmux room options, mounts a
+//! sidebar in each occupied view that has none (docking it beside that view's
+//! work panes, closing or replacing no pane, and touching no existing sidebar
+//! or other view), and reports the bounded convergence window.
 //! `rimz sidebar repair` is the independent structural close/add and daemon-view
 //! reopen pass. Standalone stats dashboards and children of non-following
 //! supervisors are signalled before workspace enumeration. The rimzd processes
@@ -38,7 +40,7 @@ use crate::mux::{
 use crate::proc::ProcInfo;
 use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
 use crate::utils::time::unix_now_ms;
-use crate::wakeup::heartbeat::SidebarHeartbeat;
+use crate::wakeup::heartbeat::{SidebarHeartbeat, fresh_foreign_protocol_claims};
 use crate::workspace::{self, KnownWorkspace, record};
 
 mod report;
@@ -424,11 +426,16 @@ pub struct ReloadOutcome {
     pub deferred: usize,
     /// Kept sidebar panes whose geometry was repaired in place.
     pub redocked: usize,
-    /// Working sidebar panes that remain outside the verified full-height left
-    /// dock after the bounded repair path.
+    /// Working sidebar panes, added by bare reload's mount or kept or added by
+    /// repair, that remain outside the verified full-height left dock after the
+    /// bounded docking path.
     pub misdocked: usize,
-    /// Live sessions carrying no sidebar renderer at all.
-    pub sidebar_missing: usize,
+    /// Live sessions with no fresh sidebar heartbeat of any protocol after bare
+    /// reload's mount pass: panes between beats, which settle on their own.
+    pub sidebar_silent: usize,
+    /// Live sessions whose only fresh sidebar heartbeats carry a protocol this
+    /// build cannot signal.
+    pub sidebar_foreign_protocol: usize,
     /// Sessions whose wholly closed daemon view was reopened.
     pub daemon_reopened: usize,
     /// Sessions whose daemon view reopen awaits an attached client.
@@ -459,7 +466,8 @@ impl ReloadOutcome {
             deferred,
             redocked,
             misdocked,
-            sidebar_missing,
+            sidebar_silent,
+            sidebar_foreign_protocol,
             daemon_reopened,
             daemon_reopen_deferred,
             daemon_reopen_failed,
@@ -483,17 +491,20 @@ impl ReloadOutcome {
         self.deferred += deferred;
         self.redocked += redocked;
         self.misdocked += misdocked;
-        self.sidebar_missing += sidebar_missing;
+        self.sidebar_silent += sidebar_silent;
+        self.sidebar_foreign_protocol += sidebar_foreign_protocol;
         self.daemon_reopened += daemon_reopened;
         self.daemon_reopen_deferred += daemon_reopen_deferred;
         self.daemon_reopen_failed += daemon_reopen_failed;
     }
 }
 
-/// Publish the invoking build as durable intent and nudge every live sidebar
-/// toward it without changing pane structure. Retire outdated language-server
-/// brokers without interrupting their servers or dropping leases. Optional
-/// structural repair runs before returning each room's report.
+/// Publish the invoking build as durable intent, nudge every live sidebar
+/// toward it, and, without `repair`, mount a sidebar in each occupied view that
+/// has none, docked beside that view's work panes, closing or replacing no pane
+/// and touching no existing sidebar or other view. Retire outdated
+/// language-server brokers without interrupting their servers or dropping
+/// leases. Optional structural repair runs before returning each room's report.
 pub fn reload_user_sidebars(repair: bool) -> Result<ReloadReport, StageBuildErr> {
     let staged = stage_current_build()?;
     let brokers = crate::lsp::retire::run();
@@ -522,7 +533,7 @@ pub fn reload_user_sidebars(repair: bool) -> Result<ReloadReport, StageBuildErr>
                 let staged = &staged;
                 let machine_config = &machine_config;
                 scope.spawn(move || {
-                    let mut room = upgrade_live(target, staged, machine_config);
+                    let mut room = upgrade_live(target, staged, machine_config, !repair);
                     if repair {
                         let repair = repair_live(target, machine_config);
                         let heartbeats = session_heartbeats(
@@ -672,11 +683,13 @@ fn claim_live_session(
     seen.insert((mux, session_name.to_owned()))
 }
 
-/// Publish and nudge one live session, then reap owners whose panes are gone.
+/// Publish and nudge one live session, mount its missing sidebars when `mount`,
+/// then reap owners whose panes are gone.
 fn upgrade_live(
     target: &LiveTarget,
     staged: &StagedBuild,
     machine_config: &MachineConfig,
+    mount: bool,
 ) -> RoomReload {
     let LiveTarget {
         mux,
@@ -738,11 +751,9 @@ fn upgrade_live(
     let build = staged.build.as_str();
     outcome.already_current += current_located_count(&before_signal, build);
     let awaiting = awaiting_panes(&before_signal, build);
-    let post_wait = if awaiting.is_empty() {
-        before_signal
-    } else {
-        wait_for_convergence(runtime, *mux, &ws.session_name, &awaiting, build)
-    };
+    if !awaiting.is_empty() {
+        wait_for_convergence(runtime, *mux, &ws.session_name, &awaiting, build);
+    }
     // 2. Converge the session's presence plugin onto the current wasm — reload
     //    is the explicit upgrade verb. Stale instances retire only after the
     //    replacement publishes topology from its new writer generation; a
@@ -783,6 +794,10 @@ fn upgrade_live(
         );
     }
 
+    if mount {
+        mount_missing_sidebars(target, backend.as_ref(), machine_config, &mut outcome);
+    }
+
     // Reap orphan sidebar processes whose pane is gone — the mux cannot close a
     // pane that no longer exists, so a wedged renderer would otherwise linger.
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), *mux, ws);
@@ -794,8 +809,97 @@ fn upgrade_live(
     crate::harness::auto_gc::sweep_runtime_claims(runtime);
     room.pending = crate::mux::room_settings::pending(runtime, machine_config, *mux);
     room.outcome = outcome;
-    room.record_upgrade(&awaiting, &post_wait, build);
+    // Read after the mount pass and the reap, so a mounted sidebar is counted
+    // and neither one's duration ages the read.
+    let heartbeats = session_heartbeats(runtime, *mux, &ws.session_name);
+    let foreign_protocol =
+        heartbeats.is_empty() && foreign_protocol_heartbeat(runtime, *mux, &ws.session_name);
+    room.record_upgrade(&awaiting, &heartbeats, build, foreign_protocol);
     room
+}
+
+/// Bare reload's mount pass: a sidebar for each occupied view that has none,
+/// docked beside that view's work panes, with no pane closed or replaced, no
+/// existing sidebar or other view touched, and no session reborn.
+fn mount_missing_sidebars(
+    target: &LiveTarget,
+    backend: &dyn MuxBackend,
+    machine_config: &MachineConfig,
+    outcome: &mut ReloadOutcome,
+) {
+    let Some(rimz_bin) = reexec_target_for_workspace(&target.workspace.workspace_id) else {
+        // No view is known to lack a sidebar, and `--repair` fails the same
+        // way; the room's record problem carries the fix.
+        tracing::warn!(
+            session = target.workspace.session_name.as_str(),
+            tags.operation = "reload.mount_sidebars",
+            "reload: no verified room build to mount sidebars with",
+        );
+        return;
+    };
+    let opts = sidebar_pane_options(target, machine_config, rimz_bin);
+    record_mount(
+        outcome,
+        &target.workspace.session_name,
+        crate::sidebar::mount_missing_sidebars(backend, &opts, RELOAD_MOUNT_LOCK_WAIT),
+    );
+}
+
+/// Another pass holding the room's reconcile lock this long is reported busy.
+const RELOAD_MOUNT_LOCK_WAIT: Duration = Duration::from_secs(2);
+
+fn record_mount(
+    outcome: &mut ReloadOutcome,
+    session: &str,
+    result: Result<Option<crate::mux::SidebarRecovery>, crate::sidebar::SidebarReconcileErr>,
+) {
+    match result {
+        Ok(Some(report)) => {
+            outcome.recovered += report.recovered;
+            outcome.failed += report.failed;
+            outcome.deferred += report.deferred_adds;
+            outcome.misdocked += report.misdocked;
+        }
+        Ok(None) => outcome.busy += 1,
+        Err(err) => {
+            outcome.failed += 1;
+            tracing::warn!(
+                session,
+                tags.operation = "reload.mount_sidebars",
+                error = &err as &dyn std::error::Error,
+                "reload: mounting missing sidebars failed",
+            );
+        }
+    }
+}
+
+fn sidebar_pane_options(
+    target: &LiveTarget,
+    machine_config: &MachineConfig,
+    rimz_bin: PathBuf,
+) -> SidebarPaneOptions {
+    let LiveTarget {
+        workspace: ws,
+        runtime,
+        ..
+    } = target;
+    let width = SidebarWidth::from_config(&machine_config.theme);
+    SidebarPaneOptions {
+        runtime: runtime.clone(),
+        session_name: ws.session_name.clone(),
+        workspace_id: ws.workspace_id.clone(),
+        project_root: ws.project_root.clone(),
+        extra_env: crate::agents::registry::room_env(runtime),
+        cwd: ws.project_root.clone(),
+        target: crate::mux::width_target::resolve(runtime, width, None),
+        max_percent: width.max_percent,
+        detected_view_size: None,
+        rimz_bin,
+        pristine_birth: false,
+        config: MultiplexerConfig::from(machine_config),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    }
 }
 
 fn presence_options(
@@ -838,7 +942,6 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> RepairRes
         };
     };
     let backend = backend_for(*mux);
-    let mux_config = MultiplexerConfig::from(machine_config);
 
     let presence = if *mux == MuxName::Zellij {
         Some(
@@ -894,24 +997,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> RepairRes
         );
     }
 
-    let width = SidebarWidth::from_config(&machine_config.theme);
-    let target = crate::mux::width_target::resolve(runtime, width, None);
-    let opts = SidebarPaneOptions {
-        runtime: runtime.clone(),
-        session_name: ws.session_name.clone(),
-        workspace_id: ws.workspace_id.clone(),
-        project_root: ws.project_root.clone(),
-        extra_env: crate::agents::registry::room_env(runtime),
-        cwd: ws.project_root.clone(),
-        target,
-        max_percent: width.max_percent,
-        detected_view_size: None,
-        rimz_bin,
-        pristine_birth: false,
-        config: mux_config,
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
+    let opts = sidebar_pane_options(target, machine_config, rimz_bin);
     outcome = reconcile_repair(&ws.session_name, presence_probe.as_ref(), || {
         crate::sidebar::reconcile_session_sidebars(backend.as_ref(), &opts, Duration::from_secs(60))
     });
@@ -1086,6 +1172,19 @@ fn session_heartbeats(
         .into_iter()
         .filter(|heartbeat| heartbeat.mux == mux && heartbeat.session_name == session_name)
         .collect()
+}
+
+/// Whether a fresh heartbeat for this session carries a protocol the
+/// current-protocol readers drop: a renderer this build cannot signal.
+fn foreign_protocol_heartbeat(runtime: &RuntimePaths, mux: MuxName, session_name: &str) -> bool {
+    fresh_foreign_protocol_claims(runtime)
+        .into_iter()
+        .any(|claim| {
+            claim.mux.is_none_or(|claimed| claimed == mux.as_str())
+                && claim
+                    .session_name
+                    .is_none_or(|claimed| claimed == session_name)
+        })
 }
 
 fn current_located_count(heartbeats: &[SidebarHeartbeat], build: &str) -> usize {

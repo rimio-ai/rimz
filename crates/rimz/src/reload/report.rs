@@ -64,7 +64,15 @@ pub enum RoomState {
 /// A room-level problem requiring a targeted fix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoomProblem {
-    MissingSidebar,
+    /// The only fresh sidebar heartbeats carry a protocol this build cannot
+    /// signal.
+    SidebarProtocol,
+    /// Bare reload's mount pass failed an add or could not run.
+    MountFailed,
+    /// Bare reload's mount pass deferred an add for want of an attached client.
+    MountDeferred,
+    /// Another sidebar pass held the room's reconcile lock.
+    MountBusy,
     Drainer,
     Record(String),
     Options(String),
@@ -111,16 +119,19 @@ impl RoomReload {
         awaiting: &std::collections::HashSet<crate::ids::PaneId>,
         heartbeats: &[crate::wakeup::heartbeat::SidebarHeartbeat],
         build: &str,
+        foreign_protocol: bool,
     ) {
         self.record_sidebars(heartbeats, build);
         self.outcome.reexeced = awaiting
             .intersection(&super::current_build_claims(heartbeats, build))
             .count();
-        // A managed room always runs a sidebar, so a live session with no fresh,
-        // protocol-current heartbeat has either lost its pane or is running a
-        // renderer this build cannot signal. Reload converges neither, and repair
-        // mounts or replaces both, so the report owes the reader that verb.
-        self.outcome.sidebar_missing = usize::from(heartbeats.is_empty());
+        // The mount pass ran first, so a view without a sidebar pane has one or
+        // carries its own problem. With no fresh heartbeat after it, the panes
+        // either run a renderer this build cannot signal, which only repair
+        // replaces, or sit between beats while a restarted host re-attaches.
+        let silent = heartbeats.is_empty();
+        self.outcome.sidebar_foreign_protocol = usize::from(silent && foreign_protocol);
+        self.outcome.sidebar_silent = usize::from(silent && !foreign_protocol);
     }
 
     pub(super) fn record_repair(
@@ -152,7 +163,7 @@ impl RoomReload {
         if !self.problems().is_empty() {
             return RoomState::NeedsYou;
         }
-        if self.settling() > 0 {
+        if self.settling() > 0 || self.silent() {
             return RoomState::Settling;
         }
         RoomState::Healthy
@@ -160,8 +171,21 @@ impl RoomReload {
 
     pub fn problems(&self) -> Vec<RoomProblem> {
         let mut problems = Vec::new();
-        if self.outcome.sidebar_missing > 0 && self.repair.is_none() {
-            problems.push(RoomProblem::MissingSidebar);
+        if self.repair.is_none() {
+            for (present, problem) in [
+                (
+                    self.outcome.sidebar_foreign_protocol > 0,
+                    RoomProblem::SidebarProtocol,
+                ),
+                (self.outcome.failed > 0, RoomProblem::MountFailed),
+                (self.outcome.deferred > 0, RoomProblem::MountDeferred),
+                (self.outcome.busy > 0, RoomProblem::MountBusy),
+                (self.outcome.misdocked > 0, RoomProblem::Misdocked),
+            ] {
+                if present {
+                    problems.push(problem);
+                }
+            }
         }
         if self.outcome.drainers_stop_failed > 0 {
             problems.push(RoomProblem::Drainer);
@@ -199,8 +223,15 @@ impl RoomReload {
         (self.current_sidebars, self.sidebars)
     }
 
+    /// Reporting sidebars not yet confirmed on the staged build.
     pub fn settling(&self) -> usize {
         self.outcome.unconverged + self.outcome.unverified
+    }
+
+    /// No sidebar reported in after bare reload's mount pass, which left
+    /// nothing to add: the panes are between beats and settle on their own.
+    fn silent(&self) -> bool {
+        self.repair.is_none() && self.outcome.sidebar_silent > 0
     }
 }
 
@@ -292,7 +323,12 @@ mod tests {
         let before = [heartbeat("old", 1), heartbeat("old", 2)];
         let after = [heartbeat("new", 1)];
         let mut room = room();
-        room.record_upgrade(&super::super::awaiting_panes(&before, "new"), &after, "new");
+        room.record_upgrade(
+            &super::super::awaiting_panes(&before, "new"),
+            &after,
+            "new",
+            false,
+        );
         assert_eq!(room.sidebar_counts(), (1, 1));
         assert_eq!(room.outcome.reexeced, 1);
         assert_eq!(room.settling(), 0);
@@ -304,7 +340,12 @@ mod tests {
         let before = [heartbeat("old", 1), heartbeat("old", 2)];
         let after = [heartbeat("new", 1), heartbeat("old", 3)];
         let mut room = room();
-        room.record_upgrade(&super::super::awaiting_panes(&before, "new"), &after, "new");
+        room.record_upgrade(
+            &super::super::awaiting_panes(&before, "new"),
+            &after,
+            "new",
+            false,
+        );
         assert_eq!(room.sidebar_counts(), (1, 2));
         assert_eq!(room.outcome.reexeced, 1);
         assert_eq!(room.settling(), 1);
@@ -371,10 +412,88 @@ mod tests {
     }
 
     #[test]
-    fn repair_replaces_missing_with_its_result_and_preserves_totals() {
+    fn a_silent_room_settles_and_an_unsignalable_one_needs_repair() {
+        let mut silent = room();
+        silent.record_upgrade(&Default::default(), &[], "new", false);
+        assert!(silent.problems().is_empty());
+        assert_eq!(silent.settling(), 0, "no heartbeat to count");
+        assert_eq!(silent.state(), RoomState::Settling);
+
+        let mut foreign = room();
+        foreign.record_upgrade(&Default::default(), &[], "new", true);
+        assert_eq!(foreign.problems(), [RoomProblem::SidebarProtocol]);
+
+        let mut mixed = room();
+        mixed.record_upgrade(&Default::default(), &[heartbeat("new", 1)], "new", true);
+        assert!(mixed.problems().is_empty(), "a current heartbeat answers");
+        assert_eq!(mixed.state(), RoomState::Healthy);
+    }
+
+    #[test]
+    fn mount_results_are_problems_and_a_mounted_sidebar_stays_healthy() {
+        for (outcome, problem) in [
+            (
+                ReloadOutcome {
+                    failed: 1,
+                    ..Default::default()
+                },
+                Some(RoomProblem::MountFailed),
+            ),
+            (
+                ReloadOutcome {
+                    deferred: 1,
+                    ..Default::default()
+                },
+                Some(RoomProblem::MountDeferred),
+            ),
+            (
+                ReloadOutcome {
+                    busy: 1,
+                    ..Default::default()
+                },
+                Some(RoomProblem::MountBusy),
+            ),
+            (
+                ReloadOutcome {
+                    recovered: 1,
+                    misdocked: 1,
+                    ..Default::default()
+                },
+                Some(RoomProblem::Misdocked),
+            ),
+            (
+                ReloadOutcome {
+                    recovered: 1,
+                    ..Default::default()
+                },
+                None,
+            ),
+        ] {
+            let mut room = room();
+            room.outcome = outcome;
+            room.record_upgrade(&Default::default(), &[], "new", false);
+            match problem {
+                Some(problem) => {
+                    assert_eq!(room.problems(), [problem]);
+                    assert_eq!(room.state(), RoomState::NeedsYou, "never also settling");
+                }
+                None => {
+                    room.record_upgrade(&Default::default(), &[heartbeat("new", 1)], "new", false);
+                    assert_eq!(room.state(), RoomState::Healthy);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repair_replaces_bare_reload_findings_with_its_result_and_preserves_totals() {
         let mut room = room();
-        room.outcome.sidebar_missing = 1;
-        assert_eq!(room.problems(), vec![RoomProblem::MissingSidebar]);
+        room.outcome.failed = 1;
+        room.record_upgrade(&Default::default(), &[], "new", true);
+        assert_eq!(
+            room.problems(),
+            [RoomProblem::SidebarProtocol, RoomProblem::MountFailed]
+        );
         room.record_repair(
             ReloadOutcome {
                 sessions: 1,
@@ -399,5 +518,12 @@ mod tests {
         assert_eq!(report.repair_totals().recovered, 2);
         room.repair.as_mut().unwrap().deferred = 1;
         assert_eq!(room.problems(), vec![RoomProblem::RepairDeferred]);
+        room.repair = Some(ReloadOutcome::default());
+        room.record_upgrade(&Default::default(), &[], "new", false);
+        assert_eq!(
+            room.state(),
+            RoomState::Healthy,
+            "repair answers for a silent room"
+        );
     }
 }

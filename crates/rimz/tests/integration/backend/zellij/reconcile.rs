@@ -738,6 +738,19 @@ fn terminal_state(snapshot: &PaneSnapshot) -> BTreeMap<u64, TerminalState> {
 /// introduced; structural replacement belongs exclusively to `sidebar repair`.
 #[test]
 fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
+    assert_bare_reload_keeps_sidebars("25%", true, "3 settling, retries on its own");
+}
+
+/// The mount pass lists a room whose sidebars exist but are silent and off
+/// width with a client attached: it adds nothing and moves no pane, where the
+/// launch's add pass would converge their geometry.
+#[test]
+fn bare_reload_mounts_nothing_beside_silent_off_width_sidebars() {
+    // The row wraps before its phrase at the fixture's long root path.
+    assert_bare_reload_keeps_sidebars("50%", false, "· settling, retries on its own");
+}
+
+fn assert_bare_reload_keeps_sidebars(sidebar_size: &str, stale_heartbeats: bool, settling: &str) {
     require_zellij!();
 
     let room = LiveZellijSession::new("reloadkeep");
@@ -750,7 +763,7 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         format!(
             r#"layout {{
     default_tab_template split_direction="vertical" {{
-        pane size="25%" name="rimz-sidebar" cwd={cwd_kdl} {{
+        pane size="{sidebar_size}" name="rimz-sidebar" cwd={cwd_kdl} {{
             command {stub_kdl}
             close_on_exit true
         }}
@@ -810,7 +823,13 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     let backend = rimz::mux::ZellijBackend::with_runtime_dir(xdg);
     let before_client_view = client.view().viewed_panes;
     let mut receivers = Vec::new();
-    for pane in before.panes.iter().filter(|pane| pane.is_sidebar()) {
+    let sidebars = before.panes.iter().filter(|pane| pane.is_sidebar());
+    assert_eq!(
+        sidebars.clone().count(),
+        3,
+        "fixture has one sidebar in each tab"
+    );
+    for pane in sidebars.filter(|_| stale_heartbeats) {
         let socket = runtime.sock_dir.join(format!("reload-{}.sock", pane.id));
         receivers.push(UnixDatagram::bind(&socket).expect("bind stale sidebar socket"));
         let mut heartbeat = SidebarHeartbeat::new(
@@ -835,7 +854,6 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
         .expect("write stale heartbeat");
         crate::common::room::date_heartbeat_as_live(&path);
     }
-    assert_eq!(receivers.len(), 3, "fixture has one sidebar in each tab");
 
     let zellij_trace = TempDir::new().expect("zellij trace tempdir");
     let zellij_log = zellij_trace.path().join("zellij.log");
@@ -887,8 +905,8 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("3 settling, retries on its own"),
-        "stale sidebars should be visible as settling: {stdout}",
+        stdout.contains(settling),
+        "present sidebars should be visible as settling: {stdout}",
     );
     let mux_log = std::fs::read_to_string(&zellij_log).expect("read zellij trace log");
     for mutation in ["action new-pane", "action close-pane", "action resize"] {
