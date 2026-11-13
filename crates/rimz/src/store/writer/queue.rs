@@ -922,9 +922,7 @@ impl Store {
                     .live()
                     .iter()
                     .filter(|live| live.message_id != message.message_id),
-                &message.kind,
-                &message.agent_id,
-                message.agent_name.as_deref(),
+                message.card_ref(),
                 now,
             )
             .map(|blocker| blocker.message_id.clone());
@@ -1022,7 +1020,7 @@ impl Store {
     }
 
     /// Marks live `Queued`, `Claimed`, or `Sent` records `Sent`. A record that is not live is skipped
-    /// and absent from the result.
+    /// and absent from the result. A command keeps the text the supplied copy says was typed.
     #[must_use = "durability barrier; check the result"]
     pub fn record_sent_batch(
         &self,
@@ -1043,6 +1041,10 @@ impl Store {
                 };
                 message.pane_id = supplied.pane_id.clone();
                 message.batch_id = supplied.batch_id.clone();
+                if message.body == MessageBody::Command {
+                    message.text.clone_from(&supplied.text);
+                }
+                message.sent_epoch = supplied.sent_epoch;
                 message.status = MessageStatus::Sent;
                 message.last_sent_at = Some(now);
                 message.updated_at = now;
@@ -1250,7 +1252,7 @@ impl Store {
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
-        self.confirm_delivered_for_card_with(card, ack, None, session_name, |_, _| {})
+        self.confirm_delivered_for_card_with(card, ack, None, 0, session_name, |_, _| {})
     }
 
     /// Observe the exact selection under the workspace lock, before the queue write. The callback must not acquire that lock again; enrichment errors belong to the caller and must not fail acknowledgment.
@@ -1258,12 +1260,15 @@ impl Store {
     /// `row` is the card's row as folded after the observation this acknowledges. In the same
     /// transaction, after acknowledgement selection, every queued record of the card that
     /// selection left whose row premise `row` shows broken is withdrawn.
+    /// `acked_epoch` is the epoch of the row the ack came from. The uncorrelated selection
+    /// skips a record written into a lower epoch's session, which a swap replaced.
     #[must_use = "durability barrier; check the result"]
     pub fn confirm_delivered_for_card_with(
         &self,
         card: AgentCardRef<'_>,
         ack: DeliveryAck<'_>,
         row: Option<&AgentState>,
+        acked_epoch: u32,
         session_name: &str,
         before_commit: impl FnOnce(&[MessageRecord], DeliveryAckMatch),
     ) -> Result<Vec<MessageRecord>> {
@@ -1274,6 +1279,7 @@ impl Store {
                     message.status == MessageStatus::Sent
                         && message.body == body
                         && message.same_card(card)
+                        && message.sent_epoch.is_none_or(|epoch| epoch >= acked_epoch)
                 });
                 let Some(oldest) = pool
                     .clone()
@@ -1778,12 +1784,9 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn clear_messages_for(
         &self,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-        agent_name: Option<&str>,
+        card: AgentCardRef<'_>,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
-        let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit_queue(|queue| {
             let cleared = queue.finalize_matching(
                 MessageStatus::Canceled,
@@ -1877,14 +1880,11 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn archive_messages_for_card(
         &self,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-        agent_name: Option<&str>,
+        card: AgentCardRef<'_>,
         enqueued_through: Option<Timestamp>,
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
-        let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit_queue(|queue| {
             let archived =
                 queue.finalize_matching(MessageStatus::Archived, session_name, reason, |message| {
@@ -1900,13 +1900,10 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn archive_messages_watching_card(
         &self,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-        agent_name: Option<&str>,
+        card: AgentCardRef<'_>,
         enqueued_through: Option<Timestamp>,
         session_name: &str,
     ) -> Result<usize> {
-        let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit_queue(|queue| {
             let archived = queue.apply_all(session_name, Timestamp::now(), |message| {
                 if message.status != MessageStatus::Queued

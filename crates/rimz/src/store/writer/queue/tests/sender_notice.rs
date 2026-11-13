@@ -488,6 +488,7 @@ fn an_unmet_after_on_an_ended_agent_archives_and_tells_its_sender() {
         kind: watched.kind.clone(),
         agent_id: watched.agent_id.clone(),
         agent_name: Some("planner".to_owned()),
+        launch_id: None,
         address: "@planner".to_owned(),
         met_at,
     };
@@ -498,9 +499,7 @@ fn an_unmet_after_on_an_ended_agent_archives_and_tells_its_sender() {
 
     let archived = q
         .archive_messages_watching_card(
-            &watched.kind,
-            &watched.agent_id,
-            Some("planner"),
+            AgentCardRef::new(&watched.kind, &watched.agent_id, Some("planner")),
             None,
             "session",
         )

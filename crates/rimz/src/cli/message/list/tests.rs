@@ -315,6 +315,7 @@ fn message_snippet_preserves_conditions_when_clipping_text() {
         kind: row.kind.clone(),
         agent_id: "planner".into(),
         agent_name: None,
+        launch_id: None,
         address: "@planner".to_owned(),
         met_at: None,
     });
@@ -322,6 +323,7 @@ fn message_snippet_preserves_conditions_when_clipping_text() {
         kind: row.kind.clone(),
         agent_id: "reviewer".into(),
         agent_name: None,
+        launch_id: None,
         address: "@reviewer".to_owned(),
         status: AgentStatus::Idle,
         dwell_secs: 60,
@@ -341,6 +343,7 @@ fn message_snippet_preserves_fold_span_and_marker_at_narrow_width() {
         kind: row.kind.clone(),
         agent_id: "planner".into(),
         agent_name: None,
+        launch_id: None,
         address: "@planner".to_owned(),
         met_at: None,
     });
@@ -396,6 +399,7 @@ fn message_snippet_marks_only_unmet_after_conditions() {
         kind: upstream.kind.clone(),
         agent_id: upstream.agent_id.clone(),
         agent_name: upstream.name.clone(),
+        launch_id: None,
         address: "@planner".to_owned(),
         met_at: None,
     };
@@ -810,4 +814,23 @@ fn agent(id: &str, status: AgentStatus) -> AgentState {
 
 fn now() -> jiff::Timestamp {
     jiff::Timestamp::UNIX_EPOCH
+}
+
+#[test]
+fn a_target_lists_the_records_parked_for_its_agent_before_a_molt_to_another_kind() {
+    let mut old = agent("sess-old", AgentStatus::Idle);
+    old.launch_id = Some("launch_coder".into());
+    old.name = Some("coder".to_owned());
+    let mut holder = AgentState::stub("codex", "sess-new", AgentStatus::Idle);
+    holder.launch_id = old.launch_id.clone();
+    holder.name = Some("molted".to_owned());
+    let row = MessageListRow::from_record(MessageRecord::new(
+        workspace_id(),
+        &old,
+        "parked".to_owned(),
+        DeliveryGate::Done,
+    ));
+    assert!(row.card_ref().matches(holder.card_ref()));
+    holder.launch_id = Some("another-agent".into());
+    assert!(!row.card_ref().matches(holder.card_ref()));
 }

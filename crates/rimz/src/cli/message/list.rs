@@ -40,6 +40,9 @@ pub(super) struct MessageListRow {
     pub(super) agent_id: AgentSessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agent_name: Option<String>,
+    /// The receiver's launch (`MessageRecord::launch_id`); a terminal event carries none.
+    #[serde(skip)]
+    pub(super) launch_id: Option<AgentSessionId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) channel: Option<LaneName>,
     pub(super) sender: MessageSender,
@@ -125,6 +128,11 @@ impl MessageListRow {
             && self.status == other.status
     }
 
+    fn card_ref(&self) -> rimz::agents::AgentCardRef<'_> {
+        rimz::agents::AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+            .with_launch(self.launch_id.as_ref())
+    }
+
     pub(super) fn from_record(message: MessageRecord) -> Self {
         Self {
             message_id: message.message_id,
@@ -133,6 +141,7 @@ impl MessageListRow {
             kind: message.kind,
             agent_id: message.agent_id,
             agent_name: message.agent_name,
+            launch_id: message.launch_id,
             channel: message.channel,
             sender: message.sender,
             body: message.body,
@@ -181,6 +190,7 @@ impl MessageListRow {
             kind: payload.kind,
             agent_id: payload.agent_id,
             agent_name: payload.agent_name,
+            launch_id: None,
             channel: payload.channel,
             sender: payload.sender.unwrap_or_default(),
             body: payload.body,
@@ -282,14 +292,7 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
         .flatten()
         .unwrap_or_else(|| empty_message_digest(&lane_scope, args.status));
     if let Some(agent) = target {
-        messages.retain(|message| {
-            rimz::agents::AgentCardRef::new(
-                &message.kind,
-                &message.agent_id,
-                message.agent_name.as_deref(),
-            )
-            .matches(agent.card_ref())
-        });
+        messages.retain(|message| message.card_ref().matches(agent.card_ref()));
     }
     messages.retain(|message| lane_scope.contains_channel(message.channel.as_ref()));
     if let Some(status) = args.status {

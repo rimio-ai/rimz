@@ -525,6 +525,11 @@ fn launch_and_supervise(
         {
             tracing::warn!(%error, "could not queue the restarted session's continue");
         }
+        let resume_launch = request
+            .identity
+            .launch_id
+            .as_deref()
+            .map(AgentSessionId::from);
         match invocation
             .store()
             .and_then(|store| Ok(store.list_pending_messages()?))
@@ -532,10 +537,10 @@ fn launch_and_supervise(
             Ok(pending) => rimz::message::spawn_queued_head(
                 workspace,
                 &pending,
-                rimz::agents::AgentCardRef::new(
-                    &target.0,
-                    &target.1,
+                resume_queue_card(
+                    target,
                     request.identity.name.as_deref(),
+                    resume_launch.as_ref(),
                 ),
                 |spawn| {
                     if let Err(error) =
@@ -1509,6 +1514,17 @@ fn exec_attach_target(
         | rimz::harness::launch::ExecAction::Pick { .. }
         | rimz::harness::launch::ExecAction::Fork { .. } => None,
     }
+}
+
+/// The card a resumed wrapper wakes its queued head for, keyed by the
+/// agent's launch so a record queued for the agent before a cross-kind molt
+/// still matches.
+fn resume_queue_card<'a>(
+    target: &'a (AgentKind, AgentSessionId),
+    name: Option<&'a str>,
+    launch: Option<&'a AgentSessionId>,
+) -> rimz::agents::AgentCardRef<'a> {
+    rimz::agents::AgentCardRef::new(&target.0, &target.1, name).with_launch(launch)
 }
 
 fn record_own_run_pane(context: &RunExecContext) {

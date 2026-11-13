@@ -728,8 +728,14 @@ pub fn archive_for_ended_agent(
     {
         return Ok(false);
     }
-    store.archive_messages_watching_card(kind, agent_id, agent_name, None, session_name)?;
-    let reason = rows.find(kind, agent_id).map_or_else(
+    let receiver = rows.find(kind, agent_id);
+    // The row's launch reaches the records of every session of the agent, of any kind.
+    let card = receiver.map_or_else(
+        || crate::agents::AgentCardRef::new(kind, agent_id, agent_name),
+        AgentState::card_ref,
+    );
+    store.archive_messages_watching_card(card, None, session_name)?;
+    let reason = receiver.map_or_else(
         || "receiver ended".to_owned(),
         |receiver| {
             let peers: Vec<_> = rows
@@ -739,7 +745,7 @@ pub fn archive_for_ended_agent(
             ended_receiver_reason(receiver, None, &peers)
         },
     );
-    store.archive_messages_for_card(kind, agent_id, agent_name, None, &reason, session_name)?;
+    store.archive_messages_for_card(card, None, &reason, session_name)?;
     Ok(true)
 }
 
@@ -839,13 +845,7 @@ pub fn sweep(
                 (message, DeliveryPolicy::Boundary)
             }
             None => {
-                let Some(head) = queue_head(
-                    pending.iter(),
-                    &message.kind,
-                    &message.agent_id,
-                    message.agent_name.as_deref(),
-                    now,
-                ) else {
+                let Some(head) = queue_head(pending.iter(), message.card_ref(), now) else {
                     continue;
                 };
                 (head, DeliveryPolicy::Boundary)
@@ -898,16 +898,12 @@ pub fn sweep(
                     &crate::address::addressable_agents(snapshot),
                 );
                 store.archive_messages_watching_card(
-                    &receiver.kind,
-                    &receiver.agent_id,
-                    receiver.name.as_deref(),
+                    receiver.card_ref(),
                     receiver.ended_at,
                     &workspace.session_name,
                 )?;
                 store.archive_messages_for_card(
-                    &receiver.kind,
-                    &receiver.agent_id,
-                    receiver.name.as_deref(),
+                    receiver.card_ref(),
                     receiver.ended_at,
                     &reason,
                     &workspace.session_name,

@@ -108,13 +108,8 @@ pub fn spawn_queued_head(
     mut spawn: impl FnMut(&RefreshSpawn),
 ) {
     // A stable name folds provisional and registered ids into the same queue.
-    let Some(head) = crate::store::message::queue_head(
-        pending.iter(),
-        card.kind,
-        card.agent_id,
-        card.name,
-        Timestamp::now(),
-    ) else {
+    let Some(head) = crate::store::message::queue_head(pending.iter(), card, Timestamp::now())
+    else {
         return;
     };
     spawn(&RefreshSpawn {
@@ -175,6 +170,7 @@ struct RecipientIdentity {
     kind: AgentKind,
     agent_id: AgentSessionId,
     agent_name: Option<String>,
+    launch_id: Option<AgentSessionId>,
     channel: Option<LaneName>,
     pane_id: Option<PaneId>,
 }
@@ -186,6 +182,7 @@ impl Recipient<'_> {
                 kind: agent.kind.clone(),
                 agent_id: agent.agent_id.clone(),
                 agent_name: agent.name.clone(),
+                launch_id: agent.launch_id.clone(),
                 channel: agent.lane_name().or_else(|| {
                     pane.and_then(|pane| recipient_channel(pane, Some(agent), scope_channel))
                 }),
@@ -200,6 +197,7 @@ impl Recipient<'_> {
                 agent_name: bound
                     .and_then(|agent| agent.name.clone())
                     .or_else(|| pane.name.clone()),
+                launch_id: bound.and_then(|agent| agent.launch_id.clone()),
                 channel: recipient_channel(pane, bound, scope_channel),
                 pane_id: Some(pane.pane_id.clone()),
             },
@@ -227,6 +225,7 @@ impl MessageDraft {
             self.enter,
             self.gate,
         )
+        .with_launch_id(recipient.launch_id)
         .with_body(self.body)
         .with_force(self.force)
         .with_address(address.map(ToOwned::to_owned))

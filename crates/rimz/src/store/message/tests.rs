@@ -263,17 +263,13 @@ fn soft_compact_wrap_up_never_enters_or_holds_the_boundary_fifo() {
             live[0].is_deliverable(now),
             queue_head(
                 live.iter(),
-                &receiver.kind,
-                &receiver.agent_id,
-                Some("coder"),
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, Some("coder")),
                 now,
             )
             .map(|message| message.message_id.clone()),
             in_flight_claim(
                 live.iter(),
-                &receiver.kind,
-                &receiver.agent_id,
-                Some("coder"),
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, Some("coder")),
                 now,
             )
             .is_some(),
@@ -1022,15 +1018,17 @@ fn expired_command_is_neither_a_head_nor_a_batch_blocker() {
     let prompt = delivery_message(2, &receiver, DeliveryGate::Done, None);
     let live = [command.clone(), prompt.clone()];
     assert_eq!(
-        queue_head(live.iter(), &receiver.kind, &receiver.agent_id, None, now),
+        queue_head(
+            live.iter(),
+            AgentCardRef::new(&receiver.kind, &receiver.agent_id, None),
+            now
+        ),
         Some(&prompt)
     );
     assert_eq!(
         queue_head(
             live.iter(),
-            &receiver.kind,
-            &receiver.agent_id,
-            None,
+            AgentCardRef::new(&receiver.kind, &receiver.agent_id, None),
             now - Duration::from_secs(1)
         ),
         Some(&command)
@@ -1652,6 +1650,7 @@ fn open_and_due_covers_status_schedule_conditions_and_internal_lanes() {
         kind: receiver.kind.clone(),
         agent_id: receiver.agent_id.clone(),
         agent_name: receiver.name.clone(),
+        launch_id: None,
         address: "@coder".to_owned(),
         status: AgentStatus::Idle,
         dwell_secs: 0,
@@ -1720,10 +1719,12 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
         assert_eq!(
             queue_head(
                 pending.iter(),
-                &registered.kind,
-                &registered.agent_id,
-                registered.name.as_deref(),
-                now,
+                AgentCardRef::new(
+                    &registered.kind,
+                    &registered.agent_id,
+                    registered.name.as_deref()
+                ),
+                now
             )
             .unwrap()
             .message_id,
@@ -1732,10 +1733,8 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
         assert_eq!(
             queue_head(
                 pending.iter(),
-                &registered.kind,
-                &registered.agent_id,
-                None,
-                now,
+                AgentCardRef::new(&registered.kind, &registered.agent_id, None),
+                now
             )
             .unwrap()
             .message_id,
@@ -1761,10 +1760,8 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
         assert_eq!(
             queue_head(
                 pending.iter(),
-                &receiver.kind,
-                &receiver.agent_id,
-                receiver.name.as_deref(),
-                now,
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, receiver.name.as_deref()),
+                now
             )
             .unwrap()
             .message_id,
@@ -1796,10 +1793,8 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
         assert_eq!(
             queue_head(
                 pending.iter(),
-                &receiver.kind,
-                &receiver.agent_id,
-                receiver.name.as_deref(),
-                now,
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, receiver.name.as_deref()),
+                now
             )
             .unwrap()
             .message_id,
@@ -1820,10 +1815,8 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
         assert_eq!(
             queue_head(
                 pending.iter(),
-                &receiver.kind,
-                &receiver.agent_id,
-                receiver.name.as_deref(),
-                now,
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, receiver.name.as_deref()),
+                now
             )
             .unwrap()
             .message_id,
@@ -1933,10 +1926,8 @@ fn in_flight_claim_selects_unexpired_claims_and_sent_prompts_for_the_card() {
         assert_eq!(
             in_flight_claim(
                 [&message],
-                &receiver.kind,
-                &receiver.agent_id,
-                receiver.name.as_deref(),
-                now,
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, receiver.name.as_deref()),
+                now
             ),
             selected.then_some(&message),
             "{message:?}"
@@ -1955,10 +1946,8 @@ fn in_flight_claim_selects_unexpired_claims_and_sent_prompts_for_the_card() {
         assert_eq!(
             in_flight_claim(
                 [&message],
-                &receiver.kind,
-                &receiver.agent_id,
-                receiver.name.as_deref(),
-                now,
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, receiver.name.as_deref()),
+                now
             ),
             selected.then_some(&message),
             "{message:?}"
@@ -2086,10 +2075,8 @@ fn overdue_sent_prompt_releases_in_flight_claim_without_reconciliation() {
         assert_eq!(
             in_flight_claim(
                 [&sent],
-                &receiver.kind,
-                &receiver.agent_id,
-                receiver.name.as_deref(),
-                now,
+                AgentCardRef::new(&receiver.kind, &receiver.agent_id, receiver.name.as_deref()),
+                now
             ),
             held.then_some(&sent),
         );
@@ -2236,6 +2223,7 @@ fn delivery_batch_selector_pins_fifo_lanes_and_compatible_prefix() {
         kind: AgentKind::new_unchecked("codex"),
         agent_id: "upstream".into(),
         agent_name: None,
+        launch_id: None,
         address: "@upstream".to_owned(),
         met_at: None,
     });
@@ -2356,6 +2344,7 @@ pub(crate) fn after_condition(agent: &AgentState, met_at: Option<Timestamp>) -> 
         kind: agent.kind.clone(),
         agent_id: agent.agent_id.clone(),
         agent_name: agent.name.clone(),
+        launch_id: None,
         address: format!("@{}", agent.name.as_deref().unwrap_or(agent.kind.as_str())),
         met_at,
     }
@@ -2371,6 +2360,7 @@ pub(crate) fn when_condition(
         kind: agent.kind.clone(),
         agent_id: agent.agent_id.clone(),
         agent_name: agent.name.clone(),
+        launch_id: None,
         address: format!("@{}", agent.name.as_deref().unwrap_or(agent.kind.as_str())),
         status,
         dwell_secs,

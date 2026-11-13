@@ -2906,7 +2906,8 @@ fn a_swap_wrapper_error_settles_the_agent_only_after_its_bind() {
             "rebase first".into(),
             true,
             rimz::store::message::DeliveryGate::Done,
-        );
+        )
+        .with_launch_id(Some(reservation.launch_id().clone()));
         env.store()
             .queue_message(&parked, &workspace.session_name)
             .unwrap();

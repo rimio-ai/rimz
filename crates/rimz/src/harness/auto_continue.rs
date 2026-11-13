@@ -979,6 +979,24 @@ pub fn clear_budget_park(runtime: &RuntimePaths, kind: &AgentKind, agent_id: &Ag
     }
 }
 
+/// Arm a session-budget park on `kind`/`agent_id` whose episode began at `last_activity`.
+#[cfg(test)]
+pub(crate) fn arm_test_park(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    last_activity: Timestamp,
+) {
+    arm_budget_park(
+        runtime,
+        kind,
+        agent_id,
+        last_activity,
+        last_activity,
+        crate::agents::BudgetWindow::Session,
+    );
+}
+
 #[cfg(test)]
 pub(crate) fn budget_park_armed(
     runtime: &RuntimePaths,

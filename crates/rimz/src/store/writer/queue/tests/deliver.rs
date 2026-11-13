@@ -357,6 +357,20 @@ fn record_sent_then_turn_start_confirms_delivery() {
     let q = Queue::new();
 
     let sent = q.sent(1);
+    assert_eq!(sent.sent_epoch, None);
+    let stamped = q
+        .record(2)
+        .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    q.queue_message(&stamped, "session").unwrap();
+    let mut written = stamped.clone();
+    written.sent_epoch = Some(2);
+    let stamped = q.record_sent_message(&written, "session").unwrap().unwrap();
+    assert_eq!(
+        stamped.sent_epoch,
+        Some(2),
+        "the Sent write keeps the checked row's epoch"
+    );
+    q.settle(&stamped.message_id, MessageStatus::Canceled, None);
     assert_eq!(sent.status, MessageStatus::Sent);
     assert_eq!(sent.pane_id.as_ref().map(PaneId::as_str), Some("tmux:%1"));
     assert!(q.list_pending_messages().unwrap().is_empty());
@@ -393,6 +407,7 @@ fn messages_and_history_read_as_one_view_across_an_ack() {
                 prompt: Some(&user_message("next")),
             },
             None,
+            0,
             "session",
             |_, _| {
                 let store: &Store = &q;
@@ -851,6 +866,7 @@ fn assert_later_human_turn_does_not_confirm_launcher_steer(prompt: Option<&str>)
             AgentCardRef::new(&sent[0].kind, &sent[0].agent_id, None),
             DeliveryAck::TurnStarted { prompt },
             None,
+            0,
             "session",
             |_, selected| selection = Some(selected),
         )

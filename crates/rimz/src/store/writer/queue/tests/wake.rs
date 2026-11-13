@@ -116,6 +116,7 @@ fn deferred_head_ignores_ready_followers_but_keeps_independent_wakes() {
                             kind: record.kind.clone(),
                             agent_id: record.agent_id.clone(),
                             agent_name: None,
+                            launch_id: None,
                             address: "@watch".to_owned(),
                             met_at: None,
                         });

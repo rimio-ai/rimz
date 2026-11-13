@@ -1011,14 +1011,17 @@ const PROMPT_LABEL_MAX_CHARS: usize = 160;
 
 /// Borrowed identity for one logical agent card.
 ///
-/// A provisional launch and its registered session share a card when they
-/// carry the same stable name, while exact session ids keep unnamed sessions
-/// distinct.
+/// Two cards that both carry a launch id are the same agent exactly when the
+/// launch ids are equal, of any kind, or they name the same session. Without a
+/// launch on one side, a provisional launch and its registered session share a
+/// card when they carry the same stable name within one kind, while exact
+/// session ids keep unnamed sessions distinct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AgentCardRef<'a> {
     pub kind: &'a AgentKind,
     pub agent_id: &'a AgentSessionId,
     pub name: Option<&'a str>,
+    pub launch: Option<&'a AgentSessionId>,
 }
 
 impl<'a> AgentCardRef<'a> {
@@ -1031,12 +1034,22 @@ impl<'a> AgentCardRef<'a> {
             kind,
             agent_id,
             name,
+            launch: None,
         }
     }
 
+    #[must_use]
+    pub const fn with_launch(mut self, launch: Option<&'a AgentSessionId>) -> Self {
+        self.launch = launch;
+        self
+    }
+
     pub fn matches(self, other: Self) -> bool {
-        self.kind == other.kind
-            && (self.agent_id == other.agent_id || (self.name.is_some() && self.name == other.name))
+        let same_session = self.kind == other.kind && self.agent_id == other.agent_id;
+        if let (Some(launch), Some(other_launch)) = (self.launch, other.launch) {
+            return launch == other_launch || same_session;
+        }
+        same_session || (self.kind == other.kind && self.name.is_some() && self.name == other.name)
     }
 }
 
@@ -2107,6 +2120,7 @@ impl AgentState {
 
     pub fn card_ref(&self) -> AgentCardRef<'_> {
         AgentCardRef::new(&self.kind, &self.agent_id, self.name.as_deref())
+            .with_launch(self.launch_id.as_ref())
     }
 
     /// A pane-backed child created through `rimz subagents`.

@@ -341,13 +341,23 @@ fn write_live(
     let head = batch
         .first()
         .expect("a write decision keeps at least one message");
+    let checked = |row: &Option<AgentState>| row.as_ref().or(bound).cloned();
     let sent = |compacted| Receipt::Sent {
         compacted,
         interrupt: InterruptConfirmation::NotChecked,
     };
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
-        write_text(workspace, store, snapshot, writer, &batch, send)?;
+        let receiver = checked(&fresh);
+        write_text(
+            workspace,
+            store,
+            snapshot,
+            writer,
+            &batch,
+            receiver.as_ref(),
+            send,
+        )?;
         return Ok((sent(false), fresh));
     }
     debug_assert!(
@@ -359,7 +369,16 @@ fn write_live(
         .iter()
         .find_map(|message| compact_message_for_target(store, target, fresh.as_ref(), message));
     let Some((command, threshold, agent)) = compact else {
-        write_text(workspace, store, snapshot, writer, &batch, send)?;
+        let receiver = checked(&fresh);
+        write_text(
+            workspace,
+            store,
+            snapshot,
+            writer,
+            &batch,
+            receiver.as_ref(),
+            send,
+        )?;
         return Ok((sent(false), fresh));
     };
     // Claimed only once the decisions above passed, so the command record
@@ -372,6 +391,7 @@ fn write_live(
         snapshot,
         writer,
         std::slice::from_ref(&command),
+        checked(&fresh).as_ref(),
         send,
     ) {
         store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
@@ -397,22 +417,53 @@ fn write_live(
         Decided::Write { row, batch } => (row, batch),
         Decided::Stop(receipt) => return Ok((receipt, None)),
     };
-    write_text(workspace, store, snapshot, writer, &batch, send)?;
+    let receiver = checked(&fresh);
+    write_text(
+        workspace,
+        store,
+        snapshot,
+        writer,
+        &batch,
+        receiver.as_ref(),
+        send,
+    )?;
     Ok((sent(true), fresh))
 }
 
+/// The receiver's live holder row as it stands now; a session a restart or molt replaced is
+/// never the receiver.
 fn row_under_lock(store: &Store, head: &MessageRecord) -> Result<Option<AgentState>> {
     let current = store.snapshot_with_context(|_, _| false)?;
+    let holders = crate::agents::state::LaunchHolders::new(current.agents.iter());
     Ok(store
-        .rows_with_live_context(
-            current
-                .agents
-                .iter()
-                .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none()),
-        )
+        .rows_with_live_context(current.agents.iter().find(|agent| {
+            head.same_agent_card(agent) && agent.ended_at.is_none() && !holders.replaced(agent)
+        }))
         .into_iter()
         .next()
         .map(std::borrow::Cow::into_owned))
+}
+
+/// The agent moved off the claim's pane while the write waited, or a launch record's agent has
+/// no live holder yet: the record goes back to its queue for the holder's pane. A record an
+/// older binary wrote, without a launch, is checked the same way against a holder of a launch,
+/// the only rows a swap replaces; a hand-launched agent's records never carry one.
+fn claim_moved(
+    head: &MessageRecord,
+    fresh: Option<&AgentState>,
+    pane: &crate::ids::PaneId,
+) -> bool {
+    match fresh {
+        Some(row) if head.launch_id.is_some() || row.launch_id.is_some() => {
+            !holder_on_pane(fresh, pane)
+        }
+        Some(_) => false,
+        None => head.launch_id.is_some(),
+    }
+}
+
+fn holder_on_pane(holder: Option<&AgentState>, pane: &crate::ids::PaneId) -> bool {
+    holder.is_some_and(|row| row.pane.as_ref().is_none_or(|bound| &bound.pane_id == pane))
 }
 
 pub(super) fn interrupt_key(kind: &crate::ids::AgentKind, label: &str) -> Result<NamedKey> {
@@ -509,7 +560,11 @@ fn wait_and_decide(
     if !store.message_claims_held(batch)? {
         return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
     }
+    let moved = |fresh: &Option<AgentState>| claim_moved(head, fresh.as_ref(), pane);
     let mut fresh = row_under_lock(store, head)?;
+    if moved(&fresh) {
+        return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
+    }
     let mut batch = batch.to_vec();
     // A withdrawal commit waits on the workspace lock, behind any hook frame applied meanwhile,
     // and can cancel a "still queued" warning in the batch: judge the survivors again on a
@@ -528,6 +583,9 @@ fn wait_and_decide(
             return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
         }
         fresh = row_under_lock(store, &survivors[0])?;
+        if moved(&fresh) {
+            return Ok(Decided::Stop(Receipt::ClaimLost { compacted }));
+        }
         batch = survivors;
     }
     let head = &batch[0];
@@ -616,31 +674,37 @@ fn withdraw_broken(
     Ok(Some(held))
 }
 
-/// Paste or type the batch, record it `Sent`, then submit it.
+/// Paste or type the batch, record it `Sent` at the epoch of `receiver` (the row the write was
+/// checked against), then submit it. A command records the text it typed.
 fn write_text(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
     writer: &PaneWriter,
     batch: &[MessageRecord],
+    receiver: Option<&AgentState>,
     send: &LiveSend,
 ) -> Result<()> {
     let head = batch
         .first()
         .expect("write_text requires at least one message");
+    let mut typed = None;
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
-            let declared = crate::agents::spec_by_kind(head.kind.as_str())
+            let kind = receiver.map_or(&head.kind, |row| &row.kind);
+            let declared = crate::agents::spec_by_kind(kind.as_str())
                 .and_then(|spec| spec.launch.compact_command)
                 .map(|compact| compact.command);
+            let text = compaction_for_receiver(head, receiver).unwrap_or_else(|| head.text.clone());
             type_command_with(
-                &head.text,
+                &text,
                 declared,
                 send,
                 |segment| writer.type_text(segment),
                 sleep,
             )?;
+            typed = Some(text);
         }
         MessageBody::Prompt => {
             debug_assert!(
@@ -664,7 +728,18 @@ fn write_text(
     }
     // Record the send once the text lands and before the submit keystroke, so a
     // submitted message is always preceded by its durable record and audit event.
-    let recorded = store.record_sent_batch(batch, &workspace.session_name)?;
+    let stamped = batch
+        .iter()
+        .cloned()
+        .map(|mut message| {
+            message.sent_epoch = receiver.map(|row| row.epoch);
+            if let Some(text) = &typed {
+                message.text.clone_from(text);
+            }
+            message
+        })
+        .collect::<Vec<_>>();
+    let recorded = store.record_sent_batch(&stamped, &workspace.session_name)?;
     let unrecorded = batch
         .iter()
         .filter(|message| {
@@ -687,6 +762,23 @@ fn write_text(
         writer.press(NamedKey::Enter)?;
     }
     Ok(())
+}
+
+/// The receiver's own compaction command for a queued compaction its agent's molt to another kind
+/// left in the old kind's words, carrying the queued instruction; `None` for any other command
+/// or a receiver of the queued kind. A receiver without a compaction command types it as queued.
+fn compaction_for_receiver(head: &MessageRecord, receiver: Option<&AgentState>) -> Option<String> {
+    let receiver = receiver.filter(|row| row.kind != head.kind)?;
+    let queued = crate::agents::spec_by_kind(head.kind.as_str())?
+        .launch
+        .compact_command?;
+    let rest = head.text.strip_prefix(queued.command)?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    crate::agents::spec_by_kind(receiver.kind.as_str())?
+        .launch
+        .compact_command(rest.trim())
 }
 
 fn type_command_with<E>(
@@ -788,6 +880,68 @@ pub fn already_compacted_at(store: &Store, agent: &AgentState, used: u64) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queued_command(kind: &str, text: &str) -> MessageRecord {
+        let receiver = AgentState::stub(kind, "sess-old", crate::agents::AgentStatus::Idle);
+        MessageRecord::new(
+            crate::ids::WorkspaceId::parse("ws_000000000000000000000000").unwrap(),
+            &receiver,
+            text.to_owned(),
+            crate::store::message::DeliveryGate::Done,
+        )
+        .with_body(MessageBody::Command)
+    }
+
+    #[test]
+    fn a_compaction_queued_before_a_molt_types_the_holders_command() {
+        let hermes = AgentState::stub("hermes", "sess-new", crate::agents::AgentStatus::Idle);
+        let claude = AgentState::stub("claude", "sess-new", crate::agents::AgentStatus::Idle);
+        let compact = queued_command("claude", "/compact keep the open questions");
+        assert_eq!(
+            compaction_for_receiver(&compact, Some(&hermes)).as_deref(),
+            Some("/compress keep the open questions")
+        );
+        assert_eq!(
+            compaction_for_receiver(&queued_command("claude", "/compact"), Some(&hermes))
+                .as_deref(),
+            Some("/compress")
+        );
+        assert_eq!(compaction_for_receiver(&compact, Some(&claude)), None);
+        assert_eq!(compaction_for_receiver(&compact, None), None);
+        for other in ["/model opus", "/compactor"] {
+            assert_eq!(
+                compaction_for_receiver(&queued_command("claude", other), Some(&hermes)),
+                None,
+                "{other}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_claim_on_a_replaced_pane_goes_back_to_its_queue() {
+        let old_pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
+        let mut holder = AgentState::stub("claude", "sess-new", crate::agents::AgentStatus::Idle);
+        holder.launch_id = Some("launch_coder".into());
+        holder.epoch = 1;
+        holder.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%2"),
+        ));
+        let legacy = queued_command("claude", "hello");
+        assert!(legacy.launch_id.is_none());
+        assert!(claim_moved(&legacy, Some(&holder), &old_pane));
+        assert!(
+            !claim_moved(&legacy, None, &old_pane),
+            "no holder found: write as before"
+        );
+        holder.launch_id = None;
+        assert!(
+            !claim_moved(&legacy, Some(&holder), &old_pane),
+            "a hand-launched agent has no swap to follow"
+        );
+        holder.launch_id = Some("launch_coder".into());
+        holder.pane = Some(crate::pane::PaneRef::from_id(old_pane.clone()));
+        assert!(!claim_moved(&legacy, Some(&holder), &old_pane));
+    }
 
     #[test]
     fn interrupt_confirmation_keeps_superseded_events_and_matches_identity() {

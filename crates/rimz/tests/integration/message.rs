@@ -2095,6 +2095,7 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
         kind: agent.kind.clone(),
         agent_id: agent.agent_id.clone(),
         agent_name: agent.name.clone(),
+        launch_id: None,
         address: "@coder".to_owned(),
         status: rimz::agents::AgentStatus::Idle,
         dwell_secs,
@@ -2658,6 +2659,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
             kind: receiver.kind.clone(),
             agent_id: receiver.agent_id.clone(),
             agent_name: receiver.name.clone(),
+            launch_id: None,
             address: "@receiver".into(),
             status: rimz::agents::AgentStatus::Failed,
             dwell_secs: 60,
@@ -2671,6 +2673,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
                 kind: sender.kind.clone(),
                 agent_id: sender.agent_id.clone(),
                 agent_name: sender.name.clone(),
+                launch_id: None,
                 address: "@sender".into(),
                 met_at: None,
             }]);

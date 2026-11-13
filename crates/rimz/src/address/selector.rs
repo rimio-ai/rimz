@@ -472,7 +472,8 @@ pub fn live_rows<'a>(
 }
 
 /// Rows for the Audit projection's closed sessions: ended, or gone from the
-/// live snapshot, and not already `listed`. Each is addressed so that live
+/// live snapshot, and not already `listed`. A session a swap replaced is no
+/// closed agent: its agent is the holder, listed on its own. Each is addressed so that live
 /// resolution misses it and Audit resolution finds it where such an address
 /// exists; otherwise it keeps its short Audit address.
 pub fn closed_rows<'a>(
@@ -489,6 +490,7 @@ pub fn closed_rows<'a>(
         .candidates
         .iter()
         .copied()
+        .filter(|agent| !agent.replaced)
         .filter(|agent| agent.parent_agent_id.is_none() || agent.is_launched_child())
         .filter(|agent| {
             let same =

@@ -70,6 +70,7 @@ fn turn_start_selects_acknowledgement_first_then_withdraws_broken_queued_records
                 prompt: Some(&turn_start("requeued")),
             },
             Some(&row),
+            0,
             "session",
             |_, _| {},
         )
@@ -112,6 +113,7 @@ fn turn_start_withdraws_even_when_it_acknowledges_nothing_and_only_for_a_later_p
                 prompt: Some(&turn_start("unrelated")),
             },
             row,
+            0,
             "session",
             |_, _| {},
         )

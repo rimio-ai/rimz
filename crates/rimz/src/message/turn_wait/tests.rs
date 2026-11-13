@@ -140,6 +140,7 @@ fn a_prompt_on_its_way_keeps_a_rested_agent_open() {
         kind: crate::ids::AgentKind::new_unchecked("codex"),
         agent_id: "sess-peer".into(),
         agent_name: None,
+        launch_id: None,
         address: "@peer".to_owned(),
         met_at: None,
     });

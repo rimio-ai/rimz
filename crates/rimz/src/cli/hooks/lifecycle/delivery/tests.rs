@@ -423,7 +423,7 @@ fn registered_checkpoint_spawns_delivery_for_the_queued_head() {
         })
         .unwrap();
     let mut spawns = Vec::new();
-    spawn_queue_delivery_with(&workspace, &store, &receipt.events[0], |spawn| {
+    spawn_queue_delivery_with(&workspace, &store, &receipt.events[0], None, |spawn| {
         spawns.push(spawn.args.clone())
     });
     assert_eq!(
@@ -659,4 +659,163 @@ fn turn_started_records_only_unsupervised_user_inputs() {
     assert!(records.iter().all(|record| {
         record.origin.as_deref() == Some(std::path::Path::new("/tmp/hooks-test/worktree"))
     }));
+}
+
+#[test]
+fn a_textless_turn_start_after_a_swap_leaves_the_replaced_sessions_prompt_to_retry() {
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let sent_at = jiff::Timestamp::now() - std::time::Duration::from_secs(3600);
+    let mut old = rimz::testkit::agent_state("claude", "sess-old", sent_at);
+    old.name = Some("coder".to_owned());
+    old.launch_id = Some("launch_coder".into());
+    let sent = |text: &str, sent_epoch: Option<u32>| {
+        let mut message =
+            MessageRecord::new(workspace_id(), &old, text.to_owned(), DeliveryGate::Done);
+        message.status = MessageStatus::Sent;
+        message.last_sent_at = Some(sent_at);
+        message.sent_epoch = sent_epoch;
+        store.queue_message(&message, "hooks-test").unwrap();
+        message
+    };
+    let ack = |session: &str, epoch: Option<u32>| {
+        let mut started = RecordedLifecycle {
+            model_hint: None,
+            observation: AgentLifecycleObservation::new(
+                Some(session.into()),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+            receipt: Default::default(),
+        };
+        started.observation.agent_name = Some("coder".to_owned());
+        started.observation.launch_id = Some("launch_coder".into());
+        started.observation.launch.epoch = epoch;
+        confirm_sent_message_for_lifecycle(&store, agent, &started, &workspace)
+    };
+
+    let replaced = sent("typed into the old session", Some(0));
+    assert!(
+        ack("sess-new", Some(1)).is_empty(),
+        "the holder's text-less turn start confirmed a prompt typed into the session it replaced"
+    );
+    let report = store
+        .reconcile_stale_messages("hooks-test", jiff::Timestamp::now(), 3)
+        .unwrap();
+    assert_eq!(report.requeued, 1);
+    let mut holder = old.clone();
+    holder.agent_id = "sess-new".into();
+    holder.epoch = 1;
+    let requeued = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == replaced.message_id)
+        .expect("the prompt stays live");
+    assert_eq!(requeued.status, MessageStatus::Queued);
+    assert!(requeued.same_agent_card(&holder));
+
+    let same_epoch = sent("typed into this session", Some(1));
+    assert_eq!(
+        ack("sess-new", Some(1))
+            .iter()
+            .map(|message| &message.message_id)
+            .collect::<Vec<_>>(),
+        vec![&same_epoch.message_id]
+    );
+    let legacy = sent("an older binary's write", None);
+    assert_eq!(
+        ack("sess-new", Some(1))
+            .iter()
+            .map(|message| &message.message_id)
+            .collect::<Vec<_>>(),
+        vec![&legacy.message_id]
+    );
+}
+
+#[test]
+fn a_molt_to_another_kind_confirms_and_wakes_the_records_queued_for_the_agent() {
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let workspace = workspace();
+    let codex = rimz::agents::definition_by_kind("codex").unwrap();
+    let mut old = rimz::testkit::agent_state("claude", "sess-old", jiff::Timestamp::now());
+    old.name = Some("coder".to_owned());
+    old.launch_id = Some("launch_coder".into());
+    let mut sent = MessageRecord::new(
+        workspace_id(),
+        &old,
+        "typed into the holder".to_owned(),
+        DeliveryGate::Done,
+    );
+    sent.status = MessageStatus::Sent;
+    sent.last_sent_at = Some(jiff::Timestamp::now());
+    sent.sent_epoch = Some(1);
+    store.queue_message(&sent, "hooks-test").unwrap();
+    let queued = MessageRecord::new(
+        workspace_id(),
+        &old,
+        "parked for later".to_owned(),
+        DeliveryGate::Done,
+    );
+    store.queue_message(&queued, "hooks-test").unwrap();
+
+    let mut started = RecordedLifecycle {
+        model_hint: None,
+        observation: AgentLifecycleObservation::new(
+            Some("sess-new".into()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+        receipt: Default::default(),
+    };
+    started.observation.agent_name = Some("molted-name".to_owned());
+    started.observation.launch_id = Some("launch_coder".into());
+    started.observation.launch.epoch = Some(1);
+    let ids = |records: Vec<MessageRecord>| {
+        records
+            .into_iter()
+            .map(|record| record.message_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(in_flight_messages_for_lifecycle(&store, codex, &started)),
+        vec![sent.message_id.clone()]
+    );
+    assert_eq!(
+        ids(confirm_sent_message_for_lifecycle(
+            &store, codex, &started, &workspace
+        )),
+        vec![sent.message_id.clone()]
+    );
+
+    let mut registered =
+        AgentLifecycleObservation::new(Some("sess-new".into()), LifecycleSignal::Registered);
+    registered.launch_id = Some("launch_coder".into());
+    let receipt = store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: codex.spec().kind_id(),
+            event_name: "SessionStart",
+            observation: &registered,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let mut spawns = Vec::new();
+    spawn_queue_delivery_with(
+        &workspace,
+        &store,
+        &receipt.events[0],
+        registered.launch_id.as_ref(),
+        |spawn| spawns.push(spawn.args.last().cloned()),
+    );
+    assert_eq!(spawns, vec![Some(queued.message_id.to_string())]);
 }
