@@ -164,6 +164,7 @@ pub struct Node {
     authored: Authored,
     edges: Vec<Edge>,
     then: Vec<Target>,
+    rest_check: Vec<Target>,
     lifecycle: StepLifecycle,
     timeout: Option<Parsed<Duration, TimeInputErr>>,
     window: Option<Parsed<WhenExpr, SpecErr>>,
@@ -320,12 +321,17 @@ impl Node {
         }
     }
 
-    /// A step's `then` targets in order, or a sleep's.
+    /// A step's `then` target, or a sleep's.
     pub fn then(&self) -> &[Target] {
         &self.then
     }
 
-    /// A step's lifecycle, its kind's default when unset; a check's is `turn`.
+    /// A session's rest checks in order; empty for a turn, a check, or a session without.
+    pub fn rest_check(&self) -> &[Target] {
+        &self.rest_check
+    }
+
+    /// A step's lifecycle; every node but an agent step is a turn.
     pub fn lifecycle(&self) -> StepLifecycle {
         self.lifecycle
     }
@@ -557,7 +563,7 @@ impl Node {
         }
     }
 
-    /// The signals that wake a check or reach a staying step: a condition or sleep's from its
+    /// The signals that wake a check or reach a session: a condition or sleep's from its
     /// cases' terms, any other node's from its wakes.
     pub fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
         if !matches!(self.kind, Some(Kind::Condition(_) | Kind::Sleep(_))) {
@@ -870,6 +876,7 @@ fn check_node(check: &Check) -> Node {
             .map(Target::parse)
             .into_iter()
             .collect(),
+        rest_check: Vec::new(),
         lifecycle: StepLifecycle::Turn,
         timeout: check.timeout.as_deref().map(duration),
         window: check.window.as_deref().map(window),
@@ -896,6 +903,12 @@ fn step_node(step: &Step) -> Node {
             .then
             .iter()
             .map(|target| Target::parse(target))
+            .collect(),
+        rest_check: step
+            .rest_check
+            .iter()
+            .flatten()
+            .map(|check| Target::parse(check))
             .collect(),
         lifecycle: step.lifecycle(),
         timeout: step.timeout.as_deref().map(duration),

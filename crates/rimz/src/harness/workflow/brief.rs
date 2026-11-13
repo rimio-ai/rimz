@@ -7,7 +7,7 @@ use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
 use crate::store::workflow::{
-    self, AttemptOutcome, JournalEvent, RunFire, RunRecord, StepLifecycle, TurnEndAction,
+    self, AttemptOutcome, JournalEvent, RunFire, RunRecord, TurnEndAction,
 };
 
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
@@ -92,7 +92,12 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
         arrival.push(format!("The previous attempt, {who}, {ended}."));
     }
     let (mut after, questions) = lifecycle(spec, step, record);
-    for check in step.then() {
+    let mut noted = Vec::new();
+    for check in step.rest_check().iter().chain(step.then()) {
+        if noted.contains(&check) {
+            continue;
+        }
+        noted.push(check);
         if let Some(note) = check_note(spec, check.as_str()) {
             after.push(' ');
             after.push_str(&note);
@@ -331,8 +336,8 @@ pub(super) fn push(
     let name = pushed.as_ref().map_or_else(
         || {
             spec.step(&record.node)
-                .and_then(|step| step.then().first())
-                .expect("validated step then")
+                .and_then(|step| step.rest_check().first())
+                .expect("a push-back comes from a rest check")
                 .as_str()
         },
         |(name, _)| name.as_str(),
@@ -435,89 +440,92 @@ fn lifecycle(spec: &Definition, step: &Node, record: &RunRecord) -> (String, Str
             "If the user must act now, ask through your own native question; otherwise end your turn and wait for their instructions.".into(),
         );
     }
-    // Validation requires a nonempty `then`: checks, or one terminal on a turn or stay step.
-    let first = step.then().first().expect("validated step then");
-    let check = span(first.as_str());
-    let next = if matches!(first, Target::Done | Target::Failed) {
-        format!("ends the run at {check}")
+    // Validation requires `then`: a check, @done, or @failed.
+    let then = step.then().first().expect("validated step then");
+    let next = if matches!(then, Target::Done | Target::Failed) {
+        format!("ends the run at {}", span(then.as_str()))
     } else {
-        format!("runs the check {check}")
+        format!("runs the check {}", span(then.as_str()))
     };
-    match step.lifecycle() {
-        StepLifecycle::Turn => {
-            let cleanup = if step.keep().unwrap_or(false) {
-                "leaves your pane open outside this run"
+    let kept = step.keep().unwrap_or(false);
+    let questions = if step.routes("asked") {
+        // An explicit asked edge always has a resolved target.
+        let target = spec
+            .target(&record.node, "asked")
+            .expect("step asked target");
+        format!(
+            "A blocking question ends this attempt, and the run goes to {}.",
+            span(target.as_str())
+        )
+    } else if step.lifecycle().is_turn() {
+        let watching = if matches!(record.fire, Some(RunFire::Scheduled { .. })) {
+            "Nobody is watching. "
+        } else {
+            ""
+        };
+        let pause = if step.timeout().is_some() {
+            ", and the timeout pauses meanwhile"
+        } else {
+            ""
+        };
+        format!("{watching}A question waits in your pane until the user answers it{pause}.")
+    } else {
+        "The user may answer in this pane later; a question goes in your final message.".into()
+    };
+    if step.lifecycle().is_turn() {
+        let cleanup = if kept {
+            "leaves your pane open outside this run"
+        } else {
+            "closes your pane"
+        };
+        let timeout = step.timeout().map_or_else(String::new, |timeout| {
+            format!(", within the step's {} timeout", verbatim(timeout.text()))
+        });
+        let after = format!(
+            "This is one turn. When it ends cleanly with nothing owed, RimZ {cleanup} and {next}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
+        );
+        return (after, questions);
+    }
+    let timeout = step.timeout().map_or_else(String::new, |timeout| {
+        format!(
+            " The step's {} timeout counts from your launch and ends this session when it passes.",
+            verbatim(timeout.text())
+        )
+    });
+    let exit = if kept {
+        format!(
+            "When your provider process exits, RimZ leaves your pane open outside this run and {next}."
+        )
+    } else {
+        format!(
+            "When your provider process exits, as when the user closes your pane, RimZ closes every cell and {next}."
+        )
+    };
+    let mut after = match step.rest_check() {
+        [] => format!("You stay open across turns. {exit}{timeout}"),
+        checks @ [first, ..] => {
+            let close = if kept {
+                "Other routes move the run on; RimZ leaves your pane open outside this run."
             } else {
-                "closes your pane"
+                "Other routes close your pane and move the run on."
             };
-            let timeout = step.timeout().map_or_else(String::new, |timeout| {
-                format!(", within the step's {} timeout", verbatim(timeout.text()))
-            });
-            let after = format!(
-                "This is one turn. When it ends cleanly with nothing owed, RimZ {cleanup} and {next}. Your final message is kept in the run's history but does not choose the next node. A subagent you launch keeps your turn open until it reports. A wait you arm keeps your pane open until it fires{timeout}. No signals reach you. Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn."
-            );
-            let questions = if step.routes("asked") {
-                // An explicit asked edge always has a resolved target.
-                let target = spec
-                    .target(&record.node, "asked")
-                    .expect("step asked target");
-                format!(
-                    "A blocking question ends this attempt, and the run goes to {}.",
-                    span(target.as_str())
-                )
+            let listed = if checks.len() > 1 {
+                " You stay open while the run moves between the listed checks; your next turn end starts at the first check."
             } else {
-                let watching = if matches!(record.fire, Some(RunFire::Scheduled { .. })) {
-                    "Nobody is watching. "
-                } else {
-                    ""
-                };
-                let pause = if step.timeout().is_some() {
-                    ", and the timeout pauses meanwhile"
-                } else {
-                    ""
-                };
-                format!("{watching}A question waits in your pane until the user answers it{pause}.")
+                ""
             };
-            (after, questions)
-        }
-        lifecycle @ (StepLifecycle::Stay | StepLifecycle::Until) => {
-            let mut after = if lifecycle == StepLifecycle::Stay {
-                format!(
-                    "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and {next}."
-                )
-            } else {
-                let close = if step.keep().unwrap_or(false) {
-                    "Other routes move the run on; RimZ leaves your pane open outside this run."
-                } else {
-                    "Other routes close your pane and move the run on."
-                };
-                let listed = if step.then().len() > 1 {
-                    " You stay open while the run moves between the listed checks; your next turn end starts at the first check."
-                } else {
-                    ""
-                };
-                let timeout = step.timeout().map_or_else(String::new, |timeout| {
-                    format!(
-                        " The step's {} timeout counts from your launch and ends this session when it passes.",
-                        verbatim(timeout.text())
-                    )
-                });
-                format!(
-                    "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {check}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn.{timeout}"
-                )
-            };
-            if let Some(subscriptions) = subscriptions(step) {
-                after.push_str(&format!(
-                    " You subscribe to {subscriptions}. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
-                ));
-            }
-            (
-                after,
-                "The user may answer in this pane later; a question goes in your final message."
-                    .into(),
+            format!(
+                "After each of your turns that rests cleanly with nothing owed, RimZ runs the check {}.{listed} A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. {close} Errors, provider limits, interrupts, and budget parks wait for a later clean turn. {exit}{timeout}",
+                span(first.as_str())
             )
         }
+    };
+    if let Some(subscriptions) = subscriptions(step) {
+        after.push_str(&format!(
+            " You subscribe to {subscriptions}. Each arrives as a SIGNAL message at one of your turn boundaries while this step lasts."
+        ));
     }
+    (after, questions)
 }
 
 fn subscriptions(step: &Node) -> Option<String> {

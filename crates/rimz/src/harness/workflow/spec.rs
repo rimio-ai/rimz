@@ -217,7 +217,7 @@ pub(super) enum Wake {
         signal: String,
         #[serde(default, rename = "match")]
         matches: BTreeMap<String, String>,
-        /// Text a staying step's leader gets after the forwarded signal; steps only.
+        /// Text a session's leader gets after the forwarded signal; steps only.
         #[serde(default)]
         prompt: Option<String>,
     },
@@ -272,7 +272,7 @@ impl Wake {
         Ok((selector, matches))
     }
 
-    /// A staying step's subscription, which may hear lifecycle signals, though never the
+    /// A session's subscription, which may hear lifecycle signals, though never the
     /// leader's own: an `agent` selector names another agent by handle or session.
     pub(super) fn step_subscription(&self) -> Result<Subscription, SpecErr> {
         let (selector, matches) = self.parsed()?;
@@ -410,6 +410,8 @@ pub struct Step {
     pub shell: Option<String>,
     pub message: Option<String>,
     pub lifecycle: Option<crate::store::workflow::StepLifecycle>,
+    /// A session's checks, in order, each of its clean rests enters at the first.
+    pub rest_check: Option<Vec<String>>,
     pub keep: Option<bool>,
     pub notes: Option<bool>,
     pub prompt_file: Option<String>,
@@ -472,22 +474,6 @@ pub struct LaunchOverrides {
     pub worktree: Option<String>,
 }
 
-#[derive(Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub(super) enum Then {
-    One(String),
-    Many(#[schemars(length(min = 1))] Vec<String>),
-}
-
-pub(super) fn then_checks<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<String>, D::Error> {
-    Then::deserialize(deserializer).map(|checks| match checks {
-        Then::One(check) => vec![check],
-        Then::Many(checks) => checks,
-    })
-}
-
 pub enum StepKind<'a> {
     Agent(&'a str),
     Command(Invoke<'a>),
@@ -495,11 +481,9 @@ pub enum StepKind<'a> {
 }
 
 impl Step {
+    /// An agent step's lifecycle, which its table requires; every other step is a turn.
     pub fn lifecycle(&self) -> StepLifecycle {
-        self.lifecycle.unwrap_or(match self.kind() {
-            Some(StepKind::Agent(_)) => StepLifecycle::Until,
-            _ => StepLifecycle::Turn,
-        })
+        self.lifecycle.unwrap_or(StepLifecycle::Turn)
     }
 
     /// The step's `max-visits` raised by the run's grant; none when the step sets no cap.
@@ -622,7 +606,8 @@ pub(crate) fn parse(text: &str) -> Result<Definition, SpecErr> {
                 summary: Some("Investigate the workflow failure with the user".into()),
                 agent: Some(agent.clone()),
                 prompt_file: prompt_file.clone(),
-                lifecycle: Some(StepLifecycle::Stay),
+                lifecycle: Some(StepLifecycle::Session),
+                rest_check: None,
                 then: vec!["@failed".into()],
                 on: StepEdges {
                     invalid: Some("@failed".into()),

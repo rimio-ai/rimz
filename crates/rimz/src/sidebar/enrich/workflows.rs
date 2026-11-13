@@ -220,6 +220,7 @@ mod tests {
             start = "sweep"
             [agent.sweep]
             agent = "coder"
+            lifecycle = "turn"
             then = "watch"
             [condition.watch]
             else = "queued"
@@ -234,6 +235,7 @@ mod tests {
             outcome = "queued"
             [agent.fix]
             agent = "coder"
+            lifecycle = "turn"
             max-visits = 2
             then = "watch"
             [command.clean]
@@ -241,7 +243,7 @@ mod tests {
             then = "triage"
             [agent.triage]
             agent = "coder"
-            lifecycle = "until"
+            lifecycle = "session"
             then = "@done"
         "#,
         )
@@ -292,7 +294,7 @@ mod tests {
         record.node = "ruled".into();
         record.held = Some(
             serde_json::from_value(json!({
-                "attempt": {"kind":"agent", "lifecycle":"until", "seq":1, "node":"triage",
+                "attempt": {"kind":"agent", "lifecycle":"session", "seq":1, "node":"triage",
                     "started_at":record.created_at, "host":{"pid":1,"start":null}},
                 "entered_at":record.created_at
             }))

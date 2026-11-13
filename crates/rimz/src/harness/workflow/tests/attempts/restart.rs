@@ -117,13 +117,13 @@ fn restart_that_breaks_on_a_step_bound_can_be_restarted_again() {
 fn restart_replaces_active_and_held_agents_and_resets_all_visits() {
     let mut actual = Vec::new();
     for held in [false, true] {
-        let definition = until::UNTIL.replace("on.pending='build'", "on.pending='@wait'");
+        let definition = rest::SESSION.replace("on.pending='build'", "on.pending='@wait'");
         let (dir, state, record) = setup(&definition);
-        until::check(dir.path(), json!({"outcome":"pending"}));
+        rest::check(dir.path(), json!({"outcome":"pending"}));
         let host = FakeHost::new();
         let mut live = advance_ok(&state, &record.id, &host);
         if held {
-            host.observed.borrow_mut().turn = Some(until::turn());
+            host.observed.borrow_mut().turn = Some(rest::turn());
             live = advance_ok(&state, &record.id, &host);
             assert!(live.held.is_some());
         }

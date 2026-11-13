@@ -520,6 +520,7 @@ fn active_workflows_supply_pane_free_forge_scopes_and_branches() {
 scope = "worktree"
 start = "work"
 [agent.work]
+lifecycle='turn'
 agent = "codex"
 prompt-file = "work.md"
 then = "probe"

@@ -131,14 +131,7 @@ expression: value
           ]
         },
         "lifecycle": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StepLifecycle"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/StepLifecycle"
         },
         "max-visits": {
           "format": "uint64",
@@ -169,6 +162,15 @@ expression: value
             "null"
           ]
         },
+        "rest-check": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "subscribe": {
           "items": {
             "$ref": "#/$defs/Wake"
@@ -191,18 +193,7 @@ expression: value
           ]
         },
         "then": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            }
-          ]
+          "type": "string"
         },
         "timeout": {
           "type": [
@@ -219,6 +210,7 @@ expression: value
       },
       "required": [
         "agent",
+        "lifecycle",
         "then"
       ],
       "type": "object"
@@ -725,8 +717,7 @@ expression: value
     "StepLifecycle": {
       "enum": [
         "turn",
-        "stay",
-        "until"
+        "session"
       ],
       "type": "string"
     },
@@ -819,7 +810,7 @@ expression: value
             },
             "prompt": {
               "default": null,
-              "description": "Text a staying step's leader gets after the forwarded signal; steps only.",
+              "description": "Text a session's leader gets after the forwarded signal; steps only.",
               "type": [
                 "string",
                 "null"

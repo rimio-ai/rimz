@@ -320,7 +320,7 @@ mod tests {
 
     fn session(record: &mut RunRecord, held: bool) {
         let attempt = json!({
-            "kind":"agent", "lifecycle":"until", "seq":1, "node":"triage",
+            "kind":"agent", "lifecycle":"session", "seq":1, "node":"triage",
             "started_at":Timestamp::UNIX_EPOCH, "host":{"pid":1, "start":null},
             "run":{"run_id":rimz::ids::RunId::new(), "handle":"@fox"},
         });
@@ -440,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn run_glyph_prioritizes_attention_capacity_and_staying_sessions() {
+    fn run_glyph_prioritizes_attention_capacity_and_live_sessions() {
         let cases = [
             ("active", true, Some("open"), None, GlyphRole::StatusWorking),
             (
@@ -491,10 +491,10 @@ mod tests {
             ("failed", false, None, None, GlyphRole::StatusAttention),
             ("canceled", false, None, None, GlyphRole::StatusIdle),
         ];
-        let actual = cases.map(|(state, staying, outcome, hold, _)| {
+        let actual = cases.map(|(state, live, outcome, hold, _)| {
             let mut record = record();
             record.state = serde_json::from_value(json!(state)).unwrap();
-            if staying {
+            if live {
                 session(&mut record, true);
             }
             if let Some(outcome) = outcome {

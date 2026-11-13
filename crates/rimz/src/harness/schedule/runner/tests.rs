@@ -820,7 +820,7 @@ fn surplus_reads_each_cell_of_a_multi_cell_step_instead_of_refusing_it() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         crate::disk::paths::workflow_spec_file(&dir),
-        "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude,codex'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude,codex'\nthen='@done'\n",
     )
     .unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
@@ -866,7 +866,7 @@ fn an_over_cap_workflow_fire_records_its_skip_before_birthing_a_room() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         crate::disk::paths::workflow_spec_file(&dir),
-        "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nbudget='$6'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nbudget='$6'\nthen='@done'\n",
     )
     .unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
@@ -2053,7 +2053,7 @@ fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
     let source = tempfile::tempdir().unwrap();
     let step = |budget: &str| {
         format!(
-            "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nbudget='{budget}'\nthen='@done'\n"
+            "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nbudget='{budget}'\nthen='@done'\n"
         )
     };
     std::fs::write(
@@ -2086,7 +2086,7 @@ fn a_live_run_reserves_its_sealed_budget_and_an_unreadable_seal_refuses() {
     );
 }
 
-const SIX_DOLLAR_STEP: &str = "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nbudget='$6'\nthen='@done'\n";
+const SIX_DOLLAR_STEP: &str = "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nbudget='$6'\nthen='@done'\n";
 
 #[test]
 fn a_capped_fire_reads_the_budget_only_after_a_concurrent_fire_publishes_its_run() {

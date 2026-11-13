@@ -9,8 +9,8 @@ const TURN: &str = "This is one turn. When it ends cleanly with nothing owed, Ri
 const STOPS: &str =
     "Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn.";
 const CHECK: &str = "The check `watch` runs `cat answer.json`. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.";
-const STAY: &str = "You stay open across turns until your provider process exits, as when the user closes your pane. RimZ then closes every cell and runs the check `watch`.";
-const UNTIL: &str = "After each of your turns that rests cleanly with nothing owed, RimZ runs the check `watch`. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn.";
+const EXIT: &str = "When your provider process exits, as when the user closes your pane, RimZ closes every cell and runs the check `watch`.";
+const RESTS: &str = "After each of your turns that rests cleanly with nothing owed, RimZ runs the check `watch`. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn.";
 const LATER: &str =
     "The user may answer in this pane later; a question goes in your final message.";
 
@@ -128,8 +128,16 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
             format!("{TURN}. No signals reach you. {STOPS}"),
             routed,
         ),
-        ("lifecycle='stay'", STAY.into(), LATER),
-        ("lifecycle='until'", UNTIL.into(), LATER),
+        (
+            "lifecycle='session'",
+            format!("You stay open across turns. {EXIT}"),
+            LATER,
+        ),
+        (
+            "lifecycle='session'\nrest-check=['watch']",
+            format!("{RESTS} {EXIT}"),
+            LATER,
+        ),
     ];
     for (settings, after, questions) in cases {
         let text = format!(
@@ -215,7 +223,7 @@ fn total_caps_name_the_actual_destination() {
         ("recover", "sends the run to `recover`"),
     ] {
         let text = format!(
-            "{}on.cap='{destination}'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+            "{}on.cap='{destination}'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
             OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
         );
         let (_dir, state, record) = setup(&text);
@@ -297,7 +305,7 @@ fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
 #[test]
 fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     let text = format!(
-        "{}on.cap='recover'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+        "{}on.cap='recover'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
         OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
@@ -429,7 +437,7 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
             "evidence ⇄ [build], plan → judge → report → reported",
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nagent='claude'\nthen='d'\non.cap='c'\n[agent.c]\nagent='claude'\nthen='d'\n[test.d]\nshell='true'\non={pass='@done',fail='@failed'}",
+            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nlifecycle='turn'\nagent='claude'\nthen='d'\non.cap='c'\n[agent.c]\nlifecycle='turn'\nagent='claude'\nthen='d'\n[test.d]\nshell='true'\non={pass='@done',fail='@failed'}",
             &["left"][..],
             "a → [b] · c → d",
         ),

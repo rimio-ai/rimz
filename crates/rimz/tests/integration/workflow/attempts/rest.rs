@@ -3,7 +3,7 @@ use std::io::Write as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 
 fn room() -> Room {
-    room_with("lifecycle='until'\n")
+    room_with("lifecycle='session'\nrest-check=['after']\n")
 }
 
 fn room_with(extra: &str) -> Room {
@@ -73,7 +73,7 @@ fn gate(listener: &UnixListener) -> UnixStream {
         }
         assert!(
             Instant::now() < deadline,
-            "until check did not reach its evaluation boundary"
+            "rest check did not reach its evaluation boundary"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -151,14 +151,6 @@ fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
 #[test]
 fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
     let room = room();
-    let definition = room.env.rimz_home().join("workflows/review/workflow.toml");
-    fs::write(
-        &definition,
-        fs::read_to_string(&definition)
-            .unwrap()
-            .replace("lifecycle='until'\n", ""),
-    )
-    .unwrap();
     fs::write(
         room.env.project_root.join("panes.json"),
         r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
@@ -258,7 +250,7 @@ fn a_cancel_retires_an_unacknowledged_push_back() {
 
 #[test]
 fn a_kept_session_ending_on_its_own_retires_its_unacknowledged_push_back() {
-    let room = room_with("lifecycle='until'\nkeep=true\n");
+    let room = room_with("lifecycle='session'\nrest-check=['after']\nkeep=true\n");
     let (id, run) = room.launch();
     let store = room.env.store();
     rimz::disk::atomic::write_temp_then_rename_cache(
@@ -434,7 +426,7 @@ fn a_closing_turn_end_hook_stops_the_layout_and_uses_one_verdict() {
 }
 
 #[test]
-fn restart_abandons_an_inflight_until_answer_before_relaunching() {
+fn restart_abandons_an_inflight_rest_check_answer_before_relaunching() {
     let room = room();
     let (id, run) = room.launch();
     let mut owner = dummy_agent_process();
@@ -528,7 +520,7 @@ fn a_turn_started_while_the_verdict_is_waiting_discards_without_stopping() {
     opened_turn(&room, &id, &run);
     #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
-    let socket = room.env.runtime_root.join("until-result.sock");
+    let socket = room.env.runtime_root.join("rest-result.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     room.hook_with_environment(
@@ -589,7 +581,7 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
     opened_turn(&room, &id, &run);
     #[cfg(target_os = "linux")]
     wait_for_advances_to_exit(&room.env, &id);
-    let socket = room.env.runtime_root.join("until-context.sock");
+    let socket = room.env.runtime_root.join("rest-context.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     room.hook_with_environment(

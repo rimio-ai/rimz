@@ -501,7 +501,7 @@ fn redefinition_forgets_only_checkouts_whose_runs_have_not_reached_an_agent() {
     }
     use super::super::{catalog::TaskCatalog, instances};
     use crate::store::workflow::ScopeKind;
-    let spec = "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n";
+    let spec = "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n";
     let mut remembered = Vec::new();
     for operation in ["replace", "remove"] {
         let home = tempfile::tempdir().unwrap();

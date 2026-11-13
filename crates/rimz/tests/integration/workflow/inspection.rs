@@ -49,7 +49,7 @@ fn list_enrichment_is_room_scoped_and_json_stays_unenriched() {
         let mut record = seed(&env, root, &checkout, "active");
         record.attempt = Some(
             serde_json::from_value(json!({
-                "kind":"agent", "lifecycle":"stay", "seq":7, "node":"gate",
+                "kind":"agent", "lifecycle":"session", "seq":7, "node":"gate",
                 "started_at":record.entered_at, "host":{"pid":1, "start":null},
                 "run":{"run_id":rimz::ids::RunId::new(), "handle":"@pet"},
             }))
@@ -150,7 +150,7 @@ fn with_you_names_use_live_card_peers_not_the_raw_rollup() {
         let now = record.entered_at;
         record.attempt = Some(
             serde_json::from_value(json!({
-                "kind":"agent", "lifecycle":"stay", "seq":7, "node":"gate",
+                "kind":"agent", "lifecycle":"session", "seq":7, "node":"gate",
                 "started_at":now, "host":{"pid":1, "start":null},
                 "run":{"run_id":rimz::ids::RunId::new(), "handle":"@fallback"},
             }))

@@ -497,7 +497,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
         ("subscribe=['review.ready']", false),
     ] {
         let text = format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='stay'\nprompt-file='prompts/build.md'\nthen=['done']\n{subscribe}\n[script.done]\nrun='true'\non.ok='@done'\n"
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompts/build.md'\nthen='done'\n{subscribe}\n[script.done]\nrun='true'\non.ok='@done'\n"
         );
         let spec: Definition = toml::from_str(&text).unwrap();
         let expected = demanded.then(std::collections::BTreeSet::new);

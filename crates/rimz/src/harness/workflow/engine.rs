@@ -21,7 +21,7 @@ use crate::store::workflow::{
 };
 
 mod accounting;
-mod until;
+mod rest;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowErr {
@@ -839,7 +839,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 return Ok(());
             }
             Decision::Push(record) => {
-                if until::push(state, &paths, &spec, &record, host)? {
+                if rest::push(state, &paths, &spec, &record, host)? {
                     continue;
                 }
                 return Ok(());
@@ -920,7 +920,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         }
         persist(&mut t, &guard)?;
         if t.record.state != RunState::Active
-            || (t.record.wait.is_some() && !recheck_woken && !until::has_pending_verdict(&t.record))
+            || (t.record.wait.is_some() && !recheck_woken && !rest::has_pending_verdict(&t.record))
         {
             return Ok(());
         }
@@ -1149,7 +1149,7 @@ fn prepare(
         admission.capacity = None;
     }
     if t.record.held.is_some()
-        && let Some(decision) = until::prepare(&mut t, host, &guard, seen)?
+        && let Some(decision) = rest::prepare(&mut t, host, &guard, seen)?
     {
         return Ok(decision);
     }
@@ -1170,7 +1170,7 @@ fn prepare(
         }
         return Ok(
             if t.record.state != RunState::Active
-                || (t.record.wait.is_some() && !until::has_pending_verdict(&t.record))
+                || (t.record.wait.is_some() && !rest::has_pending_verdict(&t.record))
             {
                 Decision::Stop
             } else {
@@ -1622,7 +1622,7 @@ fn destination(record: &RunRecord, step: &Node) -> Result<std::path::PathBuf> {
 }
 
 fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -> Result<()> {
-    // Context belongs to the published attempt, including a restored until session.
+    // Context belongs to the published attempt, including a restored session.
     let attempt = record
         .attempt
         .as_ref()
@@ -1641,7 +1641,10 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &Definition) -
         .map(|held| &held.attempt)
         .or(record.attempt.as_ref())
         .filter(|attempt| {
-            attempt.lifecycle == workflow::StepLifecycle::Until && attempt.ending.is_none()
+            attempt.ending.is_none()
+                && spec
+                    .step(&attempt.node)
+                    .is_some_and(|step| !step.rest_check().is_empty())
         })
     {
         let visits = record.visits_to(&session.node);
@@ -1681,7 +1684,7 @@ pub fn cancel(
         entries: Vec::new(),
     };
     if t.record.held.is_some() {
-        until::interrupt(&mut t, "cancel");
+        rest::interrupt(&mut t, "cancel");
     }
     t.close_wait();
     if let Some(attempt) = &t.record.attempt
@@ -1859,7 +1862,7 @@ pub fn restart(
     }
     let continued = resume.is_some();
     if t.record.held.is_some() {
-        until::interrupt(&mut t, "restart");
+        rest::interrupt(&mut t, "restart");
     }
     t.record.restart = Some(workflow::Restart {
         resume: resume.map(|(_, session)| session),
@@ -2200,7 +2203,7 @@ fn delivers(
     resolve_subscription(&selector, &matches, signal) == SignalResolution::Deliver
 }
 
-/// A subscribed signal bound for a live staying session's leader.
+/// A subscribed signal bound for a live session's leader.
 struct Forward {
     step: String,
     /// The delivering binding's `prompt`, sent after the signal.
@@ -2236,7 +2239,7 @@ impl Forward {
     }
 }
 
-/// The forwards a live staying session's leader gets, one per distinct delivering binding.
+/// The forwards a live session's leader gets, one per distinct delivering binding.
 ///
 /// Defaults resolve against the checkout the leader launched in; bindings with the same
 /// selector and filter coalesce into the first. The leader never hears its own lifecycle.
@@ -2301,7 +2304,7 @@ fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &S
     lines.join("\n")
 }
 
-/// Whether a live staying session subscribes to the family of a lifecycle signal, the only
+/// Whether a live session subscribes to the family of a lifecycle signal, the only
 /// receiver a lifecycle signal has among workflow runs. Reads records and sealed specs, and the
 /// leader's recorded session through `session` as `from_leader` needs it; it runs where a signal
 /// fires, with no attempt host.

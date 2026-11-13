@@ -4,7 +4,7 @@ use crate::harness::workflow::LeaderTurn;
 use crate::store::workflow::{HeldSession, StepLifecycle, TurnEnd, Verdict};
 use jiff::Timestamp;
 
-pub(super) const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[script.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
+pub(super) const SESSION: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['pr']\nthen='pr'\nmax-visits=2\n[script.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
 
 mod answers;
 mod checks;
@@ -20,7 +20,7 @@ fn stopped_turns_wait_for_a_clean_rest_before_the_check_judges() {
         StopKind::Interrupt,
         StopKind::Budget,
     ] {
-        let (dir, state, record) = setup(UNTIL);
+        let (dir, state, record) = setup(SESSION);
         check(dir.path(), json!({"outcome":"done"}));
         let host = FakeHost::new();
         advance_ok(&state, &record.id, &host);
@@ -42,8 +42,9 @@ fn stopped_turns_wait_for_a_clean_rest_before_the_check_judges() {
 }
 
 #[test]
-fn omitted_lifecycle_launches_an_until_session() {
-    let (_dir, state, record) = setup(&UNTIL.replace("lifecycle='until'\n", ""));
+fn a_session_without_a_rest_check_is_never_judged_and_follows_then_on_exit() {
+    let (dir, state, record) = setup(&SESSION.replace("rest-check=['pr']\n", ""));
+    check(dir.path(), json!({"outcome":"done"}));
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     assert_eq!(
@@ -52,7 +53,66 @@ fn omitted_lifecycle_launches_an_until_session() {
             host.launched.borrow()[0].lifecycle,
             host.turn_observations.get(),
         ),
-        (StepLifecycle::Until, StepLifecycle::Until, 1),
+        (StepLifecycle::Session, StepLifecycle::Session, 0),
+    );
+    host.observed.borrow_mut().turn = Some(turn());
+    let resting = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        (
+            resting.node.as_str(),
+            resting.held.is_none(),
+            host.stops.get()
+        ),
+        ("build", true, 0)
+    );
+    assert!(
+        !state
+            .workflow(&record.id)
+            .work
+            .join("check-view.json")
+            .exists(),
+        "no check at rest"
+    );
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let ended = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        (
+            ended.state,
+            ended.prev_attempt.unwrap().outcome,
+            host.stops.get()
+        ),
+        (RunState::Done, AttemptOutcome::Ended, 1)
+    );
+    assert!(
+        state
+            .workflow(&record.id)
+            .work
+            .join("check-view.json")
+            .exists(),
+        "then ran pr"
+    );
+}
+
+#[test]
+fn a_rest_checked_session_follows_then_on_exit_without_its_rest_check() {
+    let (dir, state, record) = setup(&SESSION.replace("then='pr'", "then='@done'"));
+    check(dir.path(), json!({"outcome":"pending"}));
+    let host = FakeHost::new();
+    advance_ok(&state, &record.id, &host);
+    assert_eq!(host.turn_observations.get(), 1);
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let ended = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        (ended.state, ended.prev_attempt.unwrap().outcome),
+        (RunState::Done, AttemptOutcome::Ended)
+    );
+    assert!(
+        !state
+            .workflow(&record.id)
+            .work
+            .join("check-view.json")
+            .exists(),
+        "pr never ran"
     );
 }
 
@@ -105,19 +165,29 @@ pub(super) fn held(record: &RunRecord, verdict: bool) -> RunRecord {
 }
 
 #[test]
-fn reread_then_type_error_returns_an_error_without_panicking() {
-    let (_dir, state, record) = setup(UNTIL);
+fn reread_rest_check_type_error_returns_an_error_without_panicking() {
+    let (_dir, state, record) = setup(SESSION);
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
     let paths = state.workflow(&record.id);
-    fs::write(&paths.spec, UNTIL.replace("then='pr'", "then=5")).unwrap();
+    fs::write(
+        &paths.spec,
+        SESSION.replace("rest-check=['pr']", "rest-check=5"),
+    )
+    .unwrap();
     host.observed.borrow_mut().turn = Some(turn());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         advance(&state, &record.id, &host)
     }));
-    assert!(result.is_ok(), "a dropped then must not panic: {result:?}");
+    assert!(
+        result.is_ok(),
+        "a dropped rest-check must not panic: {result:?}"
+    );
     let error = result.unwrap().unwrap_err();
-    assert!(error.to_string().contains("agent.build.then"), "{error}");
+    assert!(
+        error.to_string().contains("agent.build.rest-check"),
+        "{error}"
+    );
     let record = records::load(&paths).unwrap();
     assert_eq!(record.node, "build");
     assert!(record.attempt.unwrap().judged.is_none());
@@ -125,7 +195,7 @@ fn reread_then_type_error_returns_an_error_without_panicking() {
 
 #[test]
 fn same_step_pushes_once_updates_input_and_counts_the_push_as_a_visit() {
-    let (dir, state, mut record) = setup(UNTIL);
+    let (dir, state, mut record) = setup(SESSION);
     record.key = Some(Key::Integer(7));
     update(&state, &record);
     let host = FakeHost::new();
@@ -183,7 +253,7 @@ fn wait_holds_the_session_at_its_check_without_a_visit() {
 
 fn keeps(target: &str) -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
     let (dir, state, mut record) =
-        setup(&UNTIL.replace("on.pending='build'", &format!("on.pending='{target}'")));
+        setup(&SESSION.replace("on.pending='build'", &format!("on.pending='{target}'")));
     record.key = Some(Key::Integer(7));
     record.input = Some(json!({"launch":true}));
     update(&state, &record);
@@ -310,7 +380,7 @@ fn closing_verdicts_stop_once_and_follow_the_saved_route() {
     for target in ["@done", "@failed", "next", "other"] {
         let text = format!(
             "{}\n[agent.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[test.other]\nshell='true'\non.pass='@done'\n",
-            UNTIL.replace("on.done='@done'", &format!("on.done='{target}'"))
+            SESSION.replace("on.done='@done'", &format!("on.done='{target}'"))
         );
         let (dir, state, record) = setup(&text);
         check(dir.path(), json!({"outcome":"done"}));
@@ -374,7 +444,7 @@ fn same_turn_debt_defers_the_close_without_rechecking() {
 }
 
 fn reread(moved: bool) {
-    let (dir, state, record) = setup(UNTIL);
+    let (dir, state, record) = setup(SESSION);
     check(dir.path(), json!({"outcome":"done"}));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
@@ -421,7 +491,7 @@ fn reread(moved: bool) {
 
 #[test]
 fn a_discard_can_check_a_newer_eligible_end_in_the_same_advance() {
-    let (dir, state, record) = setup(UNTIL);
+    let (dir, state, record) = setup(SESSION);
     check(dir.path(), json!({"outcome":"done"}));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
@@ -458,7 +528,7 @@ fn provider_endings_and_deadlines_interrupt_the_held_check() {
         (RunStatus::BudgetExceeded, false, AttemptOutcome::Limited),
         (RunStatus::Running, true, AttemptOutcome::Canceled),
     ] {
-        let (dir, state, record) = setup(UNTIL);
+        let (dir, state, record) = setup(SESSION);
         check(dir.path(), json!({"outcome":"done"}));
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
@@ -540,7 +610,7 @@ fn provider_endings_and_deadlines_interrupt_the_held_check() {
 fn cancel_interrupts_a_held_session_or_replaces_a_staged_close() {
     let mut actual = Vec::new();
     for staged in [false, true] {
-        let (dir, state, record) = setup(UNTIL);
+        let (dir, state, record) = setup(SESSION);
         check(dir.path(), json!({"outcome":"done"}));
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
@@ -578,7 +648,7 @@ fn cancel_interrupts_a_held_session_or_replaces_a_staged_close() {
 
 #[test]
 fn an_already_closed_first_turn_checks_in_the_launching_advance() {
-    let (dir, state, record) = setup(UNTIL);
+    let (dir, state, record) = setup(SESSION);
     check(dir.path(), json!({"outcome":"done"}));
     let host = FakeHost::new();
     host.observed.borrow_mut().turn = Some(turn());

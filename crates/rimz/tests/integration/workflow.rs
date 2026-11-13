@@ -44,7 +44,7 @@ const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI 
 fn new_runs_seal_definitions_at_the_current_record_version() {
     let actual: Vec<_> = [
         String::new(),
-        "[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\n".into(),
+        "[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nlifecycle='session'\nrest-check=['pr']\n".into(),
         "[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nlifecycle='turn'\n"
             .into(),
     ]
@@ -1592,7 +1592,7 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
 #[test]
 fn human_show_lists_each_capped_steps_visits_with_the_grant() {
     let spec = format!(
-        "{HEADER}{WAIT}[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n[agent.plain]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
+        "{HEADER}{WAIT}[agent.build]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n[agent.plain]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
     );
     let (env, _) = fixture(&spec, PENDING);
     let id = start(&env);

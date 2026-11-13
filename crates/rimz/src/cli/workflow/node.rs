@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-use rimz::harness::workflow::{Edge, Fireability, Invocation, Kind, Node, OccupancyPolicy};
+use rimz::harness::workflow::{Edge, Fireability, Invocation, Kind, Node, OccupancyPolicy, Target};
 use rimz::store::workflow::StepLifecycle;
 
 use super::*;
@@ -238,8 +238,18 @@ fn step_facts(facts: &mut render::KeyVals, step: &Node) {
         "lifecycle",
         matches!(step.kind(), Some(Kind::Agent(_))).then(|| match step.lifecycle() {
             StepLifecycle::Turn => "turn",
-            StepLifecycle::Stay => "stay",
-            StepLifecycle::Until => "until",
+            StepLifecycle::Session => "session",
+        }),
+    );
+    field(
+        facts,
+        "rest-check",
+        (!step.rest_check().is_empty()).then(|| {
+            step.rest_check()
+                .iter()
+                .map(Target::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
         }),
     );
     field(

@@ -18,10 +18,10 @@ mod add;
 mod capacity;
 mod keep;
 mod message;
+mod rest;
 mod restart;
 mod subscribe;
 mod takeover;
-mod until;
 
 fn dummy_agent_process() -> std::process::Child {
     let mut owner = std::process::Command::new("sleep");
@@ -335,8 +335,12 @@ fn missing_companion_hooks_name_the_workflow_before_runs_or_panes() {
 
 #[test]
 fn budget_park_keeps_every_workflow_lifecycle_live() {
-    for lifecycle in ["turn", "stay", "until"] {
-        let room = Room::new(&format!("lifecycle='{lifecycle}'\n"));
+    for lifecycle in [
+        "lifecycle='turn'",
+        "lifecycle='session'",
+        "lifecycle='session'\nrest-check=['after']",
+    ] {
+        let room = Room::new(&format!("{lifecycle}\n"));
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
         let store = room.env.store();
@@ -428,7 +432,7 @@ fn budget_park_pauses_the_turn_timeout_at_the_projected_park_stamp() {
 
 #[test]
 fn stop_includes_a_cleared_companion() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     room.env.install_agent_hooks("claude");
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
@@ -608,8 +612,8 @@ fn companion_trust_warns_when_undecided_and_refuses_as_a_workflow() {
 }
 
 #[test]
-fn stay_renders_with_you_or_asking_you_until_session_exit() {
-    let room = Room::new("lifecycle='stay'\n");
+fn a_session_renders_with_you_or_asking_you_until_session_exit() {
+    let room = Room::new("lifecycle='session'\n");
     let (id, run) = room.launch();
     assert_eq!(run.lifecycle, rimz::store::run::RunLifecycle::Session);
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
@@ -626,7 +630,7 @@ fn stay_renders_with_you_or_asking_you_until_session_exit() {
         let value = show(&room.env, &id);
         assert_eq!(value["record"]["state"], "active", "{value:#}");
         assert!(value["record"]["prev_attempt"].is_null());
-        assert_eq!(value["record"]["attempt"]["lifecycle"], "stay");
+        assert_eq!(value["record"]["attempt"]["lifecycle"], "session");
     }
     let list: Value = serde_json::from_str(&success(
         room.command(&["workflow", "list", "--json"])

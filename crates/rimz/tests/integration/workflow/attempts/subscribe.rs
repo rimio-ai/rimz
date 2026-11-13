@@ -1,7 +1,7 @@
 use super::*;
 
 fn subscribed(entry: &str, scope: &str) -> (Room, String) {
-    let room = Room::new(&format!("lifecycle='stay'\nsubscribe=[{entry}]\n"));
+    let room = Room::new(&format!("lifecycle='session'\nsubscribe=[{entry}]\n"));
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     let spec = fs::read_to_string(&path).unwrap();
     fs::write(
@@ -65,7 +65,7 @@ fn step_forge_subscriptions_filter_checkout_and_ignore_sibling_skips() {
 #[test]
 fn step_stage_subscriptions_follow_the_current_archive_link() {
     use std::os::unix::fs::symlink;
-    let room = Room::new("lifecycle='stay'\nsubscribe=['team.stage']\n");
+    let room = Room::new("lifecycle='session'\nsubscribe=['team.stage']\n");
     let archive = room
         .env
         .state_path_for(&room.env.project_root)
@@ -94,7 +94,7 @@ fn step_stage_subscriptions_follow_the_current_archive_link() {
 #[test]
 fn a_forwarded_signal_is_canceled_at_delivery_once_its_attempt_ends() {
     for ending in ["detach", "stop"] {
-        let room = Room::new("lifecycle='stay'\nsubscribe=['review.ready']\n");
+        let room = Room::new("lifecycle='session'\nsubscribe=['review.ready']\n");
         let (id, run) = room.launch();
         room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
         room.hook(
@@ -197,9 +197,9 @@ fn a_forwarded_signal_is_canceled_at_delivery_once_its_attempt_ends() {
 }
 
 #[test]
-fn node_view_and_live_rail_list_a_staying_step_subscriptions_with_their_scope() {
+fn node_view_and_live_rail_list_a_session_subscriptions_with_their_scope() {
     let room = Room::new(
-        "lifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}}]\n",
+        "lifecycle='session'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}}]\n",
     );
     let node = success(
         room.command(&["workflow", "show", "review", "build"])
@@ -221,7 +221,7 @@ fn node_view_and_live_rail_list_a_staying_step_subscriptions_with_their_scope() 
             .output()
             .unwrap(),
     );
-    let current = rail.lines().find(|line| line.contains(" · since "));
+    let current = rail.lines().find(|line| line.contains("since "));
     assert!(
         current.is_some_and(|line| line.contains(" · receives ci.failed deploy.done")),
         "{rail}"

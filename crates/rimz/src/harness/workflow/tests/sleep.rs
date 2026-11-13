@@ -311,7 +311,7 @@ fn sleep_validation_accepts_plain_conditional_and_polling_cycles_with_explicit_t
 }
 
 #[test]
-fn sleep_validation_refuses_required_fields_bad_terms_and_until_reentry() {
+fn sleep_validation_refuses_required_fields_bad_terms_and_a_rest_checked_sleep() {
     let (_home, dir) = fixture();
     let cases = [
         (
@@ -352,9 +352,9 @@ fn sleep_validation_refuses_required_fields_bad_terms_and_until_reentry() {
         (format!("{SLEEP}run='true'\n"), "sleep.cooldown.run"),
         (
             format!(
-                "{SLEEP}[agent.work]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='cooldown'\n"
+                "{SLEEP}[agent.work]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nrest-check=['cooldown']\nthen='@done'\n"
             ),
-            "agent.work.then",
+            "agent.work.rest-check",
         ),
     ];
     let actual: Vec<_> = cases

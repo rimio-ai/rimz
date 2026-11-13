@@ -441,7 +441,7 @@ pub(super) fn first_bound(
         .min_by_key(|(at, _)| *at))
 }
 
-/// The check's entry-based timeout or a turn or until step's timeout, excluding held time.
+/// The check's entry-based timeout or an agent step's timeout, excluding held time.
 pub fn timeout_at(
     spec: &Definition,
     record: &RunRecord,
@@ -452,7 +452,7 @@ pub fn timeout_at(
         let Some(attempt) = record.attempt.as_ref() else {
             return Ok(None);
         };
-        // Cleanup drops a stay step's timeout; an until step's bound runs from its launch.
+        // A step's bound runs from its launch; a held attempt has none while it is held.
         if attempt.held_since.is_some() {
             return Ok(None);
         }

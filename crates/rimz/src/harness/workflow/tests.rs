@@ -452,91 +452,58 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
-fn then_lists_validate_every_entry_and_direct_link() {
+fn rest_check_lists_validate_every_entry_and_then_names_one_target() {
     let (_home, dir) = fixture();
     let base = VALID
-        .replace("lifecycle = \"turn\"", "lifecycle = 'until'")
-        .replace("then = \"pick\"", "then = ['pick', 'review']")
+        .replace(
+            "lifecycle = \"turn\"",
+            "lifecycle = 'session'\nrest-check = ['pick', 'review']",
+        )
         .replace("done = \"@done\"", "done = 'review'")
-        + "[script.review]\nrun='true'\non.ok='@done'\n";
-    for (text, error, warning) in [
-        (base.clone(), None, false),
-        (
-            base.replace("['pick', 'review']", "[]"),
-            Some("nonempty"),
-            false,
-        ),
+        + "[script.review]\nrun='true'\non.ok='@done'\non.no='build'\n";
+    for (text, path, error) in [
+        (base.clone(), "", None),
+        (base.replace("done = 'review'", "done = '@done'"), "", None),
         (
             base.replace("['pick', 'review']", "['pick', 'build']"),
-            Some("must name a check"),
-            false,
-        ),
-        (
-            base.replace("done = 'review'", "done = '@done'"),
-            Some("direct route"),
-            false,
+            "agent.build.rest-check",
+            Some("rest-check lists only check nodes"),
         ),
         (
             base.replace(
-                "[script.review]\nrun='true'\non.ok='@done'",
+                "[script.review]\nrun='true'\non.ok='@done'\non.no='build'",
                 "[sleep.review]\nsleep='1m'\nthen='@done'",
             ),
-            Some("cannot use a sleep"),
-            false,
+            "agent.build.rest-check",
+            Some("rest-check lists only check nodes"),
         ),
         (
-            base.replace("lifecycle = 'until'", "lifecycle = 'turn'"),
-            None,
-            true,
-        ),
-        (
-            base.replace("lifecycle = 'until'", "lifecycle = 'turn'")
-                .replace("['pick', 'review']", "['pick']"),
-            None,
-            false,
-        ),
-        (
-            base.replace("lifecycle = 'until'", "lifecycle = 'stay'"),
-            None,
-            true,
+            base.replace("then = \"pick\"", "then = ['pick']"),
+            "agent.build.then",
+            Some("invalid type: sequence"),
         ),
         (
             base.replace(
-                "[agent.build]\nagent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = 'until'",
+                "[agent.build]\nagent = \"claude\"\nprompt-file = \"prompts/build.md\"\nlifecycle = 'session'\nrest-check = ['pick', 'review']",
                 "[command.build]\nshell='true'\ntimeout='1m'",
-            ),
+            )
+            .replace("then = \"pick\"", "then = ['pick']"),
+            "command.build.then",
             Some("invalid type: sequence"),
-            false,
         ),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
-        let path = if text.contains("[command.build]") {
-            "command.build.then"
-        } else {
-            "agent.build.then"
-        };
         match error {
             Some(message) => assert!(
-                report
-                    .errors
-                    .iter()
-                    .any(|issue| issue.path == path && issue.message.contains(message)),
-                "{report:?}"
+                matches!(
+                    report.errors.as_slice(),
+                    [issue] if issue.path == path && issue.message.contains(message)
+                ),
+                "{text}\n{report:?}"
             ),
-            None => assert!(report.errors.is_empty(), "{report:?}"),
+            None => assert!(report.errors.is_empty(), "{text}\n{report:?}"),
         }
-        assert_eq!(
-            report
-                .warnings
-                .iter()
-                .any(|issue| issue.path == path
-                    && issue
-                        .message
-                        .contains("only an until step keeps its agent open")),
-            warning,
-            "{report:?}"
-        );
     }
 }
 
@@ -641,13 +608,16 @@ fn validation_accepts_step_layouts() {
             None,
         ),
         (
-            "stay",
-            VALID.replace("lifecycle = \"turn\"", "lifecycle='stay'"),
+            "session",
+            VALID.replace("lifecycle = \"turn\"", "lifecycle='session'"),
             None,
         ),
         (
-            "until",
-            VALID.replace("lifecycle = \"turn\"", "lifecycle='until'"),
+            "session with a rest check",
+            VALID.replace(
+                "lifecycle = \"turn\"",
+                "lifecycle='session'\nrest-check=['pick']",
+            ),
             None,
         ),
         (
@@ -666,24 +636,20 @@ fn validation_accepts_step_layouts() {
             Some("agent.build.agent"),
         ),
         (
-            "team until",
+            "team session with a rest check",
             VALID
                 .replace("agent = \"claude\"", "agent = 'forge'")
-                .replace("lifecycle = \"turn\"", "lifecycle='until'"),
+                .replace(
+                    "lifecycle = \"turn\"",
+                    "lifecycle='session'\nrest-check=['pick']",
+                ),
             Some("agent.build.agent"),
         ),
         (
-            "team omitted lifecycle",
+            "session team",
             VALID
                 .replace("agent = \"claude\"", "agent = 'forge'")
-                .replace("lifecycle = \"turn\"", ""),
-            Some("agent.build.agent"),
-        ),
-        (
-            "team stay",
-            VALID
-                .replace("agent = \"claude\"", "agent = 'forge'")
-                .replace("lifecycle = \"turn\"", "lifecycle='stay'"),
+                .replace("lifecycle = \"turn\"", "lifecycle='session'"),
             None,
         ),
         (
@@ -719,9 +685,11 @@ fn validation_accepts_step_layouts() {
                     issue.path == path
                         && match label {
                             label if label.starts_with("team") => {
-                                issue.message
-                                    == "example: agent.build.agent: a team runs only in a stay \
-                                        step; set lifecycle = \"stay\""
+                                report.errors.len() == 1
+                                    && issue.message
+                                        == "example: agent.build.agent: a team runs only in a \
+                                            session with no rest-check; set lifecycle = \
+                                            \"session\" and remove rest-check"
                             }
                             "no agent" => issue.message.contains("add an agent"),
                             "ambiguous leader" => issue.message.contains("choose an unambiguous"),
@@ -737,13 +705,16 @@ fn validation_accepts_step_layouts() {
 }
 
 #[test]
-fn until_warns_about_unreported_background_work_and_auto_continue() {
+fn a_rest_checked_session_warns_about_unreported_background_work_and_auto_continue() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
         VALID
             .replace("agent = \"claude\"", "agent = 'codex'")
-            .replace("lifecycle = \"turn\"", "lifecycle='until'"),
+            .replace(
+                "lifecycle = \"turn\"",
+                "lifecycle='session'\nrest-check=['pick']",
+            ),
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -921,12 +892,9 @@ fn validation_rejects_each_invalid_spec() {
             "agent.build.then",
         ),
         (
-            "until then terminal",
-            VALID.replace(
-                "lifecycle = \"turn\"\nthen = \"pick\"",
-                "lifecycle = \"until\"\nthen = '@done'",
-            ),
-            "agent.build.then",
+            "rest check on a turn",
+            VALID.replace("then = \"pick\"", "then = \"pick\"\nrest-check = ['pick']"),
+            "agent.build.rest-check",
         ),
         (
             "unknown profile",
@@ -1121,7 +1089,7 @@ fn bounded_command_cycles_validate_without_a_never_waits_warning() {
                      on={yes='@done',no='build',unknown='@wait'}\ntimeout='1m'";
     let held_condition = "[condition.pick]\ncases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
                           on={yes='build',no='@done',unknown='@failed'}";
-    let helper = "[agent.helper]\nagent='claude'\nprompt-file='prompts/build.md'\n\
+    let helper = "[agent.helper]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompts/build.md'\n\
                   then='back'\nmax-visits=4\n[script.back]\nrun='true'\non.fail='build'\n";
     let judge = "[judge.pick]\nagent='claude'\nprompt-file='prompts/build.md'\n\
                  summary='Review the work'\non.fail='build'";
@@ -1320,8 +1288,9 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     );
     let cases = [
         ("lifecycle='turn'", None),
-        ("lifecycle='stay'", None),
+        ("lifecycle='session'", None),
         ("lifecycle='turn'\non.asked='pick'", Some("pick")),
+        ("lifecycle='session'\non.asked='pick'", Some("pick")),
     ];
     let actual: Vec<_> = cases
         .iter()

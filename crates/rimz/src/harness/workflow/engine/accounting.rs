@@ -43,7 +43,7 @@ pub(super) fn transition(t: &Transition<'_>) {
                 object,
                 ..
             } if !explicit_route => {
-                if until::has_pending_verdict(&t.record) {
+                if rest::has_pending_verdict(&t.record) {
                     continue;
                 }
                 if t.record.state == RunState::Active && outcome == "canceled" {

@@ -6,7 +6,6 @@ use super::spec::{self, CheckKind, Invoke, Issue, RESERVED_OUTCOMES, StepKind, W
 use super::{Definition, Target};
 use super::{Edge, EdgeSource};
 use crate::config::definitions::LoadedDefinitions;
-use crate::store::workflow::StepLifecycle;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -302,7 +301,8 @@ pub(super) fn validate_spec(
         }
         let layout = if let Some(StepKind::Agent(agent)) = step.kind() {
             report.prompt(dir, &path, step.prompt_file.as_deref());
-            match step_layout(dir, agent, step.lifecycle(), definitions, project_root) {
+            let judged = step.lifecycle().is_turn() || step.rest_check.is_some();
+            match step_layout(dir, agent, judged, definitions, project_root) {
                 Ok(layout) => Some(layout),
                 Err(error) => {
                     report.error(&format!("{path}.agent"), error);
@@ -322,19 +322,21 @@ pub(super) fn validate_spec(
                     .is_wired(),
             )
         });
-        if matches!(step.lifecycle(), StepLifecycle::Turn | StepLifecycle::Until)
-            && do_background == Some(false)
-        {
+        let rest_check = step.rest_check.as_deref();
+        if (step.lifecycle().is_turn() || rest_check.is_some()) && do_background == Some(false) {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
         if !message && step.then.is_empty() {
             report.error(
                 &format!("{path}.then"),
-                "then must name a check or a nonempty list of checks",
+                if agent {
+                    "then must name a check, @done, or @failed"
+                } else {
+                    "then must name a check"
+                },
             );
         }
         let ends_run = agent
-            && step.lifecycle() != StepLifecycle::Until
             && matches!(step.then.as_slice(), [target] if matches!(target.as_str(), "@done" | "@failed"));
         if !at_break
             && !message
@@ -346,56 +348,35 @@ pub(super) fn validate_spec(
         {
             report.error(
                 &format!("{path}.then"),
-                if agent && step.lifecycle() != StepLifecycle::Until {
-                    if step.then.len() > 1
-                        && step
-                            .then
-                            .iter()
-                            .any(|target| target == "@done" || target == "@failed")
-                    {
-                        "then lists only checks; @done or @failed stands alone as then"
-                    } else {
-                        "then must name a check, @done, or @failed, never a step"
-                    }
+                if agent {
+                    "then must name a check, @done, or @failed, never a step"
                 } else {
                     "then must name a check, never a step or @done"
                 },
             );
         }
-        if !message && step.lifecycle() != StepLifecycle::Until && step.then.len() > 1 {
-            report.warnings.push(issue(
-                &format!("{path}.then"),
-                concat!(
-                    "only an until step keeps its agent open across the list; ",
-                    "enter the first check and let its routes decide the rest"
-                ),
-            ));
-        }
-        if step.lifecycle() == StepLifecycle::Until
-            && step
-                .then
-                .iter()
-                .filter_map(|node| spec.authored().checks.get(node))
-                .any(|check| check.is_sleep())
-        {
-            report.error(
-                &format!("{path}.then"),
-                "an until step cannot use a sleep as its turn-end check; use lifecycle = \"turn\"",
-            );
-        }
-        for pair in step.then.windows(2).filter(|_| !message) {
-            if !spec.edges(&pair[0]).iter().any(|edge| {
-                edge.outcome != "deadline"
-                    && edge.target.as_str() == pair[1]
-                    && edge.fires != super::Fireability::Never
-            }) {
+        if let Some(checks) = rest_check {
+            let path = format!("{path}.rest-check");
+            if step.lifecycle().is_turn() {
                 report.error(
-                    &format!("{path}.then"),
-                    format!(
-                        "{} requires a direct route to the next listed check {}",
-                        pair[0], pair[1]
-                    ),
+                    &path,
+                    "a turn is judged at its turn end; rest-check is a session's field",
                 );
+            } else if checks.is_empty() {
+                report.error(&path, "rest-check must list at least one check");
+            } else {
+                let nodes = &spec.authored().checks;
+                for entry in checks
+                    .iter()
+                    .filter(|entry| nodes.get(*entry).is_none_or(spec::Check::is_sleep))
+                {
+                    report.error(
+                        &path,
+                        format!(
+                            "rest-check lists only check nodes (test, script, judge, condition); {entry} is not one"
+                        ),
+                    );
+                }
             }
         }
         if agent && let Some(target) = &step.on.capacity {
@@ -790,16 +771,10 @@ impl Validation {
         if !agent {
             return;
         }
-        if step.keep.is_some() && lifecycle == StepLifecycle::Stay {
-            self.error(
-                &format!("{path}.keep"),
-                "keep is only for turn and until agent steps",
-            );
-        }
         if step.subscribe.is_some() && lifecycle.is_turn() {
             self.error(
                 &format!("{path}.subscribe"),
-                "only a staying agent step receives signals; a turn ends where they would land",
+                "only a session receives signals; a turn ends where they would land",
             );
         }
         self.wakes(
@@ -807,18 +782,6 @@ impl Validation {
             step.subscribe.as_ref(),
             Wake::step_subscription,
         );
-        if step.timeout.is_some() && lifecycle == StepLifecycle::Stay {
-            self.error(
-                &format!("{path}.timeout"),
-                "a staying step has no step timeout; remove timeout or use lifecycle = \"turn\"",
-            );
-        }
-        if step.on.asked.is_some() && !lifecycle.is_turn() {
-            self.error(
-                &format!("{path}.on.asked"),
-                "a staying step never ends on a question; remove on.asked or use lifecycle = \"turn\"",
-            );
-        }
     }
 
     fn node_name(&mut self, path: &str, node: &str) {
@@ -998,7 +961,7 @@ fn message_then(report: &mut Validation, spec: &Definition, path: &str, then: &[
 fn step_layout(
     dir: &Path,
     agent: &str,
-    lifecycle: StepLifecycle,
+    judged: bool,
     definitions: &LoadedDefinitions,
     project_root: Option<&Path>,
 ) -> anyhow::Result<crate::harness::spec::LayoutSpec> {
@@ -1021,10 +984,13 @@ fn step_layout(
         Some(agent),
         None,
     )?;
-    // A stay step holds its attempt until the leader's session ends and judges no turn end,
-    // the one thing a team has no answer for.
-    if resolved.team_name.is_some() && lifecycle != StepLifecycle::Stay {
-        anyhow::bail!("a team runs only in a stay step; set lifecycle = \"stay\"");
+    // A team has no one turn end or rest to judge, so it runs only in a session that judges
+    // neither: one with no rest check, whose attempt lasts until the leader's session ends.
+    if resolved.team_name.is_some() && judged {
+        anyhow::bail!(
+            "a team runs only in a session with no rest-check; set lifecycle = \"session\" and \
+             remove rest-check"
+        );
     }
     if resolved.layout.agent_cells().next().is_none() {
         anyhow::bail!("step layout needs a prompt leader; add an agent cell");

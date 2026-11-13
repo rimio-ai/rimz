@@ -199,10 +199,14 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     assert_eq!(
         (agent.lifecycle(), agent.max_visits, agent.on.cap.as_deref()),
         (
-            crate::store::workflow::StepLifecycle::Until,
+            crate::store::workflow::StepLifecycle::Session,
             Some(3),
             Some("@failed")
         )
+    );
+    assert_eq!(
+        (agent.rest_check.as_deref(), agent.then.as_slice()),
+        (Some(&["verify".to_owned()][..]), &["verify".to_owned()][..])
     );
     assert_eq!(
         (
@@ -246,14 +250,14 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
             "@wait".into()
         )
     );
-    let stay = &authored(&spec).steps["agent"];
+    let resident = &authored(&spec).steps["agent"];
     assert_eq!(
-        (stay.lifecycle(), stay.timeout.as_deref()),
-        (crate::store::workflow::StepLifecycle::Stay, None),
+        (resident.lifecycle(), resident.timeout.as_deref()),
+        (crate::store::workflow::StepLifecycle::Session, None),
         "a resident takes no default timeout"
     );
     assert_eq!(
-        subscription_prompts(stay),
+        subscription_prompts(resident),
         [Some("repair")],
         "a binding's prompt reaches the step"
     );
@@ -1207,7 +1211,10 @@ fn a_resident_launches_at_its_destination_and_a_wait_delivers_to_its_pinned_sess
     let launch = &host.launched.borrow()[0];
     assert_eq!(
         (launch.lifecycle, launch.overrides.worktree.as_deref()),
-        (crate::store::workflow::StepLifecycle::Stay, Some("review"))
+        (
+            crate::store::workflow::StepLifecycle::Session,
+            Some("review")
+        )
     );
 
     for (answer, expected) in [
@@ -1747,13 +1754,13 @@ fn a_scheduled_recurring_fire_gives_up_on_capacity_before_its_next_fire() {
 }
 
 #[test]
-fn a_keep_fire_keeps_a_turn_agent_and_starts_a_stay_row_unchanged() {
+fn a_keep_fire_keeps_a_turn_agent_and_a_resident_session() {
     let catalog = crate::harness::schedule::catalog::TaskCatalog::load(None).unwrap();
     for (row, kept) in [
         ("agent='claude'\nprompt='fix it'\nevery='1h'\n", Some(true)),
         (
             "agent='claude'\nprompt='settle'\nstay=true\nevery='1h'\n",
-            None,
+            Some(true),
         ),
     ] {
         let home = tempfile::tempdir().unwrap();

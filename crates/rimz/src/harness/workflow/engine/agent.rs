@@ -148,11 +148,7 @@ pub(super) fn empty_observation() -> Observed {
     }
 }
 
-pub(super) fn observed_outcome(
-    observed: &Observed,
-    lifecycle: crate::store::workflow::StepLifecycle,
-    on_asked: bool,
-) -> Option<AttemptOutcome> {
+pub(super) fn observed_outcome(observed: &Observed, on_asked: bool) -> Option<AttemptOutcome> {
     match observed.status {
         RunStatus::Completed => Some(AttemptOutcome::Ended),
         RunStatus::Failed | RunStatus::VerifyFailed | RunStatus::TimedOut => {
@@ -160,9 +156,7 @@ pub(super) fn observed_outcome(
         }
         RunStatus::Canceled => Some(AttemptOutcome::Canceled),
         RunStatus::BudgetExceeded => Some(AttemptOutcome::Limited),
-        RunStatus::Pending | RunStatus::Running
-            if lifecycle.is_turn() && on_asked && observed.ask.is_some() =>
-        {
+        RunStatus::Pending | RunStatus::Running if on_asked && observed.ask.is_some() => {
             Some(AttemptOutcome::Asked)
         }
         _ => None,
@@ -251,10 +245,14 @@ pub(super) fn prepare_end(
         persist(t, guard)?;
         return Ok(Decision::End(Box::new(t.record.clone())));
     }
+    let rest_checked = t
+        .spec
+        .step(&attempt.node)
+        .is_some_and(|step| !step.rest_check().is_empty());
     let mut observed = match &attempt.run {
         Some(run) => host.observe(
             run,
-            if attempt.lifecycle == workflow::StepLifecycle::Until {
+            if rest_checked {
                 Observation::LeaderTurn
             } else {
                 Observation::Attempt
@@ -263,7 +261,6 @@ pub(super) fn prepare_end(
         None => empty_observation(),
     };
     t.now = Timestamp::now();
-    let lifecycle = attempt.lifecycle;
     let missing_run = attempt.run.is_none();
     let on_asked = t
         .spec
@@ -294,7 +291,7 @@ pub(super) fn prepare_end(
             reason: None,
         })
     } else {
-        observed_outcome(&observed, lifecycle, on_asked)
+        observed_outcome(&observed, on_asked)
             .or_else(|| (missing_run && !host_live).then_some(AttemptOutcome::Canceled))
             .map(|outcome| Ending {
                 outcome,
@@ -314,7 +311,7 @@ pub(super) fn prepare_end(
             }
             return Ok(Decision::Push(Box::new(t.record.clone())));
         }
-        if until::begin(t, &observed)? {
+        if rest::begin(t, &observed)? {
             persist(t, guard)?;
             return Ok(Decision::Again);
         }
@@ -528,7 +525,12 @@ fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
     }
     let ending = attempt.ending.as_ref().expect("published agent ending");
     let keep = spec.step(&attempt.node).and_then(Node::keep);
-    keep.unwrap_or(false) && ending.cause == EndCause::Lifecycle
+    keep.unwrap_or(false)
+        && ending.cause == EndCause::Lifecycle
+        && matches!(
+            ending.outcome,
+            AttemptOutcome::Ended | AttemptOutcome::Asked
+        )
 }
 
 pub(super) fn finish(
@@ -601,10 +603,10 @@ pub(super) fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::workflow::{Asked, Asking, StepLifecycle};
+    use crate::store::workflow::{Asked, Asking};
 
     #[test]
-    fn observed_outcome_covers_status_ask_limit_lifecycle_and_asked_edge() {
+    fn observed_outcome_covers_status_ask_limit_and_asked_edge_on_either_lifecycle() {
         let statuses = [
             (RunStatus::Pending, None),
             (RunStatus::Running, None),
@@ -625,37 +627,27 @@ mod tests {
         let mut expected = Vec::new();
         for (status, terminal) in statuses {
             for (ask, limit, held, routed) in signals {
-                for lifecycle in [
-                    StepLifecycle::Turn,
-                    StepLifecycle::Stay,
-                    StepLifecycle::Until,
-                ] {
-                    for on_asked in [false, true] {
-                        let observed = Observed {
-                            status,
-                            ask: ask.then(|| Asking {
-                                since: Timestamp::now(),
-                                ask: Asked {
-                                    text: "Approve?".into(),
-                                    kind: "permission".into(),
-                                    handle: "@child".into(),
-                                },
-                            }),
-                            limited: limit.then_some(Limited { reset_at: None }),
-                            stopped: None,
-                            children: Children::default(),
-                            cost_usd: None,
-                            turn: None,
-                        };
-                        let case = (status, ask, limit, lifecycle, on_asked);
-                        actual.push((case, observed_outcome(&observed, lifecycle, on_asked)));
-                        let live = if lifecycle.is_turn() {
-                            if on_asked { routed } else { held }
-                        } else {
-                            None
-                        };
-                        expected.push((case, terminal.or(live)));
-                    }
+                for on_asked in [false, true] {
+                    let observed = Observed {
+                        status,
+                        ask: ask.then(|| Asking {
+                            since: Timestamp::now(),
+                            ask: Asked {
+                                text: "Approve?".into(),
+                                kind: "permission".into(),
+                                handle: "@child".into(),
+                            },
+                        }),
+                        limited: limit.then_some(Limited { reset_at: None }),
+                        stopped: None,
+                        children: Children::default(),
+                        cost_usd: None,
+                        turn: None,
+                    };
+                    let case = (status, ask, limit, on_asked);
+                    actual.push((case, observed_outcome(&observed, on_asked)));
+                    let live = if on_asked { routed } else { held };
+                    expected.push((case, terminal.or(live)));
                 }
             }
         }

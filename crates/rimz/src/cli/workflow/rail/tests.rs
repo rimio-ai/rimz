@@ -46,10 +46,12 @@ on.fail = '@done'
 fn turn_end_footer_only_describes_turn_agent_steps() {
     for (runner, turn_end) in [
         ("shell='true'", false),
-        ("agent='claude'\nlifecycle='stay'", false),
-        ("agent='claude'\nlifecycle='until'", false),
+        ("agent='claude'\nlifecycle='session'", false),
+        (
+            "agent='claude'\nlifecycle='session'\nrest-check=['gate']",
+            false,
+        ),
         ("agent='claude'\nlifecycle='turn'", true),
-        ("agent='claude'", false),
     ] {
         let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
@@ -823,12 +825,13 @@ then='after'
 
 #[test]
 fn horizontal_canceled_held_session_marks_the_step_not_the_check() {
-    // Cancel an until session while its held shell check is still running.
+    // Cancel a rest-checked session while its held shell check is still running.
     let text = canceled_horizontal(
         r#"[agent.work]
 agent='claude'
 prompt-file='prompt.md'
-lifecycle='until'
+lifecycle='session'
+rest-check=['after']
 then='after'
 "#,
         "work",
@@ -1114,7 +1117,7 @@ fn multiline_commands_stay_on_one_rail_line() {
 
 #[test]
 fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
-    let told = LAND.replace("on.pass = 'triage'\non.fail = '@done'\n[command.triage]", "on.pass = 'tell'\non.fail = 'stand'\n[message.tell]\nmessage = '@planner'\nthen = 'triage'\n[agent.stand]\nagent = 'claude'\nlifecycle = 'stay'\nprompt-file = 'prompt.md'\nsubscribe = ['ci.failed']\nthen = 'ruled'\n[command.triage]");
+    let told = LAND.replace("on.pass = 'triage'\non.fail = '@done'\n[command.triage]", "on.pass = 'tell'\non.fail = 'stand'\n[message.tell]\nmessage = '@planner'\nthen = 'triage'\n[agent.stand]\nagent = 'claude'\nlifecycle = 'session'\nprompt-file = 'prompt.md'\nsubscribe = ['ci.failed']\nthen = 'ruled'\n[command.triage]");
     assert_ne!(told, LAND);
     for text in [LAND, &told] {
         land_rail_agrees(text);
@@ -1241,11 +1244,11 @@ mod horizontal_sweep {
                 ) + "\n[command.cleanup]\nshell='true'\nthen='@done'\n",
             ),
             (
-                "until",
+                "rest-check",
                 "[workflow]\nscope='worktree'\nstart='plan'\n\
                  [agent.plan]\nagent='claude'\nlifecycle='turn'\nthen='planned'\n\
                  [test.planned]\nshell='true'\non.pass='work'\n\
-                 [agent.work]\nagent='claude'\nlifecycle='until'\nthen='gate'\n\
+                 [agent.work]\nagent='claude'\nlifecycle='session'\nrest-check=['gate']\nthen='gate'\n\
                  max-visits=3\non.cap='escalate_to_release_manager'\n\
                  [command.escalate_to_release_manager]\nshell='true'\nthen='gate'\n\
                  [test.gate]\nshell='true'\non.pass='@done'\non.fail='work'\n"
@@ -1359,13 +1362,13 @@ mod horizontal_sweep {
             runs.push((state.as_str(), record, hops));
         }
         if let Some(step) = spec.step(node)
-            && step.lifecycle() == StepLifecycle::Until
+            && let [check, ..] = step.rest_check()
         {
-            base.node = step.then().first().unwrap().as_str().to_owned();
+            base.node = check.as_str().to_owned();
             base.held = Some(
                 serde_json::from_value(serde_json::json!({
                     "attempt": {
-                        "kind":"agent", "lifecycle":"until", "seq":1, "node":node,
+                        "kind":"agent", "lifecycle":"session", "seq":1, "node":node,
                         "started_at":jiff::Timestamp::UNIX_EPOCH, "host":{"pid":1, "start":null},
                     },
                     "entered_at":jiff::Timestamp::UNIX_EPOCH,
@@ -1533,7 +1536,7 @@ mod horizontal_sweep {
 
     #[test]
     fn held_run_elides_interior_nodes_between_current_anchors() {
-        let spec = shape("until");
+        let spec = shape("rest-check");
         let (_, record, hops) = runs(&spec, "work", false)
             .into_iter()
             .find(|(state, _, _)| *state == "held")
@@ -1547,7 +1550,7 @@ mod horizontal_sweep {
         assert_eq!(
             anstream::adapter::strip_str(&rendered(&spec, &record, &hops, 40)).to_string(),
             "      … ◆ planned ─ ⢿ work ─ … ─ ⢿ gate\n",
-            "until walk: {walk:?}"
+            "rest-check walk: {walk:?}"
         );
     }
 

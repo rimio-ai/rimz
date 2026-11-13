@@ -8,8 +8,8 @@ use serde::Deserialize;
 use serde_path_to_error::Segment;
 
 use super::{
-    Case, Check, CheckTable, Header, OccupancyPolicy, SpecErr, Step, StepEdges, StepTable, Then,
-    Wake, WorkflowSpec, nonempty_cases, then_checks,
+    Case, Check, CheckTable, Header, OccupancyPolicy, SpecErr, Step, StepEdges, StepTable, Wake,
+    WorkflowSpec, nonempty_cases,
 };
 use crate::harness::throttle::Limit;
 use crate::store::workflow::StepLifecycle;
@@ -55,10 +55,10 @@ pub struct WorkflowFile {
 struct AgentNode {
     summary: Option<String>,
     agent: String,
-    lifecycle: Option<StepLifecycle>,
-    #[serde(default, deserialize_with = "then_checks")]
-    #[schemars(required, with = "Then", !default)]
-    then: Vec<String>,
+    lifecycle: StepLifecycle,
+    #[schemars(required)]
+    then: Option<String>,
+    rest_check: Option<Vec<String>>,
     prompt_file: Option<String>,
     keep: Option<bool>,
     notes: Option<bool>,
@@ -362,6 +362,7 @@ fn step(table: StepTable) -> Step {
         shell: None,
         message: None,
         lifecycle: None,
+        rest_check: None,
         keep: None,
         notes: None,
         prompt_file: None,
@@ -412,8 +413,9 @@ impl WorkflowFile {
                 Step {
                     summary: node.summary,
                     agent: Some(node.agent),
-                    lifecycle: node.lifecycle,
-                    then: node.then,
+                    lifecycle: Some(node.lifecycle),
+                    then: node.then.into_iter().collect(),
+                    rest_check: node.rest_check,
                     prompt_file: node.prompt_file,
                     keep: node.keep,
                     notes: node.notes,

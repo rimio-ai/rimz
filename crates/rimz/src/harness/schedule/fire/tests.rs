@@ -40,7 +40,7 @@ fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
         let mut value = serde_json::to_value(&record).unwrap();
         value["held"] = if held {
             serde_json::json!({
-                "attempt":{"kind":"agent", "lifecycle":"until", "seq":1, "node":"work",
+                "attempt":{"kind":"agent", "lifecycle":"session", "seq":1, "node":"work",
                     "started_at":record.created_at, "host":{"pid":1,"start":null},
                     "run":{"run_id":crate::ids::RunId::new(),"handle":"@worker"},
                     "judged":{"agent_id":"leader", "started_at":record.created_at,
