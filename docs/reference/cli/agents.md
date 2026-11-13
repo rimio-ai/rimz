@@ -724,7 +724,7 @@ The status is derived for display. Codex launched in `auto` mode shows `running`
 
 ##### Filter the list
 
-`--filter QUERY` narrows the listed rows, and `-q, --quiet` prints one address per row and nothing else. Each `-q` address is the shortest that resolves back to that one agent through the resolver the agent commands use, a closed session included; `-q` conflicts with `--json`. Every agent with an address can be a row: a pane-backed root (team seats included), a launched child, and a closed session from the audit record. A provider-native child has no row.
+`--filter QUERY` narrows the listed rows, and `-q, --quiet` prints one address per row and nothing else. Each `-q` address is the shortest that resolves back to that one agent through the resolver the agent commands use, a closed session included. One exception: a closed session that ended before it registered, whose name a live agent now answers to, prints `@<id>` with its provisional `launch_…` id, which names no agent, so an agent command misses it rather than acting on the live one. `-q` conflicts with `--json`. Every agent with an address can be a row: a pane-backed root (team seats included), a launched child, and a closed session from the audit record. A provider-native child has no row.
 
 ```sh
 rimz agents list --filter 'status=waiting,failed'      # attention only

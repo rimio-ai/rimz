@@ -570,7 +570,9 @@ pub fn rows_in_scope<'a>(
 }
 
 /// The short Audit address, or `@<agent_id>` when the short one also names a
-/// live agent and the id resolves in Audit to exactly this agent.
+/// live agent. A provisional id resolves nowhere, live or Audit, so such a
+/// row's line names no agent rather than the live holder of its name: an
+/// action misses and `agents show` finds nothing.
 fn closed_address(
     agent: &AgentState,
     audit: &Roster<'_>,
@@ -578,14 +580,10 @@ fn closed_address(
     reader: &AddressContext,
 ) -> String {
     let short = audit.paste_address(agent, reader);
-    if live.resolve_many(&short, None, reader).is_err() || agent.agent_id.is_provisional() {
+    if live.resolve_many(&short, None, reader).is_err() {
         return short;
     }
-    let by_id = format!("@{}", agent.agent_id);
-    let exact = audit
-        .resolve_many(&by_id, None, reader)
-        .is_ok_and(|matches| matches.len() == 1 && std::ptr::eq(matches[0], agent));
-    if exact { by_id } else { short }
+    format!("@{}", agent.agent_id)
 }
 
 fn pane_bound(snapshot: &SidebarSnapshot, agent: &AgentState) -> bool {
