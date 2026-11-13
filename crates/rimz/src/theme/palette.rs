@@ -47,9 +47,9 @@ const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 /// cache, not the full bar's live red.
 const CACHE_EXPIRED_GREY: f32 = 0.5;
 
-/// Pull `alarm` about a third toward the background: an empty strip tinted
-/// red for a fully spent budget bar, clearly quieter than a red fill.
-const BUDGET_EXHAUSTED_DIM: f32 = 0.35;
+/// Pull `alarm` a little past halfway toward the background: an empty strip
+/// tinted a muted red for a fully spent budget bar, well below a red fill.
+const BUDGET_EXHAUSTED_DIM: f32 = 0.55;
 
 /// Step the fast-mode amber away from the background to separate it from `warn`.
 /// `LIGHTNESS_STEP` is the first step; the shared readability floor then checks
@@ -1053,7 +1053,7 @@ mod tests {
             ] {
                 assert_eq!(
                     Palette::resolve(&theme, depth).budget_exhausted,
-                    rgb_color(oklab::blend(alarm, raw.background, 0.35), depth),
+                    rgb_color(oklab::blend(alarm, raw.background, 0.55), depth),
                     "alarm {alarm:?} at {depth:?}"
                 );
             }
