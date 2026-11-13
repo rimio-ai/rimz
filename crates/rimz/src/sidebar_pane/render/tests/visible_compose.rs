@@ -176,7 +176,7 @@ proptest! {
     #[test]
     fn cached_frames_equal_full_compose(
         count in 1usize..=130, mut width in 20u16..=80, height in 8u16..=60,
-        steps in prop::collection::vec((0u8..12, any::<u16>()), 8..=16),
+        steps in prop::collection::vec((0u8..13, any::<u16>()), 8..=16),
     ) {
         let mut snapshot = fleet(count);
         let mut ui = ViewState::default();
@@ -210,6 +210,14 @@ proptest! {
                 9 => ui.toggles.inactive_peek = ui.toggles.inactive_peek.is_none().then(Default::default),
                 10 => ui.toggles.search_draft =
                     Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
+                // A booking arriving, counting in `+N later`, or finishing.
+                11 => {
+                    let mut bookings =
+                        crate::sidebar::test_support::bookings_in_each_state(snapshot.now);
+                    bookings.truncate(usize::from(value) % (bookings.len() + 1));
+                    let row = snapshot.rows_mut().next().unwrap();
+                    row.as_agent_mut().unwrap().bookings = bookings;
+                }
                 _ => {
                     let row = &snapshot.worktree_groups[0].rows[0].id;
                     ui.toggles

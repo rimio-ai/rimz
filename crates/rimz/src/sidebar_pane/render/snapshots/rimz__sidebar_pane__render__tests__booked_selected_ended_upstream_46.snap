@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                    $0.00
+ ────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 1        ⢿ 0   ☾ 0   ○ 0
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌✓ claude · opus · high · 200k               ▐
+▌  Workflow language redesign plan           ▐
+▌  ▣ ╸───────────────────────────  1.0%      ▐
+▌  ▤ 0                                       ▐
+▌  ▷ booked (8)    1 running · 2 ended, no PR▐
+▌    ⣾ coder · lang-typed                    ▐
+▌      @coder                              1h▐
+▌    – forge · lane-readers                  ▐
+▌      ended 53m ago · no PR               3h▐
+▌    – coder · spike                         ▐
+▌      ended 10m ago · no PR              30m▐
+▌    ▷ writer · lane-readers-docs            ▐
+▌      lane-readers ended · no PR            ▐
+▌    ▷ writer · lang-docs                    ▐
+▌      pr[workflow-language]: #1640 open     ▐
+▌    ▷ coder · nightly                       ▐
+▌      once at 2026-11-14 03:00              ▐
+▌    +1 later                                ▐
+▌    1 more ended                            ▐
+
+
+ ────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+
+                                   ? for help

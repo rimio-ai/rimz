@@ -1,4 +1,4 @@
-//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered slot skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line.
+//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered slot skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line. A card holding an unfinished booked plan keeps its booked line on every shape that has no delegation summary, the one-line stale shape included.
 
 use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
@@ -74,6 +74,9 @@ pub(super) enum CardSlot {
     /// Unfinished and newest finished child entries, a count of the other
     /// finished children, and pending waits.
     DelegationEntries,
+    /// The booked line alone, on a shape without `Delegation` whose card holds an
+    /// unfinished booked plan.
+    Booked,
 }
 
 const IDENTITY: &[CardSlot] = &[CardSlot::Identity];
@@ -110,6 +113,18 @@ const ENGAGED_RESTING: &[CardSlot] = &[
     CardSlot::Gauge,
     CardSlot::Delegation,
 ];
+const STALE: &[CardSlot] = &[CardSlot::Stale];
+const STALE_BOOKED: &[CardSlot] = &[CardSlot::Stale, CardSlot::Booked];
+const IDENTITY_BOOKED: &[CardSlot] = &[CardSlot::Identity, CardSlot::Booked];
+const IDENTITY_DESCRIPTION_BOOKED: &[CardSlot] =
+    &[CardSlot::Identity, CardSlot::Description, CardSlot::Booked];
+const IDENTITY_DESCRIPTION_GAUGE_BOOKED: &[CardSlot] = &[
+    CardSlot::Identity,
+    CardSlot::Description,
+    CardSlot::Question,
+    CardSlot::Gauge,
+    CardSlot::Booked,
+];
 const ENGAGED_RESTING_EXPANDED: &[CardSlot] = &[
     CardSlot::Identity,
     CardSlot::Description,
@@ -138,8 +153,34 @@ pub(in crate::sidebar_pane::render) fn engaged_base_lines() -> usize {
         .count()
 }
 
-/// The ordered slot skeleton for one agent-card state.
+/// The ordered slot skeleton for one agent-card state; `plan` is an unfinished booked
+/// plan on the card, which appends `Booked` to every shape without `Delegation`.
 pub(super) fn template(
+    stage: CardStage,
+    status: AgentStatus,
+    density: CardDensityMode,
+    expansion: CardExpansion,
+    plan: bool,
+) -> &'static [CardSlot] {
+    let slots = base_template(stage, status, density, expansion);
+    if !plan {
+        return slots;
+    }
+    [
+        (IDENTITY, IDENTITY_BOOKED),
+        (IDENTITY_DESCRIPTION, IDENTITY_DESCRIPTION_BOOKED),
+        (
+            IDENTITY_DESCRIPTION_GAUGE,
+            IDENTITY_DESCRIPTION_GAUGE_BOOKED,
+        ),
+        (STALE, STALE_BOOKED),
+    ]
+    .into_iter()
+    .find_map(|(base, booked)| (base == slots).then_some(booked))
+    .unwrap_or(slots)
+}
+
+fn base_template(
     stage: CardStage,
     status: AgentStatus,
     density: CardDensityMode,
@@ -158,7 +199,7 @@ pub(super) fn template(
         && !expanded
         && density != CardDensityMode::Expanded
     {
-        return &[CardSlot::Stale];
+        return STALE;
     }
     if density == CardDensityMode::Compact && !expanded {
         return match status {
@@ -260,6 +301,20 @@ mod tests {
         status: AgentStatus,
         density: CardDensityMode,
         expansion: CardExpansion,
+        plan: bool,
+    ) -> Vec<CardSlot> {
+        let mut slots = expected_base_template(stage, status, density, expansion);
+        if plan && !slots.contains(&CardSlot::Delegation) {
+            slots.push(CardSlot::Booked);
+        }
+        slots
+    }
+
+    fn expected_base_template(
+        stage: CardStage,
+        status: AgentStatus,
+        density: CardDensityMode,
+        expansion: CardExpansion,
     ) -> Vec<CardSlot> {
         if let CardStage::Fresh { labeled } = stage {
             return if labeled && density != CardDensityMode::Compact {
@@ -301,7 +356,8 @@ mod tests {
 
     /// Engaged card shape follows live or held selection; delegation entries
     /// follow the resolved open state alone, so a selected card can close its
-    /// entries and an unselected one can open them.
+    /// entries and an unselected one can open them. An unfinished booked plan only
+    /// appends the booked line to the shapes that draw no delegation summary.
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
         assert!(ENGAGED_EXPANDED.starts_with(ENGAGED));
@@ -311,21 +367,17 @@ mod tests {
             for status in STATUSES {
                 for density in DENSITIES {
                     for reach in REACHES {
-                        for delegation in [false, true] {
+                        for (delegation, plan) in
+                            [(false, false), (true, false), (false, true), (true, true)]
+                        {
                             let expansion = CardExpansion { reach, delegation };
                             actual.push((
-                                stage,
-                                status,
-                                density,
-                                expansion,
-                                template(stage, status, density, expansion).to_vec(),
+                                (stage, status, density, expansion, plan),
+                                template(stage, status, density, expansion, plan).to_vec(),
                             ));
                             expected.push((
-                                stage,
-                                status,
-                                density,
-                                expansion,
-                                expected_template(stage, status, density, expansion),
+                                (stage, status, density, expansion, plan),
+                                expected_template(stage, status, density, expansion, plan),
                             ));
                         }
                     }
@@ -344,18 +396,22 @@ mod tests {
             for status in STATUSES {
                 for density in DENSITIES {
                     for reach in REACHES {
-                        let template = template(
-                            stage,
-                            status,
-                            density,
-                            CardExpansion {
-                                reach,
-                                delegation: reach == SelectionReach::Selected,
-                            },
-                        );
-                        assert!(!template.contains(&CardSlot::Tokens));
-                        assert!(!template.contains(&CardSlot::Delegation));
-                        assert!(!template.contains(&CardSlot::DelegationEntries));
+                        for plan in [false, true] {
+                            let template = template(
+                                stage,
+                                status,
+                                density,
+                                CardExpansion {
+                                    reach,
+                                    delegation: reach == SelectionReach::Selected,
+                                },
+                                plan,
+                            );
+                            assert!(!template.contains(&CardSlot::Tokens));
+                            assert!(!template.contains(&CardSlot::Delegation));
+                            assert!(!template.contains(&CardSlot::DelegationEntries));
+                            assert_eq!(template.contains(&CardSlot::Booked), plan);
+                        }
                     }
                 }
             }
@@ -365,7 +421,8 @@ mod tests {
                 CardStage::Fresh { labeled: false },
                 AgentStatus::Idle,
                 CardDensityMode::Auto,
-                CardExpansion::default()
+                CardExpansion::default(),
+                false,
             ),
             IDENTITY
         );

@@ -621,6 +621,71 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     }
 }
 
+/// A fired booking with a live launch focuses that pane from both entry lines, and
+/// every other entry focuses the card's own pane; a click only ever focuses.
+#[test]
+fn booking_entry_clicks_focus_the_launched_pane_or_the_card() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let parent = pane_of(&snapshot, 0);
+    let launched = pane_of(&snapshot, 1);
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let row_id = rows[0].id.clone();
+    let open_pin = render::DelegationPin {
+        open: true,
+        turn: rows[0].as_agent().unwrap().user_turn_started_at,
+    };
+    let mut bookings = crate::sidebar::test_support::bookings_in_each_state(snapshot.now);
+    bookings
+        .retain(|booking| matches!(booking.task.as_str(), "lang-typed" | "spike" | "lang-docs"));
+    if let crate::store::snapshot::BookingState::Fired(fire) = &mut bookings[0].state {
+        fire.live.as_mut().unwrap().pane = Some(launched.clone());
+    }
+    rows[0].as_agent_mut().unwrap().bookings = bookings;
+    let mut ui = render::ViewState {
+        selected_pane: Some(parent.clone()),
+        selected_index: Some(0),
+        toggles: PresentationToggles {
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, open_pin)]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+    let line_of = |task: &str| {
+        composed
+            .lines
+            .iter()
+            .position(|line| line.to_string().contains(task))
+            .unwrap_or_else(|| panic!("{task} is drawn"))
+    };
+    let cases = [
+        (line_of("lang-typed"), launched.clone()),
+        (line_of("spike"), parent.clone()),
+        (line_of("lang-docs"), parent.clone()),
+    ];
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    for (first, focus) in cases {
+        for line in [first, first + 1] {
+            for column in [0, 53] {
+                let mut view = ui.clone();
+                assert_eq!(
+                    handle_mouse_click(column, line as u16, &mut view, &mut pane_ui, &snapshot),
+                    InputOutcome {
+                        redraw: true,
+                        effects: vec![InputEffect::Focus(focus.clone())]
+                    },
+                    "line {line}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
     let mut snapshot = delegation_snapshot();
@@ -669,6 +734,71 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
         }
     );
     assert_eq!(ui.selected_pane, Some(parent));
+}
+
+/// A fired entry whose launched card a filter hides selects and focuses the card that owns
+/// the entry, as an entry without a pane does.
+#[test]
+fn booking_entry_whose_launched_card_is_filtered_focuses_the_owning_card() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let parent = pane_of(&snapshot, 0);
+    let launched = PaneId::from_parts(MuxName::Zellij, "terminal_launched");
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let row_id = rows[0].id.clone();
+    let open_pin = render::DelegationPin {
+        open: true,
+        turn: rows[0].as_agent().unwrap().user_turn_started_at,
+    };
+    let mut bookings = crate::sidebar::test_support::bookings_in_each_state(snapshot.now);
+    bookings.retain(|booking| booking.task == "lang-typed");
+    if let crate::store::snapshot::BookingState::Fired(fire) = &mut bookings[0].state {
+        fire.live.as_mut().unwrap().pane = Some(launched.clone());
+    }
+    rows[0].as_agent_mut().unwrap().bookings = bookings;
+    let mut own_card = rows[0].clone();
+    own_card.id = "launched-card".into();
+    own_card.pane = Some(pane("terminal_launched", "tab_0"));
+    let card = own_card.as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Idle;
+    card.bookings.clear();
+    rows.push(own_card);
+    let mut ui = render::ViewState {
+        toggles: PresentationToggles {
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, open_pin)]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut pane_ui = UiState::default();
+    assert!(
+        ui.visible_roster(&snapshot)
+            .ordinal_of_id("launched-card")
+            .is_none()
+    );
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+    let line = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("lang-typed"))
+        .expect("the entry is drawn");
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    for line in [line, line + 1] {
+        let mut view = ui.clone();
+        assert_eq!(
+            handle_mouse_click(1, line as u16, &mut view, &mut pane_ui, &snapshot),
+            InputOutcome {
+                redraw: true,
+                effects: vec![InputEffect::Focus(parent.clone())]
+            },
+            "line {line}"
+        );
+        assert_eq!(view.selected_pane, Some(parent.clone()));
+    }
 }
 
 fn pane_of(snapshot: &SidebarSnapshot, row: usize) -> PaneId {

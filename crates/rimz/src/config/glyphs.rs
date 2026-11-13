@@ -146,6 +146,8 @@ glyph_roles! {
         CardWaits => "waits",
         CardWaitTimer => "wait_timer",
         CardWaitSignal => "wait_signal",
+        CardBooked => "booked",
+        CardBookingEnded => "booking_ended",
         CardParkedBg => "parked_bg",
         CardTierMove => "tier_move",
         CardFast => "fast",

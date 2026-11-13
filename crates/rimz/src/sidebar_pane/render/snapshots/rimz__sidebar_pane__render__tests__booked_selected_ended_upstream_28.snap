@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0        ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                  $0.00
+ ──────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 1   ⢿
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌✓ claude                  ▐
+▌  Workflow language redesi▐
+▌  ▣ ╸───────────────  1.0%▐
+▌  ▤ 0                     ▐
+▌  ▷ 8        1 ⣾ · 2 no PR▐
+▌    ⣾ lang-typed          ▐
+▌      @coder            1h▐
+▌    – lane-readers        ▐
+▌      ended · no PR     3h▐
+▌    – spike               ▐
+▌      ended · no PR    30m▐
+▌    ▷ lane-readers-docs   ▐
+▌      lane-reader… · no PR▐
+▌    ▷ lang-docs           ▐
+▌      pr[work…: #1640 open▐
+▌    ▷ nightly             ▐
+▌      once at 2026-11-14 …▐
+▌    +1 later              ▐
+▌    1 more ended          ▐
+
+
+ ──────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 $0.00
+
+                 ? for help

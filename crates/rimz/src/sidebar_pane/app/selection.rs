@@ -767,7 +767,24 @@ fn select_clicked_pane(
                 .position(|row| row.pane_ids().any(|id| id == &pane))
         })
     else {
-        return InputOutcome::default();
+        // A fired booking whose launched card no visible row owns takes the owning card,
+        // as an entry without a pane does.
+        let owner = roster
+            .rows()
+            .iter()
+            .find(|row| {
+                row.as_agent().is_some_and(|card| {
+                    card.bookings
+                        .iter()
+                        .any(|booking| booking.live_pane() == Some(&pane))
+                })
+            })
+            .and_then(|row| row.pane.as_ref())
+            .map(|own| own.pane_id.clone())
+            .filter(|own| *own != pane);
+        return owner.map_or_else(InputOutcome::default, |own| {
+            select_clicked_pane(ui, snapshot, own)
+        });
     };
     select_row_in(ui, &roster, index);
     ui.entry_cursor = Some(EntryCursor::SubAgent(pane.clone()));
