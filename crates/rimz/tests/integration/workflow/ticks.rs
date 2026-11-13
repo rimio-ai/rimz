@@ -36,7 +36,7 @@ fn tick_routes_check_timeout_and_workflow_deadline_before_far_backoff() {
         };
         let timeout = if deadline { "1h" } else { "2s" };
         let spec = format!(
-            "{header}[checks.pr]\nsummary=\"Review the work\"\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='{timeout}'\n"
+            "{header}[script.pr]\nsummary=\"Review the work\"\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='{timeout}'\n"
         );
         let (env, _) = fixture(&spec, PENDING);
         let id = start(&env);
@@ -73,7 +73,7 @@ fn tick_retries_a_reopened_judge_window() {
     use crate::common::{path_with_front, write_fake_login_shell, write_path_shim};
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[checks.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\nwindow='5h.left>=42'\non.done='@done'\ntimeout='1h'\n"
+            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\nadmission.window='5h.left>=42'\non.done='@done'\ntimeout='1h'\n"
         ),
         "",
     );

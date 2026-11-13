@@ -3,7 +3,7 @@ use super::*;
 fn shell_fixture(shell: &str, fields: &str) -> (Env, PathBuf) {
     fixture(
         &format!(
-            "{HEADER}[checks.pr]\nshell={}\non.pass='@done'\non.fail='@failed'\n{fields}",
+            "{HEADER}[test.pr]\nshell={}\non.pass='@done'\non.fail='@failed'\n{fields}",
             toml::Value::String(shell.into())
         ),
         "",
@@ -66,7 +66,7 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
             "pwd; printf '%s\\n' \"$RIMZ_WORKFLOW_DIR\" \"$RIMZ_WORKFLOW_RUN\"; printf stderr >&2; {ending}"
         );
         let spec = format!(
-            "{}[checks.seed]\nrun='sh checks/pr.sh'\non.go='pr'\n[checks.pr]\nshell={}\non={{pass='@done',fail='@done'}}\n",
+            "{}[script.seed]\nrun='sh checks/pr.sh'\non.go='pr'\n[test.pr]\nshell={}\non={{pass='@done',fail='@done'}}\n",
             HEADER.replace("start = 'pr'", "start = 'seed'"),
             toml::Value::String(shell)
         );
@@ -171,7 +171,7 @@ fn shell_timeout_kills_the_group_and_routes_or_fails() {
         let (env, _) = shell_fixture(
             LIVE,
             &format!(
-                "timeout='1h'\n{edge}\n[checks.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
+                "timeout='1h'\n{edge}\n[test.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
             ),
         );
         let id = start(&env);
@@ -291,7 +291,7 @@ fn dead_host_check_group(action: &str, marker: GroupMarker) {
             shell_fixture(&script, "")
         } else {
             fixture(
-                &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.done='@done'\n"),
+                &format!("{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.done='@done'\n"),
                 &script,
             )
         };

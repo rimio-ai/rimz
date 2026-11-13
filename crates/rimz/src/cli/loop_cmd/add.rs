@@ -627,9 +627,9 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
     let window = rimz::harness::when::WhenExpr::parse(&args.when)
         .is_ok_and(|expr| expr.terms().any(|term| term.key.starts_with("window.")));
     let fan_out = args.each_worktree;
-    let checks = "checks and waits are the workflow's `[checks.<name>]` nodes";
-    let profile = "choose it through the `agent` profile of the workflow's `[steps.<name>]`";
-    let spend = "set `budget` on the workflow's agent `[steps.<name>]`; `--budget-per-day` and `--surplus` gate the task's runs";
+    let checks = "checks are the workflow's `[test.<name>]`, `[script.<name>]`, `[judge.<name>]` and `[condition.<name>]` nodes";
+    let profile = "choose it through the `agent` profile of the workflow's `[agent.<name>]`";
+    let spend = "set `budget` on the workflow's `[agent.<name>]`; `--budget-per-day` and `--surplus` gate the task's runs";
     let no_window =
         "a workflow task has no provider window to read; use a clock trigger or another condition";
     let groups: [(&[(bool, &str)], &str); 12] = [
@@ -639,7 +639,7 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
         ),
         (
             &[(args.takeover, "--takeover")],
-            "takeover is the workflow's `[steps.<name>] takeover`",
+            "takeover is the workflow's `[agent.<name>.admission] occupancy`",
         ),
         (
             &[(!args.subscribe.is_empty(), "--subscribe")],
@@ -662,15 +662,15 @@ fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
         ),
         (
             &[(args.throttle.is_some(), "--throttle")],
-            "set `throttle` on the workflow's `[steps.<name>]`",
+            "set `throttle` in the workflow's `[agent.<name>.admission]`",
         ),
         (
             &[(args.capacity_wait.is_some(), "--capacity-wait")],
-            "set `capacity-wait` on the workflow's `[steps.<name>]`",
+            "set `give-up` in the workflow's `[agent.<name>.admission]`",
         ),
         (
             &[(args.timeout.is_some(), "--timeout")],
-            "set `timeout` on the workflow's `[steps.<name>]` or `[checks.<name>]`",
+            "set `timeout` on the workflow's `[agent.<name>]` or check node",
         ),
         (
             &[

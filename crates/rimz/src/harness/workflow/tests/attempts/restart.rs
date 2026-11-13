@@ -64,7 +64,7 @@ fn restart_during_launch_keeps_manual_intent_until_the_replacement_launches() {
 #[test]
 fn restart_history_is_a_manual_reentry_not_a_resumed_conversation() {
     let definition = STEP.replace("then='@done'", "then='verify'")
-        + "[checks.verify]\nrun='true'\ntimeout='1m'\non.done='@done'\n";
+        + "[script.verify]\nrun='true'\ntimeout='1m'\non.done='@done'\n";
     let (_dir, state, record) = setup(&definition);
     let spec = super::super::super::spec::parse(&definition).unwrap();
     let host = FakeHost::new();
@@ -213,8 +213,8 @@ fn restart_unparks_cap_and_asked_steps_without_extending_bounds() {
 fn restart_refusals_and_stale_continue_stop_nothing() {
     let mut actual = Vec::new();
     for definition in [
-        "[workflow]\nscope='worktree'\nstart='check'\n[checks.check]\nrun='true'\ntimeout='1m'\non.done='@done'\n",
-        "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='check'\n[script.check]\nrun='true'\ntimeout='1m'\non.done='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\nthen='@done'\n",
         STEP,
     ] {
         let (_dir, state, mut record) = setup(definition);

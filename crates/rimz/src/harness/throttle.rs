@@ -39,7 +39,7 @@ pub fn probe_queue_lock() -> Result<(), LockErr> {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct Limit {
     #[schemars(range(min = 1))]

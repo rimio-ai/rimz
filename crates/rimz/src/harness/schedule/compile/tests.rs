@@ -947,8 +947,8 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     open_room(&state, home.path());
-    let text = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nshell='true'\n\
-                timeout='1h'\nthen='done'\n[checks.done]\nshell='true'\n\
+    let text = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\n\
+                timeout='1h'\nthen='done'\n[test.done]\nshell='true'\n\
                 on={pass='@done',fail='@failed',invalid='@failed'}\n";
     let record = create(
         &state,
@@ -1744,4 +1744,56 @@ fn a_scheduled_recurring_fire_gives_up_on_capacity_before_its_next_fire() {
         None,
         "a signal task waits as long as it takes"
     );
+}
+
+#[test]
+fn a_keep_fire_keeps_a_turn_agent_and_starts_a_stay_row_unchanged() {
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load(None).unwrap();
+    for (row, kept) in [
+        ("agent='claude'\nprompt='fix it'\nevery='1h'\n", Some(true)),
+        (
+            "agent='claude'\nprompt='settle'\nstay=true\nevery='1h'\n",
+            None,
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+        open_room(&state, home.path());
+        let task = loaded("nightly", &format!("{row}throttle='off'\n"), home.path());
+        let definition = crate::harness::schedule::runner::TaskFire::new(
+            "nightly",
+            task.clone(),
+            &catalog,
+            crate::harness::schedule::run_log::LoopRunMode::Manual,
+            true,
+            jiff::Timestamp::now(),
+            std::sync::Arc::new(MachineConfig::default()),
+            None,
+            std::time::Instant::now(),
+        )
+        .unwrap()
+        .inline_definition(inline(&task))
+        .unwrap();
+        let spec = crate::harness::workflow::parse(&definition.text).unwrap();
+        create(
+            &state,
+            DefinitionSource::Inline {
+                task: "nightly".into(),
+                definition,
+                fire_tree: false,
+                capacity_until: None,
+                surplus: None,
+                surplus_after: None,
+                fire: None,
+            },
+            ScopeRoots {
+                checkout: home.path().into(),
+                project: home.path().into(),
+            },
+            || Ok(None),
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{row}: {err:#}"));
+        assert_eq!(spec.node(AGENT).unwrap().keep(), kept, "{row}");
+    }
 }

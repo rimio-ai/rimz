@@ -7,36 +7,36 @@ const LAND: &str = r#"
 on-break = '@failed'
 scope = 'worktree'
 start = 'begin'
-[checks.begin]
+[test.begin]
 shell = 'true'
 on.pass = 'sweep'
 on.fail = '@failed'
-[steps.sweep]
+[command.sweep]
 shell = 'echo sweep'
 timeout = '1h'
 then = 'watch'
-[checks.watch]
+[condition.watch]
 cases = [{ when = ['ci=passed'], outcome = 'green' }]
 else = 'red'
 on.green = 'notes'
 on.red = 'fix'
 on.unknown = '@wait'
 timeout = '3d'
-[steps.fix]
+[command.fix]
 shell = 'echo fix'
 timeout = '1h'
 then = 'watch'
 max-visits = 4
-[checks.notes]
+[test.notes]
 shell = 'true'
 on.pass = 'triage'
 on.fail = '@done'
-[steps.triage]
+[command.triage]
 shell = 'echo triage'
 timeout = '1h'
 then = 'ruled'
 max-visits = 2
-[checks.ruled]
+[test.ruled]
 shell = 'true'
 on.pass = 'triage'
 on.fail = '@done'
@@ -53,8 +53,13 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
     ] {
         let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
-             [checks.gate]\nshell='true'\non.pass='work'\n\
-             [steps.work]\nthen='gate'\n{runner}\n"
+             [test.gate]\nshell='true'\non.pass='work'\n\
+             [{}.work]\nthen='gate'\n{runner}\n",
+            if runner.starts_with("agent") {
+                "agent"
+            } else {
+                "command"
+            }
         ))
         .unwrap();
         assert_eq!(
@@ -259,12 +264,12 @@ fn horizontal_detours_hang_under_their_parent_and_follow_width_elision() {
 fn horizontal_elides_unreached_left_and_reached_right_branches() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='choose'\n\
-         [checks.choose]\nshell='true'\non.a='unit_tests'\n\
+         [script.choose]\nshell='true'\non.a='unit_tests'\n\
          on.b='integration_tests'\non.c='used'\n\
-         [steps.unit_tests]\nshell='true'\nthen='used'\n\
-         [steps.integration_tests]\nshell='true'\nthen='used'\n\
-         [checks.used]\nshell='true'\non.pass='final'\n\
-         [checks.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n",
+         [command.unit_tests]\nshell='true'\nthen='used'\n\
+         [command.integration_tests]\nshell='true'\nthen='used'\n\
+         [test.used]\nshell='true'\non.pass='final'\n\
+         [script.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n",
     )
     .unwrap();
     let mut hops = vec![route("choose", "c", "used"), route("used", "pass", "final")];
@@ -334,8 +339,8 @@ fn horizontal_keeps_a_terminal_detour_and_its_parent_even_without_visits() {
 #[test]
 fn horizontal_appends_resumed_and_reached_unreachable_nodes() {
     let spec: Definition = toml::from_str(&format!(
-        "{LAND}\n[steps.resumed]\nshell='true'\nthen='watch'\n\
-         [steps.never_used]\nshell='true'\nthen='watch'\n"
+        "{LAND}\n[command.resumed]\nshell='true'\nthen='watch'\n\
+         [command.never_used]\nshell='true'\nthen='watch'\n"
     ))
     .unwrap();
     let machine = super::super::super::machine_config();
@@ -415,8 +420,8 @@ fn horizontal_terminal_marks_only_the_failed_ending_node_alarm() {
 fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
     let spec: Definition = toml::from_str(&format!(
         "[workflow]\nscope='worktree'\nstart='begin'\n\
-         [checks.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
-         {runner}[checks.after]\nshell='touch \"$RIMZ_WORKFLOW_DIR/ready\"; sleep 30'\n\
+         [test.begin]\nshell='true'\non.pass='work'\non.fail='@failed'\n\
+         {runner}[test.after]\nshell='touch \"$RIMZ_WORKFLOW_DIR/ready\"; sleep 30'\n\
          on.pass='@done'\non.fail='@failed'\n"
     ))
     .unwrap();
@@ -458,7 +463,7 @@ fn canceled_horizontal(runner: &str, stopping: &str, journal: &str) -> String {
 fn horizontal_canceled_check_origin_wait_route_keeps_the_stopping_node_ending() {
     // Pin the Check-origin @wait route, whose source already marked the ending before the fix.
     canceled_horizontal(
-        r#"[checks.work]
+        r#"[test.work]
 shell='false'
 timeout='1h'
 on.pass='@done'
@@ -536,7 +541,7 @@ on.fail='@wait'
 fn horizontal_canceled_limited_judge_wait_marks_the_stopping_node() {
     // Cancel a limited judge after its Engine-origin evaluation, before the scheduled recheck.
     canceled_horizontal(
-        r#"[checks.work]
+        r#"[judge.work]
 agent='claude'
 summary='Review the work'
 prompt-file='prompt.md'
@@ -605,7 +610,7 @@ on.fail='@failed'
 fn horizontal_canceled_live_check_marks_the_stopping_node() {
     // Cancel a shell check while its command is still running.
     canceled_horizontal(
-        r#"[checks.work]
+        r#"[test.work]
 shell='touch "$RIMZ_WORKFLOW_DIR/ready"; sleep 30'
 on.pass='@done'
 on.fail='@failed'
@@ -665,7 +670,7 @@ on.fail='@failed'
 fn horizontal_canceled_command_step_marks_the_stopping_node() {
     // Cancel a command step while its shell command is still running.
     canceled_horizontal(
-        r#"[steps.work]
+        r#"[command.work]
 shell='touch "$RIMZ_WORKFLOW_DIR/ready"; sleep 30'
 timeout='1h'
 then='after'
@@ -735,7 +740,7 @@ then='after'
 fn horizontal_canceled_agent_turn_leaves_its_then_check_unreached() {
     // Cancel an agent turn before it reaches its then check.
     let text = canceled_horizontal(
-        r#"[steps.work]
+        r#"[agent.work]
 agent='claude'
 prompt-file='prompt.md'
 lifecycle='turn'
@@ -820,7 +825,7 @@ then='after'
 fn horizontal_canceled_held_session_marks_the_step_not_the_check() {
     // Cancel an until session while its held shell check is still running.
     let text = canceled_horizontal(
-        r#"[steps.work]
+        r#"[agent.work]
 agent='claude'
 prompt-file='prompt.md'
 lifecycle='until'
@@ -931,7 +936,7 @@ then='after'
 fn horizontal_canceled_start_marks_an_ending_without_a_route() {
     // Cancel the start node before the engine takes any route.
     let text = canceled_horizontal(
-        r#"[checks.work]
+        r#"[test.work]
 shell='false'
 timeout='1h'
 on.pass='@done'
@@ -966,7 +971,7 @@ on.fail='@wait'
 fn horizontal_canceled_parked_run_keeps_the_stopping_node_ending() {
     // Cancel a run already parked by a check routing to @user.
     canceled_horizontal(
-        r#"[checks.work]
+        r#"[test.work]
 shell='true'
 on.pass='@user'
 on.fail='@failed'
@@ -1088,8 +1093,8 @@ fn multiline_commands_stay_on_one_rail_line() {
     let headings = ["run", "shell"].map(|runner| {
         let spec: Definition = toml::from_str(&format!(
             "[workflow]\nscope='worktree'\nstart='gate'\n\
-             [checks.gate]\n{runner}=\"\"\"echo first\necho second\"\"\"\non.pass='work'\n\
-             [steps.work]\n{runner}=\"\"\"echo first\necho second\"\"\"\nthen='gate'\n"
+             [test.gate]\n{runner}=\"\"\"echo first\necho second\"\"\"\non.pass='work'\n\
+             [command.work]\n{runner}=\"\"\"echo first\necho second\"\"\"\nthen='gate'\n"
         ))
         .unwrap();
         Rail::definition(&spec)
@@ -1109,7 +1114,7 @@ fn multiline_commands_stay_on_one_rail_line() {
 
 #[test]
 fn land_rail_agrees_with_validate_and_arrows_follow_the_walk() {
-    let told = LAND.replace("on.pass = 'triage'\non.fail = '@done'\n[steps.triage]", "on.pass = 'tell'\non.fail = 'stand'\n[steps.tell]\nmessage = '@planner'\nthen = 'triage'\n[steps.stand]\nagent = 'claude'\nlifecycle = 'stay'\nprompt-file = 'prompt.md'\nsubscribe = ['ci.failed']\nthen = 'ruled'\n[steps.triage]");
+    let told = LAND.replace("on.pass = 'triage'\non.fail = '@done'\n[command.triage]", "on.pass = 'tell'\non.fail = 'stand'\n[message.tell]\nmessage = '@planner'\nthen = 'triage'\n[agent.stand]\nagent = 'claude'\nlifecycle = 'stay'\nprompt-file = 'prompt.md'\nsubscribe = ['ci.failed']\nthen = 'ruled'\n[command.triage]");
     assert_ne!(told, LAND);
     for text in [LAND, &told] {
         land_rail_agrees(text);
@@ -1202,30 +1207,30 @@ mod horizontal_sweep {
             (
                 "branch",
                 "[workflow]\nscope='worktree'\nstart='choose'\n\
-                 [checks.choose]\nshell='true'\non.a='unit_tests'\n\
+                 [script.choose]\nshell='true'\non.a='unit_tests'\n\
                  on.b='integration_tests'\non.c='used'\n\
-                 [steps.unit_tests]\nshell='true'\nthen='used'\n\
-                 [steps.integration_tests]\nshell='true'\nthen='used'\n\
-                 [checks.used]\nshell='true'\non.pass='final'\n\
-                 [checks.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n"
+                 [command.unit_tests]\nshell='true'\nthen='used'\n\
+                 [command.integration_tests]\nshell='true'\nthen='used'\n\
+                 [test.used]\nshell='true'\non.pass='final'\n\
+                 [script.final]\nshell='true'\non.pass='@done'\non.retry='choose'\n"
                     .into(),
             ),
             (
                 "detours",
                 "[workflow]\nscope='worktree'\nstart='build'\n\
-                 [steps.build]\nshell='true'\nthen='review'\n\
-                 [checks.review]\nshell='true'\non.pass='merge'\n\
+                 [command.build]\nshell='true'\nthen='review'\n\
+                 [script.review]\nshell='true'\non.pass='merge'\n\
                  on.fail='address_review_comments'\non.flaky='rerun_flaky_suite'\n\
-                 [steps.address_review_comments]\nshell='true'\nthen='review'\nmax-visits=9\n\
-                 [steps.rerun_flaky_suite]\nshell='true'\nthen='review'\nmax-visits=9\n\
-                 [checks.merge]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+                 [command.address_review_comments]\nshell='true'\nthen='review'\nmax-visits=9\n\
+                 [command.rerun_flaky_suite]\nshell='true'\nthen='review'\nmax-visits=9\n\
+                 [test.merge]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
                     .into(),
             ),
             (
                 "unreachable",
                 format!(
-                    "{LAND}\n[steps.resumed]\nshell='true'\nthen='watch'\n\
-                     [steps.never_used]\nshell='true'\nthen='watch'\n"
+                    "{LAND}\n[command.resumed]\nshell='true'\nthen='watch'\n\
+                     [command.never_used]\nshell='true'\nthen='watch'\n"
                 ),
             ),
             (
@@ -1233,31 +1238,31 @@ mod horizontal_sweep {
                 LAND.replace(
                     "start = 'begin'",
                     "start = 'begin'\ndeadline = '1d'\non.deadline = 'cleanup'",
-                ) + "\n[steps.cleanup]\nshell='true'\nthen='@done'\n",
+                ) + "\n[command.cleanup]\nshell='true'\nthen='@done'\n",
             ),
             (
                 "until",
                 "[workflow]\nscope='worktree'\nstart='plan'\n\
-                 [steps.plan]\nagent='claude'\nlifecycle='turn'\nthen='planned'\n\
-                 [checks.planned]\nshell='true'\non.pass='work'\n\
-                 [steps.work]\nagent='claude'\nlifecycle='until'\nthen='gate'\n\
+                 [agent.plan]\nagent='claude'\nlifecycle='turn'\nthen='planned'\n\
+                 [test.planned]\nshell='true'\non.pass='work'\n\
+                 [agent.work]\nagent='claude'\nlifecycle='until'\nthen='gate'\n\
                  max-visits=3\non.cap='escalate_to_release_manager'\n\
-                 [steps.escalate_to_release_manager]\nshell='true'\nthen='gate'\n\
-                 [checks.gate]\nshell='true'\non.pass='@done'\non.fail='work'\n"
+                 [command.escalate_to_release_manager]\nshell='true'\nthen='gate'\n\
+                 [test.gate]\nshell='true'\non.pass='@done'\non.fail='work'\n"
                     .into(),
             ),
             (
                 "long",
                 "[workflow]\nscope='worktree'\nstart='collect_release_candidates'\n\
-                 [checks.collect_release_candidates]\nshell='true'\n\
+                 [test.collect_release_candidates]\nshell='true'\n\
                  on.pass='build_signed_release_artifacts'\non.fail='repair_release_candidate_set'\n\
-                 [steps.repair_release_candidate_set]\nshell='true'\n\
+                 [command.repair_release_candidate_set]\nshell='true'\n\
                  then='collect_release_candidates'\nmax-visits=3\n\
-                 [steps.build_signed_release_artifacts]\nshell='true'\n\
+                 [command.build_signed_release_artifacts]\nshell='true'\n\
                  then='verify_signed_artifacts_match'\n\
-                 [checks.verify_signed_artifacts_match]\nshell='true'\n\
+                 [test.verify_signed_artifacts_match]\nshell='true'\n\
                  on.pass='publish_release_to_registry'\non.fail='@failed'\n\
-                 [steps.publish_release_to_registry]\nshell='true'\nthen='@done'\n"
+                 [command.publish_release_to_registry]\nshell='true'\nthen='@done'\n"
                     .into(),
             ),
         ]
@@ -1602,8 +1607,8 @@ mod horizontal_sweep {
 fn a_sleep_rail_prints_its_spelling_and_points_then_along_the_walk() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='poll'\n\
-         [checks.poll]\nshell='true'\non={pass='@done',fail='cooldown'}\n\
-         [checks.cooldown]\nsleep='30m'\nwhen=['ci=passed']\nfor='2m'\nthen='poll'\n",
+         [test.poll]\nshell='true'\non={pass='@done',fail='cooldown'}\n\
+         [sleep.cooldown]\nsleep='30m'\nwhen=['ci=passed']\nfor='2m'\nthen='poll'\n",
     )
     .unwrap();
     let mut out = anstream::StripStream::new(Vec::new());

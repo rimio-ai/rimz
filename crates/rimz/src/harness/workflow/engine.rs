@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use super::definition::Parsed;
-use super::{AttemptHost, Observation, Occupancy, ScopeRoots};
+use super::{AttemptHost, Observation, Occupancy, OccupancyPolicy, ScopeRoots};
 use super::{Definition, Kind, Node, SpecErr, Target, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
@@ -1151,13 +1151,12 @@ fn prepare(
                 persist(&mut t, &guard)?;
                 return Ok(Decision::Stop);
             }
-            if launch_error.is_none() && !step.share().unwrap_or_default() {
+            if launch_error.is_none() && step.occupancy() != Some(OccupancyPolicy::Share) {
                 // A step launched into a named worktree occupies that checkout, not the run's.
                 let destination = destination(&t.record, step)?;
                 let occupancy =
                     host.occupancy(&destination, &t.record.project_root, &t.record.break_agents)?;
-                if let Some(wait) = occupancy_wait(&occupancy, step.takeover().unwrap_or_default())
-                {
+                if let Some(wait) = occupancy_wait(&occupancy, step) {
                     t.step_wait(wait, None);
                     persist(&mut t, &guard)?;
                     return Ok(Decision::Stop);
@@ -1474,10 +1473,12 @@ fn from_leader(
 
 /// The wait an occupied checkout puts an agent step in, or `None` when the step may launch: an
 /// open turn blocks every step, and any occupant blocks a step without `takeover`.
-fn occupancy_wait(occupancy: &Occupancy, takeover: bool) -> Option<&'static str> {
+fn occupancy_wait(occupancy: &Occupancy, step: &Node) -> Option<&'static str> {
     match occupancy {
         Occupancy::Blocked(_) => Some("takeover"),
-        Occupancy::Occupied(_) if !takeover => Some("occupied"),
+        Occupancy::Occupied(_) if step.occupancy() != Some(OccupancyPolicy::Takeover) => {
+            Some("occupied")
+        }
         Occupancy::Free | Occupancy::Occupied(_) => None,
     }
 }

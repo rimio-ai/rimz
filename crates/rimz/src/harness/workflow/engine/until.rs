@@ -32,7 +32,7 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
         .map(|check| check.as_str().to_owned())
         .ok_or_else(|| {
             WorkflowErr::Refused(format!(
-                "steps.{}.then: an until step requires a then check",
+                "agent.{}.then: an until step requires a then check",
                 attempt.node
             ))
         })?;

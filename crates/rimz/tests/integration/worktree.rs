@@ -587,7 +587,7 @@ fn waiting_workflow(
     let dir = env.rimz_home().join("workflows").join(workflow);
     std::fs::create_dir_all(&dir).unwrap();
     let spec = "[workflow]\nscope='worktree'\nstart='check'\n\
-        [checks.check]\nshell='true'\ntimeout='1h'\non={pass='@wait',fail='@failed'}\n";
+        [test.check]\nshell='true'\ntimeout='1h'\non={pass='@wait',fail='@failed'}\n";
     std::fs::write(dir.join("workflow.toml"), spec).unwrap();
     let checkout = rimz::worktree::discover_owned(&env.project_root)
         .unwrap()

@@ -1,5 +1,5 @@
 use super::*;
-use crate::harness::workflow::definition::{Kind, Target};
+use crate::harness::workflow::definition::{Invocation, Kind, Target};
 
 fn loaded(text: &str) -> Definition {
     let (_home, dir) = fixture();
@@ -10,16 +10,16 @@ fn loaded(text: &str) -> Definition {
 #[test]
 fn values_admission_refuses_load_with_their_text_and_failure() {
     let spec = loaded(
-        "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nelse='no'\n\
+        "[workflow]\nscope='worktree'\nstart='pick'\n[condition.pick]\nelse='no'\n\
          cases=[{when=['pr=merged and'],outcome='yes'}]\non={yes='@done',no='run'}\n\
-         [checks.run]\nrun=\"echo 'open\"\non.ok='@done'\n",
+         [script.run]\nrun=\"echo 'open\"\non.ok='@done'\n",
     );
     let Some(Kind::Condition(cases)) = spec.check("pick").unwrap().kind() else {
         panic!("pick is a condition");
     };
     assert_eq!(cases[0].when().clauses(), ["pr=merged and"]);
     assert!(cases[0].when().expression().is_err());
-    let Some(Kind::Run(command)) = spec.check("run").unwrap().kind() else {
+    let Some(Kind::Script(Invocation::Run(command))) = spec.check("run").unwrap().kind() else {
         panic!("run is a run check");
     };
     assert_eq!(command.text(), "echo 'open");
@@ -27,9 +27,9 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
 
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n\
-         [steps.build]\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
-         window='window.5h.bogus>=x'\nbudget='lots'\nsubscribe=['agent.stop']\nthen='pick'\n\
-         [checks.pick]\nrun='true'\nwake=['agent.stop']\non.ok='@done'\n",
+         [agent.build]\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
+         admission.window='window.5h.bogus>=x'\nbudget='lots'\nsubscribe=['agent.stop']\nthen='pick'\n\
+         [script.pick]\nrun='true'\nwake=['agent.stop']\non.ok='@done'\n",
     )
     .unwrap();
     let build = spec.step("build").unwrap();
@@ -81,7 +81,7 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
 #[test]
 fn a_route_to_a_name_that_is_no_node_compiles_as_a_node_target() {
     let spec: Definition = toml::from_str(
-        "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.ok='nowhere'\n",
+        "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='nowhere'\n",
     )
     .unwrap();
     assert_eq!(
@@ -95,8 +95,8 @@ fn a_route_to_a_name_that_is_no_node_compiles_as_a_node_target() {
 fn the_bare_window_shorthand_compiles_like_the_dotted_term() {
     let window = |text: &str| {
         let spec = loaded(&format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\n\
-             prompt-file='prompts/build.md'\nwindow='{text}'\nthen='@done'\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\n\
+             prompt-file='prompts/build.md'\nadmission.window='{text}'\nthen='@done'\n"
         ));
         spec.step("build")
             .unwrap()
@@ -110,19 +110,14 @@ fn the_bare_window_shorthand_compiles_like_the_dotted_term() {
 }
 
 #[test]
-fn a_misplaced_lifecycle_compiles_to_what_cleanup_left() {
-    const MISPLACED: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[checks.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
-    let command = loaded(&MISPLACED.replace(
-        "agent='claude'\nprompt-file='prompts/build.md'",
-        "run='true'\ntimeout='1m'",
-    ));
-    assert_eq!(command.target("pick", "ok"), Some(Target::Done));
-    let unset = loaded(&MISPLACED.replace("lifecycle='until'\n", "").replace(
-        "agent='claude'\nprompt-file='prompts/build.md'",
-        "run='true'\ntimeout='1m'",
-    ));
-    assert_eq!(
-        command.step("build").unwrap().lifecycle(),
-        unset.step("build").unwrap().lifecycle()
+fn a_lifecycle_on_a_command_refuses() {
+    let (_home, dir) = fixture();
+    fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n",
+    )
+    .unwrap();
+    assert!(
+        matches!(load(&dir), Err(SpecErr::Toml { path, .. }) if path == "command.build.lifecycle")
     );
 }

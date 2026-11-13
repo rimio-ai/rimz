@@ -59,9 +59,8 @@ dotenvy = "0.15"
 # schema. The crate is a tiny visitor wrapper over serde deserializers and adds
 # no transitive dependencies beyond serde.
 serde_ignored = "0.1"
-# Workflow definitions drop invalid optional values using structured serde paths;
-# parsing TOML error prose or mirroring the schema would lose that field boundary.
-# This small deserializer wrapper composes with serde_ignored for unknown keys.
+# Workflow definitions refuse an unknown field or an invalid value at its dotted path,
+# taken from structured serde paths; parsing TOML error prose would lose that field boundary.
 serde_path_to_error = "0.1"
 # Pack compatibility uses Cargo's version-requirement grammar, including
 # pre-release matching; semver is already in the build graph and vetted.

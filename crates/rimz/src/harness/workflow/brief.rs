@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{Definition, Fireability, HopKind, Kind, Node, Target, routing_hop};
+use super::{Definition, Fireability, HopKind, Invocation, Kind, Node, Target, routing_hop};
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::prose::{span, verbatim};
@@ -278,14 +278,16 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
         .as_ref()
         .map_or_else(String::new, |summary| format!(" ({summary})"));
     Some(match node.kind()? {
-        Kind::Run(command) => format!(
+        Kind::Test(Invocation::Run(command)) | Kind::Script(Invocation::Run(command)) => format!(
             "The check {name} runs {}{clause}. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.",
             span(command.text())
         ),
-        Kind::Shell(command) => format!(
-            "The check {name} runs {}{clause} through `sh -c`; it runs from the checkout. `$RIMZ_WORKFLOW_DEFINITION` names the definition folder for a script there. You may run this command yourself.",
-            span(command)
-        ),
+        Kind::Test(Invocation::Shell(command)) | Kind::Script(Invocation::Shell(command)) => {
+            format!(
+                "The check {name} runs {}{clause} through `sh -c`; it runs from the checkout. `$RIMZ_WORKFLOW_DEFINITION` names the definition folder for a script there. You may run this command yourself.",
+                span(command)
+            )
+        }
         Kind::Judge(_) => summary.map_or_else(
             || format!("The check {name} is an agent judge."),
             |summary| format!("The check {name} tests {summary}."),
@@ -295,7 +297,9 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
             span(node.summary().unwrap_or(sleep.duration().text()))
         ),
         Kind::Condition(_) => unreachable!("condition cases returned their note above"),
-        Kind::Agent(_) | Kind::Message(_) => unreachable!("a check runs no step kind"),
+        Kind::Command(_) | Kind::Agent(_) | Kind::Message(_) => {
+            unreachable!("a check runs no step kind")
+        }
     })
 }
 
@@ -382,7 +386,7 @@ pub(super) fn push(
     if let Some((_, seq)) = &pushed
         && matches!(
             check.kind(),
-            Some(Kind::Run(_) | Kind::Shell(_) | Kind::Judge(_))
+            Some(Kind::Test(_) | Kind::Script(_) | Kind::Judge(_))
         )
     {
         let output = seq

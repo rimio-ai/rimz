@@ -11,7 +11,6 @@ struct Row<'a> {
     record: &'a RunRecord,
     spec: Option<&'a workflow::Definition>,
     journal: Vec<records::JournalEntry>,
-    ignored: &'a [workflow::Issue],
     address: String,
     glyph: String,
     state: RunState,
@@ -73,13 +72,7 @@ pub(super) fn render(
             .zip(&specs)
             .map(|(run, spec)| {
                 let detail = workflow_view::detail(&run.record, spec.as_ref(), now, None);
-                let mut row = json_row(&run.record, &detail);
-                if let Some(spec) = spec
-                    && !spec.ignored().is_empty()
-                {
-                    row["warnings"] = serde_json::json!(spec.ignored());
-                }
-                row
+                json_row(&run.record, &detail)
             })
             .collect::<Vec<_>>();
         return render::json_pretty(&rows);
@@ -132,7 +125,6 @@ pub(super) fn render(
                 record,
                 spec: spec.as_ref(),
                 journal: records::journal(&run.paths).unwrap_or_default(),
-                ignored: spec.as_ref().map_or(&[], |spec| spec.ignored()),
                 address: record.address().to_string(),
                 glyph: glyph(role),
                 state: record.state,
@@ -276,17 +268,11 @@ fn write_rows(
     let details = rows
         .iter()
         .map(|row| {
-            let mut mark = if row.ignored.is_empty() {
-                String::new()
+            let mark = if show_origin {
+                format!(" · by {}", run_origin(row.record))
             } else {
-                format!(" · {} ignored", row.ignored.len())
+                String::new()
             };
-            if budget.is_some_and(|width| mark.width() > width) {
-                mark.clear();
-            }
-            if show_origin {
-                mark.push_str(&format!(" · by {}", run_origin(row.record)));
-            }
             let detail = budget.map_or_else(
                 || row.detail.clone(),
                 |width| render::clip_to_width(&row.detail, width.saturating_sub(mark.width())),
@@ -358,7 +344,6 @@ mod tests {
             record,
             spec: None,
             journal: Vec::new(),
-            ignored: &[],
             address: record.address().to_string(),
             glyph: if capacity_wait(record).is_some() {
                 "○"
@@ -587,12 +572,11 @@ mod tests {
             "deadline_fired":false, "next_seq":1,
         }))
         .unwrap();
-        let spec: workflow::Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='decision'\n[checks.decision]\nshell='true'\non.pass='work'\non.fail='@user'\n[steps.work]\nshell='true'\ntimeout='1h'\nthen='decision'\n").unwrap();
-        let mut rows = [Row {
+        let spec: workflow::Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='decision'\n[test.decision]\nshell='true'\non.pass='work'\non.fail='@user'\n[command.work]\nshell='true'\ntimeout='1h'\nthen='decision'\n").unwrap();
+        let row = Row {
             record: &record,
             spec: Some(&spec),
             journal: Vec::new(),
-            ignored: &[],
             address: "review#feature".into(),
             glyph: rimz::theme::theme_glyphs(&rimz::config::ThemeConfig::default())(
                 workflow_view::glyph_role(&record),
@@ -602,35 +586,27 @@ mod tests {
             detail: "user: This decision needs a long explanation".repeat(3),
             age: "47m".into(),
             since: Timestamp::UNIX_EPOCH,
-        }];
-        let ignored = [workflow::Issue {
-            path: "workflow.future".into(),
-            message: "ignored field: unknown field".into(),
-        }];
-        for ignored in [ignored.as_slice(), &[]] {
-            rows[0].ignored = ignored;
-            for width in [40, 60] {
-                let mut out = anstream::StripStream::new(Vec::new());
-                write_rows(&mut out, &[&rows[0]], Some(width), false, false).unwrap();
-                let text = String::from_utf8(out.into_inner()).unwrap();
-                assert!(
-                    text.lines().all(|line| line.width() <= width),
-                    "{width}: {text}"
-                );
-                assert!(
-                    text.contains('…') && text.lines().next().unwrap().ends_with("47m"),
-                    "{text}"
-                );
-                assert_eq!(text.contains("· 1 ignored"), !ignored.is_empty(), "{text}");
-                assert!(
-                    text.lines()
-                        .nth(1)
-                        .is_some_and(|line| line.starts_with("      ")),
-                    "{text}"
-                );
-                let rail = text.split_once('\n').unwrap().1;
-                assert_eq!(rail.matches("decision").count(), 1, "{text}");
-            }
+        };
+        for width in [40, 60] {
+            let mut out = anstream::StripStream::new(Vec::new());
+            write_rows(&mut out, &[&row], Some(width), false, false).unwrap();
+            let text = String::from_utf8(out.into_inner()).unwrap();
+            assert!(
+                text.lines().all(|line| line.width() <= width),
+                "{width}: {text}"
+            );
+            assert!(
+                text.contains('…') && text.lines().next().unwrap().ends_with("47m"),
+                "{text}"
+            );
+            assert!(
+                text.lines()
+                    .nth(1)
+                    .is_some_and(|line| line.starts_with("      ")),
+                "{text}"
+            );
+            let rail = text.split_once('\n').unwrap().1;
+            assert_eq!(rail.matches("decision").count(), 1, "{text}");
         }
     }
 }

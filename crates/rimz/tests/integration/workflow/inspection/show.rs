@@ -2,7 +2,7 @@ use super::*;
 
 const AT: &str = "2000-01-01T12:00:00Z";
 
-const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[checks.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[checks.later]\nshell='true'\non={pass='@done',fail='build'}\n";
+const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[condition.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
 fn active_break_resume_receipt_counts_the_destination_step_visits() {
@@ -21,7 +21,7 @@ fn active_break_resume_receipt_counts_the_destination_step_visits() {
     sealed_spec(
         &env,
         &record,
-        "[workflow]\nscope='worktree'\nstart='build'\non-break={agent='claude'}\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nmax-visits=2\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='build'\non-break={agent='claude'}\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nmax-visits=2\nthen='@done'\n",
     );
     let receipt = success(
         env.rimz()
@@ -59,8 +59,8 @@ fn active_break_resume_receipts_its_source_instead_of_an_extension() {
                 &env,
                 &record,
                 "[workflow]\nscope='worktree'\nstart='gate'\non-break={agent='claude'}\n\
-                 [checks.gate]\nsleep='1h'\nthen='@done'\n\
-                 [checks.other]\nsleep='1h'\nthen='@done'\n",
+                 [sleep.gate]\nsleep='1h'\nthen='@done'\n\
+                 [sleep.other]\nsleep='1h'\nthen='@done'\n",
             );
             let mut args = vec!["workflow", "resume", record.id.as_str()];
             if let Some(at) = at {
@@ -103,7 +103,7 @@ fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_wr
             fs::read(&paths.journal).unwrap(),
         );
         let expected = json!({"address":record.address().to_string(), "dir":paths.work,
-            "record":record,"journal":[],"warnings":[]});
+            "record":record,"journal":[]});
         let json_before = success(command(
             &env,
             &["workflow", "show", record.id.as_str(), "--json"],
@@ -192,7 +192,12 @@ fn show_now_skips_child_checks_and_plain_sleeps_but_reads_conditional_sleeps() {
         "sleep='365d'\nthen='@done'\nwhen=['team.stage=Done']",
     ] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='gate'\n[checks.gate]\n{runner}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='gate'\n[{}.gate]\n{runner}\n",
+            match runner.split('=').next() {
+                Some("agent") => "judge",
+                Some("sleep") => "sleep",
+                _ => "test",
+            }
         );
         sealed_spec(&env, &record, &text);
         let output = human(&env, &record, false);
@@ -407,8 +412,8 @@ fn copied_park_options_accept_a_hyphen_leading_node() {
 fn cap_after_an_engine_route_fails_the_run_and_names_both_hops() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\non.invalid='build'\n\
-            [steps.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=1\n"
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\non.invalid='build'\n\
+            [command.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=1\n"
         ),
         "exit 7\n",
     );
@@ -955,7 +960,7 @@ fn with_you_header_names_the_room_pr_and_check_without_repeating_status() {
         ]
     );
     let json = json_show(&env, record.id.as_str());
-    assert_eq!(json.as_object().unwrap().len(), 5, "{json:#}");
+    assert_eq!(json.as_object().unwrap().len(), 4, "{json:#}");
     assert!(
         json.get("pr").is_none() && json.get("agent").is_none(),
         "{json:#}"
@@ -975,9 +980,9 @@ fn holding_check_names_the_case_target_and_completion_clock() {
     fs::write(
         &paths.spec,
         concat!(
-            "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\nelse='pending'\n",
-            "on={ready='build',pending='@wait',unknown='@wait'}\n[[checks.gate.cases]]\nwhen=['ci=passed']\n",
-            "outcome='ready'\nfor='10m'\n[steps.build]\nshell='true'\nthen='gate'\n",
+            "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\nelse='pending'\n",
+            "on={ready='build',pending='@wait',unknown='@wait'}\n[[condition.gate.cases]]\nwhen=['ci=passed']\n",
+            "outcome='ready'\nfor='10m'\n[command.build]\nshell='true'\nthen='gate'\n",
         ),
     )
     .unwrap();
@@ -994,7 +999,7 @@ fn holding_check_names_the_case_target_and_completion_clock() {
     let text = fs::read_to_string(&paths.spec).unwrap();
     fs::write(
         &paths.spec,
-        text.replace("[checks.gate]", "[checks.gate]\ntimeout='5m'")
+        text.replace("[condition.gate]", "[condition.gate]\ntimeout='5m'")
             .replace(
                 "on={ready='build',pending='@wait',unknown='@wait'}",
                 "on={ready='build',pending='@wait',timeout='@failed'}",
@@ -1039,26 +1044,26 @@ const CONDITION_RAIL: &str = r#"
 [workflow]
 scope = 'worktree'
 start = 'gate'
-[checks.gate]
+[condition.gate]
 else = 'pending'
 on = { merged = '@done', red = 'build', ready = 'build', pending = '@wait', queued = '@wait', unknown = '@wait' }
-[[checks.gate.cases]]
+[[condition.gate.cases]]
 when = ['pr=merged']
 outcome = 'merged'
-[[checks.gate.cases]]
+[[condition.gate.cases]]
 when = ['ci=failed']
 outcome = 'red'
-[[checks.gate.cases]]
+[[condition.gate.cases]]
 when = ['ci=passed']
 outcome = 'ready'
 for = '10m'
-[[checks.gate.cases]]
+[[condition.gate.cases]]
 when = ['ci=pending']
 outcome = 'pending'
-[[checks.gate.cases]]
+[[condition.gate.cases]]
 when = ['pr.queue=queued']
 outcome = 'queued'
-[steps.build]
+[command.build]
 shell = 'true'
 then = 'gate'
 max-visits = 2
@@ -1092,7 +1097,10 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
     sealed_spec(
         &env,
         &record,
-        &SPEC.replace("shell='true'", "agent='codex'\nprompt-file='prompt.md'"),
+        &SPEC.replace(
+            "[command.build]\nshell='true'",
+            "[agent.build]\nagent='codex'\nprompt-file='prompt.md'",
+        ),
     );
     let dir = env.rimz_home().join("workflows/review");
     fs::create_dir_all(&dir).unwrap();
@@ -1146,11 +1154,11 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
 fn a_past_steps_visits_survive_a_key_the_run_moved_on_to() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='build'\n\
-             [steps.build]\nshell='true'\ntimeout='1h'\nthen='next'\nmax-visits=2\n\
-             [checks.next]\nrun='sh checks/pr.sh'\non.other='finish'\n\
-             [steps.finish]\nshell='true'\ntimeout='1h'\nthen='waiting'\n\
-             [checks.waiting]\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='1h'\n"
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='build'\n\
+             [command.build]\nshell='true'\ntimeout='1h'\nthen='next'\nmax-visits=2\n\
+             [script.next]\nrun='sh checks/pr.sh'\non.other='finish'\n\
+             [command.finish]\nshell='true'\ntimeout='1h'\nthen='waiting'\n\
+             [script.waiting]\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='1h'\n"
         ),
         "n=0; count=\"$RIMZ_WORKFLOW_DIR/count\"\n\
          if [ -f \"$count\" ]; then read -r n < \"$count\"; fi\n\
@@ -1175,7 +1183,7 @@ fn a_past_steps_visits_survive_a_key_the_run_moved_on_to() {
 fn folded_self_routes_count_every_check_entry() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\n\
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\n\
              on={{pass='pr',fail='@wait'}}\ntimeout='1h'\n"
         ),
         "n=0; count=\"$RIMZ_WORKFLOW_DIR/count\"\n\

@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Definition, Kind, Node, SpecErr, spec, state::Transition};
+use super::{Definition, Invocation, Kind, Node, SpecErr, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
 use crate::harness::headless::exit_failure;
@@ -85,8 +85,8 @@ pub(super) fn evaluate(
     };
     let run = match check.kind() {
         Some(Kind::Judge(_)) => return judge::evaluate(state, paths, spec, record),
-        Some(Kind::Shell(shell)) => {
-            return evaluate_shell(state, paths, spec, record, shell);
+        Some(Kind::Test(invocation)) => {
+            return evaluate_test(state, paths, spec, record, invocation);
         }
         Some(Kind::Condition(_)) => {
             let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
@@ -99,8 +99,8 @@ pub(super) fn evaluate(
                 condition_now(state, check, record, record.entered_at).map(|(object, _)| object);
             return result;
         }
-        Some(Kind::Run(run)) => run,
-        Some(Kind::Agent(_) | Kind::Message(_)) | None => {
+        Some(Kind::Script(invocation)) => invocation,
+        Some(Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
             return Evaluation::failed("invalid", "check needs exactly one runner");
         }
     };
@@ -115,12 +115,19 @@ pub(super) fn evaluate(
         }
     };
     let mut digests = BTreeMap::new();
-    let argv = match command_words(record, run, &mut digests) {
-        Ok(argv) => argv,
-        Err(err) => {
-            result.object = Err(err);
-            return result;
-        }
+    let (argv, label) = match run {
+        Invocation::Run(run) => match command_words(record, run, &mut digests) {
+            // command_words resolved this exact, nonempty argv successfully.
+            Ok(argv) => (
+                argv,
+                script_label(run.words().expect("resolved workflow argv")),
+            ),
+            Err(err) => {
+                result.object = Err(err);
+                return result;
+            }
+        },
+        Invocation::Shell(shell) => (vec!["sh".into(), "-c".into(), shell.into()], "sh"),
     };
     let mut command = Command::new(&argv[0]);
     command
@@ -162,12 +169,6 @@ pub(super) fn evaluate(
             } else if output.timed_out {
                 Err("evaluation timed out".into())
             } else if !output.status.success() {
-                // command_words resolved this exact, nonempty argv successfully.
-                let words = run.words().expect("resolved workflow argv");
-                let label = words
-                    .iter()
-                    .find(|word| word.contains('/'))
-                    .unwrap_or(&words[0]);
                 Err(exit_failure(label, output.status))
             } else {
                 serde_json::from_slice(&output.stdout)
@@ -208,15 +209,38 @@ pub fn condition_now(
     condition::reading(state, check, record)
 }
 
-fn evaluate_shell(
+/// The word a failed script names: its first path word, else its program.
+fn script_label(words: &[String]) -> &str {
+    words
+        .iter()
+        .find(|word| word.contains('/'))
+        .unwrap_or(&words[0])
+}
+
+/// The command text and, for `run`, the argv resolved against the sealed definition, recording
+/// a digest for each path word.
+fn invoked<'a>(
+    record: &RunRecord,
+    invocation: &'a Invocation,
+    digests: &mut BTreeMap<String, String>,
+) -> Result<(&'a str, Option<Vec<std::ffi::OsString>>), String> {
+    Ok(match invocation {
+        Invocation::Run(run) => (run.text(), Some(command_words(record, run, digests)?)),
+        Invocation::Shell(shell) => (shell.as_str(), None),
+    })
+}
+
+fn evaluate_test(
     state: &StatePaths,
     paths: &WorkflowPaths,
     spec: &Definition,
     record: &RunRecord,
-    shell: &str,
+    invocation: &Invocation,
 ) -> Evaluation {
-    let mut result = Evaluation::failed("invalid", "shell evaluation interrupted");
+    let mut result = Evaluation::failed("invalid", "test evaluation interrupted");
     result.object = (|| {
+        let mut digests = BTreeMap::new();
+        let (command, argv) = invoked(record, invocation, &mut digests)?;
         // Evaluation follows a recorded live attempt.
         let attempt = record
             .attempt
@@ -230,13 +254,13 @@ fn evaluate_shell(
             paths,
             spec,
             record,
-            BTreeMap::new(),
+            digests,
             |interrupted, spawned| {
                 check_run::run_command(
                     &record.scope.path,
-                    shell,
+                    command,
                     WatchDeadline::Hosted {
-                        argv: None,
+                        argv: argv.as_deref(),
                         interrupted,
                         spawned,
                     },
@@ -250,7 +274,7 @@ fn evaluate_shell(
         )
         .map_err(|error| error.to_string())?;
         if output.interrupted() {
-            return Err("shell evaluation interrupted".into());
+            return Err("test evaluation interrupted".into());
         }
         let mut object = json!({
             "outcome": if output.passed() { "pass" } else { "fail" },
@@ -277,14 +301,11 @@ pub(super) fn execute_step(
 ) -> Result<check_run::CheckOutcome, ChildError> {
     let mut digests = BTreeMap::new();
     // Only validated command steps enter this hosting path.
-    let (command, argv) = match spec.step_kind(&record.node).expect("command step runner") {
-        Kind::Run(run) => (
-            run.text(),
-            Some(command_words(record, run, &mut digests).map_err(ChildError::Failed)?),
-        ),
-        Kind::Shell(shell) => (shell.as_str(), None),
-        _ => unreachable!("advance sends agent and message steps to the attempt host"),
+    let Kind::Command(invocation) = spec.step_kind(&record.node).expect("command step runner")
+    else {
+        unreachable!("advance sends agent and message steps to the attempt host")
     };
+    let (command, argv) = invoked(record, invocation, &mut digests).map_err(ChildError::Failed)?;
     // prepare publishes the live attempt before dispatching the command.
     let seq = record.attempt.as_ref().expect("prepared command step").seq;
     let log = paths.step_log(seq);

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-use rimz::harness::workflow::{Edge, Fireability, Kind, Node};
+use rimz::harness::workflow::{Edge, Fireability, Invocation, Kind, Node, OccupancyPolicy};
 use rimz::store::workflow::StepLifecycle;
 
 use super::*;
@@ -12,8 +12,12 @@ pub(super) fn render(definition: &definition::Definition, node: &str) -> Result<
     let check = spec.check(node);
     let step = spec.step(node);
     let runner = |node: &Node| match node.kind() {
-        Some(Kind::Run(_)) => "run",
-        Some(Kind::Shell(_)) => "shell",
+        Some(Kind::Test(invocation) | Kind::Script(invocation) | Kind::Command(invocation)) => {
+            match invocation {
+                Invocation::Run(_) => "run",
+                Invocation::Shell(_) => "shell",
+            }
+        }
         Some(Kind::Judge(_) | Kind::Agent(_)) => "agent",
         Some(Kind::Condition(_)) => "condition",
         Some(Kind::Sleep(_)) => "sleep",
@@ -238,8 +242,11 @@ fn step_facts(facts: &mut render::KeyVals, step: &Node) {
             StepLifecycle::Until => "until",
         }),
     );
-    field(facts, "takeover", step.takeover());
-    field(facts, "share", step.share());
+    field(
+        facts,
+        "occupancy",
+        step.occupancy().map(OccupancyPolicy::word),
+    );
     field(facts, "keep", step.keep());
     field(facts, "window", step.window().map(|window| window.text()));
     field(

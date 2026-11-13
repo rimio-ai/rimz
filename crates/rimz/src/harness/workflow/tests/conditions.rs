@@ -2,22 +2,22 @@ use super::*;
 use crate::disk::paths::StatePaths;
 use crate::store::workflow::{RunRecord, RunState};
 
-const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
+const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
 
 #[test]
 fn inline_cases_match_table_blocks_in_order() {
     let (_home, dir) = fixture();
-    let header = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait',unknown='@wait'}\n";
+    let header = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait',unknown='@wait'}\n";
     let actual: Vec<_> = [
         r#"cases = [
     { when = ["pr=merged"], outcome = "merged" },
     { when = ["ci=failed || pr.queue=dequeued"], outcome = "red", for = "2m" },
 ]
 "#,
-        r#"[[checks.pr.cases]]
+        r#"[[condition.pr.cases]]
 when = ["pr=merged"]
 outcome = "merged"
-[[checks.pr.cases]]
+[[condition.pr.cases]]
 when = ["ci=failed || pr.queue=dequeued"]
 outcome = "red"
 for = "2m"
@@ -55,13 +55,13 @@ for = "2m"
 #[test]
 fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
     let (_home, dir) = fixture();
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report
             .errors
             .iter()
-            .any(|error| error.path == "checks.pr.cases"),
+            .any(|error| error.path == "condition.pr.cases"),
         "run must refuse cases, even an empty array: {:?}",
         report.errors
     );
@@ -127,7 +127,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
     let error = report
         .errors
         .iter()
-        .find(|e| e.path == "checks.pr.timeout")
+        .find(|e| e.path == "condition.pr.timeout")
         .unwrap();
     assert!(
         error.message.contains("timeout") && error.message.contains("on.unknown"),
@@ -143,57 +143,57 @@ fn condition_validation_refuses_malformed_cases_and_missing_required_fields() {
         (
             "missing else",
             CONDITION.replace("else='pending'\n", ""),
-            "checks.pr.else",
+            "condition.pr.else",
         ),
         (
             "empty cases",
             CONDITION.replace(
-                "[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n",
+                "[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n",
                 "cases=[]\n",
             ),
-            "checks.pr",
+            "condition.pr",
         ),
         (
             "two kinds",
             CONDITION.replace("else='pending'", "run='true'\nelse='pending'"),
-            "checks.pr",
+            "condition.pr",
         ),
         (
             "missing route",
             CONDITION.replace("ready='@done', ", ""),
-            "checks.pr.on.ready",
+            "condition.pr.on.ready",
         ),
         (
             "reserved case",
             CONDITION.replace("outcome='ready'", "outcome='hold'"),
-            "checks.pr.cases.0.outcome",
+            "condition.pr.cases.0.outcome",
         ),
         (
             "reserved else",
             CONDITION.replace("else='pending'", "else='unknown'"),
-            "checks.pr.else",
+            "condition.pr.else",
         ),
         (
             "unknown value",
             CONDITION.replace("pr=merged", "!pr=unknown"),
-            "checks.pr.cases.0.when",
+            "condition.pr.cases.0.when",
         ),
         (
             "empty when",
             CONDITION.replace("when=['pr=merged']", "when=[]"),
-            "checks.pr.cases.0.when",
+            "condition.pr.cases.0.when",
         ),
         (
             "missing provider",
             CONDITION.replace("pr=merged", "window.5h.left>=40"),
-            "checks.pr.provider",
+            "condition.pr.provider",
         ),
         (
             "unknown provider",
             CONDITION
                 .replace("else='pending'", "provider='missing-kind'\nelse='pending'")
                 .replace("pr=merged", "window.5h.left>=40"),
-            "checks.pr.provider",
+            "condition.pr.provider",
         ),
     ] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
@@ -232,8 +232,8 @@ fn a_condition_without_on_unknown_refuses_and_gets_no_implicit_wait() {
     assert_eq!(
         errors,
         [(
-            "checks.pr.on.unknown",
-            "example: checks.pr.on.unknown: a condition check requires on.unknown; route it to @wait to keep waiting while a term is unknown"
+            "condition.pr.on.unknown",
+            "example: condition.pr.on.unknown: a condition check requires on.unknown; route it to @wait to keep waiting while a term is unknown"
         )]
     );
     let spec: Definition = toml::from_str(&text).unwrap();
@@ -287,7 +287,7 @@ fn publish_pr(dir: &Path, state: &StatePaths, record: &RunRecord, fresh: bool, p
 
 fn held_condition(unknown: &str) -> String {
     format!(
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait', unknown='{unknown}' }}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n"
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait', unknown='{unknown}' }}\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n"
     )
 }
 
@@ -399,7 +399,8 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
         "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         let text = format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[checks.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n"
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[{}.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n",
+            table(runner)
         );
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -425,10 +426,9 @@ fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
             vec![],
         ),
     ] {
-        let check: super::spec::Check = toml::from_str(&format!(
+        let check = super::spec::Check::condition(&format!(
             "else='pending'\n[[cases]]\nwhen=['{terms}']\noutcome='ready'\n"
-        ))
-        .unwrap();
+        ));
         let subscriptions = Node::of_check(&check).subscriptions().unwrap();
         assert_eq!(
             subscriptions
@@ -470,14 +470,15 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             ("", false),
         ] {
             let text = format!(
-                "[workflow]\non-break='@failed'\nscope='worktree'\nstart='now'\n[checks.now]\nrun='true'\non.ok='@done'\n[checks.later]\n{runner}\n{wake}\n"
+                "[workflow]\non-break='@failed'\nscope='worktree'\nstart='now'\n[script.now]\nrun='true'\non.ok='@done'\n[{}.later]\n{runner}\n{wake}\n",
+                table(runner)
             );
             let spec: Definition = toml::from_str(&text).unwrap();
             let expected = demanded.then(std::collections::BTreeSet::new);
             assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
 
             let spec: Definition = toml::from_str(&format!(
-                "{text}[checks.condition]\nelse='pending'\non={{ready='@done',pending='@wait',unknown='@wait'}}\n[[checks.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
+                "{text}[condition.condition]\nelse='pending'\non={{ready='@done',pending='@wait',unknown='@wait'}}\n[[condition.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
             ))
             .unwrap();
             assert_eq!(
@@ -496,10 +497,19 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
         ("subscribe=['review.ready']", false),
     ] {
         let text = format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nlifecycle='stay'\nprompt-file='prompts/build.md'\nthen=['done']\n{subscribe}\n[checks.done]\nrun='true'\non.ok='@done'\n"
+            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='stay'\nprompt-file='prompts/build.md'\nthen=['done']\n{subscribe}\n[script.done]\nrun='true'\non.ok='@done'\n"
         );
         let spec: Definition = toml::from_str(&text).unwrap();
         let expected = demanded.then(std::collections::BTreeSet::new);
         assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
+    }
+}
+
+/// The kind table a check's runner belongs under.
+fn table(runner: &str) -> &'static str {
+    match runner.split('=').next() {
+        Some("shell") => "test",
+        Some("agent") => "judge",
+        _ => "script",
     }
 }

@@ -218,28 +218,28 @@ mod tests {
             [workflow]
             scope = "worktree"
             start = "sweep"
-            [steps.sweep]
+            [agent.sweep]
             agent = "coder"
             then = "watch"
-            [checks.watch]
+            [condition.watch]
             else = "queued"
-            [checks.watch.on]
+            [condition.watch.on]
             queued = "@wait"
             fix = "fix"
             merged = "clean"
             unknown = "@wait"
-            [[checks.watch.cases]]
+            [[condition.watch.cases]]
             when = ["pr.open"]
             for = "30m"
             outcome = "queued"
-            [steps.fix]
+            [agent.fix]
             agent = "coder"
             max-visits = 2
             then = "watch"
-            [steps.clean]
+            [command.clean]
             run = "clean"
             then = "triage"
-            [steps.triage]
+            [agent.triage]
             agent = "coder"
             lifecycle = "until"
             then = "@done"

@@ -3,7 +3,8 @@ use unicode_width::UnicodeWidthStr;
 
 use rimz::config::GlyphRole;
 use rimz::harness::workflow::{
-    Condition, Definition, Edge, EdgeSource, Fireability, Hop, Kind, Target, WalkNode, reached,
+    Condition, Definition, Edge, EdgeSource, Fireability, Hop, Invocation, Kind, OccupancyPolicy,
+    Target, WalkNode, reached,
 };
 use rimz::store::workflow::{JournalEntry, RunRecord, RunState, StepLifecycle};
 
@@ -383,12 +384,11 @@ impl Row {
         };
         if let Some(check) = spec.check(name) {
             let runner = match check.kind() {
-                Some(Kind::Run(run)) => render::one_line(run.text()),
-                Some(Kind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
+                Some(Kind::Test(invocation) | Kind::Script(invocation)) => command_line(invocation),
                 Some(Kind::Judge(agent)) => format!("{agent}, headless"),
                 Some(Kind::Condition(_)) => "condition".into(),
                 Some(Kind::Sleep(sleep)) => format!("sleep {}", sleep.duration().text()),
-                Some(Kind::Agent(_) | Kind::Message(_)) | None => {
+                Some(Kind::Command(_) | Kind::Agent(_) | Kind::Message(_)) | None => {
                     "invalid runner; see workflow validate".into()
                 }
             };
@@ -481,8 +481,7 @@ impl Row {
             }
         } else if let Some(step) = spec.step(name) {
             let runner = match step.kind() {
-                Some(Kind::Run(run)) => render::one_line(run.text()),
-                Some(Kind::Shell(shell)) => format!("sh: {}", render::one_line(shell)),
+                Some(Kind::Command(invocation)) => command_line(invocation),
                 Some(Kind::Agent(agent)) => format!(
                     "{agent} · {}",
                     match step.lifecycle() {
@@ -492,20 +491,24 @@ impl Row {
                     }
                 ),
                 Some(Kind::Message(target)) => target.clone(),
-                Some(Kind::Judge(_) | Kind::Condition(_) | Kind::Sleep(_)) | None => {
-                    "invalid runner; see workflow validate".into()
-                }
+                Some(
+                    Kind::Test(_)
+                    | Kind::Script(_)
+                    | Kind::Judge(_)
+                    | Kind::Condition(_)
+                    | Kind::Sleep(_),
+                )
+                | None => "invalid runner; see workflow validate".into(),
             };
             row.heading = format!("step  {runner}");
             if let Some(timeout) = step.timeout() {
                 row.heading.push_str(&format!(" ≤{}", timeout.text()));
             }
             row.summary = step.summary().map(str::to_owned);
-            if step.takeover() == Some(true) {
-                row.details.push("takes over".into());
-            }
-            if step.share() == Some(true) {
-                row.details.push("shares the checkout".into());
+            match step.occupancy() {
+                Some(OccupancyPolicy::Takeover) => row.details.push("takes over".into()),
+                Some(OccupancyPolicy::Share) => row.details.push("shares the checkout".into()),
+                Some(OccupancyPolicy::Wait) | None => {}
             }
             if let Some(window) = step.window() {
                 row.details.push(format!("window {}", window.text()));
@@ -587,6 +590,13 @@ impl Row {
             }
         }
         writeln!(out, "│")
+    }
+}
+
+fn command_line(invocation: &Invocation) -> String {
+    match invocation {
+        Invocation::Run(run) => render::one_line(run.text()),
+        Invocation::Shell(shell) => format!("sh: {}", render::one_line(shell)),
     }
 }
 

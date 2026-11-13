@@ -18,38 +18,38 @@ const LAND: &str = r#"
 [workflow]
 scope='worktree'
 start='begin'
-[checks.begin]
+[test.begin]
 shell='true'
 on={pass='sweep',fail='@failed'}
-[checks.watch]
+[script.watch]
 run='cat answer.json'
 on={merged='clean',red='fix',queued='@wait'}
-[checks.notes]
+[script.notes]
 run='cat answer.json'
 on={rule='triage',none='@done'}
-[checks.ruled]
+[script.ruled]
 run='cat answer.json'
 on={rule='triage',none='@done'}
-[steps.sweep]
+[agent.sweep]
 agent='claude'
 lifecycle='turn'
-throttle='off'
+admission.throttle='off'
 prompt-file='prompt.md'
 then='watch'
-[steps.fix]
+[agent.fix]
 agent='claude'
 lifecycle='turn'
-throttle='off'
+admission.throttle='off'
 prompt-file='prompt.md'
 then='watch'
 timeout='3h'
 max-visits=6
-[steps.clean]
+[agent.clean]
 agent='claude'
 lifecycle='turn'
 prompt-file='prompt.md'
 then='notes'
-[steps.triage]
+[agent.triage]
 agent='claude'
 lifecycle='turn'
 prompt-file='prompt.md'
@@ -133,7 +133,7 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
     ];
     for (settings, after, questions) in cases {
         let text = format!(
-            "{}{settings}\n[checks.help]\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
+            "{}{settings}\n[test.help]\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
             OUTCOME_STEP.replace("lifecycle='turn'\n", ""),
         );
         let (_dir, state, record) = setup(&text);
@@ -159,7 +159,8 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
 fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
     for origin in ["automatic", "fire", "run"] {
         for prompt in [false, true] {
-            let (_dir, state, mut record) = setup(&format!("{OUTCOME_STEP}throttle='off'\n"));
+            let (_dir, state, mut record) =
+                setup(&format!("{OUTCOME_STEP}admission.throttle='off'\n"));
             if !prompt {
                 record.prompt = None;
             }
@@ -214,7 +215,7 @@ fn total_caps_name_the_actual_destination() {
         ("recover", "sends the run to `recover`"),
     ] {
         let text = format!(
-            "{}on.cap='{destination}'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+            "{}on.cap='{destination}'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
             OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
         );
         let (_dir, state, record) = setup(&text);
@@ -296,7 +297,7 @@ fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
 #[test]
 fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     let text = format!(
-        "{}on.cap='recover'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+        "{}on.cap='recover'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
         OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
@@ -312,14 +313,14 @@ fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     assert!(!text.contains("This is visit"));
 
     let text = OUTCOME_STEP.replace("start='watch'", "start='command'");
-    let text = format!("{text}[steps.command]\nshell='true'\nthen='watch'\n");
+    let text = format!("{text}[command.command]\nshell='true'\nthen='watch'\n");
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));
     assert!(note(&host).contains("The previous attempt, the step `command`, ended normally."));
 
     let text = OUTCOME_STEP.replace("start='watch'", "start='tell'");
-    let text = format!("{text}[steps.tell]\nmessage='@planner'\nthen='watch'\n");
+    let text = format!("{text}[message.tell]\nmessage='@planner'\nthen='watch'\n");
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));
@@ -332,7 +333,7 @@ fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
 
 #[test]
 fn arrival_details_are_bounded_escaped_and_tied_to_the_matched_condition_case() {
-    let text = OUTCOME_STEP.replacen("run='cat answer.json'", "cases=[{when=['pr=merged && pr.review=approved'],outcome='blue'},{when=['pr=open || ci=failed'],outcome='red'}]\nelse='queued'", 1).replacen("queued='@wait'}", "queued='@wait',unknown='@wait'}", 1);
+    let text = OUTCOME_STEP.replacen("[script.watch]\nrun='cat answer.json'", "[condition.watch]\ncases=[{when=['pr=merged && pr.review=approved'],outcome='blue'},{when=['pr=open || ci=failed'],outcome='red'}]\nelse='queued'", 1).replacen("queued='@wait'}", "queued='@wait',unknown='@wait'}", 1);
     let (_dir, state, record) = setup(&text);
     let runtime = crate::RuntimePaths::for_state(&state).unwrap();
     let cache = runtime.lane_path("pr-state.json");
@@ -428,7 +429,7 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
             "evidence ⇄ [build], plan → judge → report → reported",
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='a'\n[checks.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[steps.b]\nagent='claude'\nthen='d'\non.cap='c'\n[steps.c]\nagent='claude'\nthen='d'\n[checks.d]\nshell='true'\non={pass='@done',fail='@failed'}",
+            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nagent='claude'\nthen='d'\non.cap='c'\n[agent.c]\nagent='claude'\nthen='d'\n[test.d]\nshell='true'\non={pass='@done',fail='@failed'}",
             &["left"][..],
             "a → [b] · c → d",
         ),
@@ -437,7 +438,8 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
         let text = text
             .replace("agent='claude'", "agent='claude'\nprompt-file='prompt.md'")
             .replace("run='true'", "run='cat answer.json'")
-            .replace(condition, "run='cat answer.json'");
+            .replace(condition, "run='cat answer.json'")
+            .replace("[condition.watch]", "[script.watch]");
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
         for outcome in outcomes {

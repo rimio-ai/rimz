@@ -16,9 +16,9 @@ fn workflow_tasks_refuse_capacity_policy_owned_by_steps() {
         })
         .collect();
     assert!(
-        errors
-            .iter()
-            .all(|error| error.as_ref().is_some_and(|error| error.contains("steps"))),
+        errors.iter().all(|error| error
+            .as_ref()
+            .is_some_and(|error| error.contains("agent.<name>.admission"))),
         "{errors:?}"
     );
 }
@@ -640,16 +640,16 @@ fn workflow_rejects_action_and_node_owned_fields() {
             "keep exactly one",
         ),
         ("stay = true", "not a resident agent"),
-        ("takeover = true", "[steps.<name>] takeover = true"),
+        (
+            "takeover = true",
+            "(`[agent.<name>.admission] occupancy = \"takeover\"`)",
+        ),
         (
             "subscribe = [{signal='ready', stage='Done'}]",
             "check names what it waits for",
         ),
-        ("check = 'true'", "[checks.<name>]"),
-        (
-            "judge = [{agent='codex', prompt='judge'}]",
-            "[checks.<name>]",
-        ),
+        ("check = 'true'", "[test.<name>]"),
+        ("judge = [{agent='codex', prompt='judge'}]", "[test.<name>]"),
     ] {
         let entry: TaskEntry = toml::from_str(&format!("workflow='review'\n{field}")).unwrap();
         let error = TaskAction::from_entry("task", &entry)

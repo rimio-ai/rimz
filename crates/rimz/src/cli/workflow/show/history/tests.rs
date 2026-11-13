@@ -68,8 +68,8 @@ fn wait(minute: i64, outcome: &str, first: i64, last: i64, count: u64) -> Journa
 fn history(journal: &[JournalEntry]) -> String {
     history_of(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
-         [checks.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.done='@done'\n\
-         [steps.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
+         [script.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.done='@done'\n\
+         [agent.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
         journal,
     )
 }
@@ -118,7 +118,7 @@ fn cancellation_history_prints_the_recorded_reason() {
         color: crate::cli::ColorWhen::Never,
     };
     let spec = b"[workflow]\nscope='worktree'\nstart='pr'\n\
-        [checks.pr]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+        [test.pr]\nshell='true'\non={pass='@done',fail='@failed'}\n";
     let mut actual = Vec::new();
     for reason in [None, Some("worktree removed")] {
         let mut record = waiting_record(0, 0, 1);
@@ -480,7 +480,7 @@ const UNDELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.841509403Z","nod
 #[test]
 fn a_message_attempt_names_its_target_or_why_none_took_it() {
     let spec = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n\
-         [steps.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+         [message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
     for (journal, detail) in [
         (DELIVERED, "    to @planner · ended"),
         (

@@ -105,15 +105,19 @@ fn loop_add_workflow_refuses_every_flag_the_fire_would_ignore() {
     let room = Room::new("");
     let config = room.env.rimz_home().join("loop.toml");
     fs::write(&config, "# untouched\n").unwrap();
-    let steps = "[steps.<name>]";
-    let checks = "[checks.<name>]";
+    let steps = "[agent.<name>";
+    let checks = "[test.<name>]";
     let profile = "agent` profile";
-    let spend = "set `budget` on the workflow's agent `[steps.<name>]`";
+    let spend = "set `budget` on the workflow's `[agent.<name>]`";
     let window = "no provider window";
     let fanout = "fan-out needs --when, --every, or --cron";
     let clocked: &[(&[&str], &str, &str)] = &[
         (&["--stay"], "--stay", "agent steps"),
-        (&["--takeover"], "--takeover", "[steps.<name>] takeover"),
+        (
+            &["--takeover"],
+            "--takeover",
+            "[agent.<name>.admission] occupancy",
+        ),
         (&["--subscribe", "ci.done"], "--subscribe", "signals"),
         (&["--check", "true"], "--check", checks),
         (&["--check-timeout", "1m"], "--check-timeout", checks),

@@ -2,7 +2,7 @@ use super::until::{UNTIL, check, turn};
 use super::*;
 use crate::harness::signal::Signal;
 
-const STAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}, prompt='redeploy'}]\nthen='@done'\n";
+const STAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}, prompt='redeploy'}]\nthen='@done'\n";
 
 fn signal(name: &str, payload: Value) -> Signal {
     Signal {
@@ -322,7 +322,7 @@ fn a_staying_step_never_hears_lifecycle_signals_from_its_leaders_session() {
 fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
     let (dir, state, record) = setup(&STAY.replace(
         "subscribe=['ci.failed',",
-        "subscribe=['team.idle', {signal='agent.done', match={handle='@other'}}, 'agent.idle', ",
+        "subscribe=['team.idle', {signal='agent.done', match={handle='@other'}}, ",
     ));
     let lifecycle = |name: &str, payload: Value| Signal {
         source: crate::store::event::SignalSource::Lifecycle,
@@ -357,7 +357,7 @@ fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
     assert_eq!(
         signals,
         vec!["team.idle".to_owned(), "agent.done".into()],
-        "the checkout's cohort and the named agent deliver; a self-scoped agent selector is dropped"
+        "the checkout's cohort and the named agent deliver"
     );
     cancel(&state, &record.id, &host, None).unwrap();
     assert!(!hears_lifecycle(&state, &idle, &|_| None).unwrap());

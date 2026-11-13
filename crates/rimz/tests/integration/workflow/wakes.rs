@@ -39,7 +39,7 @@ fn assert_woken(env: &Env, id: &str, name: &str, payload: Value) {
 
 #[test]
 fn sleep_when_wakes_from_its_derived_subscription_without_the_minute_tick() {
-    let check = "[checks.pr]\nsleep='30m'\nwhen=['pr=merged']\nthen='@done'\n";
+    let check = "[sleep.pr]\nsleep='30m'\nwhen=['pr=merged']\nthen='@done'\n";
     let (env, _) = fixture(&format!("{HEADER}{check}"), "");
     let id = start(&env);
     until(&env, &id, |value| {
@@ -82,8 +82,8 @@ fn sleep_when_wakes_from_its_derived_subscription_without_the_minute_tick() {
 fn checks_without_subscriptions_keep_their_backoff_and_wait_count() {
     for check in [
         WAIT.to_owned(),
-        "[checks.pr]\nprovider='claude'\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['window.5h.left>=40']\noutcome='ready'\n".into(),
-        "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['pr[main]=merged || ci[main]=passed || pr.queue[main]=queued']\noutcome='ready'\n".into(),
+        "[condition.pr]\nprovider='claude'\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[condition.pr.cases]]\nwhen=['window.5h.left>=40']\noutcome='ready'\n".into(),
+        "[condition.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[condition.pr.cases]]\nwhen=['pr[main]=merged || ci[main]=passed || pr.queue[main]=queued']\noutcome='ready'\n".into(),
     ] {
         let (env, _) = fixture(&format!("{HEADER}{check}"), PENDING);
         let id = start(&env);
@@ -94,33 +94,30 @@ fn checks_without_subscriptions_keep_their_backoff_and_wait_count() {
 }
 
 #[test]
-fn invalid_wakes_warn_during_validation_and_run_with_the_same_message() {
+fn invalid_wakes_refuse_validation_and_run_with_the_same_message() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['agent.idle']\n"), PENDING);
     let validation = command(&env, &["workflow", "validate", "--json"]);
     let report: Value = serde_json::from_slice(&validation.stdout).unwrap();
-    assert!(validation.status.success(), "{report}");
-    assert_eq!(report["errors"], json!([]));
-    let warnings = report["warnings"].as_array().unwrap();
-    assert_eq!(warnings.len(), 1, "{report}");
-    assert_eq!(warnings[0]["path"], "checks.pr.wake.0");
+    assert!(!validation.status.success(), "{report}");
+    assert_eq!(report["warnings"], json!([]));
+    let errors = report["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{report}");
+    assert_eq!(errors[0]["path"], "script.pr.wake.0");
     let run = command(&env, &["workflow", "run", "review"]);
-    assert!(run.status.success(), "{run:?}");
+    assert!(!run.status.success(), "{run:?}");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains(warnings[0]["message"].as_str().unwrap()),
+        String::from_utf8_lossy(&run.stderr).contains(errors[0]["message"].as_str().unwrap()),
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    let receipt = String::from_utf8(run.stdout).unwrap();
-    let id = receipt.lines().next().unwrap();
-    until(&env, id, |value| value["record"]["wait"].is_object());
-    success(command(&env, &["workflow", "cancel", id]));
+    assert!(run.stdout.is_empty(), "no run starts");
 }
 
 #[test]
 fn subscriptions_of_other_checks_do_not_wake_the_current_node() {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}{WAIT}[checks.other]\nrun='true'\non.ok='@done'\nwake=['review.ready']\n"
+            "{HEADER}{WAIT}[script.other]\nrun='true'\non.ok='@done'\nwake=['review.ready']\n"
         ),
         PENDING,
     );
@@ -174,7 +171,7 @@ fn explicit_wake_filters_override_checkout_defaults_and_require_present_keys() {
 
 #[test]
 fn condition_forge_wakes_follow_only_the_current_checks_checkout_terms() {
-    let check = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
+    let check = "[condition.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
     let (env, _) = fixture(&format!("{HEADER}{check}"), "");
     let id = start(&env);
     until(&env, &id, |value| value["record"]["wait"].is_object());
@@ -186,7 +183,7 @@ fn condition_forge_wakes_follow_only_the_current_checks_checkout_terms() {
 #[test]
 fn stage_wakes_follow_the_current_archive_link_for_declared_and_derived_subscriptions() {
     use std::os::unix::fs::symlink;
-    let condition = "[checks.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[checks.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\n";
+    let condition = "[condition.pr]\nelse='pending'\ntimeout='1h'\non={ready='@done',pending='@wait',unknown='@wait'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\n";
     for check in [format!("{WAIT}wake=['team.stage']\n"), condition.into()] {
         let (env, _) = fixture(&format!("{HEADER}{check}"), PENDING);
         let archive = env.state_path_for(&env.project_root).team_notes_dir;

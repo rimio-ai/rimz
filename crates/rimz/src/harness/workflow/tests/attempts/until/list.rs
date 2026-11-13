@@ -6,7 +6,7 @@ fn definition() -> String {
         .replace("then='pr'", "then=['pr','review']")
         .replace("max-visits=2", "max-visits=3")
         .replace("on.done='@done'", "on.done='review'")
-        + "[checks.review]\nrun='cat review.json'\nwake=['review.ready']\ntimeout='1h'\non={pending='build',waiting='@wait',done='@done'}\n"
+        + "[script.review]\nrun='cat review.json'\nwake=['review.ready']\ntimeout='1h'\non={pending='build',waiting='@wait',done='@done'}\n"
 }
 
 fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
@@ -203,7 +203,7 @@ fn listed_second_check_interruptions_and_moved_turns_name_that_check() {
 #[test]
 fn a_listed_check_reached_without_a_held_session_routes_normally() {
     let text = definition().replace("start='build'", "start='command'")
-        + "[steps.command]\nshell='true'\ntimeout='1m'\nthen='review'\n";
+        + "[command.command]\nshell='true'\ntimeout='1m'\nthen='review'\n";
     let (dir, state, record) = setup(&text.replace("then=['pr','review']", "then='pr'"));
     fs::write(&state.workflow(&record.id).spec, text).unwrap();
     fs::write(dir.path().join("review.json"), r#"{"outcome":"done"}"#).unwrap();

@@ -4,7 +4,7 @@ use crate::harness::workflow::LeaderTurn;
 use crate::store::workflow::{HeldSession, StepLifecycle, TurnEnd, Verdict};
 use jiff::Timestamp;
 
-pub(super) const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[checks.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
+pub(super) const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\nmax-visits=2\n[script.pr]\nrun='sh check.sh'\ntimeout='1h'\non.pending='build'\non.done='@done'\n";
 
 mod answers;
 mod checks;
@@ -117,7 +117,7 @@ fn reread_then_type_error_returns_an_error_without_panicking() {
     }));
     assert!(result.is_ok(), "a dropped then must not panic: {result:?}");
     let error = result.unwrap().unwrap_err();
-    assert!(error.to_string().contains("steps.build.then"), "{error}");
+    assert!(error.to_string().contains("agent.build.then"), "{error}");
     let record = records::load(&paths).unwrap();
     assert_eq!(record.node, "build");
     assert!(record.attempt.unwrap().judged.is_none());
@@ -309,7 +309,7 @@ fn closing_verdicts_stop_once_and_follow_the_saved_route() {
     let mut actual = Vec::new();
     for target in ["@done", "@failed", "next", "other"] {
         let text = format!(
-            "{}\n[steps.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[checks.other]\nshell='true'\non.pass='@done'\n",
+            "{}\n[agent.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[test.other]\nshell='true'\non.pass='@done'\n",
             UNTIL.replace("on.done='@done'", &format!("on.done='{target}'"))
         );
         let (dir, state, record) = setup(&text);

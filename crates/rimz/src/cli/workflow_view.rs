@@ -419,7 +419,7 @@ mod tests {
         let actual = ["", "when=['ci=passed']\n"].map(|when| {
             let spec: Definition = toml::from_str(&format!(
                 "[workflow]\nscope='worktree'\nstart='ruled'\n\
-                 [checks.ruled]\nsleep='30m'\nthen='fix'\n{when}"
+                 [sleep.ruled]\nsleep='30m'\nthen='fix'\n{when}"
             ))
             .unwrap();
             ["sleeping", "unknown", "hold"].map(|outcome| {

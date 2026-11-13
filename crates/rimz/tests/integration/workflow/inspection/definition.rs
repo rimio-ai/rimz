@@ -6,15 +6,15 @@ on-break = '@failed'
 summary = 'carry the change to green'
 scope = 'worktree'
 start = 'begin'
-[checks.begin]
+[test.begin]
 shell = 'true'
 on.pass = 'sweep'
 on.fail = '@failed'
-[steps.sweep]
+[command.sweep]
 shell = 'echo sweep'
 timeout = '1h'
 then = 'watch'
-[checks.watch]
+[condition.watch]
 summary = 'wait for the forge'
 cases = [{ when = ['ci=passed'], outcome = 'green', for = '3m' }]
 else = 'red'
@@ -22,17 +22,17 @@ on.green = '@done'
 on.red = 'fix'
 on.unknown = '@wait'
 timeout = '3d'
-[steps.fix]
+[agent.fix]
 agent = 'claude'
 lifecycle = 'turn'
 prompt-file = 'prompt.md'
 then = 'watch'
 timeout = '2h'
-takeover = true
+admission.occupancy = "takeover"
 max-visits = 4
-capacity-wait = '6h'
+admission.give-up = '6h'
 on.asked = 'watch'
-[checks.unused]
+[test.unused]
 shell = 'false'
 on.pass = '@done'
 on.fail = '@failed'
@@ -133,7 +133,7 @@ fn definition_hints_parse_hyphen_leading_workflow_and_node_names() {
 fn the_by_hand_hint_starts_in_the_selected_room() {
     let (env, _) = super::super::fixture(
         "[workflow]\non-break='@failed'\nscope='project'\nstart='gate'\n\
-         [checks.gate]\nshell='true'\non={pass='@done',fail='@failed'}\n",
+         [test.gate]\nshell='true'\non={pass='@done',fail='@failed'}\n",
         "",
     );
     let other = env.home_root.join("other/project");
@@ -244,16 +244,16 @@ const NODE_GRAPH: &str = r#"
 on-break = '@failed'
 scope = 'project'
 start = 'judge'
-[checks.judge]
+[judge.judge]
 summary = 'review every routing fact'
 agent = 'claude'
 prompt-file = 'prompt.md'
-window = '5h.left>=25'
+admission.window = '5h.left>=25'
 wake = [{ signal = 'ci.*', match = { path = '/checkout' } }]
 timeout = '8h'
 on.ok = 'fix'
 on.invalid = '@failed'
-[checks.watch]
+[condition.watch]
 cases = [{ when = ['ci=passed', 'pr=open', 'window.5h.left>=25'], outcome = 'green', for = '3m' }]
 provider = 'claude'
 account = 'default'
@@ -261,23 +261,23 @@ else = 'waiting'
 on.green = '@done'
 on.waiting = '@wait'
 on.unknown = '@wait'
-[checks.script]
+[script.script]
 run = 'sh checks/pr.sh'
 wake = ['pr.*']
 on.ok = '@done'
-[checks.command]
+[test.command]
 shell = "printf 'a\\nb\\n'"
 on.pass = '@done'
 on.fail = '@failed'
-[steps.fix]
+[agent.fix]
 summary = 'one bounded round'
 agent = 'claude,nvim'
 prompt-file = 'prompt.md'
 lifecycle = 'turn'
-takeover = false
-window = '7d.left>=10'
-throttle = 'off'
-capacity-wait = '6h'
+admission.occupancy = "wait"
+admission.window = '7d.left>=10'
+admission.throttle = 'off'
+admission.give-up = '6h'
 then = 'judge'
 max-visits = 4
 timeout = '2h'
@@ -327,8 +327,8 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "prompt.md",
                 "lifecycle:",
                 "turn",
-                "takeover:",
-                "false",
+                "occupancy:",
+                "wait",
                 "window:",
                 "7d.left>=10",
                 "throttle:",

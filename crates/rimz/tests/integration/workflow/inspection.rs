@@ -4,7 +4,7 @@ use rimz::store::workflow::{RunRecord, RunState};
 mod definition;
 mod show;
 
-const SPEC: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='gate'\n[checks.gate]\nrun='true'\non.ok='build'\ntimeout='1h'\n[steps.build]\nshell='true'\nthen='gate'\nmax-visits=2\n";
+const SPEC: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='gate'\n[script.gate]\nrun='true'\non.ok='build'\ntimeout='1h'\n[command.build]\nshell='true'\nthen='gate'\nmax-visits=2\n";
 
 fn seed(env: &Env, root: &Path, checkout: &Path, state: &str) -> RunRecord {
     let id = rimz::ids::WorkflowRunId::new();

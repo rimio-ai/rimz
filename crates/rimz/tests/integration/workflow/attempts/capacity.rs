@@ -86,7 +86,7 @@ fn advance_queue_busy(room: &Room, record: &records::RunRecord) -> Value {
 #[test]
 fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees() {
     for task in [Some("nightly"), None] {
-        let room = Room::new("capacity-wait='2h'\n[steps.build.limit]\nmax-parallel=5\n");
+        let room = Room::new("[agent.build.admission]\ngive-up='2h'\nmax-parallel=5\n");
         let record = pending(&room, task);
         let queue = hold_queue(&room);
         let value = advance_queue_busy(&room, &record);
@@ -130,7 +130,7 @@ fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees()
         }
         drop(queue);
         let value = advance(&room, &record);
-        assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+        assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
         assert!(value["record"]["attempt"].is_object(), "{value:#}");
         success(
             room.command(&["workflow", "cancel", record.id.as_str()])
@@ -143,7 +143,7 @@ fn capacity_lock_timeouts_wait_without_a_visit_and_launch_once_the_queue_frees()
 #[test]
 fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time() {
     for restart in [false, true] {
-        let room = Room::new("capacity-wait='2h'\n[steps.build.limit]\nmax-parallel=5\n");
+        let room = Room::new("[agent.build.admission]\ngive-up='2h'\nmax-parallel=5\n");
         let record = pending(&room, Some("nightly"));
         let queue = hold_queue(&room);
         let value = if restart {
@@ -189,7 +189,7 @@ fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time
         );
         drop(queue);
         let value = advance(&room, &record);
-        assert_eq!(value["record"]["visits"]["build"]["total"], 1, "{value:#}");
+        assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
         assert!(value["record"]["attempt"].is_object(), "{value:#}");
         success(
             room.command(&["workflow", "cancel", record.id.as_str()])
@@ -201,7 +201,7 @@ fn capacity_lock_timeouts_on_manual_and_restart_runs_wait_without_a_give_up_time
 
 #[test]
 fn capacity_lock_timeout_waits_still_give_up_through_capacity() {
-    let room = Room::new("capacity-wait='2h'\n");
+    let room = Room::new("admission.give-up='2h'\n");
     write_capacity_config(&room, "[throttle]\nmax-parallel-agents=5\n").unwrap();
     let record = pending(&room, Some("nightly"));
     let _queue = hold_queue(&room);
@@ -384,7 +384,7 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
     fs::write(
         &spec,
         format!(
-            "{}\n[steps.fallback]\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\n",
+            "{}\n[agent.fallback]\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\n",
             fs::read_to_string(&spec)
                 .unwrap()
                 .replace("start = 'pr'", "start = 'pr'\non.deadline='fallback'")
@@ -454,7 +454,7 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
 
 #[test]
 fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() {
-    let room = Room::new("capacity-wait='2h'\n");
+    let room = Room::new("admission.give-up='2h'\n");
     write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
     let record = pending(&room, Some("nightly"));
     let first = advance(&room, &record);
@@ -497,7 +497,7 @@ fn capacity_holds_merge_without_consuming_visits_and_render_the_shared_phrase() 
 fn capacity_give_up_routes_failed_or_a_node_without_an_attempt() {
     let mut actual = Vec::new();
     for (edge, terminal) in [("", "failed"), ("on.capacity='after'\n", "done")] {
-        let room = Room::new(&format!("capacity-wait='1s'\n{edge}"));
+        let room = Room::new(&format!("admission.give-up='1s'\n{edge}"));
         write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
         let record = pending(&room, Some("nightly"));
         let now = jiff::Timestamp::now();
@@ -532,7 +532,7 @@ fn capacity_give_up_routes_failed_or_a_node_without_an_attempt() {
 #[test]
 fn capacity_manual_and_exempt_steps_bypass_the_door() {
     let mut actual = Vec::new();
-    for (task, extra) in [(None, ""), (Some("nightly"), "throttle='off'\n")] {
+    for (task, extra) in [(None, ""), (Some("nightly"), "admission.throttle='off'\n")] {
         let room = Room::new(extra);
         write_capacity_config(&room, "[throttle]\ncheck='exit 75'\n").unwrap();
         let throttle: Value = serde_json::from_str(&success(
@@ -608,7 +608,7 @@ fn capacity_admission_rechecks_bounds_and_windows_and_releases_unused_turns() {
     use std::os::unix::net::UnixListener;
 
     for closes in ["deadline", "window"] {
-        let room = Room::with_kind("window='5h.left>=20'\n", "claude");
+        let room = Room::with_kind("admission.window='5h.left>=20'\n", "claude");
         super::super::judges::capacity(&room.env, 0);
         write_capacity_config(&room, "[throttle]\ncheck='exit 0'\n").unwrap();
         let record = pending(&room, Some("nightly"));

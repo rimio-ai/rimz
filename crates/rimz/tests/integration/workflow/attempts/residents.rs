@@ -78,7 +78,7 @@ fn stops_pinned_companions_even_without_a_live_leader() {
 
 #[test]
 fn takeover_waits_for_a_working_occupant_in_an_omitted_live_tab() {
-    let room = Room::new("takeover=true");
+    let room = Room::new("admission.occupancy='takeover'");
     fs::write(room.env.project_root.join("spawn.log"), "").unwrap();
     fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
     for event in ["SessionStart", "UserPromptSubmit"] {
@@ -127,7 +127,7 @@ fn takeover_waits_for_a_working_occupant_in_an_omitted_live_tab() {
 
 #[test]
 fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
-    let room = Room::new("takeover=true");
+    let room = Room::new("admission.occupancy='takeover'");
     fs::write(
         room.env.project_root.join("panes.json"),
         r#"[{"id":71,"is_plugin":false,"tab_id":1,"title":"claude"}]"#,
@@ -196,7 +196,7 @@ fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
 /// counts as stopped once its owner dies: the step launches, with no failure on record.
 #[test]
 fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
-    let room = Room::new("takeover=true");
+    let room = Room::new("admission.occupancy='takeover'");
     fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
     let mut owner = dummy_agent_process();
     let pid = owner.id();
@@ -262,7 +262,7 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
 /// advance, as on trunk, without a `retry` wait and without stopping the occupant.
 #[test]
 fn a_refused_preparation_is_not_retried_and_stops_no_occupant() {
-    let room = Room::with_kind("takeover=true", "claude");
+    let room = Room::with_kind("admission.occupancy='takeover'", "claude");
     fs::remove_file(room.env.agent_config_path("claude")).unwrap();
     fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
     let mut owner = dummy_agent_process();

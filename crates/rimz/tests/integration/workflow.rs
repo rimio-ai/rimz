@@ -10,12 +10,12 @@ mod conditions;
 mod inspection;
 mod judges;
 mod memory;
+mod refusals;
 mod scope;
 mod shells;
 mod sleep;
 mod tasks;
 mod ticks;
-mod tolerance;
 mod wakes;
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
@@ -30,15 +30,15 @@ fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
 }
 
 const HEADER: &str = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n";
-const WAIT: &str = "[checks.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = '@done' }\ntimeout = '1h'\n";
+const WAIT: &str = "[script.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wait', done = '@done' }\ntimeout = '1h'\n";
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
 
 #[test]
 fn new_runs_seal_definitions_at_the_current_record_version() {
     let actual: Vec<_> = [
         String::new(),
-        "[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\n".into(),
-        "[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nlifecycle='turn'\n"
+        "[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\n".into(),
+        "[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nlifecycle='turn'\n"
             .into(),
     ]
     .into_iter()
@@ -288,8 +288,8 @@ fn assists_once(env: &Env, key: &str, count: u64) -> Value {
 fn workflow_accounting_tracks_routes_and_terminal_states() {
     let (env, dir) = fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='gate'\n{}",
-            WAIT.replace("[checks.pr]", "[checks.gate]")
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='gate'\n{}",
+            WAIT.replace("[script.pr]", "[script.gate]")
                 .replace("checks/pr.sh", "checks/gate.sh")
         ),
         &evaluation_script("ok"),
@@ -333,7 +333,7 @@ fn workflow_accounting_counts_check_limited_as_a_route() {
 
 fn check_outcome_route_is_accounted(outcome: &str) {
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.{outcome}='@done'\n"),
+        &format!("{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.{outcome}='@done'\n"),
         &evaluation_script(outcome),
     );
     let id = start(&env);
@@ -371,7 +371,7 @@ fn check_outcome_route_is_accounted(outcome: &str) {
 #[test]
 fn happy_path_context_and_cross_directory_lookup() {
     let spec = format!(
-        "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = 'next'\n[checks.next]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"
+        "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = 'next'\n[script.next]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"
     );
     let (env, _) = fixture(&spec, &evaluation_script("ok"));
     let id = start(&env);
@@ -772,7 +772,7 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
 #[test]
 fn sealed_spec_live_scripts_and_hot_loop_guard() {
     let spec = format!(
-        "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ again = 'next', pause = '@wait' }}\ntimeout = '1h'\n[checks.next]\nrun = 'sh checks/pr.sh'\non.again = 'pr'\n"
+        "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ again = 'next', pause = '@wait' }}\ntimeout = '1h'\n[script.next]\nrun = 'sh checks/pr.sh'\non.again = 'pr'\n"
     );
     let (env, dir) = fixture(&spec, &evaluation_script("again"));
     let id = start(&env);
@@ -805,7 +805,7 @@ fn malformed_and_unrouted_objects_are_invalid() {
     ];
     for body in bodies {
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ ok = '@done', invalid = 'report' }}\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ ok = '@done', invalid = 'report' }}\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
         );
         let (env, dir) = fixture(&spec, body);
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
@@ -839,7 +839,7 @@ fn invalid_defaults_fail_and_deleted_script_is_invalid() {
 
 fn failed_script(body: &str) -> Value {
     let (env, dir) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun = 'sh checks/broken.sh'\non.ok = '@done'\n"),
+        &format!("{HEADER}[script.pr]\nrun = 'sh checks/broken.sh'\non.ok = '@done'\n"),
         body,
     );
     fs::rename(dir.join("checks/pr.sh"), dir.join("checks/broken.sh")).unwrap();
@@ -867,7 +867,7 @@ fn invalid_script_signal_names_the_signal() {
 
 fn steps_spec(cap: &str) -> String {
     format!(
-        "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ work = 'build', done = '@done' }}\n[steps.build]\nagent = 'claude'\nlifecycle = 'turn'\nprompt-file = 'prompt.md'\nthen = 'pr'\nmax-visits = 1\n{cap}\n"
+        "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ work = 'build', done = '@done' }}\n[agent.build]\nagent = 'claude'\nlifecycle = 'turn'\nprompt-file = 'prompt.md'\nthen = 'pr'\nmax-visits = 1\n{cap}\n"
     )
 }
 
@@ -884,14 +884,14 @@ fn cap_only_self_cycle_is_refused_before_launch() {
         Some(1),
         "a cap self-cycle must be refused before launch"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("steps.build.on.cap"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("agent.build.on.cap"));
     assert!(dir.exists());
 }
 
 #[test]
 fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
-        "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[checks.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
+        "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[script.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
     );
     let (env, dir) = fixture(&spec, PENDING);
     let id = start(&env);
@@ -942,7 +942,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
 fn timeout_kills_script_and_routes_or_fails() {
     for edge in ["", "on.timeout = 'report'"] {
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n{edge}\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n{edge}\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
         );
         let (env, dir) = fixture(
             &spec,
@@ -983,7 +983,7 @@ fn timeout_before_script_spawn_records_no_digests() {
     use std::os::unix::net::UnixListener;
 
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"),
+        &format!("{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"),
         "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
     );
     let socket = env.runtime_root.join("context-gate.sock");
@@ -1032,7 +1032,7 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
     let value = show(&env, &id);
     assert_eq!(value["record"]["state"], "failed");
     assert_eq!(events(&value, "route")[0]["outcome"], "timeout");
-    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[script.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
     let (env, dir) = fixture(spec, "exec sleep 60");
     fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
     let id = start(&env);
@@ -1057,7 +1057,7 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
 
 #[test]
 fn cancel_interrupts_live_evaluation_and_first_terminal_wins() {
-    let spec = format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n");
+    let spec = format!("{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n");
     let (env, _) = fixture(
         &spec,
         "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
@@ -1102,7 +1102,7 @@ fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
     let digest = hex::encode(sha2::Sha256::digest(script.as_bytes()));
     for bounded in [false, true] {
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"
         );
         let (env, _) = fixture(&spec, script);
         let id = start(&env);
@@ -1157,7 +1157,7 @@ fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
 #[test]
 fn concurrent_advance_does_not_mutate_live_attempt() {
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"),
+        &format!("{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"),
         "exec sleep 60",
     );
     let id = start(&env);
@@ -1176,7 +1176,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
     use std::io::Write;
     use std::os::unix::net::UnixListener;
 
-    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'pr'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
+    let spec = "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'pr'\n[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
     let (env, _) = fixture(
         spec,
         "while ! test -f \"$RIMZ_WORKFLOW_DIR/consume\"; do sleep 0.01; done\ndd if=\"$RIMZ_WORKFLOW_DIR/context.json\" of=\"$RIMZ_WORKFLOW_DIR/consumed.tmp\" 2>/dev/null\nmv \"$RIMZ_WORKFLOW_DIR/consumed.tmp\" \"$RIMZ_WORKFLOW_DIR/consumed.json\"\nexec sleep 60",
@@ -1244,7 +1244,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
 fn restart_between_evaluation_and_transition_reruns_check_free() {
     use std::os::unix::net::UnixListener;
     let (env, _) = fixture(
-        &format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"),
+        &format!("{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"),
         &evaluation_script("ok"),
     );
     let socket = env.runtime_root.join("workflow-gate.sock");
@@ -1545,7 +1545,7 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
 #[test]
 fn human_show_lists_each_capped_steps_visits_with_the_grant() {
     let spec = format!(
-        "{HEADER}{WAIT}[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n[steps.plain]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
+        "{HEADER}{WAIT}[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n[agent.plain]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
     );
     let (env, _) = fixture(&spec, PENDING);
     let id = start(&env);
@@ -1593,7 +1593,7 @@ fn validate_json_shape_errors_and_exit_status() {
     let env = Env::new();
     let dir = env.rimz_home().join("workflows/review");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = 'missing'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = 'missing'\n").unwrap();
     let output = env
         .rimz()
         .args(["workflow", "validate", "--json"])
@@ -1610,7 +1610,7 @@ fn validate_json_shape_errors_and_exit_status() {
     assert_eq!(
         report["rows"],
         json!([{
-            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "message": null, "summary": null, "do_background": false,
+            "workflow": "review", "node": "pr", "kind": "script", "runner": "run", "run": "true", "shell": null, "agent": null, "message": null, "summary": null, "do_background": false,
             "edges": [
                 {"outcome":"ok", "target":"missing", "source":"explicit", "fires":"yes"},
                 {"outcome":"timeout", "target":"@failed", "source":"on-break", "fires":"never", "because":"no-timeout"},
@@ -1620,14 +1620,14 @@ fn validate_json_shape_errors_and_exit_status() {
         }])
     );
     assert_eq!(report["errors"].as_array().unwrap().len(), 1);
-    assert_eq!(report["errors"][0]["path"], "checks.pr.on.ok");
+    assert_eq!(report["errors"][0]["path"], "script.pr.on.ok");
     assert!(
         report["errors"][0]["message"]
             .as_str()
             .unwrap()
             .contains("pr")
     );
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = '@done'\n").unwrap();
     assert!(
         env.rimz()
             .args(["workflow", "validate"])
@@ -1653,10 +1653,22 @@ fn validate_json_shape_errors_and_exit_status() {
     let schema = env.rimz().args(["workflow", "schema"]).output().unwrap();
     assert!(schema.status.success());
     let schema: Value = serde_json::from_slice(&schema.stdout).unwrap();
-    assert!(schema["properties"]["checks"].is_object());
+    for kind in [
+        "agent",
+        "command",
+        "message",
+        "test",
+        "script",
+        "judge",
+        "condition",
+        "sleep",
+    ] {
+        assert!(schema["properties"][kind].is_object(), "{kind}");
+    }
+    assert!(schema["properties"].get("checks").is_none());
     fs::write(
         dir.join("workflow.toml"),
-        format!("{HEADER}[checks.pr]\nshell='printf shell'\non={{pass='@done',fail='@failed'}}\n"),
+        format!("{HEADER}[test.pr]\nshell='printf shell'\non={{pass='@done',fail='@failed'}}\n"),
     )
     .unwrap();
     // A crashed `loop eject` leaves its staging copy under a dot directory.
@@ -1670,7 +1682,7 @@ fn validate_json_shape_errors_and_exit_status() {
         json!({
             "warnings": [], "errors": [],
             "rows": [{
-                "workflow":"review", "node":"pr", "kind":"check", "runner":"shell",
+                "workflow":"review", "node":"pr", "kind":"test", "runner":"shell",
                 "run":null, "shell":"printf shell", "agent":null, "message":null, "summary":null, "do_background":false,
                 "edges":[
                     {"outcome":"fail", "target":"@failed", "source":"explicit", "fires":"yes"},
@@ -1694,7 +1706,7 @@ fn validate_json_shape_errors_and_exit_status() {
     );
     for runner in ["run", "shell"] {
         fs::write(dir.join("workflow.toml"), format!(
-            "{HEADER}[checks.pr]\nshell='true'\non={{pass='@done',fail='@failed'}}\n[steps.merge]\n{runner}='gh pr merge --auto'\nthen='pr'\ntimeout='1m'\nmax-visits=2\n"
+            "{HEADER}[test.pr]\nshell='true'\non={{pass='@done',fail='@failed'}}\n[command.merge]\n{runner}='gh pr merge --auto'\nthen='pr'\ntimeout='1m'\nmax-visits=2\n"
         )).unwrap();
         let output = command(&env, &["workflow", "validate", "--json"]);
         assert!(
@@ -1710,7 +1722,7 @@ fn validate_json_shape_errors_and_exit_status() {
         assert_eq!(
             report["rows"][1],
             json!({
-                "workflow":"review", "node":"merge", "kind":"step", "runner":runner,
+                "workflow":"review", "node":"merge", "kind":"command", "runner":runner,
                 "run":run, "shell":shell,
                 "agent":null, "message":null, "summary":null, "do_background":false,
                 "edges":[
@@ -1783,7 +1795,7 @@ fn babysit_fixture_validates_capabilities_and_missing_script() {
     assert!(
         String::from_utf8(failed.stdout)
             .unwrap()
-            .contains("checks.notes.run")
+            .contains("script.notes.run")
     );
     assert!(!env.rimz_home().join("ws").exists());
 }

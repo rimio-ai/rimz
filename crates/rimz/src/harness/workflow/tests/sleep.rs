@@ -5,7 +5,7 @@ use crate::store::workflow::{self as records, JournalEvent, Key, RunRecord, RunS
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-const SLEEP: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n[checks.cooldown]\nsleep='30m'\nthen='@done'\n";
+const SLEEP: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n[sleep.cooldown]\nsleep='30m'\nthen='@done'\n";
 
 fn update(state: &StatePaths, record: &RunRecord) {
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
@@ -34,7 +34,7 @@ fn evaluations(state: &StatePaths, record: &RunRecord) -> Vec<Value> {
 
 #[test]
 fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_outcome() {
-    let text = SLEEP.replace("then='@done'", "then='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3");
+    let text = SLEEP.replace("then='@done'", "then='build'\n[agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3");
     let (_dir, state, mut record) = attempts::setup(&text);
     record.input = Some(json!({"outcome":"repair", "key":"original", "context":42}));
     record.key = Some(Key::String("original".into()));
@@ -272,7 +272,7 @@ fn sleep_validation_accepts_plain_conditional_and_polling_cycles_with_explicit_t
         format!("{SLEEP}when=['!pr.queue=queued']\n"),
         SLEEP.replace(
             "then='@done'",
-            "then='poll'\n[checks.poll]\nrun='true'\non.done='@done'\non.pending='cooldown'",
+            "then='poll'\n[script.poll]\nrun='true'\non.done='@done'\non.pending='cooldown'",
         ),
     ]
     .iter()
@@ -316,45 +316,45 @@ fn sleep_validation_refuses_required_fields_bad_terms_and_until_reentry() {
     let cases = [
         (
             SLEEP.replace("sleep='30m'", "sleep='soon'"),
-            "checks.cooldown.sleep",
+            "sleep.cooldown.sleep",
         ),
         (
             SLEEP.replace("sleep='30m'", "sleep='0s'"),
-            "checks.cooldown.sleep",
+            "sleep.cooldown.sleep",
         ),
-        (SLEEP.replace("then='@done'", ""), "checks.cooldown.then"),
+        (SLEEP.replace("then='@done'", ""), "sleep.cooldown.then"),
         (
             SLEEP.replace("then='@done'", "then='@wait'"),
-            "checks.cooldown.then",
+            "sleep.cooldown.then",
         ),
         (
             SLEEP.replace("then='@done'", "then='missing'"),
-            "checks.cooldown.then",
+            "sleep.cooldown.then",
         ),
-        (format!("{SLEEP}when=7\n"), "checks.cooldown.when"),
-        (format!("{SLEEP}when=[]\n"), "checks.cooldown.when"),
+        (format!("{SLEEP}when=7\n"), "sleep.cooldown.when"),
+        (format!("{SLEEP}when=[]\n"), "sleep.cooldown.when"),
         (
             format!("{SLEEP}when=['bad syntax']\n"),
-            "checks.cooldown.when",
+            "sleep.cooldown.when",
         ),
         (
             format!("{SLEEP}when=['pr=unknown']\n"),
-            "checks.cooldown.when",
+            "sleep.cooldown.when",
         ),
         (
             format!("{SLEEP}when=['window.5h.left>=40']\n"),
-            "checks.cooldown.provider",
+            "sleep.cooldown.provider",
         ),
         (
             format!("{SLEEP}when=['team.stage=MissingStage']\n"),
-            "checks.cooldown.when",
+            "sleep.cooldown.when",
         ),
-        (format!("{SLEEP}run='true'\n"), "checks.cooldown"),
+        (format!("{SLEEP}run='true'\n"), "sleep.cooldown.run"),
         (
             format!(
-                "{SLEEP}[steps.work]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='cooldown'\n"
+                "{SLEEP}[agent.work]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='cooldown'\n"
             ),
-            "steps.work.then",
+            "agent.work.then",
         ),
     ];
     let actual: Vec<_> = cases
@@ -387,7 +387,7 @@ fn sleep_derives_the_same_subscriptions_and_forge_demand_as_a_condition() {
         let sleep: Definition = toml::from_str(&format!("{SLEEP}when=['{term}']\n")).unwrap();
         let condition: Definition = toml::from_str(&format!(
             "[workflow]\non-break='@failed'\nscope='worktree'\nstart='cooldown'\n\
-             [checks.cooldown]\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
+             [condition.cooldown]\ncases=[{{when=['{term}'],outcome='then'}}]\nelse='sleeping'\n"
         ))
         .unwrap();
         [sleep, condition].map(|spec| {

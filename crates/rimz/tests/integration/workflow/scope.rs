@@ -86,7 +86,7 @@ fn project_scope_is_unique_across_checkouts_and_reports_the_override() {
 fn script_canceled_and_limited_are_routes_not_engine_diagnostics() {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.canceled='next'\n[checks.next]\nrun='sh checks/pr.sh'\non.limited='@done'\n"
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.canceled='next'\n[script.next]\nrun='sh checks/pr.sh'\non.limited='@done'\n"
         ),
         "if test -f \"$RIMZ_WORKFLOW_DIR/called\"; then printf '{\"outcome\":\"limited\"}'; else touch \"$RIMZ_WORKFLOW_DIR/called\"; printf '{\"outcome\":\"canceled\"}'; fi",
     );

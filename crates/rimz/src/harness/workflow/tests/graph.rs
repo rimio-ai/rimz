@@ -1,9 +1,27 @@
 use super::*;
 use serde_json::{Value, json};
 
+/// A `gate` check and a `work` step, each in the kind table its body's runner names.
 fn spec(check: &str, step: &str) -> Definition {
+    let has = |body: &str, key: &str| {
+        body.lines()
+            .any(|line| line.starts_with(&format!("{key}=")))
+    };
+    let check_kind = [
+        ("agent", "judge"),
+        ("sleep", "sleep"),
+        ("cases", "condition"),
+        ("shell", "test"),
+    ]
+    .into_iter()
+    .find(|(key, _)| has(check, key))
+    .map_or("script", |(_, kind)| kind);
+    let step_kind = [("agent", "agent"), ("message", "message")]
+        .into_iter()
+        .find(|(key, _)| has(step, key))
+        .map_or("command", |(_, kind)| kind);
     toml::from_str(&format!(
-        "[workflow]\nscope='worktree'\nstart='gate'\n[checks.gate]\n{check}\n[steps.work]\n{step}\n"
+        "[workflow]\nscope='worktree'\nstart='gate'\n[{check_kind}.gate]\n{check}\n[{step_kind}.work]\n{step}\n"
     ))
     .unwrap()
 }
@@ -19,12 +37,21 @@ fn edge(spec: &Definition, node: &str, outcome: &str) -> (Value, Option<&'static
 
 #[test]
 fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
-    for check in [
-        "run='true'\non.ok='@done'\ntimeout='1m'",
-        "shell='false'\non.pass='@done'\non.fail='@failed'\ntimeout='1m'",
-        "agent='claude'\nprompt-file='judge.md'\non.ok='@done'\ntimeout='1m'",
-        "cases=[{when=['pr=merged'],outcome='ok'}]\non.ok='@done'\ntimeout='1m'",
-        "sleep='1m'\nthen='@done'",
+    for (kind, check) in [
+        ("script", "run='true'\non.ok='@done'\ntimeout='1m'"),
+        (
+            "test",
+            "shell='false'\non.pass='@done'\non.fail='@failed'\ntimeout='1m'",
+        ),
+        (
+            "judge",
+            "agent='claude'\nprompt-file='judge.md'\non.ok='@done'\ntimeout='1m'",
+        ),
+        (
+            "condition",
+            "cases=[{when=['pr=merged'],outcome='ok'}]\non.ok='@done'\ntimeout='1m'",
+        ),
+        ("sleep", "sleep='1m'\nthen='@done'"),
     ] {
         for (on_break, target, source) in [
             ("", "@failed", "default"),
@@ -32,7 +59,7 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
             ("on-break={agent='claude'}", "@break", "on-break"),
         ] {
             let text = format!(
-                "[workflow]\nscope='worktree'\nstart='gate'\n{on_break}\n[checks.gate]\n{check}\n[steps.work]\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
+                "[workflow]\nscope='worktree'\nstart='gate'\n{on_break}\n[{kind}.gate]\n{check}\n[agent.work]\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
             );
             let spec = super::super::spec::parse(&text).unwrap();
             for (node, outcome) in [
@@ -101,25 +128,19 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
 }
 
 #[test]
-fn sleep_on_invalid_is_live_but_other_routes_still_warn() {
-    let spec = super::super::spec::parse("[workflow]\nscope='worktree'\nstart='nap'\n[checks.nap]\nsleep='1m'\nthen='@done'\non.invalid='@failed'\non.timeout='@done'\n").unwrap();
+fn sleep_on_invalid_is_live_and_other_routes_refuse() {
+    let spec = super::super::spec::parse("[workflow]\nscope='worktree'\nstart='nap'\n[sleep.nap]\nsleep='1m'\nthen='@done'\non.invalid='@failed'\n").unwrap();
     assert_eq!(
         spec.target("nap", "invalid")
             .as_ref()
             .map(|target| target.as_str()),
         Some("@failed")
     );
-    assert!(
-        !spec
-            .ignored()
-            .iter()
-            .any(|issue| issue.path == "checks.nap.on.invalid")
-    );
-    assert!(
-        spec.ignored()
-            .iter()
-            .any(|issue| issue.path == "checks.nap.on.timeout")
-    );
+    let timeout = "[workflow]\nscope='worktree'\nstart='nap'\n[sleep.nap]\nsleep='1m'\nthen='@done'\non.timeout='@done'\n";
+    match super::super::spec::parse(timeout) {
+        Err(super::super::SpecErr::Toml { path, .. }) => assert_eq!(path, "sleep.nap.on.timeout"),
+        other => panic!("a sleep's on.timeout refuses: {other:?}"),
+    }
 }
 
 #[test]
@@ -168,8 +189,9 @@ fn limited_off_capacity_edges_keep_the_give_up_routes() {
     let mut actual = Vec::new();
     for workflow_limit in [false, true] {
         for wait in ["forever", "5m"] {
-            let step =
-                format!("agent='claude'\nthen='gate'\nthrottle='off'\ncapacity-wait='{wait}'");
+            let step = format!(
+                "agent='claude'\nthen='gate'\nadmission.throttle='off'\nadmission.give-up='{wait}'"
+            );
             let mut spec = spec("run='true'\non.ready='work'", &step);
             let limit = Some(toml::from_str("max-parallel=1").unwrap());
             spec.edit(|spec| {
@@ -204,25 +226,25 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
             "never: capacity-wait is forever",
         ),
         (
-            "capacity-wait='forever'",
+            "admission.give-up='forever'",
             "never",
             Some("capacity-wait-forever"),
             "never: capacity-wait is forever",
         ),
         (
-            "capacity-wait='5m'",
+            "admission.give-up='5m'",
             "in-loop-runs",
             None,
             "only when a loop task starts the run",
         ),
         (
-            "throttle='off'",
+            "admission.throttle='off'",
             "never",
             Some("capacity-wait-forever"),
             "never: capacity-wait is forever",
         ),
         (
-            "throttle='off'\ncapacity-wait='5m'",
+            "admission.throttle='off'\nadmission.give-up='5m'",
             "in-loop-runs",
             None,
             "only when a loop task starts the run",
@@ -334,28 +356,28 @@ pub(super) const LAND: &str = r#"
 [workflow]
 scope='worktree'
 start='begin'
-[checks.begin]
+[test.begin]
 shell='true'
 on={pass='sweep',fail='@failed'}
-[checks.watch]
+[condition.watch]
 cases=[{when=['pr=merged'],outcome='merged'},{when=['ci=failed'],outcome='red'}]
 else='waiting'
 on={merged='notes',red='fix',waiting='@wait',unknown='@wait'}
 timeout='3d'
-[checks.notes]
+[script.notes]
 run='true'
 on={rule='triage',none='@done'}
-[checks.ruled]
+[script.ruled]
 run='true'
 on={rule='triage',none='@done'}
-[steps.sweep]
+[agent.sweep]
 agent='claude'
 then='watch'
-[steps.fix]
+[agent.fix]
 agent='claude'
 then='watch'
 max-visits=4
-[steps.triage]
+[agent.triage]
 agent='claude'
 then='ruled'
 max-visits=2
@@ -366,27 +388,27 @@ pub(super) const RALPH: &str = r#"
 scope='project'
 start='evidence'
 on.deadline='report'
-[checks.evidence]
+[script.evidence]
 run='true'
 on={plan='plan',build='build',review='judge',report='report',wait='@wait',broken='@failed'}
 timeout='1d'
-[checks.judge]
+[judge.judge]
 agent='claude'
 on={build='build',plan='plan',report='report',halt='@failed'}
-[checks.reported]
+[script.reported]
 run='true'
 on={complete='@done',halted='@failed',missing='report'}
-[steps.plan]
+[agent.plan]
 agent='claude'
 then='evidence'
 max-visits=20
 on.cap='report'
-[steps.build]
+[agent.build]
 agent='claude'
 then='evidence'
 max-visits=80
 on.cap='report'
-[steps.report]
+[agent.report]
 agent='claude'
 then='reported'
 max-visits=2
@@ -419,7 +441,7 @@ fn walks_match_land_ralph_and_fix_tests_without_hanging_forward_returns() {
             ],
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='tests'\n[checks.tests]\nrun='true'\non={pass='@done',fail='fix'}\n[steps.fix]\nagent='claude'\nthen='tests'\nmax-visits=3",
+            "[workflow]\nscope='worktree'\nstart='tests'\n[script.tests]\nrun='true'\non={pass='@done',fail='fix'}\n[agent.fix]\nagent='claude'\nthen='tests'\nmax-visits=3",
             vec![("tests", None), ("fix", Some("tests"))],
         ),
     ] {
@@ -444,19 +466,19 @@ fn walk_reaches_header_deadline_but_not_impossible_edges_and_sorts_unreachable()
 scope='worktree'
 start='start'
 on.deadline='rescue'
-[checks.start]
+[script.start]
 run='true'
 on={ready='work',timeout='sleeping'}
-[checks.rescue]
+[script.rescue]
 run='true'
 on.done='@done'
-[checks.sleeping]
+[script.sleeping]
 run='true'
-[checks.capped]
+[script.capped]
 run='true'
-[checks.orphan]
+[script.orphan]
 run='true'
-[steps.work]
+[agent.work]
 agent='claude'
 then='start'
 on.cap='capped'
@@ -478,9 +500,9 @@ on.cap='capped'
 fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='c'\n\
-         [checks.c]\nshell='true'\non.pass='a'\n\
-         [steps.a]\nshell='true'\nthen='c'\nmax-visits=1\non.cap='b'\n\
-         [steps.b]\nshell='true'\nthen='a'\n",
+         [test.c]\nshell='true'\non.pass='a'\n\
+         [command.a]\nshell='true'\nthen='c'\nmax-visits=1\non.cap='b'\n\
+         [command.b]\nshell='true'\nthen='a'\n",
     )
     .unwrap();
     let walk = spec.walk();
@@ -503,7 +525,7 @@ fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
         report
             .errors
             .iter()
-            .any(|error| error.path == "steps.b.then"
+            .any(|error| error.path == "command.b.then"
                 && error
                     .message
                     .ends_with("then must name a check, never a step or @done")),
@@ -515,8 +537,8 @@ fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
 fn a_deadline_only_step_does_not_hang_under_its_return_check() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='gate'\non.deadline='rescue'\n\
-         [checks.gate]\nshell='true'\non.pass='@done'\n\
-         [steps.rescue]\nshell='true'\nthen='gate'\n",
+         [test.gate]\nshell='true'\non.pass='@done'\n\
+         [command.rescue]\nshell='true'\nthen='gate'\n",
     )
     .unwrap();
     let walk = spec.walk();
@@ -584,7 +606,7 @@ fn walk_positions_distinguish_downward_routes_from_returns_and_cross_routes() {
 
 #[test]
 fn validation_rows_follow_the_walk_then_alphabetical_unreachable_nodes() {
-    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[checks.z]\nshell='true'\non={pass='work',fail='@done',invalid='@failed'}\n[checks.a]\nshell='true'\non={pass='@done',fail='@failed',invalid='@failed'}\n[steps.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={cap='@failed'}").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[test.z]\nshell='true'\non={pass='work',fail='@done',invalid='@failed'}\n[test.a]\nshell='true'\non={pass='@done',fail='@failed',invalid='@failed'}\n[command.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={cap='@failed'}").unwrap();
     let report = super::super::validate::validate_spec(
         std::path::Path::new("."),
         "example",
@@ -601,18 +623,4 @@ fn validation_rows_follow_the_walk_then_alphabetical_unreachable_nodes() {
             .collect::<Vec<_>>(),
         ["z", "work", "a"]
     );
-}
-
-#[test]
-fn a_step_sharing_a_check_name_routes_failed_by_its_own_table() {
-    let seal = |step: &str| -> Definition {
-        toml::from_str(&format!(
-            "[workflow]\nscope='worktree'\nstart='work'\n[checks.work]\nrun='true'\n\
-             on.failed='@done'\non.then='@failed'\n[steps.work]\nshell='false'\ntimeout='1h'\n\
-             then='@failed'\n{step}"
-        ))
-        .unwrap()
-    };
-    assert!(!seal("").routes_on_failed("work", "died"));
-    assert!(seal("on.failed='@failed'\n").routes_on_failed("work", "died"));
 }
