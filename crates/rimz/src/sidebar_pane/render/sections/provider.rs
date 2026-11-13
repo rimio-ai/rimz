@@ -717,8 +717,11 @@ fn block_logo(
             if !sources.any(|source| reserve.landed(source, rgb, cols)) {
                 return None;
             }
+            // The art's bottom rows that fit the box, as the text tier's crest
+            // pick keeps the bottom of a tall emblem.
+            let first = panel.art.len().saturating_sub(usize::from(logo_box.rows));
             LogoMark::Text(
-                (0..panel.art.len())
+                (first..panel.art.len())
                     .map(|row| art_row_spans(context.theme, panel, row))
                     .collect(),
             )

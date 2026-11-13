@@ -491,6 +491,70 @@ fn a_user_logo_outranks_the_shipped_one_and_waits_on_the_next_tier() {
 }
 
 #[test]
+fn a_reserved_box_keeps_tall_user_art_inside_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let good = dir.path().join("mine.svg");
+    std::fs::write(
+        &good,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="currentColor"/></svg>"#,
+    )
+    .unwrap();
+    let art = ["111", "222", "333", "444", "555", "666"];
+    let theme = theme_with(BTreeMap::from([(
+        "claude".to_owned(),
+        ThemeProviderStyle {
+            logo: Some(good.display().to_string()),
+            ascii_art: Some(art.join("\n")),
+            ..ThemeProviderStyle::default()
+        },
+    )]));
+    let mut panel = branded("claude", Some((30, 60)));
+    panel.art = art.map(ToOwned::to_owned).to_vec();
+    let panels = vec![panel];
+    let dashboard = Dashboard::tabbed(&theme, &panels).folded_footer();
+    let (drawn, _) = logo_frame(&dashboard);
+    let logos = logos_in(&drawn);
+    assert_eq!(logos.len(), 1, "{}", frame_text(&drawn));
+    let logo_box = logos[0].first..logos[0].first + logos[0].rows;
+
+    let reserved = dashboard
+        .logo_reserve(crate::sidebar_pane::pixel::logo::LogoReserve::new(2.0))
+        .block()
+        .lines;
+
+    assert_eq!(
+        reserved.len(),
+        drawn.len(),
+        "the reserve keeps the logo's rows"
+    );
+    let art_column = |line: &Line<'_>| cells(line).into_iter().take(9).collect::<Vec<_>>();
+    for (index, (reserved, drawn)) in reserved.iter().zip(&drawn).enumerate() {
+        if !logo_box.contains(&index) {
+            assert_eq!(
+                art_column(reserved),
+                art_column(drawn),
+                "line {index} outside the box keeps its first nine cells:\n{}",
+                frame_text(std::slice::from_ref(reserved))
+            );
+        }
+    }
+    let kept = reserved[logo_box]
+        .iter()
+        .map(|line| {
+            art_column(line)
+                .into_iter()
+                .map(|cell| cell.0)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    assert!(
+        kept.contains("666") && !kept.contains("111"),
+        "the bottom rows of the art are kept: {kept}"
+    );
+}
+
+#[test]
 fn pet_mode_places_the_logo_in_the_active_block_beside_the_pet() {
     let theme = truecolor_sidebar_theme();
     let panels = vec![branded("claude", Some((30, 60))), branded("codex", None)];
