@@ -8,8 +8,6 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
-use rimz::ids::AgentSessionId;
-use rimz::store::message::{DeliveryGate, MessageRecord};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use rimz::{MuxName, SidebarInstanceId, StatePaths};
 use serde_json::json;
@@ -1718,7 +1716,11 @@ fn gc_sweeps_worktree_after_agent_dies() {
     );
 }
 
+#[cfg(target_os = "linux")]
 fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageId {
+    use rimz::ids::AgentSessionId;
+    use rimz::store::message::{DeliveryGate, MessageRecord};
+
     let session_id = AgentSessionId::from(format!("sess-{channel}-message"));
     let mut observation =
         AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered);

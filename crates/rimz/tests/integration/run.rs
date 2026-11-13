@@ -7328,6 +7328,7 @@ fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, sessi
         .expect("start wait agent turn");
 }
 
+#[cfg(target_os = "linux")]
 fn end_wait_agent(env: &Env, store: &rimz::Store, session_id: &str) {
     let workspace = env.resolve_workspace(&env.project_root);
     store
