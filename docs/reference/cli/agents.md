@@ -67,13 +67,15 @@ How many matches a command accepts:
 
 | Commands | Rule |
 | --- | --- |
-| `show`, `logs`, `history`, `focus`, `fork`, `restart`, `compact`, `tune` | Exactly one agent. An address that matches several fails and lists the candidates. |
-| `stop` | One agent; `--all` acts on every match. |
+| `show`, `logs`, `history`, `focus`, `fork`, `compact`, `tune` | Exactly one agent. An address that matches several fails and lists the candidates. |
+| `stop`, `restart` | One agent; `--all` acts on every match. |
 | `wait` | One or more references, each resolved independently. |
 | `refresh` | One agent with a reference; every live root agent in the channel without one; the whole workspace with `--all`. |
 | `message` | One agent unless you opt into fan-out with `--all` or address `@all`. |
 
-An ambiguity lists up to eight runnable commands, with status, activity age, and description. A row whose address names a lane also carries that lane in any `--channel`/`--worktree`/`-w` flag of the original command, so the row never contradicts itself. Agents waiting on a person come first, then running agents, then the rest, newest activity first within each group. The header gives the full match count and distinguishes live from recorded agents; a pointer to `rimz agents list --all` appears when more matches remain. `stop` and `message` also offer `--all`. `show`, `fork`, `history`, and `explain` consult ended agents only after a live miss; a live ambiguity is not widened to historical sessions.
+These rules cover references. `--filter` and `-` select agents by a query or by addresses on stdin instead, with their own consent rule: [act on a selection](#act-on-a-selection).
+
+An ambiguity lists up to eight runnable commands, with status, activity age, and description. A row whose address names a lane also carries that lane in any `--channel`/`--worktree`/`-w` flag of the original command, so the row never contradicts itself. Agents waiting on a person come first, then running agents, then the rest, newest activity first within each group. The header gives the full match count and distinguishes live from recorded agents; a pointer to `rimz agents list --all` appears when more matches remain. `stop`, `restart`, and `message` also offer `--all`. `show`, `fork`, `history`, and `explain` consult ended agents only after a live miss; a live ambiguity is not widened to historical sessions.
 
 A fan-out message is prefixed with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message. A human-sent `@all` reaches every match. An agent-sent `@all` skips the sender and fails when no other agent remains; an explicit `--all @claude` from an agent keeps every match. The [message reference](./message.md) owns delivery.
 
@@ -622,13 +624,13 @@ rimz agents tune @coder keep-warm off    # release this session's idle cache hol
 | `top` | live agents in the current channel; `-w` or `--all` | resource-ranked table |
 | `focus` | one agent | jumps to its pane |
 | `fork` | one root agent, live or stopped | opens a copy of its conversation as a new agent |
-| `wait` | one or more runs or agents | blocks until all finish; `--any` returns on the first |
-| `refresh` | one agent, the channel, or `--all` | re-reads card context now |
-| `stop` | one run or agent; `--all` for every match | cancels the run or closes the pane |
-| `restart` | one live agent | replaces its pane and resumes its session |
+| `wait` | one or more runs or agents; a [selection](#act-on-a-selection) | blocks until all finish; `--any` returns on the first |
+| `refresh` | one agent, the channel, or `--all`; a [selection](#act-on-a-selection) | re-reads card context now |
+| `stop` | one run or agent; `--all` for every match; a [selection](#act-on-a-selection) | cancels the run or closes the pane |
+| `restart` | one live agent; `--all` for every match; a [selection](#act-on-a-selection) | replaces its pane and resumes its session |
 | `compact` | one agent with a bound pane | sends its native compaction command, with the brief for its seat, at a turn boundary |
 | `tune` | one agent | reports, overrides, or resets keep-warm, idle-compaction, smart-compaction, and budget |
-| `mark` | live agent cards, `@all`, or `#channel`; optionally `--worktree NAME` | marks read, unread, or alert |
+| `mark` | live agent cards, `@all`, or `#channel`; optionally `--worktree NAME`; a [selection](#act-on-a-selection) | marks read, unread, or alert |
 
 `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` change no agent. `fork` starts a new agent and leaves its source untouched; `stop`, `restart`, `compact`, and `tune` act on the agent. [Resume a lane by place](#resume-a-lane-by-place) covers `resume`.
 
@@ -670,7 +672,9 @@ rimz agents mark '#review' alert "Check the result"
 
 `read` writes a read receipt without focusing and clears any alert that receipt reaches. It is refused from an agent caller with exit `1`: read means a person looked; agents can use `unread` or `alert` instead. `unread` opens a new unread episode without deleting the receipt or restoring an alert already read. Neither mark answers a raised question. Reading through `agents show` or `logs` does not write a receipt.
 
-`alert TEXT` raises `!` with that text until the card is read, except that native Waiting wins. An alert can cover a running card and opens a new notification episode when displayed, even on an already-unread card. TEXT is required (exit `2`) and accepts hyphen values; use `--` before text matching a flag, including `--help`. New alerts replace earlier ones. Closed agents are refused with exit `1`. Every successful mark appends a `card.marked` audit event for each target, attributed to the calling agent or unattributed for a user shell.
+`alert TEXT` raises `!` with that text until the card is read, except that native Waiting wins. An alert can cover a running card and opens a new notification episode when displayed, even on an already-unread card. TEXT is required (exit `2`) and accepts hyphen values; use `--` before text matching a flag, including `--help`. New alerts replace earlier ones. Every successful mark appends a `card.marked` audit event for each target, attributed to the calling agent or unattributed for a user shell.
+
+`rimz agents mark --filter QUERY <MARK> [TEXT]` and `rimz agents mark - <MARK> [TEXT]` mark a [selection](#act-on-a-selection); under `--filter` the command takes no target. Every form marks each target in turn and prints `marked <mark> <address>` for it. A target that is closed or unregistered prints `error <address>: marks require a live registered agent card` and is skipped; any failure exits `1`.
 
 #### `list`
 
@@ -787,6 +791,30 @@ error: filter term `stauts=idle`: unknown field `stauts`; did you mean `status`?
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. Inspect or change the cap with [`tune … budget`](#tune). |
 | `sub_agents` | `show --json` only (a launched child is its own `list` entry): nested children, each with `id`, `name`, `status`, `phase`, `model`, optional `tokens`, and `elapsed_secs`. Each child's `status` is its displayed status, including `paused` for a live launched child parked on a provider limit or overload, or `failed` once that park can no longer resume (see [parent-card precedence](../../guide/sidebar.md#the-agent-card)). Optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
+
+##### Act on a selection
+
+`stop`, `restart`, `mark`, `refresh`, `wait`, and [`message`](./message.md#targets-and-fan-out) select their targets the way `list` does. `--filter QUERY` takes the same query, defaults, and scope as `list --filter`, and a lone `-` in place of the reference reads one address per line from stdin, skipping blank lines and repeats of an earlier line, so the lines `list --filter QUERY -q` prints select the same agents. A command takes its targets one way: references, `--filter`, or `-`; mixing them refuses with exit 2. `--filter help` prints the field table and exits 0, outside a room too. A filter that matches nothing prints the same `matches the filter` line as `list` on stderr, an empty stdin prints `no agent address on stdin`, and both exit 0 with nothing done.
+
+```sh
+rimz agents list --filter 'status=idle ctx>=80%' -q | rimz agents stop - --all
+rimz agents mark --filter 'parent=@coder' unread
+rimz agents wait --filter 'parent=@coder' --all
+```
+
+More than one selected agent needs `--all`. Without it the command refuses with exit 2, lists the selected addresses, and prints the command again with `--all` added:
+
+```text
+error: 3 agents selected; stop acts on more than one only with --all:
+  @seat-kin
+  @seat-parent
+  @seat-peer
+  or stop every match: rimz agents stop --filter 'parent=*,none' --all
+```
+
+`refresh` never asks: a selection refreshes every agent in it, and `refresh --all --filter QUERY` reads the query over the whole room instead of the current lane.
+
+Each command reads every selected agent again just before it acts on it. An address that now names another agent than the one selected, or an agent that has ended, prints `error <address>: <reason>` and is skipped; the rest still run. The command prints one receipt line per agent and exits `1` when any failed. A `restart` receipt starts with the selected address, since a fresh restart names its new handle alone: `@seat-parent: restarted fresh as @quick-river — no recorded conversation`. `wait` waits on the selected addresses as on references typed in that order.
 
 #### `show` / `inspect`
 
@@ -1012,7 +1040,7 @@ Once the new tab opens, molt requests that the old session stop after **5m of re
 
 Immediately after a prompted peer launch, `rimz agents wait @peer` resolves the pending launch run even before provider registration. Once that run has ended, a later `rimz agents wait @peer` reads that run (its stored answer, status, and cost) while the peer is at rest and has closed no turn since; after a turn the run does not describe, it waits on the peer's turn as for any agent. After a later launcher message, a wait started while that prompt is queued for the peer or inside its delivery hold waits on the turn it opens; a wait started once that hold has passed, before a prompt-correlated turn-start hook enrolls the new run, prints the previous run's answer. A person's or an agent's prompt queued for the target before it rests keeps that rest from counting as a finish, and its run parked, so the wait returns at the end of the turn the prompt opens, with both turns' answers. A prompt sent after the target's run already finished does not hold that finished run: a wait started right after such a send, before the message lands, can print the target's previous answer. A turn-start hook without prompt text acknowledges delivery but opens no reportable turn.
 
-`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A non-pausing provider error, or a provider pause the card shows as `failed` (once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset), ends the wait with exit `1`; a pause that can still recover keeps waiting. An agent with an armed one-shot wait keeps the wait blocked, even when its card displays working, as does a freshly registered agent that never opened a turn, and an agent resting with a person's or an agent's prompt queued for it. Hibernation does not change turn completion. A reference is a run id, a pet name, or any address.
+`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A non-pausing provider error, or a provider pause the card shows as `failed` (once auto-continue has run out of retries on it, or once a rate or spend limit's account has no exhausted window left after a reset), ends the wait with exit `1`; a pause that can still recover keeps waiting. An agent with an armed one-shot wait keeps the wait blocked, even when its card displays working, as does a freshly registered agent that never opened a turn, and an agent resting with a person's or an agent's prompt queued for it. Hibernation does not change turn completion. A reference is a run id, a pet name, or any address. `--filter` or `-` waits on a [selection](#act-on-a-selection), as on its addresses typed in order; more than one needs `--all`, and `--any` still returns on the first. Since the selection is a join, a selected address that resolves to nothing refuses the whole wait before any waiting, as a typed reference does.
 
 With one reference, `wait` prints the final assistant message: a run's answer (every turn of a [parked run](./subagents.md#launch-one-child) in order), or the message that closed an interactive agent's turn. A printed run answer is marked read, so no `AGENT_REPORT` or fleet report repeats it, when `wait` runs from a user shell or from the run's launcher during the launcher's open turn; from any other agent it prints and stays owed to the report. When a completed turn left no message, stderr says so and stdout stays empty. `--json` prints the same result map described below, with one entry keyed by the reference as typed. For the full run record, use `rimz agents show <ref> --json` and read `run`. `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays the transcript from the top before tailing.
 
@@ -1034,7 +1062,7 @@ The exit code is `0` when every target completes; otherwise it is the status cod
 
 #### `refresh`
 
-`rimz agents refresh [REF]` re-reads card context now instead of waiting for the next change. It re-reads the transcript tail, re-checks a Codex turn that looks dead against its live pane, starts the kind's rich-context helper when one exists, and wakes the sidebars. With a reference it refreshes exactly one agent; without one, every live root agent in the current channel; with `--all` (no reference), every live root agent in the workspace.
+`rimz agents refresh [REF]` re-reads card context now instead of waiting for the next change. It re-reads the transcript tail, re-checks a Codex turn that looks dead against its live pane, starts the kind's rich-context helper when one exists, and wakes the sidebars. With a reference it refreshes exactly one agent; without one, every live root agent in the current channel; with `--all` (no reference), every live root agent in the workspace. `--filter` or `-` refreshes a [selection](#act-on-a-selection) and never asks for `--all`; `--all` with `--filter` reads the query over the room. `--all` refuses a reference other than `-`, beside which it changes nothing. Each refreshed agent prints its own line, and a failure exits `1`.
 
 #### `stop`
 
@@ -1046,7 +1074,7 @@ A pane staying open, or a process surviving after its pane closes, fails the sto
 
 An interactive peer still takes the pane-close path when it has a launcher-opened run, whether that run is open or already terminal. An open turn reports failure to its launcher when session-end or the backstop observes the stop; an idle peer with no open turn reports nothing.
 
-Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match, waits once for the whole set, and prints `stopped <address>` for each stopped agent and `error <address>: <failures>` for each one with a failure; an agent that stopped while a child or its retirement failed gets both lines. These addresses follow `list`'s reader-relative rule, without a resume clause. It exits `1` if any agent had a failure.
+Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match, or on every agent a [selection](#act-on-a-selection) names, one at a time, waiting for each agent's processes before the next; a child an earlier stop in the set already stopped is not stopped again. It prints `stopped <address>` for each stopped agent and `error <address>: <failures>` for each one with a failure; an agent that stopped while a child or its retirement failed gets both lines. These addresses follow `list`'s reader-relative rule, without a resume clause. It exits `1` if any agent had a failure.
 
 `rimz agents stop <REF> --when-idle [DURATION|off]` asks for the same stop later, once the agent is finished rather than now. It records the request, prints one line, and returns at once with exit `0`; the room stops the agent after it has rested for the duration with nothing owed to it. An agent can pass `@me` to end its own session when its work is done.
 
@@ -1056,7 +1084,7 @@ Stopping a parent first stops its live children launched with `rimz subagents`, 
 | `--when-idle 10m`, `--when-idle=10m` | Stop after the given rest: a whole number with `s`, `m`, `h`, or `d`. `0s` stops at the first check that finds nothing owed. |
 | `--when-idle off` | Withdraw the pending request; with none pending it says so and still exits `0`. |
 
-`rimz agents stop --when-idle @me` and `--when-idle=@me` also request the default `3m`. An `@` reference in the flag plus a positional reference is a usage error (exit `2`), as is omitting the reference entirely; use `rimz agents stop <ref> --when-idle <duration>`. `--when-idle` conflicts with `--all` and needs one live agent; an ended one refuses with `rimz agents resume` as the fix. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
+`rimz agents stop --when-idle @me` and `--when-idle=@me` also request the default `3m`. An `@` reference in the flag plus a positional reference is a usage error (exit `2`), as is omitting the reference entirely; use `rimz agents stop <ref> --when-idle <duration>`. `--when-idle` conflicts with `--all` and `--filter`, refuses `-` with exit 2, and needs one live agent; an ended one refuses with `rimz agents resume` as the fix. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
 
 The agent stops only when all of this holds at one check:
 
@@ -1076,7 +1104,7 @@ A soft-stopped agent comes back like any stopped one: `rimz agents resume` reope
 
 #### `restart`
 
-`rimz agents restart <REF> [--account <NAME>] [--no-continue]` replaces one live agent's pane and resumes its provider session. From a user shell, it focuses the pane, opens the replacement in the same layout position, and closes the old pane; focus follows the replacement on Zellij and tmux. An agent caller opens the replacement beside the old pane without jumping to it, under the [focus rule](#channel-worktree-and-placement).
+`rimz agents restart <REF> [--account <NAME>] [--no-continue]` replaces one live agent's pane and resumes its provider session. A reference that matches several agents refuses and offers `--all`, which restarts every match; `--filter` or `-` restarts a [selection](#act-on-a-selection), one agent at a time, each with the same flags. From a user shell, it focuses the pane, opens the replacement in the same layout position, and closes the old pane; focus follows the replacement on Zellij and tmux. An agent caller opens the replacement beside the old pane without jumping to it, under the [focus rule](#channel-worktree-and-placement).
 
 An agent stopped mid-turn gets one continue once its session resumes. Restart reads the old card once, before the replacement opens: running, paused, or waiting on its own prompt counts as stopped mid-turn. The replacement then queues `resume.auto_continue_text` as a system message for the agent's next turn boundary, unless a team stage re-wake reaches it first and stands in for the continue. An agent at rest or restarted fresh gets none. `--no-continue` reopens the agent at rest, and blank text counts as `--no-continue` throughout: no continue is queued, no spend check runs, and a child's open run takes the `--no-continue` fate below. The receipt ends with `; continue queued` when a continue was asked for. A restart that would send a continue refuses, before any pane is woken, split, or closed, when the account reads as spent for the agent's model; the refusal names the account, its reset when known, and both ways out, `--account <other>` and `--no-continue`. A missing reading or usable credit lets the restart proceed.
 
