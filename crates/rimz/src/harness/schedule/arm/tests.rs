@@ -116,10 +116,8 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
             trigger,
             prompt: DeliveryPrompt::None,
             provenance: DeliveryProvenance::SelfWait { reader: None },
-            check: None,
             deadline: None,
             max_strikes: None,
-            surplus: None,
         };
         match build_entry(&workspace, spec, now) {
             Ok((_, task)) => {
@@ -136,7 +134,7 @@ fn self_wait_provenance_admits_only_one_shot_triggers() {
                 assert_eq!(
                     reason,
                     "self waits require a delay, a one-shot time, a once condition without a \
-                     hold, or a watched command, without a prompt or guard",
+                     hold, or a watched command, without a prompt",
                     "{case}"
                 );
             }

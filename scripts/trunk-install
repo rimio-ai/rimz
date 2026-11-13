@@ -16,14 +16,13 @@
 #      touches build inputs, runs `cargo xtask install-dev`, `cargo xtask
 #      install-system`, and a best-effort `rimz reload`.
 #
-# A rebase conflict, a rejected push, or a failed install exits nonzero so the
-# RimZ loop's `on = "fail"` agent can act. A failed install is not retried for
-# the same commit (the next trunk move retries it) unless `--force-install` is
+# A rebase conflict, a rejected push, or a failed install exits nonzero, so the
+# fire ends failed and counts a strike. A failed install is not retried for the
+# same commit (the next trunk move retries it) unless `--force-install` is
 # given. Scheduled as the machine loop task `trunk-install`:
 #
-#   rimz loop add trunk-install --root <repo> --every 1m \
-#     --check './scripts/trunk-install' --check-timeout 30m \
-#     --on fail --agent codex --mode yolo --timeout 1h --prompt '...'
+#   rimz loop add trunk-install --root <repo> --every 1m --timeout 30m \
+#     -- ./scripts/trunk-install
 from __future__ import annotations
 
 import argparse

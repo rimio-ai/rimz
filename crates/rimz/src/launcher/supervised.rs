@@ -35,6 +35,7 @@ pub(super) fn prepare_run_layout(
         .clone_from(&request.launch.cohort.description);
     supervised.workflow.clone_from(&leader.workflow);
     supervised.loop_task.clone_from(&leader.loop_task);
+    supervised.loop_fire.clone_from(&leader.loop_fire);
     supervised.loop_booked_by.clone_from(&leader.loop_booked_by);
     supervised
         .reminder_section
@@ -657,6 +658,7 @@ fn prepare(
             warn,
             grace,
             loop_task: request.loop_task.clone(),
+            loop_fire: request.loop_fire.clone(),
             loop_booked_by: request.loop_booked_by.clone(),
             workflow: request.workflow.clone(),
             reminder_section: request.reminder_section.clone(),
@@ -704,6 +706,7 @@ fn prepare(
             report_to: request.report_to,
             managed_launches,
             loop_task: None,
+            loop_booked_by: Vec::new(),
             cleanup_worktree: request.retries == 0,
             force_new_tab: request.force_new_tab,
             agent_shell_persistence: request.agent_shell_persistence,

@@ -28,9 +28,7 @@ pub mod attention;
 pub mod backlog;
 mod backlog_store;
 pub mod catalog;
-pub mod compile;
 mod config_edit;
-mod eject;
 pub mod fanout;
 #[doc(hidden)]
 pub mod fire;
@@ -95,66 +93,29 @@ pub fn watch_lost(entry: &TaskEntry, watcher_live: bool, now: Timestamp) -> bool
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskAction {
-    Spawn(String),
-    Workflow(String),
+    /// The argv a fire runs in its checkout.
+    Command(Vec<String>),
     Deliver(TaskTarget),
-    CheckOnly,
 }
 
 /// Semantic action shape encoded by one loop task entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskActionKind {
-    Spawn,
-    Workflow,
+    /// Older RimZ records name the agent, workflow, and check-only shapes a fire ran.
+    #[serde(alias = "spawn", alias = "workflow", alias = "check_only")]
+    Command,
     Deliver,
-    CheckOnly,
 }
 
 impl TaskActionKind {
-    pub const fn has_effect(self) -> bool {
-        matches!(self, Self::Spawn | Self::Deliver | Self::Workflow)
-    }
-
-    pub const fn is_spawn(self) -> bool {
-        matches!(self, Self::Spawn)
-    }
-
-    pub const fn is_check_only(self) -> bool {
-        matches!(self, Self::CheckOnly)
-    }
-
-    /// What a fire of this kind does to `subject`, with the row's guard and account, and
-    /// ` (you)` when the reader is the delivery's target.
+    /// What a fire of this kind does to `subject`, with the row's account, and ` (you)` when
+    /// the reader is the delivery's target.
     pub fn text(self, subject: &str, entry: Option<&TaskEntry>, you: bool) -> String {
         let mut action = match self {
             Self::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
-            Self::Spawn => format!("start {subject}"),
-            Self::Workflow => format!("start workflow {subject}"),
-            Self::CheckOnly => "run check".into(),
+            Self::Command => format!("run {subject}"),
         };
-        if let Some(entry) = entry {
-            let guard = entry.guard();
-            let stages = guard
-                .shell
-                .map(|_| "check".to_owned())
-                .into_iter()
-                .chain(
-                    guard
-                        .judges
-                        .iter()
-                        .map(|judge| format!("judge `{}`", judge.agent)),
-                )
-                .collect::<Vec<_>>();
-            if !stages.is_empty() && self.has_effect() {
-                let guard = stages.join(", then ");
-                action = if self.is_spawn() {
-                    format!("{guard}, then start {subject}")
-                } else {
-                    format!("{action} · {guard}")
-                };
-            }
-        }
         if you {
             action.push_str(" (you)");
         }
@@ -165,37 +126,22 @@ impl TaskActionKind {
     }
 }
 
+/// The re-add advice every refused row ends with.
+const READD: &str = "delete the task and re-add it with `rimz loop add`";
+
 /// Invalid combinations of loop task action fields.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TaskActionErr {
+    #[error("loop task `{name}` is not a row this RimZ takes ({detail}); {READD}")]
+    Refused { name: String, detail: String },
     #[error("loop task `{name}` sets `{field}`; {hint}")]
     OverlapField {
         name: String,
         field: &'static str,
         hint: &'static str,
     },
-    #[error(
-        "loop task `{name}` sets `verify` without `agent`; verification needs a supervised agent run"
-    )]
-    VerifyWithoutAgent { name: String },
-    #[error(
-        "loop task `{name}` sets `account` without `agent`; an account pin needs a supervised agent run"
-    )]
-    AccountWithoutAgent { name: String },
-    #[error("loop task `{name}` sets `max-attempts` without `verify`")]
-    AttemptsWithoutVerify { name: String },
-    #[error("loop task `{name}` sets `max-attempts` to 0; use at least 1")]
-    ZeroAttempts { name: String },
-    #[error("loop task `{name}` sets both `agent` and `wait`; keep exactly one")]
+    #[error("loop task `{name}` sets both `command` and `wait`; keep exactly one")]
     ConflictingActions { name: String },
-    #[error("loop task `{name}` sets `workflow` with `agent` or `wait`; keep exactly one")]
-    ConflictingWorkflow { name: String },
-    #[error("loop task `{name}` sets `{field}` with `workflow`; {hint}")]
-    WorkflowField {
-        name: String,
-        field: &'static str,
-        hint: &'static str,
-    },
     #[error("loop task `{name}` sets `fresh-worktree` with `{field}`; {hint}")]
     FreshWorktreeField {
         name: String,
@@ -206,20 +152,30 @@ pub enum TaskActionErr {
         "loop task `{name}` sets `fresh-worktree` to `{prefix}`, which is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
     )]
     InvalidFreshWorktree { name: String, prefix: String },
-    #[error("loop task `{name}` needs `agent`, `wait`, or `check`")]
+    #[error("loop task `{name}` has no `command`; {READD}")]
     MissingAction { name: String },
     #[error(
-        "loop task `{name}` needs `on` for its judge: `fail` acts on a fail verdict, `success` acts on a pass verdict, `any` acts whatever the verdict"
+        "loop task `{name}` has a `command` without `timeout`; set `timeout = \"2h\"`, or {READD}"
     )]
-    JudgeWithoutOn { name: String },
+    MissingTimeout { name: String },
     #[error(
-        "loop task `{name}` needs `agent` or `wait` for its judge; a check-only task runs one shell command"
+        "loop task `{name}` sets `each-worktree` on a trigger that fires once, which would remove the task after its first checkout; set `repeat = true` beside `when`, or fire on `every` or `cron`"
     )]
-    JudgeWithoutAction { name: String },
+    OneShotFanOut { name: String },
 }
 
 impl TaskAction {
     fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
+        let refused = |detail: &str| TaskActionErr::Refused {
+            name: name.to_owned(),
+            detail: detail.to_owned(),
+        };
+        if let Some(refused_row) = &entry.refused {
+            return Err(refused(&refused_row.detail));
+        }
+        if entry.on.is_some() && entry.watch.is_none() {
+            return Err(refused("`on` belongs to a watch"));
+        }
         if entry.overlap_limit.is_some() {
             let hint = if entry.overlap != Some(crate::config::OverlapPolicy::Queue) {
                 Some("overlap-limit requires overlap = 'queue'")
@@ -269,104 +225,26 @@ impl TaskAction {
             }
             Self::refuse_fresh_worktree_companions(name, entry)?;
         }
-        let guard = entry.guard();
-        if entry.workflow.is_some() {
-            if entry.agent.is_some() || entry.wait.is_some() {
-                return Err(TaskActionErr::ConflictingWorkflow {
-                    name: name.to_owned(),
-                });
-            }
-            for (set, field, hint) in [
-                (
-                    entry.throttle.is_some(),
-                    "throttle",
-                    "capacity policy belongs to the workflow's agent nodes (`agent.<name>.admission.throttle`)",
-                ),
-                (
-                    entry.capacity_wait.is_some(),
-                    "capacity-wait",
-                    "capacity policy belongs to the workflow's agent nodes (`agent.<name>.admission.give-up`)",
-                ),
-                (
-                    entry.stay,
-                    "stay",
-                    "a workflow run is not a resident agent; its agent steps launch and stop agents",
-                ),
-                (
-                    entry.takeover,
-                    "takeover",
-                    "takeover belongs to the workflow's agent nodes (`[agent.<name>.admission] occupancy = \"takeover\"`)",
-                ),
-                (
-                    !entry.subscribe.is_empty(),
-                    "subscribe",
-                    "signals wake the run's checks; a check names what it waits for",
-                ),
-                (
-                    entry.check.is_some(),
-                    "check",
-                    "checks are the workflow's `[test.<name>]`, `[script.<name>]`, `[judge.<name>]` and `[condition.<name>]` nodes",
-                ),
-                (
-                    !entry.judge.is_empty(),
-                    "judge",
-                    "checks are the workflow's `[test.<name>]`, `[script.<name>]`, `[judge.<name>]` and `[condition.<name>]` nodes",
-                ),
-            ] {
-                if set {
-                    return Err(TaskActionErr::WorkflowField {
-                        name: name.to_owned(),
-                        field,
-                        hint,
-                    });
-                }
-            }
-        }
-        if !guard.judges.is_empty() {
-            if entry.on.is_none() {
-                return Err(TaskActionErr::JudgeWithoutOn {
-                    name: name.to_owned(),
-                });
-            }
-            if entry.agent.is_none() && entry.wait.is_none() {
-                return Err(TaskActionErr::JudgeWithoutAction {
-                    name: name.to_owned(),
-                });
-            }
-        }
-        if entry.verify.is_some() && entry.agent.is_none() {
-            return Err(TaskActionErr::VerifyWithoutAgent {
+        if entry.each_worktree && !repeats(entry) {
+            return Err(TaskActionErr::OneShotFanOut {
                 name: name.to_owned(),
             });
         }
-        if entry.account.is_some() && entry.agent.is_none() {
-            return Err(TaskActionErr::AccountWithoutAgent {
-                name: name.to_owned(),
-            });
-        }
-        if entry.max_attempts.is_some() && entry.verify.is_none() {
-            return Err(TaskActionErr::AttemptsWithoutVerify {
-                name: name.to_owned(),
-            });
-        }
-        if entry.max_attempts == Some(0) {
-            return Err(TaskActionErr::ZeroAttempts {
-                name: name.to_owned(),
-            });
-        }
-        if let Some(workflow) = &entry.workflow {
-            return Ok(Self::Workflow(workflow.clone()));
-        }
-        match (entry.agent.as_deref(), entry.wait.as_ref()) {
-            (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent.to_owned())),
-            (None, Some(target)) => Ok(Self::Deliver(target.clone())),
-            (None, None) if guard.shell.is_some() => Ok(Self::CheckOnly),
-            (Some(_), Some(_)) => Err(TaskActionErr::ConflictingActions {
+        match (entry.command.is_empty(), entry.wait.as_ref()) {
+            (false, Some(_)) => Err(TaskActionErr::ConflictingActions {
                 name: name.to_owned(),
             }),
-            _ => Err(TaskActionErr::MissingAction {
+            (true, Some(target)) => Ok(Self::Deliver(target.clone())),
+            (true, None) => Err(TaskActionErr::MissingAction {
                 name: name.to_owned(),
             }),
+            (false, None) if entry.prompt.is_some() => {
+                Err(refused("`prompt` belongs to a delivery row"))
+            }
+            (false, None) if entry.timeout.is_none() => Err(TaskActionErr::MissingTimeout {
+                name: name.to_owned(),
+            }),
+            (false, None) => Ok(Self::Command(entry.command.clone())),
         }
     }
 
@@ -375,11 +253,6 @@ impl TaskAction {
         entry: &TaskEntry,
     ) -> Result<(), TaskActionErr> {
         for (set, field, hint) in [
-            (
-                entry.stay,
-                "stay",
-                "remove `fresh-worktree`; a resident's worktree is `worktree`",
-            ),
             (
                 entry.each_worktree,
                 "each-worktree",
@@ -391,19 +264,9 @@ impl TaskAction {
                 "remove `fresh-worktree`; a wait delivers to a live session and launches nothing",
             ),
             (
-                entry.workflow.is_some(),
-                "workflow",
-                "remove `fresh-worktree`; a workflow's steps place their own agents",
-            ),
-            (
-                entry.worktree.is_some(),
-                "worktree",
-                "keep one; `fresh-worktree` creates a new tree each fire, `worktree` reuses one",
-            ),
-            (
                 entry.dir.is_some(),
                 "dir",
-                "remove `dir`; a fresh-worktree task runs its guard and turn in the fire's tree",
+                "remove `dir`; a fresh-worktree task runs its command in the fire's tree",
             ),
         ] {
             if set {
@@ -417,27 +280,49 @@ impl TaskAction {
         Ok(())
     }
 
-    pub fn subject(&self) -> &str {
+    /// The command line as a shell would read it back, or the delivery's handle.
+    pub fn subject(&self) -> String {
         match self {
-            Self::Spawn(spec) | Self::Workflow(spec) => spec,
-            Self::Deliver(target) => &target.handle,
-            Self::CheckOnly => "check",
+            Self::Command(argv) => command_line(argv),
+            Self::Deliver(target) => target.handle.clone(),
         }
     }
 
     pub const fn kind(&self) -> TaskActionKind {
         match self {
-            Self::Spawn(_) => TaskActionKind::Spawn,
-            Self::Workflow(_) => TaskActionKind::Workflow,
+            Self::Command(_) => TaskActionKind::Command,
             Self::Deliver(_) => TaskActionKind::Deliver,
-            Self::CheckOnly => TaskActionKind::CheckOnly,
         }
     }
+}
+
+/// One POSIX shell word that reads back as `word` exactly: bare when it holds only characters
+/// no shell treats specially, else single-quoted.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c));
+    if plain {
+        return word.to_owned();
+    }
+    format!("'{}'", word.replace('\'', "'\\''"))
+}
+
+/// An argv as one shell line whose words read back unchanged.
+pub fn command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|word| shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Errors from parsing or validating a schedule entry.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ScheduleErr {
+    /// The stored row does not decode, so it has no trigger to read: the refusal is the error.
+    #[error(transparent)]
+    Refused(TaskActionErr),
     #[error(
         "schedule `{name}` needs a firing time: set `at = \"HH:MM\"` for a one-shot, `every = \"30m\"`, or `cron = \"...\"`"
     )]
@@ -454,8 +339,10 @@ pub enum ScheduleErr {
     MatchWithoutSignal { name: String },
     #[error(transparent)]
     Selector(#[from] crate::harness::signal::SelectorErr),
-    #[error("schedule `{name}` sets `once` without `signal` or `when`")]
-    OnceWithoutSignal { name: String },
+    #[error(
+        "schedule `{name}` sets `repeat` without `signal` or `when`; `every` and `cron` repeat already, and other triggers fire once"
+    )]
+    RepeatWithoutSignal { name: String },
     #[error("schedule `{name}` sets `for` without `when`")]
     ForWithoutWhen { name: String },
     #[error(
@@ -471,8 +358,6 @@ pub enum ScheduleErr {
         "schedule `{name}` reads a provider window without `provider`; set `provider = \"<agent kind>\"` or re-add the task with `rimz loop add`"
     )]
     WindowWithoutProvider { name: String },
-    #[error("schedule `{name}` sets both `watch` and `check`; the watched command is the check")]
-    WatchWithCheck { name: String },
     #[error("schedule `{name}` has an empty watched command, check, file, or pattern")]
     BadWatch { name: String },
     #[error(
@@ -524,7 +409,6 @@ pub enum ScheduleErr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskShape {
     action: Result<TaskAction, TaskActionErr>,
-    compiled: Result<compile::CompiledAction, TaskActionErr>,
     trigger: Result<ParsedTrigger, ScheduleErr>,
     ephemeral: bool,
     kind: TaskKind,
@@ -541,10 +425,8 @@ pub enum TaskKind {
 
 impl TaskShape {
     pub fn compile(name: &str, entry: &TaskEntry) -> Self {
-        let action = TaskAction::from_entry(name, entry);
         Self {
-            compiled: compile::compile(name, entry, action.as_ref()),
-            action,
+            action: TaskAction::from_entry(name, entry),
             trigger: parse_trigger(name, entry),
             ephemeral: ephemeral_lifetime(entry),
             kind: lifecycle_kind(entry),
@@ -553,10 +435,6 @@ impl TaskShape {
 
     pub fn action(&self) -> Result<&TaskAction, &TaskActionErr> {
         self.action.as_ref()
-    }
-
-    pub fn compiled(&self) -> Result<&compile::CompiledAction, &TaskActionErr> {
-        self.compiled.as_ref()
     }
 
     pub fn trigger(&self) -> &Result<ParsedTrigger, ScheduleErr> {
@@ -572,30 +450,24 @@ fn lifecycle_kind(entry: &TaskEntry) -> TaskKind {
     if entry.wait.is_some() || entry.team.is_some() || entry.loop_task.is_some() {
         return TaskKind::WakeUp;
     }
-    if (entry.signal.is_none()
-        && entry.when.is_none()
-        && entry.every.is_none()
-        && entry.cron.is_none()
-        && entry.watch.is_none())
-        || entry.fire_at.is_some()
-        || entry.once == Some(true)
-        || entry.watch.is_some()
-        || (entry.stay && !entry.each_worktree)
-    {
+    if !repeats(entry) || entry.fire_at.is_some() || entry.watch.is_some() {
         return TaskKind::OneOff;
     }
     TaskKind::Routine
 }
 
+/// Whether the row's trigger fires again after a fire: `every` and `cron` by nature, a
+/// `signal` or `when` row only with `repeat` or a team binding's `team`, since team arming
+/// writes standing bindings alone.
+pub(crate) fn repeats(entry: &TaskEntry) -> bool {
+    entry.every.is_some()
+        || entry.cron.is_some()
+        || ((entry.repeat || entry.team.is_some())
+            && (entry.signal.is_some() || entry.when.is_some()))
+}
+
 fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
-    (entry.signal.is_none()
-        && entry.when.is_none()
-        && entry.every.is_none()
-        && entry.cron.is_none())
-        || entry.deadline.is_some()
-        || entry.once == Some(true)
-        || entry.watch.is_some()
-        || entry.fire_at.is_some()
+    !repeats(entry) || entry.deadline.is_some() || entry.watch.is_some() || entry.fire_at.is_some()
 }
 
 const WEEK: [Weekday; 7] = [
@@ -1237,6 +1109,12 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
 
 /// Parse and validate the single trigger encoded by a task row.
 pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, ScheduleErr> {
+    if let Some(refused) = &entry.refused {
+        return Err(ScheduleErr::Refused(TaskActionErr::Refused {
+            name: name.to_owned(),
+            detail: refused.detail.clone(),
+        }));
+    }
     let has_schedule = entry.at.is_some()
         || entry.every.is_some()
         || entry.cron.is_some()
@@ -1265,14 +1143,8 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             name: name.to_owned(),
         });
     }
-    if entry.once.is_some() && !has_signal && !has_when {
-        return Err(ScheduleErr::OnceWithoutSignal {
-            name: name.to_owned(),
-        });
-    }
-    let guard = entry.guard();
-    if has_watch && (guard.shell.is_some() || !guard.judges.is_empty()) {
-        return Err(ScheduleErr::WatchWithCheck {
+    if entry.repeat && !has_signal && !has_when {
+        return Err(ScheduleErr::RepeatWithoutSignal {
             name: name.to_owned(),
         });
     }
@@ -1322,7 +1194,9 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
         Trigger::Schedule(parse_schedule(name, entry)?)
     };
     Ok(ParsedTrigger {
-        once: matches!(trigger, Trigger::Watch(_)) || entry.once == Some(true),
+        once: matches!(trigger, Trigger::Watch(_))
+            || (matches!(trigger, Trigger::Signal { .. } | Trigger::Condition { .. })
+                && !repeats(entry)),
         trigger,
     })
 }

@@ -1,11 +1,6 @@
 //! Add, remove, and rename configured loop tasks.
 
 use super::*;
-use rimz::harness::schedule::arm::{
-    self, ArmOutcome, DeliveryCheck, DeliveryName, DeliveryPrompt, DeliveryProvenance,
-    DeliverySpec, DeliverySurplus, DeliveryTrigger, SubscriptionLifetime,
-};
-use rimz::harness::signal::{SignalSelector, default_signal_match_key, parse_signal_selector};
 
 struct AddTiming {
     at: Option<String>,
@@ -13,57 +8,19 @@ struct AddTiming {
     deadline: Option<Timestamp>,
 }
 
-enum AddTaskAction {
-    Spawn {
-        resolved: ResolvedSingleAgentLaunch,
-        mode: Option<String>,
-    },
-    Stay {
-        kind: String,
-    },
-    Deliver {
-        target: TaskTarget,
-        selector: Option<SignalSelector>,
-        matches: BTreeMap<String, String>,
-    },
-    CheckOnly,
-    Workflow(String),
-}
-
-impl AddTaskAction {
-    fn provider_kind(&self) -> Option<&str> {
-        match self {
-            Self::Spawn { resolved, .. } => Some(resolved.kind()),
-            Self::Stay { kind } => Some(kind),
-            Self::Deliver { target, .. } => Some(target.kind.as_str()),
-            Self::CheckOnly | Self::Workflow(_) => None,
-        }
-    }
-}
-
 // ---- add / remove -----------------------------------------------------------
 
-pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
-    let action_kind = validate_add_args(&args)?;
+pub(super) fn add(args: AddArgs) -> Result<()> {
+    validate_add_args(&args)?;
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
     condition::validate(&args.when, &project_root)?;
-    let check = resolve_add_check(&args, &workspace)?;
-    let action = resolve_add_action(&args, &workspace, action_kind, globals.mux)?;
-    let action = match action {
-        AddTaskAction::Deliver {
-            target,
-            selector,
-            matches,
-        } => {
-            return add_delivery(&args, &workspace, target, selector, matches, check);
-        }
-        action => action,
-    };
-    let provider_kind = action.provider_kind().map(ToOwned::to_owned);
-    let (mut entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace, check)?;
+    let catalog = TaskCatalog::load(Some(&project_root))?;
+    let name = args.name.clone().unwrap_or_else(|| catalog.mint_name());
+    let mut entry = build_task_entry(&args, &name, &workspace)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-    let login = provider_kind
+    let provider = args.provider.clone();
+    let login = provider
         .as_deref()
         .map(|kind| task_login(&args.account.clone().into(), kind, &runtime))
         .transpose()?
@@ -74,7 +31,7 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
     let login_key = login.as_ref().map(rimz::agents::ProviderLogin::key);
     entry.provider = window_condition_provider(
         &args.when,
-        provider_kind.as_deref(),
+        provider.as_deref(),
         login_key.as_ref(),
         &entry.resolved_root(),
         &runtime,
@@ -85,9 +42,8 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
         .map(|span| {
             resolve_after_reset(
                 span,
-                provider_kind.as_deref(),
+                provider.as_deref(),
                 login_key.as_ref(),
-                args.surplus.is_some() || args.surplus_after.is_some(),
                 &entry.resolved_root(),
                 &runtime,
                 Timestamp::now(),
@@ -96,44 +52,37 @@ pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()?;
     if let Some(reset) = &after_reset {
         entry.fire_at = Some(reset.fire_at);
+        entry.provider = Some(reset.kind.clone());
+    }
+    if entry.provider.is_some() {
+        entry.account.clone_from(&args.account);
     }
     // Compile once before writing, so validation and feedback share one shape.
-    let shape = schedule::TaskShape::compile(&args.name, &entry);
+    let shape = schedule::TaskShape::compile(&name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
-    let task_action = shape.action().map_err(Clone::clone)?;
-    if !entry.stay {
-        preflight_entry(task_action, resolved_for_preflight.as_ref(), login.as_ref())?;
-    }
-    let catalog = TaskCatalog::load(Some(&project_root))?;
+    shape.action().map_err(Clone::clone)?;
     let project_pre_state = args
         .project
         .then(|| trust::status(&project_root))
         .transpose()?
         .map(|report| report.state);
     let mutation = if args.project {
-        catalog.replace_project(&args.name, &project_root, &entry)?
+        catalog.replace_project(&name, &project_root, &entry)?
     } else {
         entry.booked_by = booking_chain(&workspace);
-        catalog.replace_machine(&args.name, &entry)?
+        catalog.replace_machine(&name, &entry)?
     };
 
     let mut out = ui::out();
-    writeln!(out, "added loop task `{}`", args.name)?;
+    writeln!(out, "added loop task `{name}`")?;
     if mutation.cleared_overlays() {
         writeln!(out, "arming: reset")?;
     }
     if let Some(pre_state) = project_pre_state {
         finish_project_mutation(&mut out, &project_root, true, pre_state)?;
     }
-    write_add_feedback(
-        &mut out,
-        &entry,
-        parsed,
-        task_action,
-        provider_kind.as_deref(),
-        after_reset.as_ref(),
-    )?;
-    write_linked_add_note(&mut out, &entry, task_action, &workspace)?;
+    write_add_feedback(&mut out, &entry, parsed, after_reset.as_ref())?;
+    write_linked_add_note(&mut out, &entry, &workspace)?;
     writeln!(
         out,
         "live while a room for {} is open",
@@ -168,192 +117,23 @@ fn booking_chain(workspace: &rimz::ResolvedWorkspace) -> Vec<rimz::agents::Launc
     rimz::harness::ancestry::booking_chain(&rows.agents, booker)
 }
 
-fn add_delivery(
-    args: &AddArgs,
-    workspace: &rimz::ResolvedWorkspace,
-    target: TaskTarget,
-    selector: Option<SignalSelector>,
-    matches: BTreeMap<String, String>,
-    check: Option<DeliveryCheck>,
-) -> Result<()> {
-    let timing = resolve_add_timing(args)?;
-    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-    let login_key = task_login(
-        &rimz::store::writer::LaunchLogin::RoomDefault,
-        target.kind.as_str(),
-        &runtime,
-    )?
-    .map(|login| login.key());
-    let after_reset = args
-        .after_reset
-        .map(|span| {
-            resolve_after_reset(
-                span,
-                Some(target.kind.as_str()),
-                login_key.as_ref(),
-                args.surplus.is_some() || args.surplus_after.is_some(),
-                &workspace.worktree_root,
-                &runtime,
-                Timestamp::now(),
-            )
-        })
-        .transpose()?;
-    let trigger = if !args.when.is_empty() {
-        let parsed = schedule::parse_trigger(
-            &args.name,
-            &TaskEntry {
-                when: Some(args.when.clone()),
-                hold: args.hold.clone(),
-                once: args.once.then_some(true),
-                provider: window_condition_provider(
-                    &args.when,
-                    Some(target.kind.as_str()),
-                    login_key.as_ref(),
-                    &workspace.worktree_root,
-                    &runtime,
-                    Timestamp::now(),
-                )?,
-                ..TaskEntry::default()
-            },
-        )?;
-        let schedule::Trigger::Condition { expr, hold } = parsed.trigger else {
-            unreachable!("the entry contains only condition fields")
-        };
-        DeliveryTrigger::Condition {
-            expr,
-            hold,
-            lifetime: if args.once {
-                SubscriptionLifetime::Once
-            } else {
-                SubscriptionLifetime::Standing
-            },
-        }
-    } else if let Some(selector) = selector {
-        DeliveryTrigger::Signal {
-            selector,
-            matches,
-            lifetime: if args.once {
-                SubscriptionLifetime::Once
-            } else {
-                SubscriptionLifetime::Standing
-            },
-        }
-    } else {
-        let parsed = schedule::parse_trigger(
-            &args.name,
-            &TaskEntry {
-                at: timing.at,
-                every: args.every.clone(),
-                cron: args.cron.clone(),
-                fire_at: timing
-                    .fire_at
-                    .or(after_reset.as_ref().map(|reset| reset.fire_at)),
-                ..TaskEntry::default()
-            },
-        )?;
-        let clock = match parsed.trigger {
-            schedule::Trigger::Schedule(clock) => clock,
-            // This branch constructs an entry containing only clock fields.
-            schedule::Trigger::Condition { .. }
-            | schedule::Trigger::Signal { .. }
-            | schedule::Trigger::Watch(_) => unreachable!("the entry contains only clock fields"),
-        };
-        DeliveryTrigger::Clock(clock)
-    };
-    validate_task_timeout(args.timeout.as_deref())?;
-    let prompt = match (&args.prompt, &args.prompt_file) {
-        (Some(prompt), _) => DeliveryPrompt::Inline(prompt.clone()),
-        (_, Some(path)) => DeliveryPrompt::File(path.clone()),
-        _ => DeliveryPrompt::None,
-    };
-    let surplus = args
-        .surplus
-        .as_deref()
-        .map(rimz::harness::surplus::parse_surplus)
-        .transpose()
-        .map_err(anyhow::Error::msg)?
-        .map(|ratio| format!("{ratio}x"));
-    if let Some(after) = args.surplus_after.as_deref() {
-        rimz::harness::surplus::parse_surplus_after(after).map_err(anyhow::Error::msg)?;
+fn validate_add_args(args: &AddArgs) -> Result<()> {
+    if let Some(name) = &args.name {
+        rimz::harness::name::validate_name(name)?;
     }
-    let outcome = arm::arm_delivery(
-        workspace,
-        DeliverySpec {
-            name: DeliveryName::Named(args.name.parse()?),
-            label: args.label.clone(),
-            target,
-            trigger,
-            prompt,
-            provenance: DeliveryProvenance::Loop,
-            check,
-            deadline: timing.deadline,
-            max_strikes: args.max_strikes,
-            surplus: (surplus.is_some() || args.surplus_after.is_some()).then(|| DeliverySurplus {
-                ratio: surplus,
-                after: args.surplus_after.clone(),
-            }),
-        },
-    )?;
-    let mut out = ui::out();
-    let (name, task) = match outcome {
-        ArmOutcome::Armed { name, task } => (name, task),
-        ArmOutcome::AlreadySubscribed { name } => {
-            writeln!(out, "already subscribed as {name}")?;
-            return Ok(());
-        }
-    };
-    writeln!(out, "added loop task `{name}`")?;
-    let entry = task.entry();
-    write_add_feedback(
-        &mut out,
-        entry,
-        task.trigger().as_ref().map_err(Clone::clone)?,
-        task.action().map_err(Clone::clone)?,
-        entry.wait.as_ref().map(|target| target.kind.as_str()),
-        after_reset.as_ref(),
-    )?;
-    writeln!(
-        out,
-        "live while a room for {} is open",
-        entry.root.display()
-    )?;
-    if entry.when.is_some() && !render::room_open(&entry.root) {
-        writeln!(out, "no room is open there; start one with `rimz start`")?;
-        condition::write_no_room_hint(&mut out, task.trigger().as_ref().map_err(Clone::clone)?)?;
-    }
-    Ok(())
-}
-
-fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
-    rimz::harness::name::validate_name(&args.name)?;
     if args.until.is_some() {
-        bail!(
-            "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check"
-        );
+        bail!("--until is no longer accepted; fire on a condition with --when");
     }
-    if args.wait.is_some() && (args.check.is_some() || args.judge.is_some()) {
-        bail!(
-            "--check and --judge no longer guard a --wait delivery; fire on a condition with --when, or deliver from a workflow message step"
-        );
-    }
-    if args.workflow.is_some() {
-        reject_workflow_flags(args)?;
-    }
-    for (used, flag) in [
-        (args.verify.is_some(), "--verify"),
-        (args.throttle.is_some(), "--throttle"),
-        (args.capacity_wait.is_some(), "--capacity-wait"),
-    ] {
-        if used && args.agent.is_none() {
-            bail!("{flag} requires --agent");
+    let repeats_by_clock = args.every.is_some() || args.cron.is_some();
+    if args.repeat {
+        if repeats_by_clock {
+            bail!("--repeat cannot be used with --every or --cron; they repeat already");
+        }
+        if args.signal.is_none() && args.when.is_empty() {
+            bail!("--repeat requires --signal or --when");
         }
     }
-    if args.max_attempts.is_some() && args.verify.is_none() {
-        bail!("--max-attempts requires --verify");
-    }
-    if args.budget_per_day.is_some() && args.budget.is_none() && args.workflow.is_none() {
-        bail!("--budget-per-day requires --budget");
-    }
+    let repeats = repeats_by_clock || args.repeat;
     if let Some(limit) = args.overlap_limit {
         anyhow::ensure!(
             args.overlap.as_deref() == Some("queue"),
@@ -363,190 +143,40 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     }
     if args.overlap.is_some() {
         for (used, reason) in [
-            (args.wait.is_some(), "a wait delivery has no run to overlap"),
             (
                 args.each_worktree,
                 "waiting triggers are kept per task, and an each-worktree task fires per checkout",
             ),
-            (
-                args.once
-                    || args.in_after.is_some()
-                    || args.after_reset.is_some()
-                    || (args.every.is_none()
-                        && args.cron.is_none()
-                        && args.signal.is_none()
-                        && args.when.is_empty()),
-                "a one-shot has no task left to drain",
-            ),
+            (!repeats, "a one-shot has no task left to drain"),
         ] {
             if used {
                 bail!("--overlap cannot be used here; {reason}");
             }
         }
     }
-    if args.check_timeout.is_some() && args.check.is_none() {
-        bail!("--check-timeout requires --check");
-    }
-    for (used, flag) in [
-        (args.judge_prompt.is_some(), "--judge-prompt"),
-        (args.judge_prompt_file.is_some(), "--judge-prompt-file"),
-        (args.judge_recheck.is_some(), "--judge-recheck"),
-        (args.judge_timeout.is_some(), "--judge-timeout"),
-    ] {
-        if used && args.judge.is_none() {
-            let hint = if flag == "--judge-timeout" {
-                "; for the shell check use --check-timeout"
-            } else {
-                ""
-            };
-            bail!("{flag} requires --judge{hint}");
-        }
-    }
-    if args.judge.is_some() {
-        if args.judge_prompt.is_some() == args.judge_prompt_file.is_some() {
-            bail!("--judge requires exactly one of --judge-prompt and --judge-prompt-file");
-        }
-        if args.agent.is_none() && args.wait.is_none() {
-            bail!("--judge requires --agent or --wait");
-        }
-        if args.on.is_none() {
+    if args.each_worktree {
+        let used = [
+            (args.signal.is_some(), "--signal"),
+            (args.in_after.is_some(), "--in"),
+            (
+                args.at.is_some() && args.every.is_none(),
+                "--at without --every",
+            ),
+            (args.after_reset.is_some(), "--after-reset"),
+        ]
+        .into_iter()
+        .filter_map(|(used, flag)| used.then_some(flag))
+        .collect::<Vec<_>>();
+        if !used.is_empty() {
             bail!(
-                "--judge requires --on: fail acts on a negative verdict, success acts on a positive verdict, any acts whatever the verdict"
+                "--each-worktree cannot use {}; fan-out needs --when, --every, or --cron",
+                used.join(", ")
             );
         }
-    }
-    if args.judge_recheck.is_some() && !args.stay {
-        bail!("--judge-recheck requires --stay");
-    }
-    for (raw, flag) in [
-        (args.judge_recheck.as_deref(), "--judge-recheck"),
-        (args.check_timeout.as_deref(), "--check-timeout"),
-        (args.judge_timeout.as_deref(), "--judge-timeout"),
-    ] {
-        if let Some(raw) = raw {
-            if flag == "--judge-recheck" && raw.trim() == "0" {
-                continue;
-            }
-            let duration = parse_task_timeout(raw)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("invalid {flag}"))?;
-            if flag != "--judge-recheck" && duration.is_zero() {
-                bail!("{flag} must be greater than zero");
-            }
-        }
-    }
-    if args.stay && args.wait.is_some() {
-        bail!("--stay cannot use --wait; it launches a new agent layout");
-    }
-    if args.stay && args.agent.is_none() {
-        bail!("--stay requires --agent with a layout to launch");
-    }
-    for (used, flag) in [
-        (
-            args.each_worktree && args.workflow.is_none(),
-            "--each-worktree",
-        ),
-        (args.takeover, "--takeover"),
-        (!args.subscribe.is_empty(), "--subscribe"),
-    ] {
-        if used && !args.stay {
-            bail!("{flag} requires --stay; it applies to staying layouts");
-        }
-    }
-    if args.each_worktree && args.workflow.is_none() && args.when.is_empty() {
-        bail!("--each-worktree requires --when; fan-out supports conditions only");
-    }
-    if args.stay {
-        if args.worktree.is_some() {
-            if args.each_worktree {
-                bail!(
-                    "--stay --worktree cannot use --each-worktree; one named destination cannot fan out"
-                );
-            }
-            if !args.when.is_empty() {
-                let expr = rimz::harness::when::WhenExpr::parse(&args.when)?;
-                if let Some(key) = expr.scope_checkout_key() {
-                    bail!(
-                        "--stay --worktree cannot use --when key `{key}`; it reads the project root, not the destination; use a branch-qualified condition such as pr[<branch>]=merged, a window condition, or a clock trigger"
-                    );
-                }
-            }
-        }
-        for (used, flag, reason) in [
-            (
-                args.account.is_some(),
-                "--account",
-                "staying layouts use the room's accounts; omit --account or --stay",
-            ),
-            (
-                args.max_attempts.is_some(),
-                "--max-attempts",
-                "staying layouts are not supervised retries",
-            ),
-            (
-                args.budget_per_day.is_some(),
-                "--budget-per-day",
-                "staying layouts have no per-fire spend accounting",
-            ),
-            (
-                args.verify.is_some(),
-                "--verify",
-                "staying layouts are not supervised turns",
-            ),
-            (
-                args.budget.is_some(),
-                "--budget",
-                "staying layouts have no supervised run budget",
-            ),
-            (
-                args.surplus.is_some(),
-                "--surplus",
-                "staying layouts have no bounded run spend",
-            ),
-            (
-                args.surplus_after.is_some(),
-                "--surplus-after",
-                "staying layouts have no bounded run spend",
-            ),
-            (
-                args.timeout.is_some(),
-                "--timeout",
-                "staying agents remain open",
-            ),
-            (
-                args.system_prompt_file.is_some(),
-                "--system-prompt-file",
-                "staying layouts use their profiles' system prompts",
-            ),
-            (
-                args.once,
-                "--once",
-                "staying launches are deduplicated per checkout, not per task",
-            ),
-            (
-                !args.subscribe.is_empty()
-                    && (args.in_after.is_some()
-                        || (args.at.is_some() && args.every.is_none())
-                        || args.after_reset.is_some()),
-                "--subscribe",
-                "one-shot triggers remove the task before registration; use --every, --cron, or --when",
-            ),
-            (
-                args.project,
-                "--project",
-                "staying launch memory is machine-local",
-            ),
-        ] {
-            if used {
-                bail!("--stay cannot use {flag}; {reason}");
-            }
-        }
-    }
-    for signal in &args.subscribe {
-        parse_signal_selector(&args.name, signal, None)?;
-        if signal == "agent" || signal.starts_with("agent.") {
+        if !repeats {
             bail!(
-                "--subscribe cannot use agent signals without an explicit other-agent match; use a scoped `rimz loop add --wait --signal` instead"
+                "--each-worktree with --when needs --repeat; a one-shot would remove the task \
+                 after its first checkout"
             );
         }
     }
@@ -556,18 +186,17 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 args.after_reset.is_some(),
                 "--project tasks cannot use --after-reset; its reset instant is machine state",
             ),
-            (!args.when.is_empty(), "--project tasks cannot use --when yet; add it without --project"),
             (
-                args.wait.is_some(),
-                "--project tasks cannot use --wait; project config cannot pin a machine-local session",
+                !args.when.is_empty(),
+                "--project tasks cannot use --when yet; add it without --project",
             ),
             (
-                args.every.is_none() && args.cron.is_none() && args.signal.is_none(),
-                "--project tasks need a trigger; set --every, --cron, or --signal",
+                args.each_worktree,
+                "--project tasks cannot use --each-worktree; per-worktree fan-out is machine state",
             ),
             (
-                args.once,
-                "--project tasks cannot use --once; one-shot subscriptions are machine state",
+                !repeats_by_clock && !(args.signal.is_some() && args.repeat),
+                "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
             ),
         ]
         .into_iter()
@@ -576,187 +205,28 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     if let Some(message) = project_error.flatten() {
         bail!(message);
     }
-    let action_kind = args
-        .workflow
-        .as_ref()
-        .map(|_| TaskActionKind::Workflow)
-        .or(args.agent.as_ref().map(|_| TaskActionKind::Spawn))
-        .or(args.wait.as_ref().map(|_| TaskActionKind::Deliver))
-        .or(args.check.as_ref().map(|_| TaskActionKind::CheckOnly))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "loop task `{}` needs --agent, --wait, --check, or --workflow",
-                args.name
-            )
-        })?;
-    if args.on.is_some() && args.check.is_none() && args.judge.is_none() {
-        bail!("--on requires --check or --judge");
-    }
-    let matches = parse_matches(&args.matches)?;
+    parse_matches(&args.matches)?;
     if !args.matches.is_empty() && args.signal.is_none() {
         bail!("--match requires --signal");
     }
-    if args.once && args.signal.is_none() && args.when.is_empty() {
-        bail!("--once requires --signal or --when");
-    }
-    if args.wait.is_some()
-        && args
-            .signal
-            .as_deref()
-            .is_some_and(|name| name.starts_with("agent."))
-        && !matches.contains_key("handle")
-        && !matches.contains_key("session")
+    if let Some(prefix) = &args.fresh_worktree
+        && rimz::worktree::parse_requested_name(prefix).is_err()
     {
-        bail!(self_wait_guard_message());
+        bail!(
+            "--fresh-worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
+        );
     }
-    if !action_kind.has_effect() && args.after_reset.is_some() {
-        bail!("--after-reset requires --agent or --wait");
+    if let Some(kind) = &args.provider
+        && rimz::agents::find_definition(kind).is_none()
+    {
+        bail!("--provider `{kind}` is not an agent kind; see `rimz agents profiles`");
     }
-    if !action_kind.has_effect() && (args.surplus.is_some() || args.surplus_after.is_some()) {
-        bail!("--surplus and --surplus-after require --agent or --wait");
-    }
-    if args.max_attempts == Some(0) {
-        bail!("--max-attempts must be at least 1");
-    }
-    Ok(action_kind)
-}
-
-/// Refuses every flag whose field a workflow fire ignores or the stored row refuses, naming
-/// where that concept lives in a workflow.
-fn reject_workflow_flags(args: &AddArgs) -> Result<()> {
-    let window = rimz::harness::when::WhenExpr::parse(&args.when)
-        .is_ok_and(|expr| expr.terms().any(|term| term.key.starts_with("window.")));
-    let fan_out = args.each_worktree;
-    let checks = "checks are the workflow's `[test.<name>]`, `[script.<name>]`, `[judge.<name>]` and `[condition.<name>]` nodes";
-    let profile = "choose it through the `agent` profile of the workflow's `[agent.<name>]`";
-    let spend = "set `budget` on the workflow's `[agent.<name>]`; `--budget-per-day` and `--surplus` gate the task's runs";
-    let no_window =
-        "a workflow task has no provider window to read; use a clock trigger or another condition";
-    let groups: [(&[(bool, &str)], &str); 12] = [
-        (
-            &[(args.stay, "--stay")],
-            "a workflow's agent steps launch and stop agents",
-        ),
-        (
-            &[(args.takeover, "--takeover")],
-            "takeover is the workflow's `[agent.<name>.admission] occupancy`",
-        ),
-        (
-            &[(!args.subscribe.is_empty(), "--subscribe")],
-            "signals wake the run's checks; a check names the signals it waits for",
-        ),
-        (
-            &[
-                (args.check.is_some(), "--check"),
-                (args.check_timeout.is_some(), "--check-timeout"),
-                (args.judge.is_some(), "--judge"),
-                (args.judge_prompt.is_some(), "--judge-prompt"),
-                (args.judge_prompt_file.is_some(), "--judge-prompt-file"),
-                (args.judge_recheck.is_some(), "--judge-recheck"),
-                (args.judge_timeout.is_some(), "--judge-timeout"),
-                (args.on.is_some(), "--on"),
-                (args.verify.is_some(), "--verify"),
-                (args.max_attempts.is_some(), "--max-attempts"),
-            ],
-            checks,
-        ),
-        (
-            &[(args.throttle.is_some(), "--throttle")],
-            "set `throttle` in the workflow's `[agent.<name>.admission]`",
-        ),
-        (
-            &[(args.capacity_wait.is_some(), "--capacity-wait")],
-            "set `give-up` in the workflow's `[agent.<name>.admission]`",
-        ),
-        (
-            &[(args.timeout.is_some(), "--timeout")],
-            "set `timeout` on the workflow's `[agent.<name>]` or check node",
-        ),
-        (
-            &[
-                (args.mode.is_some(), "--mode"),
-                (args.effort.is_some(), "--effort"),
-                (args.fast, "--fast"),
-                (args.no_fast, "--no-fast"),
-                (args.account.is_some(), "--account"),
-                (args.system_prompt_file.is_some(), "--system-prompt-file"),
-            ],
-            profile,
-        ),
-        (&[(args.budget.is_some(), "--budget")], spend),
-        (
-            &[(args.worktree.is_some(), "--worktree")],
-            "a run scopes to the task's checkout; pass --root <worktree> or --each-worktree",
-        ),
-        (
-            &[
-                (args.after_reset.is_some(), "--after-reset"),
-                (window, "--when window.*"),
-            ],
-            no_window,
-        ),
-        (
-            &[
-                (fan_out && args.signal.is_some(), "--signal"),
-                (fan_out && args.in_after.is_some(), "--in"),
-                (
-                    fan_out && args.at.is_some() && args.every.is_none(),
-                    "--at without --every",
-                ),
-                (fan_out && args.once, "--once"),
-            ],
-            "--each-worktree fan-out needs --when, --every, or --cron",
-        ),
-    ];
-    for (flags, fix) in groups {
-        let used = flags
-            .iter()
-            .filter_map(|(used, flag)| used.then_some(*flag))
-            .collect::<Vec<_>>();
-        if !used.is_empty() {
-            bail!("--workflow cannot use {}; {fix}", used.join(", "));
-        }
+    if args.account.is_some() && args.provider.is_none() {
+        bail!(
+            "--account requires --provider; it picks the account whose windows a condition reads"
+        );
     }
     Ok(())
-}
-
-fn resolve_add_check(
-    args: &AddArgs,
-    workspace: &rimz::ResolvedWorkspace,
-) -> Result<Option<DeliveryCheck>> {
-    if args.check.is_none() && args.judge.is_none() {
-        return Ok(None);
-    }
-    let mut judge = Vec::new();
-    if let Some(profile) = args.judge.as_deref() {
-        let resolved = resolve_single_agent_launch(
-            profile,
-            workspace,
-            &rimz::store::writer::LaunchLogin::RoomDefault,
-        )?;
-        let adapter = rimz::agents::find_definition(resolved.kind())
-            .with_context(|| format!("unknown judge kind `{}`", resolved.kind()))?;
-        if adapter.spec().launch.headless.is_none() {
-            bail!(
-                "{}: only claude and codex run headless judges",
-                resolved.kind()
-            );
-        }
-        judge.push(Judge {
-            agent: profile.to_owned(),
-            prompt: args.judge_prompt.clone(),
-            prompt_file: args.judge_prompt_file.clone(),
-            recheck: args.judge_recheck.clone(),
-            timeout: args.judge_timeout.clone(),
-        });
-    }
-    Ok(Some(DeliveryCheck {
-        check: args.check.clone().map(TaskCheck),
-        check_timeout: args.check_timeout.clone(),
-        judge,
-        on: args.on.as_deref().map(parse_check_on).transpose()?,
-        timeout: args.timeout.clone(),
-    }))
 }
 
 fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
@@ -779,227 +249,34 @@ fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
     Ok(current)
 }
 
-fn resolve_add_action(
-    args: &AddArgs,
-    workspace: &rimz::ResolvedWorkspace,
-    kind: TaskActionKind,
-    mux: Option<rimz::ids::MuxName>,
-) -> Result<AddTaskAction> {
-    let preset = rimz::agents::LaunchPreset {
-        effort: rimz::harness::plan::normalized_preset_value(args.effort.as_deref()),
-        fast: fast_switch(args),
-        ..Default::default()
+/// The stored `timeout`: `--timeout`, else `loop.default-timeout`, else the scheduled default.
+/// A command needs a deadline it can reach, so `--timeout 0s` is refused the way `--for` and
+/// `--in` are.
+fn task_timeout(raw: Option<&str>) -> Result<String> {
+    let Some(raw) = raw else {
+        let configured = MachineConfig::load_lenient().r#loop.default_timeout.clone();
+        return Ok(configured.unwrap_or_else(|| SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned()));
     };
-    let mut action = match kind {
-        TaskActionKind::Spawn if args.stay => resolve_resident_action(args, workspace, &preset)?,
-        TaskActionKind::Spawn => {
-            let spec = args.agent.as_deref().unwrap_or_default();
-            let resolved = ResolvedSingleAgentLaunch::for_booking(spec, workspace)?;
-            for warning in rimz::harness::plan::validate_launch_preset(resolved.kind(), &preset)? {
-                writeln!(ui::err(), "{warning}")?;
-            }
-            AddTaskAction::Spawn {
-                resolved,
-                mode: None,
-            }
-        }
-        TaskActionKind::Deliver => {
-            let address = args.wait.as_deref().unwrap_or_default();
-            resolve_delivery_target(workspace, args, address, mux)?
-        }
-        TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
-        TaskActionKind::Workflow => {
-            let name = args.workflow.as_deref().unwrap_or_default();
-            crate::cli::workflow_view::deployed_definition(
-                Path::new(name),
-                Some(&workspace.project_root),
-            )?;
-            if rimz::harness::name::validate_name(name).is_err() {
-                bail!(
-                    "--workflow {name}: a loop task starts a workflow by its name under {}; letters, digits, `-`, `_`",
-                    rimz::disk::paths::workflows_dir().display()
-                );
-            }
-            AddTaskAction::Workflow(name.to_owned())
-        }
-    };
-    reject_unsupported_action_flags(args, kind)?;
-    if let AddTaskAction::Spawn { mode, .. } = &mut action {
-        *mode = args.mode.as_deref().map(parse_mode).transpose()?;
-    }
-    Ok(action)
-}
-
-fn resolve_resident_action(
-    args: &AddArgs,
-    workspace: &rimz::ResolvedWorkspace,
-    preset: &rimz::agents::LaunchPreset,
-) -> Result<AddTaskAction> {
-    let machine = MachineConfig::load_lenient();
-    let mut effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
-    let state = StatePaths::for_project_root(&workspace.project_root)?;
-    let runtime = rimz::RuntimePaths::for_state(&state)?;
-    let availability =
-        rimz::harness::plan::LaunchAvailability::read(&runtime, &state, &machine, Timestamp::now());
-    effective.route(
-        &machine.tiers,
-        rimz::config::effective::ProfileScope::Agents,
-        args.agent.as_deref(),
-        None,
-        None,
-        None,
-        |kind, model| availability.unavailable(kind, model),
-    )?;
-    let resolved = rimz::harness::plan::resolve_launch(
-        &effective,
-        rimz::config::effective::ProfileScope::Agents,
-        &machine.agents.commands,
-        args.agent.as_deref(),
-        None,
-    )?;
-    for cell in resolved.layout.agent_cells() {
-        for warning in rimz::harness::plan::validate_launch_preset(&cell.kind, preset)? {
-            writeln!(ui::err(), "{warning}")?;
-        }
-    }
-    let team = resolved
-        .team_name
-        .as_ref()
-        .and_then(|name| resolved.teams.0.get(name));
-    for signal in &args.subscribe {
-        let selector = parse_signal_selector(&args.name, signal, None)?;
-        match default_signal_match_key(&selector, &BTreeMap::new()) {
-            Some("path") if !args.each_worktree && args.worktree.is_none() => {
-                bail!(
-                    "--subscribe {signal} needs a checkout scope; use --each-worktree with --when, or --worktree <name>"
-                );
-            }
-            Some("instance") if team.is_none() => {
-                bail!("--subscribe {signal} needs a team layout; choose a team with --agent");
-            }
-            _ => {}
-        }
-    }
-    let leader = rimz::harness::spec::prompt_leader(&resolved.layout, team)
-        .context("--stay and --subscribe need a layout with a prompt leader")?;
-    // prompt_leader returns an index into this layout's agent cells.
-    let cell = resolved
-        .layout
-        .agent_cells()
-        .nth(leader)
-        .expect("validated prompt leader");
-    let kind = cell.kind.as_str();
-    if !args.subscribe.is_empty() {
-        let adapter = rimz::agents::find_definition(kind)
-            .with_context(|| format!("unknown agent kind `{kind}`"))?;
-        let logins = rimz::agents::RoomLoginSet::for_runtime(&runtime);
-        let login = logins.default_login(kind).with_context(|| {
-            format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
-        })?;
-        if let Err(error) = rimz::agents::preflight_hooks(
-            adapter,
-            &logins.env(&login),
-            rimz::agents::TurnLifecycleNeed::NotUnsupported,
-        ) {
-            let fix = match &error {
-                rimz::agents::HookPreflightErr::HooksUntrusted { fix, .. }
-                | rimz::agents::HookPreflightErr::HooksDisabled { fix, .. } => fix.clone(),
-                rimz::agents::HookPreflightErr::TurnLifecycleUnsupported { .. } => {
-                    "choose a prompt leader whose provider supports registration hooks".to_owned()
-                }
-                _ => format!("install supported hooks with `rimz hooks install {kind}`"),
-            };
-            bail!(
-                "--subscribe needs the prompt leader's registration hooks: {kind}: {error}; {fix}"
-            );
-        }
-    }
-    Ok(AddTaskAction::Stay {
-        kind: kind.to_owned(),
-    })
-}
-
-/// A scheduled turn needs a deadline it can reach, so `--timeout 0s` is refused
-/// the way `--for`, `--in`, and `--until` are.
-fn validate_task_timeout(raw: Option<&str>) -> Result<()> {
-    let Some(raw) = raw else { return Ok(()) };
     let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
     if duration.is_zero() {
         bail!("--timeout must be greater than zero");
     }
-    Ok(())
+    Ok(raw.trim().to_owned())
 }
 
 fn build_task_entry(
     args: &AddArgs,
-    action: AddTaskAction,
+    name: &str,
     workspace: &rimz::ResolvedWorkspace,
-    check: Option<DeliveryCheck>,
-) -> Result<(TaskEntry, Option<ResolvedSingleAgentLaunch>)> {
-    validate_task_timeout(args.timeout.as_deref())?;
-    let budget = args
-        .budget
-        .as_deref()
-        .map(str::parse::<rimz::harness::budget::BudgetSpec>)
-        .transpose()?
-        .map(|spec| spec.to_string());
-    let budget_per_day = args
-        .budget_per_day
-        .as_deref()
-        .map(str::parse::<rimz::harness::budget::BudgetSpec>)
-        .transpose()?
-        .map(|spec| format!("${:.2}", spec.cap_usd));
-    let surplus = args
-        .surplus
-        .as_deref()
-        .map(rimz::harness::surplus::parse_surplus)
-        .transpose()
-        .map_err(anyhow::Error::msg)?
-        .map(|ratio| format!("{ratio}x"));
-    let surplus_after = args
-        .surplus_after
-        .as_deref()
-        .map(rimz::harness::surplus::parse_surplus_after)
-        .transpose()
-        .map_err(anyhow::Error::msg)?
-        .map(|_| {
-            args.surplus_after
-                .as_deref()
-                .unwrap_or_default()
-                .trim()
-                .to_owned()
-        });
+) -> Result<TaskEntry> {
     let matches = parse_matches(&args.matches)?;
-    let timing = resolve_add_timing(args)?;
-    if matches!(
-        action,
-        AddTaskAction::Spawn { .. } | AddTaskAction::Stay { .. }
-    ) && args.prompt.is_none()
-        && args.prompt_file.is_none()
-    {
-        bail!(
-            "loop task `{}` needs a prompt; pass --prompt or --prompt-file",
-            args.name
-        );
-    }
-    let mut entry = TaskEntry {
+    let timing = resolve_add_timing(args, name)?;
+    Ok(TaskEntry {
         label: args.label.clone(),
-        stay: args.stay,
+        command: args.command.clone(),
+        timeout: Some(task_timeout(args.timeout.as_deref())?),
         each_worktree: args.each_worktree,
-        takeover: args.takeover,
-        subscribe: args
-            .subscribe
-            .iter()
-            .map(|signal| rimz::config::TeamSignalBinding {
-                signal: signal.clone(),
-                matches: BTreeMap::new(),
-                prompt: None,
-            })
-            .collect(),
-        prompt: args.prompt.clone(),
-        prompt_file: args.prompt_file.clone(),
         max_strikes: args.max_strikes,
-        capacity_wait: args.capacity_wait,
         overlap: args.overlap.as_deref().map(|value| match value {
             "coalesce" => rimz::config::OverlapPolicy::Coalesce,
             "queue" => rimz::config::OverlapPolicy::Queue,
@@ -1008,6 +285,7 @@ fn build_task_entry(
         }),
         overlap_limit: args.overlap_limit,
         root: workspace.project_root.clone(),
+        fresh_worktree: args.fresh_worktree.clone(),
         at: timing.at,
         fire_at: timing.fire_at,
         every: args.every.clone(),
@@ -1016,75 +294,9 @@ fn build_task_entry(
         when: (!args.when.is_empty()).then(|| args.when.clone()),
         hold: args.hold.clone(),
         matches: (!matches.is_empty()).then_some(matches),
-        once: args.once.then_some(true),
+        repeat: args.repeat,
         deadline: timing.deadline,
-        surplus,
-        surplus_after,
-        timeout: args.timeout.clone(),
         ..TaskEntry::default()
-    };
-    if let Some(check) = check {
-        entry.check = check.check;
-        entry.check_timeout = check.check_timeout;
-        entry.judge = check.judge;
-        entry.on = check.on;
-    }
-    let mut resolved_for_preflight = None;
-    match action {
-        AddTaskAction::Stay { .. } => {
-            entry.throttle = throttle_switch(args);
-            entry.agent = args.agent.clone();
-            entry.worktree = args.worktree.clone();
-            entry.mode = args.mode.as_deref().map(parse_mode).transpose()?;
-            entry.effort = args.effort.clone();
-            entry.fast = fast_switch(args);
-        }
-        AddTaskAction::Spawn { resolved, mode, .. } => {
-            resolved_for_preflight = Some(resolved);
-            entry.throttle = throttle_switch(args);
-            entry.agent = args.agent.clone();
-            entry.verify = args.verify.clone();
-            entry.max_attempts = args.max_attempts;
-            entry.fresh_worktree = fresh_worktree_prefix(args)?;
-            entry.mode = mode;
-            entry.effort = args.effort.clone();
-            entry.fast = fast_switch(args);
-            entry.account.clone_from(&args.account);
-            entry.budget = budget;
-            entry.budget_per_day = budget_per_day;
-            entry.system_prompt_file = args.system_prompt_file.clone();
-        }
-        AddTaskAction::Deliver { .. } => unreachable!("deliveries use the shared domain builder"),
-        AddTaskAction::CheckOnly => entry.fresh_worktree = fresh_worktree_prefix(args)?,
-        AddTaskAction::Workflow(name) => {
-            // A workflow task keeps the checkout it was added from: its runs and its
-            // workflow ledger are keyed on that checkout, as on trunk.
-            entry.dir = (!args.project && workspace.worktree_root != workspace.project_root)
-                .then(|| workspace.worktree_root.clone());
-            entry.workflow = Some(name);
-            entry.budget_per_day = budget_per_day;
-        }
-    }
-    Ok((entry, resolved_for_preflight))
-}
-
-/// A fresh-worktree prefix names every fire's tree, so it follows `rimz worktree new`'s rule.
-fn fresh_worktree_prefix(args: &AddArgs) -> Result<Option<String>> {
-    if let Some(prefix) = &args.worktree
-        && rimz::worktree::parse_requested_name(prefix).is_err()
-    {
-        bail!(
-            "--worktree `{prefix}` is not a worktree name; use letters, digits, `-` and `_`, with `/` between segments"
-        );
-    }
-    Ok(args.worktree.clone())
-}
-
-fn throttle_switch(args: &AddArgs) -> Option<rimz::config::ThrottleSwitch> {
-    // clap admits only `on` and `off`.
-    args.throttle.as_deref().map(|value| match value {
-        "off" => rimz::config::ThrottleSwitch::Off,
-        _ => rimz::config::ThrottleSwitch::On,
     })
 }
 
@@ -1120,33 +332,6 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
         }
     } else {
         writeln!(out, "no loop task named `{name}`")?;
-    }
-    Ok(())
-}
-
-pub(super) fn eject(args: &EjectArgs, globals: &GlobalFlags) -> Result<()> {
-    let workflow = args.workflow.as_deref().unwrap_or(&args.name);
-    let catalog = task_catalog(globals)?;
-    let project_mutation = project_mutation_pre_state(&catalog, &args.name)?;
-    let dir = catalog.eject(
-        &args.name,
-        workflow,
-        &MachineConfig::load_lenient(),
-        &crate::cli::workflow_view::definitions(),
-    )?;
-    let mut out = ui::out();
-    writeln!(
-        out,
-        "ejected loop task `{}` to workflow `{workflow}` at {}",
-        args.name,
-        dir.display()
-    )?;
-    writeln!(
-        out,
-        "the task now runs `workflow = \"{workflow}\"`; edit the workflow to change what it does"
-    )?;
-    if let Some((root, pre_state)) = project_mutation {
-        finish_project_mutation(&mut out, &root, false, pre_state)?;
     }
     Ok(())
 }
@@ -1253,62 +438,6 @@ fn scoped_tasks(args: ScopeArgs, globals: &GlobalFlags) -> Result<Vec<(String, L
         .collect()
 }
 
-fn resolve_delivery_target(
-    workspace: &rimz::ResolvedWorkspace,
-    args: &AddArgs,
-    address: &str,
-    mux: Option<rimz::ids::MuxName>,
-) -> Result<AddTaskAction> {
-    let store = crate::cli::require_existing_store(workspace)?;
-    let snapshot = rimz::sidebar::produce::resolution_snapshot(workspace, &store, mux)
-        .context("reading agent snapshot")?;
-    let channel = crate::cli::current_channel(workspace, Some(&store));
-    let agent = match crate::cli::resolve_agent_one(
-        &store,
-        &snapshot,
-        address,
-        args.worktree.as_deref(),
-        &channel.address_context(),
-    ) {
-        Ok(agent) => agent,
-        Err(err) if address == "@me" => return Err(err),
-        Err(_) => {
-            bail!("no live agent matches `{address}`; see `rimz agents list` for live handles")
-        }
-    };
-    if agent.agent_id.is_provisional() {
-        bail!(
-            "`{address}` has not registered a real session yet; retry once its first turn has started"
-        );
-    }
-    let peers = rimz::address::addressable_agents(&snapshot);
-    let caller = crate::cli::send::resolve_caller(&store)?;
-    let scope = caller
-        .as_ref()
-        .map(|caller| rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller))
-        .transpose()?
-        .unwrap_or(agent);
-    let target = TaskTarget {
-        kind: agent.kind.clone(),
-        session: agent.launch_key().clone(),
-        handle: rimz::address::agent_handle(agent, &peers, true),
-    };
-    let mut matches = parse_matches(&args.matches)?;
-    let selector = if let Some(raw) = args.signal.as_deref() {
-        let selector = parse_signal_selector(&args.name, raw, Some(&matches))?;
-        arm::default_signal_matches(workspace, &snapshot.agents, scope, &selector, &mut matches)?;
-        arm::validate_self_signal(&selector, &matches, &target, Some(agent))?;
-        Some(selector)
-    } else {
-        None
-    };
-    Ok(AddTaskAction::Deliver {
-        target,
-        selector,
-        matches,
-    })
-}
-
 fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
     raw.iter()
         .map(|pair| {
@@ -1323,69 +452,7 @@ fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
         .collect()
 }
 
-fn self_wait_guard_message() -> &'static str {
-    "--wait on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
-}
-
-fn fast_switch(args: &AddArgs) -> Option<bool> {
-    match (args.fast, args.no_fast) {
-        (true, _) => Some(true),
-        (_, true) => Some(false),
-        _ => None,
-    }
-}
-
-fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Result<()> {
-    // `reject_workflow_flags` refuses these for a workflow task, each with its own fix.
-    if kind.is_spawn() || kind == TaskActionKind::Workflow {
-        return Ok(());
-    }
-    let mut flags = Vec::new();
-    if args.mode.is_some() {
-        flags.push("--mode");
-    }
-    if args.effort.is_some() {
-        flags.push("--effort");
-    }
-    if args.fast {
-        flags.push("--fast");
-    }
-    if args.no_fast {
-        flags.push("--no-fast");
-    }
-    if args.account.is_some() {
-        flags.push("--account");
-    }
-    if args.budget.is_some() {
-        flags.push("--budget");
-    }
-    if args.budget_per_day.is_some() {
-        flags.push("--budget-per-day");
-    }
-    if args.system_prompt_file.is_some() {
-        flags.push("--system-prompt-file");
-    }
-    if kind == TaskActionKind::Deliver && args.timeout.is_some() && args.check.is_none() {
-        flags.push("--timeout");
-    }
-    if flags.is_empty() {
-        return Ok(());
-    }
-    if kind == TaskActionKind::Deliver {
-        bail!(
-            "`{}` uses --wait, so {} only apply to --agent tasks",
-            args.name,
-            flags.join(", ")
-        );
-    }
-    bail!(
-        "`{}` uses --check without an agent action, so {} only apply to --agent tasks",
-        args.name,
-        flags.join(", ")
-    )
-}
-
-fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
+fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
     let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
     let mut timing = AddTiming {
         at: None,
@@ -1400,7 +467,7 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
         timing.fire_at = Some(schedule::delayed_instant(duration, now.timestamp())?);
     } else if let Some(at) = args.at.as_deref() {
         if args.every.is_none() {
-            timing.fire_at = Some(schedule::resolve_once_at(&args.name, at, &now)?);
+            timing.fire_at = Some(schedule::resolve_once_at(name, at, &now)?);
         } else if at.trim().contains(char::is_whitespace) {
             bail!(
                 "--at with --every takes HH:MM; for a weekday time use --every <days> --at HH:MM, such as --every fri --at 09:30"
@@ -1412,34 +479,30 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     Ok(timing)
 }
 
-/// Where each fire of a launching or check-only task runs, as its receipt names it.
+/// Where each fire's command runs, as its receipt names it.
 fn fire_place(entry: &TaskEntry) -> String {
-    match entry.task_worktree() {
-        Some(rimz::config::TaskWorktree::Fresh { prefix }) => {
-            format!("a fresh worktree `{prefix}-<time>` per fire, branched from trunk")
+    match entry.fresh_worktree.as_deref() {
+        Some(prefix) => format!("a fresh worktree `{prefix}-<time>` per fire, branched from trunk"),
+        None if entry.each_worktree => {
+            "each RimZ-owned worktree where the trigger holds".to_owned()
         }
-        _ => entry.run_dir().display().to_string(),
+        None => entry.run_dir().display().to_string(),
     }
 }
 
-/// The receipt line for a launching or check-only task added from a linked
-/// worktree without `--worktree`: it runs at the project root, not there.
+/// The receipt line for a task added from a linked worktree without `--fresh-worktree`: it
+/// runs at the project root, not there.
 fn write_linked_add_note(
     out: &mut impl Write,
     entry: &TaskEntry,
-    action: &TaskAction,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<()> {
-    let launches = matches!(action, TaskAction::Spawn(_)) && !entry.stay;
-    if !(launches || matches!(action, TaskAction::CheckOnly))
-        || entry.fresh_worktree.is_some()
-        || workspace.worktree_root == workspace.project_root
-    {
+    if entry.fresh_worktree.is_some() || workspace.worktree_root == workspace.project_root {
         return Ok(());
     }
     writeln!(
         out,
-        "note: runs at the project root {}, not {}; pass --worktree <prefix> for a fresh worktree per fire",
+        "note: runs at the project root {}, not {}; pass --fresh-worktree <prefix> for a fresh worktree per fire",
         workspace.project_root.display(),
         workspace.worktree_root.display()
     )?;
@@ -1450,83 +513,22 @@ fn write_add_feedback(
     out: &mut impl Write,
     entry: &TaskEntry,
     parsed: &schedule::ParsedTrigger,
-    action: &TaskAction,
-    action_kind: Option<&str>,
     after_reset: Option<&AfterReset>,
 ) -> Result<()> {
-    match action {
-        TaskAction::Spawn(agent) if entry.stay => {
-            if entry.each_worktree {
-                writeln!(
-                    out,
-                    "action: leaves staying layout {agent} in each matching owned worktree"
-                )?;
-            } else if let Some(name) = entry.worktree.as_deref() {
-                writeln!(
-                    out,
-                    "action: leaves staying layout {agent} in worktree `{name}` (created from trunk for a team, the configured base otherwise, or reused when the task fires)"
-                )?;
-                writeln!(
-                    out,
-                    "scope: condition, guards and launch memory stay at {}",
-                    entry.run_dir().display()
-                )?;
-            } else {
-                writeln!(
-                    out,
-                    "action: leaves staying layout {agent} in {}",
-                    entry.run_dir().display()
-                )?;
-            }
-            if entry.takeover {
-                let place = entry
-                    .worktree
-                    .as_ref()
-                    .map(|name| format!("worktree `{name}`"))
-                    .unwrap_or_else(|| "the checkout".to_owned());
-                writeln!(
-                    out,
-                    "before launch: stops idle agents in {place} first (waits while any is busy)"
-                )?;
-            }
-            for binding in &entry.subscribe {
-                writeln!(
-                    out,
-                    "subscription: {} for the prompt leader",
-                    binding.signal
-                )?;
-            }
-        }
-        TaskAction::Spawn(agent) => {
-            let account = entry
-                .account
-                .as_ref()
-                .map(|account| format!(" on account `{account}`"))
-                .unwrap_or_default();
-            writeln!(
-                out,
-                "action: launches a fresh {agent} pane{account} in {}",
-                fire_place(entry)
-            )?;
-        }
-        TaskAction::Deliver(target) => {
-            writeln!(
-                out,
-                "action: waits {} — pinned to {} session `{}` now; skipped and removed if that session exits",
-                target.handle, target.kind, target.session
-            )?;
-        }
-        TaskAction::CheckOnly => {
-            writeln!(out, "action: runs check in {}", fire_place(entry))?;
-        }
-        TaskAction::Workflow(name) => writeln!(out, "action: starts workflow {name}")?,
-    }
-    if action.kind().has_effect()
-        && (entry.guard().shell.is_some() || !entry.guard().judges.is_empty())
-    {
-        writeln!(out, "guard: {}", render::guard_value(entry))?;
-    }
-    let suffix = if parsed.once { "; then removed" } else { "" };
+    writeln!(
+        out,
+        "action: runs `{}` in {} · timeout {}",
+        schedule::command_line(&entry.command),
+        fire_place(entry),
+        entry.timeout.as_deref().unwrap_or_default()
+    )?;
+    let suffix = if parsed.once {
+        "; then removed"
+    } else if entry.repeat {
+        "; repeats after each fire"
+    } else {
+        ""
+    };
     if let Some(reset) = after_reset {
         writeln!(
             out,
@@ -1538,20 +540,6 @@ fn write_add_feedback(
         condition::write_receipt(out, entry, parsed)?;
     } else {
         writeln!(out, "trigger: fires {}{suffix}", parsed.describe())?;
-    }
-    if entry.surplus.is_some() || entry.surplus_after.is_some() {
-        let kind = action_kind.unwrap_or("provider");
-        let threshold = entry
-            .surplus
-            .as_deref()
-            .and_then(|raw| rimz::harness::surplus::parse_surplus(raw).ok())
-            .unwrap_or(1.0);
-        let mut segments = Vec::new();
-        if let Some(after) = entry.surplus_after.as_deref() {
-            segments.push(format!("after {after} into the {kind} longest window"));
-        }
-        segments.push(format!("surplus ≥ {threshold:.1}x"));
-        writeln!(out, "gate: {}", segments.join(" · "))?;
     }
     let zone = MachineConfig::load_lenient().time_zone();
     if let Some(reset) = after_reset {

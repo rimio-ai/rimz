@@ -747,7 +747,7 @@ enum Subcmd {
     Asks(asks::AsksArgs),
     /// Answer one current prompt in its agent pane.
     Answer(answer::AnswerArgs),
-    /// Schedule supervised agent turns.
+    /// Run commands on a schedule, a signal, or a condition.
     ///
     /// Runs from the room's sidebar host.
     #[command(name = "loop")]

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     AgentSpecSources, CommandsConfig, ConfigFileDiagnosis, DefinitionOrigin, MachineConfig,
-    ProfileSource, ProfilesConfig, TaskEntry, Tasks, TeamsConfig,
+    ProfileSource, ProfilesConfig, Tasks, TeamsConfig,
 };
 use crate::harness::schedule::{self, ScheduleErr};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
@@ -83,12 +83,10 @@ pub enum ProjectTasksErr {
         field: &'static str,
         fix: &'static str,
     },
-    #[error("task `{task}` has no prompt; set `prompt` or `prompt-file`")]
-    MissingPrompt { task: String },
-    #[error("task `{task}` needs a trigger; set `every`, `cron`, or `signal` for project tasks")]
+    #[error(
+        "task `{task}` must repeat; set `every` or `cron`, or `signal` with `repeat = true`, for project tasks"
+    )]
     MustRepeat { task: String },
-    #[error(transparent)]
-    Budget(#[from] super::loop_::TaskBudgetError),
     #[error(transparent)]
     Schedule(#[from] ScheduleErr),
 }
@@ -650,32 +648,21 @@ pub fn project_tasks_from_value(
                 path: config_path.to_path_buf(),
                 diagnosis: Box::new(ConfigFileDiagnosis::spanless(config_path, source.message())),
             })?;
-    let config_dir = config_path.parent().unwrap_or(project_root);
     for (name, entry) in &mut tasks.0 {
         crate::harness::name::validate_name(name).map_err(|source| EffectiveConfigErr::Tasks {
             path: config_path.to_path_buf(),
             source: ScheduleErr::from(source).into(),
         })?;
         entry.root = project_root.to_path_buf();
-        if entry.agent.is_some() && !task_has_prompt(entry) {
-            return Err(EffectiveConfigErr::Tasks {
-                path: config_path.to_path_buf(),
-                source: ProjectTasksErr::MissingPrompt { task: name.clone() },
-            });
+        if entry.refused.is_some() {
+            continue;
         }
-        if entry.every.is_none() && entry.cron.is_none() && entry.signal.is_none() {
+        if !schedule::repeats(entry) {
             return Err(EffectiveConfigErr::Tasks {
                 path: config_path.to_path_buf(),
                 source: ProjectTasksErr::MustRepeat { task: name.clone() },
             });
         }
-        entry
-            .validate_budget(name)
-            .map_err(|source| EffectiveConfigErr::Tasks {
-                path: config_path.to_path_buf(),
-                source: source.into(),
-            })?;
-        resolve_task_prompt_paths(entry, config_dir);
         schedule::parse_trigger(name, entry).map_err(|source| EffectiveConfigErr::Tasks {
             path: config_path.to_path_buf(),
             source: source.into(),
@@ -686,17 +673,6 @@ pub fn project_tasks_from_value(
         state,
         config_path: config_path.to_path_buf(),
     }))
-}
-
-fn task_has_prompt(entry: &TaskEntry) -> bool {
-    entry
-        .prompt
-        .as_deref()
-        .is_some_and(|prompt| !prompt.trim().is_empty())
-        || entry
-            .prompt_file
-            .as_deref()
-            .is_some_and(|path| !path.as_os_str().is_empty())
 }
 
 impl LaunchAgents {
@@ -1056,13 +1032,9 @@ fn reject_project_task_state_fields(
             "wait-meta",
             "deadline",
             "watch",
-            "once",
             "when",
             "for",
-            "stay",
             "each-worktree",
-            "takeover",
-            "subscribe",
             "loop-task",
             "booked-by",
         ] {
@@ -1073,18 +1045,15 @@ fn reject_project_task_state_fields(
                     fix: match field {
                         "root" => "project tasks run at the project root; remove `root`",
                         "dir" => "project tasks run at the project root; remove `dir`",
-                        "wait" => "project tasks cannot pin a machine-local session; use `agent`",
+                        "wait" => "project tasks cannot pin a machine-local session; use `command`",
                         "wait-meta" => "wait provenance is machine state; arm it with `rimz wait`",
-                        "deadline" => {
-                            "poll-until deadlines are machine state; create them with `rimz loop add --until`"
-                        }
+                        "deadline" => "poll-until deadlines are machine state; remove `deadline`",
                         "watch" => "watched commands are machine state; use `rimz wait`",
-                        "once" => "one-shot subscriptions are machine state; remove `once`",
                         "when" | "for" => {
                             "project tasks cannot use conditions yet; add it with `rimz loop add` without `--project`"
                         }
-                        "stay" | "each-worktree" | "takeover" | "subscribe" => {
-                            "resident launches are machine state; add them with `rimz loop add` without `--project`"
+                        "each-worktree" => {
+                            "per-worktree fan-out is machine state; add it with `rimz loop add` without `--project`"
                         }
                         "loop-task" => {
                             "resident subscription provenance is machine state; remove `loop-task`"
@@ -1097,24 +1066,6 @@ fn reject_project_task_state_fields(
         }
     }
     Ok(())
-}
-
-fn resolve_task_prompt_paths(entry: &mut TaskEntry, config_dir: &Path) {
-    if let Some(path) = entry.prompt_file.as_mut() {
-        *path = resolve_project_prompt_path(path, config_dir);
-    }
-    if let Some(path) = entry.system_prompt_file.as_mut() {
-        *path = resolve_project_prompt_path(path, config_dir);
-    }
-}
-
-fn resolve_project_prompt_path(path: &Path, config_dir: &Path) -> PathBuf {
-    let expanded = crate::agents::transcript_fs::expand_tilde(&path.to_string_lossy());
-    if expanded.is_absolute() {
-        expanded
-    } else {
-        config_dir.join(expanded)
-    }
 }
 
 fn project_lsp_policy_key(value: &toml::Value) -> Option<&'static str> {

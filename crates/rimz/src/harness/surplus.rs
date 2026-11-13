@@ -1,5 +1,5 @@
-//! The surplus gate: a task's `surplus` and `surplus-after` values, and why
-//! they hold an agent on an account back.
+//! The surplus gate: a run record's `surplus` and `surplus-after` values, and
+//! why they hold an agent on an account back.
 
 use std::time::Duration;
 

@@ -3,7 +3,7 @@
 use crate::common::wait::{
     agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, publish_claude_5h_resetting,
     register_agent, register_agent_with_owner, register_calling_agent,
-    register_calling_agent_with_launch, wait_instances, wait_ok,
+    register_calling_agent_with_launch, seed_signal_wait, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
@@ -368,54 +368,6 @@ fn watcher_spawn_failure_leaves_no_wait() {
 }
 
 #[test]
-fn config_edit_failure_leaves_no_delivery_instance() {
-    use rimz::config::{LoopConfig, TaskEntry, Tasks};
-    use std::collections::BTreeMap;
-    use std::os::unix::fs::PermissionsExt;
-
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    let machine = LoopConfig {
-        tasks: Tasks(BTreeMap::from([(
-            "replacement".into(),
-            TaskEntry {
-                root: env.project_root.clone(),
-                agent: Some("claude".into()),
-                prompt: Some("original".into()),
-                at: Some("07:00".into()),
-                ..Default::default()
-            },
-        )])),
-        ..Default::default()
-    };
-    let home = env.rimz_home();
-    let path = home.join("loop.toml");
-    let original = toml::to_string(&machine).unwrap();
-    std::fs::write(&path, &original).unwrap();
-    std::fs::create_dir_all(home.join("loops")).unwrap();
-    let permissions = std::fs::metadata(&home).unwrap().permissions();
-    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o555)).unwrap();
-    if std::fs::write(home.join("write-probe"), b"").is_ok() {
-        std::fs::set_permissions(&home, permissions).unwrap();
-        crate::common::skip("this user bypasses directory write permissions");
-        return;
-    }
-    let output = agent_wait(&env)
-        .args(["loop", "add", "replacement", "--wait", "--at", "07:00"])
-        .output();
-    std::fs::set_permissions(&home, permissions).unwrap();
-    let output = output.unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("loop.toml"),
-        "{output:?}"
-    );
-    assert!(wait_instances(&env).0.is_empty());
-    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
-}
-
-#[test]
 fn cancel_overlay_failure_keeps_wait_pending() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -554,17 +506,7 @@ fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    wait_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "deployment",
-            "--wait",
-            "--signal",
-            "deploy.failed",
-        ],
-    );
+    seed_signal_wait(&env, "deployment", "deploy.failed", true);
     let receipt: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["wait", "--check", "false", "--json"])).unwrap();
     let name = receipt["name"].as_str().unwrap();
@@ -793,80 +735,6 @@ fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
 }
 
 #[test]
-fn loop_wait_targets_name_and_resolve_the_pane_owner_like_the_arm_receipt() {
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (name, address) in [
-        ("bare", None),
-        ("named", Some("@claude")),
-        ("shadowed", Some("@cleared-session")),
-    ] {
-        let env = Env::new();
-        env.record(&env.project_root);
-        let pane = register_cleared_and_owner_sessions(&env);
-        let pane_fixture = env.write_pane_fixture(&[pane]);
-        let run = |args: &[&str]| {
-            env.rimz()
-                .args(["--mux", "tmux"])
-                .args(args)
-                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-                .env("RIMZ_AGENT_KIND", "claude")
-                .env("RIMZ_AGENT_ID", "owner-session")
-                .output()
-                .unwrap()
-        };
-        let receipt = run(&["wait", "--in", "5m", "--json"]);
-        assert!(
-            receipt.status.success(),
-            "{}",
-            String::from_utf8_lossy(&receipt.stderr)
-        );
-        let receipt: serde_json::Value = serde_json::from_slice(&receipt.stdout).unwrap();
-        assert_eq!(receipt["target"], "@claude#main");
-
-        let mut args = vec!["loop", "add", name, "--wait"];
-        args.extend(address);
-        args.extend(["--signal", "deploy.done"]);
-        let output = run(&args);
-        let tasks = wait_instances(&env);
-        assert_eq!(
-            tasks.0.contains_key(name),
-            output.status.success(),
-            "{name}"
-        );
-        actual.push(serde_json::json!({
-            "task": name,
-            "success": output.status.success(),
-            "stderr": String::from_utf8(output.stderr).unwrap().trim(),
-            "wait": tasks.0.get(name).and_then(|task| task.wait.as_ref()),
-        }));
-        expected.push(if address == Some("@cleared-session") {
-            serde_json::json!({
-                "task": name,
-                "success": false,
-                "stderr": concat!(
-                    "error: no live agent matches `@cleared-session`; ",
-                    "see `rimz agents list` for live handles",
-                ),
-                "wait": null,
-            })
-        } else {
-            serde_json::json!({
-                "task": name,
-                "success": true,
-                "stderr": "",
-                "wait": {
-                    "kind": "claude",
-                    "session": "owner-session",
-                    "handle": receipt["target"],
-                },
-            })
-        });
-    }
-    assert_eq!(actual, expected);
-}
-
-#[test]
 fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -980,7 +848,7 @@ fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
         for args in [
             vec!["wait", "--in", "5m", "--label", &label],
             vec![
-                "loop", "add", "labelled", "--every", "1h", "--check", "true", "--label", &label,
+                "loop", "add", "labelled", "--every", "1h", "--label", &label, "--", "true",
             ],
         ] {
             let output = env.rimz().args(args).output().unwrap();
@@ -997,14 +865,13 @@ fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
 }
 
 #[test]
-fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
+fn loop_labels_persist_in_machine_and_project_tasks() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
     for (name, extra) in [
-        ("machine", vec!["--check", "true"]),
-        ("project", vec!["--check", "true", "--project"]),
-        ("delivery", vec!["--wait"]),
+        ("machine", vec!["--", "true"]),
+        ("project", vec!["--project", "--", "true"]),
     ] {
         let mut args = vec![
             "loop",
@@ -1019,22 +886,10 @@ fn loop_labels_persist_in_machine_project_and_delivery_tasks() {
         wait_ok(&env, &args);
         let text = match name {
             "machine" => std::fs::read_to_string(env.rimz_home().join("loop.toml")).unwrap(),
-            "project" => {
-                std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap()
-            }
-            _ => std::fs::read_to_string(loop_instances_path(&env)).unwrap(),
+            _ => std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
         };
-        let value: serde_json::Value = if name == "delivery" {
-            serde_json::from_str(&text).unwrap()
-        } else {
-            serde_json::to_value(toml::from_str::<toml::Value>(&text).unwrap()).unwrap()
-        };
-        let task = if name == "delivery" {
-            &value[name]
-        } else {
-            &value["tasks"][name]
-        };
-        assert_eq!(task["label"], "gate docs");
+        let value = toml::from_str::<toml::Value>(&text).unwrap();
+        assert_eq!(value["tasks"][name]["label"].as_str(), Some("gate docs"));
         let shown = wait_ok(&env, &["loop", "show", name]);
         assert!(
             shown
@@ -1519,24 +1374,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let armed = env
-        .rimz()
-        .args([
-            "loop",
-            "add",
-            "deployment",
-            "--wait",
-            "@planner",
-            "--signal",
-            "deploy.failed",
-        ])
-        .output()
-        .expect("arm wait from human shell");
-    assert!(
-        armed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&armed.stderr)
-    );
+    seed_signal_wait(&env, "deployment", "deploy.failed", true);
     let name = "deployment";
 
     let listed = agent_wait(&env)
@@ -3032,27 +2870,18 @@ fn a_signal_from_another_channel_wakes_a_starting_holder_and_not_a_namesake() {
             ..LaunchParams::default()
         },
     );
-    wait_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "deploy",
-            "--signal",
-            "deploy.done",
-            "--wait",
-            "@me",
-            "--once",
-        ],
-    );
-    assert_eq!(
-        wait_instances(&env).0["deploy"]
-            .wait
-            .as_ref()
-            .unwrap()
-            .handle,
-        "@planner#beta"
-    );
+    // The row a signal wait armed from `#beta` stores: the agent's launch and its
+    // channel's handle.
+    seed_signal_wait(&env, "deploy", "deploy.done", false);
+    let mut tasks = wait_instances(&env);
+    let target = tasks.0.get_mut("deploy").unwrap().wait.as_mut().unwrap();
+    target.session = AgentSessionId::from("launch-session");
+    target.handle = "@planner#beta".to_owned();
+    std::fs::write(
+        loop_instances_path(&env),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     let source = store
@@ -3142,12 +2971,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
-    wait_ok(
-        &env,
-        &[
-            "loop", "add", "audit", "--signal", "wait.*", "--wait", "@me", "--once",
-        ],
-    );
+    seed_signal_wait(&env, "audit", "wait.*", false);
     let release = env.home_root.join("release");
     let receipt = wait_ok(
         &env,
@@ -3262,12 +3086,7 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
         "scout",
         LaunchParams::default(),
     );
-    wait_ok(
-        &env,
-        &[
-            "loop", "add", "audit", "--signal", "wait.*", "--wait", "@me",
-        ],
-    );
+    seed_signal_wait(&env, "audit", "wait.*", true);
     let mut tasks = wait_instances(&env);
     tasks
         .0
@@ -3640,7 +3459,7 @@ fn wait_at_after_reset_and_when_arm_one_shot_self_waits_in_the_arming_checkout()
             assert!(fire_at > jiff::Timestamp::now(), "{fire_at}");
         } else {
             assert!(entry.fire_at.is_none(), "{entry:?}");
-            assert_eq!(entry.once, Some(true));
+            assert!(!entry.repeat, "{entry:?}");
             assert_eq!(
                 entry.when.as_deref(),
                 Some(&["pr=merged && ci=passed".to_owned()][..])
@@ -3762,53 +3581,6 @@ fn wait_when_twice_names_the_existing_wait_while_other_triggers_arm_again() {
     let at_again = arm(&["--at", "23:59"]);
     assert_ne!(at["name"], at_again["name"]);
     assert_eq!(wait_instances(&env).0.len(), 4);
-}
-
-const LOOP_ADD_REBASE: [&str; 7] = [
-    "loop",
-    "add",
-    "rebase",
-    "--wait",
-    "@me",
-    "--when",
-    "pr=merged",
-];
-
-#[test]
-fn loop_subscription_after_a_self_wait_on_its_condition_is_added() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    wait_ok(&env, &["wait", "--when", "pr=merged"]);
-    let added = wait_ok(&env, &LOOP_ADD_REBASE);
-    assert!(added.contains("added loop task `rebase`"), "{added}");
-    assert_eq!(wait_instances(&env).0.len(), 2);
-    let again = wait_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "rebase-2",
-            "--wait",
-            "@me",
-            "--when",
-            "pr=merged",
-        ],
-    );
-    assert!(again.contains("already subscribed as "), "{again}");
-    assert!(!again.contains("already subscribed as wait-"), "{again}");
-    assert_eq!(wait_instances(&env).0.len(), 2);
-}
-
-#[test]
-fn self_wait_after_a_loop_subscription_on_its_condition_is_armed() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    register_calling_agent(&env);
-    wait_ok(&env, &LOOP_ADD_REBASE);
-    let armed = wait_ok(&env, &["wait", "--when", "pr=merged"]);
-    assert!(armed.starts_with("armed wait-"), "{armed}");
-    assert_eq!(wait_instances(&env).0.len(), 2);
 }
 
 /// Arms `--<trigger>` with a label through `command`, publishing the window it reads, then

@@ -268,18 +268,14 @@ impl TaskState {
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ActionKind {
-    Check,
-    Start,
+    Command,
     Wake,
-    Workflow,
 }
 
 impl From<&TaskAction> for ActionKind {
     fn from(action: &TaskAction) -> Self {
         match action {
-            TaskAction::CheckOnly => Self::Check,
-            TaskAction::Spawn(_) => Self::Start,
-            TaskAction::Workflow(_) => Self::Workflow,
+            TaskAction::Command(_) => Self::Command,
             TaskAction::Deliver(_) => Self::Wake,
         }
     }
@@ -382,8 +378,6 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     newest: Option<LoopRunRecord>,
     spend_today_usd: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    budget_per_day_usd: Option<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     workflow_runs: Vec<WorkflowRunRow>,
     #[serde(rename = "capacity_wait", serialize_with = "capacity_wait_json")]
@@ -670,14 +664,8 @@ fn load(
             );
             row.held = tickets.remove(name).unwrap_or_default();
             row.refresh_attention(count, now);
-            row.worktree_here = here
-                && workspace.is_some_and(|workspace| match task.entry().task_worktree() {
-                    Some(rimz::config::TaskWorktree::Named(name)) => {
-                        rimz::worktree::worktree_path(&root, &config.agents.worktree, name)
-                            .is_ok_and(|path| path == workspace.worktree_root)
-                    }
-                    _ => run_dir == workspace.worktree_root,
-                });
+            row.worktree_here =
+                here && workspace.is_some_and(|workspace| run_dir == workspace.worktree_root);
             row.launched_count = launched_count(task.entry(), name, &workflow_ledger);
             row.attach_workflow_runs(
                 WorkflowRunRow::of_task(&workflows, name, &root, &workflow_specs, now),
@@ -812,9 +800,8 @@ impl TaskRow {
         let action = task.action().ok().map(|action| Action {
             kind: ActionKind::from(action),
             subject: match action {
-                TaskAction::Spawn(subject) | TaskAction::Workflow(subject) => subject.clone(),
+                TaskAction::Command(argv) => schedule::command_line(argv),
                 TaskAction::Deliver(target) => target.handle.clone(),
-                TaskAction::CheckOnly => "check".into(),
             },
         });
         let dir = entry.dir.as_ref().map(|_| run_dir.to_owned());
@@ -856,11 +843,6 @@ impl TaskRow {
             heard: None,
             newest: None,
             spend_today_usd: 0.0,
-            budget_per_day_usd: entry
-                .budget_per_day
-                .as_deref()
-                .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
-                .map(|budget| budget.cap_usd),
             workflow_runs: Vec::new(),
             capacity: Vec::new(),
             head,
@@ -874,7 +856,7 @@ impl TaskRow {
             watcher_pid,
             launched_count: 0,
             quiet: None,
-            launch: launch.filter(|_| entry.stay).cloned(),
+            launch: launch.cloned(),
             exit: None,
         };
         row.set_stats(stats);
@@ -986,7 +968,6 @@ impl TaskRow {
             heard: None,
             newest: None,
             spend_today_usd: 0.0,
-            budget_per_day_usd: None,
             workflow_runs: Vec::new(),
             capacity: Vec::new(),
             head: "one-shot fired".into(),
@@ -1147,13 +1128,7 @@ impl TaskRow {
         {
             parts.push(format!("{} worktrees", self.launched_count));
         }
-        if let Some(cap) = self.budget_per_day_usd {
-            parts.push(format!(
-                "${:.2} / {} today",
-                self.spend_today_usd,
-                render::format_budget_cap(cap)
-            ));
-        } else if self.spend_today_usd > 0.0 {
+        if self.spend_today_usd > 0.0 {
             parts.push(format!("${:.2} today", self.spend_today_usd));
         }
         parts.join(" · ")
@@ -1516,6 +1491,7 @@ fn trigger_text(
                 head
             }
         },
+        Err(schedule::ScheduleErr::Refused(_)) => "refused row".into(),
         Err(_) => "invalid trigger".into(),
     };
     if let Some(label) = &entry.label {

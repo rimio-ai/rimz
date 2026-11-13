@@ -771,51 +771,6 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
 }
 
 #[test]
-fn loop_json_keeps_the_park_reason_and_text_after_cancel() {
-    let env = setup();
-    fs::write(
-        env.rimz_home().join("loop.toml"),
-        format!(
-            "[tasks.review-task]\nworkflow='review'\nroot={:?}\nwhen=['team.stage=Done']\n",
-            env.project_root
-        ),
-    )
-    .unwrap();
-    let mut record = seed(&env, &env.project_root, &env.project_root, "parked");
-    record.task = Some("review-task".into());
-    record.park.as_mut().unwrap().text = Some("Choose a target".into());
-    save(&env, &record);
-    let state = env.state_path_for(&env.project_root);
-    let launch = json!({"at":record.created_at, "run":record.id, "scope":"worktree"});
-    let ledger = json!({"version":1, "tasks":{"review-task":{
-        (env.project_root.to_str().unwrap()):launch
-    }}});
-    fs::create_dir_all(state.root.join("records")).unwrap();
-    fs::write(
-        state.root.join("records/loop-workflow-launches.json"),
-        serde_json::to_vec(&ledger).unwrap(),
-    )
-    .unwrap();
-    success(command(&env, &["workflow", "cancel", record.id.as_str()]));
-    let value: Value = serde_json::from_str(&success(command(
-        &env,
-        &["loop", "show", "review-task", "--json"],
-    )))
-    .unwrap();
-    let row = value["workflow_runs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == json!(record.id))
-        .unwrap();
-    assert_eq!(row["reason"], "user", "{row:#}");
-    assert_eq!(row["text"], "Choose a target", "{row:#}");
-    assert_eq!(row["state"], "canceled", "{row:#}");
-    let text = success(command(&env, &["loop", "show", "review-task"]));
-    assert!(!text.contains("run(s) parked"), "{text}");
-}
-
-#[test]
 fn list_is_attention_first_with_state_ages_glyphs_and_address_json() {
     use jiff::SignedDuration;
     let env = setup();

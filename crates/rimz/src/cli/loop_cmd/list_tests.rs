@@ -164,20 +164,15 @@ fn launched_counts_cover_runs_and_resident_launches_of_remembering_tasks() {
         ]),
     );
     let mut entry = TaskEntry {
-        workflow: Some("review".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        once_per_checkout: Some(true),
         when: Some(vec!["pr=open".into()]),
         each_worktree: true,
         ..TaskEntry::default()
     };
     assert_eq!(launched_count(&entry, "review", &workflows), 3);
-    entry.workflow = None;
-    entry.stay = true;
-    assert_eq!(launched_count(&entry, "review", &workflows), 3);
-    entry.stay = false;
-    assert_eq!(launched_count(&entry, "review", &workflows), 0);
-    entry.workflow = Some("review".into());
-    entry.when = None;
-    entry.every = Some("1h".into());
+    entry.once_per_checkout = None;
     assert_eq!(launched_count(&entry, "review", &workflows), 0);
 }
 

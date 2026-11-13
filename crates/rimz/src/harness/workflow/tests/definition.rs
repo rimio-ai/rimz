@@ -73,7 +73,6 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
         overrides.budget.is_none(),
         "a budget that fails is no budget"
     );
-    assert_eq!(spec.reserved_usd(), 0.0);
     assert!(build.subscriptions().is_err());
     assert!(spec.check("pick").unwrap().subscriptions().is_err());
 }

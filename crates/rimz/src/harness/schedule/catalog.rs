@@ -65,15 +65,7 @@ pub fn worktree_pins(
     }
     let root = entry.resolved_root();
     let mut paths = vec![root.clone()];
-    let needs_run_dir = !entry.each_worktree
-        && (!matches!(
-            entry.task_worktree(),
-            Some(crate::config::TaskWorktree::Named(_))
-        ) || entry.check.is_some()
-            || !entry.judge.is_empty()
-            || entry.when.is_some()
-            || entry.watch.is_some());
-    if needs_run_dir {
+    if !entry.each_worktree {
         let dir = entry.run_dir();
         if dir != root {
             paths.push(dir);
@@ -235,11 +227,6 @@ impl LoadedTask {
         self.shape.action()
     }
 
-    /// The compiled action a fire runs: a delivery or the workflow it starts.
-    pub fn compiled(&self) -> Result<&super::compile::CompiledAction, &TaskActionErr> {
-        self.shape.compiled()
-    }
-
     pub fn trigger(&self) -> &std::result::Result<ParsedTrigger, ScheduleErr> {
         self.shape.trigger()
     }
@@ -394,6 +381,15 @@ impl TaskCatalog {
         &self.visible
     }
 
+    /// A `loop-<petname>` name no task of the catalog holds, for a `rimz loop add` without one.
+    pub fn mint_name(&self) -> String {
+        let taken = |name: &str| {
+            self.visible.contains_key(name) || self.skipped_machine.0.contains_key(name)
+        };
+        let petname = crate::agents::petname::mint(|name| taken(&format!("loop-{name}")));
+        format!("loop-{petname}")
+    }
+
     pub fn for_run(&self, name: &str) -> Option<&LoadedTask> {
         self.runnable.get(name)
     }
@@ -465,7 +461,7 @@ impl TaskCatalog {
             });
         };
         let root = task.entry().resolved_root();
-        let records_workflows = task.entry().workflow.is_some() || task.entry().stay;
+        let records_workflows = task.entry().dedupes_checkout();
         if records_workflows {
             super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?;
         }
@@ -524,18 +520,7 @@ impl TaskCatalog {
             });
         };
         let root = task.entry().resolved_root();
-        let records_workflows = task.entry().workflow.is_some() || task.entry().stay;
-        // A leader the resident path launched records the task name; a run's leader does not.
-        if records_workflows
-            && super::launch_ledger::load_workflows(&StatePaths::for_project_root(&root)?)?
-                .tasks
-                .get(name)
-                .is_some_and(|launches| launches.values().any(|launch| launch.run.is_none()))
-        {
-            bail!(
-                "cannot rename loop task `{name}`: its resident leaders record the task name; edit it with `rimz loop add {name}`, or remove and re-add under the new name (which relaunches its checkouts)"
-            );
-        }
+        let records_workflows = task.entry().dedupes_checkout();
         let changed = match task.source() {
             TaskSource::Config => {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
@@ -655,9 +640,7 @@ impl TaskCatalog {
         for (name, task) in self.runnable.clone() {
             let target = match task.action() {
                 Ok(TaskAction::Deliver(target)) => target.clone(),
-                Ok(TaskAction::Spawn(_) | TaskAction::Workflow(_) | TaskAction::CheckOnly) => {
-                    continue;
-                }
+                Ok(TaskAction::Command(_)) | Err(TaskActionErr::Refused { .. }) => continue,
                 // RimZ is the only writer of instance rows, so one that no
                 // longer compiles can never fire or retire: reap it. User-owned
                 // rows keep rendering `<invalid>` for the user to fix.
@@ -913,10 +896,11 @@ mod tests {
         assert_eq!(TaskCatalog::reap_dead_deliveries_for(&root_a).unwrap(), 0);
     }
 
-    fn task(prompt: &str) -> TaskEntry {
+    fn task(label: &str) -> TaskEntry {
         TaskEntry {
-            agent: Some("claude".to_owned()),
-            prompt: Some(prompt.to_owned()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
+            label: Some(label.to_owned()),
             root: PathBuf::from("/repo"),
             every: Some("1h".to_owned()),
             ..TaskEntry::default()
@@ -943,7 +927,6 @@ mod tests {
         let signal = TaskEntry {
             watch: None,
             signal: Some("pr.merged".into()),
-            once: Some(true),
             ..command.clone()
         };
         let timer = TaskEntry {
@@ -979,7 +962,7 @@ mod tests {
                 (
                     "standing".into(),
                     TaskEntry {
-                        once: None,
+                        repeat: true,
                         ..signal
                     },
                 ),
@@ -1004,7 +987,8 @@ mod tests {
                     "no-delivery".into(),
                     TaskEntry {
                         wait: None,
-                        agent: Some("claude".into()),
+                        command: vec!["true".to_owned()],
+                        timeout: Some("1m".to_owned()),
                         ..command.clone()
                     },
                 ),
@@ -1131,11 +1115,11 @@ mod tests {
         );
 
         assert_eq!(
-            catalog.visible()["same"].entry.prompt.as_deref(),
+            catalog.visible()["same"].entry.label.as_deref(),
             Some("project")
         );
         assert_eq!(
-            catalog.for_run("same").unwrap().entry.prompt.as_deref(),
+            catalog.for_run("same").unwrap().entry.label.as_deref(),
             Some("machine")
         );
         assert!(matches!(
@@ -1159,11 +1143,11 @@ mod tests {
         );
 
         assert_eq!(
-            catalog.visible()["same"].entry.prompt.as_deref(),
+            catalog.visible()["same"].entry.label.as_deref(),
             Some("project")
         );
         assert_eq!(
-            catalog.for_run("same").unwrap().entry.prompt.as_deref(),
+            catalog.for_run("same").unwrap().entry.label.as_deref(),
             Some("project")
         );
         assert!(catalog.overlay_keys.contains("machine::same"));
@@ -1200,7 +1184,7 @@ mod tests {
         );
         let loaded = &catalog.visible()["broken"];
 
-        assert!(matches!(loaded.action(), Ok(TaskAction::Spawn(_))));
+        assert!(matches!(loaded.action(), Ok(TaskAction::Command(_))));
         assert!(matches!(
             loaded.trigger(),
             Err(ScheduleErr::TimeConflict { .. })
@@ -1233,9 +1217,79 @@ mod tests {
         entry.signal = None;
         entry.deadline = None;
         entry.when = Some(vec!["team.stage=Done".to_owned()]);
-        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
-        entry.once = Some(true);
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
+        entry.repeat = true;
+        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
+    }
+
+    #[test]
+    fn when_and_signal_rows_fire_once_unless_repeat_and_clocks_always_repeat() {
+        let base = TaskEntry {
+            every: None,
+            ..task("row")
+        };
+        let rows = [
+            (
+                "every",
+                TaskEntry {
+                    every: Some("1h".into()),
+                    ..base.clone()
+                },
+                false,
+            ),
+            (
+                "cron",
+                TaskEntry {
+                    cron: Some("0 * * * *".into()),
+                    ..base.clone()
+                },
+                false,
+            ),
+            (
+                "signal",
+                TaskEntry {
+                    signal: Some("ci.failed".into()),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "when",
+                TaskEntry {
+                    when: Some(vec!["pr=open".into()]),
+                    ..base.clone()
+                },
+                true,
+            ),
+        ];
+        for (trigger, entry, spent) in rows {
+            let once = super::super::TaskShape::compile("row", &entry).is_ephemeral();
+            assert_eq!(once, spent, "{trigger} without repeat");
+            let repeating = TaskEntry {
+                repeat: true,
+                ..entry
+            };
+            assert!(
+                !super::super::TaskShape::compile("row", &repeating).is_ephemeral(),
+                "{trigger} with repeat"
+            );
+        }
+    }
+
+    #[test]
+    fn a_team_binding_is_standing_without_repeat() {
+        let entry: TaskEntry = serde_json::from_value(serde_json::json!({
+            "wait": {"kind": "claude", "session": "s", "handle": "@coder"},
+            "team": "forge#feature",
+            "signal": "ci.failed",
+            "match": {"path": "/r/feature"},
+            "root": "/r",
+            "dir": "/r/feature",
+        }))
+        .unwrap();
+        let shape = super::super::TaskShape::compile("binding", &entry);
+        assert!(!shape.is_ephemeral());
+        assert!(!shape.trigger().as_ref().unwrap().once);
     }
 
     #[test]

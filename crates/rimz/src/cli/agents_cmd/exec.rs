@@ -795,15 +795,20 @@ fn settle_after_exit(
     let session_name = run
         .map(|context| context.session_name.as_str())
         .unwrap_or(&invocation.workspace.session_name);
-    if should_linger_subagent(
+    let run_record = run
+        .and_then(|context| rimz::harness::run::load(context.store.paths(), &context.run_id).ok());
+    let held = should_hold_kept_pane(
         request.subagent,
         keep,
         parent_watchdog.is_some(),
         parent_ended(),
+        run_record
+            .as_ref()
+            .is_some_and(supervisor::kept_run_stopped),
         cleanup_signal_received(),
         interrupt_signal_flag().load(Ordering::SeqCst),
-    ) && let Some(watchdog) = parent_watchdog.as_ref()
-    {
+    );
+    if held {
         if let Some(identity) = launch_identity {
             // Provider hooks temporarily own the runtime row while the turn
             // runs. The wrapper becomes the long-lived owner once the
@@ -811,7 +816,12 @@ fn settle_after_exit(
             attach_own_launch_pane(invocation, identity);
         }
         terminal.restore();
-        linger_subagent(run, status, watchdog);
+        hold_kept_pane(
+            request.subagent,
+            run_record.as_ref(),
+            status,
+            parent_watchdog.as_ref(),
+        );
     }
     let abrupt = child_exit_abrupt || cleanup_signal_received();
     let (deliberate, ended_session) =
@@ -874,7 +884,7 @@ fn settle_after_exit(
     let close_pane = if request.subagent {
         !(keep && cleanup_signal_received())
     } else {
-        parent_ended() || request.close_pane_on_exit
+        held || parent_ended() || request.close_pane_on_exit
     };
     if close_pane {
         close_own_pane(globals, session_name);
@@ -966,38 +976,48 @@ fn stamp_own_end_if_deliberate(
     (deliberate, ended_session)
 }
 
-fn should_linger_subagent(
+/// Whether the wrapper holds a `--keep` pane once its provider has exited: a
+/// subagent's until its parent ends, and another run's when it was stopped
+/// (`supervisor::kept_run_stopped`), since `--keep` holds the pane and not the
+/// turn. A closed pane, an ended parent, or a Ctrl-C holds nothing.
+fn should_hold_kept_pane(
     subagent: bool,
     keep: bool,
     live_watch: bool,
     parent_ended: bool,
+    run_stopped: bool,
     cleanup: bool,
     interrupted: bool,
 ) -> bool {
-    subagent && keep && live_watch && !parent_ended && !cleanup && !interrupted
+    keep && !parent_ended
+        && !cleanup
+        && !interrupted
+        && if subagent { live_watch } else { run_stopped }
 }
 
-fn linger_subagent(
-    run_context: Option<&RunExecContext>,
+fn hold_kept_pane(
+    subagent: bool,
+    run_record: Option<&rimz::store::run::RunRecord>,
     status: ExitStatus,
-    parent_watchdog: &rimz::harness::parent_watch::ParentWatch,
+    parent_watchdog: Option<&rimz::harness::parent_watch::ParentWatch>,
 ) {
-    let run_status = run_context
-        .and_then(|context| {
-            rimz::harness::run::load(context.store.paths(), &context.run_id)
-                .ok()
-                .map(|record| record.status.as_str())
-        })
-        .unwrap_or("done");
+    let notice = if subagent {
+        let run_status = run_record.map_or("done", |record| record.status.as_str());
+        format!("subagent {run_status}; --keep holds this pane until its parent ends")
+    } else {
+        "run canceled; --keep holds this pane".to_owned()
+    };
     let _ = writeln!(
         std::io::stderr().lock(),
-        "rimz: subagent {run_status}; --keep holds this pane until its parent ends; press Ctrl-C to close it"
+        "rimz: {notice}; press Ctrl-C to close it"
     );
     loop {
         if cleanup_signal_received() {
             std::process::exit(status.code().unwrap_or(1));
         }
-        if interrupt_signal_flag().load(Ordering::SeqCst) || parent_watchdog.parent_ended() {
+        if interrupt_signal_flag().load(Ordering::SeqCst)
+            || parent_watchdog.is_some_and(|watchdog| watchdog.parent_ended())
+        {
             return;
         }
         std::thread::sleep(Duration::from_secs(1));

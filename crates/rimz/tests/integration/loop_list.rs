@@ -8,7 +8,8 @@ use std::path::PathBuf;
 fn task(root: &Path) -> TaskEntry {
     TaskEntry {
         root: root.to_owned(),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("1h".into()),
         ..TaskEntry::default()
     }
@@ -70,8 +71,8 @@ fn capacity_waits_reach_list_and_show_as_text_and_json() {
             "owed".into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                agent: Some("claude".into()),
-                prompt: Some("repair".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 when: Some(vec!["team.stage=Done".into()]),
                 ..Default::default()
             },
@@ -143,9 +144,10 @@ fn capacity_other_checkouts_stay_visible_while_one_checkout_runs() {
             "owed".into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                agent: Some("claude".into()),
-                prompt: Some("repair".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 when: Some(vec!["team.stage=Done".into()]),
+                repeat: true,
                 each_worktree: true,
                 ..Default::default()
             },
@@ -571,7 +573,8 @@ fn show_resolves_worktree_names_and_lists_ambiguous_tasks_and_wakeups() {
         Tasks(BTreeMap::from([(
             "wake".into(),
             TaskEntry {
-                check: None,
+                command: Vec::new(),
+                timeout: None,
                 wait: Some(TaskTarget {
                     kind: AgentKind::new_unchecked("claude"),
                     session: "session".into(),
@@ -647,7 +650,8 @@ fn show_resolves_team_owners_and_disambiguates_exact_names_by_room() {
             session: "session".into(),
             handle: "@coder#lane".into(),
         }),
-        check: None,
+        command: Vec::new(),
+        timeout: None,
         ..task(&env.project_root)
     };
     write_loop_instances(
@@ -737,10 +741,6 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     let resident = TaskEntry {
         every: None,
         signal: Some("pr.merged".into()),
-        stay: true,
-        agent: Some("claude".into()),
-        prompt: Some("inspect".into()),
-        check: None,
         ..clock.clone()
     };
     config(
@@ -754,6 +754,7 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
                 TaskEntry {
                     signal: None,
                     when: Some(vec!["pr=merged".into()]),
+                    repeat: true,
                     each_worktree: true,
                     ..resident
                 },
@@ -771,7 +772,8 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
                         session: "session".into(),
                         handle: "@coder".into(),
                     }),
-                    check: None,
+                    command: Vec::new(),
+                    timeout: None,
                     ..clock.clone()
                 },
             ),
@@ -784,7 +786,8 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
                         session: "session".into(),
                         handle: "@coder".into(),
                     }),
-                    check: None,
+                    command: Vec::new(),
+                    timeout: None,
                     ..clock
                 },
             ),
@@ -850,17 +853,12 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     changed.kind = Some(TaskKind::Routine);
     history.push(changed);
     write_loop_run_records(&env, &history);
-    let paths = env.state_path_for(&env.project_root);
-    let ledger = paths.root.join("records/loop-launches.json");
-    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
-    std::fs::write(ledger, serde_json::to_vec(&json!({"resident": {env.project_root.to_str().unwrap(): {"at": Timestamp::now(), "leader": "@leader"}}})).unwrap()).unwrap();
     let text = loop_ok(&env, &["loop", "list"]);
     for section in ["ROUTINE", "WAITING", "DONE", "WAKE-UPS"] {
         assert!(text.contains(section), "{text}");
     }
     assert!(text.contains("2 subscriptions · all healthy"), "{text}");
-    assert!(text.contains("launched claude @leader"), "{text}");
-    assert!(text.contains("(and 3 older · --all)"), "{text}");
+    assert!(text.contains("(and 2 older · --all)"), "{text}");
     assert!(
         !text.contains("retired-6")
             && !text.contains("removed-routine")
@@ -917,13 +915,6 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
         7,
         "{value}"
     );
-    let resident = value["rooms"][0]["tasks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["name"] == "resident")
-        .unwrap();
-    assert_eq!(resident["section"], "done", "{resident}");
 }
 
 #[test]
@@ -979,7 +970,6 @@ fn condition_counts_and_unhealthy_wake_ups_are_visible() {
                 "and".into(),
                 TaskEntry {
                     every: None,
-                    once: Some(true),
                     when: Some(vec!["pr=merged && ci=passed && pr.queue=queued".into()]),
                     ..task(&env.project_root)
                 },
@@ -1004,7 +994,8 @@ fn condition_counts_and_unhealthy_wake_ups_are_visible() {
                     session: "session".into(),
                     handle: "@coder".into(),
                 }),
-                check: None,
+                command: Vec::new(),
+                timeout: None,
                 ..task(&env.project_root)
             },
         )])),
@@ -1278,10 +1269,13 @@ fn other_room_hints_act_on_that_room() {
             task(&env.project_root),
         )])),
     );
-    write_project_config(&env, "[tasks.local]\ncheck = \"true\"\nevery = \"1h\"\n");
+    write_project_config(
+        &env,
+        "[tasks.local]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+    );
     write_project_config_at(
         &other,
-        "[tasks.blocked]\ncheck = \"true\"\nevery = \"1h\"\n",
+        "[tasks.blocked]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
     );
     let instances = env
         .state_path_for(&other)
@@ -1620,7 +1614,7 @@ fn inactive_tasks_do_not_request_attention_for_old_failures() {
     );
     write_project_config(
         &env,
-        "[tasks.not-enabled]\ncheck = \"true\"\nevery = \"1h\"\n",
+        "[tasks.not-enabled]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
     );
     loop_ok(&env, &["trust", "grant"]);
     write_loop_run_records(
@@ -1684,20 +1678,14 @@ fn malformed_launch_memory_warns_without_hiding_local_or_remote_tasks() {
             let entry = TaskEntry {
                 root: root.clone(),
                 when: Some(vec!["pr=open".into()]),
+                repeat: true,
                 each_worktree: true,
-                workflow: workflow.then(|| "review".into()),
-                agent: (!workflow).then(|| "codex".into()),
-                prompt: (!workflow).then(|| "review".into()),
-                stay: !workflow,
+                once_per_checkout: Some(true),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 ..TaskEntry::default()
             };
-            let healthy = TaskEntry {
-                workflow: (!workflow).then(|| "review".into()),
-                agent: workflow.then(|| "codex".into()),
-                prompt: workflow.then(|| "review".into()),
-                stay: workflow,
-                ..entry.clone()
-            };
+            let healthy = entry.clone();
             config(
                 &env,
                 BTreeMap::from([
@@ -1776,13 +1764,11 @@ fn each_worktree_uses_acting_history_and_launch_count() {
     let env = Env::new();
     let mut entry = task(&env.project_root);
     entry.every = None;
-    entry.check = None;
-    entry.agent = Some("codex".into());
-    entry.prompt = Some("review".into());
-    entry.stay = true;
+    entry.once_per_checkout = Some(true);
     entry.each_worktree = true;
     entry.when = Some(vec!["pr=merged".into()]);
     entry.hold = Some("3m".into());
+    entry.repeat = true;
     config(&env, BTreeMap::from([("sweep".into(), entry)]));
     let mut launched = record("sweep", &env.project_root, LoopRunResult::Launched, 30);
     launched.checkout = Some(env.home_root.join("one"));
@@ -2256,12 +2242,12 @@ fn every_cause_reads_alike_in_list_and_reader() {
             },
             "running-each" => TaskEntry {
                 root: root.clone(),
-                agent: Some("codex".into()),
-                prompt: Some("review".into()),
-                stay: true,
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 each_worktree: true,
                 when: Some(vec!["pr=merged".into()]),
                 hold: Some("3m".into()),
+                repeat: true,
                 ..TaskEntry::default()
             },
             _ => task(root),
@@ -2270,7 +2256,10 @@ fn every_cause_reads_alike_in_list_and_reader() {
             entry.max_strikes = Some(0);
         }
         if name == "blocked" {
-            write_project_config_at(root, "[tasks.blocked]\ncheck = \"true\"\nevery = \"1h\"\n");
+            write_project_config_at(
+                root,
+                "[tasks.blocked]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+            );
             continue;
         }
         let path = env
@@ -2779,8 +2768,8 @@ fn show_logs_and_watch_read_a_lock_free_run_as_list_does() {
     );
 }
 
-/// A row edited mid-run so it no longer compiles to a workflow (here `workflow` beside
-/// `agent`, or an unguarded `--wait`) still has the run it started: `loop show` text and
+/// A row edited mid-run so it no longer compiles to a workflow (here a command row without
+/// its `timeout`, or a delivery row) still has the run it started: `loop show` text and
 /// `--json` and `loop logs` read it as `loop list` does.
 #[cfg(target_os = "linux")]
 #[test]
@@ -2789,12 +2778,12 @@ fn a_row_edited_mid_run_reads_its_run_alike_in_list_show_and_logs() {
     let root = env.project_root.clone();
     env.record(&root);
     let invalid = TaskEntry {
-        workflow: Some("review".into()),
-        agent: Some("claude".into()),
+        timeout: None,
         ..task(&root)
     };
     let wait = TaskEntry {
-        check: None,
+        command: Vec::new(),
+        timeout: None,
         wait: Some(TaskTarget {
             kind: AgentKind::new_unchecked("codex"),
             session: "session".into(),
@@ -2985,11 +2974,11 @@ fn closed_pull_requests_and_fired_gone_checkouts_read_alike_in_list_and_reader()
     );
     let booking = |when: &str, dir: Option<PathBuf>| TaskEntry {
         root: env.project_root.clone(),
-        agent: Some("claude".into()),
-        prompt: Some("start the next stage".into()),
-        stay: true,
-        once: Some(true),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec![when.into()]),
+        // Launch memory, which marks a booking fired, is kept only for once-per-checkout rows.
+        once_per_checkout: Some(true),
         dir,
         ..TaskEntry::default()
     };
@@ -3138,7 +3127,7 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
         ..Default::default()
     };
     seed_agent_launch(&env, &env.project_root, "coder", coder, None);
-    let check = ["--check", "true", "--every", "1h"];
+    let check = ["--every", "1h", "--", "true"];
     let booking = |name: &'static str| [&[name][..], &check[..]].concat();
 
     add_as(&env, Some("launch_coder"), &booking("booked"));
@@ -3167,30 +3156,16 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
     add_as(
         &env,
         Some("launch_coder"),
-        &["delivery", "--wait", "--in", "1h"],
-    );
-    add_as(
-        &env,
-        Some("launch_coder"),
-        &[&booking("shared")[..], &["--project"][..]].concat(),
+        &["shared", "--project", "--every", "1h", "--", "true"],
     );
 
-    let delivery = read_loop_instances(&env).0.remove("delivery");
-    let delivery = delivery
-        .or_else(|| {
-            let config: LoopConfig =
-                toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-            config.tasks.0.get("delivery").cloned()
-        })
-        .expect("the delivery's row");
-    assert_eq!(delivery.booked_by, Vec::new(), "a delivery is not stamped");
     let project: toml::Value = toml::from_str(
         &std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
     )
     .unwrap();
     let shared = &project["tasks"]["shared"];
     assert!(
-        shared.get("check").is_some() && shared.get("booked-by").is_none(),
+        shared.get("command").is_some() && shared.get("booked-by").is_none(),
         "a project task is not stamped: {project}"
     );
     assert_eq!(stored_chain(&env, "shared"), None, "{project}");
@@ -3239,7 +3214,15 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
     add_as(
         &env,
         Some("launch_coder"),
-        &[&booking("elsewhere")[..], &["--root", other_root][..]].concat(),
+        &[
+            "elsewhere",
+            "--root",
+            other_root,
+            "--every",
+            "1h",
+            "--",
+            "true",
+        ],
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();

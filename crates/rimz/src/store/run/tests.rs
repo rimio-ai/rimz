@@ -330,6 +330,22 @@ fn retry_link_round_trips_and_defaults_when_absent() {
 }
 
 #[test]
+fn loop_fire_round_trips_and_defaults_when_absent() {
+    let mut record = listing_record();
+    let fire = crate::ids::WorkflowRunId::new();
+    record.loop_fire = Some(fire.clone());
+
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert_eq!(value["loop_fire"], fire.as_str());
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.loop_fire.as_ref(), Some(&fire));
+
+    value.as_object_mut().unwrap().remove("loop_fire");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.loop_fire, None);
+}
+
+#[test]
 fn parked_on_round_trips_and_defaults_when_absent() {
     let mut record = RunRecord::new(
         WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),

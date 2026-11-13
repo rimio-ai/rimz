@@ -18,8 +18,11 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     };
     let (outcome, pane_open) = stop_active_run(name, &root, None, globals)?;
     let (canceled, mut failures) = cancel_workflow_runs(name, &root)?;
+    if !canceled.is_empty() {
+        failures.extend(stop_owned_launches(name, &root, &canceled, globals)?);
+    }
     match outcome {
-        StopOutcome::NoActiveRun if canceled > 0 || !failures.is_empty() => {}
+        StopOutcome::NoActiveRun if !canceled.is_empty() || !failures.is_empty() => {}
         StopOutcome::NoActiveRun => writeln!(ui::out(), "loop `{name}`: no active run")?,
         StopOutcome::Stopped {
             run_id,
@@ -47,9 +50,12 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
 
 /// Cancel each live workflow run the task started, as `rimz workflow cancel` does; the run's
 /// own report then records the end and starts the next waiting trigger. A run that fails to
-/// cancel leaves the others to try, and its error is returned beside the count.
-fn cancel_workflow_runs(name: &str, root: &Path) -> Result<(usize, Vec<String>)> {
-    let mut canceled = 0;
+/// cancel leaves the others to try, and its error is returned beside the canceled ids.
+fn cancel_workflow_runs(
+    name: &str,
+    root: &Path,
+) -> Result<(Vec<rimz::ids::WorkflowRunId>, Vec<String>)> {
+    let mut canceled = Vec::new();
     let mut failures = Vec::new();
     for run in live_workflow_runs(name, root)? {
         let output = std::process::Command::new(rimz::proc::rimz_exe())
@@ -66,13 +72,38 @@ fn cancel_workflow_runs(name: &str, root: &Path) -> Result<(usize, Vec<String>)>
             ),
             Ok(_) => {
                 writeln!(ui::out(), "loop `{name}`: stopped · run {}", run.id)?;
-                canceled += 1;
+                canceled.push(run.id);
                 continue;
             }
         };
         failures.push(failure);
     }
     Ok((canceled, failures))
+}
+
+/// Stop each live supervised run a canceled fire owns: a canceled fire ends its command, but a
+/// blocking launch the command made runs on in its pane until it is stopped itself. A launch
+/// of a fire that started after the cancel is that fire's own and is left alone.
+fn stop_owned_launches(
+    name: &str,
+    root: &Path,
+    fires: &[rimz::ids::WorkflowRunId],
+    globals: &GlobalFlags,
+) -> Result<Vec<String>> {
+    let workspace = rimz::WorkspaceResolver::resolve(root, None)
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
+    let paths = StatePaths::for_project_root(&workspace.project_root)?;
+    let mut failures = Vec::new();
+    for run in rimz::harness::run::list(&paths)? {
+        if run.status.is_terminal() || !run.loop_fire.as_ref().is_some_and(|f| fires.contains(f)) {
+            continue;
+        }
+        match stop_owned_run(name, Some(&workspace), paths.clone(), &run, globals) {
+            Ok(pane_open) => failures.extend(pane_open),
+            Err(err) => failures.push(format!("loop `{name}`: run {}: {err:#}", run.run_id)),
+        }
+    }
+    Ok(failures)
 }
 
 fn live_workflow_runs(name: &str, root: &Path) -> Result<Vec<rimz::store::workflow::RunRecord>> {

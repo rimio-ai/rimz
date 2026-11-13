@@ -23,7 +23,7 @@ mod reconcile;
 mod show;
 
 use host::Host;
-pub(super) use receipt::{first_pass, restart, write_held};
+pub(super) use receipt::restart;
 
 fn workflow_agent(
     record: &RunRecord,
@@ -625,7 +625,7 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                     let path = entry
                         .with_context(|| format!("reading {}", home.display()))?
                         .path();
-                    // A dot directory is no workflow name: `loop eject` stages in `.eject/`.
+                    // A dot directory is no workflow name.
                     let hidden = path
                         .file_name()
                         .is_some_and(|name| name.to_string_lossy().starts_with('.'));

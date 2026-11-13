@@ -50,13 +50,6 @@ impl LoopConfig {
     pub fn is_empty(&self) -> bool {
         self.default_timeout.is_none() && self.tasks.0.is_empty()
     }
-
-    pub fn validate_budgets(&self) -> Result<(), TaskBudgetError> {
-        for (name, entry) in &self.tasks.0 {
-            entry.validate_budget(name)?;
-        }
-        Ok(())
-    }
 }
 
 fn deserialize_default_timeout<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -124,7 +117,7 @@ impl From<CapacityWait> for String {
     }
 }
 
-/// A task's own `throttle` key; absent means on.
+/// A workflow agent step's `throttle` key; absent means on.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ThrottleSwitch {
@@ -149,155 +142,19 @@ pub enum OverlapPolicy {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// A task's shell check. A judge table here is an older RimZ's form, now refused.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct TaskCheck(pub String);
-
-const CHECK_TABLE_REFUSAL: &str = "a judge table under `check` is a task form an older RimZ \
-    wrote; delete this task from the file and re-add it with `rimz loop add`";
-
-impl<'de> Deserialize<'de> for TaskCheck {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct CheckVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for CheckVisitor {
-            type Value = TaskCheck;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a shell command")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-                Ok(TaskCheck(value.to_owned()))
-            }
-
-            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
-                Ok(TaskCheck(value))
-            }
-
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                _map: M,
-            ) -> Result<Self::Value, M::Error> {
-                Err(serde::de::Error::custom(CHECK_TABLE_REFUSAL))
-            }
-        }
-
-        deserializer.deserialize_any(CheckVisitor)
-    }
-}
-
-impl From<String> for TaskCheck {
-    fn from(command: String) -> Self {
-        Self(command)
-    }
-}
-
-impl From<&str> for TaskCheck {
-    fn from(command: &str) -> Self {
-        Self(command.to_owned())
-    }
-}
-
-impl std::fmt::Display for TaskCheck {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// A headless judge's profile, question, and independent timing options.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub struct Judge {
-    pub agent: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_file: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recheck: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for Judge {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-        struct Fields {
-            agent: String,
-            prompt: Option<String>,
-            prompt_file: Option<PathBuf>,
-            recheck: Option<String>,
-            timeout: Option<String>,
-        }
-        let fields = Fields::deserialize(deserializer)?;
-        if fields.prompt.is_some() == fields.prompt_file.is_some() {
-            return Err(D::Error::custom(
-                "judge requires exactly one of prompt and prompt-file",
-            ));
-        }
-        Ok(Self {
-            agent: fields.agent,
-            prompt: fields.prompt,
-            prompt_file: fields.prompt_file,
-            recheck: fields.recheck,
-            timeout: fields.timeout,
-        })
-    }
-}
-
-pub(crate) fn deserialize_judges<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<Judge>, D::Error> {
-    struct JudgesVisitor;
-
-    impl<'de> serde::de::Visitor<'de> for JudgesVisitor {
-        type Value = Vec<Judge>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a judge table or an array of judge tables")
-        }
-
-        fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
-            Judge::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                .map(|judge| vec![judge])
-        }
-
-        fn visit_seq<S: serde::de::SeqAccess<'de>>(
-            self,
-            mut sequence: S,
-        ) -> Result<Self::Value, S::Error> {
-            let mut judges = Vec::new();
-            while let Some(judge) = sequence.next_element()? {
-                judges.push(judge);
-            }
-            Ok(judges)
-        }
-    }
-
-    deserializer.deserialize_any(JudgesVisitor)
-}
-
-/// One triggered loop wake-up. `agent` names a turn or staying layout that its
-/// workflow run launches; `wait` delivers to a pinned session.
+/// One triggered loop wake-up: a trigger, its placement, and one action. `command` is the argv
+/// a fire runs in its checkout; `wait` delivers to a pinned session instead, the row `rimz wait`
+/// and team arming write. Every key outside the row refuses that row alone (`refused`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(remote = "Self", default, deny_unknown_fields)]
 pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<String>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub stay: bool,
+    /// The argv each fire runs, word for word, in the fire's checkout.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
     #[serde(rename = "each-worktree", skip_serializing_if = "std::ops::Not::not")]
     pub each_worktree: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub takeover: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub subscribe: Vec<super::TeamSignalBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<TaskTarget>,
     #[serde(rename = "wait-meta", skip_serializing_if = "Option::is_none")]
@@ -306,64 +163,25 @@ pub struct TaskEntry {
     pub team: Option<crate::ids::TeamInstanceId>,
     #[serde(rename = "loop-task", skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    /// The text a delivery row hands its session, written by team arming.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
-    pub prompt_file: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub check: Option<TaskCheck>,
-    #[serde(
-        rename = "check-timeout",
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_default_timeout"
-    )]
-    pub check_timeout: Option<String>,
-    #[serde(
-        skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "deserialize_judges"
-    )]
-    pub judge: Vec<Judge>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify: Option<String>,
-    #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
-    pub max_attempts: Option<u32>,
     #[serde(rename = "max-strikes", skip_serializing_if = "Option::is_none")]
     pub max_strikes: Option<u32>,
-    /// Whether the task launches at most once per checkout; absent derives it from the row.
+    /// Whether the task fires at most once per checkout whose command exited 0.
     #[serde(rename = "once-per-checkout", skip_serializing_if = "Option::is_none")]
     pub once_per_checkout: Option<bool>,
+    /// A watch's polarity: which of its outcomes delivers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on: Option<CheckOn>,
     pub root: PathBuf,
-    /// Directory for check/watch commands; the arming worktree, or `root` when absent.
+    /// Directory the command or watch runs in; the arming worktree, or `root` when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
-    /// A resident's seat; on a legacy agent row, the named tree each fire reuses or creates.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<String>,
-    /// The name prefix of the fresh worktree each fire of an agent or check task creates.
+    /// The name prefix of the fresh worktree each fire creates and runs its command in.
     #[serde(rename = "fresh-worktree", skip_serializing_if = "Option::is_none")]
     pub fresh_worktree: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    /// Fast-mode override for the launched agent: `true` requests the
-    /// provider's fast mode, `false` turns off a profile's.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fast: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub budget: Option<String>,
-    #[serde(rename = "budget-per-day", skip_serializing_if = "Option::is_none")]
-    pub budget_per_day: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub surplus: Option<String>,
-    #[serde(rename = "surplus-after", skip_serializing_if = "Option::is_none")]
-    pub surplus_after: Option<String>,
-    #[serde(rename = "system-prompt-file", skip_serializing_if = "Option::is_none")]
-    pub system_prompt_file: Option<PathBuf>,
+    /// How long a fire's command may run; a watch's check-in interval on a delivery row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -382,8 +200,10 @@ pub struct TaskEntry {
     pub matches: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watch: Option<WatchSpec>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub once: Option<bool>,
+    /// Whether a `signal` or `when` row fires again after its first fire; `every` and `cron`
+    /// rows repeat by nature, and so does a team binding, whose `team` makes it standing.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub repeat: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
     /// The instant of an absolute one-shot, written by `rimz loop add --in`, a `rimz loop add
@@ -395,14 +215,9 @@ pub struct TaskEntry {
     /// The provider whose windows the row's `window.*` terms read, recorded at add.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::ids::AgentKind>,
-    /// The provider account every fire of an `agent` task runs on; unset follows the room.
+    /// The account whose usage windows the row's conditions read; unset follows the room.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<crate::ids::LoginName>,
-    /// `off` exempts every fire of the task from the start throttle.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub throttle: Option<ThrottleSwitch>,
-    #[serde(rename = "capacity-wait", skip_serializing_if = "Option::is_none")]
-    pub capacity_wait: Option<CapacityWait>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlap: Option<OverlapPolicy>,
     #[serde(rename = "overlap-limit", skip_serializing_if = "Option::is_none")]
@@ -411,48 +226,52 @@ pub struct TaskEntry {
     /// each agent that started the one before it. Empty for a booking from a shell.
     #[serde(rename = "booked-by", skip_serializing_if = "Vec::is_empty")]
     pub booked_by: Vec<crate::agents::LaunchedBy>,
+    /// Why the stored row does not decode, with the row as stored; such a row never fires and
+    /// is written back unchanged.
+    #[serde(skip)]
+    pub refused: Option<RefusedRow>,
 }
 
-/// Where a task's worktree comes from: one named tree, or a fresh one per fire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TaskWorktree<'a> {
-    /// A resident's seat, or a legacy agent row's reused tree.
-    Named(&'a str),
-    /// A fresh tree per fire, named `<prefix>-<yyyymmdd-hhmmss>`.
-    Fresh { prefix: &'a str },
+/// A stored row this RimZ does not take, kept byte for byte so a rewrite of its file keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusedRow {
+    pub raw: serde_json::Value,
+    pub detail: String,
 }
 
-/// The ordered guard chain: the shell check, then each judge.
-pub struct Guard<'a> {
-    pub shell: Option<&'a str>,
-    pub shell_timeout: Option<&'a str>,
-    pub judges: Vec<&'a Judge>,
+impl<'de> Deserialize<'de> for TaskEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        Ok(TaskEntry::deserialize(&raw).unwrap_or_else(|error| {
+            let root = raw
+                .get("root")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            TaskEntry {
+                root,
+                refused: Some(RefusedRow {
+                    detail: error.to_string(),
+                    raw,
+                }),
+                ..TaskEntry::default()
+            }
+        }))
+    }
+}
+
+impl Serialize for TaskEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.refused {
+            Some(refused) => refused.raw.serialize(serializer),
+            None => TaskEntry::serialize(self, serializer),
+        }
+    }
 }
 
 impl TaskEntry {
     pub fn dedupes_checkout(&self) -> bool {
-        self.once_per_checkout
-            .unwrap_or(self.stay || self.is_condition_workflow())
-    }
-
-    pub fn is_condition_workflow(&self) -> bool {
-        self.workflow.is_some() && self.when.is_some()
-    }
-
-    /// The task's worktree placement; the one reader of `worktree` and `fresh_worktree`.
-    pub fn task_worktree(&self) -> Option<TaskWorktree<'_>> {
-        if let Some(prefix) = self.fresh_worktree.as_deref() {
-            return Some(TaskWorktree::Fresh { prefix });
-        }
-        self.worktree.as_deref().map(TaskWorktree::Named)
-    }
-
-    pub fn guard(&self) -> Guard<'_> {
-        Guard {
-            shell: self.check.as_ref().map(|check| check.0.as_str()),
-            shell_timeout: self.check_timeout.as_deref().or(self.timeout.as_deref()),
-            judges: self.judge.iter().collect(),
-        }
+        self.once_per_checkout.unwrap_or(false)
     }
 }
 
@@ -715,80 +534,6 @@ impl TaskEntry {
             .map(|dir| resolve_root_with(dir, home_dir()))
             .unwrap_or_else(|| self.resolved_root())
     }
-
-    pub fn validate_budget(&self, task: &str) -> Result<(), TaskBudgetError> {
-        if let Some(raw) = self.budget.as_deref() {
-            raw.parse::<crate::harness::budget::BudgetSpec>()
-                .map_err(|source| TaskBudgetError::Invalid {
-                    task: task.to_owned(),
-                    field: "budget",
-                    source,
-                })?;
-        }
-        if let Some(raw) = self.budget_per_day.as_deref() {
-            raw.parse::<crate::harness::budget::BudgetSpec>()
-                .map_err(|source| TaskBudgetError::Invalid {
-                    task: task.to_owned(),
-                    field: "budget-per-day",
-                    source,
-                })?;
-            // A workflow task's runs reserve their agent steps' own budgets.
-            if self.budget.is_none() && self.workflow.is_none() {
-                return Err(TaskBudgetError::MissingRunBudget {
-                    task: task.to_owned(),
-                });
-            }
-        }
-        if let Some(raw) = self.surplus.as_deref() {
-            crate::harness::surplus::parse_surplus(raw).map_err(|detail| {
-                TaskBudgetError::InvalidSurplus {
-                    task: task.to_owned(),
-                    field: "surplus",
-                    detail,
-                }
-            })?;
-        }
-        if let Some(raw) = self.surplus_after.as_deref() {
-            crate::harness::surplus::parse_surplus_after(raw).map_err(|detail| {
-                TaskBudgetError::InvalidSurplus {
-                    task: task.to_owned(),
-                    field: "surplus-after",
-                    detail,
-                }
-            })?;
-        }
-        if (self.surplus.is_some() || self.surplus_after.is_some())
-            && self.agent.is_none()
-            && self.wait.is_none()
-            && self.workflow.is_none()
-        {
-            return Err(TaskBudgetError::SurplusNeedsAgent {
-                task: task.to_owned(),
-            });
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum TaskBudgetError {
-    #[error("task `{task}` has invalid `{field}`: {source}")]
-    Invalid {
-        task: String,
-        field: &'static str,
-        #[source]
-        source: crate::harness::budget::BudgetParseError,
-    },
-    #[error("task `{task}` sets `budget-per-day` without `budget`; set a per-run budget")]
-    MissingRunBudget { task: String },
-    #[error("task `{task}` has invalid `{field}`: {detail}")]
-    InvalidSurplus {
-        task: String,
-        field: &'static str,
-        detail: String,
-    },
-    #[error("task `{task}` sets a surplus gate without `agent`, `wait`, or `workflow`")]
-    SurplusNeedsAgent { task: String },
 }
 
 /// A loop delivery target pinned to the agent that scheduled it. The handle is

@@ -628,12 +628,12 @@ pub struct RunRecord {
     /// Whether the run's starts wait at a capacity hold or launch past it, a start argument.
     #[serde(default, skip_serializing_if = "StartCapacity::is_wait")]
     pub capacity: StartCapacity,
-    /// The loop task row's `surplus` value as written when its fire started the run. The run's
-    /// judges gate on it and on `surplus_after`, never on the live row; a record with neither
-    /// applies no surplus gate to its judges.
+    /// The `surplus` value an older RimZ's loop fire froze from its task row; a loop row carries
+    /// none now, so no fire sets it. The run's judges gate on it and on `surplus_after`; a record
+    /// with neither applies no surplus gate to its judges.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surplus: Option<String>,
-    /// The loop task row's `surplus-after` value as written when its fire started the run.
+    /// The `surplus-after` value an older RimZ's loop fire froze from its task row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surplus_after: Option<String>,
     /// What the loop fire that started the run tells the run's briefs, frozen at creation, so an

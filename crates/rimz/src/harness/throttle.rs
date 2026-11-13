@@ -1553,20 +1553,13 @@ fn diagnostic_agent_count(host: &dyn Host, config: &ThrottleConfig) -> Result<()
 /// Where a launch of `entry` into `checkout` writes, for the free-disk floor: a
 /// fresh worktree's target, at its nearest existing ancestor, else `checkout`.
 pub(super) fn disk_at(entry: &TaskEntry, worktrees: &WorktreeConfig, checkout: PathBuf) -> PathBuf {
-    let name = match entry.task_worktree() {
-        Some(crate::config::TaskWorktree::Named(name)) => name.trim(),
-        Some(crate::config::TaskWorktree::Fresh { .. }) => "",
-        None => return checkout,
-    };
+    if entry.fresh_worktree.is_none() {
+        return checkout;
+    }
     // The launch takes the task root as its repo root, as `--root` does.
     let root = entry.resolved_root();
     let repo_root = root.canonicalize().unwrap_or(root);
-    let target = if name.is_empty() {
-        crate::worktree::worktree_parent(&repo_root, worktrees)
-    } else {
-        crate::worktree::worktree_path(&repo_root, worktrees, name)
-    };
-    target
+    crate::worktree::worktree_parent(&repo_root, worktrees)
         .ok()
         .and_then(|target| {
             target

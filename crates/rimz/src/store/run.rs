@@ -339,6 +339,10 @@ pub struct RunRecord {
     pub retry_of: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    /// The workflow run of the loop fire whose command made this blocking launch: the fire owns
+    /// the run, and collecting the fire's ended run stops it if it is still open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_fire: Option<crate::ids::WorkflowRunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -605,6 +609,7 @@ impl RunRecord {
             cancel_reason: None,
             retry_of: None,
             loop_task: None,
+            loop_fire: None,
             workflow: None,
             verify: None,
             status: RunStatus::Pending,

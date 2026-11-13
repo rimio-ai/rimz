@@ -91,29 +91,6 @@ pub struct WalkNode {
 }
 
 impl Definition {
-    /// What one run reserves against a daily cap: its agent steps' per-launch budgets, summed.
-    pub(in crate::harness) fn reserved_usd(&self) -> f64 {
-        self.steps()
-            .map(|(_, step)| step)
-            .filter(|step| matches!(step.kind(), Some(Kind::Agent(_))))
-            .filter_map(|step| step.budget()?.value().ok())
-            .fold(0.0, |total, budget| total + budget.cap_usd)
-    }
-
-    /// The profile of every agent step and agent check, beside the account a step pins; a
-    /// judge runs on its profile's own login.
-    pub(in crate::harness) fn agent_launches(&self) -> Vec<(&str, Option<&crate::ids::LoginName>)> {
-        let steps = self.steps().filter_map(|(_, step)| match step.kind() {
-            Some(Kind::Agent(agent)) => Some((agent.as_str(), step.account())),
-            _ => None,
-        });
-        let checks = self.checks().filter_map(|(_, check)| match check.kind() {
-            Some(Kind::Judge(agent)) => Some((agent.as_str(), None)),
-            _ => None,
-        });
-        steps.chain(checks).collect()
-    }
-
     /// Reverse postorder, with returning steps below their earlier sending check.
     pub fn walk(&self) -> Walk {
         let mut seen = BTreeSet::new();

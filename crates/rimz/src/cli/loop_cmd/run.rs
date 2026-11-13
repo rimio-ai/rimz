@@ -1,6 +1,6 @@
 //! Execute loop tasks and record foreground or scheduled run outcomes.
 
-use super::run_report::{RunSummary, keep_hint, write_manual_verdict, write_run_summary};
+use super::run_report::{RunSummary, write_manual_verdict, write_run_summary};
 use super::*;
 use rimz::harness::launch::AgentShellPersistence;
 
@@ -53,12 +53,7 @@ fn write_condition_notice(
     )
 }
 
-pub(super) fn run_one(
-    args: RunArgs,
-    mode: LoopRunMode,
-    keep: bool,
-    globals: &GlobalFlags,
-) -> Result<()> {
+pub(super) fn run_one(args: RunArgs, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
     let name = args.name.as_str();
     let signal = args
         .signal_json
@@ -103,12 +98,6 @@ pub(super) fn run_one(
     let loaded = loaded
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
-    if keep && entry.workflow.is_some() {
-        anyhow::bail!(
-            "workflow task `{name}` cannot use --keep; set `keep = true` on the workflow's \
-             `[agent.<name>]`"
-        );
-    }
     let checkout = resident_checkout(&entry, mode, args.cwd)?;
     let source = loaded.source();
     if !args.drain {
@@ -122,7 +111,7 @@ pub(super) fn run_one(
     let action = loaded.action().cloned().map_err(Clone::clone)?;
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
-        write_manual_header(&mut ui::out(), name, &entry, &action)?;
+        write_manual_header(&mut ui::out(), name, &action)?;
     }
     if mode == LoopRunMode::Manual {
         let notice = match arm_state {
@@ -159,7 +148,6 @@ pub(super) fn run_one(
         loaded,
         &catalog,
         mode,
-        keep,
         Timestamp::now(),
         config.clone(),
         signal,
@@ -180,16 +168,12 @@ pub(super) fn run_one(
         }
     }
     let plan = fire.prepare(&mut |root| {
-        // An agent task's room is born here, so its birth keeps the fire's shell persistence;
-        // the run's step launch then finds it open.
-        if !entry.stay
-            && !matches!(action, TaskAction::Spawn(_))
-            && (mode != LoopRunMode::Scheduled
-                || !matches!(action, TaskAction::CheckOnly | TaskAction::Workflow(_)))
-        {
-            if !matches!(action, TaskAction::Workflow(_)) {
-                return Ok(());
-            }
+        // A command's room is born here, so its birth keeps the fire's shell persistence; a
+        // launch in the command then finds it open.
+        if matches!(action, TaskAction::Deliver(_)) {
+            return Ok(());
+        }
+        if mode != LoopRunMode::Scheduled {
             let workspace = WorkspaceResolver::resolve_participant(root, Some(root.to_path_buf()))?;
             if crate::cli::open_existing_store(&workspace)?.is_some() {
                 return Ok(());
@@ -231,14 +215,7 @@ pub(super) fn run_one(
     fire.release_run_lock()?;
     present_finished(name, &entry, &action, mode, &finished)?;
     if mode == LoopRunMode::Manual {
-        write_launched_run_command(
-            &entry,
-            &action,
-            keep,
-            &finished.record,
-            fire.advance(),
-            globals,
-        )?;
+        write_launched_run_command(&entry, &finished.record, globals)?;
     }
     if let Some(code) = finished.presentation.exit_code {
         std::process::exit(code);
@@ -256,9 +233,6 @@ fn resident_checkout(
             bail!("--cwd on loop run requires an --each-worktree task");
         }
         return Ok(None);
-    }
-    if !entry.stay && entry.workflow.is_none() {
-        bail!("--each-worktree requires --stay or workflow");
     }
     let owned: Vec<_> = rimz::worktree::discover_owned(&entry.resolved_root())?
         .into_iter()
@@ -430,10 +404,7 @@ fn present_finished(
 /// both.
 fn write_launched_run_command(
     entry: &TaskEntry,
-    action: &TaskAction,
-    keep: bool,
     record: &LoopRunRecord,
-    advance: Option<&rimz::harness::workflow::Advance>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     if record.result != LoopRunResult::Launched {
@@ -464,14 +435,7 @@ fn write_launched_run_command(
         "  → {}",
         crate::cli::workflow_view::resolve::run_command(&run, "show", globals, None, &[], &[])
     )?;
-    if let Some(hint) = keep_hint(entry, action, keep, run.state.is_terminal()) {
-        writeln!(ui::out(), "{}", ui::paint(ui::palette::muted(), hint))?;
-    }
-    let paths = paths.workflow(&id);
-    match crate::cli::workflow::first_pass(&paths, advance)? {
-        Some(run) => crate::cli::workflow::write_held(&paths, &run, "  "),
-        None => Ok(()),
-    }
+    Ok(())
 }
 
 fn execute_prepared_delivery(
@@ -628,7 +592,6 @@ fn dispatch_wake(
 fn write_manual_header(
     out: &mut impl Write,
     name: &str,
-    entry: &TaskEntry,
     action: &TaskAction,
 ) -> std::io::Result<()> {
     writeln!(
@@ -637,7 +600,7 @@ fn write_manual_header(
         ui::paint(ui::palette::header(), name),
         ui::paint(
             ui::palette::muted(),
-            &format!(" — {}", render::task_run_rule(entry, action))
+            &format!(" — {}", render::task_run_rule(action))
         )
     )
 }

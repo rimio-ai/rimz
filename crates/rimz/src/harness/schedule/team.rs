@@ -174,10 +174,8 @@ fn binding_spec(
             .clone()
             .map_or(DeliveryPrompt::None, DeliveryPrompt::Inline),
         provenance,
-        check: None,
         deadline: None,
         max_strikes: None,
-        surplus: None,
     })
 }
 

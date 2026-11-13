@@ -1,5 +1,5 @@
-//! Producer-published loop bookings: each staying one-off agent or team launch an agent
-//! booked in this room, with the loop's own verdict on it, read once per pass through
+//! Producer-published loop bookings: each one-off loop row an agent booked in this room whose
+//! command is an agent or team launch, with the loop's own verdict on it, read once per pass through
 //! `harness::schedule::attention::read_catalog`. The cache holds only what the room's
 //! records say; which card owns a booking and what its launch has alive are joined in
 //! the fold (`crate::sidebar::enrich::bookings`).
@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentState, LaunchedBy, WorkflowAttemptRole};
-use crate::config::{MachineConfig, TaskWorktree, TeamsConfig, WorktreeConfig};
+use crate::agents::{AgentState, LaunchedBy};
+use crate::config::{MachineConfig, TeamsConfig, WorktreeConfig};
 use crate::harness::cache_keepalive::SeatPolicy;
+use crate::harness::loop_task::{FireLaunch, LaunchTree, read_fire_launch};
 use crate::harness::schedule::attention::{self, ReadContext, TaskReading};
 use crate::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use crate::harness::schedule::launch_ledger::{self, WorkflowLaunchRecord, WorkflowLedger};
@@ -21,7 +22,7 @@ use crate::harness::schedule::{TaskKind, Trigger};
 use crate::harness::when::CiSource;
 use crate::ids::WorkflowRunId;
 use crate::store::snapshot::{BookingPr, BookingStarts, SidebarSnapshot};
-use crate::store::workflow::{RunFire, RunOrigin, StepLifecycle};
+use crate::store::workflow::{RunEnding, RunFire, RunOrigin};
 use crate::{RuntimePaths, StatePaths};
 
 #[cfg(test)]
@@ -241,8 +242,8 @@ impl Lane<'_> {
             .filter_map(|reading| reading.launch.as_ref()?.run.as_ref());
         let homes = run_homes(state, fired.chain(candidates.iter().map(|(_, run)| run)));
         let workflows = homes.values().map(|(record, _)| record.clone()).collect();
-        let (agents, rejected) = booked_agents(&homes, &candidates);
-        if !booked && agents.is_empty() {
+        let (commands, rejected) = booked_commands(&homes, &candidates);
+        if !booked && commands.is_empty() {
             lane.expired.extend(rejected);
             return Vec::new();
         }
@@ -251,7 +252,7 @@ impl Lane<'_> {
             source: CiSource::read(runtime),
             workflows,
             runs: crate::store::run::list(&state.runs_dir).unwrap_or_default(),
-            agents,
+            commands,
             rows: self.rows,
             worktrees: self.worktrees,
         };
@@ -300,14 +301,14 @@ fn run_homes<'a>(
     homes
 }
 
-/// The agent step each candidate's sealed spec starts, for the candidates whose run is a
-/// scheduled fire an agent booked of a definition compiled from an inline row whose `agent`
-/// step is a session with no rest check; and the candidates found to be no booking.
-fn booked_agents(
+/// The launch each candidate's command typed, read back from its sealed spec, for the
+/// candidates whose run is a scheduled fire an agent booked of a loop row's command; and the
+/// candidates found to be no booking.
+fn booked_commands(
     homes: &BTreeMap<WorkflowRunId, (crate::store::workflow::RunRecord, PathBuf)>,
     candidates: &[(String, WorkflowRunId)],
 ) -> (
-    BTreeMap<WorkflowRunId, BookedStep>,
+    BTreeMap<WorkflowRunId, FireLaunch>,
     Vec<(String, WorkflowRunId)>,
 ) {
     let mut booked = BTreeMap::new();
@@ -324,39 +325,23 @@ fn booked_agents(
             rejected.push((task.clone(), run.clone()));
             continue;
         }
-        // The step a compiled loop row runs its agent in (`schedule::compile`): a staying row
-        // compiles to a session with no rest check, a verify row to one with `verify`.
         let Ok(spec) = crate::harness::workflow::load(home) else {
             continue;
         };
-        let Some((step, agent)) = spec
-            .step("agent")
-            .filter(|step| {
-                step.lifecycle() == StepLifecycle::Session && step.rest_check().is_empty()
-            })
-            .and_then(|step| Some((step, step.agent()?)))
+        // The runner seals the command as `exec <argv as one shell line>`, whose words read
+        // back unchanged (`schedule::command_line`).
+        let Some(launch) = spec
+            .check(crate::harness::schedule::runner::COMMAND_NODE)
+            .and_then(|node| node.shell()?.strip_prefix("exec "))
+            .and_then(shlex::split)
+            .and_then(|argv| read_fire_launch(&argv))
         else {
             rejected.push((task.clone(), run.clone()));
             continue;
         };
-        booked.insert(
-            run.clone(),
-            BookedStep {
-                agent: agent.to_owned(),
-                worktree: step.worktree().map(str::to_owned),
-            },
-        );
+        booked.insert(run.clone(), launch);
     }
     (booked, rejected)
-}
-
-/// The agent step a consumed row's sealed spec runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct BookedStep {
-    /// The agent or team it starts.
-    pub agent: String,
-    /// The named worktree it launches in.
-    pub worktree: Option<String>,
 }
 
 /// The room's records a booking's facts read beyond its verdict.
@@ -364,8 +349,8 @@ pub(super) struct RoomRecords<'a> {
     pub source: CiSource,
     pub workflows: Vec<crate::store::workflow::RunRecord>,
     pub runs: Vec<crate::store::run::RunRecord>,
-    /// The agent step of each run whose task row the loop consumed at its fire.
-    pub agents: BTreeMap<WorkflowRunId, BookedStep>,
+    /// The launch the command typed, of each run whose task row the loop consumed at its fire.
+    pub commands: BTreeMap<WorkflowRunId, FireLaunch>,
     /// The fold's rows.
     pub rows: &'a [AgentState],
     /// Where a named worktree's checkout lies.
@@ -373,19 +358,17 @@ pub(super) struct RoomRecords<'a> {
 }
 
 /// A loop task of the machine tier or the room's state tier (the two that record
-/// `booked_by`; a timed `--in` add lands in the state tier) that is a one-off, stays,
-/// launches an agent or a team, and was booked by an agent. Any trigger qualifies; the
-/// room filter is `read_catalog`'s. Every wake-me or session-pinned state-tier row
-/// carries `wait`, which no booking does.
+/// `booked_by`; a timed `--in` add lands in the state tier) that is a one-off whose command
+/// is an agent or team launch (`read_fire_launch`), and was booked by an agent. Any trigger
+/// qualifies; the room filter is `read_catalog`'s. Every wake-me or session-pinned state-tier
+/// row carries `wait`, which no booking does.
 fn is_booking(task: &LoadedTask) -> bool {
     let entry = task.entry();
     matches!(task.source(), TaskSource::Config | TaskSource::Instance)
         && task.kind() == TaskKind::OneOff
-        && entry.stay
-        && entry.agent.is_some()
-        && entry.workflow.is_none()
         && entry.wait.is_none()
         && !entry.booked_by.is_empty()
+        && read_fire_launch(&entry.command).is_some()
 }
 
 pub(super) fn collect(
@@ -401,42 +384,37 @@ pub(super) fn collect(
         .filter_map(|(name, task)| {
             let reading = readings.get(name)?;
             let entry = task.entry();
-            let agent = entry.agent.clone()?;
-            let team = teams.0.get(&agent);
+            let launch = read_fire_launch(&entry.command)?;
+            let team = teams.0.get(&launch.target);
             let record = reading
                 .launch
                 .as_ref()
                 .and_then(|launch| launch.run.as_ref())
                 .and_then(|run| records.workflows.iter().find(|record| &record.id == run));
-            let named = match entry.task_worktree() {
-                Some(TaskWorktree::Named(name)) => Some(name),
-                _ => None,
-            };
-            let branch =
-                destination_branch(entry.task_worktree()).or_else(|| record.and_then(fire_branch));
-            let fire = reading.launch.as_ref().map(|launch| FireFacts {
-                at: launch.at,
-                run: launch.run.clone(),
-                ended_at: launch.run.as_ref().and_then(|run| ended_at(run, records)),
+            let named = named(&launch);
+            let branch = destination_branch(named).or_else(|| record.and_then(fire_branch));
+            let fire = reading.launch.as_ref().map(|fired| FireFacts {
+                at: fired.at,
+                run: fired.run.clone(),
+                ended_at: fired
+                    .run
+                    .as_ref()
+                    .and_then(|run| ended_at(run, name, fired.at, launch.detach, records)),
                 pr: branch.as_deref().map_or(BookingPr::Unread, |branch| {
                     branch_pr(&records.source, branch, root)
                 }),
-                team_done: team
-                    .and(record)
-                    .and_then(|record| team_done(record, named, records.worktrees)),
-                launches: launches(records.rows, name, launch.run.as_ref(), launch.at),
+                team_done: team.and(record).and_then(|record| {
+                    team_done(launch_checkout(record, &launch, records, name, fired.at).as_deref())
+                }),
+                launches: launches(records.rows, name, fired.run.as_ref(), fired.at),
             });
             Some(BookingFacts {
                 task: name.clone(),
-                starts: if team.is_some() {
-                    BookingStarts::Team(agent)
-                } else {
-                    BookingStarts::Profile(agent)
-                },
+                starts: starts(&launch, team.is_some()),
                 leader: team.and_then(|team| team.leader.clone()),
                 booked_by: entry.booked_by.clone(),
                 branch,
-                worktree: entry.task_worktree().is_some(),
+                worktree: launch.worktree.is_some() || entry.fresh_worktree.is_some(),
                 needs_fix: reading.attention.as_ref().map(|(_, reason)| reason.clone()),
                 blocking: reading.blocking.as_ref().map(|term| BlockingFacts {
                     key: term.key.clone(),
@@ -457,13 +435,28 @@ pub(super) fn collect(
         .collect()
 }
 
+/// What a booking starts: a team through `rimz teams` or where its spec names a configured
+/// team, else the profile or spec as typed.
+fn starts(launch: &FireLaunch, configured_team: bool) -> BookingStarts {
+    if launch.team || configured_team {
+        BookingStarts::Team(launch.target.clone())
+    } else {
+        BookingStarts::Profile(launch.target.clone())
+    }
+}
+
+/// The worktree a launch names; a bare `-w` or `--from-pr` names none.
+fn named(launch: &FireLaunch) -> Option<&str> {
+    match &launch.worktree {
+        Some(LaunchTree::Named(name)) => Some(name),
+        _ => None,
+    }
+}
+
 /// A named worktree's branch: its explicit branch, else its name where that is a legal
-/// branch as written. A fresh tree per fire has no name to join on.
-fn destination_branch(worktree: Option<TaskWorktree<'_>>) -> Option<String> {
-    let Some(TaskWorktree::Named(raw)) = worktree else {
-        return None;
-    };
-    let requested = crate::worktree::parse_requested_name(raw).ok()?;
+/// branch as written. A fresh tree per fire, or a generated name, has no name to join on.
+fn destination_branch(named: Option<&str>) -> Option<String> {
+    let requested = crate::worktree::parse_requested_name(named?).ok()?;
     Some(requested.branch.unwrap_or(requested.name))
 }
 
@@ -479,8 +472,8 @@ pub(super) fn branch_pr(source: &CiSource, branch: &str, root: &Path) -> Booking
 }
 
 /// A consumed one-shot's fired entry: each ledger task with no catalog row whose newest
-/// launch is a scheduled fire an agent booked, rebuilt from that run's record and the agent
-/// step its sealed spec starts, while it is in its lifetime (`in_lifetime`); and the fires
+/// launch is a scheduled fire an agent booked, rebuilt from that run's record and the launch
+/// its sealed command types, while it is in its lifetime (`in_lifetime`); and the fires
 /// found past it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn consumed(
@@ -503,26 +496,17 @@ pub(super) fn consumed(
             if booked_by.is_empty() {
                 return None;
             }
-            let step = records.agents.get(run)?;
-            let named = step.worktree.as_deref();
-            let agent = step.agent.clone();
-            let team = teams.0.get(&agent);
-            let branch = if record.fire_tree {
-                fire_branch(record)
-            } else {
-                destination_branch(named.map(TaskWorktree::Named))
-            };
-            let checkout = launch_checkout(record, named, records.worktrees);
+            let fired = records.commands.get(run)?;
+            let named = named(fired);
+            let team = teams.0.get(&fired.target);
+            let branch = destination_branch(named).or_else(|| fire_branch(record));
+            let checkout = launch_checkout(record, fired, records, task, launch.at);
             let facts = BookingFacts {
                 task: task.to_owned(),
-                starts: if team.is_some() {
-                    BookingStarts::Team(agent)
-                } else {
-                    BookingStarts::Profile(agent)
-                },
+                starts: starts(fired, team.is_some()),
                 leader: team.and_then(|team| team.leader.clone()),
                 booked_by: booked_by.clone(),
-                worktree: record.fire_tree || named.is_some(),
+                worktree: record.fire_tree || fired.worktree.is_some(),
                 needs_fix: None,
                 blocking: None,
                 unmet: Vec::new(),
@@ -530,11 +514,11 @@ pub(super) fn consumed(
                 fire: Some(FireFacts {
                     at: launch.at,
                     run: Some(run.clone()),
-                    ended_at: ended_at(run, records),
+                    ended_at: ended_at(run, task, launch.at, fired.detach, records),
                     pr: branch.as_deref().map_or(BookingPr::Unread, |branch| {
                         branch_pr(&records.source, branch, root)
                     }),
-                    team_done: team.and_then(|_| team_done(record, named, records.worktrees)),
+                    team_done: team.and_then(|_| team_done(checkout.as_deref())),
                     launches: launches(records.rows, task, Some(run), launch.at),
                 }),
                 branch,
@@ -578,8 +562,9 @@ fn orphans<'l>(
 }
 
 /// A consumed entry's lifetime: while its run is not terminal or a row it launched lives;
-/// after that, one with a worktree until its pull request merges or `checkout` (the
-/// launch's checkout) is gone, and one without for `window_secs` after its end.
+/// after that, one with a known worktree until its pull request merges or `checkout` (the
+/// launch's checkout) is gone, and one without, or whose tree is not known, for
+/// `window_secs` after its end.
 fn in_lifetime(
     facts: &BookingFacts,
     checkout: Option<&Path>,
@@ -606,8 +591,10 @@ fn in_lifetime(
     if !terminal || living {
         return true;
     }
-    if facts.worktree {
-        return !matches!(fire.pr, BookingPr::Merged { .. }) && checkout.is_some_and(Path::is_dir);
+    if facts.worktree
+        && let Some(checkout) = checkout
+    {
+        return !matches!(fire.pr, BookingPr::Merged { .. }) && checkout.is_dir();
     }
     recent
 }
@@ -624,30 +611,35 @@ fn fire_branch(record: &crate::store::workflow::RunRecord) -> Option<String> {
         .map(|marker| marker.branch)
 }
 
-/// The checkout a fire's launch runs in: its fresh tree (the run's scope), else the named
-/// worktree's path, resolved without creating it, else the firing checkout.
+/// The checkout a fire's launch runs in: the worktree it names, resolved without creating
+/// it; for a tree it leaves unnamed (a bare `-w`, `--from-pr`), the checkout of an agent it
+/// launched, none while no agent is joined; else the checkout its command ran in (the run's
+/// scope: the fire's fresh tree or the firing checkout).
 fn launch_checkout(
     record: &crate::store::workflow::RunRecord,
-    named: Option<&str>,
-    worktrees: &WorktreeConfig,
+    launch: &FireLaunch,
+    records: &RoomRecords,
+    task: &str,
+    at: Timestamp,
 ) -> Option<PathBuf> {
-    match named {
-        Some(name) if !record.fire_tree => {
-            crate::worktree::worktree_path(&record.project_root, worktrees, name).ok()
+    match &launch.worktree {
+        Some(LaunchTree::Named(name)) => {
+            crate::worktree::worktree_path(&record.project_root, records.worktrees, name).ok()
         }
-        _ => Some(record.scope.path.clone()),
+        Some(LaunchTree::Unnamed) => records
+            .rows
+            .iter()
+            .filter(|agent| launched_by(agent, task, Some(&record.id), at))
+            .find_map(|agent| agent.worktree_path.as_deref())
+            .map(PathBuf::from),
+        None => Some(record.scope.path.clone()),
     }
 }
 
 /// Whether a launched team's board in its launch checkout reads `Done`; `None` while the
 /// board cannot be read.
-fn team_done(
-    record: &crate::store::workflow::RunRecord,
-    named: Option<&str>,
-    worktrees: &WorktreeConfig,
-) -> Option<bool> {
-    let checkout = launch_checkout(record, named, worktrees)?;
-    crate::harness::scratch::board_stage(&checkout)
+fn team_done(checkout: Option<&Path>) -> Option<bool> {
+    crate::harness::scratch::board_stage(checkout?)
         .map(|stage| stage.name == crate::config::DONE_STAGE)
 }
 
@@ -749,32 +741,48 @@ pub(in crate::sidebar) fn branch_demand(cache: &BookingsCache) -> BTreeSet<Strin
         .collect()
 }
 
-/// The latest end stamp of a workflow run: its terminal stamp, the end of its `agent` step's
-/// previous attempt, and the completion of each supervised run its step attempts pinned. A
-/// guard's or a judge's end is no end of the launch.
-fn ended_at(run: &WorkflowRunId, records: &RoomRecords) -> Option<Timestamp> {
-    let record = records.workflows.iter().find(|record| &record.id == run);
-    let attempts = records
+/// The latest end stamp of the launch the fire of `task` at `at` made in `run`: the run's
+/// terminal stamp, unless the launch detached and the run ended done, since a detached
+/// launch's command returns once the launch is made; the completion of each supervised run the
+/// task has owned since the fire, a blocking launch's own run; and, once every row the fire
+/// launched has ended, the newest of their end stamps.
+fn ended_at(
+    run: &WorkflowRunId,
+    task: &str,
+    at: Timestamp,
+    detached: bool,
+    records: &RoomRecords,
+) -> Option<Timestamp> {
+    let terminal = records
+        .workflows
+        .iter()
+        .find(|record| &record.id == run)
+        .filter(|record| {
+            !detached
+                || record
+                    .outcome
+                    .as_ref()
+                    .is_none_or(|outcome| outcome.ending != RunEnding::Done)
+        })
+        .and_then(|record| record.terminal_at);
+    let owned = records
         .runs
         .iter()
         .filter(|supervised| {
-            supervised
-                .workflow
-                .as_ref()
-                .is_some_and(|pin| &pin.run == run && pin.role == WorkflowAttemptRole::Step)
+            supervised.loop_task.as_deref() == Some(task) && supervised.started_at >= at
         })
         .filter_map(|supervised| supervised.completed_at);
-    record
-        .and_then(|record| record.terminal_at)
-        .into_iter()
-        .chain(
-            record
-                .and_then(|record| record.prev_attempt.as_ref())
-                .filter(|prev| prev.step == "agent")
-                .map(|prev| prev.ended_at),
-        )
-        .chain(attempts)
-        .max()
+    let rows: Vec<&AgentState> = records
+        .rows
+        .iter()
+        .filter(|agent| launched_by(agent, task, Some(run), at))
+        .collect();
+    let rows_ended = rows
+        .iter()
+        .all(|agent| agent.ended_at.is_some())
+        .then(|| rows.iter().filter_map(|agent| agent.ended_at).max())
+        .flatten();
+    terminal.into_iter().chain(owned).chain(rows_ended).max()
 }
 
 /// Whether `agent` is a row the fire of `task` at `at` creating `run` launched: its

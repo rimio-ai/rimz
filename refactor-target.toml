@@ -1055,13 +1055,10 @@ upward-dependencies = [
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
 # MachineConfig::load_throttle reads core-only start limits without a memo.
-# TaskCheck and Judge share the shell check and judge guards across config, trust, delivery, and CLI (+2).
-# Guard, TaskEntry::guard and deserialize_judges share ordered loop guards and their serde projection (+3).
 # Machine hibernation policy and its duration validation serve admission (+1 net).
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
-# TaskEntry::dedupes_checkout shares launch-memory routing and condition retry policy (+1).
-# TaskEntry::is_condition_workflow unifies workflow launch-memory routing (+1).
+# TaskEntry::dedupes_checkout shares once-per-checkout launch-memory routing (+1).
 # GcConfig::tmp_floor_bytes shares the validated free-space reserve (+1).
 # HistoryRetention carries transcript and team-note archive policies through GC (+1).
 # Isolation::is_scoped shares the mount-view predicate with harness and CLI (+1).
@@ -1097,7 +1094,6 @@ upward-dependencies = [
 # Room keymap vocabulary, parser, action commands, and resolver serve mux and CLI (+14).
 # Typed key directions, split directions, palette modes, and mode-change classification
 # keep both backend compilers exhaustive (+3).
-# TaskWorktree and TaskEntry::task_worktree are the one reader of a task's worktree placement (+2).
 # RoomStyle's export lets setup's room-keys question name the stored style (+1).
 # ConsensusPieces carries the definitions' trait claims on MachineConfig to project teams' `consensus` (+1).
 # read_logo_file and parse_logo_svg give the sidebar's logo worker the checks config validates with (+2).
@@ -1385,38 +1381,13 @@ reason = "Room-start and account-list warnings share invalid-label keys, effects
 
 [[verdict]]
 kind = "item"
-key = "config::loop_::Guard"
-reason = "Borrowed loop guard projection shared with scheduling and the binary's CLI."
-
-[[verdict]]
-kind = "item"
-key = "config::loop_::TaskWorktree"
-reason = "A task's named or fresh-per-fire worktree, read by add, list, scheduling and throttle."
-
-[[verdict]]
-kind = "item"
-key = "config::loop_::Judge"
-reason = "Renamed headless model guard shared by task files, trust, scheduling and the binary."
-
-[[verdict]]
-kind = "item"
-key = "config::loop_::TaskEntry::guard"
-reason = "Single guard reader, shell check then judges, for the scheduler and loop presentation."
-
-[[verdict]]
-kind = "item"
 key = "config::loop_::TaskEntry::dedupes_checkout"
-reason = "Staying tasks and condition workflows share checkout dedupe and sustained-condition retries."
+reason = "Once-per-checkout rows share one launch-memory predicate across the runner, catalog and CLI readers."
 
 [[verdict]]
 kind = "item"
-key = "config::loop_::TaskEntry::is_condition_workflow"
-reason = "Condition workflows share one ledger-routing predicate across schedule and CLI readers."
-
-[[verdict]]
-kind = "item"
-key = "config::loop_::deserialize_judges"
-reason = "One table-or-array decoder shared by task files and the lenient trust schema."
+key = "config::loop_::RefusedRow"
+reason = "A strict row's refusal and raw bytes, carried from the store reader to every catalog view and back to disk unchanged."
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -2356,7 +2327,7 @@ path = "crates/rimz/src/harness"
 # run_log::FireWorktree carries a fire's per-fire tree and trunk fallback from the runner's record to loop logs (+1).
 # Workflow `LaunchOverrides` carries an agent step's account, mode, effort, fast, budget, system prompt, and worktree to the CLI host's launch (+1).
 # Workflow `DefinitionSource` and `InlineDefinition` let `create` start a deployed directory or a loop task's compiled definition (+2).
-# `schedule::compile` carries a task's `CompiledAction`, `TaskWorkflow`, and `InlineTask` with its text and fire-time `definition` to the clock pass, `workflow show|validate`, and `LoadedTask::compiled`; `LoadedTask::new` builds a task for workflow's compiled-graph tests (+9).
+# `LoadedTask::new` builds a task for workflow's compiled-graph tests.
 # run::describes_latest_turn lets `agents wait` read a live peer's ended run while it is the peer's latest turn (+1).
 # run::report::may_claim lets `agents wait` mark a printed answer read only for a person or the run's launcher during its open turn (+1).
 # park_notice::{Continuation, LimitReading, ParkAction, park_action, limit_reading} and run::fail_limit_park let the park-notice helper hold or fail a limit-parked child's run.
@@ -2384,7 +2355,7 @@ path = "crates/rimz/src/harness"
 # cache_keepalive::RoomCapacities and RoomCapacities::{new, window_spent} share one capacity reading per pass across the cache ping and idle and smart compaction (+3).
 # RoomCapacities::compaction_blocked reads the pass's credits cache once for both compactions (+1).
 # team_prompt::SHIPPED_REFLECT and team_prompt::reflect_copy_path let team loads and explain resolve and label the shipped `reflect` consensus piece (+2).
-# workflow::{StartArgs, Advance, parse_give_up}, TaskFire::advance and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI and loop fires to admission (+5).
+# workflow::{StartArgs, Advance, parse_give_up} and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI to admission (+5).
 # run::release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow pass and cancel (+1).
 # run_log::{QuietFires, with_quiet}, QuietFires::streak_beside and TaskHistory::acting carry a task's quiet-fire summary to the loop CLI and merge it into the streak (+4).
 # run_log::try_collect_run and workflow::reconcile_args let the workflow pass report a run and the tick spawn the pass (+2).
@@ -2660,6 +2631,21 @@ reason = "The reader's inputs that do not come from the room's paths."
 kind = "item"
 key = "harness::schedule::attention::read_room"
 reason = "The read-only, path-explicit verdict reader the sidebar calls once per room, for every task there."
+
+[[verdict]]
+kind = "item"
+key = "harness::loop_task::FireLaunch"
+reason = "A booked row's command read as the launch it types: doorway, target, worktree and detach, for the sidebar's bookings lane."
+
+[[verdict]]
+kind = "item"
+key = "harness::loop_task::LaunchTree"
+reason = "The worktree a booked launch asks for, named or generated, from which the bookings lane reads its destination branch."
+
+[[verdict]]
+kind = "item"
+key = "harness::loop_task::read_fire_launch"
+reason = "The one reading of a loop command as an agent or team launch; the CLI's parser tests pin it to clap, and an argv it cannot read whole is no booking."
 
 [[verdict]]
 kind = "item"
@@ -5857,8 +5843,10 @@ surface-budget = 1
 path = "crates/rimz/src/harness/loop_task.rs"
 # Neutral leaf in the sidebar import graph holding the loop-task environment key.
 # LOOP_BOOKED_BY_ENV carries the firing task's booking chain beside it (+1).
+# LOOP_TRIGGER_ENV carries what fired the run to its command and the launches under it (+1).
+# FireLaunch, LaunchTree and read_fire_launch read a booked row's command as the agent or team launch it types, for the sidebar's bookings lane (+3).
 allowed-dependencies = []
-surface-budget = 2
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/harness/name.rs"
@@ -6482,11 +6470,6 @@ reason = "A loop fire owns the action driver's SIGTERM guard across CLI cleanup 
 kind = "item"
 key = "harness::schedule::runner::TaskFire::record_signal_guard"
 reason = "The CLI arms the supervised action's guard directly in the fire so errors and returns leave no fatal signal gap before terminal recording."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::runner::TaskFire::advance"
-reason = "The fire hands `rimz loop fire` the detached advance of the run it started, so the receipt reports a held start with the workflow run helper."
 
 [[verdict]]
 kind = "item"

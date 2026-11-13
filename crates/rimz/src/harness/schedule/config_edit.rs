@@ -184,14 +184,6 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
         .dir
         .as_deref()
         .map(|path| PathBuf::from(path.to_string_lossy().into_owned()));
-    serializable.prompt_file = entry
-        .prompt_file
-        .as_deref()
-        .map(|path| PathBuf::from(path.to_string_lossy().into_owned()));
-    serializable.system_prompt_file = entry
-        .system_prompt_file
-        .as_deref()
-        .map(|path| PathBuf::from(path.to_string_lossy().into_owned()));
     let mut table = toml_edit::ser::to_document(&serializable)
         .context("serializing loop task")?
         .into_table();
@@ -271,7 +263,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             instances
         );
     }
-    use crate::config::{CheckOn, TaskTarget};
+    use crate::config::CheckOn;
 
     /// The machine row's text and the room's instance file, each written, read back, and
     /// written again.
@@ -309,9 +301,8 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     fn booking_chains_round_trip_and_old_rows_rewrite_byte_identical() {
         let dir = tempfile::tempdir().unwrap();
         let old = TaskEntry {
-            agent: Some("claude".to_owned()),
-            prompt: Some("start the next stage".to_owned()),
-            stay: true,
+            command: vec!["rimz".to_owned(), "teams".to_owned(), "forge".to_owned()],
+            timeout: Some("2h".to_owned()),
             when: Some(vec!["pr[x]=merged".to_owned()]),
             root: dir.path().to_path_buf(),
             ..TaskEntry::default()
@@ -341,44 +332,20 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     #[test]
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
-            label: None,
-            agent: Some("claude".to_owned()),
-            workflow: None,
-            stay: false,
+            label: Some("nightly".to_owned()),
+            command: vec!["cargo".to_owned(), "test".to_owned()],
             each_worktree: false,
-            takeover: false,
-            subscribe: Vec::new(),
             team: None,
             loop_task: None,
-            wait: Some(TaskTarget {
-                kind: crate::ids::AgentKind::new_unchecked("claude"),
-                session: "session-1".into(),
-                handle: "@claude".to_owned(),
-            }),
+            wait: None,
             wait_meta: None,
-            prompt: Some("wait".to_owned()),
-            prompt_file: Some(PathBuf::from("prompts/wait.md")),
-            notes: None,
-            check: Some("cargo check".into()),
-            check_timeout: None,
-            judge: Vec::new(),
-            verify: Some("cargo xtask gate".to_owned()),
-            max_attempts: Some(3),
+            prompt: None,
             max_strikes: Some(4),
             once_per_checkout: Some(false),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
             dir: Some(PathBuf::from("/linked")),
-            worktree: Some("task".to_owned()),
             fresh_worktree: Some("fire".to_owned()),
-            mode: Some("plan".to_owned()),
-            effort: Some("high".to_owned()),
-            fast: Some(true),
-            budget: Some("$2".to_owned()),
-            budget_per_day: Some("$8".to_owned()),
-            surplus: Some("1.5x".to_owned()),
-            surplus_after: Some("3d".to_owned()),
-            system_prompt_file: Some(PathBuf::from("prompts/system.md")),
             timeout: Some("20m".to_owned()),
             at: Some("07:00".to_owned()),
             every: Some("1h".to_owned()),
@@ -391,16 +358,15 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
                 "feature".to_owned(),
             )])),
             watch: None,
-            once: Some(true),
+            repeat: true,
             deadline: Some(jiff::Timestamp::UNIX_EPOCH),
             fire_at: Some(jiff::Timestamp::UNIX_EPOCH),
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
             account: Some("work".parse().expect("login name")),
-            throttle: Some(crate::config::ThrottleSwitch::Off),
-            capacity_wait: None,
             overlap: None,
             overlap_limit: None,
             booked_by: Vec::new(),
+            refused: None,
         };
 
         let machine = task_entry_table(&entry, true).expect("serialize machine");
@@ -412,19 +378,16 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         assert!(machine.contains_key("root"));
         assert!(machine.contains_key("dir"));
         assert!(machine_text.contains("fresh-worktree = \"fire\""));
-        assert!(machine.contains_key("prompt-file"));
-        assert!(machine.contains_key("max-attempts"));
-        assert!(machine.contains_key("budget-per-day"));
-        assert!(machine.contains_key("system-prompt-file"));
+        assert!(machine.contains_key("max-strikes"));
+        assert!(machine_text.contains("command = [\"cargo\", \"test\"]"));
+        assert!(machine_text.contains("repeat = true"));
         assert!(machine.contains_key("fire-at"));
-        assert!(machine_text.contains("[tasks.full.wait]"));
         assert!(machine_text.contains("[tasks.full.match]"));
         assert!(machine_text.contains("branch = \"feature\""));
         assert!(machine_text.contains("when = [\"team.stage=Done\", \"ci=passed\"]"));
         assert!(machine_text.contains("for = \"30m\""));
         assert!(machine_text.contains("provider = \"claude\""));
         assert!(machine_text.contains("account = \"work\""));
-        assert!(machine_text.contains("throttle = \"off\""));
         assert_eq!(
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
                 .expect("machine round trip"),
@@ -452,41 +415,42 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         let path = PathBuf::from(OsString::from_vec(b"/repo/\xff".to_vec()));
         let entry = TaskEntry {
             root: path.clone(),
-            prompt_file: Some(path.clone()),
-            system_prompt_file: Some(path.clone()),
+            dir: Some(path.clone()),
             ..TaskEntry::default()
         };
 
         let table = task_entry_table(&entry, true).expect("serialize lossy paths");
         let expected = path.to_string_lossy();
         assert_eq!(table["root"].as_str(), Some(expected.as_ref()));
-        assert_eq!(table["prompt-file"].as_str(), Some(expected.as_ref()));
-        assert_eq!(
-            table["system-prompt-file"].as_str(),
-            Some(expected.as_ref())
-        );
+        assert_eq!(table["dir"].as_str(), Some(expected.as_ref()));
     }
 
-    /// The machine, project, instance, and edit readers of one stored row compile it alike.
+    /// The machine, project, instance, and edit readers of one stored row read it alike, a
+    /// refused row included.
     #[test]
     fn stored_rows_compile_alike_through_all_four_readers() {
         let shared = [
-            "agent = 'claude'\nprompt = 'fix'\nevery = '1h'\ncheck = 'cargo test'\non = 'fail'\n\
-             judge = [{ agent = 'codex', prompt = 'worth it?' }]\noverlap = 'queue'",
-            "workflow = 'triage'\nsignal = 'ci.failed'",
+            "command = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\noverlap = 'queue'",
+            "command = ['true']\ntimeout = '5m'\nsignal = 'ci.failed'\nrepeat = true",
+            "agent = 'claude'\nprompt = 'fix'\nevery = '1h'",
         ];
         let machine_only = [
-            "agent = 'claude'\nprompt = 'tend'\nstay = true\neach-worktree = true\n\
-             takeover = true\nevery = '1h'\n\
-             subscribe = [{ signal = 'ci.failed', prompt = 'repair' }]",
-            "agent = 'claude'\nprompt = 'land'\nevery = '10m'\ncheck = 'test -e ready'\n\
-             deadline = '2030-01-01T00:00:00Z'",
-            "agent = 'claude'\nprompt = 'look'\nwhen = ['ci=passed']\nfor = '5m'",
+            "command = ['true']\ntimeout = '5m'\neach-worktree = true\nevery = '1h'",
+            "command = ['true']\ntimeout = '5m'\nevery = '10m'\ndeadline = '2030-01-01T00:00:00Z'",
+            "command = ['true']\ntimeout = '5m'\nwhen = ['ci=passed']\nfor = '5m'",
+            "once = true\nwait = { kind = 'claude', session = 's', handle = '@c' }\nat = '07:00'",
         ];
         let dir = tempfile::tempdir().unwrap();
         let compiled = |entry: &TaskEntry| {
             let shape = super::super::TaskShape::compile("task", entry);
-            shape.compiled().cloned().map_err(ToString::to_string)
+            let trigger = shape
+                .trigger()
+                .as_ref()
+                .map(super::super::ParsedTrigger::describe);
+            (
+                shape.action().cloned().map_err(ToString::to_string),
+                trigger.map_err(ToString::to_string),
+            )
         };
         for (row, project) in shared
             .iter()
@@ -503,7 +467,8 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
                     .remove("task")
                     .unwrap();
             let expected = compiled(&machine);
-            assert!(expected.is_ok(), "{row}: {expected:?}");
+            let refused = row.contains("agent") || row.contains("once");
+            assert_eq!(expected.0.is_err(), refused, "{row}: {expected:?}");
 
             if project {
                 let value = toml::from_str(&format!("[tasks.task]\n{row}\n")).unwrap();

@@ -1,32 +1,8 @@
 use super::super::run_report::render_record_detail;
 use super::*;
-use std::collections::BTreeSet;
 
 fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
     super::collapsed_run_rows(records, &refused_fire_attribution(records), true)
-}
-
-fn write_agent_runs(
-    out: &mut impl Write,
-    records: &[LoopRunRecord],
-    now: Timestamp,
-) -> std::io::Result<()> {
-    super::write_agent_runs(
-        out,
-        records,
-        0,
-        &collapsed_run_rows(records),
-        &BTreeSet::new(),
-        now,
-    )
-}
-
-fn is_agent_run(record: &LoopRunRecord) -> bool {
-    super::is_agent_run(record, &BTreeSet::new())
-}
-
-fn is_agent_run_with(record: &LoopRunRecord, engaged: &BTreeSet<String>) -> bool {
-    super::is_agent_run(record, engaged)
 }
 
 /// `has_active_run` is a run that holds the run lock.
@@ -45,110 +21,15 @@ fn write_runs_table(
     super::write_runs_table(out, &rows, limit, now)
 }
 
-#[test]
-fn agent_check_rows_name_the_profile() {
-    let decoded = toml::from_str::<TaskEntry>(
-        "agent = 'codex'\non = 'success'\n[judge]\nagent = 'haiku'\nprompt = 'q'",
-    );
-    assert!(decoded.is_ok(), "judge table must be accepted: {decoded:?}");
-    let entry = decoded.unwrap();
-    let action = TaskAction::Spawn("codex".into());
-    assert_eq!(
-        check_summary(&entry, Some(&action)).as_deref(),
-        Some("asks haiku (cap 5m); acts when it passes or gives no answer after one retry")
-    );
-    assert_eq!(
-        task_run_rule(&entry, &action),
-        "judge `haiku`, then start codex on success"
-    );
-}
-
-#[test]
-fn guard_value_single_judge_explains_no_verdict_on_failure() {
-    let entry: TaskEntry =
-        toml::from_str("on = 'fail'\n[judge]\nagent = 'haiku'\nprompt = 'q'").unwrap();
-    assert_eq!(
-        guard_value(&entry),
-        "asks haiku (cap 5m); acts when it fails or gives no answer after one retry"
-    );
-}
-
-#[test]
-fn guard_value_mixed_chain_explains_no_verdict_for_both_polarities() {
-    let mut entry: TaskEntry =
-        toml::from_str("check = 'cargo test'\n[[judge]]\nagent = 'haiku'\nprompt = 'q'").unwrap();
-    for (on, expected) in [(CheckOn::Fail, "fail"), (CheckOn::Success, "pass")] {
-        entry.on = Some(on);
-        assert_eq!(
-            guard_value(&entry),
-            format!(
-                "runs cargo test (cap 5m), then asks haiku (cap 5m); acts when both {expected}, a judge with no answer after one retry counting as a {expected}"
-            )
-        );
-    }
-}
-
-#[test]
-fn guard_value_longer_chain_explains_no_verdict_for_all_stages() {
-    let mut entry: TaskEntry = toml::from_str("check = 'cargo test'\n[[judge]]\nagent = 'haiku'\nprompt = 'q'\n[[judge]]\nagent = 'codex'\nprompt = 'q'").unwrap();
-    for (on, expected) in [(CheckOn::Success, "pass"), (CheckOn::Fail, "fail")] {
-        entry.on = Some(on);
-        assert_eq!(
-            guard_value(&entry),
-            format!(
-                "runs cargo test (cap 5m), then asks haiku (cap 5m), then asks codex (cap 5m); acts when all {expected}, a judge with no answer after one retry counting as a {expected}"
-            )
-        );
-    }
-}
-
-#[test]
-fn guard_value_keeps_shell_only_and_any_wording() {
-    let mut entry = TaskEntry {
-        check: Some("cargo test".into()),
-        ..Default::default()
-    };
-    for (on, expected) in [
-        (CheckOn::Fail, "when it fails"),
-        (CheckOn::Success, "when it passes"),
-        (CheckOn::Any, "whatever the outcome"),
-    ] {
-        entry.on = Some(on);
-        assert_eq!(
-            guard_value(&entry),
-            format!("runs cargo test (cap 5m); acts {expected}")
-        );
-    }
-    let mut entry: TaskEntry =
-        toml::from_str("on = 'any'\n[judge]\nagent = 'haiku'\nprompt = 'q'").unwrap();
-    assert_eq!(
-        guard_value(&entry),
-        "asks haiku (cap 5m); acts whatever the outcome"
-    );
-    entry.check = Some("cargo test".into());
-    assert_eq!(
-        guard_value(&entry),
-        "runs cargo test (cap 5m), then asks haiku (cap 5m); acts whatever the outcome"
-    );
-}
-
 fn show_view(each_worktree: bool) -> ShowView {
     let now = Timestamp::from_second(100).unwrap();
     let entry = TaskEntry {
         root: "/repo".into(),
-        agent: Some("sweeper".into()),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         when: Some(vec!["pr=open && ci=passed".into()]),
-        stay: each_worktree,
+        once_per_checkout: Some(each_worktree),
         each_worktree,
-        takeover: each_worktree,
-        subscribe: ["ci.failed", "pr.merged"]
-            .map(|signal| rimz::config::TeamSignalBinding {
-                signal: signal.into(),
-                matches: BTreeMap::new(),
-                prompt: None,
-            })
-            .into(),
         ..TaskEntry::default()
     };
     let timing = schedule::TaskTiming::evaluate(
@@ -160,8 +41,6 @@ fn show_view(each_worktree: bool) -> ShowView {
     );
     let mut failed = record(20, LoopRunResult::Errored);
     failed.error = Some("launch failed".into());
-    let show_agent_runs =
-        has_agent_runs_section(&entry, Some(&TaskAction::Spawn("sweeper".into())));
     ShowView {
         capacity: BTreeMap::new(),
         name: "sweep".into(),
@@ -207,9 +86,6 @@ fn show_view(each_worktree: bool) -> ShowView {
         leader_statuses: BTreeMap::new(),
         you: false,
         booker: None,
-        config: MachineConfig::default().into(),
-        throttle: ShowThrottle::Off,
-        show_agent_runs,
         worktrees: [("older", "old-leader", 10), ("newer", "new-leader", 90)]
             .map(
                 |(name, leader, second)| schedule::fanout::CheckoutCondition {
@@ -224,7 +100,6 @@ fn show_view(each_worktree: bool) -> ShowView {
             .into(),
         worktrees_error: None,
         workflow_runs: Vec::new(),
-        engaged_runs: BTreeSet::new(),
         kept_worktrees: Vec::new(),
         runs_workflows: false,
         all: false,
@@ -239,11 +114,8 @@ fn show_text(view: &ShowView) -> String {
 
 fn workflow_view() -> ShowView {
     let mut view = show_view(true);
-    view.entry.agent = None;
-    view.entry.workflow = Some("review".into());
     view.runs_workflows = true;
-    view.entry.stay = false;
-    view.entry.subscribe.clear();
+    view.entry.once_per_checkout = None;
     view.launches.clear();
     view.records.clear();
     view.subscriptions.clear();
@@ -737,7 +609,6 @@ fn show_fanout_verdict_precedes_worktrees_and_has_no_subscriptions_section() {
     assert!(!text.contains("SUBSCRIPTIONS"), "{text}");
     assert!(!text.contains("AGENT RUNS"), "{text}");
     assert!(text.contains("… 2 launched: 2 ended"), "{text}");
-    assert!(show_text(&show_view(false)).contains("AGENT RUNS"));
     assert!(
         !text.contains("LAUNCHES") && !text.contains("condition:"),
         "{text}"
@@ -1126,7 +997,7 @@ fn worktrees_order_counts_terms_and_fold_lines() {
         .find(|line| line.starts_with("  newer "))
         .unwrap();
     assert!(
-        launched.contains("@new-leader  failed · 1 armed") && !launched.contains("✓"),
+        launched.contains("@new-leader  failed") && !launched.contains("✓"),
         "{text}"
     );
     assert!(
@@ -1267,9 +1138,8 @@ fn worktrees_reason_cell_clips_to_terminal_width() {
 }
 
 #[test]
-fn worktrees_columns_follow_rendered_rows_and_armed_follows_subscribe() {
+fn worktrees_columns_follow_rendered_rows() {
     let mut view = worktree_view();
-    view.entry.subscribe.clear();
     let text = show_text(&view);
     let launched = text
         .lines()
@@ -1364,108 +1234,13 @@ fn worktrees_json_preserves_the_full_accepted_hold_duration() {
 }
 
 #[test]
-fn show_resident_facts_name_action_and_wakes_without_timeout() {
-    let mut view = show_view(true);
-    view.entry.timeout = Some("1h".into());
-    view.entry.account = Some("work".parse().unwrap());
-    let text = show_text(&view);
-    assert!(
-        text.contains("check, then start sweeper · account work · pane stays open · stops idle agents in the checkout first"),
-        "{text}"
-    );
-    assert!(
-        text.contains("leader on ci.failed, pr.merged · 1 armed"),
-        "{text}"
-    );
-    assert!(
-        !text.contains("timeout:") && !text.contains("  task:"),
-        "{text}"
-    );
-}
-
-#[test]
-fn show_wakes_with_no_subscriptions_and_no_live_leader() {
-    let mut view = show_view(true);
-    view.subscriptions.clear();
-    let text = show_text(&view);
-    assert!(
-        text.contains("leader on ci.failed, pr.merged · 0 armed, no live leader"),
-        "{text}"
-    );
-}
-
-#[test]
-fn show_wakes_with_a_live_leader_and_no_subscriptions() {
-    let mut view = show_view(true);
-    view.subscriptions.clear();
-    view.leader_statuses
-        .insert("new-leader".into(), rimz::agents::AgentStatus::Idle);
-    let text = show_text(&view);
-    assert!(
-        text.contains("leader on ci.failed, pr.merged · 0 armed"),
-        "{text}"
-    );
-    assert!(!text.contains("no live leader"), "{text}");
-}
-
-#[test]
-fn show_check_only_action_and_timeout_for_nonresident_agents() {
-    let view = show_view(false);
-    assert!(show_text(&view).contains("timeout:"));
-    let mut view = view;
-    view.entry.agent = None;
-    view.entry.when = None;
-    view.entry.subscribe.clear();
-    view.entry.every = Some("1h".into());
-    let text = show_text(&view);
-    assert!(
-        text.lines()
-            .any(|line| line.trim_start().starts_with("action:")
-                && line.ends_with("run check · true")),
-        "{text}"
-    );
-    assert!(
-        !text.contains("  check:") && !text.contains("timeout:"),
-        "{text}"
-    );
-}
-
-#[test]
-fn show_without_limits_omits_even_an_explicit_throttle_switch() {
-    let mut view = show_view(false);
-    view.entry.agent = None;
-    view.entry.subscribe.clear();
-    view.throttle = ShowThrottle::Off;
-    let text = show_text(&view);
-    assert!(
-        !text.contains("throttle:") && !text.contains("load:") && !text.contains("THROTTLE"),
-        "{text}"
-    );
-    for switch in [
-        rimz::config::ThrottleSwitch::On,
-        rimz::config::ThrottleSwitch::Off,
-    ] {
-        view.entry.throttle = Some(switch);
-        let text = show_text(&view);
-        assert!(
-            !text.contains("throttle:") && !text.contains("load:") && !text.contains("THROTTLE"),
-            "{text}"
-        );
-    }
-}
-
-#[test]
 fn show_facts_follow_the_reference_order() {
     let mut view = show_view(false);
     view.source = TaskSource::Project {
         state: rimz::trust::TrustState::Untrusted,
     };
     view.entry.label = Some("repair the build".into());
-    view.entry.verify = Some("cargo check".into());
     view.entry.dir = Some("/repo/lane".into());
-    view.entry.budget = Some("$5".into());
-    view.entry.budget_per_day = Some("$20".into());
-    view.entry.surplus = Some("1.5x".into());
     view.strike_count = 1;
     let mut out = Vec::new();
     write_show_facts(&mut out, &view).unwrap();
@@ -1479,18 +1254,12 @@ fn show_facts_follow_the_reference_order() {
         keys,
         [
             "action",
-            "check",
-            "wakes",
             "label",
-            "verify",
             "root",
             "dir",
             "source",
             "timeout",
             "will not fire",
-            "budget",
-            "surplus",
-            "spend",
             "strikes",
         ],
         "{text}"
@@ -1505,15 +1274,6 @@ fn show_no_limits_omits_throttle_and_load() {
         "{text}"
     );
     assert!(!text.contains("THROTTLE"), "{text}");
-}
-
-#[test]
-fn show_configured_limits_keep_full_throttle_section() {
-    let mut view = show_view(true);
-    view.throttle = ShowThrottle::Full(vec![("cpu pressure", "avg10 2% (limit 25%)".into())]);
-    let text = show_text(&view);
-    assert!(text.contains("THROTTLE\n"), "{text}");
-    assert!(!text.contains("no limits set"), "{text}");
 }
 
 fn refusal(second: i64, checkout: &str, reason: &str) -> LoopRunRecord {
@@ -1875,7 +1635,8 @@ fn true_condition_without_hold_renders_due() {
     let entry = TaskEntry {
         root: root.path().to_owned(),
         when: Some(vec!["team.stage=Done".to_owned()]),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
     let parsed = schedule::parse_trigger("ready", &entry);
@@ -1906,7 +1667,8 @@ fn closed_room_forge_condition_shows_unknown_on_unread_keys() {
     let entry = TaskEntry {
         root: root.path().to_owned(),
         when: Some(vec!["!ci=failed".to_owned()]),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
     let parsed = schedule::parse_trigger("forge", &entry);
@@ -2433,92 +2195,6 @@ fn last_run_hint_counts_trailing_blocks_instead_of_fire_records() {
 }
 
 #[test]
-fn agent_runs_fold_deliveries_with_ranges_costs_and_waited_counts() {
-    let mut first = scheduled(20, LoopRunResult::Delivered);
-    first.duration_ms = Some(1000);
-    first.cost_usd = Some(0.25);
-    first.target = Some("@worker".into());
-    let mut second = first.clone();
-    second.at = Timestamp::from_second(40).unwrap();
-    second.duration_ms = Some(3000);
-    second.cost_usd = Some(0.75);
-    let records = [
-        deferred(10),
-        overlap(11),
-        first,
-        scheduled(25, LoopRunResult::CheckSkipped),
-        deferred(30),
-        overlap(31),
-        second,
-    ];
-    let mut out = Vec::new();
-    write_agent_runs(&mut out, &records, Timestamp::from_second(100).unwrap()).unwrap();
-    let text = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert_eq!(text.matches("✓ delivered").count(), 1, "{text}");
-    assert!(
-        text.contains("✓ delivered ×2") && text.contains("1.0s–3.0s"),
-        "{text}"
-    );
-    let row = text
-        .lines()
-        .find(|line| line.contains("✓ delivered"))
-        .unwrap();
-    assert!(
-        row.contains("$1.00")
-            && row.ends_with(
-                "over 20s · @worker · 2 fires waited on it · 2 fires skipped, run already active"
-            ),
-        "{text}"
-    );
-    assert!(
-        text.contains("AGENT RUNS — 2 of 7 fires · $1.00 total · ø $0.50"),
-        "{text}"
-    );
-    let recent = runs_table(&records, 10);
-    assert_eq!(collapsed_run_rows(&records).len(), 3, "{recent}");
-    assert_eq!(recent.matches("✓ delivered").count(), 2, "{recent}");
-    assert!(!recent.contains("✓ delivered ×2"), "{recent}");
-}
-
-#[test]
-fn agent_runs_limit_folded_rows_but_keep_spawned_run_identities() {
-    let mut records = (1..=4)
-        .map(|index| {
-            let mut row = scheduled(index * 10, LoopRunResult::Delivered);
-            row.target = Some(format!("@worker{index}"));
-            row
-        })
-        .collect::<Vec<_>>();
-    for (second, run_id) in [(50, "run_first"), (60, "run_second")] {
-        let mut row = scheduled(second, LoopRunResult::Completed);
-        row.run_id = Some(run_id.into());
-        records.push(row);
-    }
-    records.extend([
-        scheduled(70, LoopRunResult::Delivered),
-        scheduled(75, LoopRunResult::CheckSkipped),
-        scheduled(80, LoopRunResult::Delivered),
-    ]);
-    let mut out = Vec::new();
-    write_agent_runs(&mut out, &records, Timestamp::from_second(100).unwrap()).unwrap();
-    let text = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert_eq!(
-        text.lines().filter(|line| line.contains("✓ ")).count(),
-        5,
-        "{text}"
-    );
-    assert_eq!(text.matches("✓ completed").count(), 2, "{text}");
-    assert!(
-        text.contains("✓ delivered ×2") && text.contains("@worker3") && text.contains("@worker4"),
-        "{text}"
-    );
-    assert!(
-        !text.contains("@worker1") && !text.contains("@worker2"),
-        "{text}"
-    );
-}
-
-#[test]
 fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_queued() {
     let mut skipped = record(0, LoopRunResult::ThrottleSkipped);
     skipped.error = Some("cpu pressure 41% ≥ 25%; held 30m".into());
@@ -2595,124 +2271,20 @@ fn checkout_without_a_note_has_no_trailing_separator() {
 }
 
 #[test]
-fn task_rules_and_check_rows_use_action_specific_verbs() {
-    let spawn = TaskEntry {
-        agent: Some("codex".to_owned()),
-        check: Some("cargo test".into()),
-        on: Some(CheckOn::Fail),
-        ..TaskEntry::default()
-    };
-    let spawn_action = schedule::TaskShape::compile("task", &spawn)
-        .action()
-        .unwrap()
-        .clone();
-    assert_eq!(
-        task_run_rule(&spawn, &spawn_action),
-        "check, then start codex on fail"
-    );
-    assert_eq!(
-        check_summary(&spawn, Some(&spawn_action)).as_deref(),
-        Some("cargo test (starts codex on fail)")
-    );
-
-    let wait = TaskEntry {
-        wait: Some(TaskTarget {
-            kind: rimz::ids::AgentKind::new_unchecked("claude"),
-            session: "sess-planner".into(),
-            handle: "@planner".to_owned(),
-        }),
-        check: Some("cargo test".into()),
-        on: Some(CheckOn::Success),
-        ..TaskEntry::default()
-    };
-    let wait_action = schedule::TaskShape::compile("task", &wait)
-        .action()
-        .unwrap()
-        .clone();
-    assert_eq!(
-        task_run_rule(&wait, &wait_action),
-        "check, then wake @planner on success"
-    );
-    assert_eq!(
-        check_summary(&wait, Some(&wait_action)).as_deref(),
-        Some("cargo test (wakes @planner on success)")
-    );
-
-    let check = TaskEntry {
-        check: Some("cargo test".into()),
-        ..TaskEntry::default()
-    };
-    let check_action = schedule::TaskShape::compile("task", &check)
-        .action()
-        .unwrap()
-        .clone();
-    assert_eq!(task_run_rule(&check, &check_action), "check");
-
-    let spawn = TaskEntry {
-        agent: Some("claude".to_owned()),
-        verify: Some("cargo xtask gate".to_owned()),
-        max_attempts: Some(4),
-        ..TaskEntry::default()
-    };
-    let spawn_action = schedule::TaskShape::compile("task", &spawn)
-        .action()
-        .unwrap()
-        .clone();
-    assert_eq!(
-        task_run_rule(&spawn, &spawn_action),
-        "start claude, verify `cargo xtask gate` (up to 4 attempts)"
-    );
-
-    let mut wait_only = wait;
-    wait_only.check = None;
-    let wait_action = schedule::TaskShape::compile("task", &wait_only)
-        .action()
-        .unwrap()
-        .clone();
-    assert_eq!(task_run_rule(&wait_only, &wait_action), "wake @planner");
-}
-
-#[test]
-fn budget_label_names_the_run_and_daily_caps() {
-    let entry = TaskEntry {
-        budget: Some("$5.00".to_owned()),
-        budget_per_day: Some("$20.00".to_owned()),
-        ..TaskEntry::default()
-    };
-    assert_eq!(
-        budget_label(&entry).as_deref(),
-        Some("$5 per run · $20 per day")
-    );
-}
-
-#[test]
-fn surplus_label_shows_explicit_and_implied_thresholds() {
-    let explicit = TaskEntry {
-        surplus: Some("1.5x".to_owned()),
-        surplus_after: Some("3d".to_owned()),
-        ..TaskEntry::default()
-    };
-    assert_eq!(
-        surplus_label(&explicit).as_deref(),
-        Some("surplus ≥ 1.5x · after 3d of window")
-    );
-    let implied = TaskEntry {
-        surplus_after: Some("2d".to_owned()),
-        ..TaskEntry::default()
-    };
-    assert_eq!(
-        surplus_label(&implied).as_deref(),
-        Some("surplus ≥ 1.0x · after 2d of window")
-    );
+fn task_rules_use_action_specific_verbs() {
+    let command = TaskAction::Command(vec!["cargo".into(), "test".into()]);
+    assert_eq!(task_run_rule(&command), "run `cargo test`");
+    let wake = TaskAction::Deliver(TaskTarget {
+        kind: rimz::ids::AgentKind::new_unchecked("claude"),
+        session: "sess-planner".into(),
+        handle: "@planner".to_owned(),
+    });
+    assert_eq!(task_run_rule(&wake), "wake @planner");
 }
 
 #[test]
 fn spend_label_renders_today_last_and_cost_window() {
     let now = "2026-06-02T12:00:00Z[UTC]".parse::<jiff::Zoned>().unwrap();
-    let entry = TaskEntry {
-        budget_per_day: Some("20".to_owned()),
-        ..TaskEntry::default()
-    };
     let mut records = Vec::new();
     for (second, cost) in [(1, 0.28), (2, 0.42)] {
         let mut run = record(second, LoopRunResult::Completed);
@@ -2722,14 +2294,10 @@ fn spend_label_renders_today_last_and_cost_window() {
     }
 
     assert_eq!(
-        spend_label(&entry, &records, &now, true).as_deref(),
-        Some("$0.70 today of $20 · $0.42 last · ø $0.35 over 2 runs")
+        spend_label(&records, &now).as_deref(),
+        Some("$0.70 today · $0.42 last · ø $0.35 over 2 runs")
     );
-    assert_eq!(
-        spend_label(&entry, &records, &now, false).as_deref(),
-        Some("$0.70 today of $20")
-    );
-    assert_eq!(spend_label(&TaskEntry::default(), &[], &now, true), None);
+    assert_eq!(spend_label(&[], &now), None);
 }
 
 #[test]
@@ -2795,95 +2363,6 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
         healthy,
         "✓ healthy · last finished run 10s ago, completed in 5.0s · first since a failure 10s ago"
     );
-}
-
-#[test]
-fn agent_run_predicate_counts_spawn_and_delivery_attempts() {
-    let mut spawned = record(1, LoopRunResult::Completed);
-    spawned.run_id = Some("run_0123456789abcdef01234567".to_owned());
-    assert!(is_agent_run(&spawned));
-    assert!(is_agent_run(&record(2, LoopRunResult::Delivered)));
-    assert!(is_agent_run(&record(3, LoopRunResult::TargetGone)));
-    // A workflow run's report says whether it reached its agent or message step.
-    let mut acted = record(5, LoopRunResult::Completed);
-    acted.run_id = Some("wf_01a1c231d56d75c88fa045811f1cd54f".to_owned());
-    acted.acted = Some(true);
-    assert!(is_agent_run(&acted));
-    let mut declined = acted.clone();
-    declined.acted = Some(false);
-    assert!(!is_agent_run(&declined));
-    // A run in flight is an agent run only once its record says it engaged.
-    let mut in_flight = record(6, LoopRunResult::Launched);
-    in_flight.run_id = acted.run_id.clone();
-    assert!(!is_agent_run(&in_flight));
-    let mut out = Vec::new();
-    super::write_agent_runs(
-        &mut out,
-        std::slice::from_ref(&in_flight),
-        0,
-        &collapsed_run_rows(std::slice::from_ref(&in_flight)),
-        &BTreeSet::new(),
-        Timestamp::from_second(50).unwrap(),
-    )
-    .unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("AGENT RUNS — none in 1 fire"), "{out}");
-    let engaged = BTreeSet::from([in_flight.run_id.clone().unwrap()]);
-    assert!(is_agent_run_with(&in_flight, &engaged));
-    let mut out = Vec::new();
-    super::write_agent_runs(
-        &mut out,
-        std::slice::from_ref(&in_flight),
-        0,
-        &collapsed_run_rows(std::slice::from_ref(&in_flight)),
-        &engaged,
-        Timestamp::from_second(50).unwrap(),
-    )
-    .unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("AGENT RUNS — 1 of 1 fire"), "{out}");
-    for result in [
-        LoopRunResult::CheckSkipped,
-        LoopRunResult::BudgetSkipped,
-        LoopRunResult::SurplusSkipped,
-        LoopRunResult::AccountSkipped,
-        LoopRunResult::Overlapped,
-        LoopRunResult::Expired,
-    ] {
-        assert!(!is_agent_run(&record(4, result)), "{result:?}");
-    }
-}
-
-#[test]
-fn agent_runs_heading_aggregates_all_valid_costs() {
-    let now = Timestamp::from_second(50).unwrap();
-    let mut costed = record(10, LoopRunResult::Completed);
-    costed.run_id = Some("run_0123456789abcdef01234567".to_owned());
-    costed.cost_usd = Some(0.25);
-    let mut delivered = record(20, LoopRunResult::Delivered);
-    delivered.cost_usd = Some(0.75);
-    let skipped = record(30, LoopRunResult::CheckSkipped);
-    let mut out = Vec::new();
-    write_agent_runs(&mut out, &[costed, delivered, skipped.clone()], now).unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(
-        out.contains("AGENT RUNS — 2 of 3 fires · $1.00 total · ø $0.50"),
-        "{out}"
-    );
-
-    let mut cost_free = record(10, LoopRunResult::Delivered);
-    cost_free.cost_usd = Some(f64::NAN);
-    let mut out = Vec::new();
-    write_agent_runs(&mut out, &[cost_free], now).unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("AGENT RUNS — 1 of 1 fire"), "{out}");
-    assert!(!out.contains("total"), "{out}");
-
-    let mut out = Vec::new();
-    write_agent_runs(&mut out, &[skipped], now).unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("AGENT RUNS — none in 1 fire"), "{out}");
-    assert!(!out.contains("WHEN"), "{out}");
 }
 
 #[test]
@@ -3217,7 +2696,8 @@ fn interval_timing(
     now: Timestamp,
 ) -> schedule::TaskTiming {
     let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("15m".to_owned()),
         ..TaskEntry::default()
     };
@@ -3329,17 +2809,6 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
     );
     held.reason = None;
     assert_eq!(held_run_text(&held, now), phrase);
-
-    let mut readings = Vec::new();
-    write_throttle_readings(
-        &mut readings,
-        &[("cpu pressure", "avg10 2% · avg60 3%".into())],
-    )
-    .expect("write");
-    let readings = String::from_utf8(readings).expect("utf8");
-    assert!(readings.starts_with("\nTHROTTLE\n"), "{readings}");
-    assert!(readings.contains("cpu pressure"), "{readings}");
-    assert!(readings.contains("avg10 2% · avg60 3%"), "{readings}");
 
     let pause = Arming {
         enabled: true,
@@ -4763,25 +4232,6 @@ fn runs_table_drops_uniform_mode_and_empty_cost() {
 }
 
 #[test]
-fn agent_runs_are_newest_first() {
-    let mut out = Vec::new();
-    write_agent_runs(
-        &mut out,
-        &[
-            record(10, LoopRunResult::TargetGone),
-            record(20, LoopRunResult::Delivered),
-        ],
-        Timestamp::from_second(100).unwrap(),
-    )
-    .unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(
-        out.find("delivered").unwrap() < out.find("target gone").unwrap(),
-        "{out}"
-    );
-}
-
-#[test]
 fn loop_logs_forensics_print_a_signal_payload_under_its_name() {
     use super::super::run_report::{Forensics, write_record_forensics};
     use rimz::harness::schedule::run_log::SignalRecord;
@@ -5328,7 +4778,7 @@ fn show_reads_quiet_fires_beside_the_rows_they_left_out() {
         "{quiet_only}"
     );
     assert!(
-        quiet_only.contains("completed without starting an agent"),
+        quiet_only.contains("command exited 0 · no row of its own kept"),
         "{quiet_only}"
     );
     assert!(
@@ -5337,10 +4787,6 @@ fn show_reads_quiet_fires_beside_the_rows_they_left_out() {
     );
     assert!(!quiet_only.contains("workflow show"), "{quiet_only}");
     assert!(!quiet_only.contains("LAST QUIET FIRE"), "{quiet_only}");
-    assert!(
-        quiet_only.contains("AGENT RUNS — none in 3 fires"),
-        "{quiet_only}"
-    );
 
     let mut failed = scheduled(95, LoopRunResult::Failed);
     failed.error = Some("check exited 1".into());
@@ -5373,7 +4819,7 @@ fn show_reads_quiet_fires_beside_the_rows_they_left_out() {
         "{failure_then_quiet}"
     );
     assert!(
-        failure_then_quiet.contains("completed without starting an agent")
+        failure_then_quiet.contains("command exited 0 · no row of its own kept")
             && !failure_then_quiet.contains("LAST QUIET FIRE"),
         "{failure_then_quiet}"
     );
@@ -5396,7 +4842,7 @@ fn show_reads_quiet_fires_beside_the_rows_they_left_out() {
     let in_flight = show_text(&view);
     assert!(
         in_flight.contains("LAST RUN — ✓ completed")
-            && in_flight.contains("completed without starting an agent")
+            && in_flight.contains("command exited 0 · no row of its own kept")
             && in_flight.contains("3 quiet fires · 3 in a row"),
         "{in_flight}"
     );
@@ -5410,7 +4856,7 @@ fn logs_give_quiet_fires_one_block_in_time_order() {
     assert!(only.contains("5 quiet fires · 2 in a row"), "{only}");
     assert_eq!(only.matches("nothing to do").count(), 1, "{only}");
     assert!(
-        only.contains("completed without starting an agent"),
+        only.contains("command exited 0 · no row of its own kept"),
         "{only}"
     );
 

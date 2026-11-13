@@ -1731,23 +1731,15 @@ fn opencode_stamped_asks_still_record_edges() {
                 .to_string(),
             ),
         );
-        let armed = env
-            .rimz()
-            .args([
-                "loop",
-                "add",
-                "waiting",
-                "--signal",
-                "agent.waiting",
-                "--wait",
-                "@planner",
-                "--match",
-                "session=ses-screen-ask",
-                "--once",
-            ])
-            .output()
-            .unwrap();
-        assert!(armed.status.success(), "{armed:?}");
+        crate::common::wait::seed_signal_wait(&env, "waiting", "agent.waiting", false);
+        let mut tasks = crate::common::wait::wait_instances(&env);
+        tasks.0.get_mut("waiting").unwrap().matches =
+            Some([("session".to_owned(), "ses-screen-ask".to_owned())].into());
+        std::fs::write(
+            crate::common::wait::loop_instances_path(&env),
+            serde_json::to_vec(&tasks).unwrap(),
+        )
+        .unwrap();
         let session = "ses-screen-ask";
         assert_hook_succeeded_neutral(
             "opencode",

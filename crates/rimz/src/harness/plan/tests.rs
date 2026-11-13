@@ -5215,6 +5215,67 @@ fn supervised_launch_refuses_layouts_beyond_one_agent_cell() {
 }
 
 #[test]
+fn a_fires_blocking_launch_of_more_than_one_agent_refuses_with_the_detach_fix() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "claude-agent".to_owned(),
+        configured_profile("claude", None, Some("opus"), None, None, None),
+    );
+    let team = |roles: &[&str]| Team {
+        keep_warm: None,
+        roles: roles
+            .iter()
+            .map(|role| RoleBinding {
+                profile: "claude-agent".to_owned(),
+                ..role_binding(role)
+            })
+            .collect(),
+        leader: None,
+        layout: None,
+        scratch_files: None,
+        consensus_file: None,
+        consensus: Vec::new(),
+        append_system_prompt_files: Vec::new(),
+        stages: Vec::new(),
+    };
+    machine
+        .agents
+        .teams
+        .0
+        .insert("pair".to_owned(), team(&["coder", "reviewer"]));
+    machine
+        .agents
+        .teams
+        .0
+        .insert("solo".to_owned(), team(&["coder"]));
+    let plan = |spec: &str| {
+        let mut request = supervised_request(spec, "work");
+        request.loop_task = Some("nightly".to_owned());
+        SupervisedPlan {
+            request: &request,
+            caller: None,
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(dir.path())
+        .0
+    };
+    for (spec, agents) in [("pair", 2), ("claude,codex", 2)] {
+        let err = plan(spec).expect_err(spec);
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "a launch under a loop fire runs one agent until it ends, and `{spec}` resolves to {agents} agents; add --detach to launch them on their own"
+            )
+        );
+    }
+    let solo = plan("solo").expect("a one-role team runs blocking under a fire");
+    assert_eq!(solo.team_name.as_deref(), Some("solo"));
+}
+
+#[test]
 fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();

@@ -67,6 +67,10 @@ pub struct LayoutLaunch {
     pub max_turns: Option<u32>,
     pub teams_scene: bool,
     pub report_to: ReportTo,
+    /// The loop task whose fire made this launch without owning it: its prompt leader carries
+    /// the task as identity, and every cell carries the fire's booking chain.
+    pub loop_task: Option<String>,
+    pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
 }
 
 #[derive(Default)]
@@ -1079,7 +1083,8 @@ fn settle_layout(
         description: args.launch.cohort.description.clone(),
         report_to: args.launch.report_to,
         managed_launches: Vec::new(),
-        loop_task: loop_task.clone(),
+        loop_task: loop_task.clone().or_else(|| args.launch.loop_task.clone()),
+        loop_booked_by: args.launch.loop_booked_by.clone(),
         cleanup_worktree: true,
         // A run-bearing leader opens its own tab, as a supervised launch does.
         force_new_tab: args.leader_run.is_some(),

@@ -89,24 +89,12 @@ fn write_manual_run_summary(
     }
     writeln!(out)?;
 
-    if is_spawn_failure(record.result) && !action_kind.is_check_only() {
+    if is_spawn_failure(record.result) {
         write_failure_forensics(out, name, summary)?;
     } else if record.result == LoopRunResult::Completed && record.run_id.is_some() {
         write_completion_detail(out, name, summary)?;
     }
     Ok(())
-}
-
-/// The `--keep` hint for a manual fire's run, while the run can still open a fresh agent whose
-/// pane `--keep` would leave open.
-pub(super) fn keep_hint(
-    entry: &TaskEntry,
-    action: &TaskAction,
-    keep: bool,
-    run_ended: bool,
-) -> Option<&'static str> {
-    (action.kind().is_spawn() && !entry.stay && !keep && !run_ended)
-        .then_some("  the agent's pane closes after its turn; fire with --keep to leave it open")
 }
 
 fn manual_early_verdict(summary: &RunSummary<'_>) -> Option<(LoopRunResult, String)> {
@@ -209,22 +197,10 @@ fn success_result_label(record: &LoopRunRecord) -> String {
 }
 
 fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) -> String {
-    if action_kind == TaskActionKind::Workflow {
-        return summary.record.error.as_ref().map_or_else(
-            || {
-                format!(
-                    "{} {}",
-                    summary.record.result.label(),
-                    summary.record.run_id.as_deref().unwrap_or_default()
-                )
-            },
-            |error| format!("{}: {error}", summary.record.result.label()),
-        );
-    }
-    if action_kind.is_check_only()
-        && let Some(stage) = summary.record.stages().next()
+    if action_kind == TaskActionKind::Command
+        && let Some(error) = &summary.record.error
     {
-        return check_result_label(&stage, summary.record.watch.as_ref(), false);
+        return format!("{}: {error}", summary.record.result.label());
     }
     let mut label = success_result_label(summary.record);
     if let Some(exit_label) = outcome_exit_label(summary) {
@@ -544,10 +520,18 @@ pub(super) fn write_record_forensics(
     {
         write_detail_link(out, "leader", leader)?;
     }
-    write_check_section(out, record, run_record.as_ref(), prose, detail)?;
-    if let Some(evidence) = workflow_run(record.run_id.as_deref(), workflow_runs)
-        .and_then(|run| run.evidence.as_deref())
-    {
+    let evidence = workflow_run(record.run_id.as_deref(), workflow_runs)
+        .and_then(|run| run.evidence.as_deref());
+    let journal_has_output = evidence.is_some_and(journal_has_output);
+    write_check_section(
+        out,
+        record,
+        run_record.as_ref(),
+        prose,
+        detail,
+        journal_has_output,
+    )?;
+    if let Some(evidence) = evidence {
         write_run_evidence(out, evidence, prose, detail)?;
     }
     write_verify_section(out, run_record.as_ref())?;
@@ -609,12 +593,29 @@ pub(super) fn write_record_forensics(
     write_stored_run_links(out, record, workflow_runs, run_record.as_ref())
 }
 
+/// Whether the run's journal names a check log that is still readable: the evaluation's own
+/// output block then prints the command's output, so the row's copy of it stays out.
+fn journal_has_output(evidence: &list::RunEvidence) -> bool {
+    evidence.journal.iter().any(|entry| {
+        matches!(
+            &entry.event,
+            rimz::store::workflow::JournalEvent::Evaluation { object, .. }
+                if object
+                    .get("log")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|log| Path::new(log).is_file())
+        )
+    })
+}
+
+/// `journal_has_output` leaves out the row's check output, which the run's journal prints.
 fn write_check_section(
     out: &mut impl Write,
     record: &LoopRunRecord,
     run_record: Option<&rimz::store::run::RunRecord>,
     prose: ui::prose::Prose,
     detail: Forensics,
+    journal_has_output: bool,
 ) -> std::io::Result<()> {
     for stage in record.stages() {
         if let RunStage::Judge(judge) = stage {
@@ -667,7 +668,9 @@ fn write_check_section(
             }
             continue;
         }
-        if let RunStage::Check(check) = stage {
+        if let RunStage::Check(check) = stage
+            && !journal_has_output
+        {
             if let Some(path) = &check.output_path {
                 write_detail_link(out, "output", &path.display().to_string())?;
             }
@@ -820,9 +823,7 @@ fn write_evaluation(
         .map(|(at, _)| at)
         .find(|at| output.len() - at <= CHECK_LOG_TAIL_CAP)
         .map_or(output, |at| &output[at..]);
-    if detail != Forensics::Summary {
-        write_detail_link(out, "output", log)?;
-    }
+    write_detail_link(out, "output", log)?;
     if output.is_empty() {
         return Ok(());
     }
@@ -1066,9 +1067,9 @@ mod tests {
     }
 
     #[test]
-    fn ordered_judge_forensics_and_skip_summary_name_every_tier() {
+    fn stored_judge_forensics_name_every_tier_in_order() {
         use super::*;
-        let entry: TaskEntry = toml::from_str("agent='codex'\nprompt='fix'\ncheck='false'\non='fail'\n[[judge]]\nagent='claude'\nprompt='q'\n[[judge]]\nagent='codex'\nprompt='q2'\n").unwrap();
+        let entry: TaskEntry = toml::from_str("command=['false']\ntimeout='1m'\n").unwrap();
         let mut record = LoopRunRecord::new(
             "guard",
             LoopRunResult::CheckSkipped,
@@ -1108,27 +1109,8 @@ mod tests {
             text.find("tier one").unwrap() < text.find("tier two").unwrap(),
             "{text}"
         );
-        let mut out = Vec::new();
-        write_check_skipped_summary(
-            &mut out,
-            "guard",
-            &entry,
-            &TaskAction::Spawn("codex".into()),
-            100,
-            LoopRunMode::Manual,
-            &RunSummary {
-                record: &record,
-                presentation: &LoopRunPresentation::default(),
-                prose: ui::prose::Prose::Raw,
-            },
-        )
-        .unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(
-            text.contains("judge `codex` passed") && text.contains("guard"),
-            "{text}"
-        );
     }
+
     #[test]
     fn agent_check_forensics_names_verdict_reason_and_usage() {
         use super::*;
@@ -1160,6 +1142,7 @@ mod tests {
                 None,
                 ui::prose::Prose::Raw,
                 Forensics::Full,
+                false,
             )
             .unwrap();
             let text = String::from_utf8(out).unwrap();

@@ -280,7 +280,7 @@ rimz teams resume forge -w --bg
 
 `--model MODEL`, `--effort LEVEL`, `--fast` or `--no-fast`, `--agent PROFILE|KIND`, `--tier TIER`, `--ask` or `--yolo`, and `--isolation host|scoped|sandbox` become the saved launch settings, with the same provider and tier restrictions as [`rimz agents forge --continue`](./agents.md#continue-a-cohort). A positional `PROMPT` is queued to the team's leader as a user message after reopening. Omitting isolation preserves each member's recorded override; a member with none recorded takes its profile's `isolation` default, then machine policy. The replacement survives restart, rebirth, and child launches.
 
-`--bg` and agent callers keep focus where it is under the [focus rule](./agents.md#channel-worktree-and-placement). `resume` prints `resuming <team> in <lane>`, then one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume. After a blank line come the hints `Check: rimz teams show <team>#<lane>`, `Reach: rimz message @<leader>#<lane> '<text>'`, and a `Wait:` line holding the one-shot `team.idle` [signal subscription](#launch-a-team) for the cohort.
+`--bg` and agent callers keep focus where it is under the [focus rule](./agents.md#channel-worktree-and-placement). `resume` prints `resuming <team> in <lane>`, then one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume. After a blank line come the hints `Check: rimz teams show <team>#<lane>` and `Reach: rimz message @<leader>#<lane> '<text>'`.
 
 ## Drive a live team
 

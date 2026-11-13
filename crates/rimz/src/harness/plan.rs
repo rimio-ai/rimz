@@ -688,19 +688,6 @@ pub fn resolve_single_agent_launch(
     single_agent(spec, &routed_layout(spec, workspace, login)?)
 }
 
-/// Every agent cell a workflow step's `spec` launches, routed as
-/// [`resolve_single_agent_launch`] routes one, beside the account the cell pins.
-pub(crate) fn resolve_agent_cells(
-    spec: &str,
-    workspace: &crate::workspace::ResolvedWorkspace,
-    login: &crate::store::writer::LaunchLogin,
-) -> Result<Vec<(ResolvedSingleAgentLaunch, Option<crate::ids::LoginName>)>> {
-    Ok(routed_layout(spec, workspace, login)?
-        .agent_cells()
-        .map(|cell| (single_cell(cell), cell.launch.login.clone()))
-        .collect())
-}
-
 fn routed_layout(
     spec: &str,
     workspace: &crate::workspace::ResolvedWorkspace,
@@ -1142,7 +1129,15 @@ pub fn plan_supervised_launch(
         commands,
         &effective.teams,
     )?;
-    if resolved.layout.agent_cells().count() != 1 {
+    let agents = resolved.layout.agent_cells().count();
+    if agents != 1 && request.loop_task.is_some() {
+        bail!(
+            "a launch under a loop fire runs one agent until it ends, and `{}` resolves to \
+             {agents} agents; add --detach to launch them on their own",
+            request.spec
+        );
+    }
+    if agents != 1 {
         bail!("--print requires a layout with exactly one agent cell");
     }
     let mut cells = resolved

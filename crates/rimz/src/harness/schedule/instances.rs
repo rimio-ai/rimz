@@ -152,7 +152,7 @@ pub(super) fn insert_delivery(
                 super::catalog::TaskSource::Instance,
                 &current.resolved_root(),
             );
-            // A self wait and a `loop add --wait` subscription never stand in for each other.
+            // A self wait and a delivery subscription never stand in for each other.
             !taken.contains(*name)
                 && current.wait_meta.is_some() == entry.wait_meta.is_some()
                 && super::arming::ArmState::resolve(
@@ -278,8 +278,8 @@ mod tests {
 
     fn task() -> TaskEntry {
         TaskEntry {
-            agent: Some("claude".to_owned()),
-            prompt: Some("wait".to_owned()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             root: PathBuf::from("/repo"),
             at: Some("07:00".to_owned()),
             ..TaskEntry::default()
@@ -378,17 +378,11 @@ mod tests {
         insert(&paths, "wait", &entry).expect("insert");
         let encoded = std::fs::read_to_string(path(&paths.root)).expect("serialized instances");
         let value: serde_json::Value = serde_json::from_str(&encoded).expect("instances json");
-        assert_eq!(value["wait"]["agent"], "claude");
-        assert_eq!(value["wait"]["prompt"], "wait");
+        assert_eq!(value["wait"]["command"], serde_json::json!(["true"]));
+        assert_eq!(value["wait"]["timeout"], "1m");
         assert_eq!(value["wait"]["root"], "/repo");
         assert_eq!(value["wait"]["at"], "07:00");
-        assert_eq!(
-            load_from(&paths.root)
-                .0
-                .get("wait")
-                .map(|entry| entry.prompt.as_deref()),
-            Some(Some("wait"))
-        );
+        assert_eq!(load_from(&paths.root).0.get("wait"), Some(&entry));
 
         assert!(remove(&paths, "wait", None).expect("remove"));
         assert!(load_from(&paths.root).0.is_empty());
@@ -411,10 +405,7 @@ mod tests {
         assert!(rename(&paths, "wait", "nudge").expect("rename"));
         let tasks = load_from(&paths.root);
         assert!(!tasks.0.contains_key("wait"));
-        assert_eq!(
-            tasks.0.get("nudge").map(|entry| entry.prompt.as_deref()),
-            Some(Some("wait"))
-        );
+        assert_eq!(tasks.0.get("nudge"), Some(&entry));
         assert!(!rename(&paths, "wait", "later").expect("rename absent"));
     }
 

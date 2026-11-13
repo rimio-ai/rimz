@@ -23,9 +23,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
-use rimz::config::{CheckOn, Judge, MachineConfig, TaskCheck, TaskEntry, TaskTarget};
+use rimz::config::{MachineConfig, TaskEntry, TaskTarget};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
-use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, ProcessExit,
     RunStage, RunTransition,
@@ -33,7 +32,7 @@ use rimz::harness::schedule::run_log::{
 use rimz::harness::schedule::runner::{
     AfterReset, InFlightRun, RunLockInfo, RunLockState, RunLocks,
     SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset, in_flight_run,
-    parse_mode, parse_task_timeout, preflight_entry, window_condition_provider,
+    parse_task_timeout, window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -78,8 +77,6 @@ enum LoopSubcmd {
     Remove(NamesArgs),
     /// Rename a task in the store that owns it.
     Rename(RenameArgs),
-    /// Publish a task's compiled graph as a workflow and point the task at it.
-    Eject(EjectArgs),
     /// Pause a task for a bounded duration.
     Pause(PauseArgs),
     /// Enable tasks here without replaying missed fires.
@@ -166,83 +163,18 @@ enum TimerSubcmd {
 
 #[derive(Debug, Args)]
 struct AddArgs {
-    /// Task name (letters, digits, `-`, `_`).
-    name: String,
+    /// Task name (letters, digits, `-`, `_`); generated as `loop-<petname>` when omitted.
+    name: Option<String>,
     /// Short description, one line of 1–60 characters after trimming.
     #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
     label: Option<String>,
-    /// Kind, profile, or virtual cell; with --stay, an ordinary agent layout.
-    #[arg(
-        long,
-        conflicts_with = "wait",
-        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
-    )]
-    agent: Option<String>,
-    /// Workflow under `~/.rimz/workflows/` that each fire starts as a run; validated now.
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["agent", "wait"])]
-    workflow: Option<String>,
-    /// Leave the agent layout running as ordinary room agents.
-    #[arg(long)]
-    stay: bool,
-    /// Evaluate a condition in each RimZ-owned worktree.
+    /// Evaluate the trigger in each RimZ-owned worktree and fire there.
     #[arg(long)]
     each_worktree: bool,
-    /// Arm a standing signal subscription for the layout's prompt leader.
-    #[arg(long, value_name = "SIGNAL")]
-    subscribe: Vec<String>,
-    /// Take over the checkout: stop its idle agents first, wait while any is busy.
-    #[arg(long)]
-    takeover: bool,
-    /// Live agent to wake through the message path; resolved and pinned now.
-    #[arg(
-        long,
-        value_name = "ADDRESS",
-        num_args = 0..=1,
-        default_missing_value = "@me",
-        conflicts_with = "agent",
-        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::handles)
-    )]
-    wait: Option<String>,
-    /// Inline prompt for the triggered turn.
-    #[arg(long, conflicts_with = "prompt_file")]
-    prompt: Option<String>,
-    /// File whose contents are used as the triggered prompt.
-    #[arg(long = "prompt-file", value_name = "PATH")]
-    prompt_file: Option<PathBuf>,
-    /// Shell command to run before any agent action.
-    #[arg(long, value_name = "CMD")]
-    check: Option<String>,
-    /// Cap for the shell check; default --timeout, else 5m; a killed check fails.
-    #[arg(long, value_name = "DUR")]
-    check_timeout: Option<String>,
-    /// Profile to ask as a read-only judge before the task's action.
-    #[arg(long, value_name = "PROFILE")]
-    judge: Option<String>,
-    /// Inline question for the judge.
-    #[arg(long, value_name = "TEXT")]
-    judge_prompt: Option<String>,
-    /// File containing the judge's question.
-    #[arg(long, value_name = "PATH")]
-    judge_prompt_file: Option<PathBuf>,
-    /// Ask again this long after a deduping task's guard declines.
-    #[arg(long, value_name = "DUR")]
-    judge_recheck: Option<String>,
-    /// Cap for the judge; default 5m, independent of --timeout.
-    #[arg(long, value_name = "DUR")]
-    judge_timeout: Option<String>,
-    /// Shell command that must pass before a spawned agent task is complete.
-    #[arg(long, value_name = "CMD")]
-    verify: Option<String>,
-    /// Total agent turns allowed while making --verify pass.
-    #[arg(long, value_name = "N")]
-    max_attempts: Option<u32>,
     /// Auto-disable after N consecutive failed fires; default 3, 0 disables.
     #[arg(long, value_name = "N")]
     max_strikes: Option<u32>,
-    /// Outcome every stage must land on for the action to run; required with --judge.
-    #[arg(long, value_name = "fail|success|any")]
-    on: Option<String>,
-    /// Refused: fire on a condition with `--when` instead; stored `--until` rows still run.
+    /// Refused: fire on a condition with `--when` instead.
     #[arg(long, value_name = "DUR")]
     until: Option<String>,
     /// One-shot time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `HH:MM` with --every.
@@ -261,10 +193,11 @@ struct AddArgs {
         conflicts_with_all = ["at", "every", "cron", "signal"]
     )]
     in_after: Option<String>,
-    /// Fire once after the next reset of the task provider's 5h or 7d window.
+    /// Fire once after the next reset of the --provider's 5h or 7d window.
     #[arg(
         long = "after-reset",
         value_name = "5h|7d",
+        requires = "provider",
         conflicts_with_all = ["at", "every", "cron", "in_after", "signal", "when", "until"]
     )]
     after_reset: Option<rimz::agents::WindowSpan>,
@@ -275,7 +208,7 @@ struct AddArgs {
         conflicts_with_all = ["at", "every", "cron", "in_after"]
     )]
     signal: Option<String>,
-    /// Fire while a state expression holds; repeated clauses are ANDed.
+    /// Fire when a state expression holds; repeated clauses are ANDed.
     #[arg(long, value_name = "EXPR", conflicts_with_all = ["at", "every", "cron", "in_after", "signal", "until"])]
     when: Vec<String>,
     /// Require the whole condition to hold continuously for this duration.
@@ -284,64 +217,37 @@ struct AddArgs {
     /// Require a top-level signal payload field to equal this value.
     #[arg(long = "match", value_name = "KEY=VALUE", requires = "signal")]
     matches: Vec<String>,
-    /// Remove a signal or condition task after its first fire.
+    /// Keep a --signal or --when task after a fire, so it fires again; without it, it fires once.
     #[arg(long)]
-    once: bool,
+    repeat: bool,
     /// Project root whose room hosts the task; resolved to an absolute root.
     #[arg(long, default_value = ".")]
     root: PathBuf,
     /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
     #[arg(long)]
     project: bool,
-    /// Fresh worktree prefix for each fire of an --agent or check task; with --stay, the
-    /// resident's worktree, created or reused when the task fires; with --wait, the target channel.
-    #[arg(long)]
-    worktree: Option<String>,
-    /// Permission posture for the supervised turn: auto, ask, or yolo.
-    #[arg(long)]
-    mode: Option<String>,
-    /// Reasoning effort for the launched agent.
-    #[arg(long)]
-    effort: Option<String>,
-    /// Launch the agent in the provider's fast mode (Claude, Codex, Amp, Pi on OpenAI).
-    #[arg(long, conflicts_with = "no_fast")]
-    fast: bool,
-    /// Request no fast mode, even where the agent's profile sets `fast`.
-    #[arg(long)]
-    no_fast: bool,
-    /// Named account of the agent's provider that every fire runs on; unset follows the room.
+    /// Run each fire's command in a fresh worktree `<PREFIX>-<time>`, branched from trunk.
+    #[arg(long, value_name = "PREFIX")]
+    fresh_worktree: Option<String>,
+    /// Provider whose usage windows a `window.*` condition or --after-reset reads.
+    #[arg(long, value_name = "KIND")]
+    provider: Option<String>,
+    /// Named account of --provider whose windows the condition reads; unset follows the room.
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,
-    /// Off skips machine stagger, resource limits and capacity check, not caps; unset is on.
-    #[arg(long, value_name = "on|off", value_parser = ["on", "off"])]
-    throttle: Option<String>,
-    /// How long to wait for capacity: a positive s/m/h/d duration, or forever.
-    #[arg(long, value_name = "DURATION|forever")]
-    capacity_wait: Option<rimz::config::CapacityWait>,
     /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (stop for newest).
     #[arg(long, value_name = "POLICY", value_parser = ["skip", "coalesce", "queue", "replace"])]
     overlap: Option<String>,
     /// Maximum waiting triggers with --overlap queue; default 10, at least 1.
     #[arg(long, value_name = "N")]
     overlap_limit: Option<usize>,
-    /// Dollar cap for each spawned agent run.
-    #[arg(long, value_name = "AMOUNT[/day]")]
-    budget: Option<String>,
-    /// Skip a fire once this task's local-day run spend reaches the amount.
-    #[arg(long = "budget-per-day", value_name = "AMOUNT")]
-    budget_per_day: Option<String>,
-    /// Fire only while the provider's longest budget window holds this forward headroom, e.g. 1.5x.
-    #[arg(long, value_name = "RATIO")]
-    surplus: Option<String>,
-    /// Fire only once this much of the provider's longest budget window has elapsed, e.g. 3d.
-    #[arg(long = "surplus-after", value_name = "DUR")]
-    surplus_after: Option<String>,
-    /// Replace the agent's base system prompt with a file's contents.
-    #[arg(long = "system-prompt-file", value_name = "PATH")]
-    system_prompt_file: Option<PathBuf>,
-    /// Cap for the agent turn, each verify command, and the check when it has no --check-timeout.
-    #[arg(long)]
+    /// Cap for the command; a command that outlives it fails. Default `loop.default-timeout`,
+    /// else 2h.
+    #[arg(long, value_name = "DUR")]
     timeout: Option<String>,
+    /// The command each fire runs, word for word with no shell: `-- sh -c '...'` for one.
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -404,9 +310,6 @@ struct FireArgs {
         crate::cli::complete::loop_tasks
     ))]
     name: String,
-    /// Leave the transient run pane open for inspection.
-    #[arg(long)]
-    keep: bool,
 }
 
 #[derive(Debug, Args)]
@@ -416,16 +319,6 @@ struct RenameArgs {
     ))]
     name: String,
     new_name: String,
-}
-
-#[derive(Debug, Args)]
-struct EjectArgs {
-    #[arg(add = clap_complete::ArgValueCandidates::new(
-        crate::cli::complete::loop_tasks
-    ))]
-    name: String,
-    /// The workflow's name under `~/.rimz/workflows/`; defaults to the task's name.
-    workflow: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -523,13 +416,12 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
             };
             Err(child.exec().into())
         }
-        LoopSubcmd::Add(args) => add::add(*args, globals),
+        LoopSubcmd::Add(args) => add::add(*args),
         LoopSubcmd::Remove(args) => args
             .names
             .iter()
             .try_for_each(|name| add::remove(name, globals)),
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
-        LoopSubcmd::Eject(args) => add::eject(&args, globals),
         LoopSubcmd::Pause(args) => add::pause(args, globals),
         LoopSubcmd::Enable(args) => add::enable(args, globals),
         LoopSubcmd::Disable(args) => add::disable(args, globals),
@@ -548,10 +440,9 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 drain: false,
             },
             LoopRunMode::Manual,
-            args.keep,
             globals,
         ),
-        LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, false, globals),
+        LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, globals),
         LoopSubcmd::Tick => timer::tick(),
         LoopSubcmd::Timer(args) => timer::run(args.command),
     }
@@ -597,32 +488,13 @@ fn stop_active_run(
     expected: Option<RunLockInfo>,
     globals: &GlobalFlags,
 ) -> Result<(schedule::runner::StopOutcome, Option<String>)> {
-    use crate::cli::supervised::StopRunErr;
-
     let mut pane_open = None;
     let outcome = schedule::runner::stop_task(name, root, expected, |workspace, paths, record| {
         let Some(record) = record else {
             return Ok(());
         };
-        let id = paths.workspace_id.clone();
-        let store = crate::cli::open_existing_store_at(paths)?
-            .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
-        let Some(workspace) = workspace else {
-            return crate::cli::supervised::cancel_supervised_run(&store, record);
-        };
-        match crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record) {
-            // Cancellation succeeded; still finish the ladder before reporting
-            // the pane which only the run's own stop can now close.
-            Err(StopRunErr::PaneOpen(open)) => {
-                pane_open = Some(format!(
-                    "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
-                    record.run_id
-                ));
-                Ok(())
-            }
-            Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
-            Ok(()) => Ok(()),
-        }
+        pane_open = stop_owned_run(name, workspace, paths, record, globals)?;
+        Ok(())
     });
     let (outcome, transition) = match (outcome, &pane_open) {
         (Err(err), Some(open)) => return Err(err.context(open.clone())),
@@ -630,6 +502,38 @@ fn stop_active_run(
     };
     run_tasks::handle_run_transition(name, root, transition);
     Ok((outcome, pane_open))
+}
+
+/// Stop a supervised run task `name` owns; a pane only the run's own stop can close is
+/// returned for the caller to report once the rest of its stop is done.
+fn stop_owned_run(
+    name: &str,
+    workspace: Option<&rimz::ResolvedWorkspace>,
+    paths: StatePaths,
+    record: &rimz::store::run::RunRecord,
+    globals: &GlobalFlags,
+) -> Result<Option<String>> {
+    use crate::cli::supervised::StopRunErr;
+
+    let id = paths.workspace_id.clone();
+    let store = crate::cli::open_existing_store_at(paths)?
+        .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
+    // A kept run's wrapper ends its provider on the cancel and holds the pane, as the
+    // collection of the fire's ended run leaves it; only its own stop closes that pane.
+    let Some(workspace) = workspace.filter(|_| !record.keep) else {
+        crate::cli::supervised::cancel_supervised_run(&store, record)?;
+        return Ok(None);
+    };
+    match crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record) {
+        // Cancellation succeeded; still finish the ladder before reporting
+        // the pane which only the run's own stop can now close.
+        Err(StopRunErr::PaneOpen(open)) => Ok(Some(format!(
+            "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
+            record.run_id
+        ))),
+        Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
+        Ok(()) => Ok(None),
+    }
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
@@ -705,15 +609,6 @@ fn block_untrusted_project_task(name: &str, entry: &TaskEntry, source: TaskSourc
         state = state.as_str(),
         fix = trust::blocked_fix(state),
     )
-}
-
-fn parse_check_on(raw: &str) -> Result<CheckOn> {
-    match raw.trim() {
-        "fail" => Ok(CheckOn::Fail),
-        "success" => Ok(CheckOn::Success),
-        "any" => Ok(CheckOn::Any),
-        other => bail!("unknown loop check polarity `{other}`; use fail, success, or any"),
-    }
 }
 
 fn pause_until_text(until: Timestamp, now: Timestamp) -> String {

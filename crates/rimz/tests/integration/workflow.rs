@@ -288,17 +288,6 @@ fn start_with(command: impl Fn() -> std::process::Command) -> String {
         .into()
 }
 
-/// Every run of the room this RimZ reads, live first, then finished.
-fn every_run(state: &rimz::StatePaths) -> Vec<rimz::store::workflow::RunRecord> {
-    let mut runs = rimz::store::workflow::live_runs(state).unwrap();
-    for paths in state.finished_workflow_runs().unwrap() {
-        if let Ok(record) = rimz::store::workflow::load(&paths) {
-            runs.push(record);
-        }
-    }
-    runs
-}
-
 /// The run's home, in the live directory or, once it ended, the finished one.
 fn run_home(env: &Env, id: &str) -> rimz::disk::paths::WorkflowPaths {
     let state = env.state_path_for(&env.project_root);
@@ -2159,8 +2148,8 @@ fn validate_json_shape_errors_and_exit_status() {
         format!("{HEADER}[test.pr]\ntimeout='365d'\nshell='printf shell'\non={{pass='@done',fail='@failed'}}\n"),
     )
     .unwrap();
-    // A crashed `loop eject` leaves its staging copy under a dot directory.
-    let staging = env.rimz_home().join("workflows/.eject/review");
+    // A copy under a dot directory is no deployed workflow.
+    let staging = env.rimz_home().join("workflows/.staging/review");
     fs::create_dir_all(&staging).unwrap();
     fs::copy(dir.join("workflow.toml"), staging.join("workflow.toml")).unwrap();
     let report: Value =

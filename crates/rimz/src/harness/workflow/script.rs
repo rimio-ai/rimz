@@ -17,8 +17,6 @@ mod condition;
 mod judge;
 #[cfg(test)]
 pub(super) use judge::budget_refusal;
-#[cfg(test)]
-pub(super) use judge::declines;
 
 pub use condition::{CaseMark, CaseMarks, case_marks, unread_reasons};
 
@@ -460,6 +458,12 @@ fn loop_task_env(record: &RunRecord) -> Vec<(String, String)> {
             record.scope.path.display().to_string(),
         ),
     ];
+    if let Some(trigger) = record.prompt.clone().filter(|text| !text.is_empty()) {
+        env.push((
+            crate::harness::loop_task::LOOP_TRIGGER_ENV.to_owned(),
+            trigger,
+        ));
+    }
     if let Some(fire) = record.fire.as_ref()
         && !fire.booked_by().is_empty()
         && let Ok(chain) = serde_json::to_string(fire.booked_by())

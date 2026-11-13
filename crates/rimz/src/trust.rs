@@ -19,7 +19,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::agents::PermissionMode;
-use crate::config::{CheckOn, ConfigFileDiagnosis, TaskCheck, Team};
+use crate::config::{ConfigFileDiagnosis, Team};
 use crate::disk::atomic::{self, write_bytes_atomically};
 use crate::disk::paths::rimz_home;
 use crate::ids::{RoomLogins, WorkspaceId};
@@ -879,35 +879,24 @@ pub struct ProjectProfile {
     pub fast: Option<bool>,
 }
 
+/// A project loop row as the trust hash reads it. Its command-executing fields stay raw TOML: a
+/// mistyped one is the loop loader's to refuse for that row alone, and the hash covers the value
+/// as written.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectTask {
-    pub agent: Option<String>,
-    pub workflow: Option<String>,
-    pub prompt: Option<String>,
-    #[serde(rename = "prompt-file")]
-    pub prompt_file: Option<PathBuf>,
-    pub check: Option<TaskCheck>,
-    #[serde(deserialize_with = "crate::config::deserialize_judges")]
-    pub judge: Vec<crate::config::Judge>,
-    pub verify: Option<String>,
-    #[serde(rename = "max-attempts")]
-    pub max_attempts: Option<u32>,
-    pub on: Option<CheckOn>,
+    pub command: Option<toml::Value>,
     pub root: Option<PathBuf>,
-    pub worktree: Option<String>,
-    pub mode: Option<String>,
-    pub effort: Option<String>,
-    pub fast: Option<bool>,
-    #[serde(rename = "system-prompt-file")]
-    pub system_prompt_file: Option<PathBuf>,
-    pub timeout: Option<String>,
+    #[serde(rename = "fresh-worktree")]
+    pub fresh_worktree: Option<toml::Value>,
+    pub timeout: Option<toml::Value>,
     pub at: Option<String>,
     pub every: Option<String>,
     pub cron: Option<String>,
     pub signal: Option<String>,
     #[serde(rename = "match")]
     pub matches: Option<BTreeMap<String, String>>,
+    pub repeat: Option<toml::Value>,
     pub deadline: Option<Timestamp>,
 }
 
@@ -1027,30 +1016,18 @@ struct ExecutableHook<'a> {
 #[derive(Serialize)]
 struct ExecutableTask<'a> {
     name: &'a str,
-    agent: Option<&'a str>,
+    command: Option<&'a toml::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    workflow: Option<&'a str>,
-    prompt: Option<&'a str>,
-    prompt_file: Option<String>,
-    check: Option<&'a TaskCheck>,
-    #[serde(skip_serializing_if = "<[crate::config::Judge]>::is_empty")]
-    judge: &'a [crate::config::Judge],
-    verify: Option<&'a str>,
-    max_attempts: Option<u32>,
-    on: Option<CheckOn>,
-    worktree: Option<&'a str>,
-    mode: Option<&'a str>,
-    effort: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fast: Option<bool>,
-    system_prompt_file: Option<String>,
-    timeout: Option<&'a str>,
+    fresh_worktree: Option<&'a toml::Value>,
+    timeout: Option<&'a toml::Value>,
     at: Option<&'a str>,
     every: Option<&'a str>,
     cron: Option<&'a str>,
     signal: Option<&'a str>,
     #[serde(rename = "match")]
     matches: Option<&'a BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repeat: Option<&'a toml::Value>,
 }
 
 fn permission_mode_name(mode: PermissionMode) -> &'static str {
@@ -1176,32 +1153,15 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .iter()
                 .map(|(name, task)| ExecutableTask {
                     name: name.as_str(),
-                    agent: task.agent.as_deref(),
-                    workflow: task.workflow.as_deref(),
-                    prompt: task.prompt.as_deref(),
-                    prompt_file: task
-                        .prompt_file
-                        .as_ref()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                    check: task.check.as_ref(),
-                    judge: &task.judge,
-                    verify: task.verify.as_deref(),
-                    max_attempts: task.max_attempts,
-                    on: task.on,
-                    worktree: task.worktree.as_deref(),
-                    mode: task.mode.as_deref(),
-                    effort: task.effort.as_deref(),
-                    fast: task.fast,
-                    system_prompt_file: task
-                        .system_prompt_file
-                        .as_ref()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                    timeout: task.timeout.as_deref(),
+                    command: task.command.as_ref(),
+                    fresh_worktree: task.fresh_worktree.as_ref(),
+                    timeout: task.timeout.as_ref(),
                     at: task.at.as_deref(),
                     every: task.every.as_deref(),
                     cron: task.cron.as_deref(),
                     signal: task.signal.as_deref(),
                     matches: task.matches.as_ref(),
+                    repeat: task.repeat.as_ref(),
                 })
                 .collect(),
             hooks: config

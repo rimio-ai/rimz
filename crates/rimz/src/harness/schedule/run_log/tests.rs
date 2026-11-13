@@ -778,34 +778,6 @@ fn held_stats_reset_on_local_day_and_time_zone_change() {
 }
 
 #[test]
-fn daily_gate_reserves_the_next_runs_full_cap() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().expect("zoned");
-    let mut spent = record("bounded", 0, LoopRunResult::Completed);
-    spent.at = now.timestamp();
-    spent.cost_usd = Some(6.0);
-    let path = log_path(dir.path());
-    std::fs::create_dir_all(path.parent().expect("log parent")).expect("log dir");
-    std::fs::write(
-        path,
-        format!("{}\n", serde_json::to_string(&spent).expect("record json")),
-    )
-    .expect("write run log");
-    let entry = crate::config::TaskEntry {
-        budget: Some("$5.00".to_owned()),
-        budget_per_day: Some("$10.00".to_owned()),
-        ..crate::config::TaskEntry::default()
-    };
-
-    let gate = daily_budget_gate(dir.path(), "bounded", &entry, &now)
-        .expect("valid gate")
-        .expect("next run does not fit");
-    assert_eq!(gate.spend_usd, 6.0);
-    assert_eq!(gate.reserved_usd, 5.0);
-    assert_eq!(gate.cap_usd, 10.0);
-}
-
-#[test]
 fn stats_folds_rotated_sibling_and_keeps_newest_last() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::disk::rotating::append(
@@ -1096,48 +1068,6 @@ fn a_report_row_carries_the_facts_its_fire_sealed() {
     );
 }
 
-#[test]
-fn workflow_daily_gate_holds_each_live_runs_reservation() {
-    let dir = tempfile::tempdir().unwrap();
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
-    let mut spent = record("wf", 0, LoopRunResult::Completed);
-    spent.at = now.timestamp();
-    spent.cost_usd = Some(4.0);
-    append_to(dir.path(), &spent);
-    let entry = crate::config::TaskEntry {
-        budget_per_day: Some("$10.00".to_owned()),
-        ..crate::config::TaskEntry::default()
-    };
-    let gate =
-        |reserved, live| reserved_budget_gate(dir.path(), "wf", &entry, &now, reserved, live);
-    assert_eq!(
-        gate(3.0, 3.0),
-        Ok(None),
-        "4 spent + 3 held + 3 next fits 10"
-    );
-    let held = gate(3.0, 3.5).unwrap().expect("4 + 3.5 + 3 exceeds 10");
-    assert_eq!(
-        (held.spend_usd, held.live_usd, held.reserved_usd),
-        (4.0, 3.5, 3.0)
-    );
-    assert_eq!(
-        held.reason(),
-        "daily budget $10.00 cannot fund the next $3.00 run ($4.00 spent, $3.50 held by live runs)"
-    );
-    assert_eq!(
-        gate(0.0, 5.5),
-        Ok(None),
-        "an unbounded graph is admitted below the cap"
-    );
-    assert_eq!(
-        gate(0.0, 6.0)
-            .unwrap()
-            .map(DailyBudgetGate::reason)
-            .as_deref(),
-        Some("daily budget $10.00 exhausted ($4.00 spent, $6.00 held by live runs)")
-    );
-}
-
 fn ended(
     ending: RunEnding,
     cost_usd: Option<f64>,
@@ -1163,7 +1093,8 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         .record_workspace(&workspace)
         .unwrap();
     let entry = crate::config::TaskEntry {
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("1h".into()),
         root: root.path().into(),
         ..crate::config::TaskEntry::default()
@@ -1185,7 +1116,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     };
     let failed = run("failed", serde_json::json!({"agent": 1}));
     for _ in 0..2 {
-        report_run(&failed, &ended(RunEnding::Failed, Some(0.75), true)).unwrap();
+        report_run(&failed, &ended(RunEnding::Failed, Some(0.75), true), None).unwrap();
         assert_eq!(
             super::super::strikes::load().get(&key),
             Some(&1),
@@ -1218,6 +1149,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     report_run(
         &run("done", serde_json::json!({})),
         &ended(RunEnding::Done, None, false),
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -1234,9 +1166,10 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     report_run(
         &run("canceled", serde_json::json!({})),
         &ended(RunEnding::Canceled, None, false),
+        None,
     )
     .unwrap();
-    report_run(&failed, &ended(RunEnding::Failed, None, true)).unwrap();
+    report_run(&failed, &ended(RunEnding::Failed, None, true), None).unwrap();
     assert_eq!(
         super::super::strikes::load().get(&key),
         None,
@@ -1265,7 +1198,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     };
     for run in [&quiet, &other, &quiet] {
         assert!(matches!(
-            report_run(run, &outcome),
+            report_run(run, &outcome, None),
             Ok(Collected::Forgotten)
         ));
     }
@@ -1296,7 +1229,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         let mut stranded = run("failed", serde_json::json!({}));
         stranded.stranded = true;
         assert!(matches!(
-            report_run(&stranded, &outcome),
+            report_run(&stranded, &outcome, None),
             Ok(Collected::Reported(RunTransition::Recorded))
         ));
         let rows = logged();
@@ -1325,8 +1258,8 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         .record_workspace(&workspace)
         .unwrap();
     let entry = crate::config::TaskEntry {
-        agent: Some("claude".into()),
-        prompt: Some("fix it".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         every: Some("1h".into()),
         root: root.path().into(),
         ..crate::config::TaskEntry::default()
@@ -1348,7 +1281,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
         waited_ms: 3_600_000,
         reason: Some("2 agents open".into()),
     };
-    report_run(&failed, &ended(gave_up, None, false)).unwrap();
+    report_run(&failed, &ended(gave_up, None, false), None).unwrap();
     let rows = task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",
@@ -1371,18 +1304,18 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
 }
 
 #[test]
-fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_end_keeps_it() {
+fn only_a_done_run_keeps_its_checkout_in_launch_memory() {
     let root = tempfile::tempdir().unwrap();
     let state = crate::StatePaths::for_project_root(root.path()).unwrap();
     let checkout = root.path().join("checkout");
     std::fs::create_dir_all(&checkout).unwrap();
     for (run_state, acted, kept) in [
-        ("done", false, false),
+        ("done", false, true),
         ("failed", true, false),
         ("failed", false, false),
-        ("canceled", false, true),
+        ("canceled", false, false),
         ("done", true, true),
-        ("canceled", true, true),
+        ("canceled", true, false),
     ] {
         let run: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
             "version":crate::store::workflow::VERSION, "id":crate::ids::WorkflowRunId::new(), "workflow":"resident",
@@ -1413,7 +1346,7 @@ fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_
             "failed" => RunEnding::Failed,
             _ => RunEnding::Canceled,
         };
-        report_run(&run, &ended(ending, None, acted)).unwrap();
+        report_run(&run, &ended(ending, None, acted), None).unwrap();
         let memory = super::super::launch_ledger::load_workflows(&state).unwrap();
         assert_eq!(
             memory
@@ -1424,4 +1357,48 @@ fn a_run_that_never_acted_or_failed_frees_its_checkout_and_an_acted_or_canceled_
             "{run_state} acted={acted}"
         );
     }
+}
+
+#[test]
+fn an_ended_fire_stops_only_the_open_launches_it_owns() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let fire = crate::ids::WorkflowRunId::new();
+    let successor = crate::ids::WorkflowRunId::new();
+    let launch = |owner: Option<&crate::ids::WorkflowRunId>, status: RunStatus| {
+        let mut record = crate::store::run::RunRecord::new(
+            paths.workspace_id.clone(),
+            crate::ids::AgentKind::new_unchecked("codex"),
+            crate::agents::PermissionMode::Auto,
+            "fix it".into(),
+            root.path().to_path_buf(),
+        );
+        record.loop_task = Some("spawn".into());
+        record.loop_fire = owner.cloned();
+        record.status = status;
+        crate::harness::run::create(&paths, &record).unwrap();
+        record.run_id
+    };
+    let owned = launch(Some(&fire), RunStatus::Running);
+    let finished = launch(Some(&fire), RunStatus::Completed);
+    let successors = launch(Some(&successor), RunStatus::Running);
+    let unstamped = launch(None, RunStatus::Running);
+
+    stop_fire_launches(&paths, &fire);
+
+    let status = |run| crate::harness::run::load(&paths, run).unwrap().status;
+    assert_eq!(
+        [
+            status(&owned),
+            status(&finished),
+            status(&successors),
+            status(&unstamped)
+        ],
+        [
+            RunStatus::Canceled,
+            RunStatus::Completed,
+            RunStatus::Running,
+            RunStatus::Running
+        ]
+    );
 }

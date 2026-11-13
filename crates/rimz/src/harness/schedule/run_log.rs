@@ -235,9 +235,9 @@ pub(super) fn fire_facts(record: &LoopRunRecord) -> Value {
     serde_json::to_value(capped_record(record)).unwrap_or(Value::Null)
 }
 
-/// A task's quiet fires: runs that ended done without starting an agent, a judge or a message,
-/// which leave no home and no history row. `streak` counts those since the task's last failure
-/// row; `last` is the newest one's `completed` row, with its output.
+/// A task's quiet fires: fires whose command exited 0, which leave no home and no history row.
+/// `streak` counts those since the task's last failure row; `last` is the newest one's
+/// `completed` row, with its output.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QuietFires {
     pub count: u64,
@@ -382,27 +382,55 @@ pub fn try_collect_run(
     state: &crate::StatePaths,
     run: &crate::ids::WorkflowRunId,
 ) -> anyhow::Result<()> {
+    let ended = collect_under_lock(state, run)?;
+    // An ended run never runs again, so its fire's verdict cannot go stale while the lock is
+    // released; the sweep takes each supervised run's own lock and skips one already ended.
+    if ended {
+        stop_fire_launches(state, run);
+    }
+    Ok(())
+}
+
+/// Report the run under the workspace lock, answering whether it has ended.
+fn collect_under_lock(
+    state: &crate::StatePaths,
+    run: &crate::ids::WorkflowRunId,
+) -> anyhow::Result<bool> {
     use crate::store::workflow;
     let paths = state.workflow(run);
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
     // A run that left the live directory owes nothing.
     let mut record = match workflow::classify(&paths)? {
         workflow::RunClass::Current(record) => record,
-        workflow::RunClass::Ended(header) if header.owes_loop_report() => {
-            report_header(state, run, &header)?;
-            workflow::mark_header_report_sent(&paths, &guard)?;
-            return Ok(());
+        workflow::RunClass::Ended(header) => {
+            if header.owes_loop_report() {
+                report_header(state, run, &header)?;
+                workflow::mark_header_report_sent(&paths, &guard)?;
+            }
+            return Ok(true);
         }
-        _ => return Ok(()),
+        workflow::RunClass::Recordless => return Ok(true),
+        _ => return Ok(false),
     };
     if !record.owes_loop_report() {
-        return Ok(());
+        return Ok(record.outcome.is_some());
     }
     let outcome = record
         .outcome
         .clone()
         .ok_or_else(|| anyhow::anyhow!("the run's record carries no outcome"))?;
-    match report_run(&record, &outcome)? {
+    // The exit is detail on the report; an unreadable journal leaves it out.
+    let command = workflow::journal(&paths)
+        .ok()
+        .as_deref()
+        .and_then(command_exit)
+        .map(|mut check| {
+            // The report releases the home to the finished directory, where the row's log then lies.
+            let finished = state.finished_workflow(run);
+            check.output_path = check.output_path.map(|log| finished.relocate(&log));
+            check
+        });
+    match report_run(&record, &outcome, command)? {
         Collected::Reported(_) => {
             record.loop_report = workflow::LoopReport::Sent;
             workflow::write(&paths, &record, &guard)?;
@@ -412,7 +440,42 @@ pub fn try_collect_run(
             std::fs::remove_dir_all(&paths.home)?;
         }
     }
-    Ok(())
+    Ok(true)
+}
+
+/// Stop each open supervised run that the fire `run`'s command launched blocking and that its
+/// ended command left behind: a stamped run outlives a command its fire's timeout or cancel
+/// killed. Only runs stamped with this fire's id are stopped, never a successor fire's.
+fn stop_fire_launches(state: &crate::StatePaths, run: &crate::ids::WorkflowRunId) {
+    let launches = match crate::harness::run::list(state) {
+        Ok(launches) => launches,
+        Err(error) => {
+            tracing::warn!(%run, error = %format!("{error:#}"), "fire's launches not listed");
+            return;
+        }
+    };
+    let owned = launches
+        .into_iter()
+        .filter(|launch| !launch.status.is_terminal() && launch.loop_fire.as_ref() == Some(run));
+    let mut owned = owned.peekable();
+    if owned.peek().is_none() {
+        return;
+    }
+    let runtime = match crate::RuntimePaths::for_state(state) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::warn!(%run, error = %format!("{error:#}"), "fire's launches not stopped");
+            return;
+        }
+    };
+    for launch in owned {
+        if let Err(error) =
+            crate::harness::run::cancel_and_wake_paths(state, &runtime, &launch.run_id, None)
+        {
+            let launch = &launch.run_id;
+            tracing::warn!(%run, %launch, error = %format!("{error:#}"), "fire's launch not stopped");
+        }
+    }
 }
 
 /// Report a finished run this RimZ does not decode from its record's header: the report row and
@@ -477,8 +540,7 @@ fn report_neutral(
     ended: crate::store::workflow::RunState,
     project_root: &Path,
 ) -> Result<(), ReportError> {
-    forget_unkept_launch(state, ended, facts.task, facts.run, outcome.acted)
-        .map_err(ReportFailure::Forget)?;
+    forget_unkept_launch(state, ended, facts.task, facts.run).map_err(ReportFailure::Forget)?;
     let mut record = report_row(facts, outcome);
     let catalog = super::catalog::TaskCatalog::load_lenient(Some(project_root));
     let root = match catalog.for_run(facts.task) {
@@ -526,7 +588,8 @@ pub fn collect_task_runs(root: &Path, task: &str) -> bool {
 /// Apply a collected run's launch-memory rule again, for a launcher that remembered the run only
 /// after its collection forgot it: a fast run can end before its launcher writes the memory. The
 /// workspace lock orders this read after a collection in flight, which forgets under that lock.
-/// A run with no home was forgotten as quiet, which leaves nothing to remember.
+/// A run with no home was collected as quiet, which only a run that ended `Done` is, so its
+/// memory stays.
 pub(super) fn forget_collected_launch(
     state: &crate::StatePaths,
     task: &str,
@@ -535,24 +598,16 @@ pub(super) fn forget_collected_launch(
     use crate::store::workflow;
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
     let Some(found) = workflow::find(state, run)? else {
-        return Ok(super::launch_ledger_store::forget_runs(
-            state,
-            task,
-            std::slice::from_ref(run),
-        )?);
+        return Ok(());
     };
-    let (ended, acted, project) = match &found.class {
+    let (ended, project) = match &found.class {
         workflow::RunClass::Current(record)
             if found.finished || record.loop_report == workflow::LoopReport::Sent =>
         {
-            let Some(outcome) = &record.outcome else {
+            if record.outcome.is_none() {
                 return Ok(());
-            };
-            (
-                record.state,
-                outcome.acted,
-                Some(record.project_root.clone()),
-            )
+            }
+            (record.state, Some(record.project_root.clone()))
         }
         workflow::RunClass::Current(_) => return Ok(()),
         class if found.finished => {
@@ -562,9 +617,7 @@ pub(super) fn forget_collected_launch(
             let Some(ended) = header.state.filter(|state| state.is_terminal()) else {
                 return Ok(());
             };
-            // A header that does not say whether its run acted keeps its memory.
-            let acted = header.acted.unwrap_or(true);
-            (ended, acted, header.project_root.clone())
+            (ended, header.project_root.clone())
         }
         _ => return Ok(()),
     };
@@ -575,9 +628,8 @@ pub(super) fn forget_collected_launch(
             ended,
             task,
             run,
-            acted,
         ),
-        None => forget_unkept_launch(state, ended, task, run, acted),
+        None => forget_unkept_launch(state, ended, task, run),
     }
 }
 
@@ -683,7 +735,7 @@ pub(in crate::harness) fn report_row(
 
 /// Report a finished task-started workflow run to its loop task. A run in its fire's own tree
 /// settles that tree first, so whichever collection lands first settles it, and the launch memory
-/// of a run that failed or ended unacted is forgotten; a failed forget fails the report.
+/// of a run whose command did not exit 0 is forgotten; a failed forget fails the report.
 ///
 /// A quiet run whose task row exists writes no row: its strike reset is noted through the strike
 /// store, which counts a run id once, and only a run id it counts for the first time adds to the
@@ -692,11 +744,13 @@ pub(in crate::harness) fn report_row(
 /// Any other run appends one row and, while the task's row exists, notes its strike. The report
 /// has landed only once both are durable; an error says it has not, and a failed append returns
 /// before the strike so a retry notes the two together, and history readers fold a repeated row
-/// by its run id. When the run entered an agent or message step, a scheduled `--until` row is
-/// consumed. Either way a waiting trigger is drained once the report landed.
+/// by its run id. When a scheduled fire's command exited 0, an `--until` row is consumed, quiet
+/// or not. Either way a waiting trigger is drained once the report landed. `command` is how the
+/// run's command ended, which a row carries as its check.
 pub(in crate::harness) fn report_run(
     run: &crate::store::workflow::RunRecord,
     outcome: &crate::store::workflow::RunOutcome,
+    command: Option<CheckRecord>,
 ) -> Result<Collected, ReportError> {
     let Some(task) = run.task.as_deref() else {
         return Ok(Collected::Reported(RunTransition::Recorded));
@@ -716,13 +770,13 @@ pub(in crate::harness) fn report_run(
         )?;
         return Ok(Collected::Reported(RunTransition::Recorded));
     }
-    let acted = outcome.acted;
-    super::runner::settle_fire_tree(run, acted);
+    super::runner::settle_fire_tree(run);
     crate::StatePaths::for_project_root(&run.project_root)
         .map_err(anyhow::Error::from)
-        .and_then(|state| forget_unkept_launch(&state, run.state, task, &run.id, acted))
+        .and_then(|state| forget_unkept_launch(&state, run.state, task, &run.id))
         .map_err(ReportFailure::Forget)?;
     let mut record = report_row(&ReportFacts::of(run, task), outcome);
+    record.check = command;
     let catalog = super::catalog::TaskCatalog::load_lenient(Some(&run.project_root));
     let Some(loaded) = catalog.for_run(task) else {
         // A consumed one-shot's row is gone; the facts its fire sealed still name the kind.
@@ -740,6 +794,7 @@ pub(in crate::harness) fn report_run(
             super::fires::note_quiet(&key, capped_record(&scoped_to(&root, &record)))
                 .map_err(ReportFailure::from)?;
         }
+        consume_until(&catalog, run, &record);
         drain_waiting(task, &root);
         return Ok(Collected::Forgotten);
     }
@@ -751,16 +806,80 @@ pub(in crate::harness) fn report_run(
     {
         notify(task, &root, strikes);
     }
-    if acted
+    consume_until(&catalog, run, &record);
+    drain_waiting(task, &root);
+    Ok(Collected::Reported(transition))
+}
+
+/// Consume a scheduled fire's `--until` row once its command exited 0.
+fn consume_until(
+    catalog: &super::catalog::TaskCatalog,
+    run: &crate::store::workflow::RunRecord,
+    record: &LoopRunRecord,
+) {
+    let Some(loaded) = catalog.for_run(&record.task) else {
+        return;
+    };
+    if record.result == LoopRunResult::Completed
         && !run.manual
         && loaded.is_ephemeral()
         && loaded.entry().deadline.is_some()
-        && let Err(error) = catalog.consume_scheduled(task)
+        && let Err(error) = catalog.consume_scheduled(&record.task)
     {
-        tracing::warn!(task, %error, "acted --until row not consumed");
+        tracing::warn!(task = record.task, %error, "--until row not consumed after its command exited 0");
     }
-    drain_waiting(task, &root);
-    Ok(Collected::Reported(transition))
+}
+
+/// How the run's command ended, from the newest evaluation of its command check in the
+/// run's journal: the exit code its test recorded, or the engine's timeout. The run's
+/// outcome alone says only done or failed.
+fn command_exit(journal: &[crate::store::workflow::JournalEntry]) -> Option<CheckRecord> {
+    use crate::store::workflow::JournalEvent;
+    journal.iter().rev().find_map(|entry| {
+        let JournalEvent::Evaluation {
+            outcome,
+            object,
+            started_at,
+            ended_at,
+            ..
+        } = &entry.event
+        else {
+            return None;
+        };
+        let timed_out = outcome == "timeout";
+        if entry.node != super::runner::COMMAND_NODE || !(timed_out || object.get("code").is_some())
+        {
+            return None;
+        }
+        let output_path = object.get("log").and_then(Value::as_str).map(PathBuf::from);
+        Some(CheckRecord {
+            code: object
+                .get("code")
+                .and_then(Value::as_i64)
+                .and_then(|code| i32::try_from(code).ok()),
+            timed_out,
+            output: output_path.as_deref().map(log_tail).unwrap_or_default(),
+            output_path,
+            duration_ms: u64::try_from(ended_at.duration_since(*started_at).as_millis()).ok(),
+            agent: None,
+        })
+    })
+}
+
+/// The last `CHECK_OUTPUT_CAP` bytes of a command's log, which the row keeps as its output;
+/// an unreadable log keeps none.
+fn log_tail(path: &Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(path).and_then(|mut file| {
+        let len = file.metadata()?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(CHECK_OUTPUT_CAP as u64)))?;
+        file.read_to_end(&mut bytes)
+    });
+    if read.is_err() {
+        return String::new();
+    }
+    tail_string(&String::from_utf8_lossy(&bytes), CHECK_OUTPUT_CAP)
 }
 
 /// What a quiet run's newest command step or check that printed anything printed, for its
@@ -847,23 +966,15 @@ fn quiet_check(run: &crate::store::workflow::RunRecord) -> Option<CheckRecord> {
     })
 }
 
-/// A run that ended without acting, or failed, leaves its checkout free to launch again: the
-/// launch memory keeps a checkout for a run whose act came to an end of its own, and for a
-/// canceled run, which only a manual fire replaces.
+/// Only a run whose command exited 0 keeps its checkout in the launch memory; a failed or
+/// canceled one leaves the checkout free to fire again.
 fn forget_unkept_launch(
     state: &crate::StatePaths,
     ended: crate::store::workflow::RunState,
     task: &str,
     run: &crate::ids::WorkflowRunId,
-    acted: bool,
 ) -> anyhow::Result<()> {
-    use crate::store::workflow::RunState;
-    let kept = match ended {
-        RunState::Canceled => true,
-        RunState::Failed => false,
-        _ => acted,
-    };
-    if kept {
+    if ended == crate::store::workflow::RunState::Done {
         return Ok(());
     }
     Ok(super::launch_ledger_store::forget_runs(
@@ -1119,7 +1230,7 @@ impl From<RunStatus> for LoopRunResult {
     }
 }
 
-/// The outcome of an acting run, including a successful check-only fire.
+/// Whether an acting run's outcome reads as good or as a failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunPolarity {
     Good,
@@ -1723,91 +1834,6 @@ fn cost_on_local_day(record: &LoopRunRecord, now: &Zoned) -> Option<f64> {
         .then_some(record.cost_usd)
         .flatten()
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct DailyBudgetGate {
-    pub(super) spend_usd: f64,
-    pub(super) cap_usd: f64,
-    pub(super) reserved_usd: f64,
-    /// What the task's live runs hold back until they report their cost.
-    pub(super) live_usd: f64,
-}
-
-impl DailyBudgetGate {
-    pub(super) fn reason(self) -> String {
-        let spent = if self.live_usd > 0.0 {
-            format!(
-                "${:.2} spent, ${:.2} held by live runs",
-                self.spend_usd, self.live_usd
-            )
-        } else {
-            format!("${:.2} spent", self.spend_usd)
-        };
-        if self.reserved_usd > 0.0 {
-            format!(
-                "daily budget ${:.2} cannot fund the next ${:.2} run ({spent})",
-                self.cap_usd, self.reserved_usd
-            )
-        } else {
-            format!("daily budget ${:.2} exhausted ({spent})", self.cap_usd)
-        }
-    }
-}
-
-pub(super) fn daily_budget_gate(
-    state_root: &Path,
-    task: &str,
-    entry: &crate::config::TaskEntry,
-    now: &Zoned,
-) -> std::result::Result<Option<DailyBudgetGate>, String> {
-    let Some(raw_cap) = entry.budget_per_day.as_deref() else {
-        return Ok(None);
-    };
-    raw_cap
-        .parse::<crate::harness::budget::BudgetSpec>()
-        .map_err(|err| format!("task `{task}` has invalid budget-per-day: {err}"))?;
-    let raw_reserved = entry
-        .budget
-        .as_deref()
-        .ok_or_else(|| format!("task `{task}` uses budget-per-day without a per-run budget"))?;
-    let reserved = raw_reserved
-        .parse::<crate::harness::budget::BudgetSpec>()
-        .map_err(|err| format!("task `{task}` has invalid budget: {err}"))?
-        .cap_usd;
-    reserved_budget_gate(state_root, task, entry, now, reserved, 0.0)
-}
-
-/// The daily gate for a task whose runs are workflow runs: the next run reserves its graph's
-/// agent-step budgets, and each live run holds back its own until it reports.
-pub(super) fn reserved_budget_gate(
-    state_root: &Path,
-    task: &str,
-    entry: &crate::config::TaskEntry,
-    now: &Zoned,
-    reserved: f64,
-    live: f64,
-) -> std::result::Result<Option<DailyBudgetGate>, String> {
-    let Some(raw_cap) = entry.budget_per_day.as_deref() else {
-        return Ok(None);
-    };
-    let cap = raw_cap
-        .parse::<crate::harness::budget::BudgetSpec>()
-        .map_err(|err| format!("task `{task}` has invalid budget-per-day: {err}"))?
-        .cap_usd;
-    let spend = spend_on_local_day(
-        &task_records(state_root, task, Some(&entry.resolved_root())),
-        now,
-    );
-    let held = spend + live;
-    Ok(
-        ((held >= cap) || (reserved > 0.0 && held + reserved > cap)).then_some(DailyBudgetGate {
-            spend_usd: spend,
-            cap_usd: cap,
-            reserved_usd: reserved,
-            live_usd: live,
-        }),
-    )
 }
 
 fn last_kind_after(

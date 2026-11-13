@@ -11,14 +11,13 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
 use rimz::agents::PermissionMode;
-use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
-use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
+use rimz::config::{LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::schedule::arming::Arming;
 use rimz::harness::schedule::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
-use rimz::store::message::{AutoCompact, MessageStatus};
+use rimz::store::message::MessageStatus;
 use rimz::store::run::{RunRecord, RunStatus};
 
 use crate::common::wait::{publish_claude_5h, publish_claude_5h_resetting};
@@ -27,6 +26,8 @@ use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 mod list_tests;
 #[path = "loop_overlap.rs"]
 mod overlap_tests;
+#[path = "loop_rows.rs"]
+mod row_tests;
 #[path = "agents_tune.rs"]
 mod tune_tests;
 
@@ -37,7 +38,7 @@ fn loop_views_keep_finished_headers_without_a_current_record() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.old]\nworkflow='review'\nevery='1h'\nonce-per-checkout=true\nroot={:?}\n",
+            "[tasks.old]\ncommand=['true']\ntimeout='1m'\nevery='1h'\nonce-per-checkout=true\nroot={:?}\n",
             env.project_root
         ),
     );
@@ -138,7 +139,7 @@ fn loop_show_condition_evidence_and_watch_command_are_not_repeated_or_cut() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.condition]\nroot={:?}\ncheck='true'\nwhen=['pr=merged && ci=passed']\n",
+            "[tasks.condition]\nroot={:?}\ncommand=['true']\ntimeout='1m'\nwhen=['pr=merged && ci=passed']\nrepeat=true\n",
             env.project_root
         ),
     );
@@ -197,7 +198,7 @@ fn loop_fire_warns_for_unmet_conditions_and_keeps_them_armed() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.condition]\nroot={:?}\ncheck='true'\nwhen=['team.stage=Done']\n",
+            "[tasks.condition]\nroot={:?}\ncommand=['true']\ntimeout='1m'\nwhen=['team.stage=Done']\n",
             env.project_root
         ),
     );
@@ -214,20 +215,6 @@ fn loop_fire_warns_for_unmet_conditions_and_keeps_them_armed() {
     assert!(loop_ok(&env, &["loop", "list"]).contains("condition"));
 }
 
-#[cfg(unix)]
-#[test]
-fn judge_refuses_below_version_floor_before_provider_spawn() {
-    let (env, _) = codex_judge_version_fixture("codex-cli 0.162.0");
-    assert_eq!(
-        wait_for_loop_report(&env, "guard").result,
-        LoopRunResult::Failed
-    );
-    assert_eq!(
-        std::fs::read_to_string(env.home_root.join("judge-calls")).unwrap(),
-        "--version\n"
-    );
-}
-
 #[test]
 fn tick_fires_instance_despite_same_named_foreign_machine() {
     let env = Env::new();
@@ -236,7 +223,7 @@ fn tick_fires_instance_despite_same_named_foreign_machine() {
     std::fs::create_dir(&other).unwrap();
     write_loop_config(
         &env,
-        &format!("[tasks.same]\nroot={other:?}\ncheck='true'\nevery='1m'\n"),
+        &format!("[tasks.same]\nroot={other:?}\ncommand=['true']\ntimeout='1m'\nevery='1m'\n"),
     );
     write_loop_instances(
         &env,
@@ -244,7 +231,8 @@ fn tick_fires_instance_despite_same_named_foreign_machine() {
             "same".into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                check: Some("true".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 fire_at: Some(Timestamp::now() - SignedDuration::from_mins(1)),
                 ..TaskEntry::default()
             },
@@ -269,8 +257,9 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
     let other = env.home_root.join("other");
     std::fs::create_dir(&other).unwrap();
     env.record(&other);
-    let text =
-        format!("# keep this comment\n[tasks.same]\nroot={other:?}\ncheck='true'\nevery='1h'\n");
+    let text = format!(
+        "# keep this comment\n[tasks.same]\nroot={other:?}\ncommand=['true']\ntimeout='1m'\nevery='1h'\n"
+    );
     write_loop_config(&env, &text);
 
     let keys = [
@@ -326,9 +315,9 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
                     "same".into(),
                     TaskEntry {
                         root: env.project_root.clone(),
-                        check: Some("true".into()),
+                        command: vec!["true".to_owned()],
+                        timeout: Some("1m".to_owned()),
                         signal: Some("ci.failed".into()),
-                        once: Some(true),
                         ..TaskEntry::default()
                     },
                 )])),
@@ -341,7 +330,7 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
             .collect();
         let (stdout, error) = loop_fail(
             &env,
-            &["loop", "add", "same", "--check", "true", "--every", "1h"],
+            &["loop", "add", "same", "--every", "1h", "--", "true"],
         );
         assert!(!stdout.contains("added loop task"), "{stdout}");
         assert!(
@@ -362,18 +351,18 @@ fn adding_machine_replaces_same_root() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.same]\nroot={:?}\ncheck='true'\nevery='1h'\n",
+            "[tasks.same]\nroot={:?}\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
             env.project_root
         ),
     );
     loop_ok(
         &env,
-        &["loop", "add", "same", "--check", "false", "--every", "2h"],
+        &["loop", "add", "same", "--every", "2h", "--", "false"],
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let entry = &config.tasks.0["same"];
-    assert_eq!(entry.check, Some("false".into()));
+    assert_eq!(entry.command, ["false"]);
     assert_eq!(entry.every.as_deref(), Some("2h"));
     assert_eq!(entry.resolved_root(), env.project_root);
 }
@@ -386,18 +375,19 @@ fn adding_machine_refuses_rootless_row() {
         "same".into(),
         TaskEntry {
             root: env.project_root.clone(),
-            check: Some("true".into()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             signal: Some("ci.failed".into()),
-            once: Some(true),
             ..TaskEntry::default()
         },
     )]));
     write_loop_instances(&env, instances.clone());
-    let text = "# no project owns this row\n[tasks.same]\ncheck='true'\nevery='1h'\n";
+    let text =
+        "# no project owns this row\n[tasks.same]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n";
     write_loop_config(&env, text);
     let (stdout, error) = loop_fail(
         &env,
-        &["loop", "add", "same", "--check", "false", "--every", "2h"],
+        &["loop", "add", "same", "--every", "2h", "--", "false"],
     );
     assert!(!stdout.contains("added loop task"), "{stdout}");
     assert!(
@@ -436,10 +426,10 @@ fn loop_list_skips_machine_tasks_without_absolute_roots() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.skip-bare]\ncheck='true'\nevery='1h'\n\
-         [tasks.skip-relative]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n\
-         [tasks.skip-dot]\nroot='.'\ncheck='true'\nevery='1h'\n\
-         [tasks.rooted]\nroot={:?}\ncheck='true'\nevery='1h'\n",
+            "[tasks.skip-bare]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.skip-relative]\nroot='nowhere/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.skip-dot]\nroot='.'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n\
+         [tasks.rooted]\nroot={:?}\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
             env.project_root,
         ),
     );
@@ -487,7 +477,10 @@ fn loop_list_skips_machine_tasks_without_absolute_roots() {
 #[test]
 fn loop_show_reports_machine_task_root_problem() {
     let env = Env::new();
-    write_loop_config(&env, "[tasks.one]\ncheck='true'\nevery='1h'\n");
+    write_loop_config(
+        &env,
+        "[tasks.one]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
+    );
     let output = env.rimz().args(["loop", "show", "one"]).output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
@@ -507,7 +500,7 @@ fn loop_tick_skips_machine_tasks_without_absolute_roots() {
     let env = Env::new();
     write_loop_config(
         &env,
-        "[tasks.one]\ncheck='true'\nevery='1h'\n[tasks.two]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n",
+        "[tasks.one]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n[tasks.two]\nroot='nowhere/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n",
     );
     let output = env.rimz().args(["loop", "tick"]).output().unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -516,11 +509,11 @@ fn loop_tick_skips_machine_tasks_without_absolute_roots() {
 #[test]
 fn adding_machine_refuses_relative_row() {
     let env = Env::new();
-    let text = "[tasks.same]\nroot='nowhere/x'\ncheck='true'\nevery='1h'\n";
+    let text = "[tasks.same]\nroot='nowhere/x'\ncommand=['true']\ntimeout='1m'\nevery='1h'\n";
     write_loop_config(&env, text);
     let (stdout, error) = loop_fail(
         &env,
-        &["loop", "add", "same", "--check", "false", "--every", "2h"],
+        &["loop", "add", "same", "--every", "2h", "--", "false"],
     );
     assert!(!stdout.contains("added loop task"), "{stdout}");
     let reason = format!(
@@ -537,14 +530,14 @@ fn adding_machine_refuses_relative_row() {
 
 #[test]
 fn removing_rootless_machine_row_succeeds() {
-    for resident in [false, true] {
+    for remembers in [false, true] {
         let env = Env::new();
         write_loop_config(
             &env,
             &format!(
-                "[tasks.same]\ncheck='true'\nevery='1h'\n{}",
-                if resident {
-                    "agent='codex'\nstay=true\n"
+                "[tasks.same]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n{}",
+                if remembers {
+                    "once-per-checkout=true\n"
                 } else {
                     ""
                 },
@@ -560,14 +553,14 @@ fn removing_rootless_machine_row_succeeds() {
 
 #[test]
 fn renaming_rootless_machine_row_succeeds() {
-    for resident in [false, true] {
+    for remembers in [false, true] {
         let env = Env::new();
         write_loop_config(
             &env,
             &format!(
-                "[tasks.same]\ncheck='true'\nevery='1h'\n{}",
-                if resident {
-                    "agent='codex'\nstay=true\n"
+                "[tasks.same]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n{}",
+                if remembers {
+                    "once-per-checkout=true\n"
                 } else {
                     ""
                 },
@@ -582,8 +575,8 @@ fn renaming_rootless_machine_row_succeeds() {
             toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
         assert!(!config.tasks.0.contains_key("same"));
         let entry = &config.tasks.0["renamed"];
-        assert_eq!(entry.check, Some("true".into()));
-        assert_eq!(entry.stay, resident);
+        assert_eq!(entry.command, ["true"]);
+        assert_eq!(entry.once_per_checkout, remembers.then_some(true));
         assert!(entry.root.as_os_str().is_empty());
     }
 }
@@ -597,21 +590,12 @@ fn adding_instance_removes_only_same_root_machine() {
     for root in [&other, &env.project_root] {
         write_loop_config(
             &env,
-            &format!("[tasks.same]\nroot={root:?}\ncheck='true'\nevery='1h'\n"),
+            &format!("[tasks.same]\nroot={root:?}\ncommand=['true']\ntimeout='1m'\nevery='1h'\n"),
         );
 
         loop_ok(
             &env,
-            &[
-                "loop",
-                "add",
-                "same",
-                "--signal",
-                "ci.failed",
-                "--check",
-                "true",
-                "--once",
-            ],
+            &["loop", "add", "same", "--signal", "ci.failed", "--", "true"],
         );
 
         let config: LoopConfig =
@@ -625,888 +609,10 @@ fn adding_instance_removes_only_same_root_machine() {
 }
 
 #[cfg(unix)]
-#[test]
-fn judge_with_unreadable_version_still_reads_verdict() {
-    let (env, output) = codex_judge_version_fixture("{}");
-    assert!(output.status.success(), "{output:?}");
-    // A decline ends the run done without acting.
-    let report = wait_for_loop_report(&env, "guard");
-    assert_eq!(
-        (report.result, report.acted),
-        (LoopRunResult::Completed, Some(false))
-    );
-    let calls = std::fs::read_to_string(env.home_root.join("judge-calls")).unwrap();
-    let calls: Vec<_> = calls.lines().collect();
-    assert_eq!(calls.len(), 2, "one probe and one provider launch");
-    assert_eq!(calls[0], "--version");
-    assert!(calls[1].contains(" exec --json "), "{calls:?}");
-}
-
-#[cfg(unix)]
-fn codex_judge_version_fixture(version: &str) -> (Env, std::process::Output) {
-    let env = Env::new();
-    env.write_config(&env.project_root, "[agents]\nisolation = 'host'\n");
-    env.record(&env.project_root);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let bin = env.home_root.join("check-bin");
-    write_path_shim(
-        &bin,
-        "codex",
-        &format!(
-            r#"
-printf '%s' "$*" | tr '\n' ' ' >> "$HOME/judge-calls"
-printf '\n' >> "$HOME/judge-calls"
-if [ "$1" = '--version' ]; then printf '%s\n' '{version}'; exit 0; fi
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{{"outcome":"fail","reason":"No actionable work."}}' > "$1"; fi
-    shift
-done
-"#
-        ),
-    );
-    std::fs::write(
-        env.home_root.join(".profile"),
-        format!("PATH='{}':\"$PATH\"\n", bin.display()),
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.guard]\nagent='codex'\nprompt='repair'\nroot={:?}\nevery='1h'\non='success'\n[tasks.guard.judge]\nagent='codex'\nprompt='Any work?'\n",
-            env.project_root
-        ),
-    );
-    let output = env
-        .rimz()
-        .env("PATH", path_with_front(&bin))
-        .args(["loop", "run", "guard"])
-        .output()
-        .unwrap();
-    (env, output)
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_agent_decline_is_counted_and_held_until_the_guard_changes() {
-    resident_agent_decline_holds(None);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_agent_decline_with_a_recheck_holds_in_its_run() {
-    resident_agent_decline_holds(Some("6h"));
-}
-
-#[cfg(unix)]
-fn resident_agent_decline_holds(recheck: Option<&str>) {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
-    env.record(&env.project_root);
-    loop_ok(&env, &["worktree", "new", "auth"]);
-    let checkout = rimz::utils::path::normalize_path_lexical(
-        &rimz::worktree::discover_owned(&env.project_root)
-            .unwrap()
-            .remove(0)
-            .marker
-            .worktree_path,
-    );
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let agent_bin = env.home_root.join("check-bin");
-    write_path_shim(
-        &agent_bin,
-        "codex",
-        r#"
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf '%s' '{"outcome":"fail","reason":"No actionable work."}' > "$1"; fi
-    shift
-done
-printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
-"#,
-    );
-    // The judge runs through the fixture's login shell, and a system profile
-    // that assigns PATH (Debian's does) drops the shim directory before it.
-    std::fs::write(
-        env.home_root.join(".profile"),
-        format!("PATH='{}':\"$PATH\"\n", agent_bin.display()),
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\non = \"success\"\n[tasks.guard.judge]\nagent = \"codex\"\nprompt = \"Any work?\"\n{}",
-            env.project_root,
-            recheck
-                .map(|value| format!("recheck = {value:?}\n"))
-                .unwrap_or_default()
-        ),
-    );
-    std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
-    std::fs::write(checkout.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
-    let since = Timestamp::now();
-    let evidence = json!({"when":"team.stage=Done", "hold":null, "since":since, "held_ms":0, "readings":{"team.stage":"Done"}});
-    for _ in 0..2 {
-        let output = env
-            .rimz()
-            .env("PATH", path_with_front(&agent_bin))
-            .args(["loop", "run", "guard", "--cwd"])
-            .arg(&checkout)
-            .arg("--condition-json")
-            .arg(evidence.to_string())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    assert!(
-        read_loop_run_records(&env).is_empty(),
-        "a held run logs no row"
-    );
-    let records = shown_runs(&env, "guard");
-    assert_eq!(
-        records.len(),
-        1,
-        "a holding decline must write no second history row: {records:?}"
-    );
-    assert_eq!(records[0].result, LoopRunResult::Launched);
-    assert_eq!(records[0].condition.as_ref().unwrap().since, Some(since));
-    // A condition task's decline holds inside the run until its guard changes or the judge's
-    // recheck elapses (`a_condition_tasks_held_decline_leaves_once_the_judges_recheck_elapses`).
-    let id = records[0].run_id.as_deref().unwrap().parse().unwrap();
-    let paths = env.store().paths().workflow(&id);
-    let hold = "held-judge-1";
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while !rimz::store::workflow::load(&paths)
-        .is_ok_and(|run| run.state == rimz::store::workflow::RunState::Active && run.node == hold)
-    {
-        assert!(
-            Instant::now() < deadline,
-            "{}",
-            loop_run_journal(&env, &env.project_root, &records[0])
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let stats = loop_ok(&env, &["stats", "--json"]);
-    let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
-    assert_eq!(stats["assists"]["judge_declines"], 1);
-    assert!(loop_ok(&env, &["stats", "--assists"]).contains("No actionable work."));
-}
-#[cfg(unix)]
-#[test]
-fn a_judge_decline_without_a_recheck_holds_until_a_manual_fire_or_a_redefinition() {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
-    env.record(&env.project_root);
-    crate::common::room::seed_sidebar_heartbeat(
-        &env.runtime_paths(),
-        MuxName::Zellij,
-        &env.resolve_workspace(&env.project_root).session_name,
-        "hold",
-    );
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let agent_bin = env.home_root.join("check-bin");
-    let asked = env.home_root.join("judge-asked");
-    write_path_shim(
-        &agent_bin,
-        "codex",
-        &format!(
-            r#"
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = '-o' ]; then shift; printf 'asked\n' >> '{}'; printf '%s' '{{"outcome":"fail","reason":"No actionable work."}}' > "$1"; fi
-    shift
-done
-printf '%s\n' '{{"type":"turn.completed","usage":{{"input_tokens":10,"output_tokens":5}}}}'
-"#,
-            asked.display()
-        ),
-    );
-    // The judge runs through the fixture's login shell, and a system profile
-    // that assigns PATH (Debian's does) drops the shim directory before it.
-    std::fs::write(
-        env.home_root.join(".profile"),
-        format!("PATH='{}':\"$PATH\"\n", agent_bin.display()),
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\nevery = \"1h\"\non = \"success\"\n[tasks.guard.judge]\nagent = \"codex\"\nprompt = \"Any work?\"\n",
-            env.project_root
-        ),
-    );
-    let loop_run = |verb: &str| {
-        let output = env
-            .rimz()
-            .env("PATH", path_with_front(&agent_bin))
-            .args(["loop", verb, "guard"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "loop {verb}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    let asks = || {
-        std::fs::read_to_string(&asked)
-            .unwrap_or_default()
-            .lines()
-            .count()
-    };
-    let runs = || {
-        let store = env.store();
-        let state = store.paths();
-        let mut runs = rimz::store::workflow::live_runs(state).unwrap();
-        // An ended run has left the live directory but still counts.
-        for paths in state.finished_workflow_runs().unwrap() {
-            runs.extend(rimz::store::workflow::load(&paths));
-        }
-        runs.retain(|run| run.task.as_deref() == Some("guard"));
-        runs.sort_by_key(|run| run.created_at);
-        runs
-    };
-    // Waits until the task's newest run holds the decline, and returns it.
-    let held = |count: usize| {
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        loop {
-            let runs = runs();
-            if runs.len() == count
-                && runs.last().is_some_and(|run| {
-                    run.state == rimz::store::workflow::RunState::Active
-                        && run.node == "hold-judge-1"
-                })
-            {
-                return runs;
-            }
-            assert!(Instant::now() < deadline, "{runs:?}");
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    };
-    let ended = |id: &rimz::ids::WorkflowRunId| {
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        while !rimz::store::workflow::load(&run_paths(&env, &env.project_root, id))
-            .is_ok_and(|run| run.state == rimz::store::workflow::RunState::Canceled)
-        {
-            assert!(Instant::now() < deadline, "run {id} was not canceled");
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    };
-
-    loop_run("run");
-    let first = held(1).remove(0);
-    loop_run("run");
-    loop_run("run");
-    assert_eq!(
-        (asks(), runs().len()),
-        (1, 1),
-        "two later fires on the held checkout ask no judge"
-    );
-    assert_eq!(
-        rimz::store::workflow::load(&env.store().paths().workflow(&first.id))
-            .unwrap()
-            .node,
-        "hold-judge-1"
-    );
-
-    loop_run("fire");
-    ended(&first.id);
-    let second = held(2).pop().unwrap();
-    assert_eq!(
-        asks(),
-        2,
-        "a manual fire supersedes the hold and asks again"
-    );
-
-    loop_ok_root(
-        &env,
-        &env.project_root,
-        &[
-            "loop",
-            "add",
-            "guard",
-            "--agent",
-            "codex",
-            "--stay",
-            "--every",
-            "1h",
-            "--prompt",
-            "repair again",
-            "--judge",
-            "codex",
-            "--judge-prompt",
-            "Any work?",
-            "--on",
-            "success",
-        ],
-    );
-    ended(&second.id);
-    loop_run("run");
-    held(3);
-    assert_eq!(
-        asks(),
-        3,
-        "a redefinition releases the hold and forgets the checkout"
-    );
-}
-
-#[cfg(unix)]
 use crate::common::{
     path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,
     write_path_shim,
 };
-
-#[cfg(unix)]
-#[test]
-fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
-    loop_channel_case(LoopLaunch::Agent, LoopFirer::None);
-}
-
-#[cfg(unix)]
-#[test]
-fn check_launch_uses_its_worktree_channel_not_the_firers_team() {
-    loop_channel_case(LoopLaunch::Check, LoopFirer::None);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_launch_does_not_inherit_the_firers_channel() {
-    loop_channel_case(LoopLaunch::Resident, LoopFirer::None);
-}
-
-#[cfg(unix)]
-#[test]
-fn scheduled_launch_ignores_a_subagent_firer() {
-    loop_channel_case(LoopLaunch::Agent, LoopFirer::Subagent);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_launch_ignores_a_firer_at_the_chain_limit() {
-    loop_channel_case(LoopLaunch::Resident, LoopFirer::ChainLimit);
-}
-
-#[cfg(unix)]
-#[test]
-fn check_launch_ignores_a_firer_found_by_ancestry() {
-    loop_channel_case(LoopLaunch::Check, LoopFirer::Ancestry);
-}
-
-#[cfg(unix)]
-#[test]
-fn scheduled_launch_ignores_a_firers_room_pin() {
-    loop_channel_case(LoopLaunch::Agent, LoopFirer::RoomPin);
-}
-
-#[cfg(unix)]
-#[derive(Clone, Copy, PartialEq)]
-enum LoopLaunch {
-    Agent,
-    Check,
-    Resident,
-}
-
-#[cfg(unix)]
-#[derive(Clone, Copy, PartialEq)]
-enum LoopFirer {
-    None,
-    Subagent,
-    ChainLimit,
-    Ancestry,
-    RoomPin,
-}
-
-#[cfg(unix)]
-fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
-    use crate::common::CommandTimeoutExt;
-
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = env.resolve_workspace(&env.project_root);
-    let cwd = if action == LoopLaunch::Check {
-        let linked = env.home_root.join("linked");
-        assert!(git_ok(
-            &env.project_root,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "linked",
-                linked.to_str().unwrap()
-            ]
-        ));
-        env.write_config(
-            &env.project_root,
-            r#"
-            [profiles.coder]
-            agent = "codex"
-            [[agents.teams.forge.roles]]
-            role = "coder"
-            profile = "coder"
-            "#,
-        );
-        loop_ok(&env, &["trust", "grant"]);
-        seed_agent_launch(
-            &env,
-            &env.project_root,
-            "probe-member",
-            rimz::agents::LaunchParams {
-                team: Some("forge".to_owned()),
-                role: Some("coder".to_owned()),
-                channel: Some("probe".to_owned()),
-                ..Default::default()
-            },
-            None,
-        );
-        trust_codex_project(&env, &linked);
-        canonical(&linked)
-    } else {
-        env.project_root.clone()
-    };
-    let trace = env.home_root.join("scheduled-tab.log");
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"tab_name":"rimzd","title":"loop","pane_command":"rimz loop watch --hold"}]"#;
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        serde_json::from_str(panes).unwrap(),
-    );
-    let effect = match action {
-        LoopLaunch::Check => format!(
-            "dir = {:?}\ncheck = {:?}\n",
-            cwd.to_str().unwrap(),
-            shlex::try_join([
-                env.rimz_bin().to_str().unwrap(),
-                "agents",
-                "coder",
-                "repair"
-            ])
-            .unwrap(),
-        ),
-        LoopLaunch::Resident => "agent = \"codex\"\nprompt = \"repair\"\nstay = true\n".to_owned(),
-        LoopLaunch::Agent => "agent = \"codex\"\nprompt = \"repair\"\n".to_owned(),
-    };
-    let timeout = if action == LoopLaunch::Check {
-        "30s"
-    } else {
-        "2s"
-    };
-    write_loop_config(
-        &env,
-        &format!(
-            "default-timeout = \"1s\"\n[tasks.rimzd]\nevery = \"1h\"\n{effect}root = {:?}\ntimeout = \"{timeout}\"\nthrottle = \"off\"\n",
-            env.project_root.to_str().unwrap(),
-        ),
-    );
-    if firer != LoopFirer::None {
-        seed_agent_launch(
-            &env,
-            &env.project_root,
-            "firer",
-            rimz::agents::LaunchParams {
-                parent_agent_id: (firer == LoopFirer::Subagent)
-                    .then(|| AgentSessionId::from("launch_parent")),
-                parent_agent_kind: (firer == LoopFirer::Subagent)
-                    .then(|| AgentKind::new_unchecked("claude")),
-                launch_depth: Some(match firer {
-                    LoopFirer::Subagent => 1,
-                    LoopFirer::RoomPin => 0,
-                    _ => 3,
-                }),
-                ..Default::default()
-            },
-            (firer == LoopFirer::Ancestry).then(|| {
-                rimz::pane::RuntimeOwner::new(
-                    rimz::pane::RuntimeOwnerKind::Agent,
-                    "firer",
-                    std::process::id(),
-                    None,
-                )
-            }),
-        );
-    }
-    let mut command = env.rimz();
-    if matches!(
-        firer,
-        LoopFirer::Subagent | LoopFirer::ChainLimit | LoopFirer::RoomPin
-    ) {
-        command
-            .env("RIMZ_AGENT_KIND", "claude")
-            .env("RIMZ_AGENT_ID", "launch_firer");
-    }
-    if firer == LoopFirer::RoomPin {
-        let firer_root = env.home_root.join("firer-project");
-        std::fs::create_dir(&firer_root).unwrap();
-        assert!(init_git_repo(&firer_root));
-        let firer_workspace = env.resolve_workspace(&firer_root);
-        assert_ne!(workspace.workspace_id, firer_workspace.workspace_id);
-        command.envs(rimz::workspace::pin_env(
-            &firer_workspace.workspace_id,
-            &firer_workspace.project_root,
-        ));
-    }
-    let output = command
-        .args(["--mux", "zellij", "loop", "run", "rimzd"])
-        .env("SHELL", shell)
-        .env("PATH", path_with_front(&agent_bin))
-        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.0")
-        .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
-        .env("ZELLIJ_PANE_ID", "2")
-        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-        .env("RIMZ_CHANNEL", "probe")
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 1s ago]\n", workspace.session_name),
-        )
-        .bounded_output()
-        .unwrap();
-    // The fire starts a workflow run; its detached advance opens the tab.
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let trace = loop {
-        let text = std::fs::read_to_string(&trace).unwrap_or_default();
-        if text.contains("layout-json\t") || Instant::now() >= deadline {
-            break text;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    let tabs = trace
-        .lines()
-        .filter(|line| line.contains("action\tnew-tab"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        tabs.len(),
-        1,
-        "{trace}\n{}\n{:?}",
-        String::from_utf8_lossy(&output.stderr),
-        read_loop_run_records(&env),
-    );
-    // A check's own launch is the loop's; an agent task's agent is its run's step.
-    let automation = match action {
-        LoopLaunch::Check => json!({"by": "loop"}),
-        _ => json!({"by": "workflow", "step": "agent", "workflow": "rimzd"}),
-    };
-    assert!(tabs[0].contains("\t--name\tloop rimzd"), "{trace}");
-    assert!(tabs[0].contains("\t--no-focus"), "{trace}");
-    assert!(
-        trace
-            .lines()
-            .any(|line| line.starts_with("layout\t") && line.contains("rimz-sidebar")),
-        "run tab must dock a sidebar: {trace}",
-    );
-    assert!(!trace.contains("\tnew-pane\t"), "{trace}");
-
-    let layout: String = serde_json::from_str(
-        trace
-            .lines()
-            .find_map(|line| line.strip_prefix("layout-json\t"))
-            .unwrap(),
-    )
-    .unwrap();
-    let layout: kdl::KdlDocument = layout.parse().unwrap();
-    let (_, argv) = loop_agent_pane(&layout).expect("agent pane args");
-    let request = argv
-        .windows(2)
-        .find(|pair| pair[0] == "--request-file")
-        .unwrap();
-    let payload = std::fs::read_to_string(&request[1]).unwrap();
-    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
-    assert_eq!(
-        serde_json::to_value(&request.identity.params).unwrap()["automation"],
-        automation,
-    );
-    let mut pane_env: BTreeMap<String, String> = argv
-        .iter()
-        .take_while(|arg| arg.contains('='))
-        .map(|arg| {
-            let (key, value) = arg.split_once('=').unwrap();
-            (key.to_owned(), value.to_owned())
-        })
-        .collect();
-    let pane_channel = pane_env.get("RIMZ_CHANNEL").cloned();
-    pane_env.insert(
-        "RIMZ_AGENT_ID".to_owned(),
-        request.identity.launch_id.clone().unwrap(),
-    );
-    pane_env.insert(
-        "RIMZ_AGENT_NAME".to_owned(),
-        request.identity.name.clone().unwrap(),
-    );
-    if let Some(run_id) = request.run_id {
-        pane_env.insert("RIMZ_RUN_ID".to_owned(), run_id.to_string());
-    }
-    let pane_env = pane_env
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    let hook = env.run_installed_hook_in_pane(
-        "codex",
-        &json!({
-            "hook_event_name": "SessionStart", "session_id": "loop-channel-session", "cwd": cwd,
-        })
-        .to_string(),
-        &pane_env,
-    );
-    assert!(
-        hook.status.success(),
-        "{}",
-        String::from_utf8_lossy(&hook.stderr)
-    );
-    let agents = env
-        .store()
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .unwrap()
-        .agents;
-    let agent = agents
-        .iter()
-        .find(|agent| agent.name.as_deref() == request.identity.name.as_deref())
-        .unwrap();
-    assert!(agent.launched_by.is_none(), "{agent:?}");
-    assert_eq!(
-        serde_json::to_value(agent).unwrap()["automation"],
-        automation
-    );
-    assert!(agent.parent_agent_id.is_none(), "{agent:?}");
-    assert_eq!(agent.launch_depth, None, "{agent:?}");
-    // A check launches into its own checkout's lane, which carries no name:
-    // a foreign linked worktree for the check, trunk for an agent task.
-    let (home, path) = if action == LoopLaunch::Check {
-        (rimz::ids::LaneHome::Foreign, cwd.display().to_string())
-    } else {
-        (
-            rimz::ids::LaneHome::Trunk,
-            env.project_root.display().to_string(),
-        )
-    };
-    let lane = agent.lane.as_ref().expect("the launch decided a lane");
-    assert_eq!(
-        (lane.home(), lane.path()),
-        (home, path.as_str()),
-        "{lane:?}"
-    );
-    // The recorded channel is the lane's pin name, stated empty for an own lane
-    // that carries none: trunk's and the check's foreign checkout's.
-    let routing = lane.pin_name();
-    assert_eq!(
-        agent.channel.as_deref(),
-        routing.as_ref().map(rimz::ids::LaneName::as_str),
-        "recorded channel after the pane's registration hook"
-    );
-    assert_eq!(
-        pane_channel.as_deref(),
-        Some(routing.as_ref().map_or("", rimz::ids::LaneName::as_str)),
-        "channel exported to the agent pane"
-    );
-    assert_eq!(
-        agent.team, None,
-        "the firer's team must not qualify a loop's bare profile"
-    );
-}
-
-/// A booking's chain travels with the launch its fire starts: agent B, started by the fire of
-/// `rimzd` that agent A booked, books with `[B, A]` after `rimzd` was consumed by that fire,
-/// after an unrelated agent C booked the name again, and after that row was removed.
-#[cfg(unix)]
-#[test]
-fn a_fired_bookings_chain_travels_with_the_agent_it_starts() {
-    use crate::common::CommandTimeoutExt;
-
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = env.resolve_workspace(&env.project_root);
-    seed_agent_launch(&env, &env.project_root, "a", Default::default(), None);
-    seed_agent_launch(&env, &env.project_root, "c", Default::default(), None);
-    let root = env.project_root.to_str().unwrap();
-    let book = |caller: &str, args: &[&str]| {
-        let output = calling_loop(&env, caller)
-            .args(["--root", root, "loop", "add"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    let fired = [
-        "rimzd",
-        "--agent",
-        "codex",
-        "--prompt",
-        "repair",
-        "--stay",
-        "--in",
-        "1h",
-        "--throttle",
-        "off",
-    ];
-    book("launch_a", &fired);
-    assert!(read_loop_instances(&env).0.contains_key("rimzd"));
-    let trace = env.home_root.join("scheduled-tab.log");
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        serde_json::from_str(panes).unwrap(),
-    );
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "loop", "run", "rimzd"])
-        .env("SHELL", shell)
-        .env("PATH", path_with_front(&agent_bin))
-        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.0")
-        .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
-        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 1s ago]\n", workspace.session_name),
-        )
-        .bounded_output()
-        .unwrap();
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let trace = loop {
-        let text = std::fs::read_to_string(&trace).unwrap_or_default();
-        if text.contains("layout-json\t") || Instant::now() >= deadline {
-            break text;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    let layout: String = serde_json::from_str(
-        trace
-            .lines()
-            .find_map(|line| line.strip_prefix("layout-json\t"))
-            .unwrap_or_else(|| panic!("{trace}\n{}", String::from_utf8_lossy(&output.stderr))),
-    )
-    .unwrap();
-    let layout: kdl::KdlDocument = layout.parse().unwrap();
-    let (_, argv) = loop_agent_pane(&layout).expect("agent pane args");
-    let request = argv
-        .windows(2)
-        .find(|pair| pair[0] == "--request-file")
-        .unwrap();
-    let payload = std::fs::read_to_string(&request[1]).unwrap();
-    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
-    let launched = request.identity.launch_id.clone().unwrap();
-    let chain_a = json!([{"kind": "claude", "agent_id": "launch_a"}]);
-    assert_eq!(
-        serde_json::to_value(&request.identity.params).unwrap()["loop_booked_by"],
-        chain_a,
-        "the fire stamps its booking's chain on the launch"
-    );
-    assert!(
-        !read_loop_instances(&env).0.contains_key("rimzd"),
-        "the fire consumed its one-shot row"
-    );
-    let chain_of = |name: &str| {
-        let config: LoopConfig =
-            toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-        config.tasks.0[name]
-            .booked_by
-            .iter()
-            .map(|link| link.agent_id.to_string())
-            .collect::<Vec<_>>()
-    };
-    let book_as_b = |name: &str| {
-        let output = env
-            .rimz()
-            .args([
-                "--root", root, "loop", "add", name, "--check", "true", "--every", "1h",
-            ])
-            .env("RIMZ_AGENT_KIND", "codex")
-            .env("RIMZ_AGENT_ID", &launched)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        chain_of(name)
-    };
-    let expected = [launched.as_str(), "launch_a"];
-
-    assert_eq!(book_as_b("after-consumed"), expected, "consumed");
-    book("launch_c", &fired);
-    assert_eq!(book_as_b("after-readded"), expected, "re-added by C");
-    loop_ok(&env, &["loop", "remove", "rimzd"]);
-    assert_eq!(book_as_b("after-removed"), expected, "removed");
-}
-
-#[cfg(unix)]
-fn loop_agent_pane(document: &kdl::KdlDocument) -> Option<(&kdl::KdlNode, Vec<String>)> {
-    for node in document.nodes() {
-        if node.name().value() == "pane"
-            && let Some(args) = node.children().and_then(|children| children.get("args"))
-        {
-            let args = args
-                .entries()
-                .iter()
-                .map(|entry| entry.value().as_string().unwrap().to_owned())
-                .collect::<Vec<_>>();
-            if args.iter().any(|arg| arg == "--request-file") {
-                return Some((node, args));
-            }
-        }
-        if let Some(pane) = node.children().and_then(loop_agent_pane) {
-            return Some(pane);
-        }
-    }
-    None
-}
-
-#[test]
-fn resident_layout_refuses_account_pin() {
-    let env = Env::new();
-    let output = env
-        .rimz()
-        .args([
-            "loop",
-            "add",
-            "resident",
-            "--every",
-            "1h",
-            "--agent",
-            "codex",
-            "--prompt",
-            "watch",
-            "--stay",
-            "--account",
-            "work",
-        ])
-        .output()
-        .unwrap();
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{error}");
-    assert!(error.contains("--stay cannot use --account"), "{error}");
-    assert!(error.contains("omit --account or --stay"), "{error}");
-}
 
 #[test]
 fn condition_tick_observes_board_and_records_evidence() {
@@ -1539,11 +645,10 @@ fn condition_tick_observes_board_and_records_evidence() {
             "ready",
             "--when",
             "team.stage=Done",
-            "--check",
-            "true",
             "--root",
             scope.to_str().unwrap(),
-            "--once",
+            "--",
+            "true",
         ],
     );
     assert!(
@@ -1568,7 +673,7 @@ fn condition_tick_observes_board_and_records_evidence() {
     let instances = read_loop_instances(&env);
     assert_eq!(instances.0["ready"].dir, None);
     assert_eq!(instances.0["ready"].run_dir(), canonical(&env.project_root));
-    assert_eq!(instances.0["ready"].once, Some(true));
+    assert!(!instances.0["ready"].repeat);
     loop_ok(&env, &["loop", "tick"]);
     let armed = rimz::harness::schedule::last_stamps(&env.runtime_paths());
     assert!(armed.contains_key("ready"));
@@ -1649,7 +754,8 @@ fn queue_condition_selects_a_dequeued_open_pr_from_the_room_cache() {
             "requeue",
             "--when",
             "pr=open && pr.queue=dequeued",
-            "--check",
+            "--repeat",
+            "--",
             "true",
         ],
     );
@@ -1695,7 +801,7 @@ fn condition_add_refuses_invalid_predicates_and_options() {
         ),
         (
             vec!["--when", "window.5h.left>=40"],
-            "a --check-only task has none; add --agent or --wait",
+            "name it with --provider <kind>",
         ),
         (
             vec!["--when", "team.stage=Missing"],
@@ -1709,8 +815,9 @@ fn condition_add_refuses_invalid_predicates_and_options() {
     ] {
         let output = env
             .rimz()
-            .args(["loop", "add", "bad", "--check", "true"])
+            .args(["loop", "add", "bad"])
             .args(flags)
+            .args(["--", "true"])
             .output()
             .unwrap();
         let error = String::from_utf8_lossy(&output.stderr);
@@ -1723,10 +830,11 @@ fn condition_add_refuses_invalid_predicates_and_options() {
             "loop",
             "add",
             "known",
-            "--check",
-            "true",
             "--when",
             "ci!=failed",
+            "--repeat",
+            "--",
+            "true",
         ],
     );
     assert!(receipt.contains("trigger: when ci!=failed"), "{receipt}");
@@ -1749,7 +857,7 @@ fn paused_fanout_keeps_hold_and_fired_state() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\nfor = \"30m\"\n",
+            "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\nfor = \"30m\"\n",
             env.project_root.to_str().unwrap()
         ),
     );
@@ -1786,719 +894,6 @@ fn paused_fanout_keeps_hold_and_fired_state() {
     }
 }
 
-#[test]
-fn resident_add_accepts_layout_and_persists_launch_options() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let output = env
-        .rimz()
-        .args([
-            "loop",
-            "add",
-            "resident",
-            "--agent",
-            "claude,codex",
-            "--stay",
-            "--each-worktree",
-            "--when",
-            "pr=open",
-            "--takeover",
-            "--subscribe",
-            "ci.failed",
-            "--subscribe",
-            "pr.conflicted",
-            "--mode",
-            "ask",
-            "--effort",
-            "high",
-            "--fast",
-            "--prompt",
-            "repair",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    let entry = serde_json::to_value(&config.tasks.0["resident"]).unwrap();
-    assert_eq!(entry["stay"], true);
-    assert_eq!(entry["each-worktree"], true);
-    assert_eq!(entry["takeover"], true);
-    assert_eq!(entry["subscribe"][0]["signal"], "ci.failed");
-    assert_eq!(entry["subscribe"][1]["signal"], "pr.conflicted");
-    assert_eq!(entry["mode"], "ask");
-    assert_eq!(entry["effort"], "high");
-    assert_eq!(entry["fast"], true);
-}
-
-#[test]
-fn resident_subscriptions_require_a_usable_scope_at_add() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let argv = |signal| {
-        [
-            "loop",
-            "add",
-            "resident",
-            "--agent",
-            "claude",
-            "--stay",
-            "--every",
-            "1h",
-            "--subscribe",
-            signal,
-            "--prompt",
-            "watch",
-        ]
-    };
-    for (signal, fix) in [
-        ("ci.failed", "--each-worktree"),
-        ("pr.conflicted", "--each-worktree"),
-        ("team.stage", "team layout"),
-    ] {
-        let (_, error) = loop_fail(&env, &argv(signal));
-        assert!(
-            error.contains("--subscribe") && error.contains(fix),
-            "{error}"
-        );
-    }
-    if !init_git_repo(&env.project_root) {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    let linked = env.home_root.join("linked");
-    assert!(git_ok(
-        &env.project_root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "linked",
-            linked.to_str().unwrap()
-        ]
-    ));
-    let output = env
-        .rimz()
-        .current_dir(&linked)
-        .args(argv("ci.failed"))
-        .output()
-        .unwrap();
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success()
-            && error.contains(
-                "--subscribe ci.failed needs a checkout scope; use --each-worktree with --when, or --worktree <name>"
-            )
-            && !error.contains("--root"),
-        "{error}"
-    );
-}
-
-#[test]
-fn resident_named_worktree_saves_at_root_with_checkout_subscriptions_and_receipt() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let text = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "booked",
-            "--agent",
-            "claude",
-            "--stay",
-            "--worktree",
-            "landing",
-            "--every",
-            "1h",
-            "--subscribe",
-            "pr.merged",
-            "--takeover",
-            "--prompt",
-            "review",
-        ],
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    let entry = &config.tasks.0["booked"];
-    assert_eq!(entry.worktree.as_deref(), Some("landing"));
-    assert_eq!(entry.run_dir(), canonical(&env.project_root));
-    assert!(
-        text.contains("worktree `landing`") && text.contains("when the task fires"),
-        "{text}"
-    );
-    assert!(
-        text.contains("scope") && text.contains("guards") && text.contains("launch memory"),
-        "{text}"
-    );
-    assert!(
-        text.contains("before launch: stops idle agents in worktree `landing` first"),
-        "{text}"
-    );
-    assert!(!env.project_root.join(".worktrees/landing").exists());
-    let listing: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
-    let row = listing["rooms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|room| room["tasks"].as_array().unwrap())
-        .find(|row| row["name"] == "booked")
-        .unwrap();
-    assert_eq!(row["worktree"], "landing", "{row}");
-    let text = loop_ok(&env, &["loop", "list"]);
-    assert!(
-        text.contains("landing") && !text.contains("landing (here)"),
-        "{text}"
-    );
-    let shown = loop_ok(&env, &["loop", "show", "landing"]);
-    assert!(shown.contains("worktree landing → booked"), "{shown}");
-    assert!(
-        shown.contains("booked · one-off · worktree landing"),
-        "{shown}"
-    );
-    assert!(!env.project_root.join(".worktrees/landing").exists());
-}
-
-#[cfg(unix)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NamedResident {
-    Create,
-    Solo,
-    Reuse,
-    Live,
-    Closed,
-    OtherTeam,
-    OtherTeamClosed,
-    Takeover,
-    TakeoverMissing,
-    TakeoverOtherTeam,
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_creates_from_fetched_trunk_at_fire() {
-    named_resident_case(NamedResident::Create);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_non_team_uses_configured_base() {
-    named_resident_case(NamedResident::Solo);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_reuses_existing_checkout_without_reseeding() {
-    named_resident_case(NamedResident::Reuse);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_refuses_live_cohort_without_delivering_prompt() {
-    named_resident_case(NamedResident::Live);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_refuses_closed_cohort_without_takeover() {
-    named_resident_case(NamedResident::Closed);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_refuses_a_different_teams_hold() {
-    named_resident_case(NamedResident::OtherTeam);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_refuses_a_stopped_teams_unfinished_board() {
-    named_resident_case(NamedResident::OtherTeamClosed);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_takeover_relaunches_fresh_and_leaves_scope_occupants() {
-    named_resident_case(NamedResident::Takeover);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_takeover_of_missing_destination_stops_nobody() {
-    named_resident_case(NamedResident::TakeoverMissing);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_named_worktree_takeover_stops_other_team_but_refuses_its_hold() {
-    named_resident_case(NamedResident::TakeoverOtherTeam);
-}
-
-#[cfg(unix)]
-fn named_resident_case(case: NamedResident) {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    env.write_config(
-        &env.project_root,
-        r#"
-        [profiles.codex]
-        agent = "codex"
-        [[agents.teams.forge.roles]]
-        role = "coder"
-        profile = "codex"
-        owns = ["Build"]
-        [agents.teams.forge]
-        stages = ["Build"]
-    "#,
-    );
-    loop_ok(&env, &["trust", "grant"]);
-    let worktrees = env.home_root.join("worktrees");
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        format!("[agents.worktree]\ndir = {worktrees:?}\n"),
-    )
-    .unwrap();
-    let destination = worktrees.join("landing");
-    let absent = matches!(
-        case,
-        NamedResident::Create | NamedResident::Solo | NamedResident::TakeoverMissing
-    );
-    if !absent {
-        loop_ok(&env, &["worktree", "new", "landing"]);
-        std::fs::write(destination.join("keep.txt"), "existing work\n").unwrap();
-    }
-    // Advance the remote after booking, without moving the scope's HEAD.
-    let remote = env.home_root.join("remote");
-    assert!(git_ok(
-        &env.project_root,
-        &["clone", "-q", "--bare", ".", remote.to_str().unwrap()]
-    ));
-    assert!(git_ok(
-        &env.project_root,
-        &["remote", "add", "origin", remote.to_str().unwrap()]
-    ));
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.resident]\nagent={:?}\nprompt='review'\nroot={:?}\nevery='1h'\nstay=true\nworktree='landing'\ntakeover={}\n",
-            if case == NamedResident::Solo {
-                "codex"
-            } else {
-                "forge"
-            },
-            env.project_root,
-            matches!(
-                case,
-                NamedResident::Takeover
-                    | NamedResident::TakeoverMissing
-                    | NamedResident::TakeoverOtherTeam
-            ),
-        ),
-    );
-    assert!(!absent || !destination.exists());
-    std::fs::write(env.project_root.join("merged.txt"), "new trunk\n").unwrap();
-    assert!(git_ok(&env.project_root, &["add", "merged.txt"]));
-    assert!(git_ok(&env.project_root, &["commit", "-q", "-m", "merged"]));
-    assert!(git_ok(&env.project_root, &["push", "-q", "origin", "main"]));
-    assert!(git_ok(
-        &env.project_root,
-        &["reset", "--hard", "-q", "HEAD~1"]
-    ));
-    trust_codex_project(&env, &env.project_root);
-    let provider_config = env.agent_config_path("codex");
-    let mut provider_table: toml::Table = std::fs::read_to_string(&provider_config)
-        .unwrap()
-        .parse()
-        .unwrap();
-    provider_table
-        .get_mut("projects")
-        .unwrap()
-        .as_table_mut()
-        .unwrap()
-        .insert(
-            destination.to_str().unwrap().to_owned(),
-            toml::Value::Table(toml::Table::from_iter([(
-                "trust_level".into(),
-                "trusted".into(),
-            )])),
-        );
-    std::fs::write(provider_config, toml::to_string(&provider_table).unwrap()).unwrap();
-    let workspace = env.resolve_workspace(&env.project_root);
-    let store = env.store();
-    // Each seat owns a process its stop can end, in a pane the listing holds until closed.
-    let owners = std::cell::RefCell::new(BTreeMap::<String, u32>::new());
-    let panes = env.home_root.join("named-panes.json");
-    std::fs::write(&panes, "[]").unwrap();
-    let seed = |name: &str, path: &Path, pane: &str, team: Option<&str>| {
-        let owner = dummy_agent_process();
-        owners.borrow_mut().insert(name.to_owned(), owner.id());
-        let mut listed: Vec<serde_json::Value> =
-            serde_json::from_slice(&std::fs::read(&panes).unwrap()).unwrap();
-        listed.push(json!({"id": pane.parse::<u64>().unwrap(), "is_plugin": false, "tab_id": 1}));
-        std::fs::write(&panes, serde_json::to_vec(&listed).unwrap()).unwrap();
-        seed_agent_launch(
-            &env,
-            path,
-            name,
-            rimz::agents::LaunchParams {
-                team: team.map(str::to_owned),
-                role: team.map(|_| "coder".to_owned()),
-                channel: Some(if team.is_some() { "landing" } else { "scope" }.to_owned()),
-                ..Default::default()
-            },
-            None,
-        );
-        let mut command = env.hook_command("claude");
-        command
-            .current_dir(path)
-            .env(rimz::harness::launch::ENV_AGENT_NAME, name)
-            .env("RIMZ_AGENT_PID", owner.id().to_string())
-            .env("ZELLIJ", "1")
-            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-            .env("ZELLIJ_PANE_ID", pane);
-        let output = env
-            .spawn_payload(
-                command,
-                &json!({"hook_event_name":"SessionStart", "session_id":name, "cwd":path})
-                    .to_string(),
-            )
-            .wait_with_output()
-            .unwrap();
-        reap_later(owner);
-        assert!(output.status.success(), "{output:?}");
-        env.drain_hooks();
-    };
-    seed("scope-agent", &env.project_root, "50", None);
-    if case == NamedResident::Reuse {
-        seed("destination-solo", &destination, "52", None);
-    }
-    let occupied = matches!(
-        case,
-        NamedResident::Live
-            | NamedResident::Closed
-            | NamedResident::OtherTeam
-            | NamedResident::OtherTeamClosed
-            | NamedResident::Takeover
-            | NamedResident::TakeoverOtherTeam
-    );
-    if occupied {
-        let team = if matches!(
-            case,
-            NamedResident::OtherTeam
-                | NamedResident::OtherTeamClosed
-                | NamedResident::TakeoverOtherTeam
-        ) {
-            "other"
-        } else {
-            "forge"
-        };
-        seed("old-leader", &destination, "51", Some(team));
-        rimz::harness::team_notes::register(
-            &store,
-            &destination,
-            team,
-            &toml::from_str("stages = ['Build']").unwrap(),
-            rimz::harness::team_notes::Launch::Resume,
-        )
-        .unwrap();
-        std::fs::write(
-            destination.join(".rimz/team/blackboard.md"),
-            "Stage: Build\n",
-        )
-        .unwrap();
-        if matches!(case, NamedResident::Closed | NamedResident::OtherTeamClosed) {
-            stamp_session_ended(&env, "old-leader");
-        }
-    }
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        Vec::new(),
-    );
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let trace = env.home_root.join("named-resident.log");
-    // The trace shim cannot end a pane's fixture owner. Model the
-    // provider's SessionEnd so reconciliation sees the cohort after its stop.
-    let zellij = crate::common::write_path_shim(
-        &env.home_root.join("mux-bin"),
-        "zellij",
-        r#""$RIMZ_TEST_ZELLIJ_TRACE" "$@" || exit "$?"
-for arg do
-    if [ "$arg" = close-pane ]; then
-        printf '%s\n' "$RIMZ_TEST_ENDED_PAYLOAD" | RIMZ_AGENT_PID="$RIMZ_TEST_AGENT_OWNER_PID" "$RIMZ_TEST_RIMZ" hooks feed --source claude || exit "$?"
-        exec "$RIMZ_TEST_RIMZ" hooks drain --project-root "$RIMZ_TEST_SCOPE" --once
-    fi
-done
-"#,
-    );
-    let command = || {
-        let mut command = env.rimz();
-        command
-            .args(["--mux", "zellij"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&agent_bin))
-            .env("RIMZ_ZELLIJ_BIN", &zellij)
-            .env(
-                "RIMZ_TEST_ZELLIJ_TRACE",
-                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-            )
-            .env("RIMZ_TEST_RIMZ", env.rimz().get_program())
-            .env(
-                "RIMZ_TEST_AGENT_OWNER_PID",
-                owners
-                    .borrow()
-                    .get("old-leader")
-                    .map_or_else(|| env.agent_owner_pid(), |pid| *pid)
-                    .to_string(),
-            )
-            .env("RIMZ_TEST_SCOPE", &env.project_root)
-            .env(
-                "RIMZ_TEST_ENDED_PAYLOAD",
-                json!({"hook_event_name":"SessionEnd", "session_id":"old-leader", "cwd":destination}).to_string(),
-            )
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", &panes)
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                format!("{} [Created 1s ago]\n", workspace.session_name),
-            );
-        command
-    };
-    let before_queue = store.list_messages().unwrap();
-    let before_history = store.list_message_history().unwrap();
-    let output = command()
-        .args(["loop", "run", "resident"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let refused = matches!(
-        case,
-        NamedResident::Live
-            | NamedResident::Closed
-            | NamedResident::OtherTeam
-            | NamedResident::OtherTeamClosed
-            | NamedResident::TakeoverOtherTeam
-    );
-    let fired = fired_record(&env, "resident");
-    assert!(
-        refused || fired.result == LoopRunResult::Launched,
-        "{fired:?}"
-    );
-    assert_eq!(fired.checkout.as_deref(), Some(env.project_root.as_path()));
-    // The fire returns once its run exists; the launch, or its refusal, lands in the run.
-    let leader = |store: &rimz::Store| {
-        store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .unwrap()
-            .agents
-            .iter()
-            .find(|agent| agent.loop_task.as_deref() == Some("resident"))
-            .cloned()
-    };
-    let record = if refused {
-        wait_for_loop_report(&env, "resident")
-    } else {
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        while leader(&store).is_none() {
-            // A run in flight logs no row; its report would be the first.
-            let rows = read_loop_run_records(&env);
-            assert!(
-                rows.is_empty() && Instant::now() < deadline,
-                "resident never launched: {rows:?}\n{}\n{:?}",
-                loop_run_journal(&env, &env.project_root, &fired),
-                store
-                    .runtime_projection(rimz::RuntimeScope::Audit)
-                    .unwrap()
-                    .agents
-                    .iter()
-                    .map(|agent| (
-                        agent.name.clone(),
-                        agent.loop_task.clone(),
-                        agent.worktree_path.clone(),
-                        agent.ended_at
-                    ))
-                    .collect::<Vec<_>>()
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        fired.clone()
-    };
-    let trace_text = std::fs::read_to_string(&trace).unwrap_or_default();
-    let residents = store.paths().root.join("records/loop-launches.json");
-    let agents = store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .unwrap()
-        .agents;
-    assert!(
-        agents
-            .iter()
-            .find(|agent| agent.name.as_deref() == Some("scope-agent"))
-            .unwrap()
-            .ended_at
-            .is_none()
-    );
-    assert!(!trace_text.contains("--pane-id 50"), "{trace_text}");
-    if matches!(
-        case,
-        NamedResident::Takeover | NamedResident::TakeoverOtherTeam
-    ) {
-        assert!(
-            agents
-                .iter()
-                .find(|agent| agent.name.as_deref() == Some("old-leader"))
-                .unwrap()
-                .ended_at
-                .is_some()
-        );
-    }
-    if refused {
-        assert_eq!(record.result, LoopRunResult::Failed, "{record:?}");
-        let error = record.error.as_deref().unwrap();
-        assert!(error.contains("landing"), "{error}");
-        if case == NamedResident::Live {
-            for word in [
-                "forge",
-                "@coder#landing",
-                "prompt was not delivered",
-                "--takeover",
-            ] {
-                assert!(error.contains(word), "{error}");
-            }
-        } else if case == NamedResident::Closed {
-            assert!(
-                error.contains("resume") && error.contains("fresh"),
-                "{error}"
-            );
-        } else {
-            assert!(
-                error.contains("other") && error.contains("holds team"),
-                "{error}"
-            );
-        }
-        assert_eq!(store.list_messages().unwrap(), before_queue);
-        assert_eq!(store.list_message_history().unwrap(), before_history);
-        assert!(!residents.exists());
-        assert!(!trace_text.contains("new-tab"), "{trace_text}");
-        assert_eq!(
-            trace_text.matches("close-pane").count(),
-            usize::from(case == NamedResident::TakeoverOtherTeam),
-            "{trace_text}"
-        );
-        // `run_log::record_transition` appends the report row before it notes the strike.
-        let key = machine_task_key("resident");
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        while !read_loop_strikes(&env).contains_key(&key) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        assert_eq!(read_loop_strikes(&env).get(&key), Some(&1));
-        if case == NamedResident::Live {
-            let direct = command()
-                .args(["teams", "forge", "-w", "landing", "ordinary launch prompt"])
-                .output()
-                .unwrap();
-            assert!(
-                direct.status.success(),
-                "{}",
-                String::from_utf8_lossy(&direct.stderr)
-            );
-            let messages = store.list_messages().unwrap();
-            let history = store.list_message_history().unwrap();
-            assert_eq!(
-                messages.len() + history.len(),
-                before_queue.len() + before_history.len() + 1,
-                "{direct:?}"
-            );
-            assert!(
-                messages
-                    .iter()
-                    .chain(&history)
-                    .any(|message| message.text == "ordinary launch prompt")
-            );
-        }
-        return;
-    }
-    // The run remembers the firing checkout; no fire writes the resident launch file.
-    assert!(!residents.exists());
-    let workflows = rimz::harness::schedule::launch_ledger::load_workflows(store.paths()).unwrap();
-    assert!(
-        workflows.tasks["resident"].contains_key(&env.project_root),
-        "{workflows:?}"
-    );
-    let marker = rimz::worktree::read_marker_for_worktree(&destination)
-        .unwrap()
-        .unwrap();
-    assert_eq!(marker.worktree_path, destination);
-    assert_eq!(
-        destination.join("merged.txt").exists(),
-        absent && case != NamedResident::Solo
-    );
-    assert_eq!(destination.join("keep.txt").exists(), !absent);
-    let leader = leader(&store).unwrap();
-    assert_eq!(leader.worktree_path.as_deref(), destination.to_str());
-    assert_eq!(leader.channel.as_deref(), Some("landing"));
-    assert_eq!(
-        trace_text.matches("close-pane").count(),
-        usize::from(case == NamedResident::Takeover),
-        "{trace_text}"
-    );
-    assert!(
-        command()
-            .args(["loop", "run", "resident"])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-    assert_eq!(shown_runs(&env, "resident").len(), 1);
-}
-
-#[test]
-fn resident_subscribe_requires_prompt_leader_and_installed_hooks() {
-    let env = Env::new();
-    for (spec, expected) in [("term", "prompt leader"), ("claude", "--subscribe")] {
-        let (_, error) = loop_fail(
-            &env,
-            &[
-                "loop",
-                "add",
-                "resident",
-                "--agent",
-                spec,
-                "--stay",
-                "--each-worktree",
-                "--when",
-                "pr=open",
-                "--subscribe",
-                "ci.failed",
-                "--prompt",
-                "repair",
-            ],
-        );
-        assert!(error.contains(expected), "{error}");
-    }
-    assert!(read_loop_instances(&env).0.is_empty());
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_launch_deduplicates_and_manual_fire_relaunches() {
-    resident_launch_case(false, false);
-}
-
 #[cfg(unix)]
 #[test]
 fn resident_show_summarizes_worktree_conditions() {
@@ -2507,7 +902,7 @@ fn resident_show_summarizes_worktree_conditions() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"pr=open\"]\n",
+            "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"pr=open\"]\n",
             env.project_root
         ),
     );
@@ -2523,7 +918,7 @@ fn resident_show_survives_failed_worktree_discovery() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+            "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
             env.project_root
         ),
     );
@@ -2547,7 +942,7 @@ fn resident_show_survives_unavailable_worktree_runtime() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+            "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
             env.project_root
         ),
     );
@@ -2587,7 +982,7 @@ fn resident_show_keeps_the_screen_on_room_catalog_failure() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+            "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
             root
         ),
     );
@@ -2625,104 +1020,6 @@ fn resident_show_keeps_the_screen_on_room_catalog_failure() {
     }
 }
 
-#[cfg(unix)]
-#[test]
-fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let store = env.store();
-    let workspace = env.resolve_workspace(&env.project_root);
-    let kind = AgentKind::new_unchecked("codex");
-    store
-        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
-            workspace.workspace_id,
-            &workspace.session_name,
-            &kind,
-            rimz::store::event::AgentLaunchPayload {
-                system_prompt_digest: None,
-                agent_id: "ghost-session".into(),
-                launch_id: None,
-                agent_name: "ghost-leader".into(),
-                agent_name_explicit: true,
-                launch: Default::default(),
-                state: rimz::store::event::AgentLaunchState::Bound,
-                run_id: None,
-                pane_id: None,
-                runtime_owner: Some(rimz::pane::RuntimeOwner::new(
-                    rimz::pane::RuntimeOwnerKind::Daemon,
-                    "ghost-session",
-                    std::process::id(),
-                    None,
-                )),
-                worktree_path: Some(env.project_root.display().to_string()),
-                worktree_branch: None,
-                prompt: None,
-                description: None,
-            },
-        ))
-        .unwrap();
-    let reap = env.runtime_paths().lane_path("codex-daemon-reap.json");
-    std::fs::create_dir_all(reap.parent().unwrap()).unwrap();
-    std::fs::write(
-        reap,
-        json!({
-            "produced_at_ms": rimz::utils::time::unix_now_ms(),
-            "daemon_pids": [std::process::id()],
-            "loaded": [],
-        })
-        .to_string(),
-    )
-    .unwrap();
-    assert!(
-        store
-            .snapshot_cached()
-            .unwrap()
-            .agents
-            .iter()
-            .any(|agent| agent.name.as_deref() == Some("ghost-leader"))
-    );
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        Vec::new(),
-    );
-    let listed = env
-        .rimz()
-        .args(["--mux", "zellij", "agents", "list", "--json"])
-        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("reap.log"))
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 1s ago]\n", workspace.session_name),
-        )
-        .output()
-        .unwrap();
-    assert!(listed.status.success(), "{listed:?}");
-    let listed = String::from_utf8_lossy(&listed.stdout);
-    assert!(!listed.contains("ghost-leader"), "{listed}");
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nevery = \"1h\"\nstay = true\nsubscribe = [{{ signal = \"ci.failed\" }}]\n",
-            env.project_root
-        ),
-    );
-    let ledger = store.paths().root.join("records/loop-launches.json");
-    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
-    std::fs::write(
-        ledger,
-        serde_json::to_vec(&serde_json::json!({"resident": {
-            env.project_root.display().to_string():
-                {"at": Timestamp::now(), "leader": "ghost-leader"}
-        }}))
-        .unwrap(),
-    )
-    .unwrap();
-    let shown = loop_ok(&env, &["loop", "show", "resident"]);
-    assert!(shown.contains("0 armed, no live leader"), "{shown}");
-}
-
 #[test]
 fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
     let env = Env::new();
@@ -2745,7 +1042,7 @@ fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
         .unwrap();
     }
     let config = format!(
-        "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
+        "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\n",
         env.project_root
     );
     write_loop_config(&env, &format!("{config}for = \"3m\"\n"));
@@ -2848,7 +1145,7 @@ fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"pr=open && ci=passed && team.stage=Done\"]\n",
+            "[tasks.resident]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nonce-per-checkout = true\neach-worktree = true\nwhen = [\"pr=open && ci=passed && team.stage=Done\"]\n",
             env.project_root
         ),
     );
@@ -2896,167 +1193,6 @@ fn resident_show_json_adds_unfolded_worktrees_and_keeps_existing_keys() {
 }
 
 #[test]
-fn loop_show_lists_each_derived_subscription() {
-    loop_show_subscriptions_case(false);
-}
-
-#[test]
-fn loop_show_loads_subscriptions_and_results_from_the_tasks_room() {
-    loop_show_subscriptions_case(true);
-}
-
-fn loop_show_subscriptions_case(other_room: bool) {
-    use rimz::harness::schedule::run_log::SignalRecord;
-
-    let env = Env::new();
-    let root = if other_room {
-        let root = env.home_root.join("other-room");
-        std::fs::create_dir(&root).unwrap();
-        root
-    } else {
-        env.project_root.clone()
-    };
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.sweep]\nroot = {root:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\nwhen = [\"pr=open\"]\n"
-        ),
-    );
-    let subscription = |checkout: &str, handle: &str, signal: &str| TaskEntry {
-        root: root.clone(),
-        dir: Some(env.home_root.join(checkout)),
-        loop_task: Some("sweep".into()),
-        wait: Some(TaskTarget {
-            kind: AgentKind::new_unchecked("codex"),
-            session: "session".into(),
-            handle: handle.into(),
-        }),
-        signal: Some(signal.into()),
-        ..TaskEntry::default()
-    };
-    let mut unrelated = subscription("feature-a", "@fixer#feature-a", "ci.failed");
-    unrelated.loop_task = Some("another-loop".into());
-    let mut team_only = unrelated.clone();
-    team_only.loop_task = None;
-    team_only.team = Some("forge#feature-a".parse().unwrap());
-    let tasks = Tasks(BTreeMap::from([
-        (
-            "derived-a".into(),
-            subscription("feature-a", "@fixer#feature-a", "ci.failed"),
-        ),
-        (
-            "derived-b".into(),
-            subscription("feature-a", "@fixer#feature-a", "pr.merged"),
-        ),
-        (
-            "derived-c".into(),
-            subscription("feature-b", "@reviewer#feature-b", "ci.failed"),
-        ),
-        (
-            "derived-d".into(),
-            subscription("feature-b", "@reviewer#feature-b", "ci.passed"),
-        ),
-        ("unrelated".into(), unrelated),
-        ("team-only".into(), team_only),
-    ]));
-    let path = env
-        .state_path_for(&root)
-        .root
-        .join("records/loop-instances.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
-    let record = |name: &str, result: LoopRunResult, minutes: i64| {
-        let mut record = LoopRunRecord::new(name, result, LoopRunMode::Scheduled, 0);
-        record.root = Some(root.clone());
-        record.at = Timestamp::now() - SignedDuration::from_mins(minutes);
-        if result == LoopRunResult::SignalSkipped {
-            record.signal = Some(SignalRecord {
-                name: tasks.0[name].signal.as_deref().unwrap().parse().unwrap(),
-                payload: serde_json::Map::new(),
-            });
-        }
-        record
-    };
-    let mut foreign = record("derived-a", LoopRunResult::Failed, 1);
-    foreign.root = Some(env.home_root.join("foreign-room"));
-    write_loop_run_records(
-        &env,
-        &[
-            record("derived-a", LoopRunResult::Delivered, 5),
-            record("derived-b", LoopRunResult::Completed, 4),
-            record("derived-b", LoopRunResult::SignalSkipped, 3),
-            record("derived-b", LoopRunResult::SignalSkipped, 2),
-            record("derived-b", LoopRunResult::SignalSkipped, 1),
-            record("derived-d", LoopRunResult::SignalSkipped, 1),
-            foreign,
-        ],
-    );
-    let shown = loop_ok(&env, &["loop", "show", "sweep"]);
-    let subscriptions = shown
-        .split_once("SUBSCRIPTIONS\n")
-        .unwrap_or_else(|| panic!("missing SUBSCRIPTIONS block: {shown}"))
-        .1
-        .split("\n\n")
-        .next()
-        .unwrap();
-    for (name, checkout, target, signal, last) in [
-        (
-            "derived-a",
-            "feature-a",
-            "@fixer#feature-a",
-            "ci.failed",
-            "✓ 5m ago",
-        ),
-        (
-            "derived-b",
-            "feature-a",
-            "@fixer#feature-a",
-            "pr.merged",
-            "✓ 4m ago",
-        ),
-        (
-            "derived-c",
-            "feature-b",
-            "@reviewer#feature-b",
-            "ci.failed",
-            "never fired",
-        ),
-        (
-            "derived-d",
-            "feature-b",
-            "@reviewer#feature-b",
-            "ci.passed",
-            "heard ci.passed 1m ago",
-        ),
-    ] {
-        let row = subscriptions
-            .lines()
-            .find(|line| line.contains(name))
-            .unwrap_or_else(|| panic!("missing {name}: {shown}"));
-        for cell in [checkout, target, signal, last] {
-            assert!(row.contains(cell), "missing {cell}: {row}");
-        }
-        assert_eq!(subscriptions.matches(name).count(), 1, "{shown}");
-    }
-    assert!(!subscriptions.contains("unrelated"), "{shown}");
-    assert!(!subscriptions.contains("team-only"), "{shown}");
-    assert!(!subscriptions.contains("✗ failed"), "{shown}");
-    assert!(!subscriptions.contains("skipped"), "{shown}");
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_worktree_launch_preserves_marker_path() {
-    resident_launch_case(true, false);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_team_layout_uses_the_helpers_resolved_checkout() {
-    resident_launch_case(true, true);
-}
-
-#[test]
 fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
@@ -3090,1001 +1226,6 @@ fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
     );
 }
 
-#[cfg(unix)]
-fn resident_launch_case(each_worktree: bool, team: bool) {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    let actual = env.home_root.join("actual-worktrees");
-    let alias = env.home_root.join("linked-worktrees");
-    std::fs::create_dir(&actual).unwrap();
-    std::os::unix::fs::symlink(&actual, &alias).unwrap();
-    std::fs::create_dir(alias.join("spare")).unwrap();
-    let worktree_dir = if each_worktree {
-        alias.join("spare/..")
-    } else {
-        alias.clone()
-    };
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        format!(
-            "[agents.worktree]\ndir = {:?}\n",
-            worktree_dir.to_str().unwrap()
-        ),
-    )
-    .unwrap();
-    loop_ok(&env, &["worktree", "new", "lane"]);
-    if team {
-        env.write_config(
-            &env.project_root,
-            r#"
-            [profiles.codex]
-            agent = "codex"
-            [[agents.teams.forge.roles]]
-            role = "coder"
-            profile = "codex"
-            signals = [{ signal = "ci.failed" }]
-        "#,
-        );
-        loop_ok(&env, &["trust", "grant"]);
-    }
-    let checkout = alias.join("lane");
-    let marker = rimz::worktree::read_marker_for_worktree(&checkout)
-        .unwrap()
-        .unwrap();
-    assert_eq!(marker.worktree_path, worktree_dir.join("lane"));
-    assert_ne!(checkout, canonical(&checkout));
-    trust_codex_project(&env, &checkout);
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = env.resolve_workspace(&env.project_root);
-    let trace = env.home_root.join("resident-mux.log");
-    let pane_fixture = env.home_root.join("resident-agent-panes.json");
-    std::fs::write(&pane_fixture, "[]").unwrap();
-    let _room = if each_worktree {
-        Some(crate::common::room::ShimRoom::watch(&env, &trace))
-    } else {
-        crate::common::room::seed_live_zellij_room(
-            &env.runtime_paths(),
-            &workspace.session_name,
-            Vec::new(),
-        );
-        None
-    };
-    let command = || {
-        let mut command = env.rimz();
-        command
-            .args(["--mux", "zellij"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&agent_bin))
-            .env(
-                "RIMZ_ZELLIJ_BIN",
-                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-            )
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                if each_worktree {
-                    crate::common::room::MATERIALIZED_ROOM_PANES
-                } else {
-                    "[]"
-                },
-            )
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                if each_worktree {
-                    String::new()
-                } else {
-                    format!("{} [Created 1s ago]\n", workspace.session_name)
-                },
-            );
-        if team {
-            command.env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1");
-        }
-        command
-    };
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\n{}\nstay = true\nsubscribe = [{{ signal = \"ci.failed\" }}]\n",
-            if team { "forge" } else { "codex" },
-            env.project_root.to_str().unwrap(),
-            checkout.to_str().unwrap(),
-            if each_worktree {
-                "each-worktree = true\nwhen = [\"pr=open\"]"
-            } else {
-                "every = \"1h\""
-            },
-        ),
-    );
-    if each_worktree {
-        let runtime = env.runtime_paths();
-        std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
-        std::fs::write(
-            runtime.lane_path("pr-state.json"),
-            json!({"states": {checkout.to_string_lossy().to_string(): {"state": "open"}}})
-                .to_string(),
-        )
-        .unwrap();
-        let source = rimz::harness::when::CiSource::read(&runtime);
-        let expr = rimz::harness::when::WhenExpr::parse(&["pr=open".to_owned()]).unwrap();
-        let windows = rimz::harness::when::WindowReadings::new(Some(&runtime), Timestamp::now());
-        assert_eq!(
-            rimz::harness::when::evaluate(&expr, &checkout, Some(&source), None, None, &windows)
-                .truth,
-            Some(true)
-        );
-    }
-    let store = env.store();
-    let leaders = |store: &rimz::Store| {
-        store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .unwrap()
-            .agents
-            .iter()
-            .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    let wait_for_leaders = |count: usize| {
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        loop {
-            let leaders = leaders(&store);
-            if leaders.len() == count {
-                return leaders;
-            }
-            if Instant::now() >= deadline {
-                let rows = read_loop_run_records(&env);
-                panic!(
-                    "resident never launched: {rows:?}\n{}\n{leaders:?}",
-                    loop_run_journal(&env, &env.project_root, &rows[0])
-                );
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    };
-    for fire in 0..2 {
-        let mut run = command();
-        run.args(["loop", "run", "resident"]);
-        if each_worktree {
-            run.arg("--cwd").arg(&checkout).arg("--condition-json").arg(
-                json!({
-                    "when": "pr=open", "hold": null, "held_ms": 0,
-                    "readings": {"pr": "open"}
-                })
-                .to_string(),
-            );
-        }
-        let output = run.output().unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(output.status.success(), "{stderr}");
-        assert!(
-            !stderr.contains("did not materialize"),
-            "the birth must pass the sidebar layout wait: {stderr}"
-        );
-        if fire == 0 {
-            wait_for_leaders(1);
-        }
-    }
-    let agents = wait_for_leaders(1);
-    let expected_checkout = if each_worktree {
-        checkout.clone()
-    } else {
-        canonical(&checkout)
-    };
-    // A run's scope is its checkout's physical path, so its leader launches there.
-    assert_eq!(
-        agents[0].worktree_path.as_deref(),
-        canonical(&checkout).to_str()
-    );
-    assert_eq!(agents[0].channel.as_deref(), Some("lane"));
-    let records = shown_runs(&env, "resident");
-    assert_eq!(records.len(), 1, "{records:?}");
-    assert_eq!(records[0].result, LoopRunResult::Launched);
-    let run = rimz::store::workflow::load(
-        &store
-            .paths()
-            .workflow(&records[0].run_id.as_deref().unwrap().parse().unwrap()),
-    )
-    .unwrap();
-    assert!(run.notes.is_some(), "resident fires keep memory: {run:?}");
-    // The launch records the supervised run after the leader's row, so wait for it.
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let runs = loop {
-        let runs = rimz::harness::run::list(store.paths()).unwrap();
-        if runs
-            .iter()
-            .any(|run| run.loop_task.as_deref() == Some("resident"))
-        {
-            break runs;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the resident's supervised run never appeared: {runs:?}\n{:?}",
-            read_loop_run_records(&env)
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    assert_eq!(runs.len(), 1, "{runs:?}");
-    assert_eq!(runs[0].loop_task.as_deref(), Some("resident"));
-    // The run remembers the checkout; no fire writes the resident launch file.
-    assert!(
-        !store
-            .paths()
-            .root
-            .join("records/loop-launches.json")
-            .exists()
-    );
-    let workflows = rimz::harness::schedule::launch_ledger::load_workflows(store.paths()).unwrap();
-    assert!(
-        workflows.tasks["resident"].contains_key(&expected_checkout),
-        "{workflows:?}"
-    );
-    if team {
-        assert_eq!(agents[0].team.as_deref(), Some("forge"));
-        // The team's tab opens after its run is recorded, so wait for its layout.
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        let (cwd, trace) = loop {
-            let text = std::fs::read_to_string(&trace).unwrap_or_default();
-            let cwd = text
-                .split_inclusive('\n')
-                .filter_map(|line| line.strip_prefix("layout-json\t")?.strip_suffix('\n'))
-                .find_map(|layout| {
-                    let layout: String = serde_json::from_str(layout).unwrap();
-                    let layout: kdl::KdlDocument = layout.parse().unwrap();
-                    let (pane, _) = loop_agent_pane(&layout)?;
-                    Some(pane.get("cwd")?.value().as_string()?.to_owned())
-                });
-            if let Some(cwd) = cwd {
-                break (cwd, text);
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the team's layout never reached the mux: {text}"
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        assert_eq!(cwd, canonical(&checkout).to_str().unwrap(), "{trace}");
-        return;
-    }
-    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
-        .iter()
-        .map(|record| serde_json::to_value(record).unwrap())
-        .collect::<Vec<_>>();
-    let starts = assists
-        .iter()
-        .filter(|assist| assist["assist"] == "workflow_start")
-        .collect::<Vec<_>>();
-    assert_eq!(starts.len(), 1, "{assists:?}");
-    assert_eq!(starts[0]["task"], "resident");
-    let owner = dummy_agent_process();
-    let owner_pid = owner.id();
-    reap_later(owner);
-    let transcript = env.home_root.join("resident-transcript.jsonl");
-    write_stoppable_pane(&env, &pane_fixture, 51, "codex", owner_pid);
-    std::fs::write(&transcript, "{}\n").unwrap();
-    let hook = |event: &str| {
-        let mut command = env.hook_command("codex");
-        command
-            .env("RIMZ_AGENT_PID", owner_pid.to_string())
-            .env("ZELLIJ", "1")
-            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-            .env("ZELLIJ_PANE_ID", "51")
-            .env("RIMZ_RUN_ID", runs[0].run_id.to_string());
-        command.current_dir(&checkout).env(
-            rimz::harness::launch::ENV_AGENT_NAME,
-            agents[0].name.as_deref().unwrap(),
-        );
-        let output = env
-            .spawn_payload(
-                command,
-                &json!({
-                    "hook_event_name": event, "session_id": "resident-session",
-                    "cwd": expected_checkout, "prompt": "work",
-                    "transcript_path": transcript
-                })
-                .to_string(),
-            )
-            .wait_with_output()
-            .unwrap();
-        env.drain_hooks();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    hook("SessionStart");
-    hook("UserPromptSubmit");
-    // The run's step subscription reaches the leader; loop arms no row of its own. Its
-    // default `path` is the run's scope, the checkout's physical path.
-    assert!(read_loop_instances(&env).0.is_empty());
-    for (path, matching) in [(&env.project_root, false), (&canonical(&checkout), true)] {
-        loop_ok(
-            &env,
-            &[
-                "events",
-                "emit",
-                "ci.failed",
-                "--source",
-                "forge",
-                "--json",
-                &json!({"path":path}).to_string(),
-            ],
-        );
-        if !matching {
-            assert!(store.list_pending_messages().unwrap().is_empty());
-        }
-    }
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while store.list_pending_messages().unwrap().is_empty() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let messages = store.list_pending_messages().unwrap();
-    assert_eq!(messages.len(), 1, "{:?}", read_loop_run_records(&env));
-    assert_eq!(messages[0].kind.as_str(), "codex");
-    assert_eq!(messages[0].agent_id.as_str(), "resident-session");
-    assert!(
-        messages[0].text.contains("ci.failed"),
-        "{}",
-        messages[0].text
-    );
-    // Once its run ends, a manual fire bypasses the memory and relaunches.
-    let stopped = command()
-        .args(["loop", "stop", "resident"])
-        .output()
-        .unwrap();
-    assert!(stopped.status.success(), "{stopped:?}");
-    wait_for_loop_report(&env, "resident");
-    let output = command()
-        .args(["loop", "fire", "resident"])
-        .current_dir(&checkout)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    wait_for_leaders(2);
-    if each_worktree {
-        let refused = command()
-            .args(["loop", "fire", "resident"])
-            .output()
-            .unwrap();
-        assert!(!refused.status.success());
-        assert!(String::from_utf8_lossy(&refused.stderr).contains("owned worktree"));
-    }
-    loop_ok(&env, &["loop", "remove", "resident"]);
-    assert!(
-        !rimz::harness::schedule::launch_ledger::load_workflows(store.paths())
-            .unwrap()
-            .tasks
-            .contains_key("resident")
-    );
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Takeover {
-    Restricted,
-    IdleOccupants,
-    WorkingOccupant,
-    ClosedPane,
-    OmittedTab,
-    SymlinkedCheckout,
-    FailedStop,
-    OpenRunPane,
-    EmptyCheckout,
-    TeamLayout,
-}
-
-#[test]
-fn resident_saved_untrusted_fails_its_run_before_takeover() {
-    resident_takeover_case(Takeover::Restricted);
-}
-
-#[test]
-fn resident_takeover_stops_idle_occupants_of_every_origin_and_no_other_checkout() {
-    resident_takeover_case(Takeover::IdleOccupants);
-}
-
-#[test]
-fn resident_takeover_waits_for_a_working_occupant_then_stops_it_and_launches() {
-    resident_takeover_case(Takeover::WorkingOccupant);
-}
-
-#[test]
-fn resident_takeover_ignores_a_working_row_in_a_closed_pane_and_an_unrecorded_live_pane() {
-    resident_takeover_case(Takeover::ClosedPane);
-}
-
-#[test]
-fn resident_takeover_waits_for_a_working_occupant_in_an_omitted_live_tab() {
-    resident_takeover_case(Takeover::OmittedTab);
-}
-
-#[cfg(unix)]
-#[test]
-fn resident_takeover_of_a_symlinked_checkout_finds_the_occupant_at_its_physical_path() {
-    resident_takeover_case(Takeover::SymlinkedCheckout);
-}
-
-#[test]
-fn resident_takeover_failed_stop_commits_no_launch_or_ledger() {
-    resident_takeover_case(Takeover::FailedStop);
-}
-
-/// A kept run's pane that is still listed after a failed close is an occupant
-/// still in the checkout.
-#[test]
-fn resident_takeover_of_a_run_whose_pane_stays_open_commits_no_launch_or_ledger() {
-    resident_takeover_case(Takeover::OpenRunPane);
-}
-
-#[test]
-fn resident_takeover_of_an_empty_checkout_launches_and_stops_nothing() {
-    resident_takeover_case(Takeover::EmptyCheckout);
-}
-
-#[test]
-fn resident_takeover_into_a_team_layout_relaunches_the_team_holding_the_checkout() {
-    resident_takeover_case(Takeover::TeamLayout);
-}
-
-fn resident_takeover_case(case: Takeover) {
-    let env = Env::new();
-    let Some(cwd) = team_signal_fixture(&env) else {
-        return;
-    };
-    env.record(&env.project_root);
-    // The launch checkout as the task names it, and as a provider hook reports
-    // the occupant's cwd: the same path unless a symlink leads to the checkout.
-    let symlinked = case == Takeover::SymlinkedCheckout;
-    let (launch_cwd, cwd) = if symlinked {
-        let launch_cwd = symlinked_owned_worktree(&env);
-        let physical = canonical(&launch_cwd);
-        assert_ne!(launch_cwd, physical);
-        (launch_cwd, physical)
-    } else {
-        (cwd.clone(), cwd)
-    };
-    let working = symlinked || case == Takeover::WorkingOccupant;
-    let working = working || matches!(case, Takeover::ClosedPane | Takeover::OmittedTab);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &launch_cwd);
-    if case == Takeover::Restricted {
-        let config = env.agent_config_path("codex");
-        let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
-        table["projects"][launch_cwd.to_str().unwrap()]["trust_level"] = "untrusted".into();
-        std::fs::write(config, toml::to_string(&table).unwrap()).unwrap();
-    }
-    let sibling = env.home_root.join("sibling");
-    assert!(git_ok(
-        &env.project_root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "sibling",
-            sibling.to_str().unwrap()
-        ]
-    ));
-    let docs = cwd.join("docs");
-    std::fs::create_dir_all(&docs).unwrap();
-    let workspace = env.resolve_workspace(&env.project_root);
-    let store = env.store();
-    let team = |channel: &str| rimz::agents::LaunchParams {
-        team: Some("forge".to_owned()),
-        role: Some("coder".to_owned()),
-        channel: Some(channel.to_owned()),
-        ..Default::default()
-    };
-    // The fire runs under the test process, so a launched child owned by it
-    // would make the fire itself a subagent.
-    let child_owner = dummy_agent_process();
-    let child_pid = child_owner.id();
-    reap_later(child_owner);
-    let closed_owner = (case == Takeover::ClosedPane).then(dummy_agent_process);
-    let closed_pid = closed_owner.as_ref().map(std::process::Child::id);
-    // Each occupant owns a process a takeover's SIGTERM can end.
-    let owners = std::cell::RefCell::new(BTreeMap::<String, u32>::new());
-    let owner_pid = |session: &str| {
-        if session.ends_with("-child") {
-            return child_pid;
-        }
-        if let Some(pid) = closed_pid.filter(|_| session == "old-coder") {
-            return pid;
-        }
-        *owners
-            .borrow_mut()
-            .entry(session.to_owned())
-            .or_insert_with(|| {
-                // A failed stop keeps failing on the retry: the occupant outlives its SIGTERM.
-                let owner = if case == Takeover::FailedStop && session == "old-coder" {
-                    term_ignoring_process(&env)
-                } else {
-                    dummy_agent_process()
-                };
-                let pid = owner.id();
-                reap_later(owner);
-                pid
-            })
-    };
-    let hook = |session: &str, checkout: &Path, pane: Option<&str>, event: &str| {
-        let mut hook = env.hook_command("claude");
-        hook.current_dir(checkout)
-            .env(rimz::harness::launch::ENV_AGENT_NAME, session)
-            .env("RIMZ_AGENT_PID", owner_pid(session).to_string());
-        if let Some(pane) = pane {
-            hook.env("ZELLIJ", "1")
-                .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-                .env("ZELLIJ_PANE_ID", pane);
-        }
-        let output = env
-            .spawn_payload(
-                hook,
-                &json!({"hook_event_name":event, "session_id":session, "cwd":checkout, "prompt":"work"})
-                    .to_string(),
-            )
-            .wait_with_output()
-            .unwrap();
-        env.drain_hooks();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    let child_of_old_coder = || rimz::agents::LaunchParams {
-        parent_agent_id: Some(AgentSessionId::from("launch_old-coder")),
-        parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
-        launch_depth: Some(1),
-        ..Default::default()
-    };
-    let mut occupants = vec![("sibling-coder", &sibling, Some("52"), team("sibling-coder"))];
-    if case != Takeover::EmptyCheckout {
-        occupants.push(("old-coder", &cwd, Some("51"), team("old-coder")));
-    }
-    if case == Takeover::IdleOccupants {
-        occupants.push((
-            "sweeper",
-            &cwd,
-            Some("53"),
-            rimz::agents::LaunchParams {
-                loop_task: Some("sweep".to_owned()),
-                ..Default::default()
-            },
-        ));
-        occupants.push(("solo", &docs, Some("54"), Default::default()));
-        occupants.push(("old-child", &cwd, Some("55"), child_of_old_coder()));
-    }
-    if case == Takeover::FailedStop {
-        occupants.push(("paneless-child", &cwd, None, child_of_old_coder()));
-    }
-    let seeded = occupants.len();
-    let listed = occupants
-        .iter()
-        .filter_map(|(_, _, pane, _)| *pane)
-        .map(|pane| json!({"id": pane.parse::<u64>().unwrap(), "is_plugin": false, "tab_id": 1}))
-        .collect::<Vec<_>>();
-    let panes = env.home_root.join("takeover-panes.json");
-    std::fs::write(&panes, serde_json::to_vec(&listed).unwrap()).unwrap();
-    for (session, checkout, pane, launch) in occupants {
-        seed_agent_launch(&env, checkout, session, launch, None);
-        hook(session, checkout, pane, "SessionStart");
-    }
-    if case == Takeover::ClosedPane {
-        // Make the final live-owner hook publish even inside the cadence window.
-        std::fs::File::open(store.paths().snapshots_dir().unwrap().join("publish.stamp"))
-            .unwrap()
-            .set_modified(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap();
-    }
-    if working {
-        hook("old-coder", &cwd, Some("51"), "UserPromptSubmit");
-    }
-    let team_members = if case == Takeover::EmptyCheckout {
-        1
-    } else {
-        2
-    };
-    assert_eq!(read_loop_instances(&env).0.len(), team_members);
-    let open_run_pane = case == Takeover::OpenRunPane;
-    if open_run_pane {
-        let mut run = rimz::store::run::RunRecord::new(
-            env.workspace_id.clone(),
-            AgentKind::new_unchecked("claude"),
-            rimz::agents::PermissionMode::Auto,
-            "task".to_owned(),
-            cwd.clone(),
-        );
-        run.agent_name = Some("old-coder".to_owned());
-        run.pane_id = Some(rimz::ids::PaneId::from_parts(
-            rimz::ids::MuxName::Zellij,
-            "terminal_51",
-        ));
-        run.status = rimz::store::run::RunStatus::Completed;
-        rimz::harness::run::create(store.paths(), &run).unwrap();
-    }
-    let runtime = env.runtime_paths();
-    crate::common::room::seed_live_zellij_room(&runtime, &workspace.session_name, Vec::new());
-    if symlinked {
-        std::fs::write(
-            runtime.lane_path("pr-state.json"),
-            json!({
-                "branch_ci": {},
-                "path_repos": {launch_cwd.to_string_lossy().to_string(): "repo"},
-                "repos": {"repo": {"ok": true, "refreshed_at_ms": fresh_probe_ms()}},
-                "states": {launch_cwd.to_string_lossy().to_string(): {"state": "open"}},
-            })
-            .to_string(),
-        )
-        .unwrap();
-    }
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let trace = env.home_root.join("takeover.log");
-    let command = || {
-        let mut command = env.rimz();
-        command
-            .args(["--mux", "zellij"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&agent_bin))
-            .env(
-                "RIMZ_ZELLIJ_BIN",
-                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-            )
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                format!("{} [Created 1s ago]\n", workspace.session_name),
-            );
-        if !open_run_pane && !matches!(case, Takeover::ClosedPane | Takeover::OmittedTab) {
-            command.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", &panes);
-        }
-        if open_run_pane {
-            command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
-                "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-            );
-        }
-        if matches!(case, Takeover::ClosedPane | Takeover::OmittedTab) {
-            command.env(
-                "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                json!([
-                    {"id":52,"is_plugin":false,"tab_id":1,"title":"sibling"},
-                    {"id":99,"is_plugin":false,"tab_id":1,"title":"sh","pane_cwd":cwd}
-                ])
-                .to_string(),
-            );
-        }
-        command
-    };
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\n{}\nstay = true\ntakeover = true\n",
-            if case == Takeover::TeamLayout {
-                "forge"
-            } else {
-                "codex"
-            },
-            env.project_root,
-            launch_cwd,
-            if symlinked {
-                "each-worktree = true\nwhen = [\"pr=open\"]"
-            } else {
-                "every = \"1h\""
-            },
-        ),
-    );
-    let strikes = BTreeMap::from([(machine_task_key("resident"), 2_u32)]);
-    std::fs::create_dir_all(loop_strikes_path(&env).parent().unwrap()).unwrap();
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&strikes).unwrap(),
-    )
-    .unwrap();
-    let fire = || {
-        let mut fire = command();
-        fire.args(["loop", "run", "resident"]);
-        if symlinked {
-            fire.arg("--cwd")
-                .arg(&launch_cwd)
-                .arg("--condition-json")
-                .arg(
-                    json!({
-                        "when": "pr=open", "hold": null, "held_ms": 0,
-                        "readings": {"pr": "open"}
-                    })
-                    .to_string(),
-                );
-        }
-        fire.output().unwrap()
-    };
-    let trace_text = || std::fs::read_to_string(&trace).unwrap_or_default();
-    let checkout = rimz::utils::path::normalize_path_lexical(&launch_cwd);
-    // Each-worktree memory keys the marker path; a single checkout keys its physical path.
-    let expected_checkout = if symlinked {
-        checkout.clone()
-    } else {
-        canonical(&checkout)
-    };
-    let remembered = || {
-        rimz::harness::schedule::launch_ledger::load_workflows(store.paths())
-            .unwrap()
-            .tasks
-            .get("resident")
-            .is_some_and(|checkouts| checkouts.contains_key(&expected_checkout))
-    };
-    let starts = || {
-        rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
-            .iter()
-            .map(|record| serde_json::to_value(record).unwrap())
-            .filter(|assist| assist["assist"] == "workflow_start")
-            .count()
-    };
-    let leaders = || {
-        store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .unwrap()
-            .agents
-            .into_iter()
-            .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
-            .collect::<Vec<_>>()
-    };
-
-    if let Some(mut owner) = closed_owner {
-        owner.kill().unwrap();
-        owner.wait().unwrap();
-        let cached = rimz::store::snapshot::read_fresh_latest(store.paths())
-            .expect("the final live-owner hook published the roster");
-        let ghost = cached
-            .agents
-            .iter()
-            .find(|agent| {
-                agent
-                    .runtime_owner
-                    .as_ref()
-                    .is_some_and(|recorded| recorded.pid == owner.id())
-            })
-            .unwrap();
-        assert_eq!(
-            rimz::store::runtime::agent_liveness(ghost),
-            rimz::store::runtime::AgentLiveness::Dead
-        );
-    }
-    let before_agents = serde_json::to_value(store.snapshot().unwrap().agents).unwrap();
-    let output = fire();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let fired = fired_record(&env, "resident");
-    // The run is read from itself while in flight, and this one can fail before the read.
-    assert!(
-        matches!(
-            fired.result,
-            LoopRunResult::Launched | LoopRunResult::Failed
-        ),
-        "{fired:?}"
-    );
-    let id: rimz::ids::WorkflowRunId = fired.run_id.as_deref().unwrap().parse().unwrap();
-    let run_paths = store.paths().workflow(&id);
-    let wait_for_run = |what: &str, done: &dyn Fn(&rimz::store::workflow::RunRecord) -> bool| {
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        loop {
-            if rimz::store::workflow::load(&run_paths).is_ok_and(|run| done(&run)) {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "resident run never {what}: {}\n{:?}",
-                loop_run_journal(&env, &env.project_root, &fired),
-                leaders()
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    };
-    let wait_for_leader = || {
-        wait_for_run("launched", &|_| !leaders().is_empty());
-        leaders()
-    };
-
-    if matches!(
-        case,
-        Takeover::Restricted | Takeover::FailedStop | Takeover::OpenRunPane
-    ) {
-        if case != Takeover::Restricted {
-            // The eviction started nothing, so the step waits to retry it once, counting nothing.
-            wait_for_run("waited to retry", &|run| {
-                run.wait
-                    .as_ref()
-                    .is_some_and(|wait| wait.outcome == "retry")
-                    && run.attempt.is_none()
-                    && run.prev_attempt.is_none()
-                    && run.visits.is_empty()
-            });
-            assert!(!trace_text().contains("new-tab"));
-            assert!(leaders().is_empty());
-            let advance = command()
-                .args(["workflow", "advance", id.as_str()])
-                .output()
-                .unwrap();
-            assert!(
-                advance.status.success(),
-                "{}",
-                String::from_utf8_lossy(&advance.stderr)
-            );
-        }
-        let report = wait_for_loop_report(&env, "resident");
-        assert_eq!(report.result, LoopRunResult::Failed, "{report:?}");
-        let error = report.error.as_deref().unwrap_or_default();
-        let reasons: &[&str] = match case {
-            Takeover::Restricted => &["saved untrusted", "Open restricted"],
-            Takeover::OpenRunPane => &["a pane still hosts it: zellij:terminal_51"],
-            _ => &["RimZ found no pane for it in this room"],
-        };
-        for reason in reasons {
-            assert!(error.contains(reason), "{error}");
-        }
-        let trace_text = trace_text();
-        assert!(!trace_text.contains("new-tab"), "{trace_text}");
-        assert!(leaders().is_empty());
-        if case == Takeover::Restricted {
-            // The refused launch is prepared before the takeover, so no occupant stops.
-            assert!(!trace_text.contains("close-pane"), "{trace_text}");
-            assert_eq!(
-                serde_json::to_value(store.snapshot().unwrap().agents).unwrap(),
-                before_agents
-            );
-        }
-        return;
-    }
-    if working && case != Takeover::ClosedPane {
-        // A working occupant holds the takeover: the run waits, and the task keeps its strikes.
-        wait_for_run("waited on the occupant", &|run| {
-            run.wait
-                .as_ref()
-                .is_some_and(|wait| wait.outcome == "takeover")
-        });
-        let trace_text = trace_text();
-        assert!(!trace_text.contains("close-pane"), "{trace_text}");
-        assert!(!trace_text.contains("new-tab"), "{trace_text}");
-        assert!(leaders().is_empty());
-        assert_eq!(
-            serde_json::from_slice::<BTreeMap<String, u32>>(
-                &std::fs::read(loop_strikes_path(&env)).unwrap()
-            )
-            .unwrap(),
-            strikes
-        );
-        assert_eq!(read_loop_instances(&env).0.len(), 2);
-        assert_eq!(
-            store
-                .runtime_projection(rimz::RuntimeScope::Audit)
-                .unwrap()
-                .agents
-                .len(),
-            seeded
-        );
-        if case == Takeover::OmittedTab {
-            return;
-        }
-        hook("old-coder", &cwd, Some("51"), "Stop");
-        let advance = command()
-            .args(["workflow", "advance", id.as_str()])
-            .output()
-            .unwrap();
-        assert!(
-            advance.status.success(),
-            "{}",
-            String::from_utf8_lossy(&advance.stderr)
-        );
-    }
-    let launched = wait_for_leader();
-    // The leader's card can land before the launch opens its tab.
-    wait_for_run("opened its tab", &|_| trace_text().contains("new-tab"));
-    assert!(remembered());
-    assert_eq!(starts(), 1);
-    let trace_text = trace_text();
-    let stops = trace_text.matches("close-pane").count();
-    if matches!(case, Takeover::EmptyCheckout | Takeover::ClosedPane) {
-        assert_eq!(stops, 0, "{trace_text}");
-        if case == Takeover::EmptyCheckout {
-            assert_eq!(read_loop_instances(&env).0.len(), 1);
-        }
-        return;
-    }
-    let expected: &[&str] = if case == Takeover::IdleOccupants {
-        &["old-coder", "sweeper", "solo", "old-child"]
-    } else {
-        &["old-coder"]
-    };
-    assert_eq!(stops, expected.len(), "{trace_text}");
-    assert!(
-        trace_text.rfind("close-pane").unwrap() < trace_text.find("new-tab").unwrap(),
-        "{trace_text}"
-    );
-    if case == Takeover::TeamLayout {
-        // The hold admits a relaunch of the team that holds the checkout.
-        let agents = store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .unwrap()
-            .agents;
-        let mut launched: Vec<(Option<&str>, Option<&str>)> = agents
-            .iter()
-            .filter(|agent| {
-                !agent
-                    .name
-                    .as_deref()
-                    .is_some_and(|name| name.ends_with("-coder"))
-            })
-            .map(|agent| {
-                assert_eq!(agent.team.as_deref(), Some("forge"));
-                assert_eq!(
-                    agent.worktree_path.as_deref(),
-                    canonical(&checkout).to_str()
-                );
-                (agent.role.as_deref(), agent.loop_task.as_deref())
-            })
-            .collect();
-        launched.sort();
-        assert_eq!(
-            launched,
-            [(Some("coder"), Some("resident")), (Some("reviewer"), None)]
-        );
-        return;
-    }
-    assert_eq!(launched.len(), 1);
-    let subscriptions = read_loop_instances(&env);
-    assert_eq!(subscriptions.0.len(), 1);
-    assert_eq!(
-        subscriptions
-            .0
-            .values()
-            .next()
-            .unwrap()
-            .wait
-            .as_ref()
-            .unwrap()
-            .session
-            .as_str(),
-        "launch_sibling-coder"
-    );
-    stamp_session_ended(&env, "old-coder");
-    let output = command().args(["teams", "stop", "forge"]).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(read_loop_instances(&env).0.is_empty());
-}
-
-/// An owned worktree whose marker path runs through a symlinked worktree
-/// directory, so its lexical and physical forms differ.
-#[cfg(unix)]
-fn symlinked_owned_worktree(env: &Env) -> std::path::PathBuf {
-    let actual = env.home_root.join("actual-worktrees");
-    let alias = env.home_root.join("linked-worktrees");
-    std::fs::create_dir(&actual).unwrap();
-    std::os::unix::fs::symlink(&actual, &alias).unwrap();
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        format!("[agents.worktree]\ndir = {:?}\n", alias.to_str().unwrap()),
-    )
-    .unwrap();
-    loop_ok(env, &["worktree", "new", "lane"]);
-    alias.join("lane")
-}
-
 #[test]
 fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
     let env = Env::new();
@@ -4095,19 +1236,20 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
         calling_loop(&env, "sess-reset")
             .args(["loop", "add", name, "--after-reset", "5h"])
             .args(extra)
+            .args(["--", "true"])
             .output()
             .unwrap()
     };
     for (extra, expected) in [
+        (&[][..], "--provider"),
         (
-            &["--check", "true"][..],
-            "--after-reset requires --agent or --wait",
-        ),
-        (
-            &["--project", "--agent", "claude", "--prompt", "go"][..],
+            &["--provider", "claude", "--project"][..],
             "--project tasks cannot use --after-reset",
         ),
-        (&["--wait", "--in", "5m"][..], "cannot be used with"),
+        (
+            &["--provider", "claude", "--in", "5m"][..],
+            "cannot be used with",
+        ),
     ] {
         let refused = add("refused", extra);
         let stderr = String::from_utf8_lossy(&refused.stderr);
@@ -4116,7 +1258,7 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
             "{extra:?}: {stderr}"
         );
     }
-    let refused = add("refused", &["--wait"]);
+    let refused = add("refused", &["--provider", "claude"]);
     assert!(
         String::from_utf8_lossy(&refused.stderr)
             .contains("no current claude 5h window reading; open the room's sidebar"),
@@ -4124,7 +1266,7 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
         String::from_utf8_lossy(&refused.stderr)
     );
     publish_claude_5h_resetting(&env, 30, SignedDuration::from_mins(-1));
-    let refused = add("refused", &["--wait"]);
+    let refused = add("refused", &["--provider", "claude"]);
     assert!(
         String::from_utf8_lossy(&refused.stderr).contains("no current claude 5h window reading"),
         "expired cache: {}",
@@ -4136,7 +1278,7 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
     );
 
     publish_claude_5h(&env, 30);
-    let started = add("later", &["--wait"]);
+    let started = add("later", &["--provider", "claude"]);
     let receipt = String::from_utf8_lossy(&started.stdout);
     assert!(
         started.status.success(),
@@ -4157,7 +1299,7 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
     assert!(read_loop_instances(&env).0.contains_key("later"));
 
     publish_claude_5h_resetting(&env, 0, SignedDuration::from_hours(5));
-    let fresh = add("now", &["--wait"]);
+    let fresh = add("now", &["--provider", "claude"]);
     let receipt = String::from_utf8_lossy(&fresh.stdout);
     for line in [
         "trigger: fires once after the next claude 5h reset\n",
@@ -4167,13 +1309,9 @@ fn after_reset_fires_once_at_the_window_reset_and_removes_its_row() {
         assert!(receipt.contains(line), "{line}: {receipt}");
     }
     loop_ok(&env, &["loop", "tick"]);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while (read_loop_run_records(&env).is_empty()
-        || read_loop_instances(&env).0.contains_key("now"))
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_for_loop_run_records(&env, "the fire and its spent row", |records| {
+        !records.is_empty() && !read_loop_instances(&env).0.contains_key("now")
+    });
     assert_eq!(last_loop_record(&env).task, "now");
     let rows = read_loop_instances(&env).0;
     assert!(!rows.contains_key("now"));
@@ -4192,10 +1330,12 @@ fn window_condition_waits_for_room_in_the_provider_window() {
             "loop",
             "add",
             "roomy",
-            "--wait",
+            "--provider",
+            "claude",
             "--when",
             "window.5h.left >= 40",
-            "--once",
+            "--",
+            "true",
         ])
         .output()
         .unwrap();
@@ -4212,7 +1352,8 @@ fn window_condition_waits_for_room_in_the_provider_window() {
     let row = &read_loop_instances(&env).0["roomy"];
     assert_eq!(
         row.when.as_deref(),
-        Some(&["window.5h.left>=40".to_owned()][..])
+        Some(&["window.5h.left >= 40".to_owned()][..]),
+        "a command row stores its clauses as typed"
     );
     assert_eq!(row.provider, Some(AgentKind::new_unchecked("claude")));
     loop_ok(&env, &["loop", "tick"]);
@@ -4220,108 +1361,15 @@ fn window_condition_waits_for_room_in_the_provider_window() {
     assert!(read_loop_run_records(&env).is_empty());
     publish_claude_5h(&env, 10);
     loop_ok(&env, &["loop", "tick"]);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while (read_loop_run_records(&env).is_empty()
-        || read_loop_instances(&env).0.contains_key("roomy"))
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_for_loop_run_records(&env, "the fire and its spent row", |records| {
+        !records.is_empty() && !read_loop_instances(&env).0.contains_key("roomy")
+    });
     let condition = last_loop_record(&env).condition.unwrap();
     assert_eq!(condition.when, "window.5h.left>=40");
     assert_eq!(condition.readings["window.5h.left"].as_deref(), Some("90"));
     assert!(!read_loop_instances(&env).0.contains_key("roomy"));
 }
 
-#[test]
-fn condition_wait_pins_projects_and_deduplicates() {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    let first = env.home_root.join("condition-first");
-    let second = env.home_root.join("condition-second");
-    for (branch, path) in [("first", &first), ("second", &second)] {
-        assert!(git_ok(
-            &env.project_root,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                branch,
-                path.to_str().unwrap()
-            ]
-        ));
-    }
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-condition", "feature-loop");
-    for (name, scope, expected) in [
-        ("ready", &first, "added loop task `ready`"),
-        ("duplicate", &first, "already subscribed as ready"),
-        ("second", &second, "added loop task `second`"),
-        ("second-duplicate", &second, "already subscribed as second"),
-    ] {
-        let output = calling_loop(&env, "sess-condition")
-            .args([
-                "loop",
-                "add",
-                name,
-                "--wait",
-                "--when",
-                "team.stage=Done",
-                "--for",
-                "30m",
-                "--once",
-            ])
-            .arg("--root")
-            .arg(scope)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains(expected),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-    }
-    let instances = read_loop_instances(&env);
-    assert_eq!(instances.0.len(), 2);
-    assert_eq!(instances.0["ready"].run_dir(), canonical(&first));
-    assert_eq!(instances.0["second"].run_dir(), canonical(&second));
-    assert_eq!(
-        instances.0["ready"].when.as_ref().unwrap(),
-        &["team.stage=Done"]
-    );
-    assert_eq!(instances.0["ready"].hold.as_deref(), Some("30m"));
-    let output = env
-        .rimz()
-        .args(["sidebar", "snapshot", "--json"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let snapshot: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        snapshot
-            .to_string()
-            .contains("\"when\":\"team.stage=Done\""),
-        "{snapshot}"
-    );
-    loop_ok(&env, &["loop", "run", "ready"]);
-    assert_eq!(
-        env.store().list_pending_messages().unwrap()[0].sender,
-        rimz::store::message::MessageSender::Harness {
-            notice: rimz::store::message::HarnessNotice::Wait
-        }
-    );
-}
 #[test]
 fn trunk_signal_fires_only_through_git_source() {
     let env = Env::new();
@@ -4334,7 +1382,8 @@ fn trunk_signal_fires_only_through_git_source() {
             "trunk",
             "--signal",
             "trunk.moved",
-            "--check",
+            "--repeat",
+            "--",
             "true",
         ],
     );
@@ -4393,7 +1442,8 @@ fn worktree_created_fires_a_loop_subscriber() {
             "created",
             "--signal",
             "worktree.created",
-            "--check",
+            "--repeat",
+            "--",
             "true",
         ],
     );
@@ -4425,7 +1475,8 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
                 signal,
                 "--match",
                 "branch=feature",
-                "--check",
+                "--repeat",
+                "--",
                 "true",
             ],
         );
@@ -4610,7 +1661,8 @@ fn team_signal_binding_registers_delivers_and_retires() {
         "forge#feature-team"
     );
     assert_eq!(entry.signal.as_deref(), Some("ci.failed"));
-    assert!(entry.once.is_none() && entry.deadline.is_none());
+    // A binding's `team` makes it standing; no `repeat` is written.
+    assert!(!entry.repeat && entry.deadline.is_none());
     assert_eq!(
         entry.matches.as_ref().unwrap()["path"],
         cwd.display().to_string()
@@ -4661,6 +1713,64 @@ fn team_signal_binding_registers_delivers_and_retires() {
 }
 
 #[test]
+fn a_team_binding_stored_without_repeat_delivers_on_every_match_and_stays() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    seed_team_signal_member(&env, &cwd, "sess-old-binding", None);
+    team_signal_hook(&env, &cwd, "sess-old-binding", "SessionStart");
+    // The row as an older RimZ stored a standing binding: no `repeat`, no `once`.
+    let mut stored = read_loop_instances(&env);
+    let name = "team-forge-feature-team-coder-ci-failed";
+    stored.0.get_mut(name).unwrap().repeat = false;
+    write_loop_instances(&env, stored.clone());
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(loop_instances_path(&env)).unwrap()).unwrap();
+    assert_eq!(
+        raw[name]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["dir", "match", "root", "signal", "team", "wait"])
+    );
+    team_signal_hook(&env, &cwd, "sess-old-binding", "SessionStart");
+    assert_eq!(read_loop_instances(&env), stored);
+    team_signal_hook(&env, &cwd, "sess-old-binding", "UserPromptSubmit");
+    for fire in 1..=2 {
+        loop_ok(
+            &env,
+            &[
+                "events",
+                "emit",
+                "ci.failed",
+                "--source",
+                "forge",
+                "--json",
+                &json!({"path": &cwd}).to_string(),
+            ],
+        );
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while read_loop_run_records(&env).len() < fire && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let records = read_loop_run_records(&env);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.result)
+                .collect::<Vec<_>>(),
+            vec![LoopRunResult::Delivered; fire],
+            "{records:?}"
+        );
+        assert_eq!(read_loop_instances(&env), stored, "after fire {fire}");
+    }
+}
+
+#[test]
 fn team_signal_registration_preserves_same_named_machine_configuration() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -4668,7 +1778,7 @@ fn team_signal_registration_preserves_same_named_machine_configuration() {
         return;
     };
     let config = format!(
-        "[tasks.team-forge-feature-team-coder-ci-failed]\ncheck = \"true\"\nevery = \"15m\"\nroot = {:?}\n",
+        "[tasks.team-forge-feature-team-coder-ci-failed]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\nroot = {:?}\n",
         env.project_root.display().to_string()
     );
     write_loop_config(&env, &config);
@@ -4835,20 +1945,16 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
             ("matching", "forge#feature-team"),
             ("sibling", "forge#sibling"),
         ] {
-            loop_ok(
+            seed_wait(
                 &env,
-                &[
-                    "loop",
-                    "add",
-                    name,
-                    "--wait",
-                    "@claude#main",
-                    "--signal",
-                    signal,
-                    "--match",
-                    &format!("instance={instance}"),
-                    "--once",
-                ],
+                name,
+                "sess-team-observer",
+                "@claude#main",
+                TaskEntry {
+                    signal: Some(signal.to_owned()),
+                    matches: matching("instance", instance),
+                    ..TaskEntry::default()
+                },
             );
         }
         team_signal_hook(&env, &cwd, "sess-team-member", hook);
@@ -4911,20 +2017,16 @@ fn team_signal_payload_handles_round_trip_beside_teamless_role_rivals() {
             spawned_subagents: &[],
         })
         .unwrap();
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "matching",
-            "--wait",
-            "@claude#main",
-            "--signal",
-            "team.idle",
-            "--match",
-            "instance=forge#feature-team",
-            "--once",
-        ],
+        "matching",
+        "sess-team-observer",
+        "@claude#main",
+        TaskEntry {
+            signal: Some("team.idle".to_owned()),
+            matches: matching("instance", "forge#feature-team"),
+            ..TaskEntry::default()
+        },
     );
     team_signal_hook(&env, &cwd, "sess-team-member", "Stop");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -5125,51 +2227,6 @@ fn team_signal_hook(env: &Env, cwd: &Path, session: &str, event: &str) {
 }
 
 #[test]
-fn loop_deliveries_always_persist_as_instances() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-instance-storage", "feature-loop");
-    for (name, trigger) in [
-        ("recurring", ["--every", "15m"]),
-        ("standing", ["--signal", "deploy.done"]),
-        ("one-shot", ["--in", "1h"]),
-    ] {
-        loop_ok(
-            &env,
-            &[
-                "loop", "add", name, "--wait", "@claude", trigger[0], trigger[1],
-            ],
-        );
-    }
-    let instances = read_loop_instances(&env);
-    for name in ["recurring", "standing", "one-shot"] {
-        assert!(instances.0[name].wait.is_some());
-    }
-    let one_shot = &instances.0["one-shot"];
-    assert!(
-        one_shot.at.is_none() && one_shot.fire_at.is_some(),
-        "{one_shot:?}"
-    );
-    let config = std::fs::read_to_string(loop_config_path(&env)).unwrap_or_default();
-    assert!(!config.contains("[tasks."), "{config}");
-    let (_, error) = loop_fail(
-        &env,
-        &[
-            "loop",
-            "add",
-            "project-wait",
-            "--project",
-            "--wait",
-            "@claude",
-            "--every",
-            "15m",
-        ],
-    );
-    assert!(error.contains("--project"), "{error}");
-}
-
-#[test]
 fn loop_one_shots_store_an_absolute_instant() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -5181,9 +2238,7 @@ fn loop_one_shots_store_an_absolute_instant() {
     ] {
         let out = loop_ok(
             &env,
-            &[
-                "loop", "add", name, "--check", "true", trigger[0], trigger[1],
-            ],
+            &["loop", "add", name, trigger[0], trigger[1], "--", "true"],
         );
         let entry = &read_loop_instances(&env).0[name];
         assert!(entry.at.is_none(), "{name}: {entry:?}");
@@ -5203,10 +2258,10 @@ fn loop_one_shots_store_an_absolute_instant() {
             "loop",
             "add",
             "past",
-            "--check",
-            "true",
             "--at",
             "2001-01-02 03:04",
+            "--",
+            "true",
         ],
     );
     assert!(error.contains("in the past"), "{error}");
@@ -5216,299 +2271,15 @@ fn loop_one_shots_store_an_absolute_instant() {
             "loop",
             "add",
             "weekly",
-            "--check",
-            "true",
             "--every",
             "day",
             "--at",
             "fri 09:30",
+            "--",
+            "true",
         ],
     );
     assert!(error.contains("--every <days> --at HH:MM"), "{error}");
-}
-
-#[test]
-fn loop_wait_me_and_bare_wait_pin_the_calling_session() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-caller", "feature-loop");
-    for (name, wait) in [
-        ("explicit", vec!["--wait", "@me"]),
-        ("bare", vec!["--wait"]),
-    ] {
-        let output = calling_loop(&env, "sess-loop-caller")
-            .args(["loop", "add", name, "--every", "15m"])
-            .args(wait)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let instances = read_loop_instances(&env);
-        let target = instances.0[name].wait.as_ref().unwrap();
-        assert_eq!(target.kind, AgentKind::new_unchecked("claude"));
-        assert_eq!(target.session, AgentSessionId::from("sess-loop-caller"));
-        assert!(instances.0[name].wait_meta.is_none());
-    }
-}
-
-#[test]
-fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-dedupe", "feature-loop");
-    let output = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "original",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-            "--match",
-            "zone=west",
-            "--match",
-            "status=green",
-            "--prompt",
-            "keep this prompt",
-        ],
-    );
-    assert!(output.contains("added loop task `original`"), "{output}");
-    let mut original = read_loop_instances(&env);
-    original.0.get_mut("original").unwrap().team = Some("forge#feature-loop".parse().unwrap());
-    write_loop_instances(&env, original.clone());
-    let key = project_task_key(&env.project_root, "original");
-    let arming = BTreeMap::from([(
-        key.clone(),
-        Arming {
-            enabled: true,
-            at: Some(Timestamp::from_second(1).unwrap()),
-            pause_until: Some(Timestamp::from_second(2).unwrap()),
-            strikes: None,
-        },
-    )]);
-    write_loop_arming(&env, &arming);
-    let strikes = BTreeMap::from([(key, 2_u32)]);
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&strikes).unwrap(),
-    )
-    .unwrap();
-    let output = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "replacement",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-            "--match",
-            "status=green",
-            "--match",
-            "zone=west",
-            "--once",
-            "--prompt",
-            "discard this prompt",
-        ],
-    );
-    assert!(
-        output.contains("already subscribed as original"),
-        "{output}"
-    );
-    assert_eq!(read_loop_instances(&env), original);
-    assert_eq!(read_loop_arming(&env), arming);
-    assert_eq!(read_loop_strikes(&env), strikes);
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "different-match",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-            "--match",
-            "zone=east",
-            "--match",
-            "status=green",
-        ],
-    );
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "different-selector",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.failed",
-            "--match",
-            "zone=west",
-            "--match",
-            "status=green",
-        ],
-    );
-    assert_eq!(read_loop_instances(&env).0.len(), 3);
-    register_running_agent(&env, "sess-loop-other-target", "feature-other");
-    let output = calling_loop(&env, "sess-loop-other-target")
-        .args([
-            "loop",
-            "add",
-            "different-target",
-            "--wait",
-            "@me",
-            "--signal",
-            "deploy.done",
-            "--match",
-            "status=green",
-            "--match",
-            "zone=west",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let instances = read_loop_instances(&env);
-    assert_eq!(instances.0.len(), 4);
-    assert_eq!(
-        instances.0["different-target"]
-            .wait
-            .as_ref()
-            .unwrap()
-            .session,
-        AgentSessionId::from("sess-loop-other-target")
-    );
-}
-
-#[test]
-fn concurrent_signal_adds_return_one_existing_name() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-concurrent", "feature-loop");
-    let children = ["first", "second"].map(|name| {
-        env.rimz()
-            .args([
-                "loop",
-                "add",
-                name,
-                "--wait",
-                "@claude",
-                "--signal",
-                "deploy.done",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-    });
-    let outputs = children.map(|child| {
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
-    });
-    let instances = read_loop_instances(&env);
-    assert_eq!(instances.0.len(), 1);
-    let name = instances.0.keys().next().unwrap();
-    for output in outputs {
-        assert!(output.contains(name), "{output}");
-    }
-}
-
-#[test]
-fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let Some(cwd) = team_signal_fixture(&env) else {
-        return;
-    };
-    register_running_agent(&env, "sess-scope-target", "main");
-    seed_team_signal_member(&env, &cwd, "sess-scope-caller", None);
-    team_signal_hook(&env, &cwd, "sess-scope-caller", "SessionStart");
-    for (name, signal, key, expected) in [
-        ("caller-ci", "ci.passed", "path", cwd.display().to_string()),
-        (
-            "caller-team",
-            "team.idle",
-            "instance",
-            "forge#feature-team".to_owned(),
-        ),
-    ] {
-        let output = calling_loop(&env, "launch_sess-scope-caller")
-            .env("RIMZ_AGENT_NAME", "sess-scope-caller")
-            .args([
-                "loop",
-                "add",
-                name,
-                "--wait",
-                "@claude#main",
-                "--signal",
-                signal,
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let instances = read_loop_instances(&env);
-        assert_eq!(instances.0[name].matches.as_ref().unwrap()[key], expected);
-        assert_eq!(
-            instances.0[name].wait.as_ref().unwrap().session,
-            AgentSessionId::from("sess-scope-target")
-        );
-    }
-    let output = calling_loop(&env, "sess-scope-target")
-        .args(["loop", "add", "root-ci", "--wait", "--signal", "ci.failed"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("root checkout needs an explicit scope"),
-        "{error}"
-    );
-    assert!(!read_loop_instances(&env).0.contains_key("root-ci"));
-    let output = calling_loop(&env, "sess-scope-target")
-        .args([
-            "loop",
-            "add",
-            "root-any",
-            "--wait",
-            "--signal",
-            "ci.failed",
-            "--match",
-            "branch=*",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        read_loop_instances(&env).0["root-any"].matches,
-        Some(BTreeMap::from([("branch".to_owned(), "*".to_owned())]))
-    );
 }
 
 #[test]
@@ -5517,23 +2288,21 @@ fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-signal-lifetimes", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "standing",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-            "--match",
-            "branch=feature-loop",
-        ],
+        "standing",
+        "sess-signal-lifetimes",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            matches: matching("branch", "feature-loop"),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     let mut instances = read_loop_instances(&env);
     let mut once = instances.0["standing"].clone();
-    once.once = Some(true);
+    once.repeat = false;
     instances.0.insert("once".to_owned(), once);
     write_loop_instances(&env, instances.clone());
     loop_ok(
@@ -5587,15 +2356,23 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-retire", "feature-loop");
     for (name, trigger) in [
-        ("clock", ["--every", "15m"]),
-        ("signal", ["--signal", "deploy.done"]),
+        (
+            "clock",
+            TaskEntry {
+                every: Some("15m".to_owned()),
+                ..TaskEntry::default()
+            },
+        ),
+        (
+            "signal",
+            TaskEntry {
+                signal: Some("deploy.done".to_owned()),
+                repeat: true,
+                ..TaskEntry::default()
+            },
+        ),
     ] {
-        loop_ok(
-            &env,
-            &[
-                "loop", "add", name, "--wait", "@claude", trigger[0], trigger[1],
-            ],
-        );
+        seed_wait(&env, name, "sess-retire", "@claude", trigger);
     }
     loop_ok(&env, &["loop", "disable", "clock"]);
     loop_ok(&env, &["loop", "pause", "signal", "--for", "2h"]);
@@ -5635,19 +2412,17 @@ fn non_hook_end_retires_matching_subscription_before_delivery() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "ended",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-            "--match",
-            "branch=feature-loop",
-        ],
+        "ended",
+        "sess-ended",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            matches: matching("branch", "feature-loop"),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     register_running_agent(&env, "sess-live", "feature-loop");
     let mut instances = read_loop_instances(&env);
@@ -5700,17 +2475,16 @@ fn sibling_fire_retires_only_the_durably_ended_subscription() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "ended",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-        ],
+        "ended",
+        "sess-ended",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     register_running_agent(&env, "sess-live", "feature-loop");
     let mut instances = read_loop_instances(&env);
@@ -5758,17 +2532,16 @@ fn other_session_hook_retires_non_hook_ended_subscription() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "ended",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-        ],
+        "ended",
+        "sess-ended",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     register_running_agent(&env, "sess-live", "feature-loop");
     let mut instances = read_loop_instances(&env);
@@ -5794,17 +2567,16 @@ fn side_conversation_registration_hook_retires_ended_subscription() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "ended",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-        ],
+        "ended",
+        "sess-ended",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     assert!(read_loop_instances(&env).0.contains_key("ended"));
     stamp_session_ended(&env, "sess-ended");
@@ -5833,17 +2605,16 @@ fn repeat_side_conversation_hook_reconciles_nothing() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-ended", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "ended",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-        ],
+        "ended",
+        "sess-ended",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     let armed = read_loop_instances(&env);
     // A side conversation's first hook registers it, so that one does append.
@@ -5881,17 +2652,16 @@ fn revived_session_subscription_survives_matching_signal() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-revived", "feature-loop");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "revived",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.done",
-        ],
+        "revived",
+        "sess-revived",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.done".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     let instances = read_loop_instances(&env);
     stamp_session_ended(&env, "sess-revived");
@@ -5914,80 +2684,6 @@ fn revived_session_subscription_survives_matching_signal() {
 }
 
 #[test]
-fn retired_delivery_runner_preserves_replacement_session_subscription() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "retired-session", "feature-cas");
-    let ready = env.project_root.join("check-ready");
-    let release = env.project_root.join("check-release");
-    let check = format!(
-        "touch {}; while ! test -e {}; do sleep 0.01; done",
-        shlex::try_quote(ready.to_str().unwrap()).unwrap(),
-        shlex::try_quote(release.to_str().unwrap()).unwrap(),
-    );
-    // `loop add` refuses a guarded `--wait`; a stored row of the shape still runs.
-    write_loop_instances(
-        &env,
-        Tasks(BTreeMap::from([(
-            "reused".to_owned(),
-            TaskEntry {
-                wait: Some(TaskTarget {
-                    kind: AgentKind::new_unchecked("claude"),
-                    session: AgentSessionId::from("retired-session"),
-                    handle: "@claude".to_owned(),
-                }),
-                prompt: Some("old".to_owned()),
-                check: Some(check.into()),
-                on: Some(CheckOn::Any),
-                root: env.project_root.clone(),
-                every: Some("15m".to_owned()),
-                ..TaskEntry::default()
-            },
-        )])),
-    );
-    loop_ok(&env, &["loop", "run", "reused"]);
-    wait_for_path(&ready);
-    run_hook(
-        &env,
-        json!({"hook_event_name": "SessionEnd", "session_id": "retired-session"}),
-        &env.project_root,
-    );
-    register_running_agent(&env, "replacement-session", "feature-cas");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "reused",
-            "--wait",
-            "@replacement-session",
-            "--every",
-            "15m",
-            "--prompt",
-            "replacement",
-        ],
-    );
-    std::fs::write(release, "").unwrap();
-    // The run's message step finds its pinned session gone.
-    assert_eq!(
-        wait_for_loop_report(&env, "reused").result,
-        LoopRunResult::Failed
-    );
-    assert_eq!(
-        read_loop_instances(&env).0["reused"]
-            .wait
-            .as_ref()
-            .unwrap()
-            .session
-            .as_str(),
-        "replacement-session"
-    );
-    loop_ok(&env, &["loop", "run", "reused"]);
-    assert_pending_message(&env, "replacement-session", "replacement");
-}
-
-#[test]
 fn same_task_name_in_two_rooms_does_not_collide() {
     let env = Env::new();
     let other = env.home_root.join("other-project");
@@ -5997,7 +2693,7 @@ fn same_task_name_in_two_rooms_does_not_collide() {
         let output = env
             .rimz()
             .current_dir(root)
-            .args(["loop", "add", "same", "--check", "true", "--at", "07:00"])
+            .args(["loop", "add", "same", "--at", "07:00", "--", "true"])
             .output()
             .expect("add instance");
         assert!(
@@ -6109,7 +2805,7 @@ fn external_tick_fires_a_machine_task_without_a_workspace_record() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.machine-tick]\ncheck = \"touch {}\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            "[tasks.machine-tick]\ncommand = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1m\"\n",
             marker.display(),
             env.project_root.display(),
         ),
@@ -6156,10 +2852,12 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
             "add",
             "project-tick",
             "--project",
-            "--check",
-            &format!("touch {}", marker.display()),
             "--every",
             "1m",
+            "--",
+            "sh",
+            "-c",
+            &format!("touch {}", marker.display()),
         ])
         .output()
         .expect("add project loop");
@@ -6203,10 +2901,7 @@ fn malformed_instances_fail_reads_and_survive_adds() {
     std::fs::write(&path, b"not json").expect("instances");
     let (_, error) = loop_fail(&env, &["loop", "list"]);
     assert!(error.contains("loop-instances.json"), "{error}");
-    loop_fail(
-        &env,
-        &["loop", "add", "new", "--check", "true", "--at", "07:00"],
-    );
+    loop_fail(&env, &["loop", "add", "new", "--at", "07:00", "--", "true"]);
     assert_eq!(std::fs::read(&path).expect("unchanged"), b"not json");
 }
 
@@ -6216,7 +2911,7 @@ fn instance_task_in_a_recorded_project_reaches_machine_wide_readers() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "nightly", "--at", "07:00", "--check", "true"],
+        &["loop", "add", "nightly", "--at", "07:00", "--", "true"],
     );
     assert!(
         env.state_path_for(&env.project_root)
@@ -6238,74 +2933,6 @@ fn instance_task_in_a_recorded_project_reaches_machine_wide_readers() {
 
 #[cfg(unix)]
 #[test]
-fn external_tick_spawns_an_agent_without_a_workspace_record() {
-    if which::which("tmux").is_err() && which::which("zellij").is_err() {
-        crate::common::skip("neither tmux nor zellij on PATH");
-        return;
-    }
-    let env = Env::new();
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        "[agents]\nshell = 'bash'\n",
-    )
-    .unwrap();
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let login_shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    std::os::unix::fs::symlink(&login_shell, agent_bin.join("bash")).unwrap();
-    let shell = write_path_shim(
-        &env.home_root.join("interactive-shell-bin"),
-        "rimz-test-sh",
-        &format!(
-            "for arg do\n  if [ \"$arg\" = -c ]; then exec {} \"$@\"; fi\ndone\nexec /bin/sh \"$@\"",
-            shlex::try_quote(login_shell.to_str().unwrap()).unwrap(),
-        ),
-    );
-    write_loop_config(
-        &env,
-        &format!(
-            "default-timeout = \"1s\"\n[tasks.cold-agent]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nevery = \"1m\"\ntimeout = \"2s\"\nthrottle = \"off\"\n",
-            env.project_root,
-        ),
-    );
-    let prior = Timestamp::now() - SignedDuration::from_mins(2);
-    write_loop_fire_state(&env, BTreeMap::from([("cold-agent".to_owned(), prior)]));
-    assert!(!env.state_path_for(&env.project_root).root.exists());
-
-    let output = env
-        .rimz()
-        .args(["loop", "tick"])
-        .env("PATH", path_with_front(&agent_bin))
-        .env("SHELL", shell)
-        .output()
-        .expect("tick a cold agent root");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // The fire's workflow run starts the agent's one supervised run.
-    wait_for_loop_run_records(&env, "the cold-agent step's supervised run", |_| {
-        env.state_path_for(&env.project_root).root.exists()
-            && rimz::harness::run::list(env.store().paths()).is_ok_and(|runs| runs.len() == 1)
-    });
-    assert!(
-        env.state_path_for(&env.project_root)
-            .workspace_record
-            .exists()
-    );
-    let record: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(record.get("agent_shell"), None);
-}
-
-#[cfg(unix)]
-#[test]
 fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
     use crate::common::CommandTimeoutExt;
 
@@ -6314,14 +2941,8 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
     for (kind, prior, verb) in [
         ("check", false, "run"),
         ("check", true, "run"),
-        ("agent", true, "run"),
-        ("stay", false, "run"),
-        ("stay", true, "run"),
-        ("workflow", false, "run"),
-        ("workflow", true, "run"),
-        ("agent", true, "fire"),
         ("check-agent", true, "fire"),
-        ("agent", true, "print"),
+        ("check-agent", true, "print"),
     ] {
         let env = Env::new();
         std::fs::write(
@@ -6345,12 +2966,10 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             std::fs::write(&path, record.to_string()).unwrap();
         }
         let effect = match kind {
-            "check" => "check = 'true'\n".to_owned(),
-            "agent" => "agent = 'codex'\nprompt = 'repair'\ntimeout = '1s'\n".to_owned(),
-            "stay" => "agent = 'codex'\nprompt = 'repair'\nstay = true\n".to_owned(),
+            "check" => "command = ['true']\n".to_owned(),
             "check-agent" => format!(
-                "check = {:?}\n",
-                shlex::try_join([
+                "command = {:?}\n",
+                [
                     env.rimz_bin().to_str().unwrap(),
                     "--mux",
                     "zellij",
@@ -6360,31 +2979,14 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
                     "repair",
                     "--timeout",
                     "1s",
-                ])
-                .unwrap(),
+                ]
             ),
-            "workflow" => {
-                let dir = env.rimz_home().join("workflows/review");
-                std::fs::create_dir_all(&dir).unwrap();
-                std::fs::write(
-                    dir.join("workflow.toml"),
-                    "[workflow]\nscope = 'worktree'\nstart = 'ready'\n\
-                     [script.ready]\ntimeout = '365d'\nrun = 'true'\non.ok = '@done'\n",
-                )
-                .unwrap();
-                "workflow = 'review'\n".to_owned()
-            }
             _ => unreachable!(),
-        };
-        let throttle = if kind == "workflow" {
-            ""
-        } else {
-            "throttle = 'off'\n"
         };
         write_loop_config(
             &env,
             &format!(
-                "[tasks.lookup]\nroot = {:?}\nevery = '1h'\n{throttle}{effect}",
+                "[tasks.lookup]\nroot = {:?}\nevery = '1h'\ntimeout = '1m'\n{effect}",
                 env.project_root,
             ),
         );
@@ -6408,34 +3010,10 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             || quiet_fires(&env, "lookup").is_some()
             || !read_loop_run_records(&env).is_empty();
         assert_eq!(fired, verb != "print", "{kind}/{prior}/{verb}: {output:?}");
-        // A check runs in the fire's detached run; its own agent launch births the room there.
-        if kind.starts_with("check") {
+        // The command runs in the fire's detached run; its own agent launch births the room there.
+        if verb != "print" {
             wait_for_loop_report(&env, "lookup");
         }
-        // Every task's agent launches from its workflow run, whose advance writes the notes.
-        let expected_notes = match (kind, verb) {
-            ("agent" | "stay", "run" | "fire") | ("workflow", _) => vec![json!("workflow")],
-            _ => Vec::new(),
-        };
-        let archive = env.state_path_for(&env.project_root).automation_notes_dir;
-        let read_notes = || {
-            let mut notes = Vec::new();
-            for date in std::fs::read_dir(&archive).into_iter().flatten() {
-                for run in std::fs::read_dir(date.unwrap().path()).unwrap() {
-                    let Ok(manifest) = std::fs::read(run.unwrap().path().join("run.json")) else {
-                        continue;
-                    };
-                    let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
-                    notes.push(manifest["kind"].clone());
-                }
-            }
-            notes
-        };
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        while read_notes().len() < expected_notes.len() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        assert_eq!(read_notes(), expected_notes, "{kind}/{prior}/{verb}");
         let record: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&path).unwrap_or_else(|error| panic!("{error}: {output:?}")),
         )
@@ -6461,7 +3039,7 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.open-root]\ncheck = \"touch {}\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            "[tasks.open-root]\ncommand = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1m\"\n",
             marker.display(),
             env.project_root.display(),
         ),
@@ -6500,7 +3078,7 @@ fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.unreachable-bus]\ncheck = \"touch {}\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            "[tasks.unreachable-bus]\ncommand = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1m\"\n",
             marker.display(),
             env.project_root.display(),
         ),
@@ -6542,7 +3120,7 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.missing-runner]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "[tasks.missing-runner]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
             env.project_root.display(),
         ),
     );
@@ -6602,7 +3180,8 @@ fn write_fire_at_row(env: &Env, name: &str) {
             name.into(),
             TaskEntry {
                 root: env.project_root.clone(),
-                check: Some("true".into()),
+                command: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 fire_at: Some(Timestamp::now() - SignedDuration::from_mins(30)),
                 ..TaskEntry::default()
             },
@@ -6683,83 +3262,6 @@ fn a_paused_fire_at_runner_records_nothing_and_is_retried_once_live() {
     assert!(read_loop_instances(&env).0.contains_key("raced"));
 }
 
-#[cfg(unix)]
-#[test]
-fn loop_spawn_home_cwd_refusal_names_the_loop_fix() {
-    let env = Env::new();
-    env.record(&env.home_root);
-    let store = env.store_for(&env.home_root);
-    env.install_agent_hooks("claude");
-    env.write_config(&env.home_root, "[agents]\nisolation = \"host\"\n");
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.home-spawn]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\nevery = \"1h\"\nthrottle = \"off\"\n",
-            env.home_root,
-        ),
-    );
-    let trace = env.project_root.join("home-spawn-mux.log");
-    let output = env
-        .rimz()
-        .current_dir(&env.home_root)
-        .args(["--mux", "zellij", "loop", "run", "home-spawn"])
-        .env("PATH", path_with_front(&agent_bin))
-        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    // The run's agent step refuses the home directory, so the run fails.
-    let report = wait_for_loop_report(&env, "home-spawn");
-    assert_eq!(report.result, LoopRunResult::Failed);
-    let journal = loop_run_journal(&env, &env.home_root, &report);
-    assert!(journal.contains("home directory"), "{journal}");
-    assert!(
-        journal.contains(env.home_root.to_str().unwrap()),
-        "{journal}"
-    );
-    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
-}
-
-#[cfg(unix)]
-#[test]
-fn loop_judge_home_cwd_refusal_names_the_loop_fix() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let store = env.store();
-    env.install_agent_hooks("claude");
-    env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.home-judge]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nthrottle = \"off\"\non = \"success\"\n[tasks.home-judge.judge]\nagent = \"claude\"\nprompt = \"Any work?\"\n",
-            env.project_root, env.home_root,
-        ),
-    );
-    let trace = env.project_root.join("home-judge-mux.log");
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "loop", "run", "home-judge"])
-        .env("PATH", path_with_front(&agent_bin))
-        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    // The run's agent step refuses the home directory, so the run fails.
-    let report = wait_for_loop_report(&env, "home-judge");
-    assert_eq!(report.result, LoopRunResult::Failed);
-    let journal = loop_run_journal(&env, &env.project_root, &report);
-    assert!(journal.contains("home directory"), "{journal}");
-    assert!(
-        journal.contains(env.home_root.to_str().unwrap()),
-        "{journal}"
-    );
-    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
-}
-
 #[test]
 fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
     let env = Env::new();
@@ -6767,7 +3269,7 @@ fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.missing-runner]\ncheck = \"true\"\nroot = \"{}\"\nsignal = \"deploy.finished\"\n",
+            "[tasks.missing-runner]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nsignal = \"deploy.finished\"\n",
             env.project_root.display(),
         ),
     );
@@ -6818,7 +3320,7 @@ fn external_tick_records_a_failed_scope_handoff() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.failed-handoff]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "[tasks.failed-handoff]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
             env.project_root.display(),
         ),
     );
@@ -6871,7 +3373,7 @@ fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.fast-run]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\ndeadline = \"1970-01-01T00:00:01Z\"\n",
+            "[tasks.fast-run]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\ndeadline = \"1970-01-01T00:00:01Z\"\n",
             env.project_root.display(),
         ),
     );
@@ -7023,7 +3525,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.watch-reloaded]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.watch-reloaded]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display()
         ),
     );
@@ -7131,7 +3633,7 @@ fn watch_build_move(hold: bool) {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.after-build-move]\nroot = {:?}\ncheck = 'true'\nevery = '15m'\n",
+            "[tasks.after-build-move]\nroot = {:?}\ncommand = ['true']\ntimeout = '1m'\nevery = '15m'\n",
             env.project_root
         ),
     );
@@ -7150,65 +3652,6 @@ fn watch_build_move(hold: bool) {
         repainted.is_ok() && exited.is_none(),
         "loop panel did not repaint: {output}"
     );
-}
-
-#[test]
-fn loop_wait_workflow_pins_and_delivers_to_live_session() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-live", "feature-loop");
-    loop_ok(&env, &["config", "set", "harness.smart_compact", "70%"]);
-
-    let added = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "wait",
-            "--wait",
-            "@claude",
-            "--every",
-            "15m",
-            "--prompt",
-            "next step",
-        ],
-    );
-    assert!(added.contains("pinned to claude session `sess-loop-live`"));
-    let instances = read_loop_instances(&env);
-    assert_eq!(
-        instances.0["wait"]
-            .wait
-            .as_ref()
-            .map(|wait| wait.session.as_str()),
-        Some("sess-loop-live")
-    );
-
-    loop_ok(&env, &["loop", "run", "wait"]);
-    assert_pending_message(&env, "sess-loop-live", "next step");
-    assert_eq!(
-        env.store().list_pending_messages().unwrap()[0].sender,
-        rimz::store::message::MessageSender::Harness {
-            notice: rimz::store::message::HarnessNotice::Wait,
-        }
-    );
-    assert_eq!(
-        env.store().list_pending_messages().unwrap()[0].auto_compact,
-        Some(AutoCompact::Percent(70))
-    );
-    assert_eq!(last_loop_record(&env).result, LoopRunResult::Delivered);
-    assert_eq!(
-        last_loop_record(&env).root.as_deref(),
-        Some(env.project_root.as_path())
-    );
-    let list = loop_ok(&env, &["loop", "list", "--all"]);
-    let show = loop_ok(&env, &["loop", "show", "wait"]);
-    assert!(
-        list.lines()
-            .any(|line| line == "  loop wait · every 15m → @claude in 1 worktree"),
-        "{list}"
-    );
-    assert!(show.contains("✓ healthy · last run "), "{show}");
 }
 
 #[test]
@@ -7259,21 +3702,18 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
             })
             .unwrap();
     }
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "ci-wait",
-            "--wait",
-            "@claude",
-            "--signal",
-            "deploy.finished",
-            "--match",
-            "outcome=failure",
-            "--prompt",
-            "Inspect deployment",
-        ],
+        "ci-wait",
+        "sess-signal-live",
+        "@claude",
+        TaskEntry {
+            signal: Some("deploy.finished".to_owned()),
+            matches: matching("outcome", "failure"),
+            prompt: Some("Inspect deployment".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
 
     loop_ok(
@@ -7357,21 +3797,18 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
 
     // A merge-queue rejection reaches its waiter with the reason and the
     // queue's own checks link; the sibling `pr.queued` is recorded skipped.
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "queue-wait",
-            "--wait",
-            "@claude",
-            "--signal",
-            "pr.dequeued",
-            "--match",
-            "branch=feature-signal",
-            "--prompt",
-            "Fix the queue failure",
-        ],
+        "queue-wait",
+        "sess-signal-live",
+        "@claude",
+        TaskEntry {
+            signal: Some("pr.dequeued".to_owned()),
+            matches: matching("branch", "feature-signal"),
+            prompt: Some("Fix the queue failure".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
     let queue_checks_url = "https://github.com/org/repo/commit/queue-a/checks";
     for (name, payload) in [
@@ -7439,21 +3876,18 @@ fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     register_running_agent(&env, "planner-session", "feature-planner");
-    loop_ok(
+    seed_wait(
         &env,
-        &[
-            "loop",
-            "add",
-            "review-finished",
-            "--wait",
-            "@claude",
-            "--signal",
-            "agent.idle",
-            "--match",
-            "session=reviewer-session",
-            "--prompt",
-            "review finished",
-        ],
+        "review-finished",
+        "planner-session",
+        "@claude",
+        TaskEntry {
+            signal: Some("agent.idle".to_owned()),
+            matches: matching("session", "reviewer-session"),
+            prompt: Some("review finished".to_owned()),
+            repeat: true,
+            ..TaskEntry::default()
+        },
     );
 
     run_hook(
@@ -7652,109 +4086,6 @@ fn agent_budget_plain_reports_json_and_overflow() {
 }
 
 #[test]
-fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    loop_ok(&env, &["config", "init"]);
-    write_loop_config(&env, "default-timeout = \"3h\"\n");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "bounded",
-            "--agent",
-            "claude",
-            "--prompt",
-            "bounded work",
-            "--every",
-            "15m",
-            "--budget",
-            "$5",
-            "--budget-per-day",
-            "20",
-            "--verify",
-            "cargo xtask gate",
-            "--max-attempts",
-            "4",
-            "--max-strikes",
-            "5",
-        ],
-    );
-
-    let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
-    assert!(text.contains("budget = \"$5.00\"") && text.contains("budget-per-day = \"$20.00\""));
-    let config: LoopConfig = toml::from_str(&text).expect("parse loop config");
-    let task = &config.tasks.0["bounded"];
-    assert_eq!(task.budget.as_deref(), Some("$5.00"));
-    assert_eq!(task.budget_per_day.as_deref(), Some("$20.00"));
-    assert_eq!(task.verify.as_deref(), Some("cargo xtask gate"));
-    assert_eq!((task.max_attempts, task.max_strikes), (Some(4), Some(5)));
-    let show = loop_ok(&env, &["loop", "show", "bounded"]);
-    assert!(
-        show.contains("\n  verify:  cargo xtask gate (up to 4 attempts)\n")
-            && show.contains("\n  timeout: 3h (default)\n"),
-        "{show}"
-    );
-
-    let spent = (0..4)
-        .map(|_| {
-            let mut record =
-                LoopRunRecord::new("bounded", LoopRunResult::Completed, LoopRunMode::Manual, 1);
-            record.cost_usd = Some(5.0);
-            record
-        })
-        .collect::<Vec<_>>();
-    write_loop_run_records(&env, &spent);
-    loop_ok(&env, &["loop", "run", "bounded"]);
-    let skipped = last_loop_record(&env);
-    assert_eq!(skipped.result, LoopRunResult::BudgetSkipped);
-    assert!(
-        skipped
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("daily budget"))
-    );
-    assert!(
-        std::fs::read_to_string(loop_config_path(&env))
-            .expect("read loop config")
-            .contains("[tasks.bounded]")
-    );
-
-    // The fleet budget is a scope gate, which R3's ladder reads before the daily budget.
-    loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
-    let marker = env.project_root.join("scope-check-ran");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "scope-bounded",
-            "--agent",
-            "claude",
-            "--prompt",
-            "bounded work",
-            "--check",
-            &format!("touch {}", marker.display()),
-            "--on",
-            "success",
-            "--every",
-            "15m",
-        ],
-    );
-    loop_ok(&env, &["loop", "run", "scope-bounded"]);
-    let skipped = last_loop_record(&env);
-    assert_eq!(skipped.result, LoopRunResult::BudgetSkipped);
-    assert!(
-        skipped
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("fleet budget exhausted"))
-    );
-    assert!(!marker.exists(), "scope caps must gate before the check");
-}
-
-#[test]
 fn loop_project_trust_controls_visibility_execution_and_precedence() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -7767,17 +4098,14 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.shared]\ncheck = \"printf machine\"\nroot = \"{}\"\nevery = \"15m\"\n\
-             [tasks.profile-ref]\nagent = \"repo-agent\"\nprompt = \"work\"\nroot = \"{}\"\nevery = \"15m\"\n",
-            env.project_root.display(),
+            "[tasks.shared]\ncommand = [\"sh\", \"-c\", \"printf machine\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display()
         ),
     );
     write_project_config(
         &env,
-        "[profiles.repo-agent]\nagent = \"claude\"\n\
-         [tasks.repo-check]\ncheck = \"true\"\nevery = \"15m\"\n\
-         [tasks.shared]\ncheck = \"printf project\"\nevery = \"15m\"\n",
+        "[tasks.repo-check]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n\
+         [tasks.shared]\ncommand = [\"sh\", \"-c\", \"printf project\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
     );
 
     let list = loop_ok(&env, &["loop", "list"]);
@@ -7793,13 +4121,6 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
         error.contains("loop task `repo-check` is blocked — project trust is untrusted")
             && error.contains("rimz trust grant"),
         "{error}"
-    );
-    let (_stdout, error) = loop_fail(&env, &["loop", "run", "profile-ref"]);
-    assert!(
-        error.contains("profiles are configured")
-            && error.contains("untrusted")
-            && error.contains("rimz trust grant"),
-        "the loop launch resolver must refuse an untrusted project profile: {error}"
     );
 
     loop_ok(&env, &["loop", "run", "shared"]);
@@ -7829,11 +4150,11 @@ fn project_task_enablement_is_scoped_by_project_root() {
     std::fs::create_dir_all(&other).expect("other project");
     write_project_config_at(
         &env.project_root,
-        "[tasks.nightly]\ncheck = \"true\"\nevery = \"15m\"\n",
+        "[tasks.nightly]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
     );
     write_project_config_at(
         &other,
-        "[tasks.nightly]\ncheck = \"true\"\nevery = \"15m\"\n",
+        "[tasks.nightly]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
     );
     loop_ok_root(&env, &env.project_root, &["trust", "grant"]);
     loop_ok_root(&env, &other, &["trust", "grant"]);
@@ -7872,7 +4193,10 @@ fn trusted_project_task_edits_repin_trust() {
         "rimz-test",
         "sidebar",
     );
-    write_project_config(&env, "[tasks.first]\ncheck = \"true\"\nevery = \"15m\"\n");
+    write_project_config(
+        &env,
+        "[tasks.first]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
+    );
     grant_project_trust(&env);
     let dismissal = env
         .rimz_home()
@@ -7889,10 +4213,10 @@ fn trusted_project_task_edits_repin_trust() {
             "add",
             "second",
             "--project",
-            "--check",
-            "true",
             "--every",
             "15m",
+            "--",
+            "true",
         ],
     );
     assert!(
@@ -7933,10 +4257,10 @@ fn first_project_task_grants_fresh_config() {
             "add",
             "fresh",
             "--project",
-            "--check",
-            "true",
             "--every",
             "15m",
+            "--",
+            "true",
         ],
     );
     assert!(
@@ -7964,10 +4288,10 @@ fn first_project_task_grants_fresh_config() {
             "add",
             "home",
             "--project",
-            "--check",
-            "true",
             "--every",
             "1h",
+            "--",
+            "true",
         ])
         .output()
         .expect("rimz loop add");
@@ -7982,12 +4306,12 @@ fn project_task_edit_does_not_grant_foreign_change() {
     let env = Env::new();
     write_project_config(
         &env,
-        "[tasks.remove-me]\ncheck = \"true\"\nevery = \"15m\"\n",
+        "[tasks.remove-me]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
     );
     grant_project_trust(&env);
     write_project_config(
         &env,
-        "[tasks.remove-me]\ncheck = \"true\"\nevery = \"15m\"\n\n\
+        "[tasks.remove-me]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n\n\
          [[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
     );
 
@@ -8008,14 +4332,24 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     write_loop_config(
         &env,
         &format!(
-            "# keep unrelated task comment\n[tasks.keep]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "# keep unrelated task comment\n[tasks.keep]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
             env.project_root.display()
         ),
     );
 
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--check", "printf ok", "--in", "5m"],
+        &[
+            "loop",
+            "add",
+            "probe",
+            "--in",
+            "5m",
+            "--",
+            "sh",
+            "-c",
+            "printf ok",
+        ],
     );
     assert!(read_loop_instances(&env).0.contains_key("probe"));
     assert!(
@@ -8031,7 +4365,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "morning", "--check", "true", "--every", "weekday", "--at", "07:00",
+            "loop", "add", "morning", "--every", "weekday", "--at", "07:00", "--", "true",
         ],
     );
     assert!(!read_loop_instances(&env).0.contains_key("morning"));
@@ -8043,12 +4377,9 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 
     loop_ok(
         &env,
-        &["loop", "add", "swap", "--check", "true", "--every", "15m"],
+        &["loop", "add", "swap", "--every", "15m", "--", "true"],
     );
-    loop_ok(
-        &env,
-        &["loop", "add", "swap", "--check", "true", "--in", "5m"],
-    );
+    loop_ok(&env, &["loop", "add", "swap", "--in", "5m", "--", "true"]);
     assert!(read_loop_instances(&env).0.contains_key("swap"));
     assert!(
         !std::fs::read_to_string(loop_config_path(&env))
@@ -8058,7 +4389,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "swap", "--check", "true", "--every", "weekday", "--at", "07:00",
+            "loop", "add", "swap", "--every", "weekday", "--at", "07:00", "--", "true",
         ],
     );
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
@@ -8076,14 +4407,15 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
             "add",
             "project-once",
             "--project",
-            "--check",
-            "true",
             "--in",
             "5m",
+            "--",
+            "true",
         ],
     );
     assert!(
-        error.contains("need a trigger") && error.contains("--every, --cron, or --signal"),
+        error.contains("--project tasks must repeat")
+            && error.contains("--every, --cron, or --signal with --repeat"),
         "{error}"
     );
 }
@@ -8092,10 +4424,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 fn loop_multi_name_enable_disable_resolves_before_writing() {
     let env = Env::new();
     for name in ["first", "second"] {
-        loop_ok(
-            &env,
-            &["loop", "add", name, "--check", "true", "--every", "15m"],
-        );
+        loop_ok(&env, &["loop", "add", name, "--every", "15m", "--", "true"]);
     }
     for verb in ["disable", "enable"] {
         let before = read_loop_arming(&env);
@@ -8126,10 +4455,7 @@ fn loop_multi_name_enable_disable_resolves_before_writing() {
 fn loop_multi_name_remove_reports_each_outcome() {
     let env = Env::new();
     for name in ["first", "second"] {
-        loop_ok(
-            &env,
-            &["loop", "add", name, "--check", "true", "--every", "15m"],
-        );
+        loop_ok(&env, &["loop", "add", name, "--every", "15m", "--", "true"]);
     }
     let output = env
         .rimz()
@@ -8158,11 +4484,11 @@ fn loop_add_new_task_follows_template_and_remove_restores_it() {
         }
         loop_ok(
             &env,
-            &["loop", "add", "first", "--check", "true", "--every", "15m"],
+            &["loop", "add", "first", "--every", "15m", "--", "true"],
         );
         rendered.push(std::fs::read_to_string(loop_config_path(&env)).unwrap());
         expected.push(format!(
-            "{template}\n[tasks.first]\ncheck = \"true\"\nroot = {:?}\nevery = \"15m\"\n",
+            "{template}\n[tasks.first]\ncommand = [\"true\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"15m\"\n",
             env.project_root
         ));
         loop_ok(&env, &["loop", "remove", "first"]);
@@ -8177,7 +4503,7 @@ fn loop_add_keeps_commented_default_timeout_at_root() {
     let env = Env::new();
     loop_ok(
         &env,
-        &["loop", "add", "first", "--check", "true", "--every", "15m"],
+        &["loop", "add", "first", "--every", "15m", "--", "true"],
     );
     let path = loop_config_path(&env);
     let text = std::fs::read_to_string(&path).unwrap();
@@ -8208,16 +4534,16 @@ fn loop_add_new_project_task_follows_comments_without_a_leading_blank_line() {
                 "add",
                 "one",
                 "--project",
-                "--check",
-                "true",
                 "--every",
                 "15m",
+                "--",
+                "true",
             ],
         );
         rendered.push(std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap());
         let separator = if seed.is_empty() { "" } else { "\n" };
         expected.push(format!(
-            "{seed}{separator}[tasks.one]\ncheck = \"true\"\nevery = \"15m\"\n"
+            "{seed}{separator}[tasks.one]\ncommand = [\"true\"]\ntimeout = \"2h\"\nevery = \"15m\"\n"
         ));
     }
     assert_eq!(rendered, expected);
@@ -8230,13 +4556,13 @@ fn loop_add_new_task_follows_root_settings_and_trailing_comments() {
     write_loop_config(&env, seed);
     loop_ok(
         &env,
-        &["loop", "add", "one", "--check", "true", "--every", "15m"],
+        &["loop", "add", "one", "--every", "15m", "--", "true"],
     );
     let text = std::fs::read_to_string(loop_config_path(&env)).unwrap();
     assert_eq!(
         text,
         format!(
-            "{seed}\n[tasks.one]\ncheck = \"true\"\nroot = {:?}\nevery = \"15m\"\n",
+            "{seed}\n[tasks.one]\ncommand = [\"true\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"15m\"\n",
             env.project_root
         )
     );
@@ -8262,14 +4588,16 @@ fn loop_add_new_task_keeps_preceding_task_comments_and_following_sections() {
             } else {
                 format!("root = {:?}\n", env.project_root)
             };
-            let first = format!("[tasks.one]\n{root}check = \"true\"\nevery = \"1h\"\n");
+            let first = format!(
+                "[tasks.one]\n{root}command = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n"
+            );
             let next = match (following_section, project) {
                 (false, _) => "",
                 (true, false) => "\n# Throttle settings\n[throttle]\nstagger = \"10s\"\n",
                 (true, true) => "\n# Agent settings\n[agents]\n",
             };
             let seed = format!("{first}{comments}{next}");
-            let mut args = vec!["loop", "add", "two", "--check", "false", "--every", "2h"];
+            let mut args = vec!["loop", "add", "two", "--every", "2h"];
             let path = if project {
                 write_project_config(&env, &seed);
                 args.push("--project");
@@ -8278,10 +4606,11 @@ fn loop_add_new_task_keeps_preceding_task_comments_and_following_sections() {
                 write_loop_config(&env, &seed);
                 loop_config_path(&env)
             };
+            args.extend(["--", "false"]);
             loop_ok(&env, &args);
             rendered.push(std::fs::read_to_string(path).unwrap());
             expected.push(format!(
-                "{first}{comments}\n[tasks.two]\ncheck = \"false\"\n{root}every = \"2h\"\n{next}"
+                "{first}{comments}\n[tasks.two]\ncommand = [\"false\"]\n{root}timeout = \"2h\"\nevery = \"2h\"\n{next}"
             ));
         }
     }
@@ -8293,25 +4622,25 @@ fn loop_add_replacing_first_machine_task_keeps_header_comments() {
     let env = Env::new();
     let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
     let next = format!(
-        "\n# Two note\n[tasks.two]\nroot = {:?}\ncheck = \"true\"\nevery = \"7d\"\n",
+        "\n# Two note\n[tasks.two]\nroot = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"7d\"\n",
         env.project_root
     );
     write_loop_config(
         &env,
         &format!(
-            "{heading}root = {:?}\ncheck = \"true\"\nevery = \"1h\"\n{next}",
+            "{heading}root = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n{next}",
             env.project_root
         ),
     );
 
     loop_ok(
         &env,
-        &["loop", "add", "one", "--check", "false", "--every", "2h"],
+        &["loop", "add", "one", "--every", "2h", "--", "false"],
     );
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         format!(
-            "{heading}check = \"false\"\nroot = {:?}\nevery = \"2h\"\n{next}",
+            "{heading}command = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"2h\"\n{next}",
             env.project_root
         )
     );
@@ -8321,10 +4650,11 @@ fn loop_add_replacing_first_machine_task_keeps_header_comments() {
 fn loop_add_replacing_first_project_task_keeps_header_comments() {
     let env = Env::new();
     let heading = "# Project loops\n\n# One note\n[tasks.one] # header note\n";
-    let next = "\n# Two note\n[tasks.two]\ncheck = \"true\"\nevery = \"7d\"\n";
+    let next =
+        "\n# Two note\n[tasks.two]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"7d\"\n";
     write_project_config(
         &env,
-        &format!("{heading}check = \"true\"\nevery = \"1h\"\n{next}"),
+        &format!("{heading}command = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n{next}"),
     );
 
     loop_ok(
@@ -8334,15 +4664,15 @@ fn loop_add_replacing_first_project_task_keeps_header_comments() {
             "add",
             "one",
             "--project",
-            "--check",
-            "false",
             "--every",
             "2h",
+            "--",
+            "false",
         ],
     );
     assert_eq!(
         std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
-        format!("{heading}check = \"false\"\nevery = \"2h\"\n{next}")
+        format!("{heading}command = [\"false\"]\ntimeout = \"2h\"\nevery = \"2h\"\n{next}")
     );
 }
 
@@ -8351,19 +4681,19 @@ fn loop_add_new_task_keeps_explicit_tasks_header_comments() {
     let env = Env::new();
     let original = format!(
         "# lead\n[tasks]\n\n# One note\n[tasks.one]\n\
-         root = {:?}\ncheck = \"true\"\nevery = \"1h\"\n",
+         root = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
         env.project_root
     );
     write_loop_config(&env, &original);
 
     loop_ok(
         &env,
-        &["loop", "add", "two", "--check", "false", "--every", "2h"],
+        &["loop", "add", "two", "--every", "2h", "--", "false"],
     );
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         format!(
-            "{original}\n[tasks.two]\ncheck = \"false\"\nroot = {:?}\nevery = \"2h\"\n",
+            "{original}\n[tasks.two]\ncommand = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"2h\"\n",
             env.project_root
         )
     );
@@ -8376,19 +4706,19 @@ fn loop_add_replacing_task_keeps_explicit_tasks_header_comments() {
     write_loop_config(
         &env,
         &format!(
-            "{heading}root = {:?}\ncheck = \"true\"\nevery = \"1h\"\n",
+            "{heading}root = {:?}\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
             env.project_root
         ),
     );
 
     loop_ok(
         &env,
-        &["loop", "add", "one", "--check", "false", "--every", "2h"],
+        &["loop", "add", "one", "--every", "2h", "--", "false"],
     );
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         format!(
-            "{heading}check = \"false\"\nroot = {:?}\nevery = \"2h\"\n",
+            "{heading}command = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"2h\"\n",
             env.project_root
         )
     );
@@ -8401,8 +4731,8 @@ fn loop_remove_first_task_keeps_template_comments() {
         &env,
         "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
          # default-timeout = \"2h\"\n\n\
-         [tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n\n\
-         [tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n",
+         [tasks.one]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\n\
+         [tasks.two]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1w\"\n",
     );
 
     let output = loop_ok(&env, &["loop", "remove", "one"]);
@@ -8411,7 +4741,7 @@ fn loop_remove_first_task_keeps_template_comments() {
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
          # default-timeout = \"2h\"\n\n\
-         [tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n"
+         [tasks.two]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1w\"\n"
     );
 }
 
@@ -8420,16 +4750,16 @@ fn loop_remove_last_task_keeps_preceding_task_comments() {
     let env = Env::new();
     write_loop_config(
         &env,
-        "[tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n\
+        "[tasks.one]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
          # every = \"30m\"   # faster cadence during release week\n\
-         # Weekly cleanup\n[tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n",
+         # Weekly cleanup\n[tasks.two]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1w\"\n",
     );
 
     let output = loop_ok(&env, &["loop", "remove", "two"]);
     assert_eq!(output, "removed loop task `two`\n");
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
-        "[tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n\
+        "[tasks.one]\ncommand = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
          # every = \"30m\"   # faster cadence during release week\n\
          # Weekly cleanup\n"
     );
@@ -8441,7 +4771,7 @@ fn loop_enable_disable_pause_workflow() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--check", "true", "--every", "15m"],
+        &["loop", "add", "probe", "--every", "15m", "--", "true"],
     );
     let (_stdout, error) = loop_fail(&env, &["loop", "pause", "probe"]);
     assert!(
@@ -8509,7 +4839,7 @@ fn loop_enable_disable_pause_workflow() {
 
     loop_ok(
         &env,
-        &["loop", "add", "second", "--check", "true", "--every", "15m"],
+        &["loop", "add", "second", "--every", "15m", "--", "true"],
     );
     let disabled = loop_ok(&env, &["loop", "disable", "--all"]);
     assert!(
@@ -8546,7 +4876,9 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
             "watchdog",
             "--every",
             "15m",
-            "--check",
+            "--",
+            "sh",
+            "-c",
             "printf broken; exit 1",
         ],
     );
@@ -8613,8 +4945,8 @@ fn loop_task_mutations_move_and_clear_overlays() {
     write_loop_config(
         &env,
         &format!(
-            "# keep unrelated task comment\n[tasks.keep]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\n\
-             [tasks.old]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "# keep unrelated task comment\n[tasks.keep]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n\
+             [tasks.old]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),
@@ -8636,15 +4968,7 @@ fn loop_task_mutations_move_and_clear_overlays() {
 
     loop_ok(
         &env,
-        &[
-            "loop",
-            "add",
-            "old-state",
-            "--check",
-            "true",
-            "--at",
-            "07:00",
-        ],
+        &["loop", "add", "old-state", "--at", "07:00", "--", "true"],
     );
     loop_ok(&env, &["loop", "pause", "old-state", "--for", "2h"]);
     loop_ok(&env, &["loop", "rename", "old-state", "new-state"]);
@@ -8661,12 +4985,12 @@ fn loop_task_mutations_move_and_clear_overlays() {
     assert!(!read_loop_strikes(&env).contains_key(&machine_task_key("new")));
     loop_ok(
         &env,
-        &["loop", "add", "swap", "--check", "true", "--every", "15m"],
+        &["loop", "add", "swap", "--every", "15m", "--", "true"],
     );
     loop_ok(&env, &["loop", "pause", "swap", "--for", "2h"]);
     let replaced = loop_ok(
         &env,
-        &["loop", "add", "swap", "--check", "true", "--every", "30m"],
+        &["loop", "add", "swap", "--every", "30m", "--", "true"],
     );
     assert!(
         replaced.contains("arming: reset")
@@ -8686,7 +5010,7 @@ fn loop_rename_moves_live_workflow_runs() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.old]\nworkflow = \"review\"\nroot = {:?}\nevery = \"15m\"\n",
+            "[tasks.old]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = {:?}\nevery = \"15m\"\n",
             env.project_root
         ),
     );
@@ -8771,8 +5095,8 @@ fn loop_rename_moves_live_workflow_runs() {
 #[test]
 fn loop_rename_without_a_room_does_not_create_state() {
     for definition in [
-        "check = 'true'\nevery = '15m'",
-        "workflow = 'review'\nwhen = ['pr=open']",
+        "command = ['true']\ntimeout = '1m'\nevery = '15m'",
+        "command = ['true']\ntimeout = '1m'\nwhen = ['pr=open']",
     ] {
         let env = Env::new();
         write_loop_config(
@@ -8794,7 +5118,7 @@ fn loop_remove_workflow_without_a_room_does_not_create_state() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.review]\nroot = {:?}\nworkflow = 'review'\nwhen = ['pr=open']\n",
+            "[tasks.review]\nroot = {:?}\ncommand = ['true']\ntimeout = '1m'\nwhen = ['pr=open']\n",
             env.project_root
         ),
     );
@@ -8813,15 +5137,15 @@ fn loop_rename_rejects_collisions_and_reports_missing() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.old]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n\
-             [tasks.existing]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.old]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n\
+             [tasks.existing]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),
     );
     loop_ok(
         &env,
-        &["loop", "add", "state", "--check", "true", "--at", "07:00"],
+        &["loop", "add", "state", "--at", "07:00", "--", "true"],
     );
 
     for (old, new, expected) in [
@@ -8835,228 +5159,6 @@ fn loop_rename_rejects_collisions_and_reports_missing() {
     }
     let output = loop_ok(&env, &["loop", "rename", "missing", "free"]);
     assert!(output.contains("no loop task named `missing`"), "{output}");
-}
-
-#[test]
-fn loop_qwen_exact_quota_skip_precedes_check_command() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    loop_ok(&env, &["config", "init"]);
-    loop_ok(&env, &["config", "set", "harness.budget", "0/day"]);
-    let settings = env.agent_config_path("qwen");
-    std::fs::create_dir_all(settings.parent().expect("Qwen config parent"))
-        .expect("create Qwen config");
-    std::fs::write(
-        &settings,
-        r#"{
-            "security":{"auth":{"selectedType":"openai"}},
-            "model":{"name":"qwen3-coder-plus"},
-            "modelProviders":{"openai":[{
-                "id":"qwen3-coder-plus",
-                "baseUrl":"https://coding-intl.dashscope.aliyuncs.com/v1",
-                "envKey":"BAILIAN_CODING_PLAN_API_KEY"
-            }]},
-            "env":{"BAILIAN_CODING_PLAN_API_KEY":"sentinel-loop-secret"}
-        }"#,
-    )
-    .expect("write Qwen settings");
-    env.install_agent_hooks("qwen");
-
-    let launch_env = BTreeMap::from([(
-        "RIMZ_QWEN_SETTINGS".to_owned(),
-        settings.display().to_string(),
-    )]);
-    let adapter = rimz::agents::find_definition("qwen").expect("Qwen definition");
-    let argv = adapter
-        .launch_command(&[], Some("work"))
-        .expect("Qwen launch argv");
-    let binding = adapter
-        .resolve_managed_launch(&env.project_root, &launch_env, None, &argv)
-        .binding()
-        .cloned()
-        .expect("exact Qwen binding");
-    let encoded = serde_json::to_value(&binding).expect("serialize binding");
-    let account_key = encoded["account_key"]
-        .as_str()
-        .expect("binding account key")
-        .to_owned();
-    let runtime = env.runtime_paths();
-    runtime.ensure_dirs().expect("runtime dirs");
-    let rate_cache = |used_7d, used_30d| RateLimitsCache {
-        entries: [(
-            rimz::agents::account::AccountUsageKey::new(
-                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
-                binding.scope().clone(),
-            ),
-            RateLimitCacheEntry {
-                scope: binding.scope().clone(),
-                account_key: Some(account_key.clone()),
-                limits: AgentRateLimits {
-                    windows: vec![
-                        RateLimitWindow {
-                            used_percentage: Some(used_7d),
-                            resets_at: Some(
-                                Timestamp::now() + jiff::SignedDuration::from_hours(84),
-                            ),
-                            duration_mins: Some(7 * 24 * 60),
-                            ..RateLimitWindow::default()
-                        },
-                        RateLimitWindow {
-                            used_percentage: Some(used_30d),
-                            resets_at: Some(
-                                Timestamp::now() + jiff::SignedDuration::from_hours(360),
-                            ),
-                            duration_mins: Some(30 * 24 * 60),
-                            ..RateLimitWindow::default()
-                        },
-                    ],
-                },
-                bound_limits: None,
-                pending: Vec::new(),
-                unknown_since_ms: None,
-                reset_spotted_at_ms: None,
-            },
-        )]
-        .into_iter()
-        .collect(),
-        ..RateLimitsCache::default()
-    };
-    rimz::disk::atomic::write_temp_then_rename_cache(
-        &RateLimitsCache::shared_path(&runtime),
-        &rate_cache(20, 100),
-    )
-    .expect("write exact quota cache");
-    assert!(
-        rimz::agents::provider_budget_gate(
-            &runtime,
-            &rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
-            &binding,
-            Timestamp::now()
-        )
-        .is_some(),
-        "the exact cache must close the provider gate before the loop runner starts"
-    );
-
-    let marker = env.project_root.join("check-ran");
-    qwen_loop_ok(
-        &env,
-        &settings,
-        &[
-            "loop",
-            "add",
-            "qwen-bounded",
-            "--check",
-            &format!("touch {}", marker.display()),
-            "--on",
-            "success",
-            "--agent",
-            "qwen",
-            "--prompt",
-            "work",
-            "--surplus",
-            "2x",
-            "--every",
-            "15m",
-        ],
-    );
-    let mut config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
-            .expect("parse loop config");
-
-    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
-    let scope_skip = last_loop_record(&env);
-    assert_eq!(scope_skip.result, LoopRunResult::BudgetSkipped);
-    assert!(
-        scope_skip
-            .error
-            .as_deref()
-            .is_some_and(|reason| reason.contains("fleet budget exhausted")),
-        "scope cap must gate before provider quota"
-    );
-
-    loop_ok(&env, &["budget", "off", "--no-continue"]);
-    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
-
-    assert!(
-        !marker.exists(),
-        "provider quota must gate before the check"
-    );
-    let records = read_loop_run_records(&env);
-    let skip = records.last().expect("Qwen budget skip record");
-    assert_eq!(skip.result, LoopRunResult::BudgetSkipped);
-    let reason = skip.error.as_deref().expect("skip reason");
-    assert!(
-        reason.contains("Qwen Alibaba International mo window exhausted"),
-        "{reason}"
-    );
-    assert!(!reason.contains("sentinel-loop-secret"), "{reason}");
-    assert!(!reason.contains(&account_key), "{reason}");
-
-    rimz::disk::atomic::write_temp_then_rename_cache(
-        &RateLimitsCache::shared_path(&runtime),
-        &rate_cache(80, 80),
-    )
-    .expect("write surplus cache");
-    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
-    let surplus = last_loop_record(&env);
-    assert_eq!(surplus.result, LoopRunResult::SurplusSkipped);
-    assert!(
-        surplus
-            .error
-            .as_deref()
-            .is_some_and(|reason| reason.contains("surplus")),
-        "surplus must gate before run lock and check"
-    );
-    let lock_path = loop_run_lock_path(&env, "qwen-bounded");
-    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .expect("open run lock");
-    lock_file.try_lock().expect("hold run lock");
-
-    config
-        .tasks
-        .0
-        .get_mut("qwen-bounded")
-        .expect("Qwen task")
-        .surplus = None;
-    std::fs::write(
-        loop_config_path(&env),
-        toml::to_string_pretty(&config).expect("serialize loop config"),
-    )
-    .expect("write loop config");
-    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
-    assert_eq!(last_loop_record(&env).result, LoopRunResult::Overlapped);
-
-    // R3's ladder reads the deadline before the lease.
-    config
-        .tasks
-        .0
-        .get_mut("qwen-bounded")
-        .expect("Qwen task")
-        .deadline = Some(Timestamp::from_second(1).expect("deadline"));
-    std::fs::write(
-        loop_config_path(&env),
-        toml::to_string_pretty(&config).expect("serialize loop config"),
-    )
-    .expect("write loop config");
-    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
-    assert_eq!(last_loop_record(&env).result, LoopRunResult::Expired);
-    lock_file.unlock().expect("unlock run lock");
-    assert!(
-        !std::fs::read_to_string(loop_config_path(&env))
-            .expect("read loop config")
-            .contains("qwen-bounded"),
-        "an expired deadline retires the task"
-    );
-    assert!(
-        !marker.exists(),
-        "ordered gates must stop before the check command"
-    );
 }
 
 #[test]
@@ -9081,7 +5183,9 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     let output = env
         .rimz()
         .current_dir(&linked)
-        .args(["loop", "add", "where", "--check", probe, "--every", "15m"])
+        .args([
+            "loop", "add", "where", "--every", "15m", "--", "sh", "-c", probe,
+        ])
         .output()
         .expect("add check from linked worktree");
     assert!(
@@ -9091,13 +5195,13 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     );
     let receipt = String::from_utf8_lossy(&output.stdout);
     assert!(
-        receipt.contains(&format!("action: runs check in {}", root.display())),
+        receipt.contains(&format!(" in {} · timeout 2h", root.display())),
         "{receipt}"
     );
     assert!(
         receipt.lines().any(|line| line
             == format!(
-                "note: runs at the project root {}, not {}; pass --worktree <prefix> for a fresh worktree per fire",
+                "note: runs at the project root {}, not {}; pass --fresh-worktree <prefix> for a fresh worktree per fire",
                 root.display(),
                 linked.display()
             )),
@@ -9126,7 +5230,7 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
 
     let mut config = std::fs::read_to_string(loop_config_path(&env)).unwrap();
     config.push_str(&format!(
-        "\n[tasks.legacy]\nroot = {root:?}\ndir = {linked:?}\ncheck = {probe:?}\nevery = \"15m\"\n"
+        "\n[tasks.legacy]\nroot = {root:?}\ndir = {linked:?}\ncommand = [\"sh\", \"-c\", {probe:?}]\ntimeout = \"1m\"\nevery = \"15m\"\n"
     ));
     std::fs::write(loop_config_path(&env), config).unwrap();
     loop_ok(&env, &["loop", "fire", "legacy"]);
@@ -9157,10 +5261,12 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
             "add",
             "project-where",
             "--project",
-            "--check",
-            "pwd -P; printf '%s\\n' \"$RIMZ_WORKTREE_PATH\"",
             "--every",
             "15m",
+            "--",
+            "sh",
+            "-c",
+            "pwd -P; printf '%s\\n' \"$RIMZ_WORKTREE_PATH\"",
         ])
         .output()
         .expect("add project check from linked worktree");
@@ -9171,7 +5277,7 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     );
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("action: runs check in {}", root.display()))
+            .contains(&format!(" in {} · timeout 2h", root.display()))
     );
     let project: toml::Value = toml::from_str(
         &std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
@@ -9209,17 +5315,17 @@ fn check_task_worktree_stores_a_fresh_prefix_listed_as_a_pattern() {
             "loop",
             "add",
             "nightly",
-            "--check",
-            "true",
-            "--worktree",
+            "--fresh-worktree",
             "night",
             "--every",
             "1h",
+            "--",
+            "true",
         ],
     );
     assert!(
         receipt.lines().any(|line| line
-            == "action: runs check in a fresh worktree `night-<time>` per fire, branched from trunk"),
+            == "action: runs `true` in a fresh worktree `night-<time>` per fire, branched from trunk · timeout 2h"),
         "{receipt}"
     );
     assert!(!receipt.contains("note:"), "{receipt}");
@@ -9227,10 +5333,7 @@ fn check_task_worktree_stores_a_fresh_prefix_listed_as_a_pattern() {
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let entry = &stored.tasks.0["nightly"];
     assert_eq!(entry.fresh_worktree.as_deref(), Some("night"));
-    assert_eq!(
-        (entry.worktree.as_deref(), entry.dir.as_deref()),
-        (None, None)
-    );
+    assert_eq!(entry.dir, None);
     let listing: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
     let row = listing["rooms"]
@@ -9314,7 +5417,7 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
     };
     let seen = env.home_root.join("seen");
     let check = format!(
-        "{{ pwd -P; git rev-parse HEAD; git branch --show-current; }} >> {:?}; touch scratch",
+        "{{ pwd -P; git rev-parse HEAD; git branch --show-current; }} >> {:?}",
         seen.display().to_string()
     );
     loop_ok(
@@ -9323,12 +5426,14 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
             "loop",
             "add",
             "nightly",
-            "--check",
-            &check,
-            "--worktree",
+            "--fresh-worktree",
             "night",
             "--every",
             "1h",
+            "--",
+            "sh",
+            "-c",
+            &check,
         ],
     );
     let mut reports = Vec::new();
@@ -9385,82 +5490,6 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
 
 #[cfg(unix)]
 #[test]
-fn a_declined_guard_in_a_fresh_tree_leaves_no_tree_behind() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    if origin_ahead_of_local_main(&env).is_none() {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    env.install_agent_hooks("claude");
-    crate::common::trust_claude_project(&env, &env.project_root);
-    let pwd_file = env.home_root.join("guard-pwd");
-    let guard = format!(
-        "pwd -P > {:?}; touch untracked; exit 1",
-        pwd_file.display().to_string()
-    );
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "guarded",
-            "--agent",
-            "claude",
-            "--prompt",
-            "repair",
-            "--every",
-            "1h",
-            "--check",
-            &guard,
-            "--on",
-            "success",
-            "--worktree",
-            "night",
-        ],
-    );
-    loop_ok(&env, &["loop", "fire", "guarded"]);
-
-    // A decline ends the run without acting, and its report removes the tree.
-    let report = wait_for_loop_report(&env, "guarded");
-    assert_eq!(
-        (report.result, report.acted),
-        (LoopRunResult::Completed, Some(false))
-    );
-    let tree =
-        rimz::utils::path::normalize_path_lexical(&report.worktree.expect("fire worktree").path);
-    assert_eq!(
-        std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
-        tree.display().to_string()
-    );
-    #[cfg(target_os = "linux")]
-    wait_for_fire_tree_helpers(&env);
-    assert!(!tree.exists());
-    assert_eq!(night_leftovers(&env), Vec::<String>::new());
-    let signals: Vec<serde_json::Value> = env
-        .read_events()
-        .into_iter()
-        .filter(|event| event.method == "signal.emit")
-        .map(|event| serde_json::from_str(event.params.get()).unwrap())
-        .collect();
-    let named: Vec<_> = signals
-        .iter()
-        .map(|signal| (signal["name"].as_str(), signal["payload"]["name"].as_str()))
-        .collect();
-    let name = tree.file_name().and_then(|name| name.to_str());
-    assert_eq!(
-        named,
-        [
-            (Some("worktree.created"), name),
-            (Some("worktree.removed"), name)
-        ],
-        "{signals:?}"
-    );
-    assert_eq!(signals[1]["payload"]["branch_deleted"], true, "{signals:?}");
-}
-
-#[cfg(unix)]
-#[test]
 fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -9479,12 +5508,14 @@ fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
             "loop",
             "add",
             "nightly",
-            "--check",
-            &check,
-            "--worktree",
+            "--fresh-worktree",
             "night",
             "--every",
             "1h",
+            "--",
+            "sh",
+            "-c",
+            &check,
         ],
     );
     loop_ok(&env, &["loop", "fire", "nightly"]);
@@ -9512,449 +5543,6 @@ fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
     #[cfg(target_os = "linux")]
     wait_for_fire_tree_helpers(&env);
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
-}
-
-#[cfg(unix)]
-#[test]
-fn a_declined_run_the_backstop_reports_removes_its_fresh_tree() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    if origin_ahead_of_local_main(&env).is_none() {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "nightly",
-            "--check",
-            "exit 1",
-            "--worktree",
-            "night",
-            "--every",
-            "1h",
-        ],
-    );
-    // A run whose advance died after its terminal persist: its report is still owed, and the
-    // backstop's advance is the one that reports it.
-    let root = canonical(&env.project_root);
-    let created = rimz::worktree::create_for_loop_fire(
-        &root,
-        &rimz::config::WorktreeConfig::default(),
-        "night",
-        "nightly",
-        Timestamp::now(),
-    )
-    .unwrap();
-    let tree = created.marker.worktree_path.clone();
-    let id = rimz::ids::WorkflowRunId::new();
-    let paths = env.state_path_for(&root).workflow(&id);
-    std::fs::create_dir_all(paths.record.parent().unwrap()).unwrap();
-    let record = json!({
-        "version":rimz::store::workflow::VERSION, "id":id, "workflow":"nightly", "origin":"inline", "task":"nightly",
-        "spec_dir":"/spec", "spec_digest":"abc", "fire_tree":true,
-        "scope":{"kind":"worktree","path":tree}, "project_root":root,
-        "created_at":"2026-01-01T00:00:00Z", "state":"failed", "node":"check",
-        "entered_at":"2026-01-01T00:00:00Z", "visits":{}, "visit_grant":0,
-        "deadline_fired":false, "next_seq":1, "terminal_at":"2026-01-01T00:00:01Z",
-        "loop_report":"owed", "outcome":{"ending":{"kind":"failed"}, "acted":false}
-    });
-    std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
-    let output = env
-        .rimz()
-        .arg("--root")
-        .arg(&root)
-        .args(["workflow", "advance", id.as_str()])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-
-    let report = wait_for_loop_report(&env, "nightly");
-    assert_eq!(
-        (report.result, report.acted, report.checkout.as_deref()),
-        (LoopRunResult::Failed, Some(false), Some(root.as_path()))
-    );
-    #[cfg(target_os = "linux")]
-    wait_for_fire_tree_helpers(&env);
-    assert!(!tree.exists());
-    assert_eq!(night_leftovers(&env), Vec::<String>::new());
-}
-
-/// A codex stand-in that runs a whole hook-firing turn in a tmux pane. Each
-/// turn appends its `pwd -P` to `turns`, and commits a file first while
-/// `commit` exists.
-#[cfg(unix)]
-struct LaunchedTurn {
-    bin: std::path::PathBuf,
-    shell: std::path::PathBuf,
-    turns: std::path::PathBuf,
-    commit: std::path::PathBuf,
-}
-
-#[cfg(unix)]
-impl LaunchedTurn {
-    fn install(env: &Env) -> Self {
-        std::fs::write(
-            env.rimz_home().join("config.toml"),
-            "[agents]\nshell = 'bash'\n",
-        )
-        .unwrap();
-        env.install_agent_hooks("codex");
-        trust_codex_preflight_hooks(env);
-        trust_codex_project(env, &env.project_root);
-        let bin = crate::common::write_hook_firing_agent(env, "codex");
-        let hooks = bin.join("codex-hooks");
-        std::fs::rename(bin.join("codex"), &hooks).unwrap();
-        let turns = env.home_root.join("turn-pwd");
-        let commit = env.home_root.join("turn-commits");
-        let quote = |path: &Path| {
-            shlex::try_quote(path.to_str().unwrap())
-                .unwrap()
-                .into_owned()
-        };
-        write_path_shim(
-            &bin,
-            "codex",
-            &format!(
-                "case \"${{1:-}}\" in --version|login|app-server) exec {hooks} \"$@\";; esac\n\
-                 pwd -P >> {turns}\n\
-                 if [ -e {commit} ]; then\n\
-                   echo work > work.txt && git add work.txt && \
-                 git -c user.name=t -c user.email=t@example.com commit -qm work || exit 9\n\
-                 fi\n\
-                 exec {hooks} \"$@\"",
-                hooks = quote(&hooks),
-                turns = quote(&turns),
-                commit = quote(&commit),
-            ),
-        );
-        let login_shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
-        std::os::unix::fs::symlink(&login_shell, bin.join("bash")).unwrap();
-        // The room's first pane runs `$SHELL` bare, and must outlive the birth.
-        let shell = write_path_shim(
-            &env.home_root.join("interactive-shell-bin"),
-            "rimz-test-sh",
-            &format!(
-                "for arg do\n  if [ \"$arg\" = -c ]; then exec {} \"$@\"; fi\ndone\nexec /bin/sh \"$@\"",
-                quote(&login_shell),
-            ),
-        );
-        Self {
-            bin,
-            shell,
-            turns,
-            commit,
-        }
-    }
-
-    /// Fire `task`, wait for its run's report, then for its pane's wrapper and cleanup
-    /// helper to exit.
-    fn fire(&self, env: &Env, task: &str, commit: bool) -> (std::process::Output, LoopRunRecord) {
-        if commit {
-            std::fs::write(&self.commit, "").unwrap();
-        } else {
-            let _ = std::fs::remove_file(&self.commit);
-        }
-        let before = run_mark(env, task);
-        let output = env
-            .rimz()
-            .args(["--mux", "tmux", "loop", "fire", task])
-            .env("PATH", path_with_front(&self.bin))
-            .env("SHELL", &self.shell)
-            .output()
-            .expect("fire the launched turn");
-        assert!(output.status.success(), "{output:?}");
-        let report = wait_for_loop_report_after(env, task, before);
-        #[cfg(target_os = "linux")]
-        Self::wait_for_wrappers(env);
-        (output, report)
-    }
-
-    /// Wait for the fire's pane wrapper and its tree's cleanup helpers to exit.
-    #[cfg(target_os = "linux")]
-    fn wait_for_wrappers(env: &Env) {
-        let spec = rimz::testkit::sandbox::SandboxSpec {
-            home_root: env.home_root.clone(),
-            runtime_root: env.runtime_root.clone(),
-        };
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        while rimz::testkit::sandbox::sandbox_processes(&spec)
-            .into_iter()
-            .filter_map(rimz::proc::argv)
-            .any(|argv| argv.iter().any(|arg| arg == "--supervise"))
-        {
-            assert!(Instant::now() < deadline, "the turn's wrapper did not exit");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        wait_for_fire_tree_helpers(env);
-    }
-
-    fn turn_dirs(&self) -> Vec<String> {
-        std::fs::read_to_string(&self.turns)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
-    if which::which("tmux").is_err() {
-        crate::common::skip("tmux not on PATH");
-        return;
-    }
-    let env = Env::new();
-    if origin_ahead_of_local_main(&env).is_none() {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    let turn = LaunchedTurn::install(&env);
-    let guards = env.home_root.join("guard-pwd");
-    let guard = format!("pwd -P >> {:?}", guards.display().to_string());
-    for (task, verify) in [("turn", "true"), ("unverified", "exit 1")] {
-        loop_ok(
-            &env,
-            &[
-                "loop",
-                "add",
-                task,
-                "--agent",
-                "codex",
-                "--prompt",
-                "repair",
-                "--every",
-                "1h",
-                "--check",
-                &guard,
-                "--on",
-                "success",
-                "--verify",
-                verify,
-                "--worktree",
-                "night",
-            ],
-        );
-    }
-
-    let mut kept = Vec::new();
-    for (task, commit) in [
-        ("turn", false),
-        ("turn", true),
-        ("unverified", false),
-        ("unverified", true),
-    ] {
-        let (output, report) = turn.fire(&env, task, commit);
-        let verified = task == "turn";
-        assert_eq!(
-            (report.result, report.acted),
-            (
-                if verified {
-                    LoopRunResult::Completed
-                } else {
-                    LoopRunResult::Failed
-                },
-                Some(true)
-            ),
-            "{report:?}"
-        );
-        // The report carries the tree its fire sealed into the run.
-        let tree = rimz::utils::path::normalize_path_lexical(
-            &report.worktree.clone().expect("fire worktree").path,
-        );
-        let shown = tree.display().to_string();
-        assert_eq!(turn.turn_dirs().last(), Some(&shown), "{output:?}");
-        let guarded = std::fs::read_to_string(&guards).unwrap();
-        assert_eq!(guarded.lines().last(), Some(shown.as_str()));
-        assert_eq!(
-            tree.exists(),
-            commit,
-            "{task} (commit: {commit}): {output:?}"
-        );
-        if commit {
-            assert!(tree.join("work.txt").exists());
-            kept.push((task, tree));
-        }
-    }
-
-    for (task, tree) in &kept {
-        let text = loop_ok(&env, &["loop", "show", task]);
-        let section = text
-            .split_once("KEPT WORKTREES")
-            .unwrap_or_else(|| panic!("{text}"))
-            .1;
-        let name = tree.file_name().unwrap().to_str().unwrap();
-        assert!(section.contains(name), "{text}");
-        let json: serde_json::Value =
-            serde_json::from_str(&loop_ok(&env, &["loop", "show", task, "--json"])).unwrap();
-        let listed: Vec<std::path::PathBuf> = json["kept_worktrees"]
-            .as_array()
-            .unwrap_or_else(|| panic!("{json}"))
-            .iter()
-            .map(|row| {
-                rimz::utils::path::normalize_path_lexical(Path::new(row["path"].as_str().unwrap()))
-            })
-            .collect();
-        assert_eq!(listed, std::slice::from_ref(tree), "{json}");
-        let marker = rimz::worktree::read_marker_for_worktree(tree)
-            .unwrap()
-            .unwrap();
-        assert_eq!(marker.loop_task.as_deref(), Some(*task));
-    }
-
-    // A fleet budget that closes while the guard runs passes the runner's own
-    // gate and refuses the launch itself, after the fire handed its tree over.
-    let closed = env.home_root.join("closed-fleet-budget.json");
-    let ledger = rimz::harness::budget::DailyBudgetLedger {
-        override_spec: Some("0/day".parse().expect("budget")),
-        ..Default::default()
-    };
-    std::fs::write(&closed, serde_json::to_vec(&ledger).unwrap()).unwrap();
-    let record = env.state_path_for(&env.project_root).fleet_budget_record;
-    let quote = |path: &Path| {
-        shlex::try_quote(path.to_str().unwrap())
-            .unwrap()
-            .into_owned()
-    };
-    let close = format!(
-        "{guard} && mkdir -p {} && mv {} {}",
-        quote(record.parent().unwrap()),
-        quote(&closed),
-        quote(&record),
-    );
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "refused",
-            "--agent",
-            "codex",
-            "--prompt",
-            "repair",
-            "--every",
-            "1h",
-            "--check",
-            &close,
-            "--on",
-            "success",
-            "--verify",
-            "true",
-            "--worktree",
-            "night",
-        ],
-    );
-    let turns = turn.turn_dirs().len();
-    let (output, refused) = turn.fire(&env, "refused", false);
-    assert_eq!(refused.result, LoopRunResult::BudgetSkipped, "{refused:?}");
-    assert!(
-        refused
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("fleet budget")),
-        "{refused:?}"
-    );
-    let tree =
-        rimz::utils::path::normalize_path_lexical(&refused.worktree.expect("fire worktree").path);
-    let guarded = std::fs::read_to_string(&guards).unwrap();
-    assert_eq!(
-        guarded.lines().last(),
-        Some(tree.display().to_string().as_str())
-    );
-    assert_eq!(turn.turn_dirs().len(), turns, "no turn ran: {output:?}");
-    assert!(
-        !tree.exists(),
-        "the refused launch's clean tree stays: {output:?}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    if !init_git_repo(&env.project_root) {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    env.install_agent_hooks("claude");
-    crate::common::trust_claude_project(&env, &env.project_root);
-    let linked = env.home_root.join("linked");
-    assert!(git_ok(
-        &env.project_root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "linked",
-            linked.to_str().unwrap()
-        ]
-    ));
-    let linked = canonical(&linked);
-    let root = canonical(&env.project_root);
-    let pwd_file = env.home_root.join("guard-pwd");
-    let guard = format!("pwd -P > {:?}; exit 1", pwd_file.display().to_string());
-    for (name, extra) in [("guarded", vec![]), ("seated", vec!["--stay"])] {
-        let mut argv = vec![
-            "loop", "add", name, "--agent", "claude", "--prompt", "repair", "--every", "1h",
-        ];
-        argv.extend(extra);
-        if name == "guarded" {
-            argv.extend(["--check", guard.as_str(), "--on", "success"]);
-        }
-        let output = env
-            .rimz()
-            .current_dir(&linked)
-            .args(&argv)
-            .output()
-            .expect("add agent task from linked worktree");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let stored: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    for name in ["guarded", "seated"] {
-        let entry = &stored.tasks.0[name];
-        assert_eq!(entry.root, root, "{name}");
-        assert_eq!(entry.dir, None, "{name}");
-        assert_eq!(entry.run_dir(), root, "{name}");
-    }
-
-    loop_ok(&env, &["loop", "fire", "guarded"]);
-    let report = wait_for_loop_report(&env, "guarded");
-    assert_eq!(
-        (report.result, report.acted),
-        (LoopRunResult::Completed, Some(false))
-    );
-    assert_eq!(
-        std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
-        root.display().to_string()
-    );
-
-    if which::which("tmux").is_err() {
-        crate::common::skip("tmux not on PATH");
-        return;
-    }
-    let turn = LaunchedTurn::install(&env);
-    let output = env
-        .rimz()
-        .current_dir(&linked)
-        .args([
-            "loop", "add", "launched", "--agent", "codex", "--prompt", "repair", "--every", "1h",
-        ])
-        .output()
-        .expect("add a launching task from linked worktree");
-    assert!(output.status.success(), "{output:?}");
-    let (output, report) = turn.fire(&env, "launched", false);
-    assert_eq!(report.result, LoopRunResult::Completed, "{output:?}");
-    assert_eq!(turn.turn_dirs(), [root.display().to_string()]);
 }
 
 /// The stored quiet streak of `task`, read from the machine fire record.
@@ -10015,7 +5603,7 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     env.record(&env.project_root);
     let counter = env.home_root.join("quiet-counter");
     let fail = env.home_root.join("quiet-fail");
-    let check = format!(
+    let command = format!(
         "n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {c}; printf pass-$n; \
          test ! -e {f}",
         c = counter.display(),
@@ -10023,7 +5611,19 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     );
     loop_ok(
         &env,
-        &["loop", "add", "steady", "--check", &check, "--every", "15m"],
+        &[
+            "loop",
+            "add",
+            "steady",
+            "--every",
+            "15m",
+            "--timeout",
+            "1m",
+            "--",
+            "sh",
+            "-c",
+            &command,
+        ],
     );
     let fire = |env: &Env, task: &str| {
         let before = run_mark(env, task);
@@ -10033,7 +5633,7 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     let first = fire(&env, "steady");
     let second = fire(&env, "steady");
     assert_ne!(first.run_id, second.run_id);
-    // Both passing checks are forgotten: no row, no home, no assist; the summary keeps the
+    // Both commands that exit 0 are forgotten: no row, no home, no assist; the summary keeps the
     // newest output and counts both.
     assert!(read_loop_run_records(&env).is_empty());
     wait_until_forgotten(&env, &first);
@@ -10106,14 +5706,26 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
         (&json!(2), &json!(0), &json!("failed")),
         "{quiet_then_failure}"
     );
+    // The failed row carries the command's exit and output.
+    let check = quiet_then_failure["runs"][0]["check"].clone();
+    assert_eq!(
+        (&check["code"], &check["output"]),
+        (&json!(1), &json!("pass-3")),
+        "{quiet_then_failure}"
+    );
+    // Its log path names the finished home the report releases the run to.
+    let log = std::path::PathBuf::from(check["output_path"].as_str().unwrap());
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while !log.is_file() {
+        assert!(Instant::now() < deadline, "no log at {}", log.display());
+        std::thread::sleep(Duration::from_millis(25));
+    }
     // The next quiet fire reads healthy again.
     std::fs::remove_file(&fail).unwrap();
     fire(&env, "steady");
     let show = loop_ok(&env, &["loop", "show", "steady"]);
     assert!(
-        show.contains("completed without starting an agent")
-            && show.contains("3 quiet fires · 1 in a row")
-            && show.contains("pass-4"),
+        show.contains("3 quiet fires · 1 in a row") && show.contains("pass-4"),
         "{show}"
     );
     let failure_then_quiet = shown(&env);
@@ -10128,71 +5740,6 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     );
     assert_eq!(read_loop_run_records(&env).len(), 1);
 
-    // A named command workflow of several steps that ends done is forgotten the same way.
-    let dir = env.rimz_home().join("workflows/tidy");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("workflow.toml"),
-        "[workflow]\nscope = 'project'\nstart = 'ready'\n\
-         [test.ready]\ntimeout='365d'\nshell = 'true'\non.pass = 'sweep'\non.fail = '@failed'\n\
-         [command.sweep]\nshell = 'printf swept'\ntimeout = '1m'\nthen = 'swept'\n\
-         [test.swept]\ntimeout='365d'\nshell = 'true'\non.pass = 'tidy'\non.fail = '@failed'\n\
-         [command.tidy]\nshell = 'printf tidied'\ntimeout = '1m'\nthen = 'tidied'\n\
-         [test.tidied]\ntimeout='365d'\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.tidy]\nworkflow = 'tidy'\nroot = {:?}\nevery = '1h'\n",
-            env.project_root
-        ),
-    );
-    let tidy = fire(&env, "tidy");
-    wait_until_forgotten(&env, &tidy);
-    let (count, last) = quiet_fires(&env, "tidy").unwrap();
-    assert_eq!(count, 1);
-    assert_eq!(last.check.as_ref().unwrap().output, "tidied");
-    let tidy_run = tidy.run_id.as_deref().unwrap();
-    assert!(
-        workflow_assists(&env)
-            .iter()
-            .all(|assist| assist["run"] != tidy_run),
-        "{:?}",
-        workflow_assists(&env)
-    );
-
-    // A hand-started run of the same workflow is kept and writes no `workflow_start`.
-    let output = env
-        .rimz()
-        .args(["workflow", "run", "tidy"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let id: rimz::ids::WorkflowRunId = String::from_utf8(output.stdout)
-        .unwrap()
-        .split_whitespace()
-        .find(|word| word.starts_with("wf_"))
-        .expect("run receipt names its id")
-        .parse()
-        .unwrap();
-    let state = env.state_path_for(&env.project_root);
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while !state.finished_workflow(&id).record.exists() {
-        assert!(Instant::now() < deadline, "hand-started run never finished");
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    assert!(
-        workflow_assists(&env)
-            .iter()
-            .all(|assist| assist["assist"] != "workflow_start" || assist["run"] != id.as_str())
-            && workflow_assists(&env)
-                .iter()
-                .any(|assist| assist["assist"] == "workflow_end" && assist["run"] == id.as_str()),
-        "{:?}",
-        workflow_assists(&env)
-    );
-
     // A one-shot's quiet success has no task row left to summarize it: it keeps its row and home.
     loop_ok(
         &env,
@@ -10200,10 +5747,13 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
             "loop",
             "add",
             "solo",
-            "--check",
-            "printf once",
             "--at",
             "07:00",
+            "--timeout",
+            "1m",
+            "--",
+            "printf",
+            "once",
         ],
     );
     crate::common::room::seed_sidebar_heartbeat(
@@ -10222,6 +5772,7 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
         .collect();
     assert_eq!(rows.len(), 1, "{rows:?}");
     // The run moves to the finished directory after its report.
+    let state = env.state_path_for(&env.project_root);
     let solo_id = solo.run_id.as_deref().unwrap().parse().unwrap();
     let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     while !state.finished_workflow(&solo_id).home.exists() {
@@ -10233,269 +5784,87 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     }
 }
 
-/// The task row `loop list --json` prints for `task`.
-fn listed_task(env: &Env, task: &str) -> serde_json::Value {
-    let list: serde_json::Value =
-        serde_json::from_str(&loop_ok(env, &["loop", "list", "--json"])).unwrap();
-    list["rooms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|room| room["tasks"].as_array().unwrap())
-        .find(|row| row["name"] == task)
-        .cloned()
-        .unwrap_or_else(|| panic!("{task} not listed: {list}"))
-}
-
-#[test]
-fn judged_runs_are_kept_with_their_spend_beside_quiet_fires_that_cost_nothing() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let flag = env.home_root.join("needs-review");
-    let refuse = env.home_root.join("judge-refuses");
-    let dir = env.rimz_home().join("workflows/spend");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("prompt.md"), "Review the work.").unwrap();
-    std::fs::write(
-        dir.join("workflow.toml"),
-        format!(
-            "[workflow]\nscope = 'project'\nstart = 'gate'\n\
-             [test.gate]\ntimeout='365d'\nshell = 'test ! -e {}'\non.pass = '@done'\non.fail = 'review'\n\
-             [judge.review]\ntimeout='365d'\nsummary = 'Review the work'\nagent = 'claude'\n\
-             prompt-file = 'prompt.md'\non.done = '@done'\non.invalid = '@done'\non.died = '@done'\n",
-            flag.display()
-        ),
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.spend]\nworkflow = 'spend'\nroot = {:?}\nevery = '1h'\nbudget-per-day = '$1'\n",
-            env.project_root
-        ),
-    );
-    let shell = crate::common::write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    crate::common::write_path_shim(
-        &bin,
-        "claude",
-        &format!(
-            "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
-             if [ -e {} ]; then exit 7; fi\n\
-             printf '%s\\n' '{{\"structured_output\":{{\"outcome\":\"done\",\"reason\":\"looks fine\"}},\"total_cost_usd\":0.6}}'\n",
-            refuse.display()
-        ),
-    );
-    let fire = |env: &Env| {
-        let before = run_mark(env, "spend");
-        let fired = env
-            .rimz()
-            .args(["loop", "fire", "spend"])
-            .env("SHELL", &shell)
-            .env("PATH", crate::common::path_with_front(&bin))
-            .output()
-            .unwrap();
-        assert!(fired.status.success(), "{fired:?}");
-        before
-    };
-    let kept = |env: &Env, report: &LoopRunRecord| {
-        wait_until_finished(env, report);
-        let rows: Vec<_> = read_loop_run_records(env)
-            .into_iter()
-            .filter(|row| row.run_id == report.run_id)
-            .collect();
-        assert_eq!(rows.len(), 1, "{report:?}: {rows:?}");
-        rows.into_iter().next().unwrap()
-    };
-
-    // A judge that answers is an agent: its run is kept, and its spend is its row's.
-    std::fs::write(&flag, "").unwrap();
-    let before = fire(&env);
-    let judged = kept(&env, &wait_for_loop_report_after(&env, "spend", before));
-    assert_eq!(
-        (judged.result, judged.cost_usd),
-        (LoopRunResult::Completed, Some(0.6))
-    );
-    assert!(quiet_fires(&env, "spend").is_none());
-    let spent = listed_task(&env, "spend")["spend_today_usd"].clone();
-    assert_eq!(spent, 0.6);
-
-    // A quiet fire in between costs nothing and leaves the day's admission as it was.
-    std::fs::remove_file(&flag).unwrap();
-    let before = fire(&env);
-    let quiet = wait_for_loop_report_after(&env, "spend", before);
-    wait_until_forgotten(&env, &quiet);
-    assert_eq!(quiet_fires(&env, "spend").map(|(count, _)| count), Some(1));
-    assert_eq!(listed_task(&env, "spend")["spend_today_usd"], spent);
-    let show = loop_ok(&env, &["loop", "show", "spend"]);
-    assert!(
-        show.contains("completed without starting an agent") && show.contains("1 quiet fire"),
-        "{show}"
-    );
-
-    // A judge whose process fails dies, routes to done, and is still kept: it was started.
-    std::fs::write(&flag, "").unwrap();
-    std::fs::write(&refuse, "").unwrap();
-    let before = fire(&env);
-    let refused = kept(&env, &wait_for_loop_report_after(&env, "spend", before));
-    assert_eq!(
-        (refused.result, refused.cost_usd),
-        (LoopRunResult::Completed, None)
-    );
-    assert_eq!(quiet_fires(&env, "spend").map(|(count, _)| count), Some(1));
-
-    // A kept ending after a quiet fire: LAST RUN is the kept run, the quiet fire stands beside
-    // it, and a completed ending leaves the streak, which only a failure ends.
-    let refused_id = refused.run_id.clone().unwrap();
-    let show = loop_ok(&env, &["loop", "show", "spend"]);
-    assert!(
-        show.contains(&format!("run: {refused_id} · done at review"))
-            && show.contains("LAST QUIET FIRE")
-            && show.contains("1 quiet fire · 1 in a row"),
-        "{show}"
-    );
-    let shown: serde_json::Value =
-        serde_json::from_str(&loop_ok(&env, &["loop", "show", "spend", "--json"])).unwrap();
-    assert_eq!(shown["quiet"]["count"], 1, "{shown}");
-    assert_eq!(
-        shown["runs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|run| run["run_id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        [judged.run_id.as_deref().unwrap(), refused_id.as_str()],
-        "{shown}"
-    );
-    let logs = loop_ok(&env, &["loop", "logs", "spend"]);
-    assert_eq!(logs.matches("1 quiet fire").count(), 1, "{logs}");
-    assert!(logs.contains("judge claude: done — looks fine"), "{logs}");
-    assert_eq!(listed_task(&env, "spend")["quiet"]["count"], 1);
-
-    // Two answered judges spend $1.20 of the $1 day; the quiet fire added nothing to it.
-    std::fs::remove_file(&refuse).unwrap();
-    let before = fire(&env);
-    kept(&env, &wait_for_loop_report_after(&env, "spend", before));
-    std::fs::remove_file(&flag).unwrap();
-    fire(&env);
-    let skipped = last_loop_record(&env);
-    assert_eq!(skipped.result, LoopRunResult::BudgetSkipped, "{skipped:?}");
-    let reason = skipped.error.as_deref().unwrap_or_default();
-    assert!(reason.contains("$1.20"), "{reason}");
-    assert_eq!(quiet_fires(&env, "spend").map(|(count, _)| count), Some(1));
-}
-
-#[test]
-fn a_structured_script_check_ending_done_is_forgotten_with_its_exit_and_output() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let dir = env.rimz_home().join("workflows/scan");
-    std::fs::create_dir_all(dir.join("checks")).unwrap();
-    std::fs::write(
-        dir.join("workflow.toml"),
-        "[workflow]\nscope = 'project'\nstart = 'scan'\n\
-         [script.scan]\ntimeout='365d'\nrun = 'sh checks/scan.sh'\non.clean = '@done'\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("checks/scan.sh"),
-        "echo 'scanned 3 files' >&2\nprintf '%s' '{\"outcome\":\"clean\"}'\n",
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.scan]\nworkflow = 'scan'\nroot = {:?}\nevery = '1h'\n",
-            env.project_root
-        ),
-    );
-    let before = run_mark(&env, "scan");
-    loop_ok(&env, &["loop", "fire", "scan"]);
-    let scanned = wait_for_loop_report_after(&env, "scan", before);
-    wait_until_forgotten(&env, &scanned);
-    assert!(read_loop_run_records(&env).is_empty());
-    let (count, last) = quiet_fires(&env, "scan").unwrap();
-    assert_eq!((count, last.run_id), (1, scanned.run_id));
-    let check = last.check.expect("quiet check");
-    assert_eq!(
-        (check.code, check.output.as_str()),
-        (Some(0), "scanned 3 files\n")
-    );
-}
-
 #[cfg(unix)]
 #[test]
-fn a_quiet_run_collected_before_its_launch_memory_does_not_hold_the_next_fire() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    crate::common::room::seed_sidebar_heartbeat(
-        &env.runtime_paths(),
-        MuxName::Zellij,
-        &env.resolve_workspace(&env.project_root).session_name,
-        "quick",
-    );
-    let dir = env.rimz_home().join("workflows/quick");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("workflow.toml"),
-        "[workflow]\nscope = 'project'\nstart = 'ready'\n\
-         [test.ready]\ntimeout='365d'\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
-    )
-    .unwrap();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.quick]\nworkflow = 'quick'\nroot = {:?}\nwhen = [\"pr=open\"]\n",
-            env.project_root
-        ),
-    );
-    let evidence =
-        json!({"when":"pr=open", "hold":null, "held_ms":0, "readings":{"pr":"open"}}).to_string();
-    let fire = || {
-        let mut fire = env.rimz();
-        fire.args(["loop", "run", "quick", "--condition-json", &evidence]);
-        fire
-    };
-    let quiet_count = || quiet_fires(&env, "quick").map_or(0, |(count, _)| count);
-    let remembered = || {
-        rimz::harness::schedule::launch_ledger::load_workflows(env.store().paths())
-            .unwrap()
-            .tasks
-            .get("quick")
-            .is_some_and(|checkouts| !checkouts.is_empty())
-    };
-
-    // Hold the launcher before it writes launch memory until the run's collection forgets it.
-    let hold = crate::common::DeliveryRendezvous::new(&env, "launch-memory");
-    let launcher = fire()
-        .env("RIMZ_TEST_LOOP_BEFORE_LAUNCH_MEMORY", &hold.path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut release = hold.arrive();
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while quiet_count() != 1 {
-        assert!(
-            Instant::now() < deadline,
-            "the held run was never collected"
+fn a_run_collected_before_its_launch_memory_is_remembered_only_when_it_succeeded() {
+    for succeeded in [true, false] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        crate::common::room::seed_sidebar_heartbeat(
+            &env.runtime_paths(),
+            MuxName::Zellij,
+            &env.resolve_workspace(&env.project_root).session_name,
+            "quick",
         );
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    release.write_all(&[1]).unwrap();
-    let output = launcher.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert!(!remembered(), "a forgotten run left its launch memory");
+        let command = if succeeded { "true" } else { "false" };
+        write_loop_config(
+            &env,
+            &format!(
+                "[tasks.quick]\ncommand = ['{command}']\ntimeout = '1m'\nroot = {:?}\n\
+                 when = [\"pr=open\"]\nrepeat = true\nonce-per-checkout = true\n",
+                env.project_root
+            ),
+        );
+        let evidence =
+            json!({"when":"pr=open", "hold":null, "held_ms":0, "readings":{"pr":"open"}})
+                .to_string();
+        let fire = || {
+            let mut fire = env.rimz();
+            fire.args(["loop", "run", "quick", "--condition-json", &evidence]);
+            fire
+        };
+        // A quiet success leaves its summary; a failure keeps its own row.
+        let collected = || {
+            if succeeded {
+                quiet_fires(&env, "quick").map_or(0, |(count, _)| count)
+            } else {
+                read_loop_run_records(&env).len() as u64
+            }
+        };
+        let remembered = || {
+            rimz::harness::schedule::launch_ledger::load_workflows(env.store().paths())
+                .unwrap()
+                .tasks
+                .get("quick")
+                .is_some_and(|checkouts| !checkouts.is_empty())
+        };
 
-    // The same condition stretch fires again: a second run starts and is forgotten.
-    let output = fire().output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    while quiet_count() != 2 {
-        assert!(Instant::now() < deadline, "the next fire started no run");
-        std::thread::sleep(Duration::from_millis(25));
+        // Hold the launcher before it writes launch memory until the run's collection is done.
+        let hold = crate::common::DeliveryRendezvous::new(&env, "launch-memory");
+        let launcher = fire()
+            .env("RIMZ_TEST_LOOP_BEFORE_LAUNCH_MEMORY", &hold.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = hold.arrive();
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        while collected() != 1 {
+            assert!(
+                Instant::now() < deadline,
+                "the held run was never collected"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        release.write_all(&[1]).unwrap();
+        let output = launcher.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(remembered(), succeeded, "{command}: launch memory");
+
+        // The same condition stretch fires again: only a forgotten run lets it start another.
+        let output = fire().output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let expected = if succeeded { 1 } else { 2 };
+        let deadline = Instant::now() + Duration::from_secs(if succeeded { 2 } else { 60 });
+        while collected() != expected && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(
+            collected(),
+            expected,
+            "{command}: runs after the second fire"
+        );
     }
-    assert!(read_loop_run_records(&env).is_empty());
 }
 
 #[cfg(unix)]
@@ -10522,22 +5891,12 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
     )
     .unwrap();
     let gate = env.home_root.join("strand-gate");
-    let dir = env.rimz_home().join("workflows/strand");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("workflow.toml"),
-        format!(
-            "[workflow]\nscope = 'project'\nstart = 'hold'\n\
-             [test.hold]\ntimeout='365d'\nshell = 'while [ ! -e {} ]; do sleep 0.05; done'\n\
-             on.pass = '@done'\non.fail = '@failed'\n",
-            gate.display()
-        ),
-    )
-    .unwrap();
+    let hold = format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display());
     write_loop_config(
         &env,
         &format!(
-            "[tasks.strand]\nworkflow = 'strand'\nroot = {:?}\nwhen = [\"pr=open\"]\n",
+            "[tasks.strand]\ncommand = ['sh', '-c', {hold:?}]\ntimeout = '1h'\nroot = {:?}\n\
+             when = [\"pr=open\"]\nrepeat = true\nonce-per-checkout = true\n",
             env.project_root
         ),
     );
@@ -10567,7 +5926,8 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
         // The host's last write before the check runs publishes its child.
-        if record["node"] == "hold" && record["attempt"]["child"]["pid"].is_u64() && remembered() {
+        if record["node"] == "command" && record["attempt"]["child"]["pid"].is_u64() && remembered()
+        {
             break record;
         }
         assert!(Instant::now() < deadline, "the run never held: {record}");
@@ -10700,7 +6060,7 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         )) && notice.trim_end().ends_with(" loop list`."),
         "{notice}"
     );
-    // A check run holds no agent, and its report landed.
+    // A command run holds no agent, and its report landed.
     assert!(
         !notice.contains("agents") && !notice.contains("loop report"),
         "{notice}"
@@ -10729,26 +6089,18 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
     let mut config = String::new();
     // `old` stands for a record an older RimZ created: no `engaged`, no sealed fire facts.
     // `rewritten` for one an older RimZ rewrote mid-run, dropping the `engaged` it did not know.
-    for (task, start, stripped) in [
-        ("old", "hold", &["engaged", "fire_facts"][..]),
-        ("rewritten", "first", &["engaged"][..]),
+    for (task, stripped) in [
+        ("old", &["engaged", "fire_facts"][..]),
+        ("rewritten", &["engaged"][..]),
     ] {
         let gate = env.home_root.join(format!("{task}-gate"));
-        let dir = env.rimz_home().join(format!("workflows/{task}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("workflow.toml"),
-            format!(
-                "[workflow]\nscope = 'project'\nstart = '{start}'\n\
-                 [test.first]\ntimeout='365d'\nshell = 'true'\non.pass = 'hold'\non.fail = '@failed'\n\
-                 [test.hold]\ntimeout='365d'\nshell = 'while [ ! -e {} ]; do sleep 0.05; done; printf released'\n\
-                 on.pass = '@done'\non.fail = '@failed'\n",
-                gate.display()
-            ),
-        )
-        .unwrap();
+        let hold = format!(
+            "while [ ! -e {} ]; do sleep 0.05; done; printf released",
+            gate.display()
+        );
         config.push_str(&format!(
-            "[tasks.{task}]\nworkflow = '{task}'\nroot = {:?}\nevery = '1h'\n",
+            "[tasks.{task}]\ncommand = ['sh', '-c', {hold:?}]\ntimeout = '1h'\nroot = {:?}\n\
+             every = '1h'\n",
             env.project_root
         ));
         write_loop_config(&env, &config);
@@ -10764,7 +6116,7 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
         let mut record = loop {
             let record: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
-            if record["node"] == "hold" && record["attempt"].is_object() {
+            if record["node"] == "command" && record["attempt"].is_object() {
                 break record;
             }
             assert!(Instant::now() < deadline, "{task} never held: {record}");
@@ -10825,10 +6177,12 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
             "loop",
             "add",
             "history",
-            "--check",
-            "printf healthy",
             "--every",
             "15m",
+            "--",
+            "sh",
+            "-c",
+            "printf healthy",
         ],
     );
     loop_ok(&env, &["loop", "fire", "history"]);
@@ -10849,10 +6203,12 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
             "loop",
             "add",
             "history",
-            "--check",
-            "printf broken; definitely-missing-rimz-loop-command",
             "--every",
             "15m",
+            "--",
+            "sh",
+            "-c",
+            "printf broken; definitely-missing-rimz-loop-command",
         ],
     );
     let before = run_mark(&env, "history");
@@ -10863,11 +6219,11 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     assert!(journal.contains("broken"), "{journal}");
     assert_eq!(read_loop_run_records(&env).len(), 1);
 
-    // The views read each fire's check output from its run's journal.
+    // The views read each fire's command output from its run's journal.
     let show = loop_ok(&env, &["loop", "show", "history"]);
     assert!(
         show.contains("LAST RUN — ✗ failed")
-            && show.contains("check: fail · exit 127")
+            && show.contains("command: fail · exit 127")
             && show.contains("broken"),
         "{show}"
     );
@@ -10880,180 +6236,6 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     assert!(
         failed.contains("broken") && !failed.contains("healthy"),
         "{failed}"
-    );
-}
-
-#[test]
-fn loop_judge_decline_renders_its_verdict_from_the_run() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    // A stored guarded wait whose judge declines ends before its message step.
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.judged]\nwait = {{ kind = \"claude\", session = \"sess-judged\", handle = \"@claude\" }}\n\
-             prompt = \"fix it\"\non = \"fail\"\n\
-             every = \"15m\"\nroot = {:?}\n\
-             [[tasks.judged.judge]]\nagent = \"claude\"\nprompt = \"is it broken?\"\n",
-            env.project_root
-        ),
-    );
-    let shell = crate::common::write_fake_login_shell(&env, "judge-shell", &[]);
-    let bin = env.home_root.join("judge-bin");
-    crate::common::write_path_shim(
-        &bin,
-        "claude",
-        "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
-         printf '%s\\n' '{\"structured_output\":{\"outcome\":\"pass\",\"reason\":\"all green\"}}'\n",
-    );
-    let fired = env
-        .rimz()
-        .args(["loop", "fire", "judged"])
-        .env("SHELL", &shell)
-        .env("PATH", crate::common::path_with_front(&bin))
-        .output()
-        .unwrap();
-    assert!(fired.status.success(), "{fired:?}");
-    let report = wait_for_loop_report(&env, "judged");
-    assert_eq!(report.result, LoopRunResult::Completed);
-    wait_until_finished(&env, &report);
-
-    let logs = loop_ok(&env, &["loop", "logs", "judged"]);
-    assert!(logs.contains("judge claude: pass — all green"), "{logs}");
-    let show = loop_ok(&env, &["loop", "show", "judged"]);
-    assert_eq!(
-        show.matches("judge claude: pass — all green").count(),
-        1,
-        "{show}"
-    );
-}
-
-#[test]
-fn loop_guard_skips_or_delivers_with_evidence() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-check", "feature-loop");
-    // `loop add` refuses a guarded `--wait`; stored rows of the shape still run.
-    let task = |name: &str, check: &str| {
-        format!(
-            "[tasks.{name}]\n\
-             wait = {{ kind = \"claude\", session = \"sess-loop-check\", handle = \"@claude\" }}\n\
-             prompt = \"fix it\"\ncheck = {check:?}\non = \"fail\"\nroot = {:?}\nevery = \"15m\"\n",
-            env.project_root
-        )
-    };
-    write_loop_config(
-        &env,
-        &format!(
-            "{}{}",
-            task("healthy", "printf probe-line"),
-            task("broken", "printf boom; exit 1")
-        ),
-    );
-    loop_ok(&env, &["loop", "run", "healthy"]);
-    let skipped = wait_for_loop_report(&env, "healthy");
-    assert_eq!(
-        (skipped.result, skipped.acted),
-        (LoopRunResult::Completed, Some(false))
-    );
-    assert!(
-        env.store()
-            .list_pending_messages()
-            .expect("messages")
-            .is_empty()
-    );
-
-    // The passing guard is a quiet fire, forgotten.
-    wait_until_forgotten(&env, &skipped);
-    assert_eq!(
-        quiet_fires(&env, "healthy").map(|(count, _)| count),
-        Some(1)
-    );
-
-    loop_ok(&env, &["loop", "run", "broken"]);
-    let delivered = wait_for_loop_report(&env, "broken");
-    assert_eq!(
-        (delivered.result, delivered.acted),
-        (LoopRunResult::Completed, Some(true))
-    );
-    assert_pending_message(&env, "sess-loop-check", "fix it");
-    // A run that ends done through its message step is kept: one row and a finished home.
-    wait_until_finished(&env, &delivered);
-    assert!(quiet_fires(&env, "broken").is_none());
-    assert_eq!(
-        read_loop_run_records(&env)
-            .iter()
-            .filter(|row| row.task == "broken" && row.run_id == delivered.run_id)
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn loop_preparation_error_records_and_renders() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-trip-error", "feature-loop");
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.trip_error]\n\
-             wait = {{ kind = \"claude\", session = \"sess-loop-trip-error\", handle = \"@claude\" }}\n\
-             prompt-file = \"missing-prompt.txt\"\ncheck = \"false\"\nroot = \"{}\"\nevery = \"15m\"\n",
-            env.project_root.display()
-        ),
-    );
-
-    // The prompt file is read where the run's definition compiles, before any check runs.
-    let (_stdout, error) = loop_fail(&env, &["loop", "fire", "trip_error"]);
-    assert!(
-        error.contains("reading prompt-file") && error.contains("missing-prompt.txt"),
-        "{error}"
-    );
-    let records = read_loop_run_records(&env);
-    assert_eq!(
-        records.len(),
-        1,
-        "a preparation error must append exactly one terminal row"
-    );
-    let record = &records[0];
-    assert_eq!(record.result, LoopRunResult::Errored);
-    assert!(
-        record
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("reading prompt-file"))
-    );
-    let show = loop_ok(&env, &["loop", "show", "trip_error"]);
-    assert!(
-        show.contains("error") && show.contains("reading prompt-file"),
-        "{show}"
-    );
-    assert!(
-        std::fs::read_to_string(loop_config_path(&env))
-            .unwrap()
-            .contains("[tasks.trip_error]")
-    );
-}
-
-#[test]
-fn loop_missing_spawn_prompt_names_task() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.named_spawn]\nagent = \"claude\"\nroot = \"{}\"\nat = \"07:00\"\n",
-            env.project_root.display()
-        ),
-    );
-    let (_stdout, error) = loop_fail(&env, &["loop", "run", "named_spawn"]);
-    assert!(
-        error.contains("loop task `named_spawn` has no prompt")
-            && !error.contains("loop task `claude` has no prompt"),
-        "{error}"
     );
 }
 
@@ -11070,12 +6252,10 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
             "loop",
             "add",
             "dispatch-fails",
-            "--agent",
-            "claude",
-            "--prompt",
-            "ship it",
             "--at",
             "07:00",
+            "--",
+            "true",
         ],
     );
     let empty_path = dispatch.home_root.join("empty-path");
@@ -11116,75 +6296,6 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
             .any(|row| row.task == "dispatch-fails" && row.run_id.is_some()),
         "no run for the spent one-shot: {runs:?}"
     );
-
-    let preflight = Env::new();
-    write_loop_instances(
-        &preflight,
-        Tasks(BTreeMap::from([(
-            "preflight-fails".to_owned(),
-            TaskEntry {
-                agent: Some("claude".to_owned()),
-                prompt: Some("ship it".to_owned()),
-                root: preflight.project_root.clone(),
-                at: Some("07:00".to_owned()),
-                ..TaskEntry::default()
-            },
-        )])),
-    );
-    let (_stdout, error) = loop_fail(&preflight, &["loop", "run", "preflight-fails"]);
-    assert!(error.contains("hooks are not installed"), "{error}");
-    assert!(
-        read_loop_instances(&preflight)
-            .0
-            .contains_key("preflight-fails")
-    );
-    assert_eq!(last_loop_record(&preflight).task, "preflight-fails");
-}
-
-#[test]
-fn loop_show_surfaces_spawn_failure_tail_and_prior_error() {
-    let env = Env::new();
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.forensics]\nagent = \"codex\"\nprompt = \"go\"\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
-            env.project_root.display()
-        ),
-    );
-    let paths = env.state_path_for(&env.project_root);
-    paths.ensure_dirs().unwrap();
-    let mut run = RunRecord::new(
-        env.workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        env.project_root.clone(),
-    );
-    run.status = RunStatus::Failed;
-    run.failure_tail = Some("agent startup failed\nmissing binary".to_owned());
-    run.transcript_path = Some("/tmp/rimz-transcript.jsonl".to_owned());
-    rimz::harness::run::create(&paths, &run).unwrap();
-
-    let mut prior =
-        LoopRunRecord::new("forensics", LoopRunResult::Errored, LoopRunMode::Manual, 42);
-    prior.at = Timestamp::from_second(10).unwrap();
-    prior.error = Some("reading system-prompt-file `/missing.md`\ncaused by: not found".to_owned());
-    let mut failed =
-        LoopRunRecord::new("forensics", LoopRunResult::Failed, LoopRunMode::Manual, 50);
-    failed.at = Timestamp::from_second(20).unwrap();
-    failed.run_id = Some(run.run_id.to_string());
-    failed.transcript_path = Some("/tmp/rimz-transcript.jsonl".to_owned());
-    write_loop_run_records(&env, &[prior, failed]);
-
-    let show = loop_ok(&env, &["loop", "show", "forensics"]);
-    assert!(
-        show.contains("LAST RUN — ✗ failed (exit 1)")
-            && show.contains("agent startup failed\n  │ missing binary")
-            && show.contains("transcript: /tmp/rimz-transcript.jsonl")
-            && !show.contains("last failure"),
-        "{show}"
-    );
-    assert!(!show.contains("caused by: not found"), "{show}");
 }
 
 #[test]
@@ -11205,8 +6316,6 @@ fn loop_poll_until_delivers_once_or_expires() {
                     handle: "@claude".to_owned(),
                 }),
                 prompt: Some("merge now".to_owned()),
-                check: Some("true".into()),
-                on: Some(CheckOn::Success),
                 root: env.project_root.clone(),
                 every: Some("2m".to_owned()),
                 deadline: Some(Timestamp::now() + SignedDuration::from_mins(30)),
@@ -11215,9 +6324,12 @@ fn loop_poll_until_delivers_once_or_expires() {
         )])),
     );
     loop_ok(&env, &["loop", "run", "green"]);
-    // The acted run's report consumes the row.
-    let report = wait_for_loop_report(&env, "green");
-    assert_eq!(report.acted, Some(true));
+    // The delivery consumes the row.
+    wait_for_loop_run_records(&env, "green's delivery", |records| {
+        records
+            .iter()
+            .any(|record| record.task == "green" && record.result == LoopRunResult::Delivered)
+    });
     assert_pending_message(&env, "sess-loop-until", "merge now");
     wait_for_loop_run_records(&env, "the acted --until row's removal", |_| {
         !read_loop_instances(&env).0.contains_key("green")
@@ -11236,8 +6348,6 @@ fn loop_poll_until_delivers_once_or_expires() {
                     handle: "@claude".to_owned(),
                 }),
                 prompt: Some("too late".to_owned()),
-                check: Some("true".into()),
-                on: Some(CheckOn::Success),
                 root: expired.project_root.clone(),
                 every: Some("2m".to_owned()),
                 deadline: Some(Timestamp::from_second(1).unwrap()),
@@ -11264,88 +6374,12 @@ fn loop_poll_until_delivers_once_or_expires() {
 }
 
 #[test]
-fn loop_worktree_target_delivery_preserves_session() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    if !init_git_repo(&env.project_root) {
-        crate::common::skip("git unavailable");
-        return;
-    }
-    let worktree = env.home_root.join("project-worktrees/feature-loop");
-    std::fs::create_dir_all(worktree.parent().expect("worktree parent")).expect("mkdir worktrees");
-    assert!(git_ok(
-        &env.project_root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "feature-loop",
-            worktree.to_str().expect("utf8 worktree"),
-        ]
-    ));
-    env.install_agent_hooks("claude");
-    register_running_agent_at(&env, "sess-loop-worktree", "feature-loop", &worktree);
-    let added = env
-        .rimz()
-        .current_dir(&worktree)
-        .args([
-            "loop",
-            "add",
-            "wait-worktree",
-            "--wait",
-            "@claude",
-            "--every",
-            "15m",
-            "--prompt",
-            "worktree next step",
-        ])
-        .output()
-        .expect("loop add");
-    assert!(
-        added.status.success(),
-        "{}",
-        String::from_utf8_lossy(&added.stderr)
-    );
-    loop_ok(&env, &["loop", "run", "wait-worktree"]);
-    assert_pending_message(&env, "sess-loop-worktree", "worktree next step");
-}
-
-#[test]
-fn loop_guarded_wait_to_a_dead_target_fails_its_run() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let config = format!(
-        "[tasks.dead]\nwait = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
-         prompt = \"wake up\"\ncheck = \"false\"\nroot = \"{}\"\nat = \"07:00\"\n",
-        env.project_root.display()
-    );
-    write_loop_config(&env, &config);
-    // A guarded wait runs its guard and message step in a run; an undelivered message fails it.
-    // A scheduled run spends the one-shot; a manual fire keeps it.
-    for (verb, kept) in [("fire", true), ("run", false)] {
-        let before = run_mark(&env, "dead");
-        let text = loop_ok(&env, &["loop", verb, "dead"]);
-        assert!(text.contains("launched"), "{text}");
-        let report = wait_for_loop_report_after(&env, "dead", before);
-        assert_eq!(report.result, LoopRunResult::Failed, "{verb}");
-        assert_eq!(
-            std::fs::read_to_string(loop_config_path(&env))
-                .unwrap()
-                .contains("[tasks.dead]"),
-            kept,
-            "{verb}"
-        );
-    }
-}
-
-#[test]
 fn loop_list_uses_room_arm_stamp_for_next_fire() {
     let env = Env::new();
     write_loop_config(
         &env,
         &format!(
-            "[tasks.next]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.next]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display()
         ),
     );
@@ -11381,7 +6415,7 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.invalid]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\nat = \"07:00\"\n",
+            "[tasks.invalid]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\nat = \"07:00\"\n",
             env.project_root.display()
         ),
     );
@@ -11404,7 +6438,8 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
     let mut config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let entry = config.tasks.0.get_mut("invalid").unwrap();
-    entry.check = None;
+    entry.command.clear();
+    entry.timeout = None;
     entry.wait = Some(TaskTarget {
         kind: AgentKind::new_unchecked("claude"),
         session: AgentSessionId::from("manual-invalid-session"),
@@ -11421,7 +6456,7 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.legacy]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.legacy]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display()
         ),
     );
@@ -11439,46 +6474,13 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
             && !show.contains("last failure"),
         "{list}\n{show}"
     );
-    assert!(show.contains("  action: run check · true"), "{show}");
+    assert!(show.contains("  action:  run true"), "{show}");
     assert!(
         show.lines().any(|line| line.starts_with("  source: "))
             && !show.contains("throttle:")
             && !show.contains("THROTTLE"),
         "{show}"
     );
-}
-
-#[test]
-fn loop_show_nonspawning_tasks_have_no_throttle_readings() {
-    let env = Env::new();
-    let core = env.rimz_home().join("config.toml");
-    let base = std::fs::read_to_string(&core).unwrap_or_default();
-    for (limit, switch) in [
-        ("", ""),
-        ("", "throttle='on'\n"),
-        ("", "throttle='off'\n"),
-        ("[throttle]\nmax-parallel-agents = 1\n", ""),
-    ] {
-        std::fs::write(&core, format!("{base}\n{limit}")).unwrap();
-        write_loop_config(
-            &env,
-            &format!(
-                "[tasks.check]\n{switch}check = \"true\"\nroot = {:?}\nevery = \"1h\"\n\
-                 [tasks.wake]\n{switch}root = {:?}\nevery = \"1h\"\n\
-                 wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
-                env.project_root, env.project_root,
-            ),
-        );
-        for name in ["check", "wake"] {
-            let show = loop_ok(&env, &["loop", "show", name]);
-            assert!(
-                !show.contains("throttle:")
-                    && !show.contains("load:")
-                    && !show.contains("THROTTLE"),
-                "{show}"
-            );
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -11548,7 +6550,7 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "busy", "--check", "true", "--at", "07:00"],
+        &["loop", "add", "busy", "--at", "07:00", "--", "true"],
     );
     // A stored bare `at` row: `loop add --at` now writes `fire-at`, whose one scheduled
     // attempt ends the row whatever its result.
@@ -11629,7 +6631,7 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "busy", "--check", "true", "--every", "1h"],
+        &["loop", "add", "busy", "--every", "1h", "--", "true"],
     );
     loop_ok(&env, &["loop", "fire", "busy"]);
     // The fire returns once its run starts; LAST reads the run's report.
@@ -11677,10 +6679,7 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
 fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
     let env = Env::new();
     env.record(&env.project_root);
-    loop_ok(
-        &env,
-        &["loop", "add", "fan", "--check", "true", "--every", "1h"],
-    );
+    loop_ok(&env, &["loop", "add", "fan", "--every", "1h", "--", "true"]);
     let holder = RunLockInfo {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
@@ -11710,10 +6709,7 @@ fn loop_list_warns_once_when_the_run_locks_cannot_be_listed() {
     let env = Env::new();
     env.record(&env.project_root);
     for name in ["first", "second"] {
-        loop_ok(
-            &env,
-            &["loop", "add", name, "--check", "true", "--every", "1h"],
-        );
+        loop_ok(&env, &["loop", "add", name, "--every", "1h", "--", "true"]);
     }
     // A file where the locks directory belongs makes listing it fail.
     let locks = loop_run_lock_path(&env, "first");
@@ -11754,7 +6750,8 @@ fn loop_watch_keeps_acting_results_after_skipped_signals() {
                             name.into(),
                             TaskEntry {
                                 root: env.project_root.clone(),
-                                check: Some("true".into()),
+                                command: vec!["true".to_owned()],
+                                timeout: Some("1m".to_owned()),
                                 signal: Some("ci.failed".into()),
                                 ..TaskEntry::default()
                             },
@@ -11816,7 +6813,7 @@ fn loop_watch_picks_up_a_quiet_fire_that_appends_nothing_to_the_log() {
     seed_loop_watch_room(&env);
     loop_ok(
         &env,
-        &["loop", "add", "hushed", "--check", "true", "--every", "1h"],
+        &["loop", "add", "hushed", "--every", "1h", "--", "true"],
     );
     let frame = loop_watch_across(
         &env,
@@ -11855,7 +6852,8 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
                     "local".into(),
                     TaskEntry {
                         root: env.project_root.clone(),
-                        check: Some("true".into()),
+                        command: vec!["true".to_owned()],
+                        timeout: Some("1m".to_owned()),
                         every: Some("1h".into()),
                         ..TaskEntry::default()
                     },
@@ -11865,7 +6863,8 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
                     TaskEntry {
                         root: env.project_root.clone(),
                         dir: Some(checkout),
-                        check: Some("true".into()),
+                        command: vec!["true".to_owned()],
+                        timeout: Some("1m".to_owned()),
                         every: Some("1h".into()),
                         ..TaskEntry::default()
                     },
@@ -11874,7 +6873,8 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
                     "remote-task".into(),
                     TaskEntry {
                         root: elsewhere,
-                        check: Some("true".into()),
+                        command: vec!["true".to_owned()],
+                        timeout: Some("1m".to_owned()),
                         every: Some("1h".into()),
                         ..TaskEntry::default()
                     },
@@ -11925,7 +6925,7 @@ fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
     seed_loop_watch_room(&env);
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--check", "true", "--every", "1h"],
+        &["loop", "add", "probe", "--every", "1h", "--", "true"],
     );
     // A directory where the run lock file belongs makes opening the lock fail.
     std::fs::create_dir_all(loop_run_lock_path(&env, "probe")).unwrap();
@@ -11950,7 +6950,7 @@ fn loop_watch_stays_silent_when_the_locks_directory_cannot_be_listed() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.remote-task]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.remote-task]\ncommand = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
             elsewhere.display()
         ),
     );
@@ -11979,10 +6979,7 @@ fn loop_watch_stays_silent_when_the_locks_directory_cannot_be_listed() {
 fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
     let env = Env::new();
     env.record(&env.project_root);
-    loop_ok(
-        &env,
-        &["loop", "add", "fan", "--check", "true", "--every", "1h"],
-    );
+    loop_ok(&env, &["loop", "add", "fan", "--every", "1h", "--", "true"]);
     let mut runner = Command::new("sleep")
         .arg("30")
         .spawn()
@@ -12021,7 +7018,7 @@ fn loop_stop_without_active_run_reports_no_active_run() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "idle", "--check", "true", "--every", "15m"],
+        &["loop", "add", "idle", "--every", "15m", "--", "true"],
     );
     let stopped = loop_ok(&env, &["loop", "stop", "idle"]);
     assert!(stopped.contains("loop `idle`: no active run"), "{stopped}");
@@ -12043,12 +7040,13 @@ fn terminal_check_runs_interactive_shell_to_completion() {
             "add",
             "shell-probe",
             "--every",
-            "15m",
-            // A bound on the failure only: the check exits on its own, and a
+            "15m", // A bound on the failure only: the check exits on its own, and a
             // shell stopped by terminal job control is what runs into it.
             "--timeout",
             "60s",
-            "--check",
+            "--",
+            "sh",
+            "-c",
             "bash -i -c 'printf shell-ready'",
         ],
     );
@@ -12102,7 +7100,9 @@ fn terminal_check_outlived_by_its_session_leader_runs_to_completion() {
             "15m",
             "--timeout",
             "20s",
-            "--check",
+            "--",
+            "sh",
+            "-c",
             "bash -i -c 'printf shell-ready'",
         ],
     );
@@ -12152,7 +7152,9 @@ fn manual_check_clears_the_agent_identity_overlay() {
             "identity",
             "--every",
             "15m",
-            "--check",
+            "--",
+            "sh",
+            "-c",
             "test -z \"${RIMZ_AGENT_ID+x}${RIMZ_AGENT_KIND+x}${RIMZ_AGENT_NAME+x}${RIMZ_AGENT_PROFILE+x}${RIMZ_AGENT_ROLE+x}${RIMZ_AGENT_MODEL+x}${RIMZ_AGENT_EFFORT+x}${RIMZ_AGENT_BUDGET+x}${RIMZ_AGENT_PID+x}\" && printf 'clean %s' \"${RIMZ_CHANNEL-unset}\"",
         ],
     );
@@ -12186,193 +7188,6 @@ fn manual_check_clears_the_agent_identity_overlay() {
 
 #[cfg(unix)]
 #[test]
-fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
-    loop_stop_of_a_spawn_run(false);
-}
-
-/// The run stops and its lock is released, then the command fails naming
-/// the pane it could not close and the stop that does close it.
-#[cfg(unix)]
-#[test]
-fn loop_stop_fails_after_stopping_a_run_whose_pane_stays_open() {
-    loop_stop_of_a_spawn_run(true);
-}
-
-#[cfg(unix)]
-fn loop_stop_of_a_spawn_run(pane_open: bool) {
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &env.project_root);
-    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = env.resolve_workspace(&env.project_root);
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        Vec::new(),
-    );
-    let pane_fixture = env.project_root.join("panes.json");
-    std::fs::write(&pane_fixture, "[]").unwrap();
-    let owner = dummy_agent_process();
-    let owner_pid = owner.id();
-    reap_later(owner);
-    write_stoppable_pane(&env, &pane_fixture, 51, "codex", owner_pid);
-    let command = || {
-        let mut command = env.rimz();
-        command
-            .args(["--mux", "zellij"])
-            .env("SHELL", &shell)
-            .env("PATH", path_with_front(&agent_bin))
-            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-            .env(
-                "RIMZ_ZELLIJ_BIN",
-                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-            )
-            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
-            .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-            .env("ZELLIJ_PANE_ID", "1")
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                format!("{} [Created 1s ago]\n", workspace.session_name),
-            );
-        command
-    };
-    loop_ok(
-        &env,
-        &[
-            "loop", "add", "spawn", "--agent", "codex", "--prompt", "fix it", "--every", "15m",
-        ],
-    );
-    let paths = env.state_path_for(&env.project_root);
-    assert!(!paths.workspace_record.exists());
-    let fired = command().args(["loop", "run", "spawn"]).output().unwrap();
-    assert!(fired.status.success(), "{fired:?}");
-    // The fire's workflow run launches the agent step's supervised run.
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let run = loop {
-        let records = rimz::harness::run::list(&paths).unwrap_or_default();
-        if let Some(record) = records.first() {
-            if record.status == RunStatus::Running {
-                break record.clone();
-            }
-            // The trace mux opens no provider process, so supply its startup hook.
-            if record.status == RunStatus::Pending {
-                let mut hook = env.hook_command("codex");
-                hook.env("RIMZ_AGENT_PID", owner_pid.to_string())
-                    .env("ZELLIJ_PANE_ID", "51")
-                    .env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
-                    .env(
-                        rimz::harness::launch::ENV_AGENT_NAME,
-                        record.agent_name.as_ref().unwrap().as_str(),
-                    );
-                let output = env
-                    .spawn_payload(
-                        hook,
-                        &json!({
-                            "hook_event_name": "SessionStart",
-                            "session_id": "loop-spawn-session",
-                            "cwd": env.project_root,
-                        })
-                        .to_string(),
-                    )
-                    .wait_with_output()
-                    .unwrap();
-                env.drain_hooks();
-                assert!(
-                    output.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for Running run"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    assert!(run.workflow.is_some(), "{run:?}");
-    assert!(paths.workspace_record.is_file());
-    assert!(
-        rimz::StatePaths::history_paths(&paths.root)
-            .events_log
-            .is_file()
-    );
-
-    let mut stop = command();
-    if pane_open {
-        rimz::harness::run::record_pane(
-            &paths,
-            &run.run_id,
-            rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_51"),
-        )
-        .unwrap();
-        stop.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-        );
-    }
-    let stopped = stop.args(["loop", "stop", "spawn"]).output().unwrap();
-    let stderr = String::from_utf8_lossy(&stopped.stderr);
-    if pane_open {
-        // The workflow's cancel cannot stop an attempt whose pane stays open.
-        assert!(!stopped.status.success(), "{stopped:?}");
-        assert!(
-            stderr.contains(&format!(
-                "loop `spawn`: workflow run {}",
-                run.workflow.as_ref().unwrap().run
-            )) && stderr.contains("not canceled: error: stopping workflow attempt"),
-            "{stderr}"
-        );
-        return;
-    }
-    assert!(
-        String::from_utf8_lossy(&stopped.stdout).contains("loop `spawn`: stopped · run"),
-        "{stopped:?}"
-    );
-    assert!(stopped.status.success(), "{stderr}");
-    assert_eq!(
-        rimz::harness::run::load(&paths, &run.run_id)
-            .unwrap()
-            .status,
-        RunStatus::Canceled
-    );
-    assert_eq!(
-        wait_for_loop_report(&env, "spawn").result,
-        LoopRunResult::Canceled
-    );
-    for entry in std::fs::read_dir(env.rimz_home().join("ws")).unwrap() {
-        let name = entry.unwrap().file_name();
-        let name = name.to_string_lossy();
-        assert!(
-            !name
-                .strip_prefix("ws-")
-                .is_some_and(|suffix| suffix.len() == 24
-                    && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())),
-            "fallback workspace directory: {name}"
-        );
-    }
-
-    loop_ok(&env, &["gc", "--all"]);
-    assert!(paths.root.is_dir());
-    assert!(
-        paths
-            .runs_dir
-            .join(format!("{}.json", run.run_id))
-            .is_file()
-    );
-    assert_eq!(
-        rimz::harness::run::load(&paths, &run.run_id)
-            .unwrap()
-            .status,
-        RunStatus::Canceled
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn loop_stop_terminates_holder_and_records_cancellation() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -12382,10 +7197,12 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
             "loop",
             "add",
             "stuck",
-            "--check",
-            "touch check-ready; parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
             "--at",
             "23:59",
+            "--",
+            "sh",
+            "-c",
+            "touch check-ready; parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
         ],
     );
     loop_ok(&env, &["loop", "run", "stuck"]);
@@ -12399,179 +7216,6 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
     assert!(
         list.contains("DONE") && list.contains("stuck") && list.contains("canceled"),
         "{list}"
-    );
-}
-
-/// A scheduled `--in` spawn one-shot whose runner holds its lock with a Running
-/// run record, after the fire consumed its instance row.
-#[cfg(unix)]
-struct ConsumedSpawn {
-    shell: std::path::PathBuf,
-    agent_bin: std::path::PathBuf,
-    pane_fixture: std::path::PathBuf,
-    session_name: String,
-}
-
-#[cfg(unix)]
-fn write_stoppable_pane(env: &Env, path: &Path, pane: u32, kind: &str, owner: u32) {
-    let mut listed = rimz::pane::PaneRef::from_id(rimz::ids::PaneId::from_parts(
-        MuxName::Zellij,
-        format!("terminal_{pane}"),
-    ));
-    listed.session_name = env.resolve_workspace(&env.project_root).session_name;
-    listed.command = Some(kind.to_owned());
-    listed.pane_pid = Some(owner);
-    listed.hosted_agent_kind = Some(AgentKind::new_unchecked(kind));
-    std::fs::write(path, serde_json::to_vec(&[listed]).unwrap()).unwrap();
-}
-
-#[cfg(unix)]
-impl ConsumedSpawn {
-    fn command(&self, env: &Env) -> Command {
-        let mut command = env.rimz();
-        command
-            .args(["--mux", "zellij"])
-            .env("SHELL", &self.shell)
-            .env("PATH", path_with_front(&self.agent_bin))
-            .env("RIMZ_TEST_PANE_LIST", &self.pane_fixture)
-            .env(
-                "RIMZ_ZELLIJ_BIN",
-                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-            )
-            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-            .env("ZELLIJ_PANE_ID", "1")
-            .env(
-                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                format!("{} [Created 1s ago]\n", self.session_name),
-            );
-        command
-    }
-}
-
-#[cfg(unix)]
-fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, RunRecord) {
-    env.record(&env.project_root);
-    env.install_agent_hooks("codex");
-    trust_codex_preflight_hooks(env);
-    trust_codex_project(env, &env.project_root);
-    let pane_fixture = env.project_root.join("panes.json");
-    let owner = dummy_agent_process();
-    let owner_pid = owner.id();
-    reap_later(owner);
-    write_stoppable_pane(env, &pane_fixture, 1, "codex", owner_pid);
-    let workspace = env.resolve_workspace(&env.project_root);
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        Vec::new(),
-    );
-    let fixture = ConsumedSpawn {
-        shell: write_fake_login_shell(env, "rimz-test-sh", &[]),
-        agent_bin: crate::common::write_failing_agent_shim(env, "codex", 1),
-        pane_fixture,
-        session_name: workspace.session_name.to_string(),
-    };
-    loop_ok(
-        env,
-        &[
-            "loop", "add", name, "--agent", "codex", "--prompt", "fix it", "--in", "30m",
-        ],
-    );
-    assert!(read_loop_instances(env).0.contains_key(name));
-    let paths = env.state_path_for(&env.project_root);
-    let fired = fixture
-        .command(env)
-        .args(["loop", "run", name])
-        .output()
-        .unwrap();
-    assert!(fired.status.success(), "{fired:?}");
-    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-    let run = loop {
-        let records = rimz::harness::run::list(&paths).unwrap_or_default();
-        if let Some(record) = records.first() {
-            if record.status == RunStatus::Running {
-                break record.clone();
-            }
-            // The trace mux opens no provider process, so supply its startup hook.
-            if record.status == RunStatus::Pending {
-                let mut hook = env.hook_command("codex");
-                hook.env("RIMZ_AGENT_PID", owner_pid.to_string())
-                    .env("ZELLIJ_PANE_ID", "1")
-                    .env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
-                    .env(
-                        rimz::harness::launch::ENV_AGENT_NAME,
-                        record.agent_name.as_ref().unwrap().as_str(),
-                    );
-                let output = env
-                    .spawn_payload(
-                        hook,
-                        &json!({
-                            "hook_event_name": "SessionStart",
-                            "session_id": "loop-spawn-session",
-                            "cwd": env.project_root,
-                        })
-                        .to_string(),
-                    )
-                    .wait_with_output()
-                    .unwrap();
-                env.drain_hooks();
-                assert!(
-                    output.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for Running run"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    assert!(run.workflow.is_some(), "{run:?}");
-    assert!(!read_loop_instances(env).0.contains_key(name));
-    (fixture, run)
-}
-
-#[cfg(unix)]
-#[test]
-fn loop_stop_reaches_a_consumed_one_shot_run() {
-    let env = Env::new();
-    let (fixture, run) = start_consumed_spawn(&env, "later");
-    let paths = env.state_path_for(&env.project_root);
-
-    let stopped = fixture
-        .command(&env)
-        .args(["loop", "stop", "later"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&stopped.stdout);
-    assert!(
-        stopped.status.success(),
-        "{}",
-        String::from_utf8_lossy(&stopped.stderr)
-    );
-    assert!(stdout.contains("loop `later`: stopped · run"), "{stdout}");
-    assert_eq!(
-        rimz::harness::run::load(&paths, &run.run_id)
-            .unwrap()
-            .status,
-        RunStatus::Canceled
-    );
-    let record = wait_for_loop_report(&env, "later");
-    assert_eq!(record.result, LoopRunResult::Canceled);
-    assert_eq!(record.kind, Some(rimz::harness::schedule::TaskKind::OneOff));
-    assert!(!read_loop_instances(&env).0.contains_key("later"));
-    let list = loop_ok(&env, &["loop", "list"]);
-    assert!(
-        list.contains("DONE") && list.contains("later") && list.contains("canceled"),
-        "{list}"
-    );
-    let show = loop_ok(&env, &["loop", "show", "later"]);
-    assert!(
-        show.contains("canceled") && !show.contains("▸ running"),
-        "{show}"
     );
 }
 
@@ -12608,7 +7252,7 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
     // A failing check keeps its run's row, which `loop logs` still reads once the task is gone.
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--check", "false", "--every", "1h"],
+        &["loop", "add", "probe", "--every", "1h", "--", "false"],
     );
     let before = run_mark(&env, "probe");
     loop_ok(&env, &["loop", "fire", "probe"]);
@@ -12691,14 +7335,13 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
             "loop",
             "add",
             "machine-signal",
-            "--check",
-            "true",
-            "--on",
-            "any",
             "--signal",
             "ci.failed",
             "--match",
             "branch=feature",
+            "--repeat",
+            "--",
+            "true",
         ],
     );
     assert!(
@@ -12710,7 +7353,6 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
             .expect("parse loop config");
     let machine_task = &machine.tasks.0["machine-signal"];
     assert_eq!(machine_task.signal.as_deref(), Some("ci.failed"));
-    assert_eq!(machine_task.on, Some(CheckOn::Any));
     assert_eq!(
         machine_task
             .matches
@@ -12727,12 +7369,13 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
             "add",
             "project-signal",
             "--project",
-            "--check",
-            "true",
             "--signal",
             "ci.failed",
             "--match",
             "branch=feature",
+            "--repeat",
+            "--",
+            "true",
         ],
     );
     assert!(
@@ -12796,15 +7439,7 @@ fn loop_add_from_an_empty_dir_caller_anchors_at_its_checkout() {
             &workspace.workspace_id,
             &env.project_root,
         ))
-        .args([
-            "loop",
-            "add",
-            "from-empty",
-            "--check",
-            "true",
-            "--every",
-            "1h",
-        ])
+        .args(["loop", "add", "from-empty", "--every", "1h", "--", "true"])
         .output()
         .expect("rimz loop add");
     assert!(
@@ -12827,892 +7462,37 @@ fn loop_add_from_an_empty_dir_caller_anchors_at_its_checkout() {
 }
 
 #[test]
-fn loop_add_rejects_agent_signal_self_waits() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-self-wait", "feature-loop");
-
-    for extra in [Vec::new(), vec!["--match", "handle=@claude"]] {
-        let mut args = vec![
-            "loop",
-            "add",
-            "self-wait",
-            "--wait",
-            "@claude",
-            "--signal",
-            "agent.idle",
-            "--prompt",
-            "continue",
-        ];
-        args.extend(extra);
-        let (_stdout, error) = loop_fail(&env, &args);
-        assert!(
-            error.contains("requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"),
-            "{error}"
-        );
-        assert!(read_loop_instances(&env).0.is_empty());
-    }
-
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "peer-wait",
-            "--wait",
-            "@claude",
-            "--signal",
-            "agent.idle",
-            "--match",
-            "handle=@reviewer",
-            "--prompt",
-            "continue",
-        ],
-    );
-    let instances = read_loop_instances(&env);
-    assert_eq!(
-        instances.0["peer-wait"]
-            .matches
-            .as_ref()
-            .and_then(|matches| matches.get("handle"))
-            .map(String::as_str),
-        Some("@reviewer")
-    );
-}
-
-fn add_claude_account(env: &Env, name: &str) -> std::path::PathBuf {
-    let home = env.home_root.join(format!("claude-{name}"));
-    let output = env
-        .rimz()
-        .args(["accounts", "add", "claude", name, "--home"])
-        .arg(&home)
-        .output()
-        .expect("rimz accounts add");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    home
-}
-
-#[test]
-fn loop_add_resolves_a_markdown_profiles_provider_before_selecting_its_account() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    add_claude_account(&env, "hooloovoo");
-    crate::common::write_kind_base(&env, "codex");
-    crate::common::write_definition(
-        &env,
-        "agents",
-        "sonnet",
-        "description: Sonnet\nagent: claude\nmodel: sonnet\ntools: []",
-        "",
-    );
-    env.publish_accounts(&rimz::agents::account::AccountsCache {
-        logins: BTreeMap::from([(
-            "claude@hooloovoo".parse().unwrap(),
-            rimz::agents::account::ProviderRecord {
-                consecutive_failures: 0,
-                version_probed_at_ms: None,
-                inputs_stamp: None,
-                profile: None,
-                probe_error: None,
-                login: None,
-                probed_at_ms: 1,
-                ok: true,
-                account: None,
-            },
-        )]),
-    });
-
-    let added = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "sonnet-ping-hooloovoo",
-            "--agent",
-            "sonnet",
-            "--account",
-            "hooloovoo",
-            "--prompt",
-            "ping",
-            "--in",
-            "1m",
-            "--timeout",
-            "2m",
-        ],
-    );
-    assert!(
-        added.contains("action: launches a fresh sonnet pane on account `hooloovoo` in "),
-        "{added}"
-    );
-    let instances = read_loop_instances(&env);
-    let task = &instances.0["sonnet-ping-hooloovoo"];
-    assert_eq!(task.agent.as_deref(), Some("sonnet"));
-    assert_eq!(task.account, Some("hooloovoo".parse().unwrap()));
-}
-
-#[test]
-fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    add_claude_account(&env, "work");
-    let pinned = |name: &'static str, agent: &'static str, pin: &'static str| {
-        vec![
-            "loop",
-            "add",
-            name,
-            "--agent",
-            agent,
-            "--account",
-            pin,
-            "--prompt",
-            "x",
-            "--every",
-            "15m",
-        ]
-    };
-
-    let (_, undeclared) = loop_fail(&env, &pinned("ghost", "claude", "ghost"));
-    assert!(
-        undeclared.contains(
-            "unknown claude account `ghost`; configured: default, work; run `rimz accounts add claude ghost`"
-        ),
-        "{undeclared}"
-    );
-    let (_, unsupported) = loop_fail(&env, &pinned("unsupported", "grok", "work"));
-    assert!(
-        unsupported.contains("grok has no named accounts; only `default` is available"),
-        "{unsupported}"
-    );
-    assert!(
-        !loop_config_path(&env).exists(),
-        "a refused add writes no row"
-    );
-
-    let added = loop_ok(&env, &pinned("held", "claude", "work"));
-    assert!(
-        added.contains("action: launches a fresh claude pane on account `work` in "),
-        "{added}"
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("loop config"))
-            .expect("parse loop config");
-    assert_eq!(
-        config.tasks.0["held"].account,
-        Some("work".parse().expect("login name"))
-    );
-    for view in [&["loop", "show", "held"][..], &["loop", "list"]] {
-        let shown = loop_ok(&env, view);
-        assert!(shown.contains("claude · account work"), "{shown}");
-    }
-}
-
-#[test]
-fn loop_fire_keeps_a_pinned_markdown_profiles_provider_when_unavailable() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    add_claude_account(&env, "rimio");
-    loop_ok(
-        &env,
-        &[
-            "accounts",
-            "add",
-            "codex",
-            "rimio",
-            "--home",
-            env.home_root.join("codex-rimio").to_str().unwrap(),
-        ],
-    );
-    crate::common::write_kind_base(&env, "codex");
-    crate::common::write_definition(
-        &env,
-        "agents",
-        "sonnet",
-        "description: Sonnet\nagent: claude\nmodel: sonnet\ntools: []",
-        "",
-    );
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "ping",
-            "--agent",
-            "sonnet",
-            "--account",
-            "rimio",
-            "--prompt",
-            "ping",
-            "--every",
-            "15m",
-            "--throttle",
-            "off",
-        ],
-    );
-    env.publish_accounts(&rimz::agents::account::AccountsCache {
-        logins: BTreeMap::from([(
-            "claude@rimio".parse().unwrap(),
-            rimz::agents::account::ProviderRecord {
-                consecutive_failures: 0,
-                version_probed_at_ms: None,
-                inputs_stamp: None,
-                profile: None,
-                probe_error: None,
-                login: Some(rimz::agents::account::RecordedLogin::LoggedOut),
-                probed_at_ms: 1,
-                ok: true,
-                account: None,
-            },
-        )]),
-    });
-
-    let output = env.rimz().args(["loop", "run", "ping"]).output().unwrap();
-    let records = read_loop_run_records(&env);
-    assert_eq!(
-        records.last().map(|record| record.result),
-        Some(LoopRunResult::AccountSkipped),
-        "must skip the declared Claude account, not try Codex: {records:?}; {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.status.success());
-    let record = records.last().unwrap();
-    assert!(
-        record
-            .error
-            .as_deref()
-            .unwrap()
-            .starts_with("claude account `rimio` is logged out")
-    );
-    assert!(record.run_id.is_none());
-    assert!(read_loop_strikes(&env).is_empty());
-    assert!(
-        rimz::harness::run::list(&env.state_path_for(&env.project_root))
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[test]
-fn loop_fire_skips_when_its_pinned_account_cannot_run() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let home = add_claude_account(&env, "work");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "pinned",
-            "--agent",
-            "claude",
-            "--account",
-            "work",
-            "--prompt",
-            "work",
-            "--every",
-            "15m",
-        ],
-    );
-    let skipped = || {
-        loop_ok(&env, &["loop", "run", "pinned"]);
-        let record = last_loop_record(&env);
-        assert_eq!(record.result, LoopRunResult::AccountSkipped);
-        record.error.expect("skip reason")
-    };
-
-    env.publish_accounts(&rimz::agents::account::AccountsCache {
-        logins: BTreeMap::from([(
-            "claude@work".parse().unwrap(),
-            rimz::agents::account::ProviderRecord {
-                consecutive_failures: 0,
-                version_probed_at_ms: None,
-                inputs_stamp: None,
-                profile: None,
-                probe_error: None,
-                login: None,
-                probed_at_ms: 1,
-                ok: true,
-                account: None,
-            },
-        )]),
-    });
-    assert_eq!(
-        skipped(),
-        format!(
-            "claude account `work` is logged out; log in with `CLAUDE_CONFIG_DIR={} claude`",
-            home.display()
-        )
-    );
-
-    std::fs::remove_file(env.runtime_paths().shared_accounts_path()).unwrap();
-    std::fs::remove_dir_all(&home).unwrap();
-    let reason = skipped();
-    assert!(reason.contains("is not a directory; run `"), "{reason}");
-
-    let config = std::fs::read_to_string(loop_config_path(&env)).unwrap();
-    std::fs::write(
-        loop_config_path(&env),
-        config.replace("account = \"work\"", "account = \"ghost\""),
-    )
-    .unwrap();
-    assert_eq!(
-        skipped(),
-        "unknown claude account `ghost`; configured: default, work; run `rimz accounts add claude ghost`"
-    );
-
-    assert_eq!(read_loop_run_records(&env).len(), 3);
-    assert!(read_loop_strikes(&env).is_empty(), "a skip adds no strike");
-    let paths = env.state_path_for(&env.project_root);
-    assert!(
-        rimz::harness::run::list(&paths)
-            .unwrap_or_default()
-            .is_empty(),
-        "a skipped fire launches nothing"
-    );
-}
-
-/// A codex task pinned to `work` or `default` fires in a room whose codex
-/// account is `spare`: the launch is stamped with the pin, never the room's.
-/// A `default` pin stores no stamp, which every launch reads as the provider's
-/// own home.
-#[cfg(unix)]
-#[test]
-fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
-    for (pin, stamp) in [("work", Some("work")), ("default", None)] {
-        let env = Env::new();
-        env.install_agent_hooks("codex");
-        trust_codex_preflight_hooks(&env);
-        trust_codex_project(&env, &env.project_root);
-        for name in ["work", "spare"] {
-            let home = env.home_root.join(name);
-            let output = env
-                .rimz()
-                .args(["accounts", "add", "codex", name, "--home"])
-                .arg(&home)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            // Trust the named home's hooks the way the default home's are.
-            let config = env.agent_config_path("codex");
-            let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
-            let state = table["hooks"]["state"].as_table_mut().unwrap();
-            let prefix = format!("{}:", config.display());
-            let named: Vec<_> = state
-                .iter()
-                .filter_map(|(key, value)| {
-                    key.strip_prefix(&prefix).map(|event| {
-                        (
-                            format!("{}:{event}", home.join("config.toml").display()),
-                            value.clone(),
-                        )
-                    })
-                })
-                .collect();
-            state.extend(named);
-            std::fs::write(config, toml::to_string(&table).unwrap()).unwrap();
-        }
-        let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
-        let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-        let workspace = env.resolve_workspace(&env.project_root);
-        let store = env.store();
-        store.record_workspace(&workspace).expect("record room");
-        store
-            .switch_room_login(
-                &workspace,
-                &AgentKind::new_unchecked("codex"),
-                &"spare".parse().unwrap(),
-            )
-            .unwrap();
-        crate::common::room::seed_live_zellij_room(
-            &env.runtime_paths(),
-            &workspace.session_name,
-            Vec::new(),
-        );
-        let pane_fixture = env.project_root.join("panes.json");
-        std::fs::write(&pane_fixture, "[]").unwrap();
-        let command = || {
-            let mut command = env.rimz();
-            command
-                .args(["--mux", "zellij"])
-                .env("SHELL", &shell)
-                .env("PATH", path_with_front(&agent_bin))
-                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-                .env(
-                    "RIMZ_ZELLIJ_BIN",
-                    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
-                )
-                .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
-                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-                .env("ZELLIJ_PANE_ID", "1")
-                .env(
-                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                    format!("{} [Created 1s ago]\n", workspace.session_name),
-                );
-            command
-        };
-        loop_ok(
-            &env,
-            &[
-                "loop",
-                "add",
-                "spawn",
-                "--agent",
-                "codex",
-                "--account",
-                pin,
-                "--prompt",
-                "fix it",
-                "--every",
-                "15m",
-            ],
-        );
-        let fired = command().args(["loop", "run", "spawn"]).output().unwrap();
-        assert!(fired.status.success(), "{fired:?}");
-        // The fire's run launches the agent step from its detached advance.
-        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
-        let launched = loop {
-            let agents = store
-                .runtime_projection(rimz::RuntimeScope::Audit)
-                .expect("launch history")
-                .agents;
-            if let Some(agent) = agents.into_iter().next() {
-                break agent;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for the launch"
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        assert_eq!(
-            launched.login.as_ref().map(|name| name.as_str()),
-            stamp,
-            "task pinned to `{pin}`"
-        );
-        let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
-        assert!(
-            stopped.status.success(),
-            "{}",
-            String::from_utf8_lossy(&stopped.stderr)
-        );
-    }
-}
-
-#[test]
-fn loop_add_judge_names_the_profile_and_rejects_unsupported_kinds() {
-    let env = Env::new();
-    let flags = [
-        "loop",
-        "add",
-        "guarded",
-        "--agent",
-        "claude",
-        "--stay",
-        "--every",
-        "1h",
-        "--prompt",
-        "work",
-        "--judge",
-        "opencode",
-        "--judge-prompt",
-        "q",
-        "--on",
-        "success",
-    ];
-    let output = env.rimz().args(flags).output().unwrap();
-    assert!(
-        !output.status.success(),
-        "unsupported judge must be rejected"
-    );
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("opencode") && error.contains("only claude and codex run headless judges"),
-        "{error}"
-    );
-
-    let mut flags = flags;
-    flags[11] = "claude";
-    let receipt = loop_ok(&env, &flags);
-    assert!(
-        receipt.contains("guard: asks claude (cap 5m); acts when it passes"),
-        "{receipt}"
-    );
-    let show = loop_ok(&env, &["loop", "show", "guarded"]);
-    assert!(
-        show.contains("judge `claude`") && !show.contains("judge `claude` ("),
-        "{show}"
-    );
-    let list = loop_ok(&env, &["loop", "list"]);
-    assert!(list.contains("judge `claude`"), "{list}");
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    let check = serde_json::to_value(&config.tasks.0["guarded"]).unwrap();
-    assert_eq!(check["judge"][0]["agent"], "claude");
-    assert_eq!(check["judge"][0]["prompt"], "q");
-}
-
-#[test]
-fn loop_add_saves_and_warns_for_unsupported_fast() {
-    let env = Env::new();
-    env.install_agent_hooks("cursor");
-    write_loop_config(&env, "");
-    let (_, error) = loop_ok_with_stderr(
-        &env,
-        &[
-            "loop", "add", "bad-fast", "--agent", "cursor", "--fast", "--prompt", "p", "--every",
-            "1h",
-        ],
-    );
-    assert!(
-        error.contains("fast")
-            && error.contains("cursor")
-            && error.contains("launching without")
-            && error.contains("fast model id"),
-        "{error}"
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(config.tasks.0.contains_key("bad-fast"));
-}
-
-#[test]
-fn loop_add_saves_and_warns_for_unsupported_effort() {
-    let env = Env::new();
-    env.install_agent_hooks("cursor");
-    write_loop_config(&env, "");
-    let (_, error) = loop_ok_with_stderr(
-        &env,
-        &[
-            "loop",
-            "add",
-            "bad-effort",
-            "--agent",
-            "cursor",
-            "--effort",
-            "high",
-            "--prompt",
-            "p",
-            "--every",
-            "1h",
-        ],
-    );
-    assert!(
-        error.contains(
-            "warning: `cursor` effort high is unsupported on cursor; launching without it"
-        ),
-        "{error}"
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert_eq!(config.tasks.0["bad-effort"].effort.as_deref(), Some("high"));
-    assert_eq!(
-        error.matches("effort high is unsupported").count(),
-        1,
-        "{error}"
-    );
-}
-
-#[test]
-fn loop_add_saves_and_warns_for_unsupported_effort_on_team_member() {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    env.write_config(
-        &env.project_root,
-        r#"
-        [profiles.lead]
-        agent = "claude"
-        [profiles.helper]
-        agent = "cursor"
-        [[agents.teams.forge.roles]]
-        role = "lead"
-        profile = "lead"
-        [[agents.teams.forge.roles]]
-        role = "helper"
-        profile = "helper"
-        "#,
-    );
-    loop_ok(&env, &["trust", "grant"]);
-    write_loop_config(&env, "");
-    let (_, error) = loop_ok_with_stderr(
-        &env,
-        &[
-            "loop",
-            "add",
-            "effort-team",
-            "--agent",
-            "forge",
-            "--stay",
-            "--effort",
-            "high",
-            "--when",
-            "pr=open",
-            "--prompt",
-            "p",
-        ],
-    );
-    assert!(
-        error.contains(
-            "warning: `cursor` effort high is unsupported on cursor; launching without it"
-        ),
-        "{error}"
-    );
-    assert_eq!(
-        error.matches("effort high is unsupported").count(),
-        1,
-        "{error}"
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert_eq!(
-        config.tasks.0["effort-team"].effort.as_deref(),
-        Some("high")
-    );
-}
-
-#[test]
-fn loop_add_saves_and_warns_for_unsupported_fast_on_nonleader() {
-    let env = Env::new();
-    write_loop_config(&env, "");
-    let (_, error) = loop_ok_with_stderr(
-        &env,
-        &[
-            "loop",
-            "add",
-            "bad-resident",
-            "--agent",
-            "claude,cursor",
-            "--stay",
-            "--fast",
-            "--when",
-            "pr=open",
-            "--prompt",
-            "p",
-        ],
-    );
-    assert!(
-        error.contains("fast")
-            && error.contains("cursor")
-            && error.contains("launching without")
-            && error.contains("fast model id"),
-        "{error}"
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(config.tasks.0.contains_key("bad-resident"));
-}
-
-#[test]
-fn loop_add_saves_and_warns_for_unsupported_fast_on_team_member() {
-    let env = Env::new();
-    assert!(init_git_repo(&env.project_root));
-    env.record(&env.project_root);
-    env.write_config(
-        &env.project_root,
-        r#"
-        [profiles.lead]
-        agent = "claude"
-        [profiles.helper]
-        agent = "cursor"
-        [[agents.teams.forge.roles]]
-        role = "lead"
-        profile = "lead"
-        [[agents.teams.forge.roles]]
-        role = "helper"
-        profile = "helper"
-        "#,
-    );
-    loop_ok(&env, &["trust", "grant"]);
-    write_loop_config(&env, "");
-    let (_, error) = loop_ok_with_stderr(
-        &env,
-        &[
-            "loop", "add", "bad-team", "--agent", "forge", "--stay", "--fast", "--when", "pr=open",
-            "--prompt", "p",
-        ],
-    );
-    assert!(
-        error.contains("fast")
-            && error.contains("cursor")
-            && error.contains("launching without")
-            && error.contains("fast model id"),
-        "{error}"
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(config.tasks.0.contains_key("bad-team"));
-}
-
-#[test]
-fn loop_add_accepts_no_fast_without_provider_switch() {
-    let env = Env::new();
-    env.install_agent_hooks("cursor");
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "no-fast",
-            "--agent",
-            "cursor",
-            "--no-fast",
-            "--prompt",
-            "p",
-            "--every",
-            "1h",
-        ],
-    );
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert_eq!(config.tasks.0["no-fast"].fast, Some(false));
-}
-
-#[test]
 fn loop_add_rejects_invalid_action_shapes() {
     let env = Env::new();
     env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-validate", "feature-loop");
     let cases = [
         (
-            vec!["loop", "add", "missing", "--every", "15m", "--prompt", "x"],
-            "needs --agent, --wait, --check, or --workflow",
+            vec!["loop", "add", "missing", "--every", "15m"],
+            "the following required arguments were not provided",
         ),
         (
             vec![
-                "loop", "add", "conflict", "--agent", "claude", "--wait", "@claude", "--every",
-                "15m", "--prompt", "x",
+                "loop", "add", "wait", "--wait", "--every", "15m", "--", "true",
             ],
-            "cannot be used with",
+            "unexpected argument '--wait'",
         ),
         (
             vec![
-                "loop",
-                "add",
-                "wait-mode",
-                "--wait",
-                "@claude",
-                "--mode",
-                "auto",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
+                "loop", "add", "agent", "--agent", "claude", "--every", "15m", "--", "true",
             ],
-            "`wait-mode` uses --wait, so --mode only apply to --agent tasks",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "wait-flags",
-                "--wait",
-                "@claude",
-                "--mode",
-                "auto",
-                "--effort",
-                "high",
-                "--fast",
-                "--budget",
-                "5",
-                "--budget-per-day",
-                "20",
-                "--system-prompt-file",
-                "missing-system-prompt",
-                "--timeout",
-                "1m",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
-            ],
-            "`wait-flags` uses --wait, so --mode, --effort, --fast, --budget, --budget-per-day, --system-prompt-file, --timeout only apply to --agent tasks",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "check-flags",
-                "--check",
-                "true",
-                "--worktree",
-                "lane",
-                "--mode",
-                "auto",
-                "--effort",
-                "high",
-                "--no-fast",
-                "--budget",
-                "5",
-                "--budget-per-day",
-                "20",
-                "--system-prompt-file",
-                "missing-system-prompt",
-                "--timeout",
-                "1m",
-                "--every",
-                "15m",
-            ],
-            "`check-flags` uses --check without an agent action, so --mode, --effort, --no-fast, --budget, --budget-per-day, --system-prompt-file only apply to --agent tasks",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "wait-account",
-                "--wait",
-                "@claude",
-                "--account",
-                "work",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
-            ],
-            "`wait-account` uses --wait, so --account only apply to --agent tasks",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "check-account",
-                "--check",
-                "true",
-                "--account",
-                "work",
-                "--every",
-                "15m",
-            ],
-            "`check-account` uses --check without an agent action, so --account only apply to --agent tasks",
-        ),
-        (
-            vec![
-                "loop", "add", "on", "--agent", "claude", "--on", "fail", "--every", "15m",
-                "--prompt", "x",
-            ],
-            "--on requires --check",
+            "unexpected argument '--agent'",
         ),
         (
             vec![
                 "loop",
                 "add",
                 "match",
-                "--check",
-                "true",
                 "--match",
                 "status=failed",
                 "--every",
                 "15m",
+                "--",
+                "true",
             ],
             "--match requires --signal",
         ),
@@ -13721,12 +7501,13 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "loop",
                 "add",
                 "bad-match",
-                "--check",
-                "true",
                 "--signal",
                 "ci.failed",
                 "--match",
                 "status",
+                "--repeat",
+                "--",
+                "true",
             ],
             "invalid --match `status`; expected KEY=VALUE",
         ),
@@ -13735,12 +7516,12 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "loop",
                 "add",
                 "signal-schedule",
-                "--check",
-                "true",
                 "--signal",
                 "ci.failed",
                 "--every",
                 "15m",
+                "--",
+                "true",
             ],
             "cannot be used with",
         ),
@@ -13748,66 +7529,20 @@ fn loop_add_rejects_invalid_action_shapes() {
             vec![
                 "loop",
                 "add",
-                "surplus",
-                "--check",
-                "true",
-                "--surplus",
-                "1.5x",
+                "repeat-clock",
                 "--every",
                 "15m",
+                "--repeat",
+                "--",
+                "true",
             ],
-            "--surplus and --surplus-after require --agent or --wait",
+            "--repeat cannot be used with --every or --cron; they repeat already",
         ),
         (
             vec![
-                "loop",
-                "add",
-                "attempts",
-                "--agent",
-                "claude",
-                "--verify",
-                "true",
-                "--max-attempts",
-                "0",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
+                "loop", "add", "until", "--until", "1h", "--every", "15m", "--", "true",
             ],
-            "--max-attempts must be at least 1",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "until-check",
-                "--agent",
-                "claude",
-                "--until",
-                "1h",
-                "--check",
-                "true",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
-            ],
-            "--until is no longer accepted; fire on a condition with --when, or `rimz loop eject` the task and wait in a workflow check",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "project-wait",
-                "--project",
-                "--wait",
-                "@claude",
-                "--every",
-                "15m",
-                "--prompt",
-                "x",
-            ],
-            "--project tasks cannot use --wait; project config cannot pin a machine-local session",
+            "--until is no longer accepted; fire on a condition with --when",
         ),
         (
             vec![
@@ -13815,12 +7550,12 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "add",
                 "project-once",
                 "--project",
-                "--check",
-                "true",
                 "--at",
                 "12:00",
+                "--",
+                "true",
             ],
-            "--project tasks need a trigger; set --every, --cron, or --signal",
+            "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
         ),
         (
             vec![
@@ -13828,19 +7563,19 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "add",
                 "project-signal-once",
                 "--project",
-                "--check",
-                "true",
                 "--signal",
                 "ci.failed",
-                "--once",
+                "--",
+                "true",
             ],
-            "--project tasks cannot use --once; one-shot subscriptions are machine state",
+            "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
         ),
     ];
     for (args, expected) in cases {
         let (_stdout, error) = loop_fail(&env, &args);
         assert!(error.contains(expected), "rimz {args:?}: {error}");
     }
+    assert!(read_loop_instances(&env).0.is_empty());
 }
 
 fn loop_ok(env: &Env, args: &[&str]) -> String {
@@ -13885,21 +7620,6 @@ fn loop_ok_root(env: &Env, root: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("stdout")
 }
 
-fn qwen_loop_ok(env: &Env, settings: &Path, args: &[&str]) -> String {
-    let output = env
-        .rimz()
-        .env("RIMZ_QWEN_SETTINGS", settings)
-        .args(args)
-        .output()
-        .expect("rimz Qwen loop");
-    assert!(
-        output.status.success(),
-        "rimz {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("stdout")
-}
-
 fn loop_fail(env: &Env, args: &[&str]) -> (String, String) {
     let output = env.rimz().args(args).output().expect("rimz loop");
     assert!(
@@ -13932,8 +7652,8 @@ fn run_mark(env: &Env, task: &str) -> RunMark {
     }
 }
 
-/// The quiet summary of `task` in the fixture's machine fire record: how many of its runs ended
-/// done without starting an agent, and the newest one's row.
+/// The quiet summary of `task` in the fixture's machine fire record: how many of its fires'
+/// commands exited 0, and the newest one's row.
 fn quiet_fires(env: &Env, task: &str) -> Option<(u64, LoopRunRecord)> {
     let text = std::fs::read_to_string(env.rimz_home().join("loops/loop-fires.json")).ok()?;
     let fires: BTreeMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
@@ -14232,26 +7952,6 @@ fn dummy_agent_process() -> std::process::Child {
     cmd.arg("30").spawn().expect("spawn dummy agent process")
 }
 
-/// A sleeper that ignores SIGTERM, ready once it returns.
-fn term_ignoring_process(env: &Env) -> std::process::Child {
-    let ready = env.home_root.join("term-ignoring.ready");
-    let child = Command::new("sh")
-        .scrub_session_env()
-        .args(["-c", "trap '' TERM; : > \"$0\"; exec sleep 30"])
-        .arg(&ready)
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ready.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the sleeper never trapped SIGTERM"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    child
-}
-
 fn reap_later(mut child: std::process::Child) {
     let _ = std::thread::spawn(move || {
         let _ = child.wait();
@@ -14380,6 +8080,30 @@ fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {
         return BTreeMap::new();
     };
     serde_json::from_str(&text).expect("loop strikes")
+}
+
+/// Stores the delivery row a standing wait for `session` keeps on `entry`'s trigger, at the
+/// project root: `loop add` no longer writes one, and `rimz wait` and team bindings arm
+/// their rows the same way.
+fn seed_wait(env: &Env, name: &str, session: &str, handle: &str, entry: TaskEntry) {
+    let mut instances = read_loop_instances(env);
+    instances.0.insert(
+        name.to_owned(),
+        TaskEntry {
+            root: env.project_root.clone(),
+            wait: Some(TaskTarget {
+                kind: AgentKind::new_unchecked("claude"),
+                session: AgentSessionId::from(session),
+                handle: handle.to_owned(),
+            }),
+            ..entry
+        },
+    );
+    write_loop_instances(env, instances);
+}
+
+fn matching(key: &str, value: &str) -> Option<BTreeMap<String, String>> {
+    Some(BTreeMap::from([(key.to_owned(), value.to_owned())]))
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {
@@ -14652,24 +8376,6 @@ fn find_real_git() -> Option<std::path::PathBuf> {
 }
 
 #[test]
-fn loop_add_spawn_still_requires_prompt() {
-    let env = Env::new();
-    let output = env
-        .rimz()
-        .args([
-            "loop", "add", "no-note", "--agent", "claude", "--every", "15m",
-        ])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("needs a prompt; pass --prompt or --prompt-file"),
-        "{error}"
-    );
-}
-
-#[test]
 fn branch_conditions_show_distinct_live_readings() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
@@ -14699,10 +8405,10 @@ fn branch_conditions_show_distinct_live_readings() {
             "loop",
             "add",
             "branches",
-            "--check",
-            "true",
             "--when",
             "pr[a]=merged && pr[b]=merged",
+            "--",
+            "true",
         ],
     );
     assert!(receipt.contains("pr[a]: merged, pr[b]: open"), "{receipt}");

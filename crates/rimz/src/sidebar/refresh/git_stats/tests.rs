@@ -375,7 +375,8 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
         root: root.path().to_owned(),
         dir: Some(scope.clone()),
         when: Some(vec!["ci=passed".to_owned()]),
-        check: Some("true".into()),
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
     let tasks = Tasks(BTreeMap::from([
@@ -567,7 +568,8 @@ outcome = "ready"
             root: root.path().to_owned(),
             dir: Some(checkout.clone()),
             when: Some(vec!["ci[loop]=passed".into()]),
-            check: Some("true".into()),
+            command: vec!["true".to_owned()],
+            timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
         },
     )]));

@@ -17,6 +17,7 @@ pub(super) fn launch_layout(
     args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
+    fire_task: Option<String>,
 ) -> Result<()> {
     if args.launch.cohort.continue_cohort {
         validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
@@ -142,6 +143,11 @@ pub(super) fn launch_layout(
             max_turns: launch.max_turns,
             teams_scene: launch.teams_scene,
             report_to: report_to(launch.cohort.detach),
+            loop_booked_by: fire_task
+                .as_ref()
+                .map(|_| rimz::harness::schedule::runner::loop_check_booked_by())
+                .unwrap_or_default(),
+            loop_task: fire_task,
         },
         cwd,
         allow_in_place,

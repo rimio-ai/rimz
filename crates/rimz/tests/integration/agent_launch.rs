@@ -3412,7 +3412,6 @@ fn user_shell_subagents_list_inspects_the_channel() {
         rimz::config::TaskEntry {
             root: env.project_root.clone(),
             signal: Some("deploy.done".to_owned()),
-            once: Some(true),
             wait: Some(rimz::config::TaskTarget {
                 kind: AgentKind::new_unchecked("codex"),
                 session: AgentSessionId::from("swift-child"),
@@ -10157,6 +10156,164 @@ fn parent_end_closes_a_held_subagent_and_ends_its_card() {
 #[test]
 fn the_ctrl_c_that_exits_a_provider_does_not_skip_its_subagents_hold() {
     close_held_subagent(false, true);
+}
+
+/// A run canceled from outside its pane, as a loop fire's collection cancels the blocking
+/// launch its ended fire owns, ends its provider whether or not it was launched with `--keep`:
+/// `--keep` decides only whether the pane outlives the provider.
+#[cfg(unix)]
+fn a_canceled_run_ends_its_provider(keep: bool) {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::{Read as _, Write as _};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let shim_dir = env.home_root.join("agent-bin");
+    let pid_file = env.home_root.join("provider.pid");
+    crate::common::write_path_shim(
+        &shim_dir,
+        "codex",
+        &format!(
+            "if [ \"${{1:-}}\" = --version ]; then echo 0.163.0; exit 0; fi\necho $$ > '{}'\nprintf 'provider ready\\n'\nwhile :; do sleep 1; done",
+            pid_file.display()
+        ),
+    );
+    std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
+        .expect("zellij trace shim");
+    write_startup_relaunch_config(&env, "startup-relaunches = 0");
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let launch_id = "launch_owned_run";
+    seed_launch(&env, launch_id, "otter", LaunchParams::default());
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::agents::PermissionMode::Auto,
+        "inspect".into(),
+        env.project_root.clone(),
+    );
+    run.keep = keep;
+    rimz::harness::run::create(store.paths(), &run).expect("pending run");
+    let mut request = fresh_exec("codex", Some("inspect"));
+    request.run_id = Some(run.run_id.clone());
+    (request.close_pane_on_exit, request.exit_on_run_completion) =
+        rimz::harness::plan::run_exit_policy(!keep);
+    request.identity.name = Some("otter".to_owned());
+    request.identity.launch_id = Some(launch_id.to_owned());
+    let mux_log = env.home_root.join("mux.log");
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.args(["--mux", "zellij"]);
+    cmd.args(exec_args(&env, &request));
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]));
+    cmd.env("PATH", path_with_front(&shim_dir));
+    cmd.env("ZELLIJ_PANE_ID", "4");
+    cmd.env("RIMZ_TEST_ZELLIJ_LOG", &mux_log);
+    cmd.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+    let mut wrapper = pair.slave.spawn_command(cmd).expect("spawn exec wrapper");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("pty reader");
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    let (tx, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        while reader.read(&mut byte).is_ok_and(|read| read == 1) {
+            if tx.send(byte[0]).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    let mut read_until =
+        |needle: &str, wrapper: &mut Box<dyn portable_pty::Child + Send + Sync>| {
+            let start = seen.len();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !seen[start..].contains(needle) {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                match output.recv_timeout(remaining) {
+                    Ok(byte) => seen.push(byte as char),
+                    Err(_) => {
+                        let _ = wrapper.kill();
+                        panic!("the wrapper never printed {needle:?}: {seen}");
+                    }
+                }
+            }
+            seen.clone()
+        };
+    read_until("provider ready\r\n", &mut wrapper);
+    let provider: u32 = std::fs::read_to_string(&pid_file)
+        .expect("provider pid")
+        .trim()
+        .parse()
+        .expect("numeric pid");
+
+    rimz::harness::run::cancel_and_wake(&store, &run.run_id).expect("cancel the run");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while rimz::proc::process_is_live(provider, None) {
+        if std::time::Instant::now() >= deadline {
+            let _ = wrapper.kill();
+            panic!("the canceled run's provider {provider} still runs (keep={keep})");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let wait_for_exit = |wrapper: &mut Box<dyn portable_pty::Child + Send + Sync>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while wrapper.try_wait().expect("poll wrapper").is_none() {
+            if std::time::Instant::now() >= deadline {
+                let _ = wrapper.kill();
+                panic!("the pane did not close (keep={keep})");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    };
+    let closes = || {
+        std::fs::read_to_string(&mux_log)
+            .unwrap_or_default()
+            .matches("close-pane")
+            .count()
+    };
+    if keep {
+        let seen = read_until(
+            "rimz: run canceled; --keep holds this pane; press Ctrl-C to close it",
+            &mut wrapper,
+        );
+        assert!(
+            wrapper.try_wait().expect("poll wrapper").is_none(),
+            "a kept pane outlives its provider: {seen}"
+        );
+        assert_eq!(closes(), 0, "a kept pane stays open: {seen}");
+        writer.write_all(b"\x03").expect("close the held pane");
+    }
+    wait_for_exit(&mut wrapper);
+    assert_eq!(closes(), 1, "the pane closes once (keep={keep})");
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .expect("run")
+            .status,
+        rimz::store::run::RunStatus::Canceled
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_canceled_kept_run_ends_its_provider_and_holds_its_pane() {
+    a_canceled_run_ends_its_provider(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_canceled_unkept_run_ends_its_provider_with_its_pane() {
+    a_canceled_run_ends_its_provider(false);
 }
 
 /// The wrapper would refuse the same value inside the pane; the entry point

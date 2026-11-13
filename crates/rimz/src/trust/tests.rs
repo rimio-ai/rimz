@@ -125,7 +125,7 @@ fn fresh_config_reports_untrusted() {
 #[test]
 fn birth_prompt_offers_current_hash_and_summary_for_untrusted_config() {
     let dir = project_with(
-        "[tasks.sync]\nagent = \"codex\"\nprompt = \"sync the repo\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[subagents.profiles.reviewer]\nagent = \"codex\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+        "[tasks.sync]\ncommand = [\"git\", \"pull\"]\ntimeout = \"5m\"\nevery = \"1h\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[subagents.profiles.reviewer]\nagent = \"codex\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
     );
     let config = tempdir().expect("config root");
     let offer = birth_prompt_with_roots(dir.path(), config.path())
@@ -287,30 +287,63 @@ fn packs_content_reads_before_trust_without_affecting_grants() {
 }
 
 #[test]
-fn a_judge_table_task_check_refuses_and_a_string_check_keeps_its_hash() {
-    let shell: ProjectConfig =
-        toml::from_str("[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\n").unwrap();
-    assert_eq!(
-        executable_surface_hash(&shell),
-        "sha256:1d75306246407c1e334fb78d696bc606ca2bcc971c6b4878eae1be89ddf4c716"
-    );
-    let error = toml::from_str::<ProjectConfig>(
-        "[tasks.x]\nevery = \"1h\"\n[tasks.x.check]\nagent = 'haiku'\nprompt = 'q'\n",
-    )
-    .map_or_else(|e| e.to_string(), |_| String::new());
-    assert!(
-        error.contains("judge table under `check`")
-            && error.contains("re-add it with `rimz loop add`"),
-        "{error}"
-    );
+fn a_project_rows_command_enters_the_trust_hash() {
+    let hashes = [
+        "command = ['cargo', 'test']",
+        "command = ['cargo', 'check']",
+        "command = ['cargo test']",
+        "command = ['cargo', 'test', '']",
+    ]
+    .map(|command| {
+        let config: ProjectConfig = toml::from_str(&format!(
+            "[tasks.x]\n{command}\ntimeout = '1m'\nevery = '1h'\n"
+        ))
+        .unwrap();
+        executable_surface_hash(&config)
+    });
+    let distinct: std::collections::HashSet<_> = hashes.iter().collect();
+    assert_eq!(distinct.len(), hashes.len(), "{hashes:?}");
+}
+
+#[test]
+fn a_mistyped_project_row_still_loads_trust_and_hashes_its_raw_command() {
+    let valid = "[tasks.good]\ncommand = ['true']\ntimeout = '1m'\nevery = '1h'\n";
+    for (bad, changed) in [
+        ("command = 'cargo test'", "command = 'cargo check'"),
+        ("command = 42", "command = 43"),
+        (
+            "command = ['true']\ntimeout = 5",
+            "command = ['true']\ntimeout = 6",
+        ),
+        (
+            "command = ['true']\nfresh-worktree = true",
+            "command = ['true']\nfresh-worktree = false",
+        ),
+        (
+            "command = ['true']\nrepeat = 'yes'",
+            "command = ['true']\nrepeat = 'no'",
+        ),
+    ] {
+        let text = |row: &str| format!("{valid}[tasks.bad]\n{row}\nevery = '1h'\n");
+        let project = project_with(&text(bad));
+        let home = tempdir().unwrap();
+        let before = status_with_roots(project.path(), home.path()).unwrap();
+        assert_eq!(before.state, TrustState::Untrusted, "{bad}");
+        std::fs::write(project.path().join(CONFIG_REL), text(changed)).unwrap();
+        let after = status_with_roots(project.path(), home.path()).unwrap();
+        assert_ne!(
+            before.current_hash, after.current_hash,
+            "{bad} -> {changed}"
+        );
+    }
 }
 
 #[test]
 fn task_labels_do_not_change_the_executable_hash() {
     let base: ProjectConfig =
-        toml::from_str("[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\n").unwrap();
+        toml::from_str("[tasks.x]\ncommand = [\"cargo\", \"test\"]\nevery = \"1h\"\n").unwrap();
     let labelled: ProjectConfig = toml::from_str(
-        "[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\nlabel = \"gate docs\"\n",
+        "[tasks.x]\ncommand = [\"cargo\", \"test\"]\nevery = \"1h\"\nlabel = \"gate docs\"\n",
     )
     .unwrap();
     assert_eq!(
@@ -319,7 +352,7 @@ fn task_labels_do_not_change_the_executable_hash() {
     );
     assert_eq!(
         executable_surface_hash(&base),
-        "sha256:1d75306246407c1e334fb78d696bc606ca2bcc971c6b4878eae1be89ddf4c716"
+        "sha256:79edde54358bc81e61e2e57878b756437801f9257abd811dde9b3cfd69c9d886"
     );
 }
 
@@ -375,7 +408,7 @@ fn smart_compact_role_and_profile_fields_do_not_enter_trust_hash() {
 
 #[test]
 fn loop_overlap_fields_do_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\ncheck='true'\nevery='1h'\n";
+    let base = "[tasks.x]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n";
     let configured = format!("{base}overlap='queue'\noverlap-limit=3\n");
     let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
     let value = serde_json::to_value(&entry.tasks.0["x"]).unwrap();
@@ -389,25 +422,10 @@ fn loop_overlap_fields_do_not_enter_project_trust_hash() {
 
 #[test]
 fn loop_once_per_checkout_does_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\nworkflow='review'\nevery='1h'\n";
+    let base = "[tasks.x]\ncommand=['true']\ntimeout='1m'\nevery='1h'\n";
     let configured = format!("{base}once-per-checkout=true\n");
     let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
     assert!(entry.tasks.0["x"].dedupes_checkout());
-    assert_eq!(
-        executable_surface_hash(&toml::from_str::<ProjectConfig>(base).unwrap()),
-        executable_surface_hash(&toml::from_str::<ProjectConfig>(&configured).unwrap())
-    );
-}
-
-#[test]
-fn loop_capacity_wait_does_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\nagent='claude'\nprompt='repair'\nwhen=['team.stage=Done']\n";
-    let configured = format!("{base}capacity-wait='2h'\n");
-    let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
-    assert_eq!(
-        serde_json::to_value(&entry.tasks.0["x"]).unwrap()["capacity-wait"],
-        "2h"
-    );
     assert_eq!(
         executable_surface_hash(&toml::from_str::<ProjectConfig>(base).unwrap()),
         executable_surface_hash(&toml::from_str::<ProjectConfig>(&configured).unwrap())
@@ -747,30 +765,11 @@ fn hash_covers_every_documented_surface_field() {
         "[agents.teams.review]\nconsensus = [\"reflect\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[agents.teams.review]\nconsensus = [\"reflect\", \"house\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[tasks.x]\n",
-        "[tasks.x]\nagent = \"codex\"\n",
-        "[tasks.x]\nworkflow = \"review\"\n",
-        "[tasks.y]\nagent = \"codex\"\n",
-        "[tasks.x]\nprompt = \"repair CI\"\n",
-        "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",
-        "[tasks.x]\ncheck = \"cargo test\"\n",
-        "[tasks.x.judge]\nagent = 'haiku'\nprompt = 'q'\n",
-        "[tasks.x.judge]\nagent = 'sonnet'\nprompt = 'q'\n",
-        "[tasks.x.judge]\nagent = 'haiku'\nprompt = 'other'\n",
-        "[tasks.x.judge]\nagent = 'haiku'\nprompt-file = 'q.md'\n",
-        "[tasks.x.judge]\nagent = 'haiku'\nprompt-file = 'other.md'\n",
-        "[tasks.x.judge]\nagent = 'haiku'\nprompt = 'q'\nrecheck = '6h'\n",
-        "[tasks.x.judge]\nagent = 'haiku'\nprompt = 'q'\ntimeout = '5m'\n",
-        "[tasks.x]\njudge = [{ agent = 'haiku', prompt = 'q' }, { agent = 'sonnet', prompt = 'review' }]\n",
-        "[tasks.x]\ncheck = 'cargo test'\njudge = [{ agent = 'haiku', prompt = 'q' }, { agent = 'sonnet', prompt = 'review' }]\n",
-        "[tasks.x]\nverify = \"cargo test\"\n",
-        "[tasks.x]\nmax-attempts = 4\n",
-        "[tasks.x]\non = \"success\"\n",
-        "[tasks.x]\nworktree = \"sync\"\n",
-        "[tasks.x]\nmode = \"yolo\"\n",
-        "[tasks.x]\neffort = \"low\"\n",
-        "[tasks.x]\nfast = true\n",
-        "[tasks.x]\nfast = false\n",
-        "[tasks.x]\nsystem-prompt-file = \"prompts/system.md\"\n",
+        "[tasks.y]\n",
+        "[tasks.x]\ncommand = [\"cargo\", \"test\"]\n",
+        "[tasks.x]\ncommand = [\"cargo test\"]\n",
+        "[tasks.x]\nfresh-worktree = \"sync\"\n",
+        "[tasks.x]\nrepeat = true\n",
         "[tasks.x]\ntimeout = \"2h\"\n",
         "[tasks.x]\nat = \"08:00\"\n",
         "[tasks.x]\nevery = \"15m\"\n",
@@ -889,14 +888,13 @@ fn project_accounts_apply_only_under_trust_and_leave_old_hashes_alone() {
     let config: ProjectConfig = toml::from_str("[env]\nA = \"1\"\n").expect("parse");
     assert!(!surface_snapshot(&config).json.contains("accounts"));
 
-    // A task's account pin is not a command, so it stays out of the hash.
+    // A task's account picks the windows its conditions read; it runs nothing, so it stays out
+    // of the hash.
     let hash = |text: &str| {
         executable_surface_hash(&toml::from_str::<ProjectConfig>(text).expect("parse task"))
     };
-    assert_eq!(
-        hash("[tasks.x]\nagent = \"codex\"\naccount = \"work\"\n"),
-        hash("[tasks.x]\nagent = \"codex\"\n"),
-    );
+    let row = "[tasks.x]\ncommand = [\"true\"]\ntimeout = \"1m\"\n";
+    assert_eq!(hash(&format!("{row}account = \"work\"\n")), hash(row));
 }
 
 #[test]

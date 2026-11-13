@@ -38,9 +38,9 @@ fn read_room_reads_a_seeded_room_without_writing() {
     let runtime = RuntimePaths::for_state_under(&state, &dir.path().join("run"));
     let name = "attention-reader-booking";
     let entry = TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("start the next stage".to_owned()),
-        stay: true,
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        once_per_checkout: Some(true),
         when: Some(vec!["pr[feature]=merged && pr[other]=merged".to_owned()]),
         root: root.clone(),
         ..TaskEntry::default()
@@ -260,9 +260,9 @@ fn a_blocking_term_counts_each_further_unmet_term() {
 fn booking(when: &str) -> impl FnOnce(&Path) -> TaskEntry {
     let when = when.to_owned();
     move |root| TaskEntry {
-        agent: Some("claude".to_owned()),
-        prompt: Some("start the next stage".to_owned()),
-        stay: true,
+        command: vec!["true".to_owned()],
+        timeout: Some("1m".to_owned()),
+        once_per_checkout: Some(true),
         when: Some(vec![when]),
         root: root.to_path_buf(),
         ..TaskEntry::default()
@@ -305,7 +305,7 @@ fn a_closed_pull_request_needs_you_only_while_nothing_else_can_meet_the_conditio
         dir.path(),
         name,
         |root| TaskEntry {
-            stay: false,
+            repeat: true,
             ..booking("pr[x]=merged")(root)
         },
         closed(),
@@ -418,7 +418,8 @@ fn a_run_in_progress_holds_back_only_the_failure_it_follows() {
             name,
             |root| TaskEntry {
                 root: root.to_path_buf(),
-                check: Some("false".into()),
+                command: vec!["false".to_owned()],
+                timeout: Some("1m".to_owned()),
                 every: Some("1h".to_owned()),
                 max_strikes: Some(0),
                 ..TaskEntry::default()

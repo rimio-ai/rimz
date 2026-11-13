@@ -105,13 +105,10 @@ pub use harness::{
     KeepWarmPolicy, LifetimeSource,
 };
 pub(crate) use logo::{parse_logo_svg, read_logo_file};
-use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
-pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
-    CapacityWait, CapacityWaitErr, CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy,
-    TaskCheck, TaskEntry, TaskTarget, TaskWorktree, Tasks, ThrottleSwitch, WatchSpec,
-    has_absolute_task_root,
+    CapacityWait, CapacityWaitErr, CheckOn, FileMark, LoopConfig, OverlapPolicy, RefusedRow,
+    TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::{MultiplexerConfig, MuxStatusBar, RoomStyle};
@@ -339,12 +336,6 @@ pub enum ConfigErr {
         #[source]
         source: NotificationsConfigErr,
     },
-    #[error("invalid per-machine loop config at {path}: {source}")]
-    Loop {
-        path: PathBuf,
-        #[source]
-        source: TaskBudgetError,
-    },
     #[error("invalid per-machine account budget at {path}: {source}")]
     AccountBudget {
         path: PathBuf,
@@ -377,7 +368,6 @@ impl ConfigErr {
             | Self::Agents { path, .. }
             | Self::Notifications { path, .. }
             | Self::Worktree { path, .. }
-            | Self::Loop { path, .. }
             | Self::AccountBudget { path, .. }
             | Self::Account { path, .. }
             | Self::RemovedTable { path, .. }
@@ -395,7 +385,6 @@ impl ConfigErr {
             Self::Agents { source, .. } => source.to_string(),
             Self::Notifications { source, .. } => source.to_string(),
             Self::Worktree { source, .. } => source.to_string(),
-            Self::Loop { source, .. } => source.to_string(),
             Self::AccountBudget { source, .. } => source.to_string(),
             Self::Account { source, .. } => source.to_string(),
             Self::Io { .. }
@@ -1585,13 +1574,6 @@ fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
 
 fn parse_loop_text_collecting(path: &Path, text: &str) -> Result<Parsed<LoopConfig>> {
     let mut parsed = parse_toml_collecting::<LoopConfig>(path, text)?;
-    parsed
-        .value
-        .validate_budgets()
-        .map_err(|source| ConfigErr::Loop {
-            path: path.to_path_buf(),
-            source,
-        })?;
     let (tasks, skipped) = std::mem::take(&mut parsed.value.tasks.0)
         .into_iter()
         .partition(|(_, entry)| has_absolute_task_root(&entry.root));

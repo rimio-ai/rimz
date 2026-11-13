@@ -11,16 +11,6 @@ use std::path::{Path, PathBuf};
 
 use super::launch_ledger;
 
-/// Held by a capped task's fire from its daily-budget read until `create` publishes its run, so
-/// the next fire's read counts that run: each checkout of an each-worktree task fires under its
-/// own lease.
-pub(super) fn hold_budget(
-    paths: &crate::StatePaths,
-    task: &str,
-) -> Result<crate::disk::lock::WorkspaceLock, crate::disk::lock::LockErr> {
-    crate::disk::lock::WorkspaceLock::acquire(&paths.lock_path(&format!("loop-budget.{task}.lock")))
-}
-
 pub(super) fn record_workflow(
     paths: &crate::StatePaths,
     task: &str,
