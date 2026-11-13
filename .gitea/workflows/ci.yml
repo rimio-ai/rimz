@@ -32,7 +32,7 @@ env:
 jobs:
   checks:
     runs-on: [linux_amd64, debian-13]
-    timeout-minutes: 30
+    timeout-minutes: 45
     # The rimz-ci image keeps the no-persistence job container model while
     # starting warm: Rust, cargo plugins, cargo-vet, the cargo registry, tmux,
     # Zellij, mold, sccache, and the release toolchain are baked once by
