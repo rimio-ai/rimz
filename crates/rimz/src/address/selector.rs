@@ -9,10 +9,6 @@
 use jiff::Timestamp;
 use serde::Serialize;
 
-use winnow::combinator::{alt, delimited, repeat};
-use winnow::token::{any, none_of, take_while};
-use winnow::{ModalResult, Parser};
-
 use super::{
     AddressContext, LaneSelector, addressable_agents, agent_in_lane, lane_label, launched_parent,
     parse_selector, paste_address, resolve_many,
@@ -22,6 +18,7 @@ use crate::ids::AgentKind;
 use crate::store::snapshot::{
     AgentCard, SidebarRow, SidebarSnapshot, SidebarSubAgent, agent_idle_since, card_status,
 };
+use crate::utils::filter::{self, Op, TermError, Word, glob};
 use crate::utils::suggest::nearest_name;
 use crate::utils::time::parse_compact_duration;
 
@@ -525,16 +522,6 @@ struct Term {
     values: Vec<Value>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Op {
-    Eq,
-    Ne,
-    Gt,
-    Ge,
-    Lt,
-    Le,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 enum Value {
     None,
@@ -551,16 +538,8 @@ enum Value {
 pub enum QueryError {
     #[error("empty filter: write <field><op><value>, such as status=idle; see `--filter help`")]
     Empty,
-    #[error("filter term `{term}` has no operator: use one of = != > >= < <=")]
-    NoOperator { term: String },
-    #[error("filter term `{term}` has no field before its operator; see `--filter help`")]
-    NoField { term: String },
-    #[error("filter term `{term}` has an empty value")]
-    EmptyValue { term: String },
-    #[error("filter term `{term}` has an unterminated quote")]
-    UnterminatedQuote { term: String },
-    #[error("filter term `{term}` has a quote inside a word; quote the whole value")]
-    StrayQuote { term: String },
+    #[error(transparent)]
+    Term(#[from] TermError),
     #[error("filter term `{term}`: unknown field `{field}`{suggestion}")]
     UnknownField {
         term: String,
@@ -595,12 +574,8 @@ impl Query {
             if rest.trim().is_empty() {
                 return Err(QueryError::Empty);
             }
-            loop {
-                rest = rest.trim_start();
-                if rest.is_empty() {
-                    break;
-                }
-                terms.push(Term::parse(&mut rest)?);
+            while let Some(term) = filter::next_term(&mut rest) {
+                terms.push(Term::parse(term?)?);
             }
         }
         Ok(Self { terms })
@@ -631,27 +606,13 @@ impl Query {
 }
 
 impl Term {
-    fn parse(input: &mut &str) -> Result<Self, QueryError> {
-        let start = *input;
-        let word = start.split_whitespace().next().unwrap_or_default();
-        let field: ModalResult<&str> =
-            take_while(0.., |ch: char| ch.is_ascii_alphanumeric() || ch == '_').parse_next(input);
-        let field = field.unwrap_or_default();
-        let Ok(op) = Op::lex(input) else {
-            return Err(QueryError::NoOperator { term: word.into() });
-        };
-        if field.is_empty() {
-            return Err(QueryError::NoField { term: word.into() });
-        }
-        let mut raw = vec![lex_value(input, word)?];
-        while let Some(rest) = input.strip_prefix(',') {
-            *input = rest;
-            raw.push(lex_value(input, word)?);
-        }
-        if !input.is_empty() && !input.starts_with(char::is_whitespace) {
-            return Err(QueryError::StrayQuote { term: word.into() });
-        }
-        let term = &start[..start.len() - input.len()];
+    fn parse(lexed: filter::Term<'_>) -> Result<Self, QueryError> {
+        let filter::Term {
+            text: term,
+            field,
+            op,
+            values: raw,
+        } = lexed;
         let Some(field) = Field::from_name(&field.to_ascii_lowercase()) else {
             let suggestion = nearest_name(field, Field::ALL.map(Field::name)).map_or_else(
                 || "; see `--filter help`".to_owned(),
@@ -671,7 +632,7 @@ impl Term {
         }
         let values = raw
             .iter()
-            .map(|(text, quoted)| parse_value(field, text, *quoted, term))
+            .map(|word| parse_value(field, word, term))
             .collect::<Result<Vec<_>, _>>()?;
         if op.ordered() && !matches!(values.as_slice(), [Value::Number(_)]) {
             return Err(QueryError::OneValue { term: term.into() });
@@ -681,8 +642,7 @@ impl Term {
 
     /// `=` holds when any value does, `!=` when none does.
     fn holds(&self, test: impl Fn(&Value) -> bool) -> bool {
-        let any = self.values.iter().any(test);
-        if self.op == Op::Ne { !any } else { any }
+        self.op.holds(&self.values, test)
     }
 
     fn matches(&self, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
@@ -696,68 +656,12 @@ impl Term {
     }
 }
 
-impl Op {
-    fn lex(input: &mut &str) -> ModalResult<Self> {
-        alt((
-            "!=".value(Self::Ne),
-            ">=".value(Self::Ge),
-            "<=".value(Self::Le),
-            "=".value(Self::Eq),
-            ">".value(Self::Gt),
-            "<".value(Self::Lt),
-        ))
-        .parse_next(input)
-    }
-
-    const fn ordered(self) -> bool {
-        matches!(self, Self::Gt | Self::Ge | Self::Lt | Self::Le)
-    }
-
-    fn compares(self, have: f64, want: f64) -> bool {
-        match self {
-            Self::Eq => have == want,
-            Self::Ne => have != want,
-            Self::Gt => have > want,
-            Self::Ge => have >= want,
-            Self::Lt => have < want,
-            Self::Le => have <= want,
-        }
-    }
-}
-
-/// One value: a bare word up to whitespace, a comma, or a quote, or a
-/// JSON-escaped quoted string. The flag is whether it was quoted.
-fn lex_value(input: &mut &str, term: &str) -> Result<(String, bool), QueryError> {
-    if input.starts_with('"') {
-        let quoted: ModalResult<&str> = delimited(
-            '"',
-            repeat::<_, _, (), _, _>(0.., alt((('\\', any).void(), none_of(['"', '\\']).void()))),
-            '"',
-        )
-        .take()
-        .parse_next(input);
-        let unterminated = || QueryError::UnterminatedQuote { term: term.into() };
-        let text = serde_json::from_str(quoted.map_err(|_| unterminated())?)
-            .map_err(|_| unterminated())?;
-        return Ok((text, true));
-    }
-    let bare: ModalResult<&str> = take_while(0.., |ch: char| {
-        !ch.is_whitespace() && ch != ',' && ch != '"'
-    })
-    .parse_next(input);
-    match bare.unwrap_or_default() {
-        "" => Err(QueryError::EmptyValue { term: term.into() }),
-        bare => Ok((bare.to_owned(), false)),
-    }
-}
-
-fn parse_value(field: Field, raw: &str, quoted: bool, term: &str) -> Result<Value, QueryError> {
-    if !quoted && raw == "*" {
-        return Ok(Value::Any);
-    }
-    if !quoted && raw.eq_ignore_ascii_case("none") {
-        return Ok(Value::None);
-    }
+fn parse_value(field: Field, word: &Word, term: &str) -> Result<Value, QueryError> {
+    let raw = match word {
+        Word::Any => return Ok(Value::Any),
+        Word::None => return Ok(Value::None),
+        Word::Text(raw) => raw.as_str(),
+    };
     let invalid = |expected| QueryError::InvalidValue {
         term: term.into(),
         value: raw.into(),
@@ -922,26 +826,6 @@ fn parent_matches(row: &AgentRow<'_>, text: &str, reader: &AddressContext) -> bo
             .iter()
             .any(|agent| agent.kind == parent.kind && agent.agent_id == parent.agent_id)
     })
-}
-
-/// Whole-text match where each `*` stands for any run of characters.
-fn glob(pattern: &str, text: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let Some(rest) = text.strip_prefix(parts.next().unwrap_or_default()) else {
-        return false;
-    };
-    let parts = parts.collect::<Vec<_>>();
-    let Some((last, middle)) = parts.split_last() else {
-        return rest.is_empty();
-    };
-    let mut rest = rest;
-    for part in middle {
-        let Some(at) = rest.find(part) else {
-            return false;
-        };
-        rest = &rest[at + part.len()..];
-    }
-    rest.ends_with(last)
 }
 
 #[cfg(test)]
