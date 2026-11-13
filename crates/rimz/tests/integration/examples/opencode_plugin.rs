@@ -280,6 +280,8 @@ assert.deepEqual((await payloads()).filter(p => p.request_id === "slow").map(p =
 await emit("permission.asked", {id:"permission", sessionID:"root", action:"bash", resources:["git status"], message:"Run command"});
 if (autoApprove) {
   assert.deepEqual(replies, [], "reply must wait for the ask feed without blocking events");
+  // The plugin can spawn the ask feed after the event handler returns.
+  await eventually(() => releasePermission);
   releasePermission();
 }
 const permission = await envelope("permission_ask");
