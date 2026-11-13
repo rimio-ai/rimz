@@ -122,7 +122,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Loop delivery, self-wait, or watch delivery | `crates/rimz/src/harness/schedule/runner.rs::resolve_effect_prompt`, `crates/rimz/src/harness/schedule/runner/prompt.rs::compose_wait`, dispatched by `crates/rimz/src/cli/loop_cmd/run.rs::execute_prepared_delivery` | `Harness { notice: Wait }` / `Prompt` |
 | Signal delivery | Same composition and dispatch, for a `Trigger::Signal` row. Team bindings are armed by `crates/rimz/src/harness/schedule/team.rs::arm_member` | `Harness { notice: Signal }` / `Prompt` |
 | Workflow message step | `crates/rimz/src/cli/workflow/host.rs::Host::message`, through `queue_notice` and `attempt_now` | `Harness { notice: Wait }` / `Prompt` |
-| Signal forwarded to a staying workflow step's leader | `crates/rimz/src/cli/workflow/host.rs::Host::forward`, through `queue_notice` with `about_run` set to the attempt's run | `Harness { notice: Signal }` / `Prompt` |
+| Signal forwarded to a workflow session's leader | `crates/rimz/src/cli/workflow/host.rs::Host::forward`, through `queue_notice` with `about_run` set to the attempt's run | `Harness { notice: Signal }` / `Prompt` |
 | Workflow push-back | `crates/rimz/src/cli/workflow/host.rs::Host::push`, through `SyntheticMessage` under the push's own message id | `System` / `Prompt` |
 | Loop task agent step | The task's compiled workflow run: `crates/rimz/src/harness/workflow/engine/agent.rs::compose` joins the sealed prompt file with the run prompt, and `crates/rimz/src/cli/workflow/host.rs::Host::launch` launches it through the library launcher | No queue record. The run's task, carried by `StepLaunch.task` into the launch's `RunRecord.loop_task`, supplies harness origin |
 | Supervised launch or subagent brief | `crates/rimz/src/launcher/resolve.rs::supervised_prompt`, fallback reminder from `crates/rimz/src/harness/launch_reminders.rs::subagent_reminder` | No queue record. Run origin is human or the subagent's parent |
@@ -595,7 +595,7 @@ Content:
 | `DEADLINE` | The deadline ladder's stop rung, typed into a supervised child's pane: a steer for a kind without hook context, an interrupt for Claude and Codex once their hook has left it unclaimed past the delay. A stop left queued is withdrawn if its run ends, or ends and reopens, before delivery | `@rimz` |
 | `WAIT` | A timer, command, watch, clock, or condition wait delivery, or a workflow message step's message ([workflow.md](./workflow.md)) | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping ([policy](#prompt-cache-keepalive)) | `@rimz` |
-| `SIGNAL` | Every delivery fired by a `Trigger::Signal` row, and a signal forwarded to a staying workflow step's leader ([workflow.md](./workflow.md#the-signal-helper)) | `@rimz` |
+| `SIGNAL` | Every delivery fired by a `Trigger::Signal` row, and a signal forwarded to a workflow session's leader ([workflow.md](./workflow.md#the-signal-helper)) | `@rimz` |
 | `STAGE` | A prose-only stage-open delivery from a flip or a resume or registration re-wake | `@rimz` |
 | The notice name, upper-cased | A harness notice this binary does not know (`HarnessNotice::Other`) | `@rimz` |
 

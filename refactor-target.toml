@@ -2495,7 +2495,7 @@ reason = "Catalog removal and rename read the strict capacity memory an older Ri
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Observation"
-reason = "The engine explicitly requests locked leader-turn eligibility only for until decisions."
+reason = "The engine explicitly requests locked leader-turn eligibility only for a session's rest-check decisions."
 
 [[verdict]]
 kind = "item"
@@ -3024,12 +3024,12 @@ reason = "One launch interaction preserves typed notices and the existing unatte
 [[verdict]]
 kind = "item"
 key = "launcher::prepare_layout"
-reason = "Preparation precedes a staying step's takeover; execution owns live-room layout effects."
+reason = "Preparation precedes a session step's takeover; execution owns live-room layout effects."
 
 [[verdict]]
 kind = "item"
 key = "launcher::execute"
-reason = "Preparation precedes a staying step's takeover; execution owns live-room layout effects."
+reason = "Preparation precedes a session step's takeover; execution owns live-room layout effects."
 
 [[verdict]]
 kind = "item"
@@ -11813,7 +11813,7 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 [[verdict]]
 kind = "item"
 key = "store::workflow::StepLifecycle"
-reason = "Step definitions and durable attempts share turn/stay/until vocabulary; the definition's until default is separate from legacy attempts decoding as turn."
+reason = "Step definitions and durable attempts share the turn/session vocabulary; a definition names its lifecycle, while a stored attempt without one decodes as turn."
 
 [[verdict]]
 kind = "item"
@@ -12468,7 +12468,7 @@ reason = "The host confirms that the durable push-back message id has been queue
 [[verdict]]
 kind = "item"
 key = "store::workflow::PushBack"
-reason = "Until sessions publish a stable message id before delivery and remember enqueue progress."
+reason = "Rest-checked sessions publish a stable push-back message id before delivery and remember enqueue progress."
 
 [[verdict]]
 kind = "item"
