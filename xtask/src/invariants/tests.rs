@@ -448,6 +448,7 @@ include = [
     "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/pricing/litellm-pricing.json",
     "/logos",
+    "/keymaps",
 ]
 "#;
 
@@ -467,6 +468,22 @@ include = [
 
     let err = ensure_include_covers_build_inputs(manifest).unwrap_err();
     assert!(err.to_string().contains("/logos"), "{err}");
+}
+
+#[test]
+fn package_include_list_flags_missing_keymaps() {
+    let manifest = r#"
+[package]
+include = [
+    "/presence/rimz-presence-zellij.wasm",
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
+    "/pricing/litellm-pricing.json",
+    "/logos",
+]
+"#;
+
+    let err = ensure_include_covers_build_inputs(manifest).unwrap_err();
+    assert!(err.to_string().contains("/keymaps"), "{err}");
 }
 
 #[test]
