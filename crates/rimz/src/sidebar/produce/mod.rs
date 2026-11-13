@@ -10,6 +10,7 @@
 //! Passive publication reads and the shared fold core live in [`super::consumer`]; the performance model is in [docs/internals/performance.md](../../../../../docs/internals/performance.md).
 
 pub(crate) mod git;
+pub mod hosting;
 mod metrics;
 mod panes;
 pub(crate) mod tab_status;

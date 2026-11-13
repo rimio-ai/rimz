@@ -129,13 +129,16 @@ fn rejected_candidates_do_not_hold_the_next_tenant_to_the_prior_process() {
                 Some(&own_id),
                 &diag,
                 &mut |ctx, prior| {
-                    let (mut candidate, _) = ctx.candidate(prior, true, None, false)?;
+                    let (mut candidate, _) =
+                        ctx.candidate(prior, true, None, PaneReadConsistency::Cached)?;
                     if !include_own {
                         assert!(matches!(
                             frame_publish_verdict(&candidate, Some(&own_id)),
                             PublishVerdict::Reject(FrameRejectReason::MissingOwnPane)
                         ));
-                        candidate = ctx.candidate(prior, true, None, false)?.0;
+                        candidate = ctx
+                            .candidate(prior, true, None, PaneReadConsistency::Cached)?
+                            .0;
                         assert!(matches!(
                             frame_publish_verdict(&candidate, Some(&own_id)),
                             PublishVerdict::Reject(FrameRejectReason::MissingOwnPane)

@@ -494,6 +494,45 @@ pub(crate) fn read_pane_frame(
     }
 }
 
+/// The session's panes as the multiplexer answers now, asked at
+/// [`PaneReadConsistency::RequireAuthoritative`] and assembled with no prior frame: no
+/// carried pane, held frame, or cached topology stands in for a failed query, which is
+/// the mux's own error. The pane fixture stands in for the mux as it does for
+/// [`read_pane_frame`].
+pub(super) fn read_authoritative_pane_frame(
+    runtime: &crate::RuntimePaths,
+    mux: MuxName,
+    session: &str,
+    diag: &crate::diag::DiagSink,
+) -> Result<PaneFrame> {
+    if let Some(panes) = super::pane_list_fixture()? {
+        return Ok(crate::sidebar::frame::assemble_frame(
+            panes,
+            unix_now_ms(),
+            session.to_owned(),
+        ));
+    }
+    let mut context = FrameContext {
+        runtime,
+        mux,
+        session,
+        own_pane: None,
+        diag,
+        metrics: &mut MetricsSampleCache::default(),
+        sampled: false,
+        hibernated_panes: &HashSet::new(),
+        agent_panes: &HashSet::new(),
+        native_tenants: &mut HashMap::new(),
+        settled_resumes: &mut SettledResumes::new(),
+        held_checks: &mut HashMap::new(),
+        checked_panes: HashSet::new(),
+        resolve_ttys: &mut |_| {},
+    };
+    let (frame, _) =
+        context.candidate(None, false, None, PaneReadConsistency::RequireAuthoritative)?;
+    Ok(frame)
+}
+
 struct FrameContext<'a> {
     runtime: &'a crate::RuntimePaths,
     mux: MuxName,
@@ -520,18 +559,14 @@ fn list_session_panes(
     workspace_id: crate::WorkspaceId,
     min_topology_produced_at_ms: Option<u64>,
     command_timeout: Option<Duration>,
-    prefer_authoritative: bool,
+    consistency: PaneReadConsistency,
 ) -> Result<PaneListing> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
         runtime_paths,
         workspace_id: Some(workspace_id),
         min_topology_produced_at_ms,
-        consistency: if prefer_authoritative {
-            PaneReadConsistency::PreferAuthoritative
-        } else {
-            PaneReadConsistency::Cached
-        },
+        consistency,
         command_timeout,
     })?)
 }
@@ -983,7 +1018,7 @@ pub fn repaired_pane_frame_for_binding(
             runtime.workspace_id.clone(),
             None,
             Some(command_timeout),
-            false,
+            PaneReadConsistency::Cached,
         )?,
     };
     let prior = read_snapshot_cache(&cache_path, session);
@@ -1245,7 +1280,7 @@ impl FrameContext<'_> {
         prior: Option<&PaneFrame>,
         enrich_metrics: bool,
         min_topology_produced_at_ms: Option<u64>,
-        authoritative: bool,
+        consistency: PaneReadConsistency,
     ) -> Result<(PaneFrame, bool)> {
         let listing = match list_session_panes(
             self.mux,
@@ -1254,7 +1289,7 @@ impl FrameContext<'_> {
             self.runtime.workspace_id.clone(),
             min_topology_produced_at_ms,
             None,
-            authoritative,
+            consistency,
         ) {
             Ok(panes) => panes,
             Err(err) => {
@@ -1341,7 +1376,7 @@ impl FrameContext<'_> {
     }
 
     fn produce(&mut self, prior: Option<&PaneFrame>) -> Result<Accepted> {
-        let frame = self.candidate(prior, true, None, false)?;
+        let frame = self.candidate(prior, true, None, PaneReadConsistency::Cached)?;
         let bindings = super::metrics::pane_root_bindings(self.metrics);
         let diag = self.diag;
         let own_pane = self.own_pane;
@@ -1349,7 +1384,14 @@ impl FrameContext<'_> {
             frame,
             prior,
             own_pane,
-            &mut |enrich, floor, authoritative| self.candidate(prior, enrich, floor, authoritative),
+            &mut |enrich, floor, authoritative| {
+                let consistency = if authoritative {
+                    PaneReadConsistency::PreferAuthoritative
+                } else {
+                    PaneReadConsistency::Cached
+                };
+                self.candidate(prior, enrich, floor, consistency)
+            },
             diag,
             true,
             &bindings,
