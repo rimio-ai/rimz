@@ -1056,7 +1056,7 @@ At 46 columns the same notices keep their suffixes:
  ⚠ starts held: cannot · 2 held · rimz doctor
 ```
 
-A [workflow run](../guide/workflows.md) raises no attention notice. Failures lead to an on-break agent or end the run; an agent asks in its own pane.
+A [workflow run](../guide/workflows.md) raises no attention notice. Failures take the routes their workflow sets, often to an agent, or end the run; an agent asks in its own pane.
 
 When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor · Esc dismiss` (singular `setting` for one; no `Esc dismiss` tail when no key is bound to `view.cancel`). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice. `Esc` dismisses the notice once no search, pane notice, or alert is left to clear, and the footer then sits as it does when nothing was skipped. The notice returns when a later start or attach records a different set of warnings, even one of the same size, and when the sidebar host is replaced (an upgrade reload, a crash, a new session); another client viewing the room keeps it until dismissed there. Dismissing it changes nothing on disk: `rimz doctor` still lists every skipped setting.
 
