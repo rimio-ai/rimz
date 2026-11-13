@@ -67,24 +67,10 @@ expression: value
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 5,
+  "version": 6,
   "visit_grant": 0,
   "visits": {
-    "build": {
-      "outcomes": [
-        {
-          "key": 42,
-          "outcome": null,
-          "visits": 1
-        },
-        {
-          "key": "42",
-          "outcome": null,
-          "visits": 1
-        }
-      ],
-      "total": 2
-    }
+    "build": 2
   },
   "wait": null,
   "workflow": "review"

@@ -293,7 +293,7 @@ pub(super) fn check_layout(
                         vec![workflow::TurnEndAction::Pushed]
                     }
                 );
-                assert_eq!(record.visits["work"].total, 2);
+                assert_eq!(record.visits["work"], 2);
                 if closing {
                     assert_eq!(record.state, RunState::Done);
                 } else {

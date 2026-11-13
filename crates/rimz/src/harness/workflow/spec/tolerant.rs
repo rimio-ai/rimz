@@ -89,9 +89,6 @@ pub(super) fn parse(mut value: toml::Value) -> Result<WorkflowSpec, SpecErr> {
         if path.len() > 4 && subscription_entry(&path) {
             path.truncate(4);
         }
-        if path.len() > 3 && path[0] == "steps" && path[2] == "max-visits-per-outcome" {
-            path.truncate(3);
-        }
         let dotted = original_path(&path, &indices);
         if !remove(&mut value, &path, &mut indices) {
             return Err(SpecErr::Toml {

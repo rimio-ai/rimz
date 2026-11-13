@@ -238,27 +238,6 @@ impl Transition<'_> {
                 },
             },
         );
-        if origin == EvaluationOrigin::Check && outcome != "hold" {
-            let spec = self.spec;
-            for (step, definition) in spec.steps() {
-                if definition
-                    .max_visits_per_outcome()
-                    .is_some_and(|cap| cap.reset_on().contains(&outcome))
-                    && let Some(visits) = self.record.visits.get_mut(step)
-                    && !visits.outcomes.is_empty()
-                {
-                    visits.outcomes.clear();
-                    self.push(
-                        Some(seq),
-                        JournalEvent::VisitsReset {
-                            step: step.clone(),
-                            outcome: outcome.clone(),
-                            all: false,
-                        },
-                    );
-                }
-            }
-        }
         if reason == ParkReason::Invalid {
             self.push(
                 Some(seq),
@@ -539,10 +518,10 @@ impl Transition<'_> {
         object
     }
 
-    pub(super) fn cap_route(&mut self, bound: &str, visits: u64, max: u64) -> Verdict {
+    pub(super) fn cap_route(&mut self, visits: u64, max: u64) -> Verdict {
         let object = self.engine_object(json!({
-            "outcome":"cap", "step":self.record.node, "bound":bound,
-            "visits":visits, "max":max, "routed_by":self.record.visit_bucket().0
+            "outcome":"cap", "step":self.record.node, "bound":"max-visits",
+            "visits":visits, "max":max, "routed_by":self.record.routed_by()
         }));
         self.push(
             None,
@@ -590,23 +569,11 @@ impl Transition<'_> {
         if attempt.visit.is_none() {
             return;
         }
-        let (outcome, key) = self.record.visit_bucket();
-        let bucket = (outcome.map(str::to_owned), key.cloned());
         let Some(visits) = self.record.visits.get_mut(&attempt.node) else {
             return;
         };
-        visits.total = visits.total.saturating_sub(1);
-        if let Some(index) = visits
-            .outcomes
-            .iter()
-            .position(|row| (&row.outcome, &row.key) == (&bucket.0, &bucket.1))
-        {
-            visits.outcomes[index].visits = visits.outcomes[index].visits.saturating_sub(1);
-            if visits.outcomes[index].visits == 0 {
-                visits.outcomes.remove(index);
-            }
-        }
-        if visits.total == 0 && visits.outcomes.is_empty() {
+        *visits = visits.saturating_sub(1);
+        if *visits == 0 {
             self.record.visits.remove(&attempt.node);
         }
     }
@@ -665,17 +632,16 @@ impl Transition<'_> {
     fn previous_attempt(&self, outcome: AttemptOutcome) -> PreviousAttempt {
         // Both callers retain a live step attempt while recording its end.
         let attempt = self.record.attempt.as_ref().expect("live step attempt");
-        let bucket = self.record.visit_bucket();
         let visit = attempt
             .visit
-            .unwrap_or_else(|| self.record.visits[&attempt.node].for_bucket(bucket));
+            .unwrap_or_else(|| self.record.visits_to(&attempt.node));
         PreviousAttempt {
             step: attempt.node.clone(),
             outcome,
             seq: attempt.seq,
             visit,
-            key: bucket.1.cloned(),
-            routed_by: bucket.0.map(str::to_owned),
+            key: self.record.key.clone(),
+            routed_by: self.record.routed_by().map(str::to_owned),
             started_at: attempt.started_at,
             ended_at: self.now,
             handle: attempt.run.as_ref().map(|run| run.handle.clone()),
@@ -913,7 +879,6 @@ impl Transition<'_> {
             JournalEvent::VisitsReset {
                 step: step.into(),
                 outcome: outcome.into(),
-                all: true,
             },
         );
     }

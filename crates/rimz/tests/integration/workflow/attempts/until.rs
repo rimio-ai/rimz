@@ -110,7 +110,7 @@ fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     assert_eq!(message.sender, rimz::store::message::MessageSender::System);
     assert_eq!(message.gate, rimz::store::message::DeliveryGate::Done);
     assert!(!message.is_user_input());
-    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
+    assert_eq!(value["record"]["visits"]["build"], 2);
     let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
     assert!(
         !trace.contains("close-pane"),
@@ -135,7 +135,7 @@ fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     room.hook(&id, &run, json!({"hook_event_name":"UserPromptSubmit"}));
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
     let value = settled(&room.env, &id, "failed");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
+    assert_eq!(value["record"]["visits"]["build"], 2);
     assert_eq!(events(&value, "turn_end").len(), 2);
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
@@ -212,7 +212,7 @@ fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
     room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
     let value = settled(&room.env, &id, "done");
     assert_eq!(events(&value, "turn_end")[1]["action"], "closed");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
+    assert_eq!(value["record"]["visits"]["build"], 2);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn restart_after_pending_push(continued: bool) {
     let value = settled(&room.env, &id, "done");
     assert_eq!(events(&value, "turn_end").len(), 2, "{value:#}");
     assert_eq!(events(&value, "turn_end")[1]["action"], "closed");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(
         rimz::store::message::read_status(store.paths(), &message_id).unwrap(),
         Some(rimz::store::message::MessageStatus::Canceled),
@@ -385,7 +385,7 @@ fn restart_abandons_an_inflight_until_answer_before_relaunching() {
             .is_some_and(|current| current != run.run_id.as_str())
     });
     assert!(value["record"]["held"].is_null(), "{value:#}");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert!(
         !events(&value, "turn_end")
             .iter()
@@ -544,7 +544,7 @@ fn a_held_check_publishes_the_live_session_and_renders_checking() {
             .unwrap(),
     );
     let value = settled(&room.env, &id, "done");
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(events(&value, "turn_end")[1]["action"], "closed");
 }
 

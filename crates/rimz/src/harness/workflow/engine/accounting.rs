@@ -185,10 +185,7 @@ pub(super) fn step(record: &RunRecord, handle: Option<String>) {
     let Some(attempt) = &record.attempt else {
         return;
     };
-    let visit = record
-        .visits
-        .get(&record.node)
-        .map_or(0, |visits| visits.for_bucket(record.visit_bucket()));
+    let visit = record.visits_to(&record.node);
     assist_log::append(&AssistRecord {
         at: Timestamp::now(),
         assist: Assist::WorkflowStep {

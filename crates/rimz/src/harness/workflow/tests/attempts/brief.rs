@@ -44,7 +44,6 @@ prompt-file='prompt.md'
 then='watch'
 timeout='3h'
 max-visits=6
-max-visits-per-outcome={limit=2,reset-on='queued'}
 [steps.clean]
 agent='claude'
 lifecycle='turn'
@@ -86,7 +85,7 @@ fn task(record: &mut RunRecord, manual: bool) {
 }
 
 #[test]
-fn land_note_matches_the_approved_example_with_reset_aware_visits() {
+fn land_note_matches_the_approved_example() {
     let (_dir, state, mut record) = setup(LAND);
     record.workflow = "land".into();
     record.prompt = None;
@@ -103,7 +102,7 @@ fn land_note_matches_the_approved_example_with_reset_aware_visits() {
         );
     }
     let expected = format!(
-        "{INTRO} You are the step `fix` of the workflow `land` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\nbegin → sweep → watch ⇄ [fix] → clean → notes → triage → ruled\n\nRimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`). Your prompt is the step's fixed text, not a message someone just typed.\n\nYou were launched because the check `watch` answered `red` (ci=failed). This is visit 2 of 6 to `fix`, and the second for `red` since the last `queued`: one more `red` before a `queued` ends the run as failed. Launches and push-backs count as visits. The previous attempt, @builder in `fix`, ended normally.\n\n{TURN}, within the step's 3h timeout. No signals reach you. {STOPS} {CHECK}\n\nNobody is watching. A question waits in your pane until the user answers it, and the timeout pauses meanwhile.\n\n{MORE}"
+        "{INTRO} You are the step `fix` of the workflow `land` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\nbegin → sweep → watch ⇄ [fix] → clean → notes → triage → ruled\n\nRimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`). Your prompt is the step's fixed text, not a message someone just typed.\n\nYou were launched because the check `watch` answered `red` (ci=failed). This is visit 2 of 6 to `fix`. Launches and push-backs count as visits. The previous attempt, @builder in `fix`, ended normally.\n\n{TURN}, within the step's 3h timeout. No signals reach you. {STOPS} {CHECK}\n\nNobody is watching. A question waits in your pane until the user answers it, and the timeout pauses meanwhile.\n\n{MORE}"
     );
     assert_eq!(note(&host), expected);
 }
@@ -208,7 +207,7 @@ fn first_step_has_no_invented_outcome_or_previous_attempt() {
 }
 
 #[test]
-fn keyed_and_total_caps_name_the_actual_destination_and_optional_reset() {
+fn total_caps_name_the_actual_destination() {
     for (destination, words) in [
         ("@done", "ends the run as done"),
         ("@failed", "ends the run as failed"),
@@ -216,33 +215,7 @@ fn keyed_and_total_caps_name_the_actual_destination_and_optional_reset() {
     ] {
         let text = format!(
             "{}on.cap='{destination}'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
-            OUTCOME_STEP.replace("{limit=2,reset-on='queued'}", "2")
-        );
-        let (_dir, state, record) = setup(&text);
-        let host = FakeHost::new();
-        for _ in 0..2 {
-            answer(
-                &state,
-                &record,
-                &host,
-                json!({"outcome":"red","key":"lint"}),
-            );
-        }
-        let text = note(&host);
-        assert!(
-            text.contains(
-                "This is visit 2 of 6 to `build`, and the second for `red` with key `lint`"
-            ),
-            "{text}"
-        );
-        assert!(text.contains(&format!("one more `red` {words}")), "{text}");
-        assert!(!text.contains("since the last"));
-
-        let text = format!(
-            "{}on.cap='{destination}'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
-            OUTCOME_STEP
-                .replace("max-visits=6", "max-visits=2")
-                .replace("max-visits-per-outcome={limit=2,reset-on='queued'}\n", "")
+            OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
         );
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
@@ -260,22 +233,11 @@ fn keyed_and_total_caps_name_the_actual_destination_and_optional_reset() {
 }
 
 #[test]
-fn per_outcome_only_and_multiple_resets_do_not_invent_a_total_limit() {
-    let text = OUTCOME_STEP
-        .replace("max-visits=6\n", "")
-        .replace("reset-on='queued'", "reset-on=['queued','blue']");
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    answer(&state, &record, &host, json!({"outcome":"red"}));
-    assert!(note(&host).contains(
-        "This is the first visit to `build` for `red` since the last `queued` or `blue`."
-    ));
-}
-
-#[test]
 fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
     let notes = [false, true].map(|previously_broken| {
-        let (_dir, state, record) = setup(&on_break(OUTCOME_STEP));
+        let (_dir, state, record) = setup(&on_break(
+            &OUTCOME_STEP.replace("max-visits=6", "max-visits=2"),
+        ));
         let host = FakeHost::new();
         if previously_broken {
             for _ in 0..3 {
@@ -308,7 +270,9 @@ fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
 
 #[test]
 fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
-    let (_dir, state, record) = setup(&on_break(OUTCOME_STEP));
+    let (_dir, state, record) = setup(&on_break(
+        &OUTCOME_STEP.replace("max-visits=6", "max-visits=2"),
+    ));
     let host = FakeHost::new();
     for _ in 0..3 {
         answer(&state, &record, &host, json!({"outcome":"red"}));
@@ -326,14 +290,14 @@ fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
         (Some(1), Some(1))
     );
     let text = note(&host);
-    assert!(text.contains("The user resumed the run at this step after it parked. This is visit 1 of 7 to `build`, and the first for `red` since the last `queued`"), "{text}");
+    assert!(text.contains("The user resumed the run at this step after it parked. This is visit 1 of 3 to `build`."), "{text}");
 }
 
 #[test]
 fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     let text = format!(
         "{}on.cap='recover'\n[steps.recover]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
-        OUTCOME_STEP
+        OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();

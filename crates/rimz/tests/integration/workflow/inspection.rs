@@ -680,7 +680,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let env = setup();
     let mut record = seed(&env, &env.project_root, &env.project_root, "parked");
     record.node = "build".into();
-    record.visits = serde_json::from_value(json!({"build":{"total":1,"outcomes":[]}})).unwrap();
+    record.visits = serde_json::from_value(json!({"build":1})).unwrap();
     save(&env, &record);
     let output = env
         .rimz()
@@ -722,7 +722,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         stderr.contains("deadline") && stderr.contains("--extend 'deadline=<when>'"),
         "{stderr}"
     );
-    record.visits.get_mut("build").unwrap().total = 2;
+    *record.visits.get_mut("build").unwrap() = 2;
     save(&env, &record);
     let output = env
         .rimz()
@@ -1020,8 +1020,7 @@ fn list_derives_bound_phrases_from_the_sealed_spec_and_ignores_stale_parks() {
             "cap" => {
                 record.node = "build".into();
                 record.visit_grant = 1;
-                record.visits =
-                    serde_json::from_value(json!({"build":{"total":3,"outcomes":[]}})).unwrap();
+                record.visits = serde_json::from_value(json!({"build":3})).unwrap();
             }
             "deadline" => record.deadline = Some("2000-01-01T00:00:00Z".parse().unwrap()),
             _ => {}

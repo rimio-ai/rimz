@@ -1543,43 +1543,24 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
 }
 
 #[test]
-fn human_show_lists_outcome_buckets_only_for_steps_with_per_outcome_caps() {
+fn human_show_lists_each_capped_steps_visits_with_the_grant() {
     let spec = format!(
-        "{HEADER}{WAIT}[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\nmax-visits-per-outcome=2\n[steps.plain]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
+        "{HEADER}{WAIT}[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n[steps.plain]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
     );
     let (env, _) = fixture(&spec, PENDING);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let mut record = value["record"].clone();
     record["visit_grant"] = json!(3);
-    record["visits"] = json!({
-        "build": {"total":4,"outcomes":[
-            {"outcome":"red","key":"lint","visits":2},
-            {"outcome":"red","key":8,"visits":1},
-            {"outcome":null,"key":null,"visits":1}
-        ]},
-        "plain": {"total":1,"outcomes":[{"outcome":"ok","key":"hidden","visits":1}]}
-    });
+    record["visits"] = json!({"build":4, "plain":1});
     let paths = env
         .state_path_for(&env.project_root)
         .workflow(&id.parse().unwrap());
     fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(
-        text.contains(concat!(
-            "visits  build 4 of 8\n",
-            "  build 2 of 5 for red key \"lint\"\n",
-            "  build 1 of 5 for red key 8\n",
-            "  build 1 of 5 for null\n",
-            "visits  plain 1 of 8\n"
-        )),
+        text.contains("visits  build 4 of 8\nvisits  plain 1 of 8\n"),
         "{text}"
-    );
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.contains(" for red") || line.contains(" for null"))
-            .count(),
-        3
     );
     assert_eq!(show(&env, &id)["record"]["visits"], record["visits"]);
     success(command(&env, &["workflow", "cancel", &id]));

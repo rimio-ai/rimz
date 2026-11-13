@@ -33,8 +33,8 @@ fn evaluations(state: &StatePaths, record: &RunRecord) -> Vec<Value> {
 }
 
 #[test]
-fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_visit_bucket() {
-    let text = SLEEP.replace("then='@done'", "then='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3\nmax-visits-per-outcome=2");
+fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_outcome() {
+    let text = SLEEP.replace("then='@done'", "then='build'\n[steps.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3");
     let (_dir, state, mut record) = attempts::setup(&text);
     record.input = Some(json!({"outcome":"repair", "key":"original", "context":42}));
     record.key = Some(Key::String("original".into()));
@@ -59,10 +59,7 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_visit_buc
     let next = advance_sleep(&state, &record);
     assert_eq!(next.node, "build");
     assert_eq!((&next.input, &next.key), (&input, &record.key));
-    assert_eq!(
-        next.visits["build"].outcomes[0].outcome.as_deref(),
-        Some("repair")
-    );
+    assert_eq!(next.routed_by(), Some("repair"));
     assert_eq!(
         evaluations(&state, &record),
         vec![

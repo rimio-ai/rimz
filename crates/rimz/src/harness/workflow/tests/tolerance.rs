@@ -501,70 +501,23 @@ fn route_tables_require_a_string_target_and_warn_on_unknown_keys() {
 }
 
 #[test]
-fn per_outcome_number_and_reset_tables_load_without_ignored_fields() {
-    for cap in [
-        "2",
-        "{limit=2}",
-        "{limit=2,reset-on='ready'}",
-        "{limit=2,reset-on=['ready','done']}",
+fn old_per_key_and_per_outcome_caps_and_case_keys_warn_unknown_and_do_not_cap_steps() {
+    for field in [
+        "max-visits-per-key=1",
+        "max-visits-per-outcome={limit=2,reset-on='ready'}",
     ] {
-        let text = VALID.replace(
-            "max-visits = 3",
-            &format!("max-visits=3\nmax-visits-per-outcome={cap}"),
-        );
+        let text = VALID.replace("max-visits = 3", &format!("max-visits=3\n{field}"));
         let spec = loaded(&text).unwrap();
-        assert!(spec.ignored().is_empty(), "{cap}: {:?}", spec.ignored());
+        let name = field.split('=').next().unwrap();
+        assert!(
+            spec.ignored()
+                .iter()
+                .any(|issue| issue.path == format!("steps.build.{name}")
+                    && issue.message.contains("unknown field")),
+            "{field}: {:?}",
+            spec.ignored()
+        );
     }
-}
-
-#[test]
-fn per_outcome_inner_unknown_fields_warn_and_invalid_values_drop_the_whole_cap() {
-    let path = "steps.build.max-visits-per-outcome";
-    let text = VALID.replace(
-        "max-visits = 3",
-        "max-visits=3\nmax-visits-per-outcome={limit=2,future=true}",
-    );
-    let spec = loaded(&text).unwrap();
-    assert_eq!(
-        spec.ignored()
-            .iter()
-            .map(|issue| issue.path.as_str())
-            .collect::<Vec<_>>(),
-        [format!("{path}.future")]
-    );
-    for cap in [
-        "0",
-        "-1",
-        "'two'",
-        "[]",
-        "{}",
-        "{limit=0,reset-on='ready'}",
-        "{limit=2,reset-on=[]}",
-        "{limit=2,reset-on=42}",
-        "{limit='two'}",
-        "{limit=2,reset-on=['ready',42]}",
-        "{limit=3,reset-on='ready'}",
-    ] {
-        let spec = loaded(&VALID.replace(
-            "max-visits = 3",
-            &format!("max-visits=3\nmax-visits-per-outcome={cap}"),
-        ))
-        .unwrap();
-        assert_eq!(spec.ignored().len(), 1, "{cap}: {:?}", spec.ignored());
-        assert_eq!(spec.ignored()[0].path, path, "{cap}");
-    }
-}
-
-#[test]
-fn old_per_key_caps_and_case_keys_warn_unknown_and_do_not_cap_steps() {
-    let text = VALID.replace("max-visits = 3", "max-visits=3\nmax-visits-per-key=1");
-    let spec = loaded(&text).unwrap();
-    assert!(
-        spec.ignored()
-            .iter()
-            .any(|issue| issue.path == "steps.build.max-visits-per-key"
-                && issue.message.contains("unknown field"))
-    );
     let spec = loaded(&CONDITION.replace("outcome='yes'", "outcome='yes',key='ci'")).unwrap();
     assert!(
         spec.ignored()
@@ -1097,18 +1050,6 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
             "steps.build.max-visits",
         ),
         (
-            acyclic.replace("max-visits = 3", "max-visits=3\nmax-visits-per-outcome=0"),
-            "steps.build.max-visits-per-outcome",
-        ),
-        (
-            acyclic.replace("max-visits = 3", "max-visits=3\nmax-visits-per-outcome=3"),
-            "steps.build.max-visits-per-outcome",
-        ),
-        (
-            acyclic.replace("max-visits = 3", "max-visits=3\nmax-visits-per-outcome=4"),
-            "steps.build.max-visits-per-outcome",
-        ),
-        (
             CONDITION.replace("outcome='yes'", "outcome='yes',for='0s'"),
             "checks.pick.cases.0.for",
         ),
@@ -1322,7 +1263,6 @@ fn semantic_and_misplaced_values_are_cleared_before_validation() {
                             "timeout" => step.timeout.is_none(),
                             "window" => step.window.is_none(),
                             "max-visits" => step.max_visits.is_none(),
-                            "max-visits-per-outcome" => step.max_visits_per_outcome.is_none(),
                             "notes" => step.notes.is_none(),
                             "limit" => step.limit.is_none(),
                             "keep" => step.keep.is_none(),

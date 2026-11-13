@@ -166,44 +166,29 @@ impl View<'_> {
     }
 
     fn cap(&self, out: &mut impl Write) -> Result<()> {
-        let Some((bound, used, max)) = self
+        let Some((used, max)) = self
             .spec
             .step(&self.record.node)
             .and_then(|step| step.tripped_visit_bound(self.record))
         else {
             return Ok(());
         };
-        let per_outcome = bound == "max-visits-per-outcome";
-        let bucket = self.record.visit_bucket();
-        let key = bucket
-            .1
-            .map(serde_json::to_string)
-            .transpose()?
-            .map(|key| format!(" key {key}"))
-            .unwrap_or_default();
-        let bucket_label = if per_outcome {
-            format!(" for {}{key}", bucket.0.unwrap_or("null"))
-        } else {
-            String::new()
-        };
-        writeln!(out, "{bound}{bucket_label}: {used} of {max} visits used")?;
+        writeln!(out, "max-visits: {used} of {max} visits used")?;
         let since = self
             .journal
             .iter()
             .rposition(|entry| match &entry.event {
-                JournalEvent::VisitsReset { step, all, .. } => {
-                    step == &self.record.node && (per_outcome || *all)
-                }
+                JournalEvent::VisitsReset { step, .. } => step == &self.record.node,
                 _ => false,
             })
             .map_or(0, |index| index + 1);
-        let mut total_visit = 0;
+        let mut visit = 0;
         for (index, entry) in self.journal.iter().enumerate().skip(since) {
             if let JournalEvent::TurnEnd {
                 action: records::TurnEndAction::Pushed,
                 check,
                 outcome,
-                visit: Some(visit),
+                visit: Some(_),
                 message,
                 ..
             } = &entry.event
@@ -211,23 +196,7 @@ impl View<'_> {
                 if entry.node != self.record.node {
                     continue;
                 }
-                let key = self.journal[..index]
-                    .iter()
-                    .rev()
-                    .find_map(|answer| match &answer.event {
-                        JournalEvent::Evaluation { object, .. } if &answer.node == check => {
-                            Some(object.get("key").and_then(|key| {
-                                serde_json::from_value::<records::Key>(key.clone()).ok()
-                            }))
-                        }
-                        _ => None,
-                    })
-                    .flatten();
-                if per_outcome && (outcome.as_deref(), key.as_ref()) != bucket {
-                    continue;
-                }
-                total_visit += 1;
-                let visit = if per_outcome { *visit } else { total_visit };
+                visit += 1;
                 writeln!(
                     out,
                     "  {} {check} {} · {} {visit} · push-back{}",
@@ -241,9 +210,6 @@ impl View<'_> {
                 continue;
             }
             let JournalEvent::Attempt {
-                visit,
-                key,
-                routed_by,
                 handle,
                 code,
                 outcome,
@@ -255,13 +221,10 @@ impl View<'_> {
             else {
                 continue;
             };
-            if entry.node != self.record.node
-                || (per_outcome && (routed_by.as_deref(), key.as_ref()) != bucket)
-            {
+            if entry.node != self.record.node {
                 continue;
             }
-            total_visit += 1;
-            let visit = if per_outcome { *visit } else { total_visit };
+            visit += 1;
             let sender = match self.sender(&self.journal[..index]) {
                 Sender::Edge(node, outcome) => format!("{node} {outcome}"),
                 Sender::Resume => "resumed".into(),
@@ -291,7 +254,7 @@ impl View<'_> {
         let visit = used.saturating_add(1);
         writeln!(
             out,
-            "  {} {} {visit} refused: {bound}{bucket_label} {max}",
+            "  {} {} {visit} refused: max-visits {max}",
             self.clock(
                 self.record
                     .park

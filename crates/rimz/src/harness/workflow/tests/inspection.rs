@@ -1,7 +1,5 @@
 use super::*;
-use crate::store::workflow::{
-    EvaluationOrigin, JournalEntry, JournalEvent, Key, RunState, StepVisits,
-};
+use crate::store::workflow::{EvaluationOrigin, JournalEntry, JournalEvent, RunState};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -33,7 +31,7 @@ fn spec() -> Definition {
     toml::from_str(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
          [checks.pr]\nrun='true'\non.pass='build'\non.fail='@wait'\n\
-         [steps.build]\nrun='true'\nthen='pr'\nmax-visits=4\nmax-visits-per-outcome=2\n",
+         [steps.build]\nrun='true'\nthen='pr'\nmax-visits=4\n",
     )
     .unwrap()
 }
@@ -170,40 +168,21 @@ fn edge_lookup_keeps_explicit_overrides() {
 }
 
 #[test]
-fn visit_bounds_keep_total_first_typed_keys_and_grants() {
+fn visit_caps_add_the_grant_and_trip_at_the_cap() {
     let spec = spec();
-    let visits: StepVisits = serde_json::from_value(json!({
-        "total":4, "outcomes":[{"key":42,"visits":2},{"key":"42","visits":1}]
-    }))
-    .unwrap();
     let step = &spec.authored().steps["build"];
-    assert_eq!(
-        step.visit_bounds(Some(&visits), (None, Some(&Key::Integer(42))), 1)
-            .collect::<Vec<_>>(),
-        [("max-visits", 4, 5), ("max-visits-per-outcome", 2, 3)]
+    assert_eq!(step.visit_cap(1), Some(5));
+    assert_eq!(step.visit_cap(u64::MAX), Some(u64::MAX));
+    let (_dir, _state, mut record) = super::attempts::setup(
+        "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nrun='true'\nthen='@done'\n",
     );
-    assert_eq!(
-        step.visit_bounds(Some(&visits), (None, Some(&Key::String("42".into()))), 0)
-            .collect::<Vec<_>>(),
-        [("max-visits", 4, 4), ("max-visits-per-outcome", 1, 2)]
-    );
-    assert_eq!(
-        step.visit_bounds(None, (None, None), u64::MAX)
-            .collect::<Vec<_>>(),
-        [
-            ("max-visits", 0, u64::MAX),
-            ("max-visits-per-outcome", 0, u64::MAX)
-        ]
-    );
+    record.visits.insert("build".into(), 4);
+    assert_eq!(step.tripped_visit_bound(&record), Some((4, 4)));
+    record.visit_grant = 1;
+    assert_eq!(step.tripped_visit_bound(&record), None);
     let mut unbounded = step.clone();
     unbounded.max_visits = None;
-    unbounded.max_visits_per_outcome = None;
-    assert_eq!(
-        unbounded
-            .visit_bounds(Some(&visits), (None, None), 0)
-            .count(),
-        0
-    );
+    assert_eq!(unbounded.visit_cap(0), None);
 }
 
 #[test]
@@ -354,7 +333,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
 
     let text = "[workflow]\nscope='worktree'\nstart='build'\n\
         [steps.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\n\
-        max-visits=6\nmax-visits-per-outcome={limit=2,reset-on=['pending','done']}\n\
+        max-visits=6\n\
         [checks.pr]\nrun='true'\non.pending='build'\non.done='@done'\n";
     let (_dir, state, record) = super::attempts::setup(text);
     let host = FakeHost::new();

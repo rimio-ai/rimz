@@ -201,8 +201,8 @@ fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
 }
 
 #[test]
-fn agent_step_start_launches_with_null_context_and_counts_the_null_outcome() {
-    let room = Room::new("max-visits-per-outcome=1\n");
+fn agent_step_start_launches_with_null_context_and_counts_its_visit() {
+    let room = Room::new("");
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
         &path,
@@ -238,10 +238,7 @@ fn agent_step_start_launches_with_null_context_and_counts_the_null_outcome() {
     for field in ["input", "key", "prev_attempt"] {
         assert_eq!(ctx.get(field), Some(&Value::Null), "{ctx:#}");
     }
-    assert_eq!(
-        value["record"]["visits"]["build"]["outcomes"],
-        json!([{"outcome":null,"key":null,"visits":1}])
-    );
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(run.workflow.as_ref().unwrap().seq, 1);
     assert!(events(&value, "evaluation").is_empty(), "{value:#}");
     room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
@@ -864,10 +861,7 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
         });
     }
     let value = settled(&room.env, &id, "done");
-    assert_eq!(
-        value["record"]["visits"]["build"]["outcomes"],
-        json!([{"outcome":"ready", "key":"one", "visits":1}, {"outcome":"ready", "key":"two", "visits":1}])
-    );
+    assert_eq!(value["record"]["visits"]["build"], 2, "{value:#}");
     let picked: Vec<_> = events(&value, "evaluation")
         .into_iter()
         .filter(|row| row["outcome"] == "ready")

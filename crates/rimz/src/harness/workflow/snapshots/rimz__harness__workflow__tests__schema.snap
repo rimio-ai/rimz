@@ -253,53 +253,6 @@ expression: value
         }
       ]
     },
-    "OutcomeCap": {
-      "anyOf": [
-        {
-          "format": "uint64",
-          "minimum": 1,
-          "type": "integer"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "limit": {
-              "format": "uint64",
-              "minimum": 1,
-              "type": "integer"
-            },
-            "reset-on": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ResetOn"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "limit"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "ResetOn": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        }
-      ]
-    },
     "Route": {
       "anyOf": [
         {
@@ -409,16 +362,6 @@ expression: value
           "type": [
             "integer",
             "null"
-          ]
-        },
-        "max-visits-per-outcome": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OutcomeCap"
-            },
-            {
-              "type": "null"
-            }
           ]
         },
         "message": {

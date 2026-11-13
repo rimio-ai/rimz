@@ -326,7 +326,7 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
         for step in visited {
             record.visits.insert(
                 (*step).into(),
-                serde_json::from_value(json!({"total": 1, "outcomes": []})).unwrap(),
+                serde_json::from_value(serde_json::json!(1)).unwrap(),
             );
         }
         {
@@ -916,7 +916,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
                 "5h.left=0<20"
             );
         } else {
-            assert_eq!(current.visits["pr"].total, 1);
+            assert_eq!(current.visits["pr"], 1);
             assert!(current.wait.is_none());
             assert!(workflow::journal(&state.workflow(&record.id)).unwrap().iter().any(|row| matches!(&row.event, JournalEvent::Wait { outcome, count:2, .. } if outcome == "window")));
         }

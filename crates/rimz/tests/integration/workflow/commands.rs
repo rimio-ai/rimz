@@ -207,7 +207,7 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
     assert_eq!(previous["outcome"], outcome);
     assert_eq!(previous["code"], code);
     assert_eq!(previous["log"], attempt["log"]);
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(value["record"]["next_seq"], 4);
     let ctx = context(&value);
     assert_eq!(
@@ -385,7 +385,7 @@ fn command_bound(mode: &str) {
     };
     assert_eq!(attempts[0]["outcome"], outcome, "{mode}: {value:#}");
     assert_eq!(value["record"]["prev_attempt"]["outcome"], outcome);
-    assert_eq!(value["record"]["visits"]["build"]["total"], 1);
+    assert_eq!(value["record"]["visits"]["build"], 1);
     assert!(attempts[0]["code"].is_null());
     assert_eq!(
         attempts[0]["head_end"],

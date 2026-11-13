@@ -261,22 +261,6 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             ignored,
             positive,
         );
-        sanitize(
-            &mut step.max_visits_per_outcome,
-            &format!("{path}.max-visits-per-outcome"),
-            ignored,
-            |cap| positive(&cap.limit()),
-        );
-        if let (Some(cap), Some(total)) = (&step.max_visits_per_outcome, step.max_visits)
-            && cap.limit() >= total
-        {
-            ignore(
-                &mut step.max_visits_per_outcome,
-                &format!("{path}.max-visits-per-outcome"),
-                ignored,
-                "must be below max-visits, since the total cap trips first",
-            );
-        }
         limit(&mut step.limit, &format!("{path}.limit"), ignored);
         let command = matches!(step.kind(), Some(StepKind::Run(_) | StepKind::Shell(_)));
         let message = matches!(step.kind(), Some(StepKind::Message(_)));

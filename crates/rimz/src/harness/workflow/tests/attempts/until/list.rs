@@ -40,7 +40,7 @@ fn listed_checks_keep_the_session_and_input_then_push_and_restart_at_the_first()
     fs::write(dir.path().join("review.json"), r#"{"outcome":"pending"}"#).unwrap();
     let pushed = advance_ok(&state, &live.id, &host);
     assert_eq!(pushed.node, "build");
-    assert_eq!(pushed.visits["build"].total, 2);
+    assert_eq!(pushed.visits["build"], 2);
     assert_eq!(
         pushed.attempt.as_ref().unwrap().run,
         live.attempt.as_ref().unwrap().run

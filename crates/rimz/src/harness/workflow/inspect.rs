@@ -388,7 +388,7 @@ fn attempt_superseded(
         ) => true,
         (
             JournalEvent::Cancel { .. }
-            | JournalEvent::VisitsReset { all: true, .. }
+            | JournalEvent::VisitsReset { .. }
             | JournalEvent::Restart { .. },
             AttemptOutcome::Canceled,
         ) => true,

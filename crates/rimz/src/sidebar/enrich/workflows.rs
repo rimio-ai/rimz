@@ -120,14 +120,9 @@ fn project(
     } else {
         Vec::new()
     };
-    let capped = spec.and_then(|spec| spec.step(name)).is_some_and(|step| {
-        step.visit_bounds(
-            record.visits.get(name),
-            record.visit_bucket(),
-            record.visit_grant,
-        )
-        .any(|(_, used, max)| used >= max)
-    });
+    let capped = spec
+        .and_then(|spec| spec.step(name)?.visit_cap(record.visit_grant))
+        .is_some_and(|max| record.visits_to(name) >= max);
     let hold_limit = record
         .wait
         .as_ref()
@@ -187,7 +182,7 @@ fn project(
             reached: reached.is_some_and(|nodes| nodes.contains(name)),
         },
         detour_parent,
-        visits: record.visits.get(name).map_or(0, |visits| visits.total),
+        visits: record.visits_to(name),
         capped,
         word,
         since,
@@ -260,7 +255,7 @@ mod tests {
         record.node = "fix".into();
         record.visits.insert(
             "fix".into(),
-            serde_json::from_value(json!({"total":2, "outcomes":[]})).unwrap(),
+            serde_json::from_value(serde_json::json!(2)).unwrap(),
         );
         let reached = ["sweep", "watch", "fix"].map(str::to_owned).into();
         let projected = project(&record, Some(&spec), Some(&reached));

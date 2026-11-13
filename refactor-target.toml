@@ -11718,16 +11718,6 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 
 [[verdict]]
 kind = "item"
-key = "store::workflow::StepVisits"
-reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
-
-[[verdict]]
-kind = "item"
-key = "store::workflow::OutcomeVisits"
-reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
-
-[[verdict]]
-kind = "item"
 key = "store::workflow::AttemptKind"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
 
@@ -12000,11 +11990,6 @@ reason = "Routing and inspection share node edges and engine defaults from the g
 kind = "item"
 key = "harness::workflow::spec::RESERVED_OUTCOMES"
 reason = "Workflow admission and answer normalization share one reserved-outcome vocabulary."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::OutcomeCap"
-reason = "Definition views and visit admission share the per-outcome limit and reset outcomes."
 
 [[verdict]]
 kind = "item"

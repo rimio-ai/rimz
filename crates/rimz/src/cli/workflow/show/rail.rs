@@ -62,44 +62,12 @@ impl View<'_> {
             } else {
                 row.style
             };
-            let visits = self
+            let used = self.record.visits_to(&row.name);
+            let max = self
                 .spec
                 .step(&row.name)
-                .and_then(|step| {
-                    let bucket = if is_current
-                        || self
-                            .record
-                            .session_attempt()
-                            .is_some_and(|attempt| attempt.node == row.name)
-                    {
-                        self.record.visit_bucket()
-                    } else {
-                        self.journal
-                            .iter()
-                            .rev()
-                            .find_map(|entry| match &entry.event {
-                                JournalEvent::Attempt { routed_by, key, .. }
-                                    if entry.node == row.name =>
-                                {
-                                    Some((routed_by.as_deref(), key.as_ref()))
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or((None, None))
-                    };
-                    step.visit_bounds(
-                        self.record.visits.get(&row.name),
-                        bucket,
-                        self.record.visit_grant,
-                    )
-                    .next()
-                })
-                .filter(|(_, used, _)| *used > 0 || is_current);
-            let count = self
-                .record
-                .visits
-                .get(&row.name)
-                .map_or(count, |visits| visits.total);
+                .and_then(|step| step.visit_cap(self.record.visit_grant));
+            let count = self.record.visits.get(&row.name).copied().unwrap_or(count);
             let repeated = if count > 1 {
                 format!(" ×{count}")
             } else {
@@ -114,7 +82,7 @@ impl View<'_> {
             } else if let Some(summary) = self.last(&row.name, &hops) {
                 row.heading.push_str(&format!(" · {summary}{repeated}"));
             }
-            if let Some((_, used, max)) = visits.filter(|(_, used, _)| *used > 0) {
+            if let Some(max) = max.filter(|_| used > 0) {
                 row.heading.push_str(&format!(" · visit {used} of {max}"));
             }
             if is_current {

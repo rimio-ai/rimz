@@ -166,10 +166,7 @@ pub(super) fn horizontal(
                 reached,
                 current,
                 ending: terminal,
-                visits: record
-                    .visits
-                    .get(&node.node)
-                    .map_or(0, |visits| visits.total),
+                visits: record.visits.get(&node.node).map_or(0, |visits| *visits),
                 name: node.node,
                 parent: node.hangs_under,
             }
@@ -533,17 +530,6 @@ impl Row {
                         if let Some(max) = step.max_visits() {
                             row.details.push(format!(
                                 "{max} visits, then {}",
-                                target(name, &edge.target, order)
-                            ));
-                        }
-                        if let Some(max) = step.max_visits_per_outcome() {
-                            let reset_on = match max.reset_on() {
-                                [] => String::new(),
-                                outcomes => format!(" (reset-on {})", outcomes.join(", ")),
-                            };
-                            row.details.push(format!(
-                                "max-visits-per-outcome {}{reset_on}, then {}",
-                                max.limit(),
                                 target(name, &edge.target, order)
                             ));
                         }
