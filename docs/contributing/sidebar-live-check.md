@@ -823,7 +823,7 @@ grep -ao $'\e_G[^;\e]*' "$ROOT/tmp/kitty.raw" | sed -E 's/i=[0-9]+/i=N/; s/[xy]=
    <n> _Ga=p,U=1,i=N,p=1,c=38,r=1,q=2
 ```
 
-The `d=I` lines are the sweeps a sidebar makes over its slot's id window each time it takes the slot, on arrival at its tab, before its first transmit. The `a=t` transmits are chunked (`m=1` then `m=0`), and each virtual placement carries `p=1`. Drop `-o` and read the raw lines to see the actual ids.
+The `d=I` lines are the sweeps a sidebar makes over its slot's id window each time it takes the slot, on arrival at its tab, before its first transmit. After a native tab switch, the arriving sidebar's first frame is painted without an image permit, since focus optimism earns none ([image ids and slots](../internals/sidebar/pets.md#image-ids-and-slots)), so it carries no kitty graphics; the pixel tier (pets, meters, budget bars and logos), with its `d=I` sweep, follows in the next frame after the host's client sample places the pane on a client's screen. The `a=t` transmits are chunked (`m=1` then `m=0`), and each virtual placement carries `p=1`. Drop `-o` and read the raw lines to see the actual ids.
 
 ## Replay a kitty capture through Ghostty
 
