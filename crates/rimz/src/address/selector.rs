@@ -368,7 +368,7 @@ impl<'a> AgentRow<'a> {
         }
     }
 
-    /// Whether the agent is unended and pane-bound, or a live launched child.
+    /// Whether the agent is unended and bound to a pane.
     pub fn live(&self) -> bool {
         self.live
     }
