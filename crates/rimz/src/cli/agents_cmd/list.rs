@@ -26,7 +26,7 @@ pub(super) fn list_agents(
     globals: &GlobalFlags,
 ) -> Result<()> {
     if filters.iter().any(|filter| filter.trim() == "help") {
-        return Ok(render_filter_help(&mut render::out())?);
+        return Ok(render::filter_help(&mut render::out(), FILTER_DEFAULTS)?);
     }
     let query = Query::parse(filters).map_err(|err| UsageError::new(err.to_string()))?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
@@ -199,34 +199,9 @@ fn empty_list_line(lane: Option<&str>, filters: &[String]) -> String {
     }
 }
 
-/// `--filter help`: the selector's field table, then the grammar in brief.
-fn render_filter_help(w: &mut impl std::io::Write) -> std::io::Result<()> {
-    let mut table = render::Table::new(["FIELD", "TYPE", "VALUES"]);
-    for field in Field::ALL {
-        let values = field.values();
-        let values = if values.is_empty() {
-            field.kind().hint().to_owned()
-        } else {
-            values.join(", ")
-        };
-        table.row([
-            render::cell(field.name()),
-            render::cell(field.kind().label()),
-            render::cell(values),
-        ]);
-    }
-    table.render(w)?;
-    writeln!(w)?;
-    for line in [
-        "term: <field><op><value>[,<value>...]; ops: = != and, on age, ctx, tokens, cost, > >= < <=",
-        "every term and every --filter must match; under = any value matches, under != none may",
-        "none matches a missing value and * any present one; quote a value holding spaces or commas",
-        "naming lane, live, or parent replaces its default: the current lane, live=yes, parent=none",
-    ] {
-        writeln!(w, "{line}")?;
-    }
-    Ok(())
-}
+/// What `agents list` lists until a term names the field.
+const FILTER_DEFAULTS: &str =
+    "naming lane, live, or parent replaces its default: the current lane, live=yes, parent=none";
 
 pub(super) fn agent_pr(snapshot: &SidebarSnapshot, agent: &AgentState) -> Option<PrInfo> {
     snapshot

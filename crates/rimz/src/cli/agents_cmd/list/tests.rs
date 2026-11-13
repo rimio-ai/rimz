@@ -568,7 +568,7 @@ fn list_json_carries_each_row_flat_beside_its_detail() {
 #[test]
 fn filter_help_lists_every_field_with_its_type() {
     let mut out = anstream::StripStream::new(Vec::new());
-    render_filter_help(&mut out).unwrap();
+    render::filter_help(&mut out, FILTER_DEFAULTS).unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
     for field in Field::ALL {
         assert!(
