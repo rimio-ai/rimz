@@ -2390,7 +2390,8 @@ path = "crates/rimz/src/harness"
 # loop_task::LOOP_BOOKED_BY_ENV hands a fire's booking chain from its checks to the agents they launch (+1).
 # cache_keepalive::RoomCapacities and RoomCapacities::{new, window_spent} share one capacity reading per pass across the cache ping and idle and smart compaction (+3).
 # RoomCapacities::compaction_blocked reads the pass's credits cache once for both compactions (+1).
-surface-budget = 1210
+# team_prompt::SHIPPED_REFLECT and team_prompt::reflect_copy_path let team loads and explain resolve and label the shipped `reflect` consensus piece (+2).
+surface-budget = 1212
 
 [[verdict]]
 kind = "item"
