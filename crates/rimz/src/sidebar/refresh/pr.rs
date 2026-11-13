@@ -52,8 +52,13 @@ pub(super) fn produce_pr_states(
     let path = runtime.pr_state_path();
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
-    let condition_scopes =
+    let mut condition_scopes =
         crate::harness::schedule::probe::probe_demand(runtime, snapshot.project_root.as_deref());
+    add_booking_demand(
+        &mut condition_scopes,
+        &super::bookings::read_bookings_cache(&runtime.bookings_path()),
+        snapshot.project_root.as_deref(),
+    );
     let needed = pr_demand_paths(snapshot, condition_scopes.keys().cloned().collect());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
@@ -135,6 +140,26 @@ pub(super) fn produce_pr_states(
         );
     }
     cache
+}
+
+/// Joins each fired, unfinished booking's own branch to the branch demand at the room's
+/// project root, so the bookings lane reads that branch's pull request from these rows.
+fn add_booking_demand(
+    demand: &mut BTreeMap<String, BTreeSet<String>>,
+    bookings: &super::bookings::BookingsCache,
+    project_root: Option<&Path>,
+) {
+    let Some(root) = project_root.filter(|root| root.is_dir()) else {
+        return;
+    };
+    let branches = super::bookings::branch_demand(bookings);
+    if branches.is_empty() {
+        return;
+    }
+    demand
+        .entry(root.to_string_lossy().into_owned())
+        .or_default()
+        .extend(branches);
 }
 
 /// The git demand plus every listed worktree root but the project root's own

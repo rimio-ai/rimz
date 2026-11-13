@@ -128,47 +128,6 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     Ok(())
 }
 
-fn focus_member<'a>(
-    cohort: &TeamCohort<'a>,
-    leader: Option<&str>,
-    attention_scores: &HashMap<&str, u32>,
-    now: jiff::Timestamp,
-) -> &'a AgentState {
-    let score = |agent: &AgentState| {
-        attention_scores
-            .get(agent.agent_id.as_str())
-            .copied()
-            .unwrap_or_default()
-    };
-    let actionable = cohort
-        .members
-        .iter()
-        .copied()
-        .filter(|agent| agent.effective_status(now).is_actionable())
-        .fold(None, |best, candidate| match best {
-            Some(best) if score(best) >= score(candidate) => Some(best),
-            _ => Some(candidate),
-        });
-    actionable
-        .or_else(|| {
-            leader.and_then(|leader| {
-                cohort
-                    .members
-                    .iter()
-                    .copied()
-                    .find(|agent| agent.role.as_deref() == Some(leader))
-            })
-        })
-        // `team_cohorts` only creates cohorts after inserting a live member.
-        .unwrap_or_else(|| {
-            cohort
-                .members
-                .first()
-                .copied()
-                .expect("team_cohorts emits non-empty cohorts")
-        })
-}
-
 pub(super) fn focus(
     team: &str,
     worktree: Option<&str>,
@@ -184,7 +143,7 @@ pub(super) fn focus(
         .collect::<HashMap<_, _>>();
     agents_cmd::focus_resolved(
         &ctx,
-        focus_member(&cohort, leader, &attention_scores, snapshot.now),
+        cohort.focus_member(leader, &attention_scores, snapshot.now),
     )
 }
 
@@ -307,27 +266,6 @@ mod tests {
         let error = select("forge", None, None, &[]).expect_err("missing cohort");
 
         assert!(error.to_string().contains("rimz teams resume forge"));
-    }
-
-    #[test]
-    fn focus_picks_the_actionable_member_with_the_highest_attention_score() {
-        let mut roster_first = agent("first", "forge", "docs");
-        roster_first.status = rimz::agents::AgentStatus::Waiting;
-        let mut urgent = agent("urgent", "forge", "docs");
-        urgent.status = rimz::agents::AgentStatus::Failed;
-        let agents = vec![roster_first, urgent];
-        let cohort = rimz::address::team_cohorts(&agents)
-            .into_iter()
-            .next()
-            .expect("cohort");
-        let scores = HashMap::from([("first", 10), ("urgent", 50)]);
-
-        assert_eq!(
-            focus_member(&cohort, None, &scores, jiff::Timestamp::UNIX_EPOCH)
-                .agent_id
-                .as_str(),
-            "urgent"
-        );
     }
 
     #[test]

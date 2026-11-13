@@ -249,7 +249,7 @@ lanes/zellij-mode-<session-hash>-<client>.json stamped per-client mode observati
 lanes/room-settings.json                     asserted Zellij session and client settings
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
 lanes/typing.json                            Linux terminal-input timing and non-typing exclusions
-lanes/{group-roots,diff-stats,cohort-spend,pipeline,pr-state,trunk-state,keep-warm,metrics-sample}.json enrichment
+lanes/{group-roots,diff-stats,cohort-spend,pipeline,bookings,pr-state,trunk-state,keep-warm,metrics-sample}.json enrichment
 lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
 lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state
 lanes/workspace-spending.<prefix>.json        room spend projection

@@ -42,6 +42,7 @@ use super::refresh::rate_limits::apply_cached_rate_limits;
 use super::timing::LINK_STATS_STALE;
 use crate::remote::link::LINK_STATS_EXPIRE;
 
+mod bookings;
 mod workflows;
 
 #[cfg(test)]
@@ -726,6 +727,7 @@ fn enrich_core(
         crate::disk::atomic::read_json_cache(&runtime.group_roots_path());
     let cohort_spend_cache = read_cohort_spend_cache(&runtime.cohort_spend_path());
     let pipeline_cache = super::refresh::pipeline::read_pipeline_cache(&runtime.pipeline_path());
+    let bookings_cache = super::refresh::bookings::read_bookings_cache(&runtime.bookings_path());
     let keep_warm_cache =
         super::refresh::keep_warm::read_keep_warm_cache(&runtime.keep_warm_path());
 
@@ -1035,6 +1037,7 @@ fn enrich_core(
     );
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
     super::attention::AttentionStamps::load(runtime).derive(&mut snapshot);
+    bookings::attach(&mut snapshot, &bookings_cache);
     // Late git, unread and attention facts land after the pane fold's initial
     // sort, so publish the spine once all presentation inputs are present.
     snapshot.sort_groups_for_presentation();

@@ -231,3 +231,169 @@ pub(crate) fn status_counts_from_rows(
     }
     counts
 }
+
+/// A card's bookings in every state the renderer draws, in draw order: one needing a
+/// fix, a fired agent running, a fired team running at its stage (its lead waiting)
+/// followed by the adopted entry that waits `after` it, a fired launch at rest whose
+/// probe found no pull request, a finished one, a waiting entry on a raw term, one on a
+/// timed trigger, one counted `later`, and one counted `older`.
+pub(crate) fn bookings_in_each_state(
+    now: Timestamp,
+) -> Vec<crate::store::snapshot::SidebarBooking> {
+    use crate::store::snapshot::{
+        BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling,
+        BookingStage, BookingStarts, BookingState, BookingWait, SiblingState, SidebarBooking,
+    };
+    let ago = |secs: i64| now - jiff::SignedDuration::from_secs(secs);
+    let profile = |name: &str| BookingStarts::Profile(name.to_owned());
+    let team = |name: &str| BookingStarts::Team(name.to_owned());
+    let booking = |task: &str, starts, band, state| SidebarBooking {
+        task: task.to_owned(),
+        starts,
+        band,
+        needs_fix: None,
+        state,
+    };
+    let fired = |at, live, ended_at, pr, finished| {
+        BookingState::Fired(BookingFire {
+            at,
+            live,
+            ended_at,
+            starting: false,
+            pr,
+            finished,
+            depended_on: false,
+        })
+    };
+    let running = |status, handle: &str, stage: Option<(&str, &str)>, pane: &str| BookingLive {
+        status,
+        phase: TurnPhase::Acting,
+        handle: Some(handle.to_owned()),
+        stage: stage.map(|(stage, owner)| BookingStage {
+            stage: stage.to_owned(),
+            owner: Some(owner.to_owned()),
+            done: false,
+        }),
+        pane: Some(PaneId::from_parts(MuxName::Zellij, pane)),
+    };
+    let waiting = |after: Option<(&str, SiblingState)>, key: &str, reading: Option<&str>| {
+        BookingState::Waiting(BookingWait {
+            blocker: Some(BookingBlocker {
+                after: after.map(|(task, state)| BookingSibling {
+                    task: task.to_owned(),
+                    state,
+                }),
+                key: key.to_owned(),
+                reading: reading.map(str::to_owned),
+                pr: reading.map(|_| 1640),
+                more: 0,
+            }),
+            timing: None,
+        })
+    };
+    vec![
+        SidebarBooking {
+            needs_fix: Some("invalid: unknown term `pr[`".to_owned()),
+            ..booking(
+                "broken",
+                profile("coder"),
+                BookingBand::NeedsFix,
+                BookingState::Waiting(BookingWait::default()),
+            )
+        },
+        booking(
+            "lang-typed",
+            profile("coder"),
+            BookingBand::Fired,
+            fired(
+                ago(3_600),
+                Some(running(AgentStatus::Running, "coder", None, "terminal_7")),
+                None,
+                BookingPr::Open { number: Some(1641) },
+                false,
+            ),
+        ),
+        booking(
+            "lane-readers",
+            team("forge"),
+            BookingBand::Fired,
+            fired(
+                ago(3_000),
+                Some(running(
+                    AgentStatus::Waiting,
+                    "planner",
+                    Some(("Build", "coder")),
+                    "terminal_8",
+                )),
+                None,
+                BookingPr::Unread,
+                false,
+            ),
+        ),
+        booking(
+            "lane-readers-docs",
+            profile("writer"),
+            BookingBand::Next,
+            waiting(
+                Some(("lane-readers", SiblingState::Running)),
+                "pr[lane-readers]",
+                None,
+            ),
+        ),
+        booking(
+            "spike",
+            profile("coder"),
+            BookingBand::Fired,
+            fired(ago(2_400), None, Some(ago(600)), BookingPr::None, false),
+        ),
+        booking(
+            "landed",
+            profile("coder"),
+            BookingBand::Fired,
+            fired(
+                ago(2_000),
+                None,
+                Some(ago(300)),
+                BookingPr::Merged { number: Some(1630) },
+                true,
+            ),
+        ),
+        booking(
+            "lang-docs",
+            profile("writer"),
+            BookingBand::Next,
+            waiting(None, "pr[workflow-language]", Some("open")),
+        ),
+        booking(
+            "nightly",
+            profile("coder"),
+            BookingBand::Next,
+            BookingState::Waiting(BookingWait {
+                blocker: None,
+                timing: Some("once at 2026-11-14 03:00".to_owned()),
+            }),
+        ),
+        booking(
+            "lang-release",
+            profile("coder"),
+            BookingBand::Later,
+            waiting(
+                Some(("lang-docs", SiblingState::Waiting)),
+                "pr[lang-docs]",
+                None,
+            ),
+        ),
+        booking(
+            "old-spike",
+            profile("coder"),
+            BookingBand::Older,
+            fired(
+                ago(90_000),
+                None,
+                Some(ago(86_400)),
+                BookingPr::Closed { number: Some(1500) },
+                false,
+            ),
+        ),
+    ]
+}

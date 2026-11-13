@@ -625,6 +625,11 @@ pub struct AgentCard {
     pub turn_error_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay_raised_at: Option<Timestamp>,
+    /// The room's loop bookings this card owns, in draw order with their bands. Beside
+    /// `sub_agents` and `pending_waits` and in neither: no status, attention, count or
+    /// sort reads them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bookings: Vec<SidebarBooking>,
 }
 
 /// How long a card's prompt cache stays warm: the resolved agent lifetime and
@@ -690,7 +695,215 @@ impl Default for AgentCard {
             tool_repeat: None,
             turn_error_label: None,
             overlay_raised_at: None,
+            bookings: Vec::new(),
         }
+    }
+}
+
+/// One launch the room's loop is booked to start, or started, for the card it sits on:
+/// a staying one-off loop task an agent booked (`rimz loop add` from its pane). It reads
+/// no harness type, so the renderer draws it without adding a rule.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarBooking {
+    /// The loop task's name.
+    pub task: String,
+    pub starts: BookingStarts,
+    pub band: BookingBand,
+    /// The loop's own reason the task needs a fix (`TaskReading::attention`); set
+    /// exactly when the band is [`BookingBand::NeedsFix`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_fix: Option<String>,
+    pub state: BookingState,
+}
+
+/// What a booking launches: a configured team, or an agent profile or kind.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "name", rename_all = "snake_case")]
+pub enum BookingStarts {
+    Team(String),
+    Profile(String),
+}
+
+/// Where an entry stands in the card's list, which arrives in draw order: every
+/// `NeedsFix` first, then `Fired`, `Next`, `Later` (counted in `+N later`) and `Older`
+/// (counted in `K more ended`). An adopted entry (one its booker, now ended, left to this
+/// card) of band `Fired` or `Next` follows the fired entry whose launch booked it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BookingBand {
+    NeedsFix,
+    Fired,
+    Next,
+    Later,
+    Older,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BookingState {
+    Waiting(BookingWait),
+    Fired(BookingFire),
+}
+
+/// A booking before its fire.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookingWait {
+    /// What keeps a condition trigger from firing; `None` for any other trigger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<BookingBlocker>,
+    /// A trigger that is no condition, in the loop's own words (`once at 2026-11-14 03:00`,
+    /// `every 30m`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<String>,
+}
+
+/// The blocking term of a waiting condition.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookingBlocker {
+    /// The sibling booking on this card whose destination branch the term reads; the
+    /// line then reads `after <task>` in place of the raw term.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<BookingSibling>,
+    /// The raw term key, such as `pr[feature]`.
+    pub key: String,
+    /// The term's reading; `None` while it is unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading: Option<String>,
+    /// The cached pull request number behind a forge key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u64>,
+    /// How many further terms are unmet (` +N`).
+    #[serde(default)]
+    pub more: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookingSibling {
+    pub task: String,
+    pub state: SiblingState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiblingState {
+    Waiting,
+    /// Fired with nothing launched yet and no end: its agent step has not started.
+    Starting,
+    /// Fired with something it launched alive.
+    Running,
+    /// Fired with nothing it launched alive.
+    Ended,
+}
+
+/// A booking after its fire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookingFire {
+    /// The launch ledger's fire time.
+    pub at: Timestamp,
+    /// What the launch has alive in this fold; `None` once nothing is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<BookingLive>,
+    /// The latest end stamp the room's records hold for the launch; read only when
+    /// `live` is `None`, and `None` there means the line reads `ended`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<Timestamp>,
+    /// Fired, nothing it launched has a row yet and the room's records hold no end for
+    /// the launch: the line reads `starting`, and the entry is neither ended nor older.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub starting: bool,
+    /// The pull request of the launch's own destination branch.
+    pub pr: BookingPr,
+    /// The stage is finished (D11): its pull request merged, or no waiting entry on
+    /// the card depends on it and either its team's board reached `Done` (with its
+    /// panes open or closed) or it ended with no worktree at all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
+    /// A waiting entry on the card has an unmet term joined to this one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub depended_on: bool,
+}
+
+/// The live side of a fired booking: its lead's display status, and the pane a click
+/// focuses (the launched agent's, or the one `rimz teams focus` picks for a team).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookingLive {
+    /// A team's status is its members' most urgent: waiting, then failed, then
+    /// running; else the leader's.
+    pub status: AgentStatus,
+    #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
+    pub phase: TurnPhase,
+    /// The lead's display handle, as its own card names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    /// A team's board stage, from the pipeline attached to its group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<BookingStage>,
+    /// `None` when the focus row is hidden or has no pane: a click then selects the card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<PaneId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookingStage {
+    pub stage: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The board reached `Done`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub done: bool,
+}
+
+/// The own-branch pull request reading: `None` is a probe that found no pull request,
+/// `Unread` a branch no probe has read (or a launch with no branch).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "pr", rename_all = "snake_case")]
+pub enum BookingPr {
+    #[default]
+    Unread,
+    None,
+    Open {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u64>,
+    },
+    Merged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u64>,
+    },
+    Closed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u64>,
+    },
+}
+
+impl SidebarBooking {
+    fn fire(&self) -> Option<&BookingFire> {
+        match &self.state {
+            BookingState::Fired(fire) => Some(fire),
+            BookingState::Waiting(_) => None,
+        }
+    }
+
+    /// Fired, something it launched alive, and not finished: the `N running` count.
+    pub fn is_running(&self) -> bool {
+        self.fire()
+            .is_some_and(|fire| fire.live.is_some() && !fire.finished)
+    }
+
+    /// Fired, nothing alive, and a probe proved no pull request: `ended, no PR`.
+    pub fn ended_without_pr(&self) -> bool {
+        self.fire()
+            .is_some_and(|fire| fire.live.is_none() && !fire.starting && fire.pr == BookingPr::None)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.fire().is_some_and(|fire| fire.finished)
+    }
+
+    /// The pane a click on a fired entry focuses: its live launch's.
+    pub fn live_pane(&self) -> Option<&PaneId> {
+        self.fire()
+            .and_then(|fire| fire.live.as_ref())
+            .and_then(|live| live.pane.as_ref())
     }
 }
 
@@ -787,6 +1000,7 @@ impl AgentCard {
             tool_repeat: agent.tool_repeat.clone(),
             turn_error_label: None,
             overlay_raised_at: None,
+            bookings: Vec::new(),
         }
     }
 

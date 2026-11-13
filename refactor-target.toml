@@ -86,7 +86,8 @@ path = "crates/rimz/src/address.rs"
 # LaneSelector::holds_record matches a durable record's lane, and TeamCohort::team and channel
 # read the cohort's typed instance (+3).
 # `selector` gives agents list one flat row, field table, and --filter match (+1).
-surface-budget = 58
+# TeamCohort::focus_member gives `teams focus` and the sidebar's booking rows one focus rule (+1).
+surface-budget = 59
 allowed-dependencies = ["agents", "ids", "store"]
 
 [[verdict]]
@@ -1594,7 +1595,8 @@ allowed-dependencies = [
 # StatePaths::wait_watch_log gives every wait watcher one room log for its own stderr (+1).
 # StatePaths::{finished_workflow, finished_workflow_runs} and disk::paths::recorded_rooms_under place and find finished run homes (+3).
 # WorkflowPaths::{history, relocate} name a run's saved history and map its journal's live paths onto its current home (+2).
-surface-budget = 341
+# RuntimePaths::bookings_path classes the sidebar's loop-bookings lane cache (+1).
+surface-budget = 342
 
 [[verdict]]
 kind = "item"
@@ -2396,7 +2398,8 @@ path = "crates/rimz/src/harness"
 # run::release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow pass and cancel (+1).
 # run_log::{QuietFires, with_quiet}, QuietFires::streak_beside and TaskHistory::acting carry a task's quiet-fire summary to the loop CLI and merge it into the streak (+4).
 # run_log::try_collect_run and workflow::reconcile_args let the workflow pass report a run and the tick spawn the pass (+2).
-surface-budget = 1224
+# schedule::attention::read_catalog, when::forge_branch and CiSource::branch_pr give the sidebar's bookings lane the loop's verdicts and a booking's pull request reading (+3).
+surface-budget = 1227
 
 [[verdict]]
 kind = "item"
@@ -2667,6 +2670,11 @@ reason = "The reader's inputs that do not come from the room's paths."
 kind = "item"
 key = "harness::schedule::attention::read_room"
 reason = "The read-only, path-explicit verdict reader the sidebar calls once per room, for every task there."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::attention::read_catalog"
+reason = "read_room over a catalog the caller already loaded, so the bookings lane reads the loop's verdicts without a second load."
 
 [[verdict]]
 kind = "item"
@@ -4509,7 +4517,8 @@ path = "crates/rimz/src/store"
 # workflow::{FoundRun, find, find_under} look a run up by id in either directory (+3).
 # workflow::{Finished, finish} move an ended run's home into the finished directory under the caller's workspace lock (+2).
 # workflow::{end_stranded, mark_header_report_sent} and RunClass::awaits_pass let the workflow pass end a stranded run in place, mark its header report sent, and tell the tick it has work (+3).
-surface-budget = 628
+# The agent card's loop booking rows (SidebarBooking and its band, state, wait, fire and PR types) (+11).
+surface-budget = 639
 
 [[verdict]]
 kind = "item"
@@ -4725,6 +4734,71 @@ reason = "`ask_detail`: The public serialized AgentCard schema carries eligible 
 kind = "item"
 key = "store::snapshot::row::AgentCard::open_ask"
 reason = "One displayed-status gate for the sidebar's blocking ask description."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::SidebarBooking"
+reason = "One loop booking a card shows: its task, what it starts, its band and its state."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingStarts"
+reason = "Names the team or profile a booking launches."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingBand"
+reason = "The draw band that orders a card's bookings."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingState"
+reason = "A booking waits or has fired."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingWait"
+reason = "What a waiting booking waits on: its blocking term or its timing."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingBlocker"
+reason = "The first unmet term of a waiting booking, with the sibling it follows."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingSibling"
+reason = "The sibling booking whose branch a waiting booking's term reads."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::SiblingState"
+reason = "Whether the followed sibling waits, runs or has ended."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingFire"
+reason = "A fired booking's launch: when, what lives, when it ended, its pull request."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingLive"
+reason = "The living launch's status, pane and team stage."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingStage"
+reason = "The team board stage a fired team booking's launch stands at."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::BookingPr"
+reason = "The pull request a fired booking's branch holds, unread until the forge answers."
+
+[[verdict]]
+kind = "item"
+key = "harness::when::forge_branch"
+reason = "Names the branch a forge term reads, so a booking's unmet key joins to the sibling that owns that branch."
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -5913,7 +5987,8 @@ allowed-dependencies = [
 # `WhenTerm::truth` gives the CLI's leaf rows the term's three-valued truth (+1).
 # WhenExpr::blocking_term and CiSource::term_pr_number name a waiting loop task's blocking term and its pull request for the loop verdict (+2).
 # WhenExpr::closed_pr_term names a merge-required pull request term that reads closed for the loop verdict (+1).
-surface-budget = 52
+# forge_branch and CiSource::branch_pr read a booking's unmet keys and its branch's pull request for the sidebar (+2).
+surface-budget = 54
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

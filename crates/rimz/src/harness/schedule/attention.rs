@@ -380,20 +380,29 @@ impl<'a> RoomReadings<'a> {
         scope: &Path,
         timing: TaskTiming,
         now: Timestamp,
-    ) -> (TaskTiming, Option<BlockingTerm>) {
+    ) -> (TaskTiming, Option<BlockingTerm>, Vec<String>) {
         let Ok(ParsedTrigger {
             trigger: Trigger::Condition { expr, .. },
             ..
         }) = timing.parsed()
         else {
-            return (timing, None);
+            return (timing, None, Vec::new());
         };
         let verdict = self.verdict(name, entry, scope, expr, now);
         let blocking = (verdict.truth != Some(true))
             .then(|| BlockingTerm::of(expr, &verdict, self.source.as_ref(), scope));
+        let mut unmet = Vec::new();
+        if blocking.is_some() {
+            for leaf in unmet_leaves(expr, &verdict) {
+                if !unmet.contains(&leaf.key) {
+                    unmet.push(leaf.key.clone());
+                }
+            }
+        }
         (
             timing.with_condition(&verdict, self.states.get(name), now),
             blocking,
+            unmet,
         )
     }
 }
@@ -412,28 +421,37 @@ pub struct BlockingTerm {
     pub more: usize,
 }
 
+/// A term's reading as the blocking pick names it: `None` while it is unread.
+fn term_reading(verdict: &Verdict, key: &str) -> Option<String> {
+    if verdict.unread.contains_key(key) {
+        return None;
+    }
+    verdict.readings.get(key).cloned().flatten()
+}
+
+/// The condition's leaves that are not met, a repeat of one key included.
+fn unmet_leaves<'e>(
+    expr: &'e WhenExpr,
+    verdict: &'e Verdict,
+) -> impl Iterator<Item = &'e when::WhenTerm> + 'e {
+    expr.leaves()
+        .filter(|(leaf, negated)| {
+            leaf.truth(term_reading(verdict, &leaf.key).as_deref())
+                .map(|truth| truth != *negated)
+                != Some(true)
+        })
+        .map(|(leaf, _)| leaf)
+}
+
 impl BlockingTerm {
     fn of(expr: &WhenExpr, verdict: &Verdict, source: Option<&CiSource>, scope: &Path) -> Self {
-        let reading = |key: &str| {
-            if verdict.unread.contains_key(key) {
-                return None;
-            }
-            verdict.readings.get(key).cloned().flatten()
-        };
         let (term, _) = expr.blocking_term(verdict);
-        let more = expr
-            .leaves()
-            .filter(|(leaf, negated)| {
-                let met = leaf
-                    .truth(reading(&leaf.key).as_deref())
-                    .map(|truth| truth != *negated)
-                    == Some(true);
-                !std::ptr::eq(*leaf, term) && !met
-            })
+        let more = unmet_leaves(expr, verdict)
+            .filter(|leaf| !std::ptr::eq(*leaf, term))
             .count();
         Self {
             key: term.key.clone(),
-            reading: reading(&term.key),
+            reading: term_reading(verdict, &term.key),
             pr: source.and_then(|source| source.term_pr_number(&term.key, scope)),
             more,
         }
@@ -449,6 +467,11 @@ pub struct TaskReading {
     pub fired: bool,
     /// What blocks a waiting condition trigger.
     pub blocking: Option<BlockingTerm>,
+    /// The key of every unmet term of a waiting condition trigger, each once, in the
+    /// condition's order; empty when nothing blocks.
+    pub unmet: Vec<String>,
+    /// The launch the ledger records for a fired task.
+    pub launch: Option<WorkflowLaunchRecord>,
 }
 
 /// The facts a reader cannot take from the room's paths.
@@ -471,8 +494,19 @@ pub fn read_room(
     runtime: &RuntimePaths,
     context: ReadContext<'_>,
 ) -> BTreeMap<String, TaskReading> {
-    let ReadContext { open, stats, now } = context;
     let catalog = TaskCatalog::load_room_lenient(root, state);
+    read_catalog(&catalog, root, state, runtime, context)
+}
+
+/// [`read_room`] over a catalog the caller already loaded for the room at `root`.
+pub fn read_catalog(
+    catalog: &TaskCatalog,
+    root: &Path,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    context: ReadContext<'_>,
+) -> BTreeMap<String, TaskReading> {
+    let ReadContext { open, stats, now } = context;
     let tasks = catalog
         .visible()
         .iter()
@@ -520,7 +554,7 @@ pub fn read_room(
                 arming.get(&key),
                 now,
             );
-            let (timing, blocking) =
+            let (timing, blocking, unmet) =
                 readings.observe_blocking(name, entry, &run_dir, timing, now.timestamp());
             let acting = stats
                 .get(name)
@@ -575,6 +609,8 @@ pub fn read_room(
                 attention,
                 fired,
                 blocking,
+                unmet,
+                launch: launch.filter(|_| fired).cloned(),
             };
             (name.clone(), reading)
         })

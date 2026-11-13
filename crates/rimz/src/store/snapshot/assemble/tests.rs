@@ -601,8 +601,24 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_redeem_forecast_states_contract_is_version_99() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 99);
+fn snapshot_card_bookings_contract_is_version_100() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 100);
+}
+
+#[test]
+fn pre_100_bookingless_card_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(99);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose agent cards carry no loop bookings, or whose fired bookings cannot say \
+         they are starting, must refold"
+    );
 }
 
 #[test]
