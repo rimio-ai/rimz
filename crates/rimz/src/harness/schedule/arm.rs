@@ -338,7 +338,7 @@ fn retire_session_in(
         if let Err(err) = super::arming::remove(&key) {
             tracing::warn!(task = name, error = %err, "retire: clearing the arming overlay");
         }
-        if let Err(err) = super::strikes::clear(&key) {
+        if let Err(err) = super::strikes::remove(&key) {
             tracing::warn!(task = name, error = %err, "retire: clearing the strike overlay");
         }
     }

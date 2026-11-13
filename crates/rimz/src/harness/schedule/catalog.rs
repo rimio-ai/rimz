@@ -799,7 +799,7 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
 
 fn clear_overlays(key: &str) -> Result<bool> {
     let cleared_arming = arming::remove(key)?;
-    let cleared_strikes = strikes::clear(key)?;
+    let cleared_strikes = strikes::remove(key)?;
     Ok(cleared_arming || cleared_strikes)
 }
 

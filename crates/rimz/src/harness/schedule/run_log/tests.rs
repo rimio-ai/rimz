@@ -370,7 +370,8 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
             record: delivered,
             polarity: RunPolarity::Good,
             streak: 2,
-            since: Some(failed.at)
+            since: Some(failed.at),
+            failed_at: Vec::new(),
         })
     );
     assert_eq!(
@@ -397,6 +398,46 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
 }
 
 #[test]
+fn a_late_quiet_collection_counts_but_keeps_the_newer_last_fire() {
+    let fires = super::super::fires::load;
+    let key = format!("late-quiet-{}", crate::ids::WorkflowRunId::new());
+    for second in [20, 10] {
+        super::super::fires::note_quiet(&key, record("task", second, LoopRunResult::Completed))
+            .unwrap();
+    }
+    let quiet = fires()[&key].quiet.clone().unwrap();
+    assert_eq!(
+        (quiet.count, quiet.streak, quiet.last.at.as_second()),
+        (2, 2, 20)
+    );
+    super::super::fires::clear(&key).unwrap();
+}
+
+#[test]
+fn in_flight_rows_merge_into_the_logged_rows_by_time() {
+    let launched = |second| record("task", second, LoopRunResult::Launched);
+    let logged = vec![
+        record("task", 10, LoopRunResult::Completed),
+        record("task", 30, LoopRunResult::Overlapped),
+    ];
+    let merged = merge_by_at(logged, vec![launched(5), launched(10), launched(20)]);
+    let order = merged
+        .iter()
+        .map(|row| (row.at.as_second(), row.result))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        [
+            (5, LoopRunResult::Launched),
+            (10, LoopRunResult::Completed),
+            (10, LoopRunResult::Launched),
+            (20, LoopRunResult::Launched),
+            (30, LoopRunResult::Overlapped),
+        ]
+    );
+}
+
+#[test]
 fn acting_streak_uses_log_order_and_resets_on_opposite_polarity() {
     let good = record("task", 30, LoopRunResult::Completed);
     let failed = record("task", 10, LoopRunResult::Failed);
@@ -405,19 +446,39 @@ fn acting_streak_uses_log_order_and_resets_on_opposite_polarity() {
     assert_eq!(
         acting_run(&[
             good.clone(),
-            failed,
+            failed.clone(),
             neutral.clone(),
             error.clone(),
             neutral
         ]),
         Some(ActingRun {
-            record: error,
+            record: error.clone(),
             polarity: RunPolarity::Failure,
             streak: 2,
-            since: Some(good.at)
+            since: Some(good.at),
+            failed_at: vec![failed.at, error.at],
         })
     );
     assert_eq!(acting_run(&[]), None);
+
+    // A quiet fire between two failures ends the first one's streak, whatever the summary
+    // stored: the failure after it reset the quiet streak.
+    let quiet = QuietFires {
+        count: 1,
+        streak: 0,
+        last: record("task", 15, LoopRunResult::Completed),
+    };
+    let after = with_quiet(acting_run(&[failed.clone(), error.clone()]), Some(&quiet)).unwrap();
+    assert_eq!(
+        (after.polarity, after.streak, after.since),
+        (RunPolarity::Failure, 1, Some(quiet.last.at))
+    );
+    let older = QuietFires {
+        last: record("task", 5, LoopRunResult::Completed),
+        ..quiet
+    };
+    let after = with_quiet(acting_run(&[failed, error]), Some(&older)).unwrap();
+    assert_eq!((after.streak, after.since), (2, None));
 }
 
 #[test]
@@ -456,6 +517,7 @@ fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
         assert!(!has_scheduled_row_since(
             dir.path(),
             "task",
+            "task",
             root,
             None,
             since
@@ -465,7 +527,7 @@ fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
         row.mode = mode;
         append_to(dir.path(), &row);
         assert_eq!(
-            has_scheduled_row_since(dir.path(), "task", root, None, since),
+            has_scheduled_row_since(dir.path(), "task", "task", root, None, since),
             expected,
             "{row:?}"
         );
@@ -945,7 +1007,7 @@ fn append_caps_forensic_fields() {
 }
 
 #[test]
-fn workflow_reports_supersede_the_launch_and_count_once() {
+fn history_drops_named_launch_rows_and_keeps_each_runs_first_report() {
     let dir = tempfile::tempdir().unwrap();
     let run = |second, result, acted: Option<bool>| {
         let mut row = record("wf", second, result);
@@ -954,8 +1016,37 @@ fn workflow_reports_supersede_the_launch_and_count_once() {
         row.cost_usd = acted.map(|_| 2.0);
         row
     };
-    let mut launch = run(1, LoopRunResult::Launched, None);
+    let launch = run(1, LoopRunResult::Launched, None);
+    let skipped = run(2, LoopRunResult::WorkflowSkipped, None);
+    let report = run(3, LoopRunResult::Failed, Some(true));
+    let again = run(4, LoopRunResult::Failed, Some(true));
+    // An older binary logs the launch row after a fast run's report.
+    let late = run(5, LoopRunResult::Launched, None);
+    for row in [&launch, &skipped, &report, &again, &late] {
+        append_to(dir.path(), row);
+    }
+    assert_eq!(
+        task_records(dir.path(), "wf", None),
+        vec![skipped, report],
+        "a launch row naming a run is dropped, early or late, a skip naming the run is kept, \
+         and the run's first report wins"
+    );
+    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let stats = &stats(dir.path(), &now, None)["wf"];
+    assert_eq!(stats.runs, 2, "the skip and the run's report are two fires");
+    assert_eq!(stats.last.as_ref().map(|row| row.at.as_second()), Some(3));
+    assert_eq!(
+        stats.last.as_ref().map(|row| row.result),
+        Some(LoopRunResult::Failed),
+        "a launch row never stands in for the run's outcome"
+    );
+}
+
+#[test]
+fn a_report_row_carries_the_facts_its_fire_sealed() {
+    let mut launch = record("wf", 1, LoopRunResult::Launched);
     launch.absorbed = 2;
+    launch.kind = Some(super::super::TaskKind::OneOff);
     launch.signal = Some(SignalRecord {
         name: "ci.failed".parse().unwrap(),
         payload: serde_json::Map::new(),
@@ -964,66 +1055,44 @@ fn workflow_reports_supersede_the_launch_and_count_once() {
         pid: 7,
         started_at: Timestamp::from_second(1).unwrap(),
     });
-    let skipped = run(2, LoopRunResult::WorkflowSkipped, None);
-    let report = run(3, LoopRunResult::Failed, Some(true));
-    let again = run(4, LoopRunResult::Failed, Some(true));
-    for row in [&launch, &skipped, &report, &again] {
-        append_to(dir.path(), row);
-    }
-    let mut reported = again.clone();
-    reported.absorbed = launch.absorbed;
-    reported.signal = launch.signal.clone();
-    reported.run_lock = launch.run_lock;
-    assert_eq!(
-        task_records(dir.path(), "wf", None),
-        vec![skipped, reported],
-        "a report replaces the launch and earlier reports, never a skip naming the run, \
-         and keeps the fire's own facts"
-    );
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
-    let stats = &stats(dir.path(), &now, None)["wf"];
-    assert_eq!(
-        stats.runs, 2,
-        "the launch, its reports and the skip are two fires"
-    );
-    assert_eq!(stats.last.as_ref().map(|row| row.at.as_second()), Some(3));
-}
-
-#[test]
-fn a_launch_row_written_after_its_runs_report_folds_into_that_report() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut report = record("wf", 3, LoopRunResult::Completed);
-    report.run_id = Some("wf_1".to_owned());
-    report.acted = Some(false);
-    let mut launch = record("wf", 4, LoopRunResult::Launched);
-    launch.run_id = report.run_id.clone();
-    launch.kind = Some(super::super::TaskKind::OneOff);
     launch.worktree = Some(FireWorktree {
         path: PathBuf::from("/tree"),
         base_fallback: None,
     });
-    launch.signal = Some(SignalRecord {
-        name: "ci.failed".parse().unwrap(),
-        payload: serde_json::Map::new(),
-    });
-    append_to(dir.path(), &report);
-    append_to(dir.path(), &launch);
-    let mut folded = report.clone();
-    folded.kind = launch.kind;
-    folded.worktree = launch.worktree.clone();
-    folded.signal = launch.signal.clone();
+    let sealed = fire_facts(&launch);
+    let run = crate::ids::WorkflowRunId::new();
+    let facts = ReportFacts {
+        task: "wf",
+        run: &run,
+        manual: false,
+        created_at: Timestamp::from_second(1).unwrap(),
+        terminal_at: Some(Timestamp::from_second(3).unwrap()),
+        checkout: Path::new("/tree"),
+        fire_facts: Some(&sealed),
+    };
+    let outcome: crate::store::workflow::RunOutcome =
+        serde_json::from_value(serde_json::json!({"ending": {"kind": "failed"}, "acted": true}))
+            .unwrap();
+    let row = report_row(&facts, &outcome);
+    assert_eq!(row.result, LoopRunResult::Failed);
+    assert_eq!(row.at.as_second(), 3);
+    assert_eq!(row.run_id, Some(run.to_string()));
     assert_eq!(
-        task_records(dir.path(), "wf", None),
-        vec![folded],
-        "a fast run's report lands first and still takes its launch row's fire facts"
-    );
-    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
-    let stats = &stats(dir.path(), &now, None)["wf"];
-    assert_eq!(stats.runs, 1);
-    assert_eq!(
-        stats.last.as_ref().map(|row| row.result),
-        Some(LoopRunResult::Completed),
-        "the late launch row does not stand in for the run's outcome"
+        (
+            row.absorbed,
+            row.kind,
+            row.signal,
+            row.run_lock,
+            row.worktree
+        ),
+        (
+            launch.absorbed,
+            launch.kind,
+            launch.signal,
+            launch.run_lock,
+            launch.worktree
+        ),
+        "the report keeps the fire's own facts"
     );
 }
 
@@ -1079,6 +1148,7 @@ fn ended(
         cost_usd,
         acted,
         reason: None,
+        quiet: false,
     }
 }
 
@@ -1172,6 +1242,46 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         None,
         "cancel is neutral"
     );
+
+    // A quiet run collected again after a crash before its delete counts once, with another
+    // task's quiet collection between the two.
+    super::super::instances::insert(&state, "other", &entry).unwrap();
+    let catalog = super::super::catalog::TaskCatalog::load_lenient(Some(root.path()));
+    let other_key = catalog.for_run("other").unwrap().key("other");
+    let quiet = run("done", serde_json::json!({}));
+    let mut other = run("done", serde_json::json!({}));
+    other.task = Some("other".into());
+    let logged = || {
+        task_records(
+            &crate::disk::paths::logs_dir(),
+            "nightly",
+            Some(root.path()),
+        )
+    };
+    let before = logged().len();
+    let outcome = crate::store::workflow::RunOutcome {
+        quiet: true,
+        ..ended(RunEnding::Done, None, false)
+    };
+    for run in [&quiet, &other, &quiet] {
+        assert!(matches!(
+            report_run(run, &outcome),
+            Ok(Collected::Forgotten)
+        ));
+    }
+    let fires = super::super::fires::load();
+    let count = |key: &str| {
+        fires
+            .get(key)
+            .and_then(|fires| fires.quiet.as_ref())
+            .map(|q| q.count)
+    };
+    assert_eq!(
+        (count(&key), count(&other_key)),
+        (Some(1), Some(1)),
+        "{fires:?}"
+    );
+    assert_eq!(logged().len(), before, "a quiet run appends no row");
 }
 
 #[test]

@@ -1496,15 +1496,19 @@ fn condition_workflow_ledger_write_failure_keeps_the_launched_history_and_repair
     let paths = room.env.state_path_for(&room.env.project_root);
     let lock = paths.root.join("locks/loop-workflow-launches.lock");
     fs::create_dir_all(&lock).unwrap();
-    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    // The fire logs no launch row: its receipt warns of the failed memory write, and the views
+    // show the run in flight.
+    let output = room.command(&["loop", "run", "review"]).output().unwrap();
+    let warning = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && warning.contains("loop-workflow-launches.lock"),
+        "{output:?}"
+    );
     let history = workflow_task_history(&room, "review");
     let rows = history["runs"].as_array().unwrap();
     assert!(
-        rows.iter().any(|row| row["result"] == "launched"
-            && row["run_id"].is_string()
-            && row["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("loop-workflow-launches.lock"))),
+        rows.iter()
+            .any(|row| row["result"] == "launched" && row["run_id"].is_string()),
         "{history}"
     );
     fs::remove_dir(lock).unwrap();
@@ -1610,7 +1614,12 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
     assert_eq!(skipped(), before + 1, "{}", history());
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     success(fire());
-    assert_eq!(every_run(&paths).len(), 2);
+    let runs = every_run(&paths);
+    assert_eq!(runs.len(), 2);
+    // A task's run records its start once it launches its agent: the cancel closed the first
+    // run's agent, so the second launches its own.
+    let second = runs.iter().find(|run| run.id.to_string() != id).unwrap();
+    room.attempt(&second.id.to_string());
     assert_eq!(assists(&room.env)["rollup"]["workflow_starts"], 2);
 }
 

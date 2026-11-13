@@ -94,16 +94,26 @@ pub(super) fn note_run(key: &str, run: &str, signal: Signal) -> Result<(u32, boo
     note_run_in(&loops_dir(), key, run, signal)
 }
 
+/// Clear the count, as `loop enable` does; the task's fire record stays.
 pub(super) fn clear(key: &str) -> Result<bool> {
     clear_from(&loops_dir(), key)
 }
 
+/// Clear the count and the task's fire record, for a task that is removed or replaced.
+pub(super) fn remove(key: &str) -> Result<bool> {
+    let fires = super::fires::clear(key)?;
+    Ok(clear(key)? || fires)
+}
+
+/// Move the count and the task's fire record to a renamed task.
 pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
-    rename_in(&loops_dir(), old, new)
+    let fires = super::fires::rename(old, new)?;
+    Ok(rename_in(&loops_dir(), old, new)? || fires)
 }
 
 pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
-    prune_orphans_in(&loops_dir(), known, scopes)
+    let fires = super::fires::prune_orphans(known, scopes)?;
+    Ok(prune_orphans_in(&loops_dir(), known, scopes)? + fires)
 }
 
 fn load_from(state_root: &Path) -> BTreeMap<String, u32> {

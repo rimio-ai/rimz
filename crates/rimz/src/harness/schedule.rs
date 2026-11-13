@@ -34,6 +34,7 @@ mod eject;
 pub mod fanout;
 #[doc(hidden)]
 pub mod fire;
+mod fires;
 pub mod instances;
 pub mod launch_ledger;
 mod launch_ledger_store;

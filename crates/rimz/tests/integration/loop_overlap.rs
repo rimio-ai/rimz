@@ -65,23 +65,27 @@ while ! test -e allow-exit; do sleep 0.025; done
 /// Fire the run that blocks the task, and wait until its check holds.
 fn start_blocker(env: &Env) -> LoopRunRecord {
     arrive(env, "x", "a");
-    let fired = last_loop_record(env);
+    let fired = fired_record(env, "busy");
     assert_eq!(fired.result, LoopRunResult::Launched, "{fired:?}");
     wait_for_path(&env.project_root.join("check-ready"));
     fired
 }
 
-/// Wait until `count` runs have launched, and return their rows in order.
-fn wait_for_launches(env: &Env, count: usize) -> Vec<LoopRunRecord> {
-    let launched = |rows: Vec<LoopRunRecord>| -> Vec<LoopRunRecord> {
-        rows.into_iter()
-            .filter(|row| row.result == LoopRunResult::Launched)
-            .collect()
-    };
-    wait_for_loop_run_records(env, "drained runs launch", |rows| {
-        launched(rows.to_vec()).len() >= count
-    });
-    launched(read_loop_run_records(env))
+/// Wait until `count` of the task's runs have ended quiet, which a passing check does, and
+/// return the last one's row.
+fn wait_for_quiet(env: &Env, count: u64) -> LoopRunRecord {
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    loop {
+        match quiet_fires(env, "busy") {
+            Some((quiet, last)) if quiet >= count => return last,
+            found => assert!(
+                Instant::now() < deadline,
+                "{found:?} of {count} quiet runs: {:?}",
+                read_loop_run_records(env)
+            ),
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn results(rows: &[LoopRunRecord]) -> Vec<LoopRunResult> {
@@ -145,31 +149,23 @@ fn concurrent_fires_admit_one_run() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    // The admitted fire's run writes no launch row; the three refused fires each write one.
     let rows = read_loop_run_records(&env);
-    let launched: Vec<_> = rows
-        .iter()
-        .filter(|row| row.result == LoopRunResult::Launched)
-        .collect();
-    assert_eq!(launched.len(), 1, "{rows:?}");
-    assert_eq!(rows.len(), 4, "{rows:?}");
-    assert!(
-        rows.iter().all(|row| matches!(
-            row.result,
-            LoopRunResult::Launched | LoopRunResult::Overlapped
-        )),
-        "{rows:?}"
-    );
+    assert_eq!(results(&rows), [LoopRunResult::Overlapped; 3], "{rows:?}");
     let runs = rimz::store::workflow::live_runs(env.store().paths()).unwrap();
     assert_eq!(runs.len(), 1, "one workflow run for four fires: {runs:?}");
     wait_for_path(&env.project_root.join("check-ready"));
     std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
-    wait_for_loop_report(&env, "busy");
+    wait_for_quiet(&env, 1);
     let starts = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
         .iter()
         .map(|record| serde_json::to_value(record).unwrap())
         .filter(|assist| assist["assist"] == "workflow_start")
         .count();
-    assert_eq!(starts, 1, "only the admitted run records its start");
+    assert_eq!(
+        starts, 0,
+        "the admitted run is quiet, so it records no start"
+    );
 }
 
 #[test]
@@ -182,7 +178,7 @@ fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
     let blocker = start_blocker(&env);
     arrive(&env, "a", "b");
     // The detached cancel appends the blocker's row whenever it lands, so read by position.
-    let row = read_loop_run_records(&env).swap_remove(1);
+    let row = read_loop_run_records(&env).swap_remove(0);
     assert_eq!(row.result, LoopRunResult::Deferred);
     assert!(
         row.error
@@ -196,30 +192,30 @@ fn replace_cancels_and_starts_only_once_the_blocker_is_terminal() {
         blocker.run_id,
         "a deferred replace names the run it cancels"
     );
-    wait_for_loop_run_records(&env, "the replacement reports", |rows| rows.len() == 5);
+    // The replacement's passing check is a quiet run, which its summary row stands for.
+    let replacement = wait_for_quiet(&env, 1);
     let rows = read_loop_run_records(&env);
     assert_eq!(
         results(&rows),
-        [
-            LoopRunResult::Launched,
-            LoopRunResult::Deferred,
-            LoopRunResult::Canceled,
-            LoopRunResult::Launched,
-            LoopRunResult::Completed,
-        ],
+        [LoopRunResult::Deferred, LoopRunResult::Canceled],
         "{rows:?}"
     );
-    assert_eq!(rows[2].run_id, blocker.run_id);
-    assert_eq!(rows[3].signal.as_ref().unwrap().payload["to"], "b");
-    let load = |row: &LoopRunRecord| {
-        let id = row.run_id.as_deref().unwrap().parse().unwrap();
-        rimz::store::workflow::load(&run_paths(&env, &env.project_root, &id)).unwrap()
-    };
-    let (old, new) = (load(&blocker), load(&rows[3]));
+    assert_eq!(rows[1].run_id, blocker.run_id);
+    assert_eq!(replacement.signal.as_ref().unwrap().payload["to"], "b");
+    let id = blocker.run_id.as_deref().unwrap().parse().unwrap();
+    let old = rimz::store::workflow::load(&run_paths(&env, &env.project_root, &id)).unwrap();
     assert_eq!(old.state, rimz::store::workflow::RunState::Canceled);
+    // A report row's `at` is its run's end and its duration runs from the run's creation, in
+    // whole milliseconds, so this start is at most 1 ms after the true one.
+    let started = replacement
+        .at
+        .checked_sub(jiff::SignedDuration::from_millis(
+            replacement.duration_ms.unwrap() as i64,
+        ))
+        .unwrap();
     assert!(
-        old.terminal_at.unwrap() <= new.created_at,
-        "the replacement started before its blocker ended: {old:?} {new:?}"
+        old.terminal_at.unwrap() <= started,
+        "the replacement started before its blocker ended: {old:?} {replacement:?}"
     );
     assert!(
         !loop_strikes_path(&env).exists(),
@@ -239,20 +235,14 @@ fn stop_cancels_the_run_and_its_report_drains_the_waiting_trigger() {
         output.contains(blocker.run_id.as_deref().unwrap()),
         "{output}"
     );
-    wait_for_loop_run_records(&env, "stop drains waiting work", |rows| rows.len() == 5);
+    let drained = wait_for_quiet(&env, 1);
     let rows = read_loop_run_records(&env);
     assert_eq!(
         results(&rows),
-        [
-            LoopRunResult::Launched,
-            LoopRunResult::Deferred,
-            LoopRunResult::Canceled,
-            LoopRunResult::Launched,
-            LoopRunResult::Completed,
-        ],
+        [LoopRunResult::Deferred, LoopRunResult::Canceled],
         "{rows:?}"
     );
-    assert_eq!(rows[3].signal.as_ref().unwrap().payload["to"], "b");
+    assert_eq!(drained.signal.as_ref().unwrap().payload["to"], "b");
 }
 
 #[test]
@@ -268,7 +258,7 @@ fn workflow_cancel_collects_the_run_it_ends_before_it_returns() {
             .filter(|row| row.run_id.as_deref() == Some(run.as_str()))
             .map(|row| row.result)
             .collect::<Vec<_>>(),
-        [LoopRunResult::Launched, LoopRunResult::Canceled],
+        [LoopRunResult::Canceled],
         "{rows:?}"
     );
     std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
@@ -286,7 +276,6 @@ fn a_queue_drains_each_trigger_in_turn_and_refuses_past_its_limit() {
     assert_eq!(
         results(&rows),
         [
-            LoopRunResult::Launched,
             LoopRunResult::Deferred,
             LoopRunResult::Deferred,
             LoopRunResult::Overlapped,
@@ -294,33 +283,15 @@ fn a_queue_drains_each_trigger_in_turn_and_refuses_past_its_limit() {
     );
     let run = blocker.run_id.as_deref().unwrap();
     assert_eq!(
-        rows[3].error.as_deref(),
+        rows[2].error.as_deref(),
         Some(format!("run {run} still active — queue full (2/2), skipped").as_str())
     );
     std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
-    wait_for_loop_run_records(&env, "the queue drains both triggers", |rows| {
-        rows.len() == 9
-    });
-    let launched: Vec<_> = read_loop_run_records(&env)
-        .into_iter()
-        .skip(4)
-        .filter(|row| row.result == LoopRunResult::Launched)
-        .collect();
-    assert_eq!(launched.len(), 2, "{launched:?}");
-    assert!(
-        launched[0].signal.as_ref().unwrap().payload["to"] == "b",
-        "{:?}",
-        read_loop_run_records(&env)
-            .iter()
-            .map(|row| (
-                row.result,
-                row.signal.as_ref().map(|signal| signal.payload.clone()),
-                row.error.clone()
-            ))
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(launched[0].signal.as_ref().unwrap().payload["to"], "b");
-    assert_eq!(launched[1].signal.as_ref().unwrap().payload["to"], "c");
+    // The blocker and both drained runs pass quiet; the queue serves `b` and then `c`, so the
+    // last quiet run is `c`'s, and no run logs a row.
+    let last = wait_for_quiet(&env, 3);
+    assert_eq!(last.signal.as_ref().unwrap().payload["to"], "c");
+    assert_eq!(read_loop_run_records(&env).len(), 3);
 }
 
 fn show(env: &Env, name: &str) -> serde_json::Value {
@@ -366,11 +337,11 @@ fn coalesce_records_each_arrival_and_drains_the_merged_newest_trigger() {
         LoopRunResult::Completed
     );
     let rows = read_loop_run_records(&env);
-    assert_eq!(rows.len(), 4, "{rows:?}");
-    assert_eq!(rows[2].result, LoopRunResult::Launched);
-    assert_eq!(rows[2].absorbed, 1);
+    assert_eq!(rows.len(), 2, "the served run is quiet: {rows:?}");
+    let served = wait_for_quiet(&env, 1);
+    assert_eq!(served.absorbed, 1);
     assert_eq!(
-        serde_json::to_value(&rows[2].signal).unwrap(),
+        serde_json::to_value(&served.signal).unwrap(),
         backlog["triggers"][0]["signal"]
     );
     assert!(
@@ -382,7 +353,7 @@ fn coalesce_records_each_arrival_and_drains_the_merged_newest_trigger() {
     loop_ok(&env, &["loop", "run", "busy", "--drain"]);
     assert_eq!(
         read_loop_run_records(&env).len(),
-        4,
+        2,
         "empty drainer writes no row"
     );
 }
@@ -426,9 +397,7 @@ fn coalesce_drains_the_latest_fired_signal_when_runners_arrive_backwards() {
     arrive_at(&env, "a", "b", Timestamp::from_second(1).unwrap());
     lock.unlock().unwrap();
     loop_ok(&env, &["loop", "run", "busy", "--drain"]);
-    // The drained run's report follows its launch row whenever it lands, so read by position.
-    let record = read_loop_run_records(&env).swap_remove(2);
-    assert_eq!(record.result, LoopRunResult::Launched);
+    let record = fired_record(&env, "busy");
     assert_eq!(record.absorbed, 1);
     assert_eq!(
         record.signal.unwrap().payload,
@@ -446,11 +415,10 @@ fn queue_drains_in_firing_order_when_runners_arrive_backwards() {
     arrive_at(&env, "a", "b", Timestamp::from_second(1).unwrap());
     lock.unlock().unwrap();
     loop_ok(&env, &["loop", "run", "busy", "--drain"]);
-    // Each drained run's report starts the next.
-    let records = wait_for_launches(&env, 2);
-    assert_eq!(records[0].signal.as_ref().unwrap().payload["to"], "b");
-    assert_eq!(records[1].signal.as_ref().unwrap().payload["to"], "c");
-    assert!(records.iter().all(|record| record.absorbed == 0));
+    // Each drained run's collection starts the next, so `c`, fired last, runs last.
+    let last = wait_for_quiet(&env, 2);
+    assert_eq!(last.signal.as_ref().unwrap().payload["to"], "c");
+    assert_eq!(last.absorbed, 0);
 }
 
 #[test]
@@ -484,12 +452,9 @@ fn queue_is_fifo_full_is_overlapped_and_release_starts_the_next_process() {
     assert_eq!(value["backlog"]["limit"], 2);
     lock.unlock().unwrap();
     loop_ok(&env, &["loop", "run", "busy", "--drain"]);
-    let records = wait_for_launches(&env, 2);
-    assert_eq!(records[0].signal.as_ref().unwrap().payload["to"], "b");
-    assert_eq!(records[1].signal.as_ref().unwrap().payload["to"], "c");
-    wait_for_loop_run_records(&env, "the second drained run reports", |records| {
-        records.len() == 7
-    });
+    let last = wait_for_quiet(&env, 2);
+    assert_eq!(last.signal.as_ref().unwrap().payload["to"], "c");
+    assert_eq!(read_loop_run_records(&env).len(), 3);
     assert!(
         serde_json::to_value(&records[0])
             .unwrap()
@@ -523,20 +488,21 @@ fn fresh_arrival_reconciles_waiting_triggers_and_manual_overlap_never_enqueues()
         1
     );
     lock.unlock().unwrap();
-    let before = read_loop_run_records(&env).len();
+    let before = run_mark(&env, "busy");
     arrive(&env, "b", "c");
-    let record = read_loop_run_records(&env).swap_remove(before);
-    assert_eq!(record.result, LoopRunResult::Launched);
+    let record = fired_record(&env, "busy");
     let payload = json!({"repo":"r", "trunk":"main", "from":"a", "to":"c"});
     assert_eq!(
         record.signal.unwrap().payload,
         *payload.as_object().unwrap()
     );
-    // The served run's report replaces its launch row and keeps the fire's facts.
-    wait_for_loop_report_after(&env, "busy", before);
-    let served = &show(&env, "busy")["runs"][2];
-    assert_eq!(served["absorbed"], 1, "{served}");
-    assert_eq!(served["signal"]["payload"], payload, "{served}");
+    // The served run is quiet; its summary row keeps the fire's facts.
+    let served = wait_for_loop_report_after(&env, "busy", before);
+    assert_eq!(served.absorbed, 1, "{served:?}");
+    assert_eq!(
+        serde_json::to_value(&served.signal.unwrap().payload).unwrap(),
+        payload
+    );
 }
 
 #[test]

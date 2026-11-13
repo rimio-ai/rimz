@@ -68,6 +68,7 @@ pub enum DefinitionSource<'a> {
         surplus: Option<String>,
         surplus_after: Option<String>,
         fire: Option<RunFire>,
+        fire_facts: Option<serde_json::Value>,
     },
     /// A loop task's compiled definition, sealed into the run's own root and named for the task.
     /// `fire_tree` marks a checkout that is the fire's own fresh worktree: overlap then keys on
@@ -79,6 +80,7 @@ pub enum DefinitionSource<'a> {
         surplus: Option<String>,
         surplus_after: Option<String>,
         fire: Option<RunFire>,
+        fire_facts: Option<serde_json::Value>,
     },
 }
 
@@ -132,6 +134,7 @@ pub fn create(
             surplus,
             surplus_after,
             fire,
+            fire_facts,
         } => {
             let dir = dir.canonicalize()?;
             RunStart {
@@ -147,6 +150,7 @@ pub fn create(
                 surplus: surplus.clone(),
                 surplus_after: surplus_after.clone(),
                 fire: fire.clone(),
+                fire_facts: fire_facts.clone(),
             }
         }
         DefinitionSource::Inline {
@@ -155,6 +159,7 @@ pub fn create(
             surplus,
             surplus_after,
             fire,
+            fire_facts,
             ..
         } => RunStart {
             origin: RunOrigin::Inline,
@@ -165,6 +170,7 @@ pub fn create(
             surplus: surplus.clone(),
             surplus_after: surplus_after.clone(),
             fire: fire.clone(),
+            fire_facts: fire_facts.clone(),
         },
     };
     // A run already holding the scope wins before the definition or the
@@ -337,6 +343,7 @@ struct RunStart {
     surplus: Option<String>,
     surplus_after: Option<String>,
     fire: Option<RunFire>,
+    fire_facts: Option<serde_json::Value>,
 }
 
 /// Validate the definition at `start.spec_dir` and publish the run's record.
@@ -450,6 +457,8 @@ fn publish(
         check_retry: 0,
         check_retry_context: None,
         launch_retry: false,
+        engaged: Some(false),
+        fire_facts: start.fire_facts,
     };
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     refuse_existing(
@@ -552,6 +561,10 @@ fn spawn(record: &RunRecord) -> Result<Advance> {
 
 fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
     t.record.version = workflow::VERSION;
+    let latched = t.record.engaged == Some(false) && engages(&t.record);
+    if latched {
+        t.record.engaged = Some(true);
+    }
     if t.record.state != RunState::Active {
         t.record.restart = None;
     }
@@ -574,14 +587,26 @@ fn persist(t: &mut Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
             }
         };
         let acted = entered_act(t.spec, &t.record);
-        t.record.outcome = Some(outcome(&t.record, &journal, acted));
+        let mut ended = outcome(&t.record, &journal, acted);
+        ended.quiet = t.record.state == RunState::Done && t.record.engaged == Some(false);
+        t.record.outcome = Some(ended);
     }
     for entry in &t.entries {
         workflow::append(t.paths, entry, guard)?;
     }
     workflow::write(t.paths, &t.record, guard)?;
-    accounting::transition(t);
+    accounting::transition(t, latched);
     Ok(())
+}
+
+/// Whether the record's live attempts start more than a script or a command: an agent, a judge,
+/// a team, a child workflow, or a message.
+fn engages(record: &RunRecord) -> bool {
+    record
+        .attempt
+        .iter()
+        .chain(record.held.as_ref().map(|held| &held.attempt))
+        .any(|attempt| attempt.kind != AttemptKind::Script || attempt.message.is_some())
 }
 
 /// How a terminal run ended, read from its whole journal: the decision that ended it, its summed
@@ -628,6 +653,7 @@ pub(super) fn outcome(
         cost_usd,
         acted,
         reason,
+        quiet: false,
     }
 }
 
