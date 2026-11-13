@@ -53,6 +53,7 @@ mod stats;
 mod statusline;
 mod subagents;
 mod supervised;
+mod tab;
 mod teams;
 mod transcript;
 mod trust;
@@ -292,6 +293,7 @@ pub(super) fn dispatch(preparsed: Option<Cli>) -> Result<()> {
         Some(Subcmd::Message(args)) => message::run(*args, &globals),
         Some(Subcmd::Notes(args)) => notes::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
+        Some(Subcmd::Tab(args)) => tab::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
@@ -359,9 +361,6 @@ where
             ),
             Some("feed") => anyhow::bail!(
                 "`rimz feed` has been removed; blocking agent prompts now surface as Waiting state in the agent pane"
-            ),
-            Some("tab") => anyhow::bail!(
-                "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `<agents_home>/teams/<name>.md`"
             ),
             Some("channel") => anyhow::bail!(
                 "`rimz channel` has been removed; channels are implicit: launch into one with `rimz agents <spec> --channel <name>`, and see lanes with `rimz agents list --all` and `rimz worktree list`"
@@ -777,6 +776,8 @@ enum Subcmd {
     Message(Box<message::MessageArgs>),
     /// Navigate sidebar cards, filter the fleet, and recover the column.
     Sidebar(sidebar::SidebarArgs),
+    /// Show the dashboard or a numbered terminal tab.
+    Tab(tab::TabArgs),
     /// Statusline datasource. The installed `statusLine` command calls this;
     /// humans do not.
     #[command(hide = true)]

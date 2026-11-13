@@ -6,6 +6,7 @@ mod card_commands;
 mod command;
 mod shared_view;
 mod single_backend_room;
+mod tab_commands;
 mod tmux;
 mod web;
 mod workflow;

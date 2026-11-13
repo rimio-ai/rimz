@@ -6,6 +6,7 @@ mod recovery;
 pub mod session;
 mod standing;
 pub mod teardown;
+mod views;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU16;
@@ -35,6 +36,7 @@ pub use standing::{
     AccountStanding, AgentStateCounts, Deciding, Scope, Scopes, live_agents_by_login,
     live_agents_on_machine_default, other_live_agents_on,
 };
+pub use views::FixedView;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LiveRoomErr {

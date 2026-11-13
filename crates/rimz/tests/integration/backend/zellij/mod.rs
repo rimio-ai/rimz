@@ -38,6 +38,7 @@ mod shared_view;
 mod sidebar_keys;
 mod stack_winsize;
 mod support;
+mod tab_commands;
 mod tab_ownership;
 mod tabs;
 mod title;

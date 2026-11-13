@@ -151,6 +151,11 @@ pub const VIEW_NAME: &str = "rimzd";
 
 const TERMINAL_VIEW_PREFIX: &str = "term-";
 
+/// View name of numbered terminal `n` (1..=9): the name is its whole identity.
+pub(crate) fn terminal_view_name(n: u8) -> String {
+    format!("{TERMINAL_VIEW_PREFIX}{n}")
+}
+
 /// Whether `name` is a numbered terminal's view name, `term-1` through `term-9`.
 pub(crate) fn is_terminal_view_name(name: &str) -> bool {
     name.strip_prefix(TERMINAL_VIEW_PREFIX)

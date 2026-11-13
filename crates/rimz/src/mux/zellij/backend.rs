@@ -11,7 +11,7 @@ use super::pane_topology::{
 };
 use super::parse::{
     classify_session_not_found, is_session_not_found, is_transient_list_reply,
-    live_session_name_from_line, parse_client_view,
+    live_session_name_from_line, parse_client_view, terminal_client_ids,
 };
 use super::raw_pane::{
     first_proven_view_cols, floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane,
@@ -44,6 +44,9 @@ use serde::Deserialize;
 pub(super) struct RawTab {
     pub(super) name: String,
     tab_id: u64,
+    /// The tab's current index, from 0; `go-to-tab` counts from 1.
+    #[serde(default)]
+    position: Option<u64>,
     #[serde(default)]
     selectable_tiled_panes_count: u64,
     /// Some client is viewing this tab.
@@ -1953,6 +1956,29 @@ impl MuxBackend for ZellijBackend {
             std::thread::sleep(super::NEW_TAB_MATERIALIZE_STEP.min(remaining));
         }
         last_observed.unwrap_or_else(|| vec![Err(ResumeTabUnconfirmed::Absent); tabs.len()])
+    }
+
+    fn show_view(&self, session: &str, name: &str) -> Result<crate::mux::ViewShown> {
+        let clients = self.client_view(ClientFocusOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        })?;
+        if terminal_client_ids(&clients).is_empty() {
+            return Ok(crate::mux::ViewShown::NoClient);
+        }
+        let config = crate::config::MachineConfig::load_lenient();
+        let tabs = self.list_tabs(session)?;
+        let Some(tab) = tabs
+            .iter()
+            .find(|tab| crate::theme::strip_status_glyph_suffix(&tab.name, &config.theme) == name)
+        else {
+            return Ok(crate::mux::ViewShown::Absent);
+        };
+        let position = tab.position.ok_or_else(|| {
+            output_error(format!("list-tabs gave tab '{}' no position", tab.name))
+        })?;
+        self.go_to_tab_position(session, position)?;
+        Ok(crate::mux::ViewShown::Shown)
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {

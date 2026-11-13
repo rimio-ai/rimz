@@ -1049,6 +1049,17 @@ pub enum BackgroundViewLaunch {
     Deferred,
 }
 
+/// Outcome of [`MuxBackend::show_view`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewShown {
+    /// A view of that name is now the one shown.
+    Shown,
+    /// No view bears that name.
+    Absent,
+    /// No client could be shown anything; nothing was looked up.
+    NoClient,
+}
+
 /// Health verdict for a backend session. [`MuxBackend::probe_session_health`]
 /// returns a read-only verdict; [`MuxBackend::ensure_clean_session`] adds
 /// `Reborn` when it rebirthed a safely-rebuildable room into a clean one.
@@ -1399,6 +1410,14 @@ pub trait MuxBackend: Send + Sync {
     /// the session's `after-new-window` hook; Zellij renders it into the tab
     /// layout. A caller-built layout can opt out through [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
+    /// Show the first view of `session`, in the backend's native order, whose
+    /// name with RimZ's status glyph suffix stripped equals `name`. It never
+    /// creates a view, and a failed lookup is an error, never
+    /// [`ViewShown::Absent`]. tmux selects the session's current window, so
+    /// every client of the session follows, and never reports
+    /// [`ViewShown::NoClient`]. Zellij moves a client focused on a terminal
+    /// pane, and reports [`ViewShown::NoClient`] when there is none.
+    fn show_view(&self, session: &str, name: &str) -> Result<ViewShown>;
 
     /// Whether each tab a birth seeded is open in `session`, one result per
     /// tab in order. A tab is open when a live tab of its name holds at least

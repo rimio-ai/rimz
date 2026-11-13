@@ -3458,7 +3458,8 @@ path = "crates/rimz/src/mux"
 # TypingView and its backend selector distinguish focus evidence from corroborating clocks (+2).
 # exclude_pane_input shares pane-write exclusions with the palette (+1).
 # write_client_mode and ClientModeWriteError share mode publication with wake ingestion (+2).
-surface-budget = 339
+# MuxBackend::show_view and its ViewShown outcome show a fixed view by name without creating it (+2).
+surface-budget = 341
 
 [[verdict]]
 kind = "item"
@@ -3847,7 +3848,8 @@ path = "crates/rimz/src/reload.rs"
 # RecordWatch/RecordChange and their cadence move from the sidebar; RoomBuildFollower and exec_current_args serve every rimzd process (+12).
 # ReloadOutcome reports reopened daemon views and failed reopens (+2).
 # Per-room results and machine problem vocabulary reach the CLI through reload (+4).
-surface-budget = 28
+# reopen_dashboard shares repair's dashboard reopen with `rimz tab dashboard` (+1).
+surface-budget = 29
 
 [[verdict]]
 kind = "item"
