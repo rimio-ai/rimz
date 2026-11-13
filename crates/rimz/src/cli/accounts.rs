@@ -398,7 +398,13 @@ fn write_redeem_preview(
         return rows.render(w);
     }
     let forecast = match forecast {
-        Some(RedeemForecast::Manual) => "off",
+        // The preview forecasts RimZ's own redemption; the user's states never reach it.
+        Some(
+            RedeemForecast::Manual
+            | RedeemForecast::Soon
+            | RedeemForecast::Now
+            | RedeemForecast::NowWaiting,
+        ) => "off",
         Some(RedeemForecast::Armed) => "armed",
         Some(RedeemForecast::Holding) => "holding",
         None => "no credits",

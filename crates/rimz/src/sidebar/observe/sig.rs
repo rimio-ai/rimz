@@ -521,6 +521,9 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
                         RedeemForecast::Manual => "manual",
                         RedeemForecast::Armed => "armed",
                         RedeemForecast::Holding => "holding",
+                        RedeemForecast::Soon => "soon",
+                        RedeemForecast::Now => "now",
+                        RedeemForecast::NowWaiting => "now_waiting",
                     }
                     .to_owned()
                 }),

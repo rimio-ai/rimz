@@ -10,11 +10,14 @@
 //! on, gets the expiry rescue alone: the producer reads its cached credits
 //! from its caller, the helper resolves its login from the machine catalog,
 //! and the helper skips a window its fresh read shows unused.
+//! The sidebar's reset-credit marker reads the same ladder for every login with
+//! banked credits: RimZ's forecast where it redeems, and the user's own advice
+//! everywhere else, lit only from cached facts the provider would accept.
 //! Elected-producer and one-shot heavy refreshes may both advance the shared
 //! burn-rate cache; atomic replacement plus observation stamps make duplicate
 //! folds idempotent.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -33,12 +36,18 @@ use crate::agents::{
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
+use crate::harness::auto_continue::limit_marker_active;
 use crate::harness::spend_ladder::SpendFacts;
 use crate::ids::{AgentKind, LoginKey, WorkspaceId};
 use crate::store::snapshot::{RedeemForecast, SidebarProviderPanel, SidebarSnapshot};
 
 const CODEX_KIND: &str = "codex";
-const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
+pub(super) const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
+/// How long before a credit expires the marker tells the user to redeem it,
+/// long enough for a person to act.
+const MANUAL_EXPIRY_LEAD: Duration = Duration::from_secs(24 * 60 * 60);
+/// The longest window's share left below which the marker says redeem soon.
+const SOON_LEFT_PCT: u8 = 10;
 const MIN_HOLD: Duration = Duration::from_secs(24 * 60 * 60);
 const ATTEMPT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 const POST_SUCCESS_COOLDOWN: Duration = Duration::from_secs(30 * 60);
@@ -279,15 +288,17 @@ fn consume_manual_redemption(
 }
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
-/// one consume attempt. Expiry rescue is unconditional; every other reason
-/// needs the user's opt-in and a spent window with a future reset. What follows
-/// depends on what a redemption does to the window's reset.
+/// one consume attempt. Expiry rescue, within `expiry_lead` of the soonest
+/// expiry, is unconditional; every other reason needs the user's opt-in and a
+/// spent window with a future reset. What follows depends on what a redemption
+/// does to the window's reset.
 pub(super) fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
     min_gain: Duration,
     auto_redeem: bool,
+    expiry_lead: Duration,
     now: Timestamp,
 ) -> Option<RedeemReason> {
     if credits.count == 0 {
@@ -295,7 +306,7 @@ pub(super) fn redeem_verdict(
     }
 
     if credits.soonest_expiry.is_some_and(|expiry| {
-        expiry > now && expiry.as_second() - now.as_second() <= duration_seconds(EXPIRY_RESCUE_LEAD)
+        expiry > now && expiry.as_second() - now.as_second() <= duration_seconds(expiry_lead)
     }) {
         return Some(RedeemReason::ExpiryRescue);
     }
@@ -324,7 +335,15 @@ pub(super) fn redeem_verdict(
 /// The verdict for an idle account, one no agent of this room runs on: the
 /// expiry rescue alone.
 fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
-    redeem_verdict(None, credits, None, Duration::ZERO, false, now)
+    redeem_verdict(
+        None,
+        credits,
+        None,
+        Duration::ZERO,
+        false,
+        EXPIRY_RESCUE_LEAD,
+        now,
+    )
 }
 
 /// The helper's verdict on its fresh provider read. An idle account is judged
@@ -400,16 +419,7 @@ fn redeem_forecast(
     else {
         return Some(RedeemForecast::Armed);
     };
-    let mut dry = facts.clone();
-    dry.capacity.as_mut()?.windows = capacity
-        .projected_windows(now)
-        .map(|mut window| {
-            if window.scope.is_none() && window.duration_mins == longest.duration_mins {
-                window.used_percentage = Some(100);
-            }
-            window
-        })
-        .collect();
+    let dry = with_longest_spent(facts, capacity, &longest, now);
     Some(if dry.redemption(config, now).is_some() {
         RedeemForecast::Armed
     } else if dry.step(config, None, now) == crate::harness::spend_ladder::SpendStep::PaidCredit
@@ -419,6 +429,156 @@ fn redeem_forecast(
     } else {
         RedeemForecast::Armed
     })
+}
+
+/// `facts` with the longest unscoped window, `longest`, read as spent now.
+fn with_longest_spent(
+    facts: &SpendFacts,
+    capacity: &ProviderCapacity,
+    longest: &RateLimitWindow,
+    now: Timestamp,
+) -> SpendFacts {
+    let mut dry = facts.clone();
+    if let Some(dry_capacity) = dry.capacity.as_mut() {
+        dry_capacity.windows = capacity
+            .projected_windows(now)
+            .map(|mut window| {
+                if window.scope.is_none() && window.duration_mins == longest.duration_mins {
+                    window.used_percentage = Some(100);
+                }
+                window
+            })
+            .collect();
+    }
+    dry
+}
+
+/// The marker's answer for one login with banked credits: RimZ's forecast
+/// where it redeems (a provider served by auto-redeem, switched on), and the
+/// user's own advice everywhere else. `limit_stopped` says an agent on the login
+/// is stopped on a provider limit.
+fn marker_forecast(
+    facts: &SpendFacts,
+    config: &ResumeConfig,
+    limit_stopped: bool,
+    now: Timestamp,
+) -> Option<RedeemForecast> {
+    if facts.supports_reset() && config.auto_redeem {
+        return redeem_forecast(facts, config, now);
+    }
+    if facts.reset_credits.as_ref()?.count == 0 {
+        return None;
+    }
+    let capacity = facts.capacity.as_ref();
+    let longest = capacity.and_then(|capacity| capacity.longest_window_observation(now));
+    let dry = capacity.and_then(|capacity| capacity.latest_spent_window(now));
+    let lit = if limit_stopped {
+        RedeemForecast::NowWaiting
+    } else {
+        RedeemForecast::Now
+    };
+    let claimed;
+    let advice_facts = if facts.supports_reset() {
+        facts
+    } else {
+        let Some(narrowed) = claimed_facts(facts) else {
+            return Some(RedeemForecast::Manual);
+        };
+        claimed = narrowed;
+        &claimed
+    };
+    let advised = advice_facts
+        .advice(config, MANUAL_EXPIRY_LEAD, now)
+        .is_some_and(|reason| {
+            if reason != RedeemReason::ExpiryRescue {
+                provider_accepts(facts, dry.as_ref(), dry.is_some(), now)
+            } else if facts.supports_reset() {
+                !capacity.is_some_and(|capacity| capacity.known_unused(now))
+            } else {
+                accepted_on_a_window_in_use(facts, capacity, dry.is_some(), now)
+            }
+        });
+    if advised {
+        return Some(lit);
+    }
+    let soon = dry.is_none()
+        && capacity
+            .zip(longest.as_ref())
+            .is_some_and(|(capacity, longest)| {
+                longest
+                    .used_percentage
+                    .is_some_and(|used| used > 100 - SOON_LEFT_PCT)
+                    && provider_accepts(facts, Some(longest), false, now)
+                    && with_longest_spent(advice_facts, capacity, longest, now)
+                        .advice(config, MANUAL_EXPIRY_LEAD, now)
+                        .is_some()
+            });
+    Some(if soon {
+        RedeemForecast::Soon
+    } else {
+        RedeemForecast::Manual
+    })
+}
+
+/// `facts` with its credit expiry narrowed to the grant the provider's next
+/// redemption claims, the only one a redemption by hand reaches, so another
+/// grant's expiry neither rescues nor dooms. `None` when no grant is selected.
+fn claimed_facts(facts: &SpendFacts) -> Option<SpendFacts> {
+    let mut claimed = facts.clone();
+    let credits = claimed.reset_credits.as_mut()?;
+    let expiry = credits.grants.iter().find(|grant| grant.selected)?.expiry;
+    credits.soonest_expiry = expiry;
+    credits.expiries = expiry.into_iter().collect();
+    Some(claimed)
+}
+
+/// Whether the provider would accept the selected grant now against an
+/// unscoped window in use, so redeeming it before it expires saves it.
+fn accepted_on_a_window_in_use(
+    facts: &SpendFacts,
+    capacity: Option<&ProviderCapacity>,
+    dry: bool,
+    now: Timestamp,
+) -> bool {
+    capacity.is_some_and(|capacity| {
+        capacity
+            .projected_windows(now)
+            .filter(|window| window.scope.is_none() && !window.lifted)
+            .filter(|window| {
+                window
+                    .used_percentage
+                    .is_some_and(|used| used > 0 && !window.not_started(now))
+            })
+            .any(|window| provider_accepts(facts, Some(&window), dry, now))
+    })
+}
+
+/// Whether the provider would accept a redemption against `window` now, by
+/// the cached credit; `dry` says a window is spent now. A provider served by
+/// auto-redeem caches no claim facts and is judged at its consume. Every other
+/// provider's selected grant must be claimable, clear `window`, and, when it
+/// is usable only at the limit, meet a dry window: a fact the cache lacks
+/// refuses.
+fn provider_accepts(
+    facts: &SpendFacts,
+    window: Option<&RateLimitWindow>,
+    dry: bool,
+    now: Timestamp,
+) -> bool {
+    if facts.supports_reset() {
+        return true;
+    }
+    let Some(credits) = facts.reset_credits.as_ref() else {
+        return false;
+    };
+    let Some(grant) = credits.grants.iter().find(|grant| grant.selected) else {
+        return false;
+    };
+    credits.refusal(dry, now).is_none()
+        && (dry || !grant.use_requires_limit)
+        && window
+            .and_then(|window| window.duration_mins)
+            .is_some_and(|mins| grant.clears_window(mins))
 }
 
 fn paced_chain_deadline(
@@ -726,9 +886,11 @@ fn reserve_and_spawn(
     }
 }
 
-/// Project the auto-redeem forecast onto the Codex panel, reading the same
-/// capacity and burn-rate caches `redeem_credits` evaluates without writing
-/// either. Only a panel that carries reset credits gets a forecast.
+/// Project the reset-credit marker's answer onto each kind-wide panel that
+/// carries credits, reading the same capacity and burn-rate caches
+/// `redeem_credits` evaluates without writing either. Alternates and scoped
+/// credentials get none. A login reads as waiting while one of the room's live
+/// agents on it is stopped on a provider limit.
 pub(crate) fn project_redeem_forecasts(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -737,20 +899,27 @@ pub(crate) fn project_redeem_forecasts(
 ) {
     let now = snapshot.now;
     let in_use = logins.keys_in_use();
+    let limit_stopped = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none() && limit_marker_active(agent, now))
+        .map(|agent| agent.login_key())
+        .collect::<BTreeSet<_>>();
     for panel in &mut snapshot.providers {
         panel.redeem_forecast = None;
-        if panel.kind != CODEX_KIND {
+        let key = panel.login_key();
+        if panel.reset_credits.is_none()
+            || !panel.account_scope.is_kind_wide()
+            || !in_use.contains(&key)
+        {
             continue;
         }
-        let (Some(_), Some(key)) = (
-            panel.reset_credits.as_ref(),
-            in_use
-                .contains(&panel.login_key())
-                .then(|| panel.login_key()),
-        ) else {
-            continue;
-        };
-        panel.redeem_forecast = redeem_forecast(&SpendFacts::read(runtime, &key, now), config, now);
+        panel.redeem_forecast = marker_forecast(
+            &SpendFacts::read(runtime, &key, now),
+            config,
+            limit_stopped.contains(&key),
+            now,
+        );
     }
 }
 

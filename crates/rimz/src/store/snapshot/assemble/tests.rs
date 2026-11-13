@@ -601,8 +601,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_lane_group_contract_is_version_98() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 98);
+fn snapshot_redeem_forecast_states_contract_is_version_99() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 99);
+}
+
+#[test]
+fn pre_99_two_state_redeem_forecast_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(98);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose redeem forecast predates the user's soon and now states must refold"
+    );
 }
 
 #[test]
