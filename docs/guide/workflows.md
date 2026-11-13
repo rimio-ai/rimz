@@ -69,7 +69,7 @@ Validate the definition first. The command prints every node with the edges it r
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER      BACKGROUND  EDGES
 fix-tests  tests  test   cargo test  —           fail → fix (explicit), pass → @done (explicit), timeout → @failed (on-break, never: no timeout), invalid → @failed (on-break), deadline → @failed (on-break, only with a deadline)
-fix-tests  fix    agent  claude      yes         then → tests (explicit), invalid → @failed (on-break), cap → @failed (on-break), capacity → @failed (default, never: capacity-wait is forever), deadline → @failed (on-break, only with a deadline)
+fix-tests  fix    agent  claude      yes         then → tests (explicit), invalid → @failed (on-break), cap → @failed (on-break), capacity → @failed (default, never: give-up is forever), deadline → @failed (on-break, only with a deadline)
 warning: fix-tests: agent.fix: auto-continue is off; a step paused on a provider limit waits for you
 ```
 
@@ -135,7 +135,7 @@ edges:
   then → tests (explicit)
   invalid → @failed (on-break)
   cap → @failed (on-break)
-  capacity → @failed (default, never: capacity-wait is forever)
+  capacity → @failed (default, never: give-up is forever)
   deadline → @failed (on-break, only with a deadline)
 
 agent:       claude
