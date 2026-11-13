@@ -287,6 +287,7 @@ impl Host for SystemHost {
             |err: &dyn fmt::Display| format!("workspace {workspace} unreadable: {err}");
         let state = StatePaths::for_workspace(workspace.clone()).map_err(|err| unreadable(&err))?;
         let mut runs = Vec::new();
+        let mut refused = 0;
         for paths in state.workflow_runs().map_err(|err| unreadable(&err))? {
             let record = match crate::store::workflow::load(&paths) {
                 Ok(record) => record,
@@ -296,7 +297,7 @@ impl Host for SystemHost {
                     continue;
                 }
                 Err(err) if err.is_refused() => {
-                    tracing::warn!(%err, "skipping workflow with unreadable record");
+                    refused += 1;
                     continue;
                 }
                 Err(err) => return Err(unreadable(&err)),
@@ -304,6 +305,16 @@ impl Host for SystemHost {
             if !record.state.is_terminal() {
                 runs.push(record);
             }
+        }
+        // One line per census walk, as the store's run loaders warn, so a room holding
+        // thousands of old runs does not print a line for each.
+        if refused > 0 {
+            tracing::warn!(
+                %workspace,
+                count = refused,
+                "skipping workflow runs whose record another RimZ version wrote; \
+                 `rimz workflow list` names each, and `rimz workflow cancel <run-id>` clears one"
+            );
         }
         Ok(runs)
     }
