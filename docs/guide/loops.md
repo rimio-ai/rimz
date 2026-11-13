@@ -316,7 +316,7 @@ Add records the reset instant on the task, and the receipt shows the window's cu
 
 ## Limit agent starts
 
-A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts automated agent launches one at a time through one capacity door for the whole machine. The turn passes on when the new agent reports in or after ten seconds, whichever comes first. A configured capacity check raises that ceiling to two minutes, giving the provider time to report usage. A separate `stagger` can require a minimum gap between launches even when agents report quickly. Agents you start yourself, wakes of running agents, runs with no agent step, and runs started with `rimz workflow run --skip-capacity` never wait in the machine queue.
+A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts automated agent launches one at a time through one capacity door for the whole machine. The turn passes on when the new agent reports in, when its workflow stops it, or after ten seconds, whichever comes first. A configured capacity check raises that ceiling to two minutes, giving the provider time to report usage. A separate `stagger` can require a minimum gap between launches even when agents report quickly. Agents you start yourself, wakes of running agents, runs with no agent step, and runs started with `rimz workflow run --skip-capacity` never wait in the machine queue.
 
 The machine-only `[throttle]` table in `~/.rimz/config.toml` can also hold starts back while the machine is busy:
 

@@ -1,7 +1,7 @@
 //! Home-wide machine admission and workflow/step start limits.
 //!
 //! Blocking runs keep a ticket; condition fires try once and leave none when held.
-//! Machine turns release on a provider report or ceiling. A workflow-scoped turn
+//! Machine turns release on a provider report, a workflow stop, or ceiling. A workflow-scoped turn
 //! releases at its launch report, when the run record already counts the attempt,
 //! independently of machine scope. Skipped starts claim without waiting, carrying each hold
 //! they met, and stamp stagger at launch.
@@ -1147,6 +1147,46 @@ pub(super) fn reap() {
         .and_then(|_lock| sweep(&host, None, host.now_ms()));
     if let Err(err) = reaped {
         tracing::warn!(error = %err, "failed to reap the loop throttle queue");
+    }
+}
+
+/// Release the turn of a launch its workflow stopped before the provider reported. A stopped
+/// launch starts nothing more, as an ended row already tells `sweep`, but its row stays open
+/// until its process exits, and the next start would wait for the ceiling and a later pass.
+pub(in crate::harness) fn release_stopped(run: &crate::store::run::RunRecord) {
+    release_stopped_in(&SystemHost, run);
+}
+
+fn release_stopped_in(host: &dyn Host, run: &crate::store::run::RunRecord) {
+    let released = (|| -> Result<()> {
+        let _lock = WorkspaceLock::acquire(&host.queue_lock())?;
+        let agents = host
+            .agents(&run.workspace_id)
+            .map_err(ThrottleError::Unreadable)?;
+        for path in ticket_paths(&host.queue_dir())? {
+            // A corrupt ticket is the next sweep's to remove.
+            let Ok(Some(ticket)) = read_ticket(&path) else {
+                continue;
+            };
+            let TicketState::Launched {
+                workspace, agent, ..
+            } = &ticket.state
+            else {
+                continue;
+            };
+            if workspace == &run.workspace_id
+                && agents
+                    .iter()
+                    .any(|row| &row.agent_id == agent && run.matches_agent(row))
+            {
+                remove_ticket(&path);
+            }
+        }
+        Ok(())
+    })();
+    if let Err(err) = released {
+        // The ticket stays to its report or ceiling, as before the stop.
+        tracing::warn!(error = %err, "failed to release a stopped launch's throttle turn");
     }
 }
 
