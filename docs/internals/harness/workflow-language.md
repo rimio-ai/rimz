@@ -2,7 +2,7 @@
 
 This page specifies a target: the workflow definition language and the loop command that RimZ is being rebuilt toward, not the behaviour RimZ ships. The [workflows guide](../../guide/workflows.md), the [workflow CLI reference](../../reference/cli/workflow.md) and the [loop reference](../../reference/cli/loop.md) describe the shipped product, and they move link by link as each build link merges. Every build link builds to this page, and two of them need nothing from it: the compatibility removal and the typed pipeline. A link that finds a meeting point this page leaves unowned asks the owner before it builds one. The page was written for the parallel build of ten links in separate worktrees, so it states each rule whole, names the link that owns it, and carries worked examples the links use as acceptance cases.
 
-The goal is a language whose every rule fits in one sentence without "except", and a loop command that owns only when a run starts. Each rule below is numbered (R1 to R49) so a link can cite it. Whatever this page does not name keeps its shipped meaning and stays owned by the [workflow CLI reference](../../reference/cli/workflow.md): the check answer object and `context.json` apart from the failure input, `key`, `recheck_at`, signs, `wake` and `subscribe` entries, launch settings, notes, the layout grammar, and the run control commands apart from `resume --at` and the count reset `resume` applies after a cap (the note under R40). The condition grammar and its keys stay owned by the loop reference's [conditions](../../reference/cli/loop.md#conditions) section. Every rule is a target that no build has run yet. The page ends with two lists for the owner: what it decided beyond the ten picks, and each rule that still carries an exception.
+The goal is a language whose every rule fits in one sentence without "except", and a loop command that owns only when a run starts. Each rule below is numbered (R1 to R49) so a link can cite it. Whatever this page does not name keeps its shipped meaning and stays owned by the [workflow CLI reference](../../reference/cli/workflow.md): the check answer object and `context.json` apart from the failure input, `key`, `recheck_at`, signs, `wake` and `subscribe` entries, launch settings, notes, the layout grammar, and the run control commands apart from `resume --at` and the count reset `resume` applies after a cap (the note under R40). The condition grammar and its keys stay owned by the loop reference's [conditions](../../reference/cli/loop.md#conditions) section. Every rule but the loop's (R41 to R49) is a target that no build has run yet. The page ends with two lists for the owner: what it decided beyond the ten picks, and each rule that still carries an exception.
 
 ## Definition file
 
@@ -96,32 +96,33 @@ How R40 meets the shipped count and the run control commands:
 
 The last point rests on a premise no build has run: that once the compatibility removal has merged and R4 holds, no run parks. The only arm that sets the parked state is the `@user` target in `Transition::route`, and a current definition that names `@user` refuses (`crates/rimz/src/harness/workflow/spec.rs::reject_reserved_target`); not traced is every default edge that fills `@user` outside the legacy routing mode. If a park survives, the failures link keeps the parked branch's reset and asks the owner.
 
-Today `crates/rimz/src/harness/workflow/engine.rs::prepare_capacity` lets a start wait for capacity only for a run with a loop task that is neither manual nor a restart, with the step's `capacity-wait` from the first hold as its give-up time, else the run record's cutoff, which `crates/rimz/src/harness/schedule/runner.rs::TaskFire::default_capacity_cutoff` computes for a scheduled inline row that sets no `capacity-wait`.
+Today `crates/rimz/src/harness/workflow/engine.rs::prepare_capacity` lets every start of a run whose record says to wait (all but a `--skip-capacity` run) wait for capacity, with the step's `admission.give-up` from the first hold as its give-up time, else the run record's give-up instant (`rimz workflow run --give-up`). A loop fire's run sets none, since R47 is withdrawn, and its one `command` check takes no capacity at all.
 
 ## Loop
 
-- R41. A row holds a trigger, placement and fan-out, overlap, pacing, strikes, the start arguments and one action: `workflow = "<name>"`, an inline node, or delivery to a waiting session.
-- R42. A fire starts a run of the row's workflow or inline node with the row's start arguments, or delivers the row's prompt to its waiting session.
-- R43. An inline node is a node table of this language, `[tasks.<task>.agent]` or `[tasks.<task>.command]`, run as the workflow `{ scope = "worktree", start = <that node> }`, whose name is its kind word and whose routes name `@done` or `@failed`.
-- R44. The start arguments, shared by `rimz workflow run` and a row, are where the run happens (a checkout, or a fresh worktree per start), the prompt, the give-up instant and `capacity`; a row spells them `prompt` or `prompt-file`, `fresh-worktree`, `give-up` and `capacity`, and `rimz workflow run` spells them `--prompt`, `--fresh-worktree`, `--give-up` and `--skip-capacity`.
-- R45. `rimz loop add --agent` or `--command` with its option flags is a constructor that writes the inline node and adds nothing the stored row does not show: `--lifecycle` is required, an inline node's occupancy is the one `--occupancy` names, `wait` when the flag is omitted, and `timeout` is written when the row is added (from `--timeout`, else `loop.default-timeout`, else 2h).
-- R46. An agent node's prompt is its `prompt-file`, its sign files and the run's prompt, in that order, each when present, and a start that would launch an agent with none refuses.
-- R47. Every loop-started run receives a give-up instant: the row's `give-up`, else one second before the row's next clock fire capped by the row's deadline, else the deadline, else none, and a row that names a workflow gets it like an inline one.
-- R48. `rimz loop eject` moves the row's inline node into a workflow file and leaves `workflow = "<name>"` on the row, with the start arguments staying on the row.
-- R49. A row with `each-worktree` that names a workflow with `scope = "project"` refuses when it is added.
+R41 to R49 record the owner's rulings of 2026-11-13, which the loop link (`loop-triggers`) built; they replace the rules the page first proposed for the loop.
+
+- R41. A row holds a trigger, placement and fan-out, overlap, strikes, the usage scope its conditions read, and one action: a command (`command`, an argv, with its `timeout`) or delivery to a waiting session (`wait`), and a row holding any other key refuses alone, with one message that says to delete the task and add it again.
+- R42. A fire of a command row starts a run of the workflow `{ scope = "worktree", start = "command" }` whose one `test` check, `command`, runs the row's argv in the fire's checkout under the row's `timeout` and routes `pass` to `@done` and `fail`, `timeout` and `invalid` to `@failed`; a fire of a delivery row delivers to its waiting session and starts no run.
+- R43. The argv reaches its process word for word, a shell is written as `sh -c '...'`, and the trigger's evidence reaches the command as `RIMZ_LOOP_TRIGGER`, which a `rimz agents` or `rimz teams` launch carrying the loop marker appends to its prompt.
+- R44. A fire tracks its command's lifetime and nothing else: a blocking `rimz agents` or `rimz teams` launch in the command is a run the fire owns, a `--detach` launch and a `rimz workflow run` start are not the fire's, and `fresh-worktree` cuts a worktree for each fire, removed at collection unless it is occupied or dirty.
+- R45. `rimz loop add [<name>] <trigger flags> -- <argv>` is a constructor that writes the row and adds nothing the stored row does not show: `timeout` is written when the row is added (from `--timeout`, else `loop.default-timeout`, else 2h), and an omitted name is generated and printed in the receipt.
+- R46. Withdrawn, with no new owner: an agent node's optional `prompt-file` and the refusal of a start that would launch an agent with no prompt, since no row carries an agent node.
+- R47. Withdrawn, with no new owner: the give-up instant a loop fire passes to its run, since a fire's run holds no agent node for a capacity wait to bound.
+- R48. Withdrawn: `rimz loop eject` goes with the inline nodes it moved; a row runs a workflow by naming `rimz workflow run <name>` in its command.
+- R49. Withdrawn: a row names no workflow, so `each-worktree` meets no workflow scope to refuse.
 
 Row fields after R41:
 
-- Trigger: `at`, `fire-at`, `every`, `cron`, `signal`, `match`, `when`, `for`, `watch`, `once`, `deadline`, `provider`.
-- Placement and fan-out: `root`, `dir`, `label`, `each-worktree`, `once-per-checkout`.
+- Trigger: `at`, `fire-at`, `every`, `cron`, `signal`, `match`, `when`, `for`, `watch` with its polarity `on`, `repeat`, `deadline`. A row fires once unless it has `every` or `cron`, or a `signal` or `when` with `repeat = true`.
+- Placement and fan-out: `root`, `dir`, `label`, `each-worktree`, `once-per-checkout`, `fresh-worktree`.
 - Overlap: `overlap`, `overlap-limit`.
-- Pacing: `budget-per-day`, `surplus`, `surplus-after`.
+- Usage scope: `provider`, `account`, which name whose usage windows the row's conditions read and pick no login.
 - Strikes: `max-strikes`.
-- Start arguments: `prompt`, `prompt-file`, `fresh-worktree`, `give-up`, `capacity`.
-- Action: `workflow`, `[agent]`, `[command]`, or `wait` with `wait-meta`, `team`, `loop-task`.
+- Action: `command` with `timeout`, or `wait` with `wait-meta`, `team`, `loop-task` and `prompt`.
 - Provenance: `booked-by`.
 
-Fields leaving the row (today's row is `crates/rimz/src/config/loop_.rs::TaskEntry`): `stay`, `takeover`, `check`, `check-timeout`, `judge`, `verify`, `max-attempts` and `on` go with the guards; `agent` as a string, `subscribe`, `notes`, `worktree`, `mode`, `effort`, `fast`, `budget`, `system-prompt-file`, `timeout`, `account`, `throttle` and `capacity-wait` each become a field of the inline node or a start argument.
+Fields leaving the row (the row is `crates/rimz/src/config/loop_.rs::TaskEntry`): `stay`, `takeover`, `check`, `check-timeout`, `judge`, `verify` and `max-attempts` go with the guards; `agent`, `subscribe`, `notes`, `worktree`, `mode`, `effort`, `fast`, `budget`, `system-prompt-file`, `throttle`, `capacity-wait` and `workflow` go with the work the row described; `budget-per-day`, `surplus` and `surplus-after` go with the budget gates, leaving a usage condition in `when` as the pacing; `once` gives way to `repeat`. The proposed start arguments `prompt-file`, `give-up` and `capacity` never reach the row.
 
 ## Worked examples
 
@@ -276,62 +277,19 @@ Differs from shipped: the script's `failed` answer is renamed `broken` (R7). The
 Source: the loop compiler's shell guard with the default polarity, declining by ending the run.
 
 ```toml
-[workflow]
-scope = "worktree"
-start = "check"
-
-[test.check]
-shell = "scripts/has-work.sh"
-timeout = "5m"
-on = { pass = "@done", fail = "agent" }
-
-[agent.agent]
-agent = "claude"
-lifecycle = "turn"
-timeout = "2h"
-then = "@done"
-```
-
-with the row that starts it:
-
-```toml
 [tasks.triage]
 cron = "0 9 * * *"
-workflow = "guarded-agent"
-prompt = "Triage what the check found."
+command = ["sh", "-c", "scripts/has-work.sh || rimz agents claude 'Triage what the check found.'"]
+timeout = "2h"
 ```
 
-Differs from shipped: today `rimz loop add --check` compiles this graph into the run at each fire (`crates/rimz/src/harness/schedule/compile.rs::Graph`), with the guard's `timeout` and `invalid` routed to `@failed`. Here the author writes the workflow file, and the row names it and carries the prompt as a start argument (R44).
+The guard is the command's own: a pass ends the fire with exit 0 and launches nothing, and a fail launches the agent, whose turn the fire owns until it ends (R44).
 
 ### Example 5: a judge with a recheck in front of a session
 
 Source: the loop compiler's judge, its recheck sleep and its `--stay` agent.
 
-```toml
-[workflow]
-scope = "worktree"
-start = "judge"
-
-[judge.judge]
-agent = "haiku"
-prompt-file = "checks/judge.md"
-timeout = "5m"
-on = { pass = "recheck", fail = "agent", died = "agent", invalid = "agent", timeout = "agent" }
-
-[sleep.recheck]
-sleep = "30m"
-then = "judge"
-
-[agent.agent]
-agent = "claude"
-lifecycle = "session"
-admission = { occupancy = "share" }
-then = "@done"
-```
-
-Differs from shipped: "run the agent anyway" when the judge fails is three explicit routes, not `on.failed`, which would also send a `limited` judge and the deadline to the agent. The session shares its checkout because the definition says so, where the compiler sets `occupancy = "share"` whenever `--takeover` is absent.
-
-The agent sets no `prompt-file` because the shape's prompt is the row's, so the run is started by a row that sets `prompt`, as in example 4, or by `rimz workflow run --prompt` (R44, R46), and a start that passes none refuses.
+A row runs no judge and holds no session (R41). The shape is a deployed workflow with its `judge`, `sleep` and `session` agent nodes, and a row that starts it names `rimz workflow run` in its command, whose run is not the fire's (R44, R48). Its prompt is the run's own, from `rimz workflow run --prompt`, since R46 is withdrawn.
 
 ### Example 6: a verify loop
 
@@ -356,51 +314,41 @@ timeout = "5m"
 on = { pass = "@done", fail = "agent" }
 ```
 
-`verify` is both the session's rest check and its `then` target. At a rest, `fail` sends the answer into the open session; after the agent exits on its own, `fail` launches it again; either way the entry counts a visit (R23, R40).
+`verify` is both the session's rest check and its `then` target. At a rest, `fail` sends the answer into the open session; after the agent exits on its own, `fail` launches it again; either way the entry counts a visit (R23, R40). A row starts it with `rimz workflow run` in its command, and the run carries `--prompt` as its prompt.
 
-The agent sets no `prompt-file` because the shape's prompt is the row's, so the run is started by a row that sets `prompt`, as in example 4, or by `rimz workflow run --prompt` (R44, R46), and a start that passes none refuses.
-
-### Example 7: two inline rows
+### Example 7: two command rows
 
 Source: the loop compiler's `--agent` and a bare `--check`.
 
 ```toml
 [tasks.nightly]
 cron = "0 3 * * *"
-prompt = "Triage the new issues."
-
-[tasks.nightly.agent]
-agent = "claude"
-lifecycle = "turn"
+command = ["rimz", "agents", "claude", "Triage the new issues."]
 timeout = "2h"
-then = "@done"
 
 [tasks.sync]
 every = "1h"
-
-[tasks.sync.command]
-shell = "scripts/sync.sh"
+command = ["scripts/sync.sh"]
 timeout = "5m"
-then = "@done"
 ```
 
-Differs from shipped: today the compiler builds a turn step `agent` and a check `check` from row flags at each fire, filling the run timeout per fire. Here the row carries the node table itself, with `lifecycle` and `timeout` written when the row is added (R45).
+Each row's run is the one node of R42, with `timeout` written when the row is added (R45). The `nightly` fire owns the agent's turn (R44).
 
 ## What replaces each compiler shape
 
-Today's compiled shapes are built by `crates/rimz/src/harness/schedule/compile.rs::Graph`.
+The compiled shapes were built by `harness/schedule/compile.rs`, which the loop link removed.
 
-| Today's row | Compiled today | Target |
+| Old row | Compiled | Ruled |
 | --- | --- | --- |
-| `--agent` | turn step `agent` | an inline `[tasks.<t>.agent]` with `lifecycle = "turn"` (example 7) |
-| `--agent --stay` | session step, `share` unless `--takeover` | an inline agent with `lifecycle = "session"` and the occupancy the flags name |
-| `--agent --verify` | session step with rest check `verify` | a workflow (example 6) |
-| `--check` (a shell guard) | check `check` routed by polarity | a workflow with a `test` node (example 4) |
-| `--check` alone | check with `pass` to `@done`, `fail` to `@failed` | an inline `[tasks.<t>.command]` (example 7) |
-| `--judge` | checks `judge-<tier>` that run the agent anyway on failure | a workflow with a `judge` node (example 5) |
-| a decline with a recheck | sleep `recheck-<guard>` or `hold-<guard>` | a `sleep` node (example 5) |
-| a decline held on `when` | condition `held-<guard>` and `rearm` | a `condition` node routing `@wait`, or a `sleep` with `when` and `for` |
-| `--wait` (delivery) | no run | unchanged: the row's own action |
+| `--agent` | turn step `agent` | a command that runs `rimz agents` (example 7) |
+| `--agent --stay` | session step, `share` unless `--takeover` | a command that runs a staying launch, or a deployed workflow with a `session` agent |
+| `--agent --verify` | session step with rest check `verify` | a deployed workflow (example 6) |
+| `--check` (a shell guard) | check `check` routed by polarity | the guard inside the command (example 4) |
+| `--check` alone | check with `pass` to `@done`, `fail` to `@failed` | a command row (example 7) |
+| `--judge` | checks `judge-<tier>` that run the agent anyway on failure | a deployed workflow with a `judge` node (example 5) |
+| a decline with a recheck | sleep `recheck-<guard>` or `hold-<guard>` | a `sleep` node in a deployed workflow (example 5) |
+| a decline held on `when` | condition `held-<guard>` and `rearm` | the row's own `when` and `for` |
+| `--wait` (delivery) | no run | the delivery row, which `rimz wait` and team role bindings write |
 | `--wait` with a guard | check, then message step `deliver` pinned to the session | gone with the guards |
 
 ## Build map
@@ -413,7 +361,7 @@ Each link and the rules it owns:
 - Timeout (`language-timeout`): R26 and R27.
 - Conditions (`language-conditions`): R28 to R34, and R6's required `on.unknown`.
 - Capacity (`language-capacity`): R35 to R39, `--give-up` and `--skip-capacity` on `rimz workflow run`, and a run of any origin accepting a give-up instant.
-- Loop (`loop-triggers`): R41 to R49, with the compiler and `TaskFire::supersede_held_decline` removed.
+- Loop (`loop-triggers`): R41 to R45, with the compiler, `rimz loop eject` and `TaskFire::supersede_held_decline` removed; R46 to R49 are withdrawn.
 - The compatibility removal and the typed pipeline need nothing from this page; the compatibility removal owns the one refusal R11's version rule reuses.
 
 Meeting points, each stated whole:
@@ -421,11 +369,10 @@ Meeting points, each stated whole:
 - An expired capacity wait as a failure cause: capacity owns when `capacity` is raised (R37) and failures owns where it goes (R13); the expiry never passes the function that settles a finished step, so the chain needs one entry that both paths reach, which failures builds and capacity calls.
 - A node timeout as a failure cause: timeout owns when the clock passes (R26, R27) and failures owns the cause's route; until the timeout link lands, the lifecycles and failures links keep today's clocks.
 - The session's clock against its rest check's clock: timeout owns it (R27), and lifecycles builds the rest (R23, R24) on today's clock behaviour and changes no clock.
-- The lifecycle an inline loop node names: lifecycles owns the two names and renames them wherever trunk writes them, loop owns the constructor that requires `--lifecycle` (R45), and whichever merges second adopts the other's change.
-- The give-up instant a loop passes to a run: loop computes and passes it for every fire (R47), and capacity owns the argument on the run and what the engine does with it (R37, R44).
+- The lifecycle names: lifecycles owns them and renames them wherever trunk writes them; a row names no lifecycle, so loop has no constructor to meet.
+- A run's give-up instant: capacity owns the argument on the run and what the engine does with it (R37), and no loop fire passes one (R47 is withdrawn).
 - A dead session at rest, closing and timeout together: failures owns the definition of dead (R15), lifecycles owns what a rest is, and timeout changes neither.
 - `resume --at` on a live run (R20): failures.
-- An optional `prompt-file` on an agent node and the refusal of an empty prompt (R46): loop, since the inline node needs it first.
 
 ## Decisions for the owner to confirm
 
@@ -443,16 +390,15 @@ Meeting points, each stated whole:
 - `timeout` required on five kinds (R27).
 - `none`, the refusal of `=unknown`, no veto, a hold surviving unknown, and the reader table (R28, R29, R31, R33).
 - `else` and `on.unknown` required on a condition (R6, the field table).
-- The admission fields, `give-up`, `--skip-capacity`, a give-up instant for every loop-started run, and `rimz workflow run` waiting (R35 to R38, R47).
+- The admission fields, `give-up`, `--skip-capacity`, and `rimz workflow run` waiting (R35 to R38).
 - Sealing whole with a language version (R11).
-- The row, the constructor with a required `--lifecycle`, eject as a move, the prompt as a start argument, and a guarded delivery lost (R41 to R48).
+- Withdrawn with no new owner, each awaiting a ruling on whether another link takes it: an agent node's optional `prompt-file` and the refusal of an empty prompt (R46), `--fresh-worktree` on `rimz workflow run`, a start argument the page first proposed, and the loop's give-up instant (R47).
 - `failed` reserved (R7).
 - The validation of `visits` and `capacity` routes (R10).
 - The warning for a cycle that never waits dropped (R9).
-- The project-scope refusals (R12, R49).
+- The project-scope refusals (R12).
 - The visit-rule removal assigned to the schema link (R40, the build map).
 - What an entry is, with `restart` keeping its reset, `--extend visits=+N` keeping its grant, and the reset on resuming after a cap gone with the park and the handler (R40 and the note under it).
-- A row's `prompt-file` beside an inline agent's own `prompt-file`, one table apart with different meanings: an open naming choice (R44, the field table).
 - The build map.
 - What becomes of this page once the last link merges; recommended: delete it, since the guide and the reference then own every fact.
 
@@ -469,7 +415,7 @@ Each with what would remove it:
 7. Two built-in retries, a judge's and a launch's (R19). Removed by dropping them, or by one `retries` field.
 8. `give-up` and `--skip-capacity` cover the capacity wait only; the window and checkout waits are bounded by the deadline alone (R37, R38). Removed by one bound and one flag over the whole wait in front of a node.
 9. The deadline fires once per grant (R18). Removed by making the deadline end the run with no route. Not proposed: that loses the handler that reports on a late run (example 3 reaches `reflect` on `deadline` through the workflow's `on.failed`), and firing again at every later node instead would fail that handler too.
-10. A delivery starts no run (R42). Removed by an inline `[tasks.<t>.message]` node.
+10. A delivery starts no run (R42). Removed by a delivery row whose fire runs a message step.
 11. The cache keep-alive reads unknown as yes (R33). Removed by keeping warm only on true, like every other reader. Not proposed: an unread reading would then let a warm cache lapse, and the shipped code keeps warm on purpose (`crates/rimz/src/harness/cache_keepalive.rs::SeatPolicy::horizon` gives up its horizon only when the clause is false with every reading present).
 12. A condition waits during a `for` hold without a route saying so (R32). Removed by a routable `holding` outcome.
 13. `visits` and `capacity` are the two causes whose route is restricted (R10). For `capacity`, removed by counting a visit at entry, before the capacity wait, so the node's own cap ends the loop; not proposed, since a held start would then spend the node's visits doing nothing. For `visits`, no removal: once the cap is spent every further entry raises `visits` again, counted or not, so a route that reaches the node again never ends, and the restriction is what makes a cap a bound.
