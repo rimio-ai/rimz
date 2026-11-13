@@ -6861,6 +6861,241 @@ fn agents_list_filter_selects_children_closed_sessions_and_addresses() {
     assert!(String::from_utf8_lossy(&help.stdout).starts_with("FIELD"));
 }
 
+#[test]
+fn subagents_list_is_a_preset_over_the_agent_selector() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    // The children name `seat-parent` by its launch id, as a launched
+    // subagent records its caller.
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "parent".into(),
+                launch_id: Some("launch-parent".into()),
+                agent_name: "seat-parent".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%1")),
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("launch parent");
+    let silent_since = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(45);
+    for (order, (id, name, pane, parent)) in [
+        ("parent", "seat-parent", "%1", None),
+        ("other", "seat-other", "%2", None),
+        ("quiet", "seat-quiet", "%3", Some("launch-parent")),
+        ("kid", "seat-kid", "%4", Some("launch-parent")),
+        ("done", "seat-done", "%5", Some("launch-parent")),
+        ("stray", "seat-stray", "%6", Some("other")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(name.to_owned());
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane));
+        if let Some(parent) = parent {
+            observation.launch.parent_agent_id = Some(parent.into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+        }
+        let mut registered = EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        );
+        registered.timestamp = silent_since + jiff::SignedDuration::from_secs(order as i64);
+        env.store()
+            .append_event(&registered)
+            .expect("register seat record");
+    }
+    // `quiet` started its turn 45 minutes ago and has said nothing since,
+    // past the 30-minute stall window; `kid` started one just now.
+    for (id, at) in [
+        ("quiet", silent_since + jiff::SignedDuration::from_secs(10)),
+        ("kid", jiff::Timestamp::now()),
+    ] {
+        let mut started = EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(
+                Some(id.into()),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+        );
+        started.timestamp = at;
+        env.store().append_event(&started).expect("start turn");
+    }
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionEnd",
+            &AgentLifecycleObservation::new(Some("done".into()), LifecycleSignal::Ended),
+        ))
+        .expect("end done");
+    publish_pane_frame(
+        &env,
+        &workspace.session_name,
+        ["%1", "%2", "%3", "%4", "%6"]
+            .into_iter()
+            .map(|pane| list_pane(&workspace.session_name, pane, "claude", &env.project_root))
+            .collect(),
+    );
+    let session = workspace.session_name.as_str();
+    let caller = [
+        (rimz::harness::launch::ENV_AGENT_KIND, "claude"),
+        (rimz::harness::launch::ENV_AGENT_ID, "parent"),
+    ];
+    let subagents = |args: &[&str], as_agent: bool| {
+        let mut command = agents_command(&env, session, &[&["subagents", "list"], args].concat());
+        if as_agent {
+            command.envs(caller);
+        }
+        let out = command.output().expect("subagents list");
+        assert!(out.status.success(), "{out:?}");
+        out
+    };
+    let json = |args: &[&str], as_agent: bool| {
+        let out = subagents(&[args, &["--json"]].concat(), as_agent);
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("subagents json")
+    };
+    let names = |rows: &serde_json::Value| {
+        let mut names = rows
+            .as_array()
+            .expect("a bare array")
+            .iter()
+            .map(|row| row["name"].as_str().expect("name").to_owned())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    };
+
+    // Parity: each child reads the status `agents list` gives it.
+    let shell = json(&[], false);
+    assert_eq!(
+        names(&shell),
+        ["seat-done", "seat-kid", "seat-quiet", "seat-stray"],
+        "{shell:#}"
+    );
+    let agents = run_agents_json_command(
+        &env,
+        session,
+        &[
+            "agents",
+            "list",
+            "--filter",
+            "parent=*",
+            "--filter",
+            "live=yes,no",
+        ],
+    );
+    for row in shell.as_array().expect("rows") {
+        let entry = agents["agents"]
+            .as_array()
+            .expect("agents")
+            .iter()
+            .find(|agent| agent["name"] == row["name"])
+            .unwrap_or_else(|| panic!("{} missing from {agents:#}", row["name"]));
+        assert_eq!(row["status"], entry["status"], "{row:#}\n{entry:#}");
+        assert_eq!(row["handle"], entry["handle"], "{row:#}\n{entry:#}");
+        assert_eq!(row["parent"], entry["parent"], "{row:#}\n{entry:#}");
+    }
+    let quiet = shell
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "seat-quiet")
+        .expect("silent child");
+    assert_eq!(quiet["status"], "failed", "{quiet:#}");
+    let table = String::from_utf8(subagents(&[], false).stdout).expect("utf-8 table");
+    assert!(table.contains("silent 4"), "{table}");
+
+    // Scope: an agent sees its own children, finished ones included, and a
+    // `parent` term scopes it like a shell.
+    assert_eq!(
+        names(&json(&[], true)),
+        ["seat-done", "seat-kid", "seat-quiet"]
+    );
+    assert_eq!(
+        names(&json(&["--filter", "live=yes"], true)),
+        ["seat-kid", "seat-quiet"]
+    );
+    assert_eq!(
+        names(&json(&["--filter", "parent=*"], true)),
+        ["seat-done", "seat-kid", "seat-quiet", "seat-stray"]
+    );
+    assert!(names(&json(&["--filter", "parent=none"], false)).is_empty());
+
+    // `-q`: every address resolves back to its row's agent.
+    let addresses = String::from_utf8(subagents(&["-q"], false).stdout).expect("utf-8");
+    let mut resolved = addresses
+        .lines()
+        .map(|address| {
+            run_agents_json_command(&env, session, &["agents", "show", address])["agent"]["id"]
+                .as_str()
+                .expect("shown id")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    resolved.sort_unstable();
+    assert_eq!(resolved, ["done", "kid", "quiet", "stray"], "{addresses}");
+
+    let none = subagents(&["--filter", "status=waiting"], false);
+    assert!(none.stdout.is_empty(), "{none:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&none.stderr),
+        "No subagent in this room matches the filter\n"
+    );
+    let none = subagents(&["--filter", "status=waiting", "-q"], false);
+    assert!(none.stdout.is_empty() && none.stderr.is_empty(), "{none:?}");
+    let help = subagents(&["--filter", "help"], false);
+    assert!(String::from_utf8_lossy(&help.stdout).starts_with("FIELD"));
+    for filter in ["stauts=idle", "parent=@"] {
+        let out = agents_command(&env, session, &["subagents", "list", "--filter", filter])
+            .output()
+            .expect("refused filter");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{filter:?}: {stderr}");
+        assert!(stderr.contains(filter), "{filter:?}: {stderr}");
+    }
+
+    // Room down: the refusal `agents list` gives.
+    let refusal = |verb: &str| {
+        let out = env
+            .rimz()
+            .args([verb, "list"])
+            .output()
+            .expect("list without a room");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let down = refusal("subagents");
+    assert_ne!(down.0, Some(0), "{down:?}");
+    assert_eq!(down, refusal("agents"));
+}
+
 fn register_list_agent(
     env: &Env,
     workspace: &rimz::ResolvedWorkspace,

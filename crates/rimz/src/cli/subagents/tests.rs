@@ -911,12 +911,10 @@ fn child_reports_name_each_parent_and_channel() {
     run.agent_id = Some(first.agent_id.clone());
     run.status = rimz::store::run::RunStatus::Completed;
     let agents = [planner, coder, first, second, orphan];
-    let children = [&agents[2], &agents[3], &agents[4]];
 
-    let reports = child_reports(
+    let reports = reports_for(
         &rimz::agents::ParkDemotion::default(),
         &agents,
-        &children,
         &[run],
         Timestamp::now(),
     );
@@ -950,13 +948,48 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         run_status: None,
         started_at: None,
         elapsed_secs: None,
+        row: serde_json::Map::new(),
     };
 
-    let value = serde_json::to_value(report).expect("serialize child report");
+    let value = report.json().expect("serialize child report");
 
     assert_eq!(value["parent"], "@planner");
     assert!(value.get("channel").is_none());
     assert!(value.get("turn_error").is_none());
+}
+
+/// The reports `subagents list` builds for every launched child of a room
+/// holding `agents`.
+fn reports_for(
+    demotion: &rimz::agents::ParkDemotion,
+    agents: &[AgentState],
+    runs: &[rimz::store::run::RunRecord],
+    now: Timestamp,
+) -> Vec<ChildReport> {
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-list")),
+        agents.to_vec(),
+        now,
+    );
+    snapshot_reports(&snapshot, demotion, runs, now)
+}
+
+fn snapshot_reports(
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    demotion: &rimz::agents::ParkDemotion,
+    runs: &[rimz::store::run::RunRecord],
+    now: Timestamp,
+) -> Vec<ChildReport> {
+    let rows = selector::live_rows(snapshot, demotion, &address_context(), now);
+    let rows = preset_rows(
+        rows,
+        &snapshot.agents,
+        ListScope::Channel,
+        None,
+        &Query::default(),
+        &address_context(),
+    );
+    child_reports(&rows, runs, now).expect("serialize the rows")
 }
 
 fn launched_child(parent: &AgentState, id: &str) -> AgentState {
@@ -993,13 +1026,16 @@ fn child_reports_list_live_children_first_then_settled_then_runless() {
     let at = |secs: i64| Timestamp::from_second(1_700_000_000 + secs).expect("valid timestamp");
     let planner =
         rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
-    let agents = [
+    let mut agents = [
         planner.clone(),
         launched_child(&planner, "runless"),
         launched_child(&planner, "settled"),
         launched_child(&planner, "early-live"),
         launched_child(&planner, "late-pending"),
+        launched_child(&planner, "zz-runless-registered-first"),
     ];
+    agents[1].registered_at = Some(at(20));
+    agents[5].registered_at = Some(at(10));
     let mut settled = child_run(&agents[2], RunStatus::Completed, at(300));
     settled.completed_at = Some(at(400));
     let runs = [
@@ -1007,12 +1043,9 @@ fn child_reports_list_live_children_first_then_settled_then_runless() {
         child_run(&agents[3], RunStatus::Running, at(100)),
         child_run(&agents[4], RunStatus::Pending, at(200)),
     ];
-    let children = [&agents[1], &agents[2], &agents[3], &agents[4]];
-
-    let reports = child_reports(
+    let reports = reports_for(
         &rimz::agents::ParkDemotion::default(),
         &agents,
-        &children,
         &runs,
         at(1_000),
     );
@@ -1021,7 +1054,16 @@ fn child_reports_list_live_children_first_then_settled_then_runless() {
         .iter()
         .map(|report| report.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(order, ["late-pending", "early-live", "settled", "runless"]);
+    assert_eq!(
+        order,
+        [
+            "late-pending",
+            "early-live",
+            "settled",
+            "zz-runless-registered-first",
+            "runless"
+        ]
+    );
 }
 
 #[test]
@@ -1054,12 +1096,9 @@ fn child_reports_measure_the_current_answer() {
         unstamped,
         followed,
     ];
-    let children = agents[1..].iter().collect::<Vec<_>>();
-
-    let reports = child_reports(
+    let reports = reports_for(
         &rimz::agents::ParkDemotion::default(),
         &agents,
-        &children,
         &runs,
         at(3_790),
     );
@@ -1127,10 +1166,9 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
 
     let report = |child: rimz::agents::AgentState| {
         let agents = [planner.clone(), child];
-        child_reports(
+        reports_for(
             &rimz::agents::ParkDemotion::default(),
             &agents,
-            &[&agents[1]],
             std::slice::from_ref(&run),
             Timestamp::now(),
         )
@@ -1198,14 +1236,7 @@ fn parked_child_report(demotion: &rimz::agents::ParkDemotion) -> ChildReport {
     });
     child.context = Some(context);
     let run = child_run(&child, rimz::store::run::RunStatus::Running, now);
-    child_reports(
-        demotion,
-        std::slice::from_ref(&child),
-        &[&child],
-        &[run],
-        now,
-    )
-    .remove(0)
+    reports_for(demotion, std::slice::from_ref(&child), &[run], now).remove(0)
 }
 
 fn assert_spent_child_report(demotion: &rimz::agents::ParkDemotion) {
@@ -1291,9 +1322,13 @@ fn ended_child_keeps_its_settled_status_in_list_and_nested_entry() {
     );
     assert_eq!(report.status, "failed");
     assert_eq!(entry.status.as_str(), report.status);
-    assert!(report.turn_error.is_none());
-    assert!(report.detail().is_none());
+    // The nested card drops an ended child's error; the row keeps its last
+    // one from the context sidecar, as `agents list` reads it.
     assert!(entry.turn_error_label.is_none());
+    assert_eq!(report.detail().as_deref(), Some("Usage limit reached"));
+    let value = report.json().expect("serialize child report");
+    assert_eq!(value["turn_error"]["class"], "paused_rate_limit");
+    assert_eq!(value["error"], "rate-limit");
     assert_eq!(report.run_status.as_deref(), Some("running"));
 }
 
@@ -1325,6 +1360,215 @@ fn failed_child_with_non_pausing_error_shows_its_provider_label() {
     let value = serde_json::to_value(report).expect("serialize child report");
     assert_eq!(value["turn_error"]["class"], "failed");
     assert_eq!(value["turn_error"]["label"], "Provider failed");
+}
+
+#[test]
+fn silent_child_reads_failed_with_its_silence_as_the_detail() {
+    let now = Timestamp::from_second(1_700_000_000).expect("valid timestamp");
+    let mut parent =
+        rimz::agents::AgentState::stub("claude", "parent", rimz::agents::AgentStatus::Idle);
+    parent.worktree_path = Some("/repo/main".to_owned());
+    let pane: rimz::pane::PaneRef = serde_json::from_value(serde_json::json!({
+        "pane_id": "tmux:%1", "session_name": "test", "command": "claude", "cwd": "/repo/main"
+    }))
+    .unwrap();
+    parent.pane = Some(pane.clone());
+    let mut child = launched_child(&parent, "quiet");
+    child.phase = rimz::agents::TurnPhase::Reasoning;
+    child.description = Some("reviewing the diff".to_owned());
+    child.registered_at = Some(now - Duration::from_secs(2_000));
+    child.turn_started_at = Some(now - Duration::from_secs(2_000));
+    child.last_activity = now - Duration::from_secs(1_920);
+    let run = child_run(
+        &child,
+        rimz::store::run::RunStatus::Running,
+        now - Duration::from_secs(2_000),
+    );
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo/main")),
+        vec![parent, child],
+        now,
+    )
+    .with_live_panes(vec![pane], None);
+
+    let report = snapshot_reports(
+        &snapshot,
+        &rimz::agents::ParkDemotion::default(),
+        &[run],
+        now,
+    )
+    .remove(0);
+
+    assert_eq!(report.status, "failed");
+    assert_eq!(report.detail().as_deref(), Some("silent 32m"));
+    assert_eq!(report.run_status.as_deref(), Some("running"));
+    let value = report.json().expect("serialize child report");
+    assert_eq!(value["status"], "failed");
+}
+
+#[test]
+fn list_json_keeps_todays_keys_beside_the_row_keys() {
+    use rimz::agents::{AgentStatus, TurnErrorClass};
+
+    let (report, _) = child_list_and_nested_entry(
+        AgentStatus::Running,
+        false,
+        Some((TurnErrorClass::PausedRateLimit, Some("Usage limit reached"))),
+    );
+    let value = report.json().expect("serialize child report");
+    for key in [
+        "name",
+        "handle",
+        "parent",
+        "kind",
+        "status",
+        "turn_error",
+        "run_id",
+        "run_status",
+        "started_at",
+    ] {
+        assert!(value.get(key).is_some(), "{key} in {value:#}");
+    }
+    for field in Field::ALL {
+        assert!(
+            value.get(field.name()).is_some(),
+            "{} in {value:#}",
+            field.name()
+        );
+    }
+    assert_eq!(value["handle"], report.handle.as_str());
+    assert_eq!(value["parent"], report.parent.as_str());
+    assert!(report.parent.starts_with('@'), "{}", report.parent);
+    assert_eq!(value["status"], "paused");
+    assert_eq!(value["turn_error"]["class"], "paused_rate_limit");
+    assert_eq!(value["error"], "rate-limit");
+    assert_eq!(value["live"], false, "a paneless child is not pane-bound");
+}
+
+#[test]
+fn preset_scopes_to_own_children_or_the_lane_and_never_admits_a_non_child() {
+    let lane_of = |name: &str| rimz::address::LaneSelector::parse(Some(name), None);
+    let mut planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    planner.name = Some("planner".to_owned());
+    planner.channel = Some("feat-x".to_owned());
+    let mut other =
+        rimz::agents::AgentState::stub("claude", "other", rimz::agents::AgentStatus::Idle);
+    other.name = Some("other".to_owned());
+    other.channel = Some("other".to_owned());
+    let mut kid = launched_child(&planner, "kid");
+    kid.channel = Some("feat-x".to_owned());
+    let mut done = launched_child(&planner, "done");
+    done.channel = Some("feat-x".to_owned());
+    done.ended_at = Some(Timestamp::now());
+    let mut stranger = launched_child(&other, "stranger");
+    stranger.channel = Some("other".to_owned());
+    let mut lead = rimz::agents::AgentState::stub("codex", "lead", rimz::agents::AgentStatus::Idle);
+    lead.channel = Some("feat-x".to_owned());
+    // No channel stamp: its lane reads from its worktree.
+    let mut cousin = launched_child(&lead, "cousin");
+    cousin.worktree_path = Some("/repo/feat-x".to_owned());
+    cousin.worktree_branch = Some("feat-x".to_owned());
+    // A provider-native child carries a parent but no launch depth.
+    let mut native = launched_child(&planner, "native");
+    native.channel = Some("feat-x".to_owned());
+    native.launch_depth = None;
+    let panes = ["%2", "%3", "%1", "%4", "%5", "%6", "%7"].map(|pane| {
+        serde_json::from_value::<rimz::pane::PaneRef>(serde_json::json!({
+            "pane_id": format!("tmux:{pane}"), "session_name": "test", "command": "codex",
+            "cwd": "/tmp/subagent-list"
+        }))
+        .unwrap()
+    });
+    kid.pane = Some(panes[0].clone());
+    stranger.pane = Some(panes[1].clone());
+    planner.pane = Some(panes[2].clone());
+    other.pane = Some(panes[3].clone());
+    lead.pane = Some(panes[4].clone());
+    cousin.pane = Some(panes[5].clone());
+    native.pane = Some(panes[6].clone());
+    let now = Timestamp::now();
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-list")),
+        vec![
+            planner.clone(),
+            other,
+            kid,
+            done,
+            stranger,
+            lead,
+            cousin,
+            native,
+        ],
+        now,
+    )
+    .with_live_panes(panes.to_vec(), None);
+    let ids = |caller: Option<&AgentState>, lane: Option<&str>, filters: &[&str]| {
+        let query = Query::parse(filters).expect("query");
+        let rows = selector::live_rows(
+            &snapshot,
+            &rimz::agents::ParkDemotion::default(),
+            &address_context(),
+            now,
+        );
+        let mut ids = preset_rows(
+            rows,
+            &snapshot.agents,
+            list_scope(caller, &query),
+            lane.map(lane_of).as_ref(),
+            &query,
+            &address_context(),
+        )
+        .iter()
+        .map(|row| row.agent().agent_id.to_string())
+        .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    };
+
+    assert_eq!(ids(Some(&planner), Some("other"), &[]), ["done", "kid"]);
+    assert!(ids(Some(&planner), None, &["lane=other"]).is_empty());
+    assert_eq!(ids(None, Some("feat-x"), &[]), ["cousin", "done", "kid"]);
+    assert_eq!(ids(None, None, &[]), ["cousin", "done", "kid", "stranger"]);
+    assert_eq!(
+        ids(Some(&planner), Some("other"), &["parent=*"]),
+        ["stranger"],
+        "a parent term scopes an agent caller like a shell"
+    );
+    assert_eq!(
+        ids(None, Some("feat-x"), &["lane=*"]),
+        ["cousin", "done", "kid", "stranger"]
+    );
+    assert_eq!(ids(None, None, &["live=no"]), ["done"]);
+    assert!(ids(None, None, &["parent=none"]).is_empty());
+    assert!(ids(Some(&planner), None, &["parent=none"]).is_empty());
+    assert_eq!(
+        ids(None, None, &["parent=*,none", "live=*"]),
+        ["cousin", "done", "kid", "stranger"]
+    );
+}
+
+#[test]
+fn list_takes_repeatable_filters_and_quiet_but_not_quiet_json() {
+    let args = parse(&[
+        "rimz",
+        "list",
+        "--filter",
+        "status=idle",
+        "--filter",
+        "live=*",
+        "-q",
+    ]);
+    assert!(matches!(
+        args.command,
+        Some(SubagentsSubcmd::List { json: false, quiet: true, ref filters }) if filters.len() == 2
+    ));
+    assert!(Harness::try_parse_from(["rimz", "list", "-q", "--json"]).is_err());
+    let mut out = anstream::StripStream::new(Vec::new());
+    render::filter_help(&mut out, FILTER_DEFAULTS).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(text.starts_with("FIELD"), "{text}");
+    assert_eq!(text.lines().last(), Some(FILTER_DEFAULTS));
 }
 
 fn child_list_and_nested_entry(
@@ -1367,20 +1611,17 @@ fn child_list_and_nested_entry(
     }
     let run = child_run(&child, rimz::store::run::RunStatus::Running, now);
     let agents = vec![parent, child];
-    let mut list_agents = agents.clone();
-    attach_list_context(&runtime, &mut list_agents);
-    let report = child_reports(
-        &rimz::agents::ParkDemotion::default(),
-        &list_agents,
-        &[&list_agents[1]],
-        &[run],
-        now,
-    )
-    .remove(0);
     let snapshot =
         rimz::store::snapshot::SidebarSnapshot::build_with_agents(workspace_id, agents, now)
             .with_agent_context(rimz::store::agent_context::read_all(&runtime))
             .with_live_panes(vec![pane], None);
+    let report = snapshot_reports(
+        &snapshot,
+        &rimz::agents::ParkDemotion::default(),
+        &[run],
+        now,
+    )
+    .remove(0);
     let entry = snapshot.worktree_groups[0].rows[0].sub_agents()[0].clone();
     (report, entry)
 }

@@ -2593,6 +2593,25 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
     );
 }
 
+/// `rimz` against the room's shimmed live Zellij session, which a listing
+/// over the published snapshot needs.
+fn live_rimz(env: &Env) -> std::process::Command {
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "zellij"])
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LOG",
+            env.project_root.join("live-rimz.log"),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session} [Created 1s ago]\n"),
+        );
+    command
+}
+
 #[cfg(unix)]
 #[test]
 fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() {
@@ -2632,7 +2651,10 @@ fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() 
             ))
             .unwrap();
     }
-    let output = env.rimz().args(["subagents", "list"]).output().unwrap();
+    let output = live_rimz(&env)
+        .args(["subagents", "list"])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{output:?}");
     let text = String::from_utf8_lossy(&output.stdout);
     let child = text
@@ -2640,8 +2662,7 @@ fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() 
         .find(|line| line.contains("@swift-otter"))
         .unwrap();
     assert_eq!(child.split_whitespace().nth(2), Some("main"), "{text}");
-    let output = env
-        .rimz()
+    let output = live_rimz(&env)
         .args(["subagents", "list", "--json"])
         .output()
         .unwrap();
@@ -2731,8 +2752,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
     )]);
     std::fs::write(&instances_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
 
-    let output = env
-        .rimz()
+    let output = live_rimz(&env)
         .args(["subagents", "list", "--json"])
         .env(rimz::workspace::ENV_CHANNEL, "feat-x")
         .output()
@@ -2752,8 +2772,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
     assert_eq!(rows[0]["channel"], "feat-x");
 
     std::fs::write(&instances_path, b"{}").unwrap();
-    let output = env
-        .rimz()
+    let output = live_rimz(&env)
         .args(["subagents", "list", "--json"])
         .output()
         .expect("list all channel subagents");
@@ -2855,8 +2874,7 @@ fn limit_parked_child_lists_paused_and_is_held_without_a_message() {
             .last_activity
     };
     let list = || {
-        let output = env
-            .rimz()
+        let output = live_rimz(&env)
             .args(["subagents", "list", "--json"])
             .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
             .env(rimz::harness::launch::ENV_AGENT_ID, parent_id.as_str())
@@ -5652,8 +5670,7 @@ fn explain_refuses_missing_seats_and_multi_agent_layouts_without_writes() {
 fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
     let env = Env::new();
     env.record(&env.project_root);
-    let output = env
-        .rimz()
+    let output = live_rimz(&env)
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .args(["subagents", "list", "--json"])
         .output()
@@ -5697,7 +5714,7 @@ fn empty_subagent_list_explains_itself_on_stderr_only() {
         ))
         .expect("seed parent row");
     let list = |json: bool, env_pairs: &[(&str, &str)]| {
-        let mut command = env.rimz();
+        let mut command = live_rimz(&env);
         command.args(["subagents", "list"]);
         if json {
             command.arg("--json");
@@ -5799,8 +5816,7 @@ fn launch_identity_and_parentage_survive_event_log_rotation() {
         ))
         .expect("append first post-rotation lifecycle event");
 
-    let output = env
-        .rimz()
+    let output = live_rimz(&env)
         .args(["subagents", "list", "--json"])
         .env(rimz::harness::launch::ENV_AGENT_KIND, kind.as_str())
         .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())

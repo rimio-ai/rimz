@@ -1555,22 +1555,6 @@ pub fn launched_fleet<'a>(
     )
 }
 
-/// Pane-backed children launched through `rimz subagents` by any parent,
-/// scoped to `lane` when one is in play.
-pub fn launched_children_in_channel<'a>(
-    agents: &'a [AgentState],
-    lane: Option<&LaneSelector>,
-) -> Vec<&'a AgentState> {
-    by_registration(
-        agents
-            .iter()
-            .filter(|agent| {
-                agent.is_launched_child() && lane.is_none_or(|lane| agent.in_lane(lane))
-            })
-            .collect(),
-    )
-}
-
 /// The current row of the launch that parents `child`.
 pub fn launched_parent<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,

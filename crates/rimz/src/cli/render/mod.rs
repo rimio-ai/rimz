@@ -511,6 +511,33 @@ pub(crate) fn finish(write: std::io::Result<()>) -> anyhow::Result<()> {
     }
 }
 
+/// `--filter help`: the selector's field table, the grammar in brief, then the
+/// listing's own `defaults` line.
+pub(crate) fn filter_help(w: &mut impl Write, defaults: &str) -> std::io::Result<()> {
+    use rimz::address::selector::Field;
+    let mut table = Table::new(["FIELD", "TYPE", "VALUES"]);
+    for field in Field::ALL {
+        let values = field.values();
+        let values = if values.is_empty() {
+            field.kind().hint().to_owned()
+        } else {
+            values.join(", ")
+        };
+        table.row([cell(field.name()), cell(field.kind().label()), cell(values)]);
+    }
+    table.render(w)?;
+    writeln!(w)?;
+    for line in [
+        "term: <field><op><value>[,<value>...]; ops: = != and, on age, ctx, tokens, cost, > >= < <=",
+        "every term and every --filter must match; under = any value matches, under != none may",
+        "none matches a missing value and * any present one; quote a value holding spaces or commas",
+        defaults,
+    ] {
+        writeln!(w, "{line}")?;
+    }
+    Ok(())
+}
+
 /// Emit one compact JSON document followed by one newline.
 pub(crate) fn json<T: serde::Serialize + ?Sized>(value: &T) -> anyhow::Result<()> {
     write_json(&mut std::io::stdout().lock(), value, false)

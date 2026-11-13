@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use super::usage::UsageError;
 use super::{Ctx, GlobalFlags, agents_cmd, render};
 use agents_cmd::newest_run_for_child;
+use rimz::address::selector::{self, AgentRow, Field, Query};
 use rimz::agents::AgentState;
+use rimz::store::snapshot::SidebarSnapshot;
 
 mod resume;
 pub(in crate::cli) use resume::{ResumeChildOutcome, resume_child};
@@ -43,6 +45,16 @@ enum SubagentsSubcmd {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
+        /// Keep children matching `field=value` terms; repeatable, `--filter help` lists fields.
+        #[arg(
+            long = "filter",
+            value_name = "QUERY",
+            add = clap_complete::ArgValueCompleter::new(crate::cli::complete::filter_terms)
+        )]
+        filters: Vec<String>,
+        /// Print one address per listed child and nothing else.
+        #[arg(short = 'q', long, conflicts_with = "json")]
+        quiet: bool,
     },
     /// List agent profiles available to launch.
     Profiles {
@@ -241,7 +253,11 @@ pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(SubagentsSubcmd::Launch(args)) => launch_child(args.launch, args.json, globals),
         Some(SubagentsSubcmd::Fanout(fanout)) => fanout_children(fanout, globals),
-        Some(SubagentsSubcmd::List { json }) => list_children(json, globals),
+        Some(SubagentsSubcmd::List {
+            json,
+            filters,
+            quiet,
+        }) => list_children(json, quiet, &filters, globals),
         Some(SubagentsSubcmd::Profiles { json, path }) => list_profiles(json, path, globals),
         Some(SubagentsSubcmd::Wait {
             names,
@@ -641,6 +657,9 @@ struct ChildReport {
     started_at: Option<jiff::Timestamp>,
     #[serde(skip)]
     elapsed_secs: Option<u64>,
+    /// The selector row's flat keys, which win where a key is shared.
+    #[serde(skip)]
+    row: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -656,81 +675,149 @@ impl ChildReport {
             .clone()
             .or_else(|| self.description.clone())
     }
+
+    /// The `--json` entry: the row's flat keys, then this report's keys beside them.
+    fn json(&self) -> serde_json::Result<serde_json::Value> {
+        let mut fields = self.row.clone();
+        if let serde_json::Value::Object(report) = serde_json::to_value(self)? {
+            for (key, value) in report {
+                fields.entry(key).or_insert(value);
+            }
+        }
+        Ok(serde_json::Value::Object(fields))
+    }
 }
 
+/// Where the preset's children come from before the filter's terms apply.
 #[derive(Clone, Copy)]
-enum ListScope {
-    Caller,
+enum ListScope<'a> {
+    /// The caller's own launched children, finished ones included.
+    Caller(&'a AgentState),
+    /// Every launched child in a lane, or in the room without one.
     Channel,
 }
 
-fn list_scope(agent_caller: bool) -> ListScope {
-    if agent_caller {
-        ListScope::Caller
-    } else {
-        ListScope::Channel
+/// A resolved agent caller sees its own children unless a term names `parent`.
+fn list_scope<'a>(caller: Option<&'a AgentState>, query: &Query) -> ListScope<'a> {
+    match caller {
+        Some(caller) if !query.names(Field::Parent) => ListScope::Caller(caller),
+        _ => ListScope::Channel,
     }
 }
 
-fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
+/// The preset over the selector's rows: launched children only, the scope's
+/// children, the current `lane` unless a term names `lane`, then every term.
+fn preset_rows<'a>(
+    rows: Vec<AgentRow<'a>>,
+    agents: &[AgentState],
+    scope: ListScope<'_>,
+    lane: Option<&rimz::address::LaneSelector>,
+    query: &Query,
+    reader: &rimz::address::AddressContext,
+) -> Vec<AgentRow<'a>> {
+    let own = match scope {
+        ListScope::Caller(caller) => Some(rimz::address::launched_children(agents, caller)),
+        ListScope::Channel => None,
+    };
+    let lane = lane.filter(|_| own.is_none() && !query.names(Field::Lane));
+    rows.into_iter()
+        .filter(|row| {
+            let agent = row.agent();
+            agent.is_launched_child()
+                && own.as_ref().is_none_or(|own| {
+                    own.iter()
+                        .any(|child| child.kind == agent.kind && child.agent_id == agent.agent_id)
+                })
+                && lane.is_none_or(|lane| rimz::address::agent_in_lane(agent, lane))
+                && query.matches(row, reader)
+        })
+        .collect()
+}
+
+/// What `subagents list` lists until a term names the field.
+const FILTER_DEFAULTS: &str = "naming parent or lane replaces its default: an agent's own \
+     children (else the current lane's), the current lane; live has no default";
+
+fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFlags) -> Result<()> {
+    if filters.iter().any(|filter| filter.trim() == "help") {
+        return Ok(render::filter_help(&mut render::out(), FILTER_DEFAULTS)?);
+    }
+    let query = Query::parse(filters).map_err(|err| UsageError::new(err.to_string()))?;
     let ctx = Ctx::open(globals)?;
-    let mut audit = ctx
+    let _mux = rimz::room::require_live_mux(globals.mux, &ctx.workspace)?;
+    let snapshot = ctx.published_snapshot()?;
+    let audit = ctx
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
-        .context("reading agent history")?;
-    let root = &ctx.workspace.project_root;
-    let mut waits = rimz::harness::schedule::pending::pending_waits_by_session(
-        &rimz::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root)),
-        root,
-        &jiff::Timestamp::now().to_zoned(rimz::config::MachineConfig::load_lenient().time_zone()),
-    );
-    for agent in &mut audit.agents {
-        agent.pending_waits = waits
-            .remove(&(agent.kind.clone(), agent.agent_id.clone()))
-            .unwrap_or_default();
-    }
-    attach_list_context(ctx.store.runtime_paths(), &mut audit.agents);
+        .context("reading agent history")?
+        .agents;
     let now = jiff::Timestamp::now();
     let demotion = rimz::harness::park_demotion(
         Some(&ctx.store),
         ctx.store.paths(),
-        ctx.store.runtime_paths(),
+        ctx.runtime(),
         &crate::cli::machine_config(),
-        &audit.agents,
-        &audit.resume_outcomes,
+        &snapshot.agents,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
         now,
     );
-    let caller_identity = rimz::harness::ancestry::resolve_caller(&audit.agents);
-    let caller = caller_identity.as_ref().and_then(|identity| {
-        rimz::harness::ancestry::resolve_launch_caller(&audit.agents, identity).ok()
+    let audit_snapshot = ctx.fold_agent_context(SidebarSnapshot::build_with_agents(
+        ctx.workspace.workspace_id.clone(),
+        audit.clone(),
+        now,
+    ));
+    let reader = ctx.address_context();
+    let mut rows = selector::live_rows(&snapshot, &demotion, &reader, now);
+    let closed = selector::closed_rows(&audit_snapshot, &snapshot, &rows, &demotion, &reader, now);
+    rows.extend(closed);
+    let caller = rimz::harness::ancestry::resolve_caller(&audit).and_then(|identity| {
+        rimz::harness::ancestry::resolve_launch_caller(&audit, &identity).ok()
     });
-    let scope = list_scope(caller.is_some());
-    let children = match caller {
-        Some(caller) => rimz::address::launched_children(&audit.agents, caller),
-        None => rimz::address::launched_children_in_channel(
-            &audit.agents,
-            ctx.current_channel().address_context().lane().as_ref(),
-        ),
-    };
+    let scope = list_scope(caller, &query);
+    let rows = preset_rows(rows, &audit, scope, reader.lane().as_ref(), &query, &reader);
     let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let reports = child_reports(&demotion, &audit.agents, &children, &runs, now);
+    let reports = child_reports(&rows, &runs, now)?;
     if json {
-        return render::json_pretty(&reports);
+        let entries = reports
+            .iter()
+            .map(ChildReport::json)
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        return render::json_pretty(&entries);
+    }
+    if quiet {
+        let mut out = render::out();
+        for child in &reports {
+            writeln!(out, "{}", child.handle)?;
+        }
+        return Ok(());
     }
     if reports.is_empty() {
-        let lane_label = ctx.address_context().lane_label();
-        let line = match (caller, lane_label.as_deref()) {
-            (Some(caller), _) => format!(
+        let channel = reader
+            .lane_label()
+            .filter(|_| !query.names(Field::Lane))
+            .map(|channel| format!("#{channel}"));
+        let line = match (scope, channel, filters.is_empty()) {
+            (ListScope::Caller(caller), _, true) => format!(
                 "{} has launched no subagents. Launch one: rimz subagents launch <PROFILE> \"<PROMPT>\" (profiles: rimz subagents profiles)",
-                peer_handle(&audit.agents, caller)
+                peer_handle(&audit, caller)
             ),
-            (None, Some(channel)) => format!("No subagents in #{channel}"),
-            (None, None) => "No subagents in this room".to_owned(),
+            (ListScope::Caller(caller), _, false) => format!(
+                "No subagent of {} matches the filter",
+                peer_handle(&audit, caller)
+            ),
+            (ListScope::Channel, Some(channel), true) => format!("No subagents in {channel}"),
+            (ListScope::Channel, Some(channel), false) => {
+                format!("No subagent in {channel} matches the filter")
+            }
+            (ListScope::Channel, None, true) => "No subagents in this room".to_owned(),
+            (ListScope::Channel, None, false) => {
+                "No subagent in this room matches the filter".to_owned()
+            }
         };
         return render::finish(writeln!(render::err(), "{line}"));
     }
     let headers = match scope {
-        ListScope::Caller => vec!["SUBAGENT", "KIND", "AGENT", "RUN", "ELAPSED"],
+        ListScope::Caller(_) => vec!["SUBAGENT", "KIND", "AGENT", "RUN", "ELAPSED"],
         ListScope::Channel => vec![
             "SUBAGENT", "PARENT", "CHANNEL", "KIND", "AGENT", "RUN", "ELAPSED",
         ],
@@ -747,7 +834,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         )
         .dash();
         let row = match scope {
-            ListScope::Caller => vec![
+            ListScope::Caller(_) => vec![
                 render::cell(child.handle),
                 render::cell(child.kind),
                 render::cell(child.status),
@@ -769,57 +856,57 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     table.render(&mut render::out()).map_err(Into::into)
 }
 
-fn attach_list_context(runtime: &rimz::disk::paths::RuntimePaths, agents: &mut [AgentState]) {
-    rimz::store::agent_context::attach_rest_certificates(runtime, agents.iter_mut());
-    rimz::store::agent_context::attach_child_display_context(runtime, agents.iter_mut());
-}
-
+/// One report per row, open runs first, then settled ones, newest answer first,
+/// then runless children, ties in registration order. Status, handle, and
+/// parent are the row's.
 fn child_reports(
-    demotion: &rimz::agents::ParkDemotion,
-    agents: &[AgentState],
-    children: &[&AgentState],
+    rows: &[AgentRow<'_>],
     runs: &[rimz::store::run::RunRecord],
     now: jiff::Timestamp,
-) -> Vec<ChildReport> {
-    let mut rows = children
+) -> serde_json::Result<Vec<ChildReport>> {
+    let mut rows = rows
         .iter()
-        .map(|child| (*child, newest_run_for_child(runs, child)))
+        .map(|row| (row, newest_run_for_child(runs, row.agent())))
         .collect::<Vec<_>>();
-    rows.sort_by_key(|(_, run)| match run {
-        Some(run) => (
-            u8::from(run.status.is_terminal()),
-            Some(Reverse(run.answer_started_at())),
-        ),
-        None => (2, None),
+    rows.sort_by_key(|(row, run)| {
+        let registered = (row.agent().registered_at, row.agent().agent_id.clone());
+        match run {
+            Some(run) => (
+                u8::from(run.status.is_terminal()),
+                Some(Reverse(run.answer_started_at())),
+                registered,
+            ),
+            None => (2, None, registered),
+        }
     });
     rows.into_iter()
-        .map(|(child, run)| {
-            let name = child
-                .name
-                .clone()
-                .unwrap_or_else(|| child.agent_id.to_string());
-            ChildReport {
-                handle: format!("@{name}"),
-                name,
-                parent: rimz::address::launched_parent(agents, child)
-                    .map(|parent| peer_handle(agents, parent))
-                    .unwrap_or_else(|| {
-                        format!(
-                            "@{}",
-                            child
-                                .parent_agent_id
-                                .as_ref()
-                                // `children` comes from selectors whose launched-child
-                                // predicate requires a parent id.
-                                .expect("launched children have a parent")
-                        )
-                    }),
+        .map(|(row, run)| {
+            let child = row.agent();
+            Ok(ChildReport {
+                name: child
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| child.agent_id.to_string()),
+                handle: row.handle().to_owned(),
+                parent: row.parent().map(ToOwned::to_owned).unwrap_or_else(|| {
+                    format!(
+                        "@{}",
+                        child
+                            .parent_agent_id
+                            .as_ref()
+                            // `preset_rows` keeps launched children only, and a
+                            // launched child carries a parent id.
+                            .expect("launched children have a parent")
+                    )
+                }),
                 channel: child.lane_name().map(String::from),
                 lane_label: rimz::address::lane_label(child),
                 kind: child.kind.to_string(),
-                status: child.rowless_status(demotion, now).0.as_str().to_owned(),
+                status: row.card().0.as_str().to_owned(),
                 description: child.activity_line(),
-                turn_error_label: child.displayed_turn_error_label(now),
+                turn_error_label: selector::child_card(row.source(), child)
+                    .and_then(|card| card.turn_error_label.clone())
+                    .or_else(|| child.displayed_turn_error_label(now)),
                 turn_error: child
                     .displayed_turn_error(now)
                     .map(|(class, error)| ChildTurnError {
@@ -837,7 +924,8 @@ fn child_reports(
                     };
                     end.duration_since(run.answer_started_at()).as_secs().max(0) as u64
                 }),
-            }
+                row: serde_json::from_value(serde_json::to_value(row)?)?,
+            })
         })
         .collect()
 }
