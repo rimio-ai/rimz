@@ -523,8 +523,10 @@ fn a_session_renders_with_you_or_asking_you_until_session_exit() {
             .output()
             .unwrap(),
     );
-    let ended = settled(&room.env, &id, "done");
-    assert_eq!(ended["record"]["prev_attempt"]["outcome"], "ended");
+    // The provider exited with its permission open, away from rest: the session died, and with
+    // no failure route the run fails.
+    let ended = settled(&room.env, &id, "failed");
+    assert_eq!(ended["record"]["prev_attempt"]["outcome"], "died");
     assert!(ended["record"]["prev_attempt"]["asked"].is_null());
 }
 
