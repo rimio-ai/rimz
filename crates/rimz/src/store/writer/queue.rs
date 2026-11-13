@@ -840,6 +840,40 @@ impl Store {
         })
     }
 
+    /// Stamps `announced_at` on each record that announces to `card` at the
+    /// commit's instant (`MessageRecord::announces_to`) and was never
+    /// announced, and returns every such record announced at or after
+    /// `since`. A second wait of the same caller finds them stamped and
+    /// rewrites nothing; the stamp changes no `updated_at` and logs no event.
+    #[must_use = "durability barrier; check the result"]
+    pub fn queue_announced(
+        &self,
+        card: &crate::agents::AgentState,
+        since: Timestamp,
+        session_name: &str,
+    ) -> Result<Vec<MessageRecord>> {
+        self.commit_queue(|queue| {
+            let now = Timestamp::now();
+            let mut announced = Vec::new();
+            queue.apply_all(session_name, now, |record| {
+                if !record.announces_to(card, now) {
+                    return MessageUpdate::Keep;
+                }
+                let update = if record.announced_at.is_none() {
+                    record.announced_at = Some(now);
+                    MessageUpdate::SilentRewrite
+                } else {
+                    MessageUpdate::Keep
+                };
+                if record.announced_at.is_some_and(|at| at >= since) {
+                    announced.push(record.clone());
+                }
+                update
+            });
+            Ok(announced)
+        })
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn queue_claimed_message(
         &self,

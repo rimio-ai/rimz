@@ -80,6 +80,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `last_sent_at` | Last pane write. Survives a prompt requeue so a late acknowledgement can still settle it |
 | `unconfirmed_sends` | Prompt requeues after a write no hook confirmed |
 | `queued_notice_at` | When the [still-queued notice](#sender-notices) went to the sender. Never cleared on the same message |
+| `announced_at` | When a blocking wait of the receiving agent first stopped on this queued prompt to announce it ([the message stop](../../reference/cli/agents.md#wait)). Never cleared; a requeued copy starts without it |
 | `last_error` | The latest delivery or reconciliation failure, a refused synthetic attempt's verdict, a `NoPane` blocker, or the terminal reason for an archived, expired, tagged idle-canceled, or withdrawn record |
 | `enqueued_at`, `updated_at`, `delivered_at` | Timestamps |
 
@@ -878,16 +879,17 @@ History is audit, so an append failure warns and leaves the queue transition sta
 
 The store reads through `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only). The parked resume monitor instead uses `store::message::read_status` for one id, under the workspace lock, across the live queue and all retained history, without opening or folding a store. It does not use the newest-500 history view, because an older `Delivered` follow-up must keep the reopen hold and not look missing. The monitor caches the result behind the queue file's stamp.
 
-The event log carries twelve methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, `message.expired`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Some transitions rewrite the queue silently, with no event: a claim, a retryable pre-send failure returning a claim to `Queued`, a reconciliation hold, and a sweep that only moves `retry_after` and its blocker. An explicit claim release (`release_message_claims`) does write `message.queued`.
+The event log carries twelve methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, `message.expired`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Some transitions rewrite the queue silently, with no event: a claim, a retryable pre-send failure returning a claim to `Queued`, a reconciliation hold, a sweep that only moves `retry_after` and its blocker, and a blocking wait's `announced_at` stamp. An explicit claim release (`release_message_claims`) does write `message.queued`.
 
 The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body`, `pane_id`, the `forced` flag, sender attribution, `text_len`, both counters, timestamps, the compaction baseline, and an optional `reason`. The reason is set on errors, abandons, cancels, archives, expiries, releases and requeues, timeouts, edits (the changed fields), condition stamps, and mixed-submit deliveries. **Message text never enters the event log**, which is why `message list` merges three sources: live records, history records with text, and terminal rows known only from events.
 
 ### Mixed binaries
 
-A room can be shared by binaries of different versions, and seven record changes have a compatibility edge:
+A room can be shared by binaries of different versions, and eight record changes have a compatibility edge:
 
 - `Expired` is a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries fail the history reads behind `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup. The terminal commit removes the record from the live queue, so older queue transactions never meet the status. Event-log readers keep unknown methods through their catch-all.
 - `queued_notice_at` is dropped by an older binary that rewrites the queue, so a later sweep by a newer binary can send a second still-queued notice. No status or event method marks this.
+- `announced_at` is dropped by an older binary that rewrites the queue, so a wait a newer binary starts after the stop announces the same prompt again. No status or event method marks this.
 - `about_run` is dropped by an older binary that rewrites the queue, so a linked notice can then deliver even after its child run has ended. Records written without a link retain their existing JSON shape.
 - `idle_since` is dropped by an older binary that rewrites the queue, so an idle compaction can then deliver after the agent has taken a turn. Untagged records retain their existing JSON shape.
 - Harness notice strings a binary does not know survive its queue rewrites as `HarnessNotice::Other`.

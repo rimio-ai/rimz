@@ -2,7 +2,9 @@ use super::*;
 
 use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
+use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
 use rimz::agents::TurnCompletion;
+use rimz::message::announce::WaitCaller;
 use rimz::message::turn_wait::{TurnWaitReason, TurnWaitView};
 
 pub(super) fn report_wait_reason(
@@ -80,6 +82,7 @@ pub(in crate::cli) fn wait_agent(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    let caller = WaitCaller::starting_now();
     let mut seen = std::collections::HashSet::new();
     references.retain(|(typed, _)| seen.insert(typed.clone()));
     if stream_output && references.len() > 1 {
@@ -98,38 +101,18 @@ pub(in crate::cli) fn wait_agent(
         let (typed_reference, reference) =
             references.first().context("wait requires a reference")?;
         return wait_stream_request(
-            store,
+            (store, &ctx.workspace.session_name),
             snapshot,
             typed_reference,
             reference,
             current_channel,
             options,
+            caller,
         );
     }
 
     let style = WaitStyle::new(references.len(), any, json);
-    wait_non_stream_request(references, any, timeout, style, globals)
-}
-
-fn wait_non_stream_request(
-    references: Vec<(String, String)>,
-    any: bool,
-    timeout: Option<Duration>,
-    style: WaitStyle,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    let ctx = Ctx::open(globals)?;
-    let snapshot = ctx.cached_snapshot()?;
-    let current_channel = &ctx.address_context();
-    wait_non_stream(
-        &ctx,
-        &snapshot,
-        references,
-        any,
-        timeout,
-        style,
-        current_channel,
-    )
+    wait_non_stream(references, any, timeout, style, globals, caller)
 }
 
 #[derive(Clone, Copy)]
@@ -140,40 +123,51 @@ struct WaitStreamOptions {
 }
 
 fn wait_stream_request(
-    store: &rimz::Store,
+    (store, session_name): (&rimz::Store, &str),
     snapshot: rimz::store::snapshot::SidebarSnapshot,
     typed_reference: &str,
     reference: &str,
     current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
+    caller: WaitCaller,
 ) -> Result<()> {
     match resolve_wait_target(store, &snapshot, reference, reference, current_channel)? {
         WaitTarget::Run { run_id, .. } => {
             let run = rimz::harness::run::load(store.paths(), &run_id)?;
-            wait_run_stream(store, &run, typed_reference, current_channel, options)
+            wait_run_stream(
+                (store, session_name),
+                &run,
+                typed_reference,
+                current_channel,
+                options,
+                caller,
+            )
         }
         WaitTarget::Agent {
             reference, kind, ..
         } => wait_interactive_agent_stream(
-            store,
+            (store, session_name),
             typed_reference,
             &reference,
             &kind,
             current_channel,
             options,
+            caller,
         ),
     }
 }
 
 fn wait_non_stream(
-    ctx: &Ctx,
-    snapshot: &rimz::store::snapshot::SidebarSnapshot,
     references: Vec<(String, String)>,
     any: bool,
     timeout: Option<Duration>,
     style: WaitStyle,
-    current_channel: &rimz::address::AddressContext,
+    globals: &GlobalFlags,
+    caller: WaitCaller,
 ) -> Result<()> {
+    let ctx = &Ctx::open(globals)?;
+    let snapshot = &ctx.cached_snapshot()?;
+    let current_channel = &ctx.address_context();
     let store = &ctx.store;
     let session_name = &ctx.workspace.session_name;
     let targets = references
@@ -186,9 +180,10 @@ fn wait_non_stream(
         targets,
         if any { JoinMode::Any } else { JoinMode::All },
         timeout,
+        caller,
     );
     loop {
-        match waits.poll(store, current_channel)? {
+        match waits.poll(store, session_name, current_channel)? {
             WaitPoll::Pending { settled } => {
                 style.report_progress(store, session_name, &waits, &settled)?;
             }
@@ -205,9 +200,29 @@ fn wait_non_stream(
                 std::process::exit(style.exit_code(&waits, selected)?);
             }
             WaitPoll::TimedOut { settled } => {
-                style.report_timeout(store, session_name, &waits, &settled)?;
+                style.report_unfinished(
+                    store,
+                    session_name,
+                    &waits,
+                    &settled,
+                    Unfinished::TimedOut,
+                )?;
                 render::err().flush()?;
-                std::process::exit(RunStatus::TimedOut.exit_code());
+                std::process::exit(Unfinished::TimedOut.exit_code());
+            }
+            WaitPoll::Announced {
+                settled,
+                announcement,
+            } => {
+                style.report_unfinished(
+                    store,
+                    session_name,
+                    &waits,
+                    &settled,
+                    Unfinished::Running,
+                )?;
+                write_message_stop(&mut render::err(), &announcement)?;
+                std::process::exit(Unfinished::Running.exit_code());
             }
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -310,25 +325,28 @@ impl WaitStyle {
         }
     }
 
-    fn report_timeout(
+    /// The ending of a wait that stops with targets unfinished: at its
+    /// deadline, or on a message queued for its caller.
+    fn report_unfinished(
         self,
         store: &rimz::Store,
         session_name: &str,
         waits: &WaitSet,
         settled: &[usize],
+        ending: Unfinished,
     ) -> Result<()> {
         match self {
-            Self::Single { json: true } => print_timeout_json(waits),
-            Self::Single { json: false } => print_pending_timeouts(waits),
+            Self::Single { json: true } => print_unfinished_json(waits, ending),
+            Self::Single { json: false } => print_unfinished_headers(waits, ending),
             Self::Any { json } | Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if json {
                     mark_joined(store, session_name, waits.outcomes.iter().flatten());
-                    print_timeout_json(waits)
+                    print_unfinished_json(waits, ending)
                 } else {
                     mark_settled_joined(store, session_name, waits, settled)?;
                     print_settled_blocks(waits, settled)?;
-                    print_pending_timeouts(waits)
+                    print_unfinished_headers(waits, ending)
                 }
             }
         }
@@ -442,12 +460,12 @@ impl WaitTarget {
         }
     }
 
-    fn timeout_entry(&self) -> WaitEntryJson {
+    fn unfinished_entry(&self, ending: Unfinished) -> WaitEntryJson {
         let (name, reason) = match self {
             Self::Run { name, reason, .. } | Self::Agent { name, reason, .. } => (name, reason),
         };
-        let mut entry =
-            WaitEntryJson::new(name.clone(), RunStatus::TimedOut, None, None, None, None);
+        let mut entry = WaitEntryJson::new(name.clone(), ending.status(), None, None, None, None);
+        entry.exit = ending.exit_code();
         entry.reason = reason
             .as_ref()
             .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()));
@@ -783,6 +801,7 @@ struct WaitSet {
     outcomes: Vec<Option<TargetOutcome>>,
     deadline: Option<Instant>,
     mode: JoinMode,
+    caller: WaitCaller,
 }
 
 enum WaitPoll {
@@ -796,10 +815,43 @@ enum WaitPoll {
     TimedOut {
         settled: Vec<usize>,
     },
+    Announced {
+        settled: Vec<usize>,
+        announcement: rimz::message::announce::Announcement,
+    },
+}
+
+/// How a wait that stops with targets unfinished reports them.
+#[derive(Clone, Copy)]
+enum Unfinished {
+    TimedOut,
+    /// Stopped on a message queued for the caller; the targets run on.
+    Running,
+}
+
+impl Unfinished {
+    const fn status(self) -> RunStatus {
+        match self {
+            Self::TimedOut => RunStatus::TimedOut,
+            Self::Running => RunStatus::Running,
+        }
+    }
+
+    const fn exit_code(self) -> i32 {
+        match self {
+            Self::TimedOut => RunStatus::TimedOut.exit_code(),
+            Self::Running => MESSAGE_STOP_EXIT,
+        }
+    }
 }
 
 impl WaitSet {
-    fn new(targets: Vec<WaitTarget>, mode: JoinMode, timeout: Option<Duration>) -> Self {
+    fn new(
+        targets: Vec<WaitTarget>,
+        mode: JoinMode,
+        timeout: Option<Duration>,
+        caller: WaitCaller,
+    ) -> Self {
         let outcomes = std::iter::repeat_with(|| None)
             .take(targets.len())
             .collect();
@@ -808,12 +860,14 @@ impl WaitSet {
             outcomes,
             deadline: timeout.map(|duration| Instant::now() + duration),
             mode,
+            caller,
         }
     }
 
     fn poll(
         &mut self,
         store: &rimz::Store,
+        session_name: &str,
         current_channel: &rimz::address::AddressContext,
     ) -> Result<WaitPoll> {
         let pending_agent = self
@@ -860,6 +914,12 @@ impl WaitSet {
             return Ok(WaitPoll::Settled {
                 selected: 0,
                 settled,
+            });
+        }
+        if let Some(announcement) = self.caller.queued(store, session_name) {
+            return Ok(WaitPoll::Announced {
+                settled,
+                announcement,
             });
         }
         if self
@@ -1010,59 +1070,63 @@ fn print_settled_blocks(waits: &WaitSet, settled: &[usize]) -> Result<()> {
     Ok(())
 }
 
-fn print_pending_timeouts(waits: &WaitSet) -> Result<()> {
+fn print_unfinished_headers(waits: &WaitSet, ending: Unfinished) -> Result<()> {
     let mut err = render::err();
     for (target, outcome) in waits.targets.iter().zip(&waits.outcomes) {
         if outcome.is_none() {
-            write_timeout_header(
+            write_unfinished_header(
                 &mut err,
                 target.typed_reference(),
-                target.timeout_entry().reason,
+                target.unfinished_entry(ending).reason,
+                ending,
             )?;
         }
     }
     Ok(())
 }
 
-fn write_timeout_header(
+fn write_unfinished_header(
     err: &mut impl Write,
     reference: &str,
     reason: Option<String>,
+    ending: Unfinished,
 ) -> Result<()> {
+    let status = ending.status();
     let label = reason.map_or_else(
-        || "timed out".to_owned(),
-        |reason| format!("timed out: {reason}"),
+        || status.label().to_owned(),
+        |reason| format!("{}: {reason}", status.label()),
     );
     writeln!(
         err,
         "--- {} ({}) ---",
         render::paint(render::palette::body(), reference),
-        render::paint(render::status::run(RunStatus::TimedOut), &label),
+        render::paint(render::status::run(status), &label),
     )?;
     err.flush()?;
     Ok(())
 }
 
-fn print_timeout_json(waits: &WaitSet) -> Result<()> {
+fn print_unfinished_json(waits: &WaitSet, ending: Unfinished) -> Result<()> {
     let entries = waits
         .targets
         .iter()
         .zip(&waits.outcomes)
         .map(|(target, outcome)| match outcome {
             Some(outcome) => (outcome.reference.as_str(), outcome.entry()),
-            None => (target.typed_reference(), target.timeout_entry()),
+            None => (target.typed_reference(), target.unfinished_entry(ending)),
         })
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
 }
 
 fn wait_interactive_agent_stream(
-    store: &rimz::Store,
+    (store, session_name): (&rimz::Store, &str),
     typed_reference: &str,
     reference: &str,
     kind: &rimz::ids::AgentKind,
     current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
+    mut caller: WaitCaller,
 ) -> Result<()> {
     let adapter = rimz::agents::find_definition(kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
@@ -1112,17 +1176,17 @@ fn wait_interactive_agent_stream(
             }
             TurnCompletion::Open => {}
         }
+        if let Some(announcement) = caller.queued(store, session_name) {
+            stop_stream(typed_reference, reason.as_ref(), Unfinished::Running)?;
+            write_message_stop(&mut render::err(), &announcement)?;
+            std::process::exit(Unfinished::Running.exit_code());
+        }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             if sink.is_text() {
                 sink.timeout()?;
             }
-            if let Some(text) = reason
-                .as_ref()
-                .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()))
-            {
-                write_timeout_header(&mut render::err(), typed_reference, Some(text))?;
-            }
-            std::process::exit(RunStatus::TimedOut.exit_code());
+            stop_stream(typed_reference, reason.as_ref(), Unfinished::TimedOut)?;
+            std::process::exit(Unfinished::TimedOut.exit_code());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -1142,12 +1206,27 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
     }
 }
 
+/// The header a stream that stops unfinished prints, when the target has a
+/// reason it has not finished.
+fn stop_stream(
+    typed_reference: &str,
+    reason: Option<&TurnWaitReason>,
+    ending: Unfinished,
+) -> Result<()> {
+    let Some(text) = reason.and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()))
+    else {
+        return Ok(());
+    };
+    write_unfinished_header(&mut render::err(), typed_reference, Some(text), ending)
+}
+
 fn wait_run_stream(
-    store: &rimz::Store,
+    (store, session_name): (&rimz::Store, &str),
     run: &RunRecord,
     typed_reference: &str,
     current_channel: &rimz::address::AddressContext,
     options: WaitStreamOptions,
+    mut caller: WaitCaller,
 ) -> Result<()> {
     let adapter = rimz::agents::find_definition(run.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
@@ -1165,7 +1244,8 @@ fn wait_run_stream(
         )
     };
     let mut reason = None;
-    match supervised::stream::stream_attached_run(
+    let mut announcement = None;
+    let end = supervised::stream::stream_attached_run(
         store,
         &run.run_id,
         adapter,
@@ -1174,21 +1254,32 @@ fn wait_run_stream(
         &mut sink,
         |record| {
             if let Ok(view) = TurnWaitView::load(store) {
-                return report_run_wait_reason(&view, record, current_channel, &mut reason);
+                report_run_wait_reason(&view, record, current_channel, &mut reason)?;
+            } else {
+                reason = None;
             }
-            reason = None;
-            Ok(())
+            announcement = caller.queued(store, session_name);
+            Ok(if announcement.is_some() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            })
         },
-    )? {
-        Some(record) => std::process::exit(record.status.exit_code()),
-        None => {
-            if let Some(text) = reason
-                .as_ref()
-                .and_then(|reason| wait_reason_text(reason, jiff::Timestamp::now()))
-            {
-                write_timeout_header(&mut render::err(), typed_reference, Some(text))?;
+    )?;
+    match end {
+        supervised::stream::AttachedEnd::Terminal(record) => {
+            std::process::exit(record.status.exit_code())
+        }
+        supervised::stream::AttachedEnd::TimedOut => {
+            stop_stream(typed_reference, reason.as_ref(), Unfinished::TimedOut)?;
+            std::process::exit(Unfinished::TimedOut.exit_code());
+        }
+        supervised::stream::AttachedEnd::Stopped => {
+            stop_stream(typed_reference, reason.as_ref(), Unfinished::Running)?;
+            if let Some(announcement) = &announcement {
+                write_message_stop(&mut render::err(), announcement)?;
             }
-            std::process::exit(RunStatus::TimedOut.exit_code());
+            std::process::exit(Unfinished::Running.exit_code());
         }
     }
 }

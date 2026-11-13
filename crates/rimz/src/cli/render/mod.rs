@@ -8,6 +8,7 @@
 //! `writeln!`, not the `print!` macros, matching the `print_json` stdout path —
 //! the `print_stdout` lint still guards the protocol surface.
 
+pub(crate) mod announce;
 pub(crate) mod diff;
 pub(super) mod launch_suggestions;
 pub(crate) mod palette;

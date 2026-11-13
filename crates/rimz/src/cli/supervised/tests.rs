@@ -833,11 +833,11 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
         false,
         Some(Duration::ZERO),
         &mut sink,
-        |_| Ok(()),
+        |_| Ok(std::ops::ControlFlow::Continue(())),
     )
     .unwrap();
 
-    assert_eq!(outcome, None);
+    assert_eq!(outcome, stream::AttachedEnd::TimedOut);
     assert_eq!(
         rimz::harness::run::load(&fixture.paths, &run_id)
             .unwrap()
@@ -845,6 +845,26 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
         RunStatus::Running
     );
     assert!(String::from_utf8(err).unwrap().contains("wait timed out"));
+
+    let mut err = Vec::new();
+    let mut sink = output::StreamSink::text(
+        &mut out,
+        &mut err,
+        crate::cli::render::prose::Prose::Raw,
+        100,
+    );
+    let stopped = stream_attached_run(
+        &fixture.store,
+        &run_id,
+        rimz::agents::definition_by_kind("codex").unwrap(),
+        false,
+        Some(Duration::ZERO),
+        &mut sink,
+        |_| Ok(std::ops::ControlFlow::Break(())),
+    )
+    .unwrap();
+    assert_eq!(stopped, stream::AttachedEnd::Stopped);
+    assert!(err.is_empty(), "{}", String::from_utf8_lossy(&err));
 }
 
 #[test]

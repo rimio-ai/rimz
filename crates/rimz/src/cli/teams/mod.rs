@@ -354,7 +354,8 @@ struct WaitArgs {
     /// Return when the first cohort settles instead of all of them.
     #[arg(long)]
     any: bool,
-    /// Give up after this long, exiting 124 and leaving the cohorts running.
+    /// Give up after this long, exiting 124 and leaving the cohorts running. An agent's
+    /// wait also exits 75 when a prompt for it is queued.
     #[arg(long, value_name = "DURATION", value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<std::time::Duration>,
     /// Emit the outcome as JSON.

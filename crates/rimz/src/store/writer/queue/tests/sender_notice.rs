@@ -521,3 +521,40 @@ fn an_unmet_after_on_an_ended_agent_archives_and_tells_its_sender() {
     );
     assert_notice(&q, &original, "archived");
 }
+
+#[test]
+fn announced_stamp_commits_once_and_only_on_queued_records() {
+    let q = Queue::new();
+    let older = q.queue_with(1, |record| {
+        record.announced_at = Some(Timestamp::now() - jiff::SignedDuration::from_secs(60));
+    });
+    let fresh = q.queue_with(2, |_| {});
+    let claimed = q.queue_with(3, |record| record.status = MessageStatus::Claimed);
+    let not_due = q.queue_with(4, |record| {
+        record.not_before = Some(Timestamp::now() + jiff::SignedDuration::from_secs(3600));
+    });
+    let since = Timestamp::now() - jiff::SignedDuration::from_secs(1);
+    let events = serde_json::to_value(q.events()).unwrap();
+
+    let announced = q.queue_announced(&agent(), since, "session").unwrap();
+    assert_eq!(announced.len(), 1, "{announced:?}");
+    assert_eq!(announced[0].message_id, fresh.message_id);
+    let stamped = q.by_id(&fresh.message_id);
+    let stamp = stamped.announced_at.expect("fresh record stamped");
+    assert!(stamp >= since);
+    assert_eq!(stamped.updated_at, fresh.updated_at);
+    assert_eq!(q.by_id(&older.message_id), older);
+    assert_eq!(q.by_id(&claimed.message_id).announced_at, None);
+    assert_eq!(
+        q.by_id(&not_due.message_id),
+        not_due,
+        "a record not yet due"
+    );
+    assert_eq!(serde_json::to_value(q.events()).unwrap(), events);
+
+    let live = q.live();
+    let again = q.queue_announced(&agent(), since, "session").unwrap();
+    assert_eq!(again, vec![stamped]);
+    assert_eq!(q.live(), live);
+    assert_eq!(serde_json::to_value(q.events()).unwrap(), events);
+}

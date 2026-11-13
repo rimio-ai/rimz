@@ -35,6 +35,9 @@ mod command_cells;
 #[path = "run/late_wait.rs"]
 mod late_wait;
 
+#[path = "run/message_stop.rs"]
+mod message_stop;
+
 #[test]
 fn run_record_json_shape_is_pinned() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace id");
@@ -8302,6 +8305,9 @@ fn assert_run_wait_ignores_reason_read_error(stream: bool) {
     env.record(&env.project_root);
     let store = env.store();
     let mut record = create_running_named_run(&env, &store, "quiet-fox");
+    // Run as an agent, so the wait's queued-message check meets the read
+    // error too and skips its poll rather than failing the wait.
+    crate::common::wait::register_calling_agent(&env);
     std::fs::create_dir_all(&store.paths().messages_dir).unwrap();
     std::fs::write(
         store.paths().messages_dir.join("messages.jsonl"),
@@ -8311,7 +8317,7 @@ fn assert_run_wait_ignores_reason_read_error(stream: bool) {
     assert!(store.list_messages().is_err());
     for status in [RunStatus::Running, RunStatus::Completed] {
         write_run_status(&store, &mut record, status);
-        let mut command = env.rimz();
+        let mut command = crate::common::wait::agent_wait(&env);
         command.args([
             "agents",
             "wait",
