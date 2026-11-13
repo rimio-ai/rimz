@@ -5,9 +5,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use jiff::Timestamp;
 use rimz::agents::single_line_description;
-use rimz::harness::notes::{self, AddRequest, ListFilter, NotesErr};
+use rimz::harness::notes::{self, AddRequest, ListRequest, NotesErr};
 
 use super::render::{self, Table, cell, palette};
 use super::usage::UsageError;
@@ -37,20 +36,17 @@ enum NotesSubcmd {
         #[arg(long, value_name = "KEY=VALUE")]
         meta: Vec<String>,
     },
-    /// List notes by write time, oldest first.
+    /// List the newest matching notes by write time, oldest first.
     List {
-        /// Keep notes of this kind.
-        #[arg(long)]
-        kind: Option<String>,
-        /// Keep notes written at or after this RFC 3339 instant.
-        #[arg(long, value_name = "INSTANT")]
-        since: Option<Timestamp>,
-        /// Keep notes whose author is this agent instance name.
-        #[arg(long)]
-        author: Option<String>,
-        /// Keep notes written from this project root.
-        #[arg(long, value_name = "PATH")]
-        project: Option<PathBuf>,
+        /// Keep notes matching `field=value` terms; repeatable, `--filter help` lists fields.
+        #[arg(long = "filter", value_name = "QUERY")]
+        filters: Vec<String>,
+        /// Print one absolute path per listed note and nothing else.
+        #[arg(short = 'q', long, conflicts_with = "json")]
+        quiet: bool,
+        /// Show the newest N matches; 0 shows every match.
+        #[arg(short = 'n', long, value_name = "N", default_value_t = 20)]
+        limit: usize,
         /// Print a JSON array instead of the table.
         #[arg(long)]
         json: bool,
@@ -77,20 +73,11 @@ pub fn run(args: NotesArgs, globals: &super::GlobalFlags) -> Result<()> {
             file,
         ),
         NotesSubcmd::List {
-            kind,
-            since,
-            author,
-            project,
+            filters,
+            quiet,
+            limit,
             json,
-        } => list(
-            ListFilter {
-                kind,
-                since,
-                author,
-                project,
-            },
-            json,
-        ),
+        } => list(ListRequest { filters, limit }, json, quiet),
     }
 }
 
@@ -124,19 +111,42 @@ fn add(mut request: AddRequest, file: Option<PathBuf>) -> Result<()> {
     render::finish(writeln!(std::io::stdout(), "{}", added.path.display()))
 }
 
-fn list(filter: ListFilter, json: bool) -> Result<()> {
-    let listing = notes::list(&filter).map_err(usage_or_error)?;
+fn list(request: ListRequest, json: bool, quiet: bool) -> Result<()> {
+    if request.filters.iter().any(|filter| filter.trim() == "help") {
+        return render::finish(render_filter_help(&mut render::out()));
+    }
+    let listing = notes::list(&request).map_err(usage_or_error)?;
     let mut stderr = render::err();
+    let warning = render::paint(palette::warn().bold(), "warning:");
     for (path, reason) in &listing.skipped {
+        let _ = writeln!(stderr, "{warning} skipped {}: {reason}", path.display());
+    }
+    for key in &listing.unknown_keys {
         let _ = writeln!(
             stderr,
-            "{} skipped {}: {reason}",
-            render::paint(palette::warn().bold(), "warning:"),
-            path.display()
+            "{warning} no note carries the key `{key}`, so nothing matches"
         );
     }
-    if json {
-        return render::json_pretty(&listing.notes);
+    let hidden = (listing.hidden > 0).then(|| {
+        let unit = if listing.hidden == 1 { "note" } else { "notes" };
+        format!(
+            "{} older {unit} not shown; pass -n to see more",
+            listing.hidden
+        )
+    });
+    if json || quiet {
+        if json {
+            render::json_pretty(&listing.notes)?;
+        } else {
+            let mut out = render::out();
+            for note in &listing.notes {
+                render::finish(writeln!(out, "{}", note.path.display()))?;
+            }
+        }
+        if let Some(hidden) = hidden {
+            let _ = writeln!(stderr, "{hidden}");
+        }
+        return Ok(());
     }
     let mut table = Table::new(["WRITTEN", "KIND", "AUTHOR", "TITLE", "PATH"]);
     for note in &listing.notes {
@@ -155,15 +165,51 @@ fn list(filter: ListFilter, json: bool) -> Result<()> {
             cell(note.path.display().to_string()),
         ]);
     }
-    render::finish(table.render(&mut render::out()))
+    let mut out = render::out();
+    render::finish(table.render(&mut out))?;
+    match hidden {
+        Some(hidden) => render::finish(writeln!(out, "{hidden}")),
+        None => Ok(()),
+    }
+}
+
+/// `--filter help`: every field a note filter names, then the grammar in brief.
+fn render_filter_help(w: &mut impl Write) -> std::io::Result<()> {
+    let mut table = Table::new(["FIELD", "TYPE", "VALUES"]);
+    for key in notes::RIMZ_KEYS.into_iter().chain(["age"]) {
+        let (kind, values) = match key {
+            "kind" => ("text", "a kind as add slugs it, * wildcard"),
+            "title" => ("text", "words in any case, * wildcard"),
+            "written" => ("instant", "RFC 3339, such as 2026-11-12T09:00:00Z"),
+            "author" => ("text", "an agent name, @ optional, * wildcard"),
+            "project" => ("path", "a project root, * wildcard"),
+            "age" => ("duration", "30s, 5m, 1h, 2d"),
+            _ => ("text", "words, * wildcard"),
+        };
+        table.row([cell(key), cell(kind), cell(values)]);
+    }
+    table.render(w)?;
+    writeln!(w)?;
+    for line in [
+        "term: <field><op><value>[,<value>...]; ops: = != and, on age and written, > >= < <=",
+        "every term and every --filter must match; under = any value matches, under != none may",
+        "none matches a missing value and * any present one; quote a value holding spaces or commas",
+        "any other field is a --meta key, matched as written; a key no note carries matches nothing",
+    ] {
+        writeln!(w, "{line}")?;
+    }
+    Ok(())
 }
 
 /// Input the command line got wrong exits 2; everything else is a failure.
 fn usage_or_error(error: NotesErr) -> anyhow::Error {
     match error {
-        NotesErr::NoSlug { .. } | NotesErr::BadMeta { .. } | NotesErr::HeaderTooLarge { .. } => {
-            UsageError::new(error.to_string()).into()
-        }
+        NotesErr::NoSlug { .. }
+        | NotesErr::BadMeta { .. }
+        | NotesErr::HeaderTooLarge { .. }
+        | NotesErr::EmptyFilter
+        | NotesErr::Term(_)
+        | NotesErr::BadTerm { .. } => UsageError::new(error.to_string()).into(),
         error => error.into(),
     }
 }

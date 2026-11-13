@@ -34,7 +34,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [hooks-trust.md](./cli/hooks-trust.md) | `rimz hooks` and `rimz trust`: installing and removing agent hooks, granting or revoking project trust, and agent folder trust. |
 | [config.md](./cli/config.md) | `rimz config`, `list-themes`, and `list-pets`: the config files, `init`, `path`, `get`, `set` value parsing and refusals, and the theme and pet pickers. |
 | [packs.md](./cli/packs.md) | `rimz packs`: Git and linked sources, install review and confirmation, updates, listing and showing packs, exclusions, customized overrides, the manifest, the installation record, and exit codes. |
-| [notes.md](./cli/notes.md) | `rimz notes`: saving a Markdown note from stdin or a file, the store layout, the header RimZ stamps, slugs and numbered names, listing by kind, time, author, and project, and the JSON shape. |
+| [notes.md](./cli/notes.md) | `rimz notes`: saving a Markdown note from stdin or a file, the store layout, the header RimZ stamps, slugs and numbered names, listing the newest matches through `--filter` over every header key and the note's age, paths alone with `-q`, and the JSON shape. |
 | [paths.md](./cli/paths.md) | `rimz paths`: the RimZ home, the room's state and runtime directories, and every account-global directory, as a table or JSON. |
 | [maintenance.md](./cli/maintenance.md) | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, and `ping`: checking adapter coverage, resolving and moving a store, rotating the event log, upgrading, repairing and resetting a room, sweeping stale state, and removing RimZ. |
 
