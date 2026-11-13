@@ -82,7 +82,8 @@ When the local base branch tracks an upstream and is behind it, creation succeed
 | --- | --- |
 | ``cannot create a worktree: MESSAGE; correct PATH, then retry; `rimz config get` shows the strict error`` | The per-machine `config.toml` cannot be read. |
 | ``invalid worktree name `NAME`; ...`` | The name breaks the [name rules](#names-and-paths). |
-| ``channel `NAME` is held by live agents; pick another name, or stop them with `rimz agents stop` `` | Live agents launched with `--channel NAME` hold the name you passed. |
+| `` `main` is the project checkout's lane; pick another worktree name `` | The name is `main`, the project root's own lane. |
+| ``channel `NAME` is held by live agents; pick another name, or stop them with `rimz agents stop` `` | Live agents launched with `--channel NAME`, or a team running in place at the project root under that name, hold the name you passed. A worktree named after the project directory is an ordinary name. |
 | ``agents.worktree.hooks.EVENT cannot be empty; set a command or remove the key`` | A `created` or `removed` hook is set to a blank command. `remove` and `sweep` refuse the same way. |
 | ``worktree `NAME` already exists at PATH`` | The directory exists, marked or not. A launch with `-w NAME` reuses a marked tree instead. |
 | `git command failed in ROOT: git rev-parse --verify ...` | `--base` names no commit. |

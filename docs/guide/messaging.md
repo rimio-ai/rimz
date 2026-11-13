@@ -46,8 +46,8 @@ A channel is never created or removed on its own: it is derived from what backs 
 
 - **A Git worktree.** Every agent working an isolated worktree shares that channel, named for the worktree ([worktrees guide](./worktrees.md)).
 - **An explicit `--channel`.** A launch with `--channel design` puts its agents in `#design`, a lane with no branch and no directory behind it. It lasts while agents run in it.
-- **A team in place.** A named team launched at the room root gets a channel of its own, `<dir>/<team>`.
-- **The checkout.** Agents with no other channel take their checkout's own lane: `#main` anywhere under the project root, a worktree's lane anywhere inside it, and a group of its own for a directory outside both. The project's directory name remains accepted as an alias for `#main`.
+- **A team in place.** A named team launched at the room root gets a channel of its own, named after the team: `rimz teams forge` at the root runs in `#forge` ([teams guide](./teams.md)).
+- **The checkout.** Agents with no other channel take their checkout's own lane: `#main` anywhere under the project root, a worktree's lane anywhere inside it, and a group of its own for a directory outside both. `#main` is the root's only name: the project's directory name is an ordinary channel name and does not reach the root's agents.
 
 An agent's channel is decided once, when it launches, and it keeps it through restarts, forks, and resumes. A child launched without flags joins its parent's channel; launched into another checkout with `--cwd`, it joins that checkout's lane instead.
 
