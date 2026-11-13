@@ -383,7 +383,7 @@ fn seed_run(room: &Room, run: RunRecord) {
 }
 
 #[test]
-fn a_newer_run_in_progress_holds_back_only_the_failure_it_follows() {
+fn a_run_in_progress_holds_back_only_the_failure_it_follows() {
     let name = "retried-check";
     let failed_at = Timestamp::now() - jiff::SignedDuration::from_mins(5);
     let mut failed = super::super::run_log::LoopRunRecord::new(
@@ -486,7 +486,7 @@ fn a_newer_run_in_progress_holds_back_only_the_failure_it_follows() {
 }
 
 #[test]
-fn the_newer_run_executes_only_without_a_wait() {
+fn a_run_in_progress_is_the_lock_or_an_active_run_after_the_acting_result() {
     let root = Path::new("/repo");
     let acting_at = Timestamp::now() - jiff::SignedDuration::from_mins(5);
     let after = |minutes| acting_at + jiff::SignedDuration::from_mins(minutes);
@@ -495,9 +495,12 @@ fn the_newer_run_executes_only_without_a_wait() {
         run_record("task", root, "active", after(3)),
         run_record("task", root, "active", after(2)),
     ];
+    let read = |lock: Option<u32>, runs: &[RunRecord], acting_at| {
+        run_in_progress(lock, runs, "task", root, acting_at)
+    };
     assert_eq!(
-        newer_run_in_progress(std::slice::from_ref(&waiting), "task", root, acting_at),
-        Some(NewerRun {
+        read(None, std::slice::from_ref(&waiting), Some(acting_at)),
+        Some(InProgress::Run {
             since: after(1),
             executing: false,
         }),
@@ -505,12 +508,47 @@ fn the_newer_run_executes_only_without_a_wait() {
     );
     let runs = [&[waiting][..], &executing[..]].concat();
     assert_eq!(
-        newer_run_in_progress(&runs, "task", root, acting_at),
-        Some(NewerRun {
+        read(None, &runs, Some(acting_at)),
+        Some(InProgress::Run {
             since: after(2),
             executing: true,
         }),
         "the earliest executing run outranks a waiting one"
     );
-    assert_eq!(newer_run_in_progress(&runs, "task", root, after(3)), None);
+    assert_eq!(read(None, &runs, Some(after(3))), None);
+    assert_eq!(
+        read(Some(7), &[], Some(after(3))),
+        Some(InProgress::Locked(7)),
+        "the held run lock is a run in progress, with or without a run record"
+    );
+    assert_eq!(read(Some(7), &runs, None), Some(InProgress::Locked(7)));
+    // With no acting result (a first fire), every active run of the task counts, and the
+    // exclusions that need no cutoff still hold.
+    let first = [
+        run_record("task", root, "parked", after(-9)),
+        run_record("other-task", root, "active", after(-9)),
+        run_record("task", Path::new("/elsewhere"), "active", after(-9)),
+        run_record("task", root, "active", after(-8)),
+    ];
+    assert_eq!(
+        read(None, &first, None),
+        Some(InProgress::Run {
+            since: after(-8),
+            executing: true,
+        }),
+        "a first fire's run reads in progress"
+    );
+    assert_eq!(
+        read(None, &first[..3], None),
+        None,
+        "parked, foreign, elsewhere"
+    );
+    assert!(InProgress::<u32>::Locked(7).executing());
+    assert!(
+        !InProgress::<u32>::Run {
+            since: acting_at,
+            executing: false
+        }
+        .executing()
+    );
 }

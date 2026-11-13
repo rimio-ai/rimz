@@ -3,7 +3,7 @@
 use super::*;
 use crate::cli::wake_view::checkout_name;
 use rimz::config::WatchSpec;
-use rimz::harness::schedule::attention::{self, Attention};
+use rimz::harness::schedule::attention::{self, Attention, InProgress};
 use rimz::harness::schedule::{TaskKind, Trigger, launch_ledger, signal::watcher_info};
 use serde::Serialize;
 
@@ -390,13 +390,10 @@ pub(super) struct TaskRow {
     task: Option<LoadedTask>,
     #[serde(skip)]
     timing: Option<schedule::TaskTiming>,
+    /// The task's run in progress, by [`attention::run_in_progress`]: it holds back a failure,
+    /// and reads as running while the lock is held or the run executes.
     #[serde(skip)]
-    running: Option<Option<RunLockInfo>>,
-    /// A run of the task in progress after its acting fire, by
-    /// [`attention::newer_run_in_progress`]: it holds back a failure, and reads as running when
-    /// it executes while no run lock is held.
-    #[serde(skip)]
-    newer_run: Option<attention::NewerRun>,
+    in_progress: Option<InProgress<Option<RunLockInfo>>>,
     #[serde(skip)]
     held: Vec<Held>,
     #[serde(skip)]
@@ -688,7 +685,7 @@ fn load(
             for (name, holder) in locks.rowless(&names) {
                 let history = stats.get(&name);
                 let held = tickets.remove(&name).unwrap_or_default();
-                let mut row = TaskRow::rowless(name, holder, history);
+                let mut row = TaskRow::rowless(name, InProgress::Locked(holder), history);
                 row.held = held;
                 let (attention, reason) = attention(&row, 0, now);
                 if attention.is_some() {
@@ -699,27 +696,36 @@ fn load(
                 tasks.push(row);
             }
         }
-        let retired = stats
-            .iter()
-            .filter_map(|(name, stats)| {
-                if tasks.iter().any(|row| &row.name == name)
-                    || stats.last_kind.map(|(_, kind)| kind) != Some(TaskKind::OneOff)
-                {
-                    return None;
-                }
-                let last = stats.last.as_ref()?;
-                Some(Retired {
-                    name: name.clone(),
-                    at: last.at,
-                    result: last.result,
-                    checkout: last.checkout.clone(),
-                    worktree_here: here
-                        && workspace.is_some_and(|workspace| {
-                            last.checkout.as_ref() == Some(&workspace.worktree_root)
-                        }),
-                })
-            })
-            .collect();
+        let mut retired = Vec::new();
+        for (name, stats) in stats.iter() {
+            if tasks.iter().any(|row| &row.name == name)
+                || stats.last_kind.map(|(_, kind)| kind) != Some(TaskKind::OneOff)
+            {
+                continue;
+            }
+            let Some(last) = stats.last.as_ref() else {
+                continue;
+            };
+            let acting_at = stats.acting.as_ref().map(|acting| acting.record.at);
+            // A consumed one-shot whose run still executes is a run in progress, as under its
+            // lock.
+            if let Some(run) = attention::run_in_progress(None, &workflows, name, &root, acting_at)
+                .filter(InProgress::executing)
+            {
+                tasks.push(TaskRow::rowless(name.clone(), run, Some(stats)));
+                continue;
+            }
+            retired.push(Retired {
+                name: name.clone(),
+                at: last.at,
+                result: last.result,
+                checkout: last.checkout.clone(),
+                worktree_here: here
+                    && workspace.is_some_and(|workspace| {
+                        last.checkout.as_ref() == Some(&workspace.worktree_root)
+                    }),
+            });
+        }
         rooms.push(Room {
             root,
             open,
@@ -784,20 +790,14 @@ impl TaskRow {
             now,
         } = context;
         let entry = task.entry();
-        let newer_run = stats
+        let acting_at = stats
             .and_then(|stats| stats.acting.as_ref())
-            .filter(|acting| since_wait_armed(Some(task), acting.record.at))
-            .and_then(|acting| {
-                attention::newer_run_in_progress(runs, name, root, acting.record.at)
-            });
-        // The run lock's holder decides; without one, an executing newer run reads running.
-        let running_since = match running {
-            Some(holder) => holder.map(|holder| holder.started_at),
-            None => newer_run.filter(|run| run.executing).map(|run| run.since),
-        };
+            .map(|acting| acting.record.at)
+            .filter(|at| since_wait_armed(Some(task), *at));
+        let in_progress = attention::run_in_progress(running, runs, name, root, acting_at);
         let state = TaskState::observe(
             &timing,
-            running.is_some() || running_since.is_some(),
+            in_progress.as_ref().is_some_and(InProgress::executing),
             clocks_kept,
         );
         let (head, continuation) = trigger_text(entry, run_dir, &timing, state, now);
@@ -843,7 +843,7 @@ impl TaskRow {
             you: false,
             booked_by: entry.booked_by.clone(),
             next_at: timing.next_timestamp(),
-            running_since,
+            running_since: running_since(in_progress.as_ref()),
             last: None,
             heard: None,
             newest: None,
@@ -860,8 +860,7 @@ impl TaskRow {
             reason: String::new(),
             task: Some(task.clone()),
             timing: Some(timing),
-            running,
-            newer_run,
+            in_progress,
             held: Vec::new(),
             worktree_here: false,
             watcher_pid,
@@ -948,9 +947,11 @@ impl TaskRow {
         Some(attention::parked_words(first.summary(now), more))
     }
 
+    /// A row for a run in progress no catalog row claims: a held run lock, or a consumed
+    /// one-shot's executing run.
     fn rowless(
         name: String,
-        holder: Option<RunLockInfo>,
+        in_progress: InProgress<Option<RunLockInfo>>,
         stats: Option<&run_log::LoopRunStats>,
     ) -> Self {
         let held = Vec::new();
@@ -971,7 +972,7 @@ impl TaskRow {
             you: false,
             booked_by: Vec::new(),
             next_at: None,
-            running_since: holder.map(|holder| holder.started_at),
+            running_since: running_since(Some(&in_progress)),
             last: None,
             heard: None,
             newest: None,
@@ -984,8 +985,7 @@ impl TaskRow {
             reason: String::new(),
             task: None,
             timing: None,
-            running: Some(holder),
-            newer_run: None,
+            in_progress: Some(in_progress),
             held,
             worktree_here: false,
             watcher_pid: None,
@@ -1026,7 +1026,7 @@ impl TaskRow {
         let count = self.self_clearing_count();
         if self.state == TaskState::Running {
             return render::in_flight_text(
-                self.running.flatten(),
+                self.holder(),
                 self.running_since,
                 &self.held,
                 count,
@@ -1057,6 +1057,14 @@ impl TaskRow {
         }
     }
 
+    /// The held run lock's holder, when the lock is held and names one.
+    fn holder(&self) -> Option<RunLockInfo> {
+        match self.in_progress {
+            Some(InProgress::Locked(holder)) => holder,
+            _ => None,
+        }
+    }
+
     fn held_starts(&self) -> impl Iterator<Item = CapacityStart> + '_ {
         self.capacity
             .iter()
@@ -1075,9 +1083,7 @@ impl TaskRow {
 
     fn running_agents(&self) -> bool {
         self.state == TaskState::Running
-            && render::split_held(self.running.flatten(), &self.held)
-                .0
-                .is_none()
+            && render::split_held(self.holder(), &self.held).0.is_none()
     }
 
     fn last_text(&self, now: Timestamp) -> String {
@@ -1140,6 +1146,19 @@ impl TaskRow {
             parts.push(format!("${:.2} today", self.spend_today_usd));
         }
         parts.join(" · ")
+    }
+}
+
+/// When the running run started: the lock holder's start, or an executing lock-free run's
+/// creation.
+fn running_since(in_progress: Option<&InProgress<Option<RunLockInfo>>>) -> Option<Timestamp> {
+    match in_progress? {
+        InProgress::Locked(holder) => holder.map(|holder| holder.started_at),
+        InProgress::Run {
+            since,
+            executing: true,
+        } => Some(*since),
+        InProgress::Run { .. } => None,
     }
 }
 
@@ -1467,8 +1486,7 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             timing: row.timing.as_ref(),
             checkout: row.dir.as_deref(),
             fired: attention::fired(task, row.launch.as_ref()),
-            running: row.running.is_some(),
-            newer_run: row.newer_run.is_some(),
+            in_progress: row.in_progress.is_some(),
             disabled: matches!(row.state, TaskState::Off | TaskState::NotEnabled),
             last_failed: row.last.as_ref().is_some_and(|last| !last.ok),
             exit: row.exit.as_deref(),
