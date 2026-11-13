@@ -1114,13 +1114,12 @@ impl<'a> TaskFire<'a> {
         } else if policy == OverlapPolicy::Queue {
             format!("waiting (queue {count}/{limit})")
         } else if policy == OverlapPolicy::Replace {
-            self.cancel_blocker(&paths, run);
             "canceling it for this trigger".to_owned()
         } else {
             "waiting".to_owned()
         };
         let detail = format!("run {run} still active — {suffix}");
-        Ok(TaskFirePlan::Done(self.record_terminal_with(
+        let finished = self.record_terminal_with(
             if enqueued {
                 LoopRunResult::Deferred
             } else {
@@ -1135,7 +1134,13 @@ impl<'a> TaskFire<'a> {
                 record.blocking_run = Some(run.clone());
                 record.error = Some(format!("{detail}{repair}"));
             },
-        )))
+        );
+        // The deferred row and this fire's lock release come first: the canceled run's report
+        // drains the waiting trigger, and a drainer that finds this fire's lock held starts none.
+        if enqueued && policy == OverlapPolicy::Replace {
+            self.cancel_blocker(&paths, run);
+        }
+        Ok(TaskFirePlan::Done(finished))
     }
 
     /// Cancel a replaced run in a detached helper; its report drains the waiting trigger once
