@@ -1,5 +1,6 @@
 //! Supervised and attached run streaming effects.
 
+use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -34,6 +35,16 @@ pub(super) fn stream_blocking_run(
     })
 }
 
+/// How an attached stream ended. Only `Terminal` ends the run; the others
+/// stop watching it.
+#[derive(Debug, PartialEq)]
+pub(crate) enum AttachedEnd {
+    Terminal(Box<RunRecord>),
+    TimedOut,
+    /// The observer asked the stream to stop before its deadline.
+    Stopped,
+}
+
 pub(crate) fn stream_attached_run(
     store: &rimz::Store,
     run_id: &rimz::RunId,
@@ -41,8 +52,8 @@ pub(crate) fn stream_attached_run(
     from_start: bool,
     timeout: Option<Duration>,
     sink: &mut StreamSink<'_>,
-    mut observe: impl FnMut(&RunRecord) -> Result<()>,
-) -> Result<Option<RunRecord>> {
+    mut observe: impl FnMut(&RunRecord) -> Result<ControlFlow<()>>,
+) -> Result<AttachedEnd> {
     let mut cursor = TranscriptCursor::new(from_start);
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
@@ -50,14 +61,16 @@ pub(crate) fn stream_attached_run(
         emit_stream_updates(store, adapter, &mut cursor, sink, &record)?;
         if record.status.is_terminal() {
             sink.end_record(&record)?;
-            return Ok(Some(record));
+            return Ok(AttachedEnd::Terminal(Box::new(record)));
         }
-        observe(&record)?;
+        if observe(&record)?.is_break() {
+            return Ok(AttachedEnd::Stopped);
+        }
         if reached_deadline(deadline) {
             if sink.is_text() {
                 sink.timeout()?;
             }
-            return Ok(None);
+            return Ok(AttachedEnd::TimedOut);
         }
         std::thread::sleep(next_attached_stream_sleep(deadline));
     }

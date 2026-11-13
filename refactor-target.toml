@@ -3342,6 +3342,21 @@ reason = "Soft-compaction queue and delivery choreography belongs beside other m
 
 [[verdict]]
 kind = "item"
+key = "message::announce"
+reason = "One caller check reads the waiting agent's queue for every blocking wait, so the join, both streams, and the team wait stop on the same prompts."
+
+[[verdict]]
+kind = "item"
+key = "message::announce::WaitCaller"
+reason = "A wait stamps its start at entry and resolves its caller at the first readable poll, so every poll checks the same agent and a prompt announced before the wait began does not stop it."
+
+[[verdict]]
+kind = "item"
+key = "message::announce::Announcement"
+reason = "The count and senders of the prompts that stopped a wait carry to the one stderr line both CLI scenes print, never the message text."
+
+[[verdict]]
+kind = "item"
 key = "message::soft_compact::WrapUpOutcome"
 reason = "The helper records whether a steer reached the pane, including a miss's reason."
 
@@ -12445,6 +12460,11 @@ reason = "Workflow-owned runs retain a non-clean turn stop as evidence rather th
 kind = "item"
 key = "store::run::StoppedTurnDisposition"
 reason = "Only failed and canceled turn dispositions can hold a workflow-owned run open."
+
+[[verdict]]
+kind = "item"
+key = "cli::supervised::stream::AttachedEnd"
+reason = "An attached stream ends at a terminal run, a deadline, or its observer's stop, and only the deadline prints its timeout line."
 
 [[verdict]]
 kind = "item"

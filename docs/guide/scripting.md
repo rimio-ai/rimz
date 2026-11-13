@@ -144,7 +144,7 @@ A `<ref>` below is the printed name, a run id, or any [agent address](./messagin
 - `rimz agents show <ref>` reports a run's activity, context, and recent transcript.
 - `rimz agents stop <ref>` cancels a live run or closes its pane.
 
-`wait --timeout` stops the waiting, not the run. It exits `124` with the run still going, which is the code a timed-out run exits with too, so a script that has to tell the two apart rereads the record with `rimz agents show`. Ending the run itself takes `rimz agents stop`. Every flag on these verbs is in the [agent control reference](../reference/cli/agents.md#supervised-runs--p).
+`wait --timeout` stops the waiting, not the run. It exits `124` with the run still going, which is the code a timed-out run exits with too, so a script that has to tell the two apart rereads the record with `rimz agents show`. A wait an agent runs also stops, with exit `75` and the run still going, when a message for that agent is queued: the message lands at its turn end, which the wait would otherwise hold off. Ending the run itself takes `rimz agents stop`. Every flag on these verbs is in the [agent control reference](../reference/cli/agents.md#supervised-runs--p).
 
 ## In a pipeline
 

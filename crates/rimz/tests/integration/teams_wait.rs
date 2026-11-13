@@ -426,3 +426,81 @@ fn wait_joins_cohorts_and_races_them_with_any() {
     assert!(stdout.starts_with("--- forge#a ---\n"), "{stdout}");
     assert!(stdout.contains("--- forge#b ---\n"), "{stdout}");
 }
+
+#[test]
+fn an_agents_team_wait_stops_on_a_prompt_for_it_and_leaves_cohorts_running() {
+    let fixture = Fixture::new();
+    let a = fixture.lane("a");
+    fixture.lane("b");
+    std::fs::create_dir_all(a.join(".rimz/team")).unwrap();
+    std::fs::write(a.join(".rimz/team/blackboard.md"), DONE_BOARD).unwrap();
+    let root = fixture.env.project_root.clone();
+    fixture.seed("planner", "planner", "main", &root, None, None);
+    let planner = fixture
+        .env
+        .store()
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("planner"))
+        .cloned()
+        .expect("planner card");
+    let message = rimz::store::message::MessageRecord::new(
+        fixture.env.workspace_id.clone(),
+        &planner,
+        "team follow-up".to_owned(),
+        rimz::store::message::DeliveryGate::Done,
+    );
+    fixture
+        .env
+        .store()
+        .queue_message(&message, "rimz-test")
+        .unwrap();
+
+    let person = fixture.run(&["forge#a", "forge#b", "--timeout", "0s"]);
+    assert_eq!(person.status.code(), Some(124), "{}", text(&person.stderr));
+    assert!(
+        fixture
+            .env
+            .store()
+            .list_messages()
+            .unwrap()
+            .iter()
+            .all(|record| record.announced_at.is_none())
+    );
+
+    let out = fixture
+        .wait(&["forge#a", "forge#b", "--timeout", "30s", "--json"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch_planner")
+        .output()
+        .expect("run an agent's teams wait");
+    assert_eq!(out.status.code(), Some(75), "{}", text(&out.stderr));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["forge#a"]["status"], "completed");
+    assert_eq!(report["forge#b"]["status"], "running");
+    assert_eq!(report["forge#b"]["exit"], 75);
+    let stderr = text(&out.stderr);
+    assert!(
+        stderr.contains("forge#b: stopped at none; cohort left running"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with(
+            "rimz: stopped waiting: 1 message from user arrives when you end your turn; what \
+             you waited on is still running\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("team follow-up"), "{stderr}");
+    let stamped = fixture
+        .env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.message_id == message.message_id)
+        .expect("still queued");
+    assert!(stamped.announced_at.is_some());
+}

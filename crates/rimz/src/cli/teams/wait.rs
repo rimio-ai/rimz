@@ -10,7 +10,9 @@ use serde::Serialize;
 
 use super::super::{Ctx, GlobalFlags, render};
 use super::WaitArgs;
+use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
 use rimz::harness::scratch::{BoardStage, board_section, board_stage};
+use rimz::message::announce::WaitCaller;
 use rimz::store::run::RunStatus;
 use rimz::utils::path::normalize_path_lexical;
 
@@ -94,6 +96,37 @@ fn timeout_line(instance: &str, progress: &Progress, timeout: Duration) -> Strin
     )
 }
 
+/// How a wait that stops before every cohort settles ends.
+enum Unfinished {
+    TimedOut(Duration),
+    /// Stopped on a message queued for the caller.
+    Message,
+}
+
+impl Unfinished {
+    fn line(&self, instance: &str, progress: &Progress) -> String {
+        match self {
+            Self::TimedOut(timeout) => timeout_line(instance, progress, *timeout),
+            Self::Message => format!(
+                "{instance}: stopped at {}; cohort left running",
+                progress_stage(progress)
+            ),
+        }
+    }
+
+    /// The entry of a cohort still pending when the wait stops.
+    fn entry(&self, target: &Target) -> EntryJson {
+        let mut entry = target.entry();
+        if target.outcome.is_none()
+            && let Self::Message = self
+        {
+            entry.status = RunStatus::Running;
+            entry.exit = MESSAGE_STOP_EXIT;
+        }
+        entry
+    }
+}
+
 struct Target {
     cohort: rimz::ids::TeamInstanceId,
     worktree: PathBuf,
@@ -171,6 +204,7 @@ fn settle(
 }
 
 pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
+    let mut caller = WaitCaller::starting_now();
     if args.worktree.is_some() && args.references.len() > 1 {
         bail!("-w/--worktree selects one cohort; name each cohort as `team#lane` instead");
     }
@@ -211,10 +245,15 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             report_finished(reported, single, args.json)?;
             std::process::exit(status.exit_code());
         }
+        if let Some(announcement) = caller.queued(&ctx.store, &ctx.workspace.session_name) {
+            report_unfinished(&targets, single, args.json, &Unfinished::Message)?;
+            write_message_stop(&mut render::err(), &announcement)?;
+            std::process::exit(MESSAGE_STOP_EXIT);
+        }
         if let Some(timeout) = args.timeout
             && started.elapsed() >= timeout
         {
-            report_timeout(&targets, single, args.json, timeout)?;
+            report_unfinished(&targets, single, args.json, &Unfinished::TimedOut(timeout))?;
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -380,39 +419,40 @@ fn report_finished(targets: &[Target], single: bool, json: bool) -> Result<()> {
     match (single, json) {
         (true, true) => render::json_pretty(&targets[0].entry()),
         (true, false) => print_outcome(&targets[0], &mut render::err()),
-        (false, true) => print_json(targets),
+        (false, true) => print_json(targets, Target::entry),
         (false, false) => Ok(()),
     }
 }
 
-fn report_timeout(targets: &[Target], single: bool, json: bool, timeout: Duration) -> Result<()> {
+fn report_unfinished(
+    targets: &[Target],
+    single: bool,
+    json: bool,
+    ending: &Unfinished,
+) -> Result<()> {
     let mut err = render::err();
     for target in targets.iter().filter(|target| target.outcome.is_none()) {
-        // The run loop polls every target before checking its timeout.
+        // The run loop polls every target before it checks a stop.
         let progress = target
             .progress
             .as_ref()
             .expect("polled target has progress");
-        writeln!(
-            err,
-            "{}",
-            timeout_line(&target.instance(), progress, timeout)
-        )?;
+        writeln!(err, "{}", ending.line(&target.instance(), progress))?;
     }
     if json {
         return if single {
-            render::json_pretty(&targets[0].entry())
+            render::json_pretty(&ending.entry(&targets[0]))
         } else {
-            print_json(targets)
+            print_json(targets, |target| ending.entry(target))
         };
     }
     Ok(())
 }
 
-fn print_json(targets: &[Target]) -> Result<()> {
+fn print_json(targets: &[Target], entry: impl Fn(&Target) -> EntryJson) -> Result<()> {
     let entries = targets
         .iter()
-        .map(|target| (target.instance(), target.entry()))
+        .map(|target| (target.instance(), entry(target)))
         .collect::<BTreeMap<_, _>>();
     render::json(&entries)
 }

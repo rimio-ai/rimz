@@ -637,6 +637,11 @@ pub struct MessageRecord {
     /// The once-only sender notice for this message's long-queued state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_notice_at: Option<Timestamp>,
+    /// When a blocking wait of the receiving agent first stopped on this
+    /// `Queued` prompt to announce it. Set once, never cleared; a requeued
+    /// copy starts without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announced_at: Option<Timestamp>,
     /// When set, deliver a `/compact` ahead of the text if the agent's context
     /// fill has reached this threshold at delivery time, so the message lands
     /// against a fresh window instead of racing the agent's own auto-compaction.
@@ -789,6 +794,7 @@ impl MessageRecord {
             typing_hold: None,
             forced_keepalive: false,
             queued_notice_at: None,
+            announced_at: None,
             auto_compact: None,
             soft_compact: None,
             compacted_context_tokens: None,
@@ -952,6 +958,17 @@ impl MessageRecord {
 
     pub fn same_agent_card(&self, agent: &AgentState) -> bool {
         self.same_card(agent.card_ref())
+    }
+
+    /// Whether a blocking wait run by `card` stops on this record at `now`: a
+    /// person's or an agent's prompt for that card, `Queued` and deliverable.
+    /// The wait's read and the stamp under the queue lock both judge by it.
+    pub fn announces_to(&self, card: &AgentState, now: Timestamp) -> bool {
+        self.sender.is_conversation()
+            && self.body == MessageBody::Prompt
+            && self.status == MessageStatus::Queued
+            && self.is_deliverable(now)
+            && self.same_agent_card(card)
     }
 
     /// Registration waits only against an absent card or an end no later than enqueue.

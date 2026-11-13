@@ -88,6 +88,7 @@ A launch refuses before it writes a run record or opens a pane when:
 | `2` | Usage error: a flag clap rejects, bare `rimz subagents`, or the retired `--detach`. |
 | `125` | A room or account cap, or a Qwen quota window, refused the launch. With `--wait`, the child's run ended `budget_exceeded`. |
 | `123`, `124`, `130` | With `--wait` only: the run's status, or `124` when the `--wait` deadline expired ([exit codes](./agents.md#supervised-runs--p)). |
+| `75` | With `--wait` only: a prompt for the calling agent was queued, and the child keeps running ([the message stop](./agents.md#wait)). |
 
 `rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. `--detach` on `launch` or `fanout` is refused with exit 2, because a subagent ends with its parent; for a run that outlives the caller, launch a peer with `rimz agents <spec> "<prompt>" -p --bg --detach`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
 

@@ -7,6 +7,7 @@ use jiff::Timestamp;
 use crate::harness::auto_continue::CardStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
+pub mod announce;
 pub mod compact;
 pub mod deliver;
 pub mod dispatch;
