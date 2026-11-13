@@ -6705,12 +6705,19 @@ fn agents_list_filter_selects_children_closed_sessions_and_addresses() {
             },
         ))
         .expect("launch parent");
-    for (id, name, pane, parent) in [
+    // Each registration is stamped a second after the one before it: the list
+    // orders newest first, and two that share a millisecond fall back to
+    // launch order.
+    let first_registered = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(10);
+    for (order, (id, name, pane, parent)) in [
         ("parent", "seat-parent", "%1", None),
         ("child", "seat-child", "%2", Some("parent")),
         ("gone", "seat-gone", "%3", None),
         ("kin", "seat-kin", "%4", Some("launch-parent")),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut observation =
             AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
         observation.agent_name = Some(name.to_owned());
@@ -6721,14 +6728,16 @@ fn agents_list_filter_selects_children_closed_sessions_and_addresses() {
             observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
             observation.launch.launch_depth = Some(1);
         }
+        let mut registered = EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        );
+        registered.timestamp = first_registered + jiff::SignedDuration::from_secs(order as i64);
         env.store()
-            .append_event(&EventEnvelope::agent_lifecycle(
-                env.workspace_id.clone(),
-                &workspace.session_name,
-                "claude",
-                "SessionStart",
-                &observation,
-            ))
+            .append_event(&registered)
             .expect("register seat record");
     }
     let ended = AgentLifecycleObservation::new(Some("gone".into()), LifecycleSignal::Ended);
