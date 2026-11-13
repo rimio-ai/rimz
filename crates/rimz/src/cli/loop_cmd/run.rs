@@ -518,6 +518,7 @@ fn execute_prepared_delivery(
         &store,
         rimz::message::dispatch::DispatchRequest {
             about_run: None,
+            reply_wanted: false,
             resuming_recipient: None,
             target: format!("@{}", prepared.target.session),
             text: prepared.prompt,

@@ -1165,6 +1165,72 @@ fn message_header_parser_round_trips_attributed_senders() {
 }
 
 #[test]
+fn marked_record_headers_round_trip_through_the_parser() {
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let lane = |name: &str| name.parse::<crate::ids::LaneName>().unwrap();
+    for (name, role, channel, from) in [
+        (Some("swift-otter"), None, None, "@swift-otter (planner)"),
+        (None, Some("planner"), None, "@planner"),
+        (
+            Some("swift-otter"),
+            None,
+            Some("auth"),
+            "@swift-otter#auth (planner)",
+        ),
+        (
+            Some("swift-otter"),
+            None,
+            Some("a,b"),
+            "@swift-otter#a,b (planner)",
+        ),
+    ] {
+        let mut record = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+            &recipient,
+            "Did it land?".to_owned(),
+            crate::store::message::DeliveryGate::Done,
+        )
+        .with_channel(Some(lane("main")))
+        .with_sender(MessageSender::Agent {
+            agent_id: None,
+            kind: AgentKind::new_unchecked("claude"),
+            name: name.map(str::to_owned),
+            profile: Some("planner".to_owned()),
+            role: role.map(str::to_owned),
+            channel: channel.map(lane),
+        });
+        let unmarked = record_header(&record, &[], None).unwrap();
+        assert_eq!(
+            unmarked,
+            message_header(&record.sender, &[], Some(&lane("main")), None).unwrap()
+        );
+        assert_eq!(
+            unmarked,
+            format!("Type: AGENT_MESSAGE\nFrom: {from}\nContent:\n")
+        );
+        record.reply_wanted = true;
+        let prompt = record_header(&record, &[], None).unwrap() + &record.text;
+        assert_eq!(
+            prompt,
+            format!("Type: AGENT_MESSAGE\nFrom: {from}, wants a reply\nContent:\nDid it land?")
+        );
+        assert_eq!(
+            parse_message_header(&prompt),
+            Some((
+                HeaderKind::Agent,
+                from.split(' ').next().unwrap().to_owned(),
+                record.text.clone()
+            ))
+        );
+        let (leading, segments, trailing) =
+            crate::store::message::align_submitted_prompt(&prompt, &[&record])
+                .expect("marked header aligns");
+        assert_eq!((leading, trailing), (None, None));
+        assert_eq!(segments, vec![prompt.as_str()]);
+    }
+}
+
+#[test]
 fn unknown_harness_notice_header_and_ack_agree() {
     let sender: MessageSender = serde_json::from_value(serde_json::json!({
         "origin": "harness", "notice": "future_notice"

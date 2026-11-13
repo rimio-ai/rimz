@@ -147,6 +147,7 @@ When `--create --worktree NAME` finds an existing unoccupied RimZ-owned tree, it
 | `--no-enter` | Type the text and leave it unsubmitted in the composer. |
 | `--smart-compact <PCT\|TOKENS>` | When a resting agent's context is at least this full, send its compact command first. Boundary delivery waits for compaction to end; steer and interrupt paste the prompt after the command without waiting for completion. A busy agent gets no compact command. Takes a percentage (`70%`, at most 100) or an occupied-token count (`120000`, `180k`, `1m`). A context below the threshold sends the message alone. Unset, the recipient's session [`tune`](./agents.md#tune) override wins, then its role or profile-chain [`smart-compact`](../definitions.md#smart-compaction), then `[harness] smart_compact` (default `258k`); `off` stops inheritance. A bare pane bound to an agent uses that agent's policy; an unbound pane uses the harness setting. `[harness] compact_instruction` rides agents whose compact command accepts guidance. The flag overrides only this delivery, not the mid-turn trigger; queued messages retain their enqueue-time line. |
 | `--no-from` | Send the text with no message header. |
+| `--reply-wanted` | End the header's `From:` line with `, wants a reply`, so the receiver knows you want a message back. RimZ does nothing else with it. Refused with `--no-from` and with `--create`, which deliver no header to carry it, and from a user shell, which has no inbox a reply could reach. `message list --json` and `message show` print it as `reply_wanted`, and `message requeue` keeps it. |
 
 ## The message header
 
@@ -162,7 +163,7 @@ Read plan.md when the planner finishes.
 | `Type` | Sent for | `From` |
 | --- | --- | --- |
 | `USER_MESSAGE` | A send from a user shell | `@user` |
-| `AGENT_MESSAGE` | A send from an agent, whether RimZ launched it or only saw it running | Reply address: role, else explicit name, else pet name; kind only when no role or name exists. Adds `#channel` when crossing channels, then the profile (else kind) in parentheses unless it repeats the handle base. |
+| `AGENT_MESSAGE` | A send from an agent, whether RimZ launched it or only saw it running | Reply address: role, else explicit name, else pet name; kind only when no role or name exists. Adds `#channel` when crossing channels, then the profile (else kind) in parentheses unless it repeats the handle base. A `--reply-wanted` send ends the line with `, wants a reply`: `From: @swift-otter (planner), wants a reply`. |
 | `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) settle | `@rimz` |
 | `AGENT_REPORT` | The status digest for a fleet containing solo agents, including background runs and interactive peers | `@rimz` |
 | `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` or the cohort ends before `Done` | `@rimz` |

@@ -49,6 +49,7 @@ pub(super) struct MessageListRow {
     pub(super) enter: bool,
     pub(super) gate: DeliveryGate,
     pub(super) force: bool,
+    pub(super) reply_wanted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pane_id: Option<PaneId>,
     pub(super) status: MessageStatus,
@@ -130,6 +131,7 @@ impl MessageListRow {
             enter: message.enter,
             gate: message.gate,
             force: message.force,
+            reply_wanted: message.reply_wanted,
             pane_id: message.pane_id,
             status: message.status,
             enqueued_at: message.enqueued_at,
@@ -174,6 +176,7 @@ impl MessageListRow {
             enter: payload.enter,
             gate: payload.gate,
             force: payload.forced,
+            reply_wanted: false,
             pane_id: payload.pane_id,
             status: payload.status,
             enqueued_at: payload.enqueued_at.unwrap_or(event.timestamp),

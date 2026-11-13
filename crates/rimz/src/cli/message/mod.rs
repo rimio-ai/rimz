@@ -34,6 +34,7 @@ const LONG_ABOUT: &str = r#"Send text to an agent, and manage what you have sent
   rimz message @coder "rebase first"             now if free, else at turn end
   rimz message --steer @coder "use the cache"    type into its running turn
   rimz message --interrupt @coder "stop"         type, then stop its turn
+  rimz message --reply-wanted @coder "landed?"   ask for a message back
   rimz message                                   what you sent in this lane
   rimz message show msg_0123456789abcdef         why a message has not landed"#;
 
@@ -358,6 +359,7 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
                 file,
                 stdin,
                 no_from,
+                reply_wanted,
             },
     } = args;
     let send_only = [
@@ -375,6 +377,7 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
         (file.is_some(), "--file <PATH>"),
         (*stdin, "--stdin"),
         (*no_from, "--no-from"),
+        (*reply_wanted, "--reply-wanted"),
     ];
     if let Some((_, flag)) = send_only.into_iter().find(|(given, _)| *given) {
         return Err(UsageError::new(format!(
@@ -492,7 +495,7 @@ mod tests {
             .filter_map(|line| line.strip_prefix("  rimz message"))
             .map(|rest| format!("rimz message{}", rest.split("  ").next().unwrap()))
             .collect::<Vec<_>>();
-        assert_eq!(examples.len(), 5, "{help}");
+        assert_eq!(examples.len(), 6, "{help}");
         for example in examples {
             let words = shlex::split(&example).unwrap();
             Cli::try_parse_from(words).unwrap_or_else(|err| panic!("`{example}`: {err}"));

@@ -99,6 +99,9 @@ pub struct DispatchRequest {
     /// The run each recipient's record is about, for delivery to withdraw it
     /// once that run ends; only the deadline stop sets it.
     pub about_run: Option<crate::ids::RunId>,
+    /// Stamped on every recipient's record for its header to say the sender
+    /// wants a message back; nothing else reads it.
+    pub reply_wanted: bool,
 }
 
 pub struct DispatchResult {
@@ -733,6 +736,7 @@ fn prepare_mode(
             after: resolve_after(resolution, recipients, after, gate, pending)?,
             when: resolve_when(resolution, when)?,
             about_run: request.about_run.clone(),
+            reply_wanted: request.reply_wanted,
         },
     })
 }

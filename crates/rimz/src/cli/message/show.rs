@@ -186,6 +186,9 @@ fn render_message_kv(
     if message.force {
         kv.push("force", render::cell("true"));
     }
+    if message.reply_wanted {
+        kv.push("reply", render::cell("wanted"));
+    }
     kv.push(
         "created",
         render::cell(time_with_absolute(message.enqueued_at, now)),

@@ -921,6 +921,22 @@ fn correlated_ack_aligns_headered_and_mixed_batches() {
             ),
         ),
         (
+            MessageSender::Agent {
+                agent_id: None,
+                kind: AgentKind::new_unchecked("codex"),
+                name: None,
+                profile: None,
+                role: Some("planner".to_owned()),
+                channel: None,
+            },
+            "first",
+            "second",
+            format!(
+                "Type: AGENT_MESSAGE\nFrom: @planner, wants a reply\nContent:\nfirst\n\n{}",
+                user_message("second")
+            ),
+        ),
+        (
             MessageSender::Human,
             "first\n",
             "second",

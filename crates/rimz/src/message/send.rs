@@ -565,10 +565,9 @@ fn write_text(
             let payload = batch
                 .iter()
                 .map(|message| {
-                    match crate::address::message_header(
-                        &message.sender,
+                    match crate::address::record_header(
+                        message,
                         &peers,
-                        message.channel.as_ref(),
                         Some(&workspace.project_root),
                     ) {
                         Some(header) => format!("{header}{}", message.text),
@@ -660,6 +659,7 @@ fn compact_message_for_target<'a>(
         after: Vec::new(),
         when: Vec::new(),
         about_run: None,
+        reply_wanted: false,
     }
     .record(
         prompt.workspace_id.clone(),

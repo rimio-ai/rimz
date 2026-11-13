@@ -69,6 +69,7 @@ rimz subagents wait @otter @fox      # collect named children's results
 rimz subagents list                  # inspect own children, or the user shell's channel
 rimz subagents stop --all            # from an agent: stop all its live children
 rimz message @coder "rebase first"   # park for the next turn boundary
+rimz message --reply-wanted @coder "did it land?" # ask for a message back
 rimz message --steer @coder "stop"   # type into the live turn now; it does not interrupt
 rimz message show msg_<id>           # why a message hasn't landed
 rimz asks --json                     # structured prompts that currently block agents

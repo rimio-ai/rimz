@@ -254,9 +254,24 @@ Content:
 read plan.md and start
 ```
 
-The first token after `From:` is the reply address: here, reply with `rimz message @swift-otter "got it"`. The parenthesized label identifies the sender's profile, or its agent kind when it has no profile; a label that repeats the handle is omitted. A team profile such as `recon.planner` is also omitted when the handle is `@planner`, including when it has a channel suffix.
+The `@handle`, with its `#channel` when it has one, that opens the `From:` line is the reply address; a ` (label)` and a closing `, wants a reply` come after it and are not part of it. The parenthesized label identifies the sender's profile, or its agent kind when it has no profile; a label that repeats the handle is omitted. A team profile such as `recon.planner` is also omitted when the handle is `@planner`, including when it has a channel suffix.
 
-An agent should not have to wait forever on a handoff that never arrived. RimZ tells a live agent sender when its message ends undelivered, or stays queued for five minutes with a receiver not working or twenty minutes with a receiver busy in a turn. A queued message stays queued; the notice lets the sender check the receiver or withdraw the message, not resend it blindly. Time spent waiting on the sender's schedule or conditions does not trigger a notice while those conditions remain unmet. Senders using `--wait` learn failures from the wait itself instead of a separate notice.
+A sender that wants a message back says so with `--reply-wanted`, and the header ends the `From:` line with the mark:
+
+```sh
+rimz message --reply-wanted @planner "did the migration land?"
+```
+
+```text
+Type: AGENT_MESSAGE
+From: @swift-otter (planner), wants a reply
+Content:
+did the migration land?
+```
+
+The receiver answers with a message of its own, here `rimz message @swift-otter "landed at 14:02"`. The mark is only shown: RimZ sends no notice when no reply comes and holds nothing open, so a sender that hears nothing asks again. Only an agent can ask this way. A user shell has no inbox a reply could reach, and `--no-from` and `--create` deliver no header to carry the mark, so each refuses the flag.
+
+An agent should not have to wait forever on a handoff that never arrived. RimZ tells a live agent sender when its message ends undelivered, or stays queued for five minutes with a receiver not working or twenty minutes with a receiver busy in a turn. A queued message stays queued; the notice lets the sender check the receiver or withdraw the message, not resend it blindly. Time spent waiting on the sender's schedule or conditions does not trigger a notice while those conditions remain unmet.
 
 Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
 

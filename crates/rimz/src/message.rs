@@ -154,6 +154,7 @@ struct MessageDraft {
     after: Vec<AfterCondition>,
     when: Vec<WhenCondition>,
     about_run: Option<crate::ids::RunId>,
+    reply_wanted: bool,
 }
 
 enum Recipient<'a> {
@@ -214,7 +215,7 @@ impl MessageDraft {
         address: Option<&str>,
     ) -> MessageRecord {
         let recipient = recipient.into_identity(scope_channel);
-        let record = MessageRecord::new_for_card(
+        let mut record = MessageRecord::new_for_card(
             workspace_id,
             recipient.kind,
             recipient.agent_id,
@@ -234,6 +235,7 @@ impl MessageDraft {
         .with_after(self.after.clone())
         .with_when(self.when.clone())
         .with_about_run(self.about_run.clone());
+        record.reply_wanted = self.reply_wanted;
         match recipient.pane_id {
             Some(pane_id) => record.with_pane_id(pane_id),
             None => record,

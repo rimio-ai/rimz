@@ -37,7 +37,7 @@ use std::path::Path;
 use crate::agents::AgentState;
 use crate::agents::petname::{sender_handle, sender_label};
 use crate::ids::{AgentKind, AgentSessionId, Lane, LaneHome, LaneName, PaneId, TeamInstanceId};
-use crate::store::message::MessageSender;
+use crate::store::message::{MessageRecord, MessageSender, REPLY_WANTED_MARK};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot, find_agent};
 
 /// Where a command's channel came from; explicit addresses and flags override it.
@@ -1589,13 +1589,40 @@ pub fn paste_address(
         .unwrap_or(full)
 }
 
-/// The structured header for a human-, agent-, subagent-, or harness-authored message.
+/// The structured header for a human-, agent-, subagent-, or harness-authored record.
 ///
 /// Agent-authored text uses a stable reply handle and a profile or kind label,
-/// taking live identity when visible and launch identity otherwise.
+/// taking live identity when visible and launch identity otherwise, and ends its
+/// `From:` line with [`REPLY_WANTED_MARK`] when the sender wants a reply.
 /// System-authored text stays verbatim.
+pub(crate) fn record_header(
+    record: &MessageRecord,
+    peers: &[&AgentState],
+    project_root: Option<&Path>,
+) -> Option<String> {
+    header(
+        &record.sender,
+        record.reply_wanted,
+        peers,
+        record.channel.as_ref(),
+        project_root,
+    )
+}
+
+/// [`record_header`] for an unmarked sender.
+#[cfg(test)]
 pub(crate) fn message_header(
     sender: &MessageSender,
+    peers: &[&AgentState],
+    target_channel: Option<&LaneName>,
+    project_root: Option<&Path>,
+) -> Option<String> {
+    header(sender, false, peers, target_channel, project_root)
+}
+
+fn header(
+    sender: &MessageSender,
+    reply_wanted: bool,
     peers: &[&AgentState],
     target_channel: Option<&LaneName>,
     project_root: Option<&Path>,
@@ -1622,8 +1649,9 @@ pub(crate) fn message_header(
     let label = sender_label(&handle, profile, kind)
         .map(|label| format!(" ({label})"))
         .unwrap_or_default();
+    let mark = if reply_wanted { REPLY_WANTED_MARK } else { "" };
     Some(format!(
-        "Type: AGENT_MESSAGE\nFrom: {handle}{label}\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: {handle}{label}{mark}\nContent:\n"
     ))
 }
 

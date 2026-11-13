@@ -54,6 +54,11 @@ pub(crate) struct SendFlags {
     /// Deliver the text verbatim with no message header.
     #[arg(long)]
     pub(crate) no_from: bool,
+    /// Mark the message as wanting a message back: the receiver's `From:` line
+    /// ends with `, wants a reply`. Only an agent can ask; refused with `--no-from`
+    /// and `--create`, which deliver no header.
+    #[arg(long)]
+    pub(crate) reply_wanted: bool,
 }
 
 /// Resolve the prompt a send-style invocation carries from inline argv,
