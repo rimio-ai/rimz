@@ -52,7 +52,7 @@ pub enum Fireability {
 pub enum NeverReason {
     NoTimeout,
     NoMaxVisits,
-    CapacityWaitForever,
+    GiveUpForever,
 }
 
 impl NeverReason {
@@ -60,7 +60,7 @@ impl NeverReason {
         match self {
             Self::NoTimeout => "never: no timeout",
             Self::NoMaxVisits => "never: no max-visits",
-            Self::CapacityWaitForever => "never: capacity-wait is forever",
+            Self::GiveUpForever => "never: give-up is forever",
         }
     }
 }
@@ -374,7 +374,7 @@ impl Definition {
             return (Fireability::Yes, None);
         }
         if !matches!(step.capacity_wait, Some(CapacityWait::Duration(_))) {
-            return (Fireability::Never, Some(NeverReason::CapacityWaitForever));
+            return (Fireability::Never, Some(NeverReason::GiveUpForever));
         }
         (Fireability::InLoopRuns, None)
     }

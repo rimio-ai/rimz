@@ -208,9 +208,9 @@ fn limited_off_capacity_edges_keep_the_give_up_routes() {
     assert_eq!(
         actual,
         [
-            (json!("never"), json!("capacity-wait-forever")),
+            (json!("never"), json!("give-up-forever")),
             (json!("in-loop-runs"), serde_json::Value::Null),
-            (json!("never"), json!("capacity-wait-forever")),
+            (json!("never"), json!("give-up-forever")),
             (json!("in-loop-runs"), serde_json::Value::Null),
         ]
     );
@@ -222,14 +222,14 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
         (
             "",
             "never",
-            Some("capacity-wait-forever"),
-            "never: capacity-wait is forever",
+            Some("give-up-forever"),
+            "never: give-up is forever",
         ),
         (
             "admission.give-up='forever'",
             "never",
-            Some("capacity-wait-forever"),
-            "never: capacity-wait is forever",
+            Some("give-up-forever"),
+            "never: give-up is forever",
         ),
         (
             "admission.give-up='5m'",
@@ -240,8 +240,8 @@ fn capacity_edges_name_the_loop_and_definition_preconditions() {
         (
             "admission.throttle='off'",
             "never",
-            Some("capacity-wait-forever"),
-            "never: capacity-wait is forever",
+            Some("give-up-forever"),
+            "never: give-up is forever",
         ),
         (
             "admission.throttle='off'\nadmission.give-up='5m'",
