@@ -30,6 +30,11 @@ pub(super) fn compose_wait(
     let continuation = if checkin { " · still watching" } else { "" };
     let mut body = String::new();
     body.push_str(&wait_line(task, meta, &evidence));
+    if meta.is_some()
+        && let Some(label) = &task.label
+    {
+        body.push_str(&format!(" · {label}"));
+    }
     if let Some(verdict) = verdict_line(task, &evidence, meta, now, name, continuation) {
         body.push('\n');
         body.push_str(&verdict);
@@ -116,6 +121,14 @@ fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>)
     if let Some(delay) = meta.and_then(|meta| meta.delay.as_deref()) {
         return format!("waited {delay}");
     }
+    if meta.is_some()
+        && let Some(at) = task.fire_at
+    {
+        return format!(
+            "waited until {}",
+            crate::harness::schedule::local_minute(at)
+        );
+    }
     "scheduled wait".to_owned()
 }
 
@@ -130,23 +143,14 @@ fn verdict_line(
     let mut verdict = match evidence {
         Evidence::Signal(signal) => match &signal.watch {
             Some(watch) => watch.verdict.label(),
-            None => match meta {
-                Some(meta) => {
-                    let elapsed_ms = now
-                        .as_millisecond()
-                        .saturating_sub(meta.armed_at.as_millisecond())
-                        .max(0) as u64;
-                    format!("fired after {}", elapsed_label(elapsed_ms))
-                }
-                None => "fired".to_owned(),
-            },
+            None => fired_after(meta, now),
         },
         Evidence::Manual => "fired by hand".to_owned(),
         Evidence::Condition(condition) => condition
             .hold
             .as_ref()
-            .map_or_else(|| "fired".to_owned(), |hold| format!("held {hold}")),
-        Evidence::Scheduled if meta.is_some_and(|meta| meta.delay.is_some()) => return None,
+            .map_or_else(|| fired_after(meta, now), |hold| format!("held {hold}")),
+        Evidence::Scheduled if meta.is_some() => return None,
         Evidence::Scheduled => "fired".to_owned(),
     };
     verdict.push_str(continuation);
@@ -168,6 +172,18 @@ fn verdict_line(
     }
     verdict.push_str(&format!(" [{name}]"));
     Some(verdict)
+}
+
+/// `fired`, with the time since a self wait was armed.
+fn fired_after(meta: Option<&WaitMeta>, now: Timestamp) -> String {
+    let Some(meta) = meta else {
+        return "fired".to_owned();
+    };
+    let elapsed_ms = now
+        .as_millisecond()
+        .saturating_sub(meta.armed_at.as_millisecond())
+        .max(0) as u64;
+    format!("fired after {}", elapsed_label(elapsed_ms))
 }
 
 fn signal_headline(signal: &Signal) -> String {

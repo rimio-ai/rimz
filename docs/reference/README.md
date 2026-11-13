@@ -19,7 +19,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, driving, and waiting on team cohorts, team reports, board entries, and stage flips. |
 | [asks.md](./cli/asks.md) | `rimz asks` and `rimz answer`: raising and withdrawing asks, reading the prompt that blocks an agent, the ask JSON, answering in the agent's native UI, and what each agent accepts. |
 | [message.md](./cli/message.md) | `rimz message`: parking text for the next turn boundary, steering a live turn, conditions, fan-out, the message header, statuses, and the inbox verbs. |
-| [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, a process exit, a polled check, a file change, or a watched command, and listing or canceling pending waits. |
+| [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, at a clock time or usage-window reset, on a state expression, after a process exit, a polled check, a file change, or a watched command, and listing or canceling pending waits. |
 | [transcript.md](./cli/transcript.md) | `rimz transcript`: rendering a channel or one agent from RimZ's durable transcript log, as the human view or JSON. |
 | [pane.md](./cli/pane.md) | `rimz pane`: pane targets, listing, capturing, sending text and keys, focus, zoom, split, detach, and per-pane bandwidth. Also `rimz sidebar frame` and its section filter. |
 | [sidebar.md](./cli/sidebar.md) | `rimz sidebar`: walking cards and worktrees, numbered slots, previous-card focus, needs-you filtering, closing panes, and reopening agent cards. |

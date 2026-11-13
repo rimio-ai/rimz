@@ -50,6 +50,7 @@ use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
 use super::render as ui;
+use super::wake_view::runtime_for_root;
 
 mod add;
 mod condition;
@@ -633,11 +634,6 @@ fn stop_active_run(
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
     Ok(task_catalog(globals)?.visible().get(name).cloned())
-}
-
-fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
-    let state = StatePaths::for_project_root(root).ok()?;
-    RuntimePaths::for_state(&state).ok()
 }
 
 fn observe_task_timing(

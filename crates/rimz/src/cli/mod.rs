@@ -738,7 +738,7 @@ enum Subcmd {
     Agents(Box<agents_cmd::AgentsArgs>),
     /// Launch and drive supervised child agents.
     Subagents(Box<subagents::SubagentsArgs>),
-    /// Wait for a timer, a process, or a command to finish.
+    /// Wake yourself on a timer, a clock time, a condition, or a watch.
     Wait(Box<wait::WaitCommand>),
     /// Discover, inspect, install, launch, and resume named teams.
     Teams(Box<teams::TeamsArgs>),

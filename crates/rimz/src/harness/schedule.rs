@@ -653,6 +653,13 @@ impl IntervalSpec {
     }
 }
 
+/// `at` to the minute in the machine's time zone, as listings and wakes print an instant.
+fn local_minute(at: Timestamp) -> String {
+    at.to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
 /// A parsed schedule: calendar time, interval, a raw cron escape hatch, or
 /// the absolute instant of a `fire-at` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -681,10 +688,7 @@ impl Schedule {
                 format!("every {days} at {:02}:{:02}", spec.hour, spec.minute)
             }
             Schedule::Interval(spec) => format!("every {}", format_minutes(spec.minutes)),
-            Schedule::Instant(at) => at
-                .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
-                .strftime("once at %Y-%m-%d %H:%M")
-                .to_string(),
+            Schedule::Instant(at) => format!("once at {}", local_minute(*at)),
         }
     }
 

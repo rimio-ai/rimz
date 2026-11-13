@@ -783,6 +783,129 @@ fn scheduled_wait_without_metadata_does_not_fabricate_delay() {
 }
 
 #[test]
+fn clock_self_wait_names_its_local_time_and_condition_self_wait_its_elapsed_time() {
+    let at: Timestamp = "2026-01-01T14:20:00Z".parse().unwrap();
+    let clock = TaskEntry {
+        fire_at: Some(at),
+        ..task()
+    };
+    let local = at
+        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string();
+    assert_eq!(
+        compose_wait(
+            "wait-test",
+            &clock,
+            Some(&meta("@coder")),
+            Evidence::Scheduled,
+            "",
+            now()
+        ),
+        format!("waited until {local} [wait-test]")
+    );
+    let condition = crate::harness::when::ConditionEvidence {
+        since: None,
+        when: "pr=merged".to_owned(),
+        hold: None,
+        held_ms: 0,
+        readings: std::collections::BTreeMap::from([("pr".to_owned(), Some("merged".to_owned()))]),
+    };
+    let when = TaskEntry {
+        when: Some(vec!["pr=merged".to_owned()]),
+        ..task()
+    };
+    assert_eq!(
+        compose_wait(
+            "wait-test",
+            &when,
+            Some(&meta("@coder")),
+            Evidence::Condition(&condition),
+            "",
+            now()
+        ),
+        "waited on pr=merged\nfired after 18m [wait-test]\npr: merged"
+    );
+}
+
+#[test]
+fn self_wait_headlines_end_with_the_label_and_loop_deliveries_do_not() {
+    let labelled = |entry: TaskEntry| TaskEntry {
+        label: Some("rebase once both land".to_owned()),
+        ..entry
+    };
+    let delay = WaitMeta {
+        delay: Some("30m".to_owned()),
+        ..meta("@coder")
+    };
+    let condition = crate::harness::when::ConditionEvidence {
+        since: None,
+        when: "pr=merged".to_owned(),
+        hold: None,
+        held_ms: 0,
+        readings: std::collections::BTreeMap::new(),
+    };
+    let at: Timestamp = "2026-01-01T14:20:00Z".parse().unwrap();
+    let local = at
+        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string();
+    for (entry, meta, evidence, headline) in [
+        (
+            labelled(task()),
+            delay.clone(),
+            Evidence::Scheduled,
+            "waited 30m · rebase once both land [wait-test]".to_owned(),
+        ),
+        (
+            labelled(TaskEntry {
+                fire_at: Some(at),
+                ..task()
+            }),
+            meta("@coder"),
+            Evidence::Scheduled,
+            format!("waited until {local} · rebase once both land [wait-test]"),
+        ),
+        (
+            labelled(TaskEntry {
+                watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
+                ..task()
+            }),
+            meta("@coder"),
+            Evidence::Manual,
+            "waited on `cargo test` · rebase once both land".to_owned(),
+        ),
+        (
+            labelled(TaskEntry {
+                when: Some(vec!["pr=merged".to_owned()]),
+                ..task()
+            }),
+            meta("@coder"),
+            Evidence::Condition(&condition),
+            "waited on pr=merged · rebase once both land".to_owned(),
+        ),
+    ] {
+        let body = compose_wait("wait-test", &entry, Some(&meta), evidence, "", now());
+        assert_eq!(body.lines().next().unwrap(), headline, "{body}");
+    }
+    let loop_row = labelled(TaskEntry {
+        when: Some(vec!["pr=merged".to_owned()]),
+        ..task()
+    });
+    assert_eq!(
+        compose_wait(
+            "ship",
+            &loop_row,
+            None,
+            Evidence::Condition(&condition),
+            "",
+            now()
+        ),
+        "waited on pr=merged\nfired [ship]"
+    );
+}
+
+#[test]
 fn watch_command_preview_preserves_both_ends() {
     let command = format!("cargo test {} --all-targets", "界".repeat(140));
     let task = TaskEntry {

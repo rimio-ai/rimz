@@ -11450,7 +11450,7 @@ reason = "Pass 28e: four distinct, test-pinned edge rules (team.waiting, team.fa
 [[verdict]]
 kind = "item"
 key = "harness::schedule::arm::build_entry"
-reason = "Pass 28e: provenance guards enforce self-wait and team contracts; ParsedSchedule re-serialization canonicalizes stored task bytes (2h becomes 120m). Moving the conversion to a single-caller helper deletes nothing, and constructors cannot remove the guards without replacing public options or adding another options type."
+reason = "Pass 28e: provenance guards enforce the self-wait contract (a delay, a watch, a one-shot instant, or a once condition without a hold, with no prompt or guard) and the team contract; ParsedSchedule re-serialization canonicalizes stored task bytes (2h becomes 120m). Moving the conversion to a single-caller helper deletes nothing, and constructors cannot remove the guards without replacing public options or adding another options type."
 
 [[verdict]]
 kind = "item"

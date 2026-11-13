@@ -3811,6 +3811,8 @@ rimz update
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz wait
+    --after-reset <5h|7d>  [action=set takes=1..=1]
+    --at <TIME>  [action=set takes=1..=1]
     --check <COMMAND>  [action=set takes=1..=1]
     --check-in <DURATION>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
@@ -3828,6 +3830,7 @@ rimz wait
     --run <COMMAND>  [action=set takes=1..=1]
     --timeout <DURATION>  [action=set takes=1..=1 hidden]
     --tmux  [action=set-true takes=0..=0 global]
+    --when <EXPR>  [action=append takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz wait cancel

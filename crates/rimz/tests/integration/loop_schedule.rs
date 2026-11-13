@@ -21,6 +21,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::message::{AutoCompact, MessageStatus};
 use rimz::store::run::{RunRecord, RunStatus};
 
+use crate::common::wait::{publish_claude_5h, publish_claude_5h_resetting};
 use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_list.rs"]
 mod list_tests;
@@ -3908,30 +3909,6 @@ fn symlinked_owned_worktree(env: &Env) -> std::path::PathBuf {
     .unwrap();
     loop_ok(env, &["worktree", "new", "lane"]);
     alias.join("lane")
-}
-
-fn publish_claude_5h(env: &Env, used: u8) {
-    publish_claude_5h_resetting(env, used, SignedDuration::from_hours(2));
-}
-
-fn publish_claude_5h_resetting(env: &Env, used: u8, resets_in: SignedDuration) {
-    env.publish_rate_limits(&RateLimitsCache {
-        entries: BTreeMap::from([(
-            "claude@default".parse().unwrap(),
-            RateLimitCacheEntry {
-                limits: AgentRateLimits {
-                    windows: vec![RateLimitWindow {
-                        used_percentage: Some(used),
-                        resets_at: Some(Timestamp::now() + resets_in),
-                        duration_mins: Some(rimz::agents::WindowSpan::FiveHour.minutes()),
-                        ..RateLimitWindow::default()
-                    }],
-                },
-                ..Default::default()
-            },
-        )]),
-        ..Default::default()
-    });
 }
 
 #[test]

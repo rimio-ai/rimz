@@ -1,13 +1,8 @@
 //! Condition admission and room-aware presentation.
 
 use super::*;
-use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WhenTerm, WindowReadings};
-
-struct Reading {
-    verdict: Verdict,
-    room_open: bool,
-    source: Option<CiSource>,
-}
+use crate::cli::wake_view::read_condition as read;
+use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WhenTerm};
 
 pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     if clauses.is_empty() {
@@ -20,38 +15,6 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
 
 pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
     read(entry, expr, None).verdict
-}
-
-/// Read `expr` for `entry` under the freshness rule firing applies, against the task's fire
-/// stamp when it has one.
-fn read(entry: &TaskEntry, expr: &WhenExpr, fired_at: Option<Timestamp>) -> Reading {
-    let root = entry.resolved_root();
-    let runtime = runtime_for_root(&root);
-    let room_open = render::room_open(&root);
-    let source = runtime.as_ref().filter(|_| room_open).map(CiSource::read);
-    let now = Timestamp::now();
-    let windows = WindowReadings::new(runtime.as_ref(), now);
-    let verdict = when::evaluate(
-        expr,
-        &entry.run_dir(),
-        source.as_ref(),
-        entry.provider.as_ref(),
-        entry.account.as_ref(),
-        &windows,
-    )
-    .freshen(
-        expr,
-        &entry.run_dir(),
-        source.as_ref(),
-        fired_at,
-        Some(now),
-        true,
-    );
-    Reading {
-        verdict,
-        room_open,
-        source,
-    }
 }
 
 pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
@@ -135,16 +98,12 @@ pub(super) fn write_receipt(
     let schedule::Trigger::Condition { expr, hold } = &parsed.trigger else {
         return Ok(());
     };
-    let verdict = reading(entry, expr);
-    let state = schedule::TaskTimingState::unmet(expr, &verdict).unwrap_or_else(|| match hold {
-        Some(hold) => schedule::TaskTimingState::Holding {
-            elapsed: Duration::ZERO,
-            hold: *hold,
-        },
-        None => schedule::TaskTimingState::Due(Timestamp::now()),
-    });
     writeln!(out, "scope: {}", entry.run_dir().display())?;
-    writeln!(out, "now: {}", state.condition_label().unwrap_or_default())?;
+    writeln!(
+        out,
+        "now: {}",
+        crate::cli::wake_view::condition_now(entry, expr, *hold)
+    )?;
     Ok(())
 }
 

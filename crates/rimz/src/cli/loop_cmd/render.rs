@@ -7,11 +7,7 @@ use schedule::fanout::{CheckoutCondition, CheckoutState};
 const NOTE_MAX: usize = 60;
 const BLOCKED_WARN_AFTER_SECS: i64 = 30 * 60;
 
-pub(super) fn room_open(root: &Path) -> bool {
-    runtime_for_root(root)
-        .as_ref()
-        .is_some_and(fresh_sidebar_present)
-}
+pub(super) use crate::cli::wake_view::room_open;
 
 fn root_with_room(root: &Path, room_is_open: bool) -> String {
     format!(
