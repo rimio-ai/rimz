@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -187,7 +186,6 @@ struct ViewMode {
 
 #[derive(Clone, Debug)]
 struct Identity {
-    root_lane: bool,
     base_handle: String,
     channel: Option<LaneName>,
     name: Option<String>,
@@ -200,11 +198,7 @@ struct Identity {
 
 impl Identity {
     fn lane_label(&self) -> Option<&str> {
-        if self.root_lane {
-            Some(LaneName::TRUNK_LABEL)
-        } else {
-            self.channel.as_ref().map(LaneName::as_str)
-        }
+        self.channel.as_ref().map(LaneName::as_str)
     }
 }
 
@@ -216,9 +210,7 @@ struct FocusTiming {
 
 #[derive(Clone, Debug)]
 struct Scope {
-    project_root: Option<PathBuf>,
     channel: Option<String>,
-    channel_filter: Option<String>,
     focus: Option<String>,
     focus_keys: Option<BTreeSet<AgentKey>>,
     live_focus: Option<FocusTiming>,
@@ -226,38 +218,18 @@ struct Scope {
 }
 
 impl Scope {
-    fn for_channel(channel: Option<String>, project_root: Option<&std::path::Path>) -> Self {
-        let include_channel = channel.is_none();
-        let root_filter = project_root.is_some()
-            && channel
-                .as_deref()
-                .is_some_and(|channel| LaneSelector::parse(Some(channel), project_root).is_trunk());
-        let channel_filter = if root_filter {
-            Some(LaneName::TRUNK_LABEL.to_owned())
-        } else {
-            channel.clone()
-        };
+    fn for_channel(channel: Option<String>) -> Self {
         Self {
-            channel: if root_filter {
-                project_root.map(|root| rimz::address::trunk_lane_name(root).into())
-            } else {
-                channel
-            },
-            project_root: project_root.map(Path::to_path_buf),
-            channel_filter,
+            include_channel: channel.is_none(),
+            channel,
             focus: None,
             focus_keys: None,
             live_focus: None,
-            include_channel,
         }
     }
 
     fn lane_label(&self) -> Option<&str> {
-        if self.channel_filter.as_deref() == Some(LaneName::TRUNK_LABEL) {
-            Some(LaneName::TRUNK_LABEL)
-        } else {
-            self.channel.as_deref()
-        }
+        self.channel.as_deref()
     }
 }
 
@@ -402,7 +374,7 @@ pub(crate) fn resolve_view_workspace(
     let Some(channel) = requested_channel(target, worktree) else {
         return Ok(current);
     };
-    let selector = LaneSelector::parse(Some(&channel), Some(&current.project_root));
+    let selector = LaneSelector::parse(Some(&channel));
     let Some(lane) = selector.name().filter(|_| !selector.is_trunk()).cloned() else {
         return Ok(current);
     };
@@ -545,8 +517,7 @@ fn chat_view_with_mode(
         .flat_map(|entry| entry.reply_to.iter().map(ToString::to_string))
         .collect::<HashSet<_>>();
     let entries = dedup_asks(log);
-    let project_root = Some(workspace.project_root.as_path());
-    let identities = build_identities(&entries, project_root);
+    let identities = build_identities(&entries);
     let snapshot = store
         .as_ref()
         .map(rimz::Store::snapshot_cached)
@@ -587,8 +558,7 @@ fn chat_view_with_mode(
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope, &identities))
         .filter_map(|entry| {
-            let render =
-                render_entry_for_log_entry(entry, &identities, scope.include_channel, project_root);
+            let render = render_entry_for_log_entry(entry, &identities, scope.include_channel);
             entry_matches_focus(entry, &render.chat, &scope, &identities).then_some(render)
         })
         .collect();
@@ -600,12 +570,12 @@ fn chat_view_with_mode(
         flips
             .iter()
             .filter(|flip| {
-                let filter = scope.channel_filter.as_deref();
+                let filter = scope.channel.as_deref();
                 filter.is_none()
                     || flip
                         .instance
                         .lane()
-                        .is_some_and(|lane| channel_matches(Some(lane), filter, project_root))
+                        .is_some_and(|lane| channel_matches(Some(lane), filter))
             })
             .map(|flip| render_entry_for_flip(flip, scope.include_channel))
             .filter(|render| {
@@ -614,8 +584,7 @@ fn chat_view_with_mode(
                         &render.chat.from,
                         focus,
                         &identities,
-                        scope.channel_filter.as_deref(),
-                        project_root,
+                        scope.channel.as_deref(),
                     )
                 })
             }),

@@ -210,14 +210,7 @@ pub(in crate::cli) fn restart_resolved(
     if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
-            &relaunch_request(
-                agent,
-                &posture,
-                action.clone(),
-                login.clone(),
-                None,
-                &workspace.project_root,
-            ),
+            &relaunch_request(agent, &posture, action.clone(), login.clone(), None),
             &cwd,
             Some(store.runtime_paths()),
         )?;
@@ -275,14 +268,7 @@ pub(in crate::cli) fn restart_resolved(
         .as_ref()
         .map(AgentLaunchBatch::single_identity)
         .transpose()?;
-    let mut invocation = relaunch_request(
-        agent,
-        &posture,
-        action,
-        login,
-        fresh_identity,
-        &workspace.project_root,
-    );
+    let mut invocation = relaunch_request(agent, &posture, action, login, fresh_identity);
     if let Some(run) = handover {
         invocation = with_run(invocation, run);
     }
@@ -603,8 +589,12 @@ pub(in crate::cli) fn relaunch_identity_env(
     cwd: &Path,
     request: &ExecRequest,
 ) -> std::collections::BTreeMap<String, String> {
-    let lane = request.identity.params.lane.as_ref();
-    rimz::room::pane_identity_env(workspace, cwd, lane.and_then(rimz::ids::Lane::stored_name))
+    let channel = (request.identity.params.lane.as_ref()).and_then(rimz::ids::Lane::pin_name);
+    rimz::room::pane_identity_env(
+        workspace,
+        cwd,
+        channel.as_ref().map(rimz::ids::LaneName::as_str),
+    )
 }
 
 pub(in crate::cli) fn relaunch_request(
@@ -613,7 +603,6 @@ pub(in crate::cli) fn relaunch_request(
     action: ExecAction,
     login: Option<rimz::ids::LoginName>,
     fresh_identity: Option<&AgentLaunchIdentity>,
-    project_root: &Path,
 ) -> ExecRequest {
     let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
         Some(identity.name.as_str())
@@ -641,7 +630,7 @@ pub(in crate::cli) fn relaunch_request(
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: None,
-        lane: rimz::harness::lanes::row_lane(agent, project_root),
+        lane: agent.lane.clone(),
         mode: posture.launch.mode,
         isolation: agent.isolation,
         model: posture.launch.model.clone(),
@@ -817,7 +806,7 @@ fn append_fresh_launch(
     mode: Option<PermissionMode>,
     login: Option<rimz::ids::LoginName>,
 ) -> Result<AgentLaunchBatch> {
-    let mut request = fresh_launch_request(agent, cell, mode, &workspace.project_root)?;
+    let mut request = fresh_launch_request(agent, cell, mode)?;
     if let Some(login) = login {
         request.login = rimz::store::writer::LaunchLogin::Pinned(login);
     }
@@ -847,7 +836,6 @@ pub(super) fn fresh_launch_request(
     agent: &AgentState,
     cell: Cell,
     mode: Option<PermissionMode>,
-    project_root: &Path,
 ) -> Result<AgentLaunchRequest> {
     let layout = LayoutSpec::single(cell);
     let mut requests = rimz::harness::plan::launch_identity_requests(
@@ -855,7 +843,7 @@ pub(super) fn fresh_launch_request(
         None,
         None,
         agent.team.as_deref(),
-        rimz::harness::lanes::row_lane(agent, project_root).as_ref(),
+        agent.lane.as_ref(),
         None,
         None,
         None,

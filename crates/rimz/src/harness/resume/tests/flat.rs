@@ -215,6 +215,34 @@ fn provider_resume_adopts_one_session_with_profile_login_and_handle() {
 }
 
 #[test]
+fn a_discovered_session_at_trunk_resumes_into_trunks_lane() {
+    let root = tempfile::tempdir().unwrap();
+    let mut observation = local_session("claude", "native", 1, 2);
+    observation.workspace = root.path().to_path_buf();
+    let profiles = no_profiles();
+    let (_, plan, _) = plan_provider_resume(
+        &observation,
+        None,
+        &[],
+        ctx(1, Some(root.path()), &profiles),
+        &SingleResumeOptions::default(),
+    );
+    assert!(
+        plan.tabs[0].label.contains("#main"),
+        "{}",
+        plan.tabs[0].label
+    );
+    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+    assert_eq!(
+        request.identity.params.lane,
+        Some(crate::ids::Lane::own(
+            crate::ids::LaneHome::Trunk,
+            root.path().display().to_string()
+        ))
+    );
+}
+
+#[test]
 fn one_ended_solo_session_can_resume_in_place() {
     let mut saved = agent("codex", "saved", "/code/project", 0);
     saved.ended_at = Some(saved.last_seen);
@@ -355,6 +383,10 @@ fn resume_reports_why_a_candidate_was_not_seeded() {
             "a session the provider cannot reopen plans fresh instead",
             AgentState {
                 root_lane: true,
+                lane: Some(crate::ids::Lane::own(
+                    crate::ids::LaneHome::Trunk,
+                    "/code/query-engine",
+                )),
                 ..agent("claude", "a1", "/code/query-engine", 1)
             },
             true,
@@ -522,14 +554,16 @@ fn resume_tab_labels_and_replayed_channel() {
         ),
         (
             "an explicit channel names the tab and is replayed",
-            AgentState {
-                channel: Some("design".to_owned()),
-                lane: Some(design_lane(
-                    crate::ids::LaneHome::Trunk,
-                    "/code/query-engine",
-                )),
-                ..agent("codex", "c1", "/code/query-engine", 1)
-            },
+            in_lane(
+                AgentState {
+                    lane: Some(design_lane(
+                        crate::ids::LaneHome::Trunk,
+                        "/code/query-engine",
+                    )),
+                    ..agent("codex", "c1", "/code/query-engine", 1)
+                },
+                "design",
+            ),
             None,
             "#design",
             Some("design"),
@@ -537,7 +571,10 @@ fn resume_tab_labels_and_replayed_channel() {
         ),
         (
             "a team checkout beside the project root carries its own lane, unnamed",
-            team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1),
+            AgentState {
+                lane: Some(checkout_lane("/code/project-wt/auth")),
+                ..team_agent("claude", "planner", "planner", "/code/project-wt/auth", 1)
+            },
             Some(Path::new("/code/project")),
             "#auth",
             Some("auth"),
@@ -575,21 +612,29 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
     for (label, agent, tab_label, channel) in [
         (
             "an explicit channel is pinned and replayed",
-            AgentState {
-                channel: Some("design".to_owned()),
-                lane: Some(design_lane(
-                    crate::ids::LaneHome::Worktree,
-                    "/code/project-wt/auth",
-                )),
-                ..agent("codex", "c1", "/code/project-wt/auth", 1)
-            },
+            in_lane(
+                AgentState {
+                    lane: Some(design_lane(
+                        crate::ids::LaneHome::Worktree,
+                        "/code/project-wt/auth",
+                    )),
+                    ..agent("codex", "c1", "/code/project-wt/auth", 1)
+                },
+                "design",
+            ),
             "#design",
             Some("design"),
         ),
         (
-            "a room-root tab labelled by its directory states an empty channel",
-            agent("codex", "c1", "/code/project", 1),
-            "#project",
+            "a trunk tab is labelled main and states an empty channel",
+            AgentState {
+                lane: Some(crate::ids::Lane::own(
+                    crate::ids::LaneHome::Trunk,
+                    "/code/project",
+                )),
+                ..agent("codex", "c1", "/code/project", 1)
+            },
+            "#main",
             None,
         ),
     ] {
@@ -610,7 +655,9 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
                 .params
                 .lane
                 .as_ref()
-                .and_then(crate::ids::Lane::stored_name),
+                .and_then(crate::ids::Lane::pin_name)
+                .as_ref()
+                .map(crate::ids::LaneName::as_str),
             channel,
             "{label}"
         );
@@ -638,20 +685,22 @@ fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
 
 #[test]
 fn flat_resume_replays_every_durable_identity_field() {
-    let agent = AgentState {
-        name: Some("swift-otter".to_owned()),
-        name_explicit: true,
-        launch_id: Some("launch_a1".into()),
-        profile: Some("claude-planner".to_owned()),
-        role: Some("planner".to_owned()),
-        team: Some("forge".to_owned()),
-        launch_group: Some("launch_group_1".to_owned()),
-        launch_ordinal: Some(2),
-        channel: Some("design".to_owned()),
-        lane: Some(design_lane(crate::ids::LaneHome::Trunk, "/code/qe")),
-        launch_depth: Some(1),
-        ..agent("claude", "a1", "/code/qe", 1)
-    };
+    let agent = in_lane(
+        AgentState {
+            name: Some("swift-otter".to_owned()),
+            name_explicit: true,
+            launch_id: Some("launch_a1".into()),
+            profile: Some("claude-planner".to_owned()),
+            role: Some("planner".to_owned()),
+            team: Some("forge".to_owned()),
+            launch_group: Some("launch_group_1".to_owned()),
+            launch_ordinal: Some(2),
+            lane: Some(design_lane(crate::ids::LaneHome::Trunk, "/code/qe")),
+            launch_depth: Some(1),
+            ..agent("claude", "a1", "/code/qe", 1)
+        },
+        "design",
+    );
 
     let plan = plan(&[agent]);
     let request = decode_exec_request(&first_argv(&plan.tabs[0]));

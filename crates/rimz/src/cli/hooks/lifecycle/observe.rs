@@ -231,7 +231,7 @@ fn record_mapped_lifecycle_observation(
         && observation.launch.lane.is_none()
         && let Some(path) = observation.worktree_path.as_deref()
     {
-        observation.launch.lane = Some(rimz::harness::lanes::own_lane(
+        observation.launch.lane = Some(rimz::worktree::own_lane(
             &workspace.project_root,
             std::path::Path::new(path),
         ));

@@ -181,7 +181,7 @@ fn fanout_matches_pin_panes_and_round_trip_recorded_agents() {
     let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
     let durable = ["session-a", "session-b"].map(|id| {
         let mut agent = agent(id, AgentStatus::Idle);
-        agent.channel = Some("B".to_owned());
+        set_lane(&mut agent, "B");
         agent
     });
     let channel = context(None);
@@ -861,13 +861,25 @@ fn agent(id: &str, status: AgentStatus) -> AgentState {
     let mut agent = AgentState::stub("claude", id, status);
     agent.worktree_path = Some("/repo/project".to_owned());
     agent.worktree_branch = Some("project".to_owned());
+    agent.lane = Some(crate::ids::Lane::own(
+        crate::ids::LaneHome::Worktree,
+        "/repo/project",
+    ));
     agent
+}
+
+/// Put `agent` in the named lane `channel` at its checkout, as a launch
+/// with `--channel` stamps it.
+fn set_lane(agent: &mut AgentState, channel: &str) {
+    let own = agent.lane.take().expect("fixture lane").own_lane();
+    agent.lane = Some(own.named(channel.parse().expect("lane name")));
+    agent.channel = Some(channel.to_owned());
 }
 
 fn named_agent(id: &str, name: &str, channel: &str) -> AgentState {
     let mut agent = agent(id, AgentStatus::Running);
     agent.name = Some(name.to_owned());
-    agent.channel = Some(channel.to_owned());
+    set_lane(&mut agent, channel);
     agent.worktree_branch = Some(channel.to_owned());
     agent
 }
@@ -894,7 +906,10 @@ fn owner_pane(id: &str, role: Option<&str>) -> PaneAgent {
     PaneAgent {
         checkout: None,
         root_lane: false,
-        lane: None,
+        lane: Some(crate::ids::Lane::own(
+            crate::ids::LaneHome::Worktree,
+            "/repo/project",
+        )),
         kind: AgentKind::new_unchecked("claude"),
         kind_ordinal: Some(2),
         name: Some("owner".to_owned()),

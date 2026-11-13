@@ -51,7 +51,7 @@ fn a_name_shared_across_lanes_resolves_by_the_senders_channel() {
         let mut card = agent();
         card.agent_id = session.into();
         card.name = Some("sender".into());
-        card.channel = Some(channel.into());
+        crate::testkit::set_lane(&mut card, channel);
         card
     };
     let cards = [lane("docs-session", "docs"), lane("auth-session", "auth")];

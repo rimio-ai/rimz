@@ -1037,6 +1037,15 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
         .expect("newborn Kiro agent");
     assert_eq!(agent["status"], "idle");
     assert_eq!(agent["phase"], "idle");
+    assert_eq!(
+        agent["lane"],
+        serde_json::to_value(rimz::worktree::own_lane(
+            &env.project_root,
+            &env.project_root
+        ))
+        .unwrap(),
+        "a provider-files session at trunk is in trunk's lane"
+    );
     assert!(agent.get("prompt").is_none());
     assert!(agent["context_pct"].is_null());
     assert!(agent["context_window"].is_null());

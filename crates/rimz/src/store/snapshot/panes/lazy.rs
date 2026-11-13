@@ -20,9 +20,12 @@ pub(crate) enum AgentPaneRow<'a> {
     Agent(&'a AgentState),
     /// A wired instance with no session bound yet.
     Idle(Box<SidebarRow>),
+    /// A process row for an agent pane RimZ cannot follow. With a `kind` the
+    /// pane is still an addressable agent pane, in `lane`; the row takes none.
     NotTracked {
         kind: Option<AgentKind>,
         row: Box<SidebarRow>,
+        lane: Option<crate::ids::Lane>,
     },
     /// This pane resolves to a session already bound to another pane. It folds
     /// no row; the projection emits the diagnostic.
@@ -763,11 +766,13 @@ fn agent_pane_identity_from_evidence(
 }
 
 /// The resting row for a wired agent pane that no session claimed: `○ <kind>`
-/// with adapter-owned model/window defaults when known.
+/// with adapter-owned model/window defaults when known, in the producer's own
+/// lane for its directory.
 fn idle_agent_row(
     pane: &PaneRef,
     definition: &AgentSpec,
     worktree_path: &str,
+    lane: Option<crate::ids::Lane>,
     default_model: Option<&str>,
     now: Timestamp,
 ) -> SidebarRow {
@@ -778,8 +783,11 @@ fn idle_agent_row(
         worktree_path: Some(worktree_path.to_owned()),
         checkout: None,
         worktree_branch: None,
-        channel: None,
-        lane: None,
+        channel: lane
+            .as_ref()
+            .and_then(crate::ids::Lane::pin_name)
+            .map(Into::into),
+        lane,
         unread: false,
         inactive: false,
         archived: false,
@@ -830,9 +838,13 @@ fn unbound_agent_row(
         let mut row = row_from_process(pane, now);
         // row_from_process always constructs RowCard::Process.
         row.as_process_mut().expect("process card").not_tracked = Some(note);
+        let lane = kind
+            .as_ref()
+            .and_then(|_| wiring.own_lanes.get(worktree_path).cloned());
         return Some(AgentPaneRow::NotTracked {
             kind,
             row: Box::new(row),
+            lane,
         });
     }
     wired_frontend.then(|| {
@@ -840,6 +852,7 @@ fn unbound_agent_row(
             pane,
             definition,
             worktree_path,
+            wiring.own_lanes.get(worktree_path).cloned(),
             wiring
                 .default_models
                 .get(definition.kind)

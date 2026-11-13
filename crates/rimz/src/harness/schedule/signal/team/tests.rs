@@ -12,7 +12,9 @@ fn member(name: &str, channel: &str, status: AgentStatus) -> AgentState {
     member.name = Some(name.to_owned());
     member.role = Some(name.to_owned());
     member.team = Some("forge".to_owned());
-    member.channel = Some(channel.to_owned());
+    if !channel.is_empty() {
+        crate::testkit::set_lane(&mut member, channel);
+    }
     member.status = status;
     member
 }
@@ -443,9 +445,24 @@ fn one_cohort_writes_one_instance_into_each_of_its_records() {
     let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
     let selector =
         crate::harness::signal::parse_signal_selector("idle", "team.idle", None).unwrap();
-    for (stamp, expected) in [(Some("feat x"), "forge#feat-x"), (None, "forge#external")] {
+    let checkout = root.path().to_string_lossy();
+    let named = |home, name: &str| {
+        crate::ids::Lane::own(home, checkout.as_ref()).named(name.parse().unwrap())
+    };
+    for (lane, expected) in [
+        (
+            Some(named(crate::ids::LaneHome::Worktree, "feat-x")),
+            "forge#feat-x",
+        ),
+        // An in-place team on trunk is the named lane of the team.
+        (
+            Some(named(crate::ids::LaneHome::Trunk, "forge")),
+            "forge#forge",
+        ),
+        (None, "forge#external"),
+    ] {
         let mut coder = member("coder", "", AgentStatus::Success);
-        coder.channel = stamp.map(str::to_owned);
+        coder.lane = lane;
         coder.worktree_path = None;
         let rows = [coder.clone()];
         let listed = team_cohorts(&rows).remove(0).instance;

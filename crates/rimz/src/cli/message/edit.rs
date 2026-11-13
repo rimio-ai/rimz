@@ -220,16 +220,8 @@ pub(super) fn message_target_for_record(
 ) -> String {
     let row = MessageListRow::from_record(record.clone());
     let agents = rimz::address::addressable_agents(snapshot);
-    let project_root = snapshot.project_root.as_deref();
-    let lane = rimz::address::record_lane_label(
-        row.channel.as_ref().map(rimz::ids::LaneName::as_str),
-        project_root,
-    );
-    scoped_handle(
-        message_target(&row, &agents, project_root),
-        lane,
-        project_root,
-    )
+    let lane = row.channel.as_ref().map(rimz::ids::LaneName::as_str);
+    scoped_handle(message_target(&row, &agents), lane)
 }
 
 pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
@@ -293,12 +285,11 @@ pub(super) fn clear_messages(
                 "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a RimZ channel"
             )
         })?;
-    let project_root = Some(workspace.project_root.as_path());
-    let selector = LaneSelector::parse(Some(lane), project_root);
+    let selector = LaneSelector::parse(Some(lane));
     let canceled = match selector.name().filter(|_| !selector.is_trunk()) {
         Some(name) => store.clear_channel_messages(name, &workspace.session_name)?,
         None => store.clear_messages_matching(
-            |message| selector.holds_record(message.channel.as_ref(), project_root),
+            |message| selector.holds_record(message.channel.as_ref()),
             &workspace.session_name,
         )?,
     };

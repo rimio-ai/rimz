@@ -381,7 +381,7 @@ fn team_seat_launch_prompt_opens_a_team_run_and_no_peer_turns() {
     let h = Harness::new();
     let mut leader = peer();
     leader.team = Some("forge".into());
-    leader.channel = Some("feat-x".into());
+    rimz::testkit::set_lane(&mut leader, "feat-x");
     let adapter = rimz::agents::registry::definition_by_kind("claude").unwrap();
     let record = run::create_peer_prompt(
         h.store.paths(),

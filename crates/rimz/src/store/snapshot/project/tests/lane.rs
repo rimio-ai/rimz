@@ -82,12 +82,9 @@ fn the_first_lane_stands_against_registration_bound_launch_and_old_channel() {
 }
 
 #[test]
-fn a_lane_less_row_adopts_its_old_stamp_at_the_first_lane() {
-    for (stamp, expect) in [
-        ("main", Lane::own(LaneHome::Trunk, "/repo")),
-        ("repo", Lane::own(LaneHome::Trunk, "/repo")),
-        ("design", named(LaneHome::Trunk, "/repo", "design")),
-    ] {
+fn a_lane_less_row_takes_the_first_lane_as_it_is_whatever_its_old_stamp() {
+    let trunk = Lane::own(LaneHome::Trunk, "/repo");
+    for stamp in ["main", "repo", "design"] {
         let old = lane_launch(
             AgentLaunchState::Starting,
             LaunchParams {
@@ -98,19 +95,20 @@ fn a_lane_less_row_adopts_its_old_stamp_at_the_first_lane() {
         let agents = reduce_agent_states(std::slice::from_ref(&old));
         assert_eq!(agents[0].lane, None, "{stamp}");
         assert_eq!(agents[0].channel.as_deref(), Some(stamp), "{stamp}");
-
-        let registered = registration(
-            "sess-1",
-            json!({ "lane": lane_json(&Lane::own(LaneHome::Trunk, "/repo")) }),
+        assert!(
+            !agents[0].in_trunk(),
+            "{stamp}: a lane-less row is not trunk"
         );
+        assert_eq!(agents[0].lane_name(), None, "{stamp}");
+
+        let registered = registration("sess-1", json!({ "lane": lane_json(&trunk) }));
         let agents = reduce_agent_states(&[old, registered]);
         let agent = agents.last().unwrap();
-        assert_eq!(agent.lane.as_ref(), Some(&expect), "{stamp}");
-        assert_eq!(agent.root_lane, expect.is_trunk(), "{stamp}");
+        assert_eq!(agent.lane.as_ref(), Some(&trunk), "{stamp}");
+        assert!(agent.root_lane, "{stamp}");
         assert_eq!(
-            agent.channel.as_deref(),
-            expect.stored_name(),
-            "{stamp}: the stamp gives way to the lane's stored name"
+            agent.channel, None,
+            "{stamp}: the stamp gives way to trunk's lane, which projects no channel"
         );
     }
 }

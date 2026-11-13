@@ -1,7 +1,7 @@
 //! `rimz message` — parse command input, call message domain, and render output.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};

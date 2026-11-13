@@ -105,8 +105,8 @@ pub(super) fn team_launch_context(
         channel: params
             .lane
             .as_ref()
-            .and_then(crate::ids::Lane::stored_name)
-            .map(ToOwned::to_owned),
+            .and_then(crate::ids::Lane::pin_name)
+            .map(Into::into),
         leader,
         declared_leader: team.leader.is_some(),
         seats: team

@@ -595,7 +595,7 @@ fn inject_lifecycle_with_launch(
     branch: Option<&str>,
     launch: LaunchParams,
 ) {
-    let obs = AgentLifecycleObservation {
+    let mut obs = AgentLifecycleObservation {
         on_screen: None,
         state_snapshot: None,
         ask_queue: None,
@@ -621,6 +621,7 @@ fn inject_lifecycle_with_launch(
         parent_agent_id: None,
         background_shells: None,
     };
+    crate::common::wait::stamp_hook_lane(env, &mut obs);
     let envelope = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),
         "test-session",
@@ -2835,7 +2836,8 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         agent,
         "stuck".to_owned(),
         DeliveryGate::Done,
-    );
+    )
+    .with_channel(agent.lane_name());
     stuck.agent_name = Some("coder".to_owned());
     stuck.attempts = 3;
     stuck.last_error = Some("pane rejected".to_owned());
@@ -2849,7 +2851,8 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         agent,
         "failed".to_owned(),
         DeliveryGate::Done,
-    );
+    )
+    .with_channel(agent.lane_name());
     failed.status = MessageStatus::Errored;
     let failed_id = failed.message_id.to_string();
     env.store()
@@ -2866,7 +2869,8 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         agent,
         "delivered".to_owned(),
         DeliveryGate::Done,
-    );
+    )
+    .with_channel(agent.lane_name());
     delivered.status = MessageStatus::Delivered;
     let delivered_id = delivered.message_id.to_string();
     env.store()

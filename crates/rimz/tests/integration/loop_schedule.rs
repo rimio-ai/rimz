@@ -1188,14 +1188,17 @@ fn loop_channel_case(action: LoopLaunch, firer: LoopFirer) {
         (home, path.as_str()),
         "{lane:?}"
     );
+    // The recorded channel is the lane's pin name, stated empty for an own lane
+    // that carries none: trunk's and the check's foreign checkout's.
+    let routing = lane.pin_name();
     assert_eq!(
         agent.channel.as_deref(),
-        None,
+        routing.as_ref().map(rimz::ids::LaneName::as_str),
         "recorded channel after the pane's registration hook"
     );
     assert_eq!(
         pane_channel.as_deref(),
-        Some(""),
+        Some(routing.as_ref().map_or("", rimz::ids::LaneName::as_str)),
         "channel exported to the agent pane"
     );
     assert_eq!(
@@ -4713,7 +4716,7 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
                     "add",
                     name,
                     "--wait",
-                    "@claude#project",
+                    "@claude#main",
                     "--signal",
                     signal,
                     "--match",
@@ -4789,7 +4792,7 @@ fn team_signal_payload_handles_round_trip_beside_teamless_role_rivals() {
             "add",
             "matching",
             "--wait",
-            "@claude#project",
+            "@claude#main",
             "--signal",
             "team.idle",
             "--match",
@@ -5329,7 +5332,7 @@ fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
                 "add",
                 name,
                 "--wait",
-                "@claude#project",
+                "@claude#main",
                 "--signal",
                 signal,
             ])

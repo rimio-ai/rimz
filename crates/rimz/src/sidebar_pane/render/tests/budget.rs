@@ -258,6 +258,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         wired_kinds: Vec::new(),
         wired_default_models: std::collections::BTreeMap::new(),
         untracked_kinds: std::collections::BTreeMap::new(),
+        own_lanes: std::collections::BTreeMap::new(),
         agent_panes: Vec::new().into(),
         own_view: None,
         only_daemon_view_remains: false,

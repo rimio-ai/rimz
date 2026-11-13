@@ -600,8 +600,8 @@ fn full_entry_has_a_stable_projection() {
     state.role = Some("coder".to_owned());
     state.team = Some("forge".to_owned());
     state.mode = Some(PermissionMode::Yolo);
-    state.channel = Some("auth".to_owned());
     state.worktree_path = Some("/repo/auth".to_owned());
+    rimz::testkit::set_lane(&mut state, "auth");
     state.worktree_branch = Some("feature/auth".to_owned());
     state.model = Some("gpt-5".to_owned());
     state.effort = Some("high".to_owned());

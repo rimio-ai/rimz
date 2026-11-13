@@ -332,7 +332,11 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             automation: agent.automation.clone(),
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
-            channel: super::lanes::stored_channel(agent).map(ToOwned::to_owned),
+            channel: agent
+                .lane
+                .as_ref()
+                .and_then(crate::ids::Lane::pin_name)
+                .map(Into::into),
             lane: agent.lane.clone(),
             launch_depth: agent.launch_depth,
             launched_by: agent.launched_by.clone(),

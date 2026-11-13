@@ -1,12 +1,15 @@
 //! An agent's lane, decided once at a fresh launch.
 //!
 //! [`decide`] is the one constructor of a fresh launch's lane; relaunches copy
-//! the row's lane through [`row_lane`] and never decide again. [`own_lane`]
-//! classifies a directory into its checkout's own lane without spawning Git, so
-//! the constructor, registration, and every reader agree on it. The lane rules
+//! the row's stored lane and never decide again.
+//! [`crate::worktree::own_lane`] classifies a directory into its checkout's own
+//! lane without spawning Git, so the constructor, registration, and every
+//! reader agree on it. The lane rules
 //! live beside them: a typed name is flat, a name a checkout owns (trunk's
-//! `main` and directory, a managed worktree's directory) means that checkout's
-//! own lane, and one named lane is held at one checkout while live agents hold it.
+//! `main`, a managed worktree's directory) means that checkout's own lane, an
+//! in-place team at trunk is the named lane [`team_lane`] gives it, admitted like a
+//! typed name but never refused as unflat, and one named lane is held at one
+//! checkout while live agents hold it.
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +36,10 @@ pub enum LaneErr {
         "channel `{name}` is held by live agents; pick another name, or stop them with `rimz agents stop`"
     )]
     LaneOccupied { name: String },
+    #[error(
+        "team `{team}` cannot run in place: `{team}` is the project checkout's own lane; launch it in a worktree with `--worktree <name>`"
+    )]
+    TeamOwnLane { team: String },
 }
 
 /// The lane of the launch's caller, when it has one.
@@ -61,19 +68,17 @@ pub struct LaneRequest<'a> {
 
 /// Decide a fresh launch's lane, first match: a typed name the target checkout
 /// owns, a typed name, a bare role joining the caller's named lane, an in-place
-/// team at trunk, the caller's named lane, the target checkout's own lane. Only
-/// the caller's lane homed at the target checkout carries over; a pin that
-/// fails a typed name's checks is ignored.
+/// team at trunk (the named lane of its dashed name, under a typed name's checks
+/// apart from flatness), the caller's named lane, the target checkout's own
+/// lane. Only the caller's lane homed at the target checkout carries over; a pin
+/// that fails a typed name's checks is ignored.
 pub fn decide(request: &LaneRequest<'_>) -> Result<Lane, LaneErr> {
-    let own = own_lane(request.project_root, request.target);
+    let own = crate::worktree::own_lane(request.project_root, request.target);
     if let Some(typed) = request.typed.filter(|typed| !typed.is_empty()) {
-        if owned_names(&own, request.project_root)
-            .iter()
-            .any(|owned| owned == typed)
-        {
+        if owned_names(&own).iter().any(|owned| owned == typed) {
             return Ok(own);
         }
-        let name = admit_named(request, &own, typed)?;
+        let name = admit_typed(request, &own, typed)?;
         return Ok(own.named(name));
     }
     let caller = request.caller.as_ref().and_then(|caller| {
@@ -81,7 +86,7 @@ pub fn decide(request: &LaneRequest<'_>) -> Result<Lane, LaneErr> {
         let name = lane.name()?;
         let admissible = || match caller {
             CallerLane::Agent(_) => true,
-            CallerLane::Pin(_) => admit_named(request, &own, name.as_str()).is_ok(),
+            CallerLane::Pin(_) => admit_typed(request, &own, name.as_str()).is_ok(),
         };
         (same_checkout(lane.path(), own.path()) && admissible()).then_some(lane)
     });
@@ -93,101 +98,27 @@ pub fn decide(request: &LaneRequest<'_>) -> Result<Lane, LaneErr> {
     if let Some(team) = request.team.filter(|team| !team.is_empty())
         && own.is_trunk()
     {
-        return Ok(own.named(in_place_team_name(request.project_root, team)));
+        let name = team_lane(team);
+        if owned_names(&own).iter().any(|owned| owned == name.as_str()) {
+            return Err(LaneErr::TeamOwnLane {
+                team: team.to_owned(),
+            });
+        }
+        admit_named(request, &own, &name)?;
+        return Ok(own.named(name));
     }
     Ok(caller.cloned().unwrap_or(own))
 }
 
-/// The checkout's own lane for `dir`: the deepest of trunk and a managed
-/// worktree containing it, else a foreign checkout homed at its repository
-/// root, else at `dir` itself. A non-repository room's project root is its
-/// trunk; a managed worktree whose directory is `main` is foreign. A repository
-/// at or above the user's home, compared with links resolved, homes no foreign
-/// lane, so every directory under a dotfiles home keeps its own.
-pub fn own_lane(project_root: &Path, dir: &Path) -> Lane {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
-    own_lane_at_home(project_root, dir, home.as_deref().map(Path::new))
-}
-
-fn own_lane_at_home(project_root: &Path, dir: &Path, home: Option<&Path>) -> Lane {
-    let dir = crate::utils::path::normalize_path_lexical(dir);
-    for ancestor in dir.ancestors() {
-        if ancestor == project_root {
-            return Lane::own(LaneHome::Trunk, path_text(project_root));
-        }
-        if is_managed_worktree(project_root, ancestor) {
-            let home = if ancestor.file_name().is_some_and(|name| name == "main") {
-                LaneHome::Foreign
-            } else {
-                LaneHome::Worktree
-            };
-            return Lane::own(home, path_text(ancestor));
-        }
-    }
-    let root = dir
-        .ancestors()
-        .find(|ancestor| is_repository_root(ancestor))
-        .filter(|root| !home.is_some_and(|home| resolved(home).starts_with(resolved(root))))
-        .unwrap_or(&dir);
-    Lane::own(LaneHome::Foreign, path_text(root))
-}
-
-/// `path` with every link resolved, or as written when it cannot be resolved,
-/// so a home and a root named through different links still compare equal.
-fn resolved(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(path))
-}
-
-/// A `.git` directory holding `HEAD`, or a `.git` file naming its `gitdir:`;
-/// read without Git, since a bare `.git` entry proves nothing.
-fn is_repository_root(dir: &Path) -> bool {
-    use std::io::Read;
-    let git = dir.join(".git");
-    if git.is_dir() {
-        return git.join("HEAD").is_file();
-    }
-    let mut prefix = [0; 7];
-    std::fs::File::open(&git)
-        .and_then(|mut file| file.read_exact(&mut prefix))
-        .is_ok_and(|()| &prefix == b"gitdir:")
-}
-
-/// A row's lane: its stored lane, else its old stamp adopted at the checkout
-/// its lane path classifies into.
-pub fn row_lane(agent: &AgentState, project_root: &Path) -> Option<Lane> {
-    if let Some(lane) = &agent.lane {
-        return Some(lane.clone());
-    }
-    let path = agent.lane_path()?;
-    Some(own_lane(project_root, Path::new(path)).adopt(agent.channel.as_deref()))
-}
-
-/// The lane name a row's record `channel` field carries: its stored lane's
-/// stored name, else its old stamp when that is not empty.
-pub(super) fn stored_channel(agent: &AgentState) -> Option<&str> {
-    match &agent.lane {
-        Some(lane) => lane.stored_name(),
-        None => agent
-            .channel
-            .as_deref()
-            .filter(|channel| !channel.is_empty()),
-    }
-}
-
-/// The named lane an in-place team starts at trunk: `<project dir>/<team>`, or
-/// the team name alone when the root has no basename. Each whitespace
-/// character and `#` becomes `-`, so the name is always a lane name.
-pub fn in_place_team_name(project_root: &Path, team: &str) -> LaneName {
-    let raw = match project_root.file_name().and_then(|name| name.to_str()) {
-        Some(dir) if !dir.is_empty() => format!("{dir}/{team}"),
-        _ => team.to_owned(),
-    };
-    LaneName::dashed(&raw)
+/// The name of the lane an in-place team runs in at trunk: the team's name,
+/// dashed so a name that is not flat still names a lane.
+pub fn team_lane(team: &str) -> LaneName {
+    LaneName::dashed(team)
 }
 
 /// The routing name of `dir`'s own lane; trunk's own lane has none.
 pub fn directory_channel(project_root: &Path, dir: &Path) -> Option<LaneName> {
-    let lane = own_lane(project_root, dir);
+    let lane = crate::worktree::own_lane(project_root, dir);
     if lane.is_trunk() {
         return None;
     }
@@ -195,24 +126,22 @@ pub fn directory_channel(project_root: &Path, dir: &Path) -> Option<LaneName> {
 }
 
 /// Admit a new managed worktree's name: no live agent holds a named lane under
-/// it, apart from agents whose lane path is a directory of that name, which is
-/// the worktree itself before it exists.
-pub fn admit_worktree_name(
-    agents: &[AgentState],
-    project_root: &Path,
-    name: &str,
-) -> Result<(), LaneErr> {
+/// it, apart from agents whose lane path is `dir`, the worktree's own
+/// directory before it exists. A holder homed anywhere else refuses it.
+pub fn admit_worktree_name(agents: &[AgentState], name: &str, dir: &Path) -> Result<(), LaneErr> {
+    let dir = crate::utils::path::normalize_path_lexical(dir);
     let in_worktree = |agent: &AgentState| {
         agent
             .lane_path()
-            .and_then(|path| Path::new(path).file_name())
-            .is_some_and(|dir| dir == name)
+            .is_some_and(|path| crate::utils::path::normalize_path_lexical(Path::new(path)) == dir)
     };
     let occupied = agents
         .iter()
         .filter(|agent| held_live(agent) && !in_worktree(agent))
         .any(|agent| {
-            row_lane(agent, project_root)
+            agent
+                .lane
+                .as_ref()
                 .is_some_and(|lane| lane.name().is_some_and(|held| held.as_str() == name))
         });
     if occupied {
@@ -223,9 +152,24 @@ pub fn admit_worktree_name(
     Ok(())
 }
 
-/// A typed name's checks, for a named lane at `own`'s checkout: no other
-/// checkout owns it, it is flat, and no live agents hold it at another checkout.
-fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<LaneName, LaneErr> {
+/// A typed name's checks: it is flat, and admitted as a named lane at `own`'s
+/// checkout.
+fn admit_typed(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<LaneName, LaneErr> {
+    let invalid = || LaneErr::InvalidName {
+        name: name.to_owned(),
+    };
+    if !LaneName::is_flat(name) {
+        return Err(invalid());
+    }
+    let name = name.parse().map_err(|_| invalid())?;
+    admit_named(request, own, &name)?;
+    Ok(name)
+}
+
+/// A named lane's checks at `own`'s checkout: no other checkout owns it, and no
+/// live agents hold it at another checkout.
+fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &LaneName) -> Result<(), LaneErr> {
+    let name = name.as_str();
     let project_root = request.project_root;
     let trunk = Lane::own(LaneHome::Trunk, path_text(project_root));
     if managed_worktree_names(project_root)
@@ -236,17 +180,7 @@ fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<Lane
             name: name.to_owned(),
         });
     }
-    let invalid = || LaneErr::InvalidName {
-        name: name.to_owned(),
-    };
-    if !LaneName::is_flat(name) {
-        return Err(invalid());
-    }
-    if !own.is_trunk()
-        && owned_names(&trunk, project_root)
-            .iter()
-            .any(|owned| owned == name)
-    {
+    if !own.is_trunk() && owned_names(&trunk).iter().any(|owned| owned == name) {
         return Err(LaneErr::TrunkCollision {
             name: name.to_owned(),
         });
@@ -255,7 +189,7 @@ fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<Lane
         .agents
         .iter()
         .filter(|agent| held_live(agent))
-        .filter_map(|agent| row_lane(agent, project_root))
+        .filter_map(|agent| agent.lane.as_ref())
         .find(|lane| {
             lane.name().is_some_and(|held| held.as_str() == name)
                 && !same_checkout(lane.path(), own.path())
@@ -266,26 +200,16 @@ fn admit_named(request: &LaneRequest<'_>, own: &Lane, name: &str) -> Result<Lane
             checkout: PathBuf::from(lane.path()),
         });
     }
-    name.parse().map_err(|_| invalid())
+    Ok(())
 }
 
-/// The names a checkout's own lane owns: its directory, and for trunk also `main`.
-fn owned_names(own: &Lane, project_root: &Path) -> Vec<String> {
-    let mut names = Vec::new();
+/// The names a checkout's own lane owns: trunk's `main`, a managed worktree's
+/// directory.
+fn owned_names(own: &Lane) -> Vec<String> {
     match own.home() {
-        LaneHome::Trunk => {
-            names.push("main".to_owned());
-            names.extend(
-                project_root
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(ToOwned::to_owned),
-            );
-        }
-        LaneHome::Worktree => names.push(own.routing_name().into()),
-        LaneHome::Foreign => {}
+        LaneHome::Trunk | LaneHome::Worktree => vec![own.routing_name().into()],
+        LaneHome::Foreign => Vec::new(),
     }
-    names
 }
 
 /// Every managed worktree's directory name; an unreadable list claims none.
@@ -298,16 +222,6 @@ fn managed_worktree_names(project_root: &Path) -> Vec<String> {
             (name != "main").then_some(name)
         })
         .collect()
-}
-
-fn is_managed_worktree(project_root: &Path, dir: &Path) -> bool {
-    dir.join(".git").is_file()
-        && matches!(
-            crate::worktree::classify_checkout(dir, project_root),
-            crate::worktree::CheckoutKind::Linked(_)
-        )
-        && crate::worktree::read_marker_from_checkout_metadata(dir)
-            .is_ok_and(|marker| marker.is_some())
 }
 
 fn held_live(agent: &AgentState) -> bool {

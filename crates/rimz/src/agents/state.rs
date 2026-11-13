@@ -1271,16 +1271,18 @@ pub struct AgentState {
     /// agent-cell index. Roleless team cells leave it unset and tail the block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
-    /// The routing lane name: the lane's stored name while `lane` is set, else an
-    /// older binary's stamp. When absent, read paths fall back to the lane-path
-    /// directory basename.
+    /// The lane's name while `lane` is set and is not trunk's own, else an
+    /// older binary's stamp. No reader takes a lane from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// Derived at the store fold exit from the workspace record's project root, never from an event.
+    /// The lane's is-trunk reading while `lane` is set; a lane-less row is not
+    /// in trunk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub root_lane: bool,
     /// The lane the fold first saw for this row, never moved after. While it is
-    /// set, `channel` is its stored name and `root_lane` its is-trunk reading.
+    /// set, `channel` is its name (absent for trunk's own lane) and `root_lane`
+    /// its is-trunk reading. A native child's is its parent's, stamped by the
+    /// writer on the event that creates the row. A row without one is in no lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<crate::ids::Lane>,
     /// When this session explicitly ended or the store proved its root process
@@ -1864,14 +1866,10 @@ impl AgentState {
             .or(self.checkout.as_deref())
     }
 
-    /// The row's lane name: its stored lane's routing name, else the reading of
-    /// a row an older binary wrote before rows stored their lane, from its stamp
-    /// or its lane path. Link 3 deletes that fallback.
+    /// The row's lane name: its stored lane's routing name. A row an older
+    /// binary wrote before rows stored their lane has none, so it is in no lane.
     pub fn lane_name(&self) -> Option<crate::ids::LaneName> {
-        match &self.lane {
-            Some(lane) => Some(lane.routing_name()),
-            None => crate::ids::legacy_lane_name(self.channel.as_deref(), self.lane_path()),
-        }
+        self.lane.as_ref().map(crate::ids::Lane::routing_name)
     }
 
     /// The team cohort this seat belongs to: its team in its lane, or the team's
@@ -1881,41 +1879,18 @@ impl AgentState {
         crate::ids::TeamInstanceId::new(team, self.lane_name()).ok()
     }
 
-    /// Whether the row is in trunk's own lane: its stored lane's reading, else
-    /// the root predicate the fold stamped on a lane-less row.
+    /// Whether the row is in trunk's own lane; a lane-less row is not.
     pub fn in_trunk(&self) -> bool {
-        self.lane
-            .as_ref()
-            .map_or(self.root_lane, crate::ids::Lane::is_trunk)
+        self.lane.as_ref().is_some_and(crate::ids::Lane::is_trunk)
     }
 
-    /// The row's lane path when the row is its checkout's own lane: a stored
-    /// lane without a name, else a lane-less row with no stamp. Link 3 deletes
-    /// that fallback.
-    pub(crate) fn own_lane_path(&self) -> Option<&str> {
-        let own = match &self.lane {
-            Some(lane) => lane.name().is_none(),
-            None => self.channel.as_deref().is_none_or(str::is_empty),
-        };
-        own.then(|| self.lane_path()).flatten()
-    }
-
-    /// A lane-less row's stamp when no lane name can hold it (a directory with
-    /// a space), shown as written. Link 3 deletes it.
-    pub(crate) fn stamp_label(&self) -> Option<&str> {
-        let stamp = self.channel.as_deref().filter(|_| self.lane.is_none())?;
-        stamp
-            .parse::<crate::ids::LaneName>()
-            .is_err()
-            .then_some(stamp)
-    }
-
-    /// Point `channel` and `root_lane` at the lane, when the row has one.
+    /// Point `channel` and `root_lane` at the lane, when the row has one:
+    /// `channel` is its pin name ([`Lane::pin_name`](crate::ids::Lane::pin_name)).
     pub(crate) fn project_lane(&mut self) {
         let Some(lane) = &self.lane else {
             return;
         };
-        self.channel = lane.stored_name().map(ToOwned::to_owned);
+        self.channel = lane.pin_name().map(Into::into);
         self.root_lane = lane.is_trunk();
     }
 

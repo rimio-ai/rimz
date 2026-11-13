@@ -824,7 +824,7 @@ fn lane_matches(row: &AgentRow<'_>, text: &str) -> bool {
     if text.contains('*') {
         return row.lane.as_deref().is_some_and(|lane| glob(text, lane));
     }
-    agent_in_lane(row.agent, &LaneSelector::parse(Some(text), None))
+    agent_in_lane(row.agent, &LaneSelector::parse(Some(text)))
 }
 
 /// `@` is optional, and a pattern without `#lane` ignores the address's lane.

@@ -418,11 +418,12 @@ impl fmt::Display for TeamInstanceId {
     }
 }
 
-/// The name of a named lane: any non-empty text without `#` or whitespace.
+/// A lane's name: any non-empty text without `#` or whitespace.
 ///
-/// In-place team lanes are `<project dir>/<team>`, and a project directory may
-/// hold `.`, so only a typed `--channel` answers to the narrower
-/// [`LaneName::is_flat`] check.
+/// Every lane a launch names is flat ([`LaneName::is_flat`]), but the grammar
+/// stays wide: a record an older binary wrote may carry a name outside the flat
+/// set (it decodes through [`LaneName::dashed`]), and a checkout's own lane
+/// takes its directory's name, which may hold `.`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct LaneName(String);
@@ -433,8 +434,13 @@ pub struct LaneName(String);
 pub struct InvalidLane(String);
 
 impl LaneName {
-    /// How trunk's own lane reads to a person.
-    pub const TRUNK_LABEL: &'static str = "main";
+    /// Trunk's own lane's name.
+    pub const TRUNK: &'static str = "main";
+
+    /// Trunk's own lane's name, as a lane name.
+    pub fn trunk() -> Self {
+        Self(Self::TRUNK.to_owned())
+    }
 
     pub fn as_str(&self) -> &str {
         &self.0
@@ -449,16 +455,6 @@ impl LaneName {
         } else {
             dashed
         })
-    }
-
-    /// How a lane of this routing name reads to a person: `main` for trunk's
-    /// own lane, else the name itself.
-    pub fn label(&self, trunk: bool) -> &str {
-        if trunk {
-            Self::TRUNK_LABEL
-        } else {
-            self.as_str()
-        }
     }
 
     /// Whether `raw` is a flat name, as a typed `--channel` must be: non-empty
@@ -606,35 +602,37 @@ impl Lane {
         self.home == LaneHome::Trunk && self.name.is_none()
     }
 
-    /// The name the record's `channel` field carries: the name, else a
-    /// worktree's directory; trunk's and a foreign checkout's own lanes have none.
-    pub fn stored_name(&self) -> Option<&str> {
+    /// The name a launch pins and titles the lane with: `RIMZ_CHANNEL`, a tab
+    /// and a zone title, the row's `channel` projection, and a resume identity.
+    /// A named lane and a worktree's own lane give their name; trunk's and a
+    /// foreign checkout's own lanes give none. [`Lane::routing_name`] stays the
+    /// lane's name everywhere a lane is printed or matched.
+    pub fn pin_name(&self) -> Option<LaneName> {
         match (&self.name, self.home) {
-            (Some(name), _) => Some(name.as_str()),
-            (None, LaneHome::Worktree) => self.basename(),
+            (Some(name), _) => Some(name.clone()),
+            (None, LaneHome::Worktree) => Some(self.routing_name()),
             (None, LaneHome::Trunk | LaneHome::Foreign) => None,
         }
     }
 
-    /// The one name of the lane every comparison, key, and record reads: the
-    /// name, else the home directory's basename made a lane name.
+    /// The lane's one name, which every surface, comparison, key, and record
+    /// reads: the name, else `main` for trunk's own lane, else the home
+    /// directory's basename made a lane name.
     pub fn routing_name(&self) -> LaneName {
-        match &self.name {
-            Some(name) => name.clone(),
-            None => LaneName::dashed(self.basename().unwrap_or_default()),
+        match (&self.name, self.home) {
+            (Some(name), _) => name.clone(),
+            (None, LaneHome::Trunk) => LaneName::trunk(),
+            (None, LaneHome::Worktree | LaneHome::Foreign) => {
+                LaneName::dashed(self.basename().unwrap_or_default())
+            }
         }
     }
 
-    /// The human lane name: `main` for trunk's own lane, else the routing name.
-    pub fn label(&self) -> String {
-        self.routing_name().label(self.is_trunk()).to_owned()
-    }
-
-    /// The lane an old `channel` stamp means at this lane's checkout.
+    /// The lane a lane name read back at this lane's checkout means.
     ///
-    /// A named lane stays as it is. No stamp, an empty one, or a name the
-    /// checkout owns (its directory; for trunk also `main`) is the own lane;
-    /// any other stamp is a named lane of that name homed here.
+    /// A named lane stays as it is. No stamp, an empty one, or the checkout's
+    /// own lane's name is the own lane; any other stamp is a named lane of that
+    /// name homed here.
     pub fn adopt(self, stamp: Option<&str>) -> Self {
         if self.name.is_some() {
             return self;
@@ -642,8 +640,7 @@ impl Lane {
         let Some(stamp) = stamp.filter(|stamp| !stamp.is_empty()) else {
             return self;
         };
-        let owned =
-            Some(stamp) == self.basename() || (self.home == LaneHome::Trunk && stamp == "main");
+        let owned = stamp == self.routing_name().as_str();
         match stamp.parse::<LaneName>() {
             Ok(name) if !owned => self.named(name),
             _ => self,
@@ -1424,17 +1421,6 @@ impl std::fmt::Display for FocusNonce {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
-}
-
-/// The lane name of a row an older binary wrote before rows stored their lane:
-/// its `channel` stamp, else its lane path's directory, each made a lane name.
-/// Link 3 deletes it with the lane-less rows.
-pub(crate) fn legacy_lane_name(stamp: Option<&str>, lane_path: Option<&str>) -> Option<LaneName> {
-    if let Some(stamp) = stamp.filter(|stamp| !stamp.is_empty()) {
-        return Some(LaneName::dashed(stamp));
-    }
-    let dir = Path::new(lane_path?).file_name()?.to_str()?;
-    Some(LaneName::dashed(dir))
 }
 
 /// Decode a record's optional lane name without failing the record: an empty

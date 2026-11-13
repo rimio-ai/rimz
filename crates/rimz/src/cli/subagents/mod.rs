@@ -639,8 +639,6 @@ struct ChildReport {
     parent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
-    #[serde(skip)]
-    lane_label: Option<String>,
     kind: String,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -793,7 +791,8 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
     }
     if reports.is_empty() {
         let channel = reader
-            .lane_label()
+            .channel
+            .as_ref()
             .filter(|_| !query.names(Field::Lane))
             .map(|channel| format!("#{channel}"));
         let line = match (scope, channel, filters.is_empty()) {
@@ -844,7 +843,7 @@ fn list_children(json: bool, quiet: bool, filters: &[String], globals: &GlobalFl
             ListScope::Channel => vec![
                 render::cell(child.handle),
                 render::cell(child.parent),
-                render::cell(child.lane_label.unwrap_or_else(|| "-".to_owned())).dash(),
+                render::cell(child.channel.unwrap_or_else(|| "-".to_owned())).dash(),
                 render::cell(child.kind),
                 render::cell(child.status),
                 render::cell(child.run_status.unwrap_or_else(|| "-".to_owned())).dash(),
@@ -900,7 +899,6 @@ fn child_reports(
                     )
                 }),
                 channel: child.lane_name().map(String::from),
-                lane_label: rimz::address::lane_label(child),
                 kind: child.kind.to_string(),
                 status: row.card().0.as_str().to_owned(),
                 description: child.activity_line(),

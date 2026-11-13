@@ -272,10 +272,10 @@ fn address_miss_names_live_addresses_and_empty_parts_are_usage_errors() {
     seed(&env, &env.project_root, &env.project_root, "active");
     let text = refusal(command(&env, &["workflow", "show", "review#missing"]));
     assert!(
-        text.contains("no review run in missing\n  live runs: review#project"),
+        text.contains("no review run in missing\n  live runs: review#main"),
         "{text}"
     );
-    for target in ["review#", "#project", "review#project#stale"] {
+    for target in ["review#", "#project", "review#main#stale"] {
         let output = command(&env, &["workflow", "show", target]);
         let text = String::from_utf8(output.stderr).unwrap();
         assert_eq!(output.status.code(), Some(2), "{text}");
@@ -292,18 +292,13 @@ fn address_miss_names_live_addresses_and_empty_parts_are_usage_errors() {
 fn colliding_addresses_refuse_with_ids_and_checkout_paths() {
     let env = setup();
     let first = seed(&env, &env.project_root, &env.project_root, "parked");
-    let second = seed(
-        &env,
-        &env.project_root,
-        &env.home_root.join("linked/project"),
-        "active",
-    );
+    let second = seed(&env, &env.project_root, &env.project_root, "active");
     for (verb, flags) in [
         ("show", vec![]),
         ("resume", vec!["--at", "build", "--extend", "visits=+1"]),
         ("cancel", vec![]),
     ] {
-        let mut args = vec!["workflow", verb, "review#project"];
+        let mut args = vec!["workflow", verb, "review#main"];
         args.extend(&flags);
         let text = refusal(command(&env, &args));
         for record in [&first, &second] {
@@ -372,10 +367,7 @@ fn bare_mutations_prefer_checkout_then_only_run_then_offer_quoted_commands() {
         "parked",
     );
     let receipt = success(command(&env, &["workflow", "cancel", "review"]));
-    assert!(
-        receipt.starts_with("canceled review#project\n"),
-        "{receipt}"
-    );
+    assert!(receipt.starts_with("canceled review#main\n"), "{receipt}");
     assert_eq!(
         json_show(&env, first.id.as_str())["record"]["state"],
         "canceled"
@@ -507,7 +499,7 @@ fn bare_show_always_lists_live_runs_and_distinguishes_known_empty_from_unknown()
     );
     let rows = json_show(&env, "review");
     assert_eq!(rows.as_array().map(Vec::len), Some(1), "{rows:#}");
-    assert_eq!(rows[0]["address"], "review#project");
+    assert_eq!(rows[0]["address"], "review#main");
     let text = success(command(&env, &["workflow", "show", "review"]));
     assert!(text.contains("NEEDS YOU"), "{text}");
     assert!(!text.contains("current node"), "{text}");
@@ -535,7 +527,7 @@ fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
     let text = refusal(
         env.rimz()
             .current_dir(&outside)
-            .args(["workflow", "show", "review#project"])
+            .args(["workflow", "show", "review#main"])
             .output()
             .unwrap(),
     );
@@ -548,7 +540,7 @@ fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
     }
     assert!(!env.state_path_for(&outside).root.exists());
     assert_eq!(
-        json_show(&env, "review#project")["record"]["id"],
+        json_show(&env, "review#main")["record"]["id"],
         json!(here.id)
     );
     let rows = success(command(&env, &["workflow", "list"]));
@@ -557,13 +549,13 @@ fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
         "{rows}"
     );
     assert!(
-        rows.contains("rimz --root ~/other/project workflow show 'review#project'"),
+        rows.contains("rimz --root ~/other/project workflow show 'review#main'"),
         "{rows}"
     );
     there.state = RunState::Done;
     there.terminal_at = Some(jiff::Timestamp::now());
     save(&env, &there);
-    for target in ["review", "review#project"] {
+    for target in ["review", "review#main"] {
         let output = success(
             env.rimz()
                 .current_dir(&outside)
@@ -631,7 +623,7 @@ fn receipt_hints_keep_the_resumed_runs_room() {
                 other.to_str().unwrap(),
                 "workflow",
                 "resume",
-                "review#project",
+                "review#main",
             ])
             .output()
             .unwrap(),
@@ -661,16 +653,16 @@ fn ids_keep_working_and_terminal_cancel_names_the_state() {
     );
     assert_eq!(
         resumed,
-        "resumed review#project at gate\n→ rimz workflow show 'review#project'\n"
+        "resumed review#main at gate\n→ rimz workflow show 'review#main'\n"
     );
     let canceled = success(command(&env, &["workflow", "cancel", record.id.as_str()]));
     assert_eq!(
         canceled,
-        "canceled review#project\n→ rimz workflow show 'review#project'\n"
+        "canceled review#main\n→ rimz workflow show 'review#main'\n"
     );
     let unchanged = success(command(&env, &["workflow", "cancel", record.id.as_str()]));
     assert!(
-        unchanged.starts_with("review#project is already canceled; unchanged\n"),
+        unchanged.starts_with("review#main is already canceled; unchanged\n"),
         "{unchanged}"
     );
 }
@@ -685,13 +677,13 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
-        .args(["workflow", "resume", "review#project"])
+        .args(["workflow", "resume", "review#main"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let text = success(output);
     assert!(
-        text.starts_with("resumed review#project at build · build 1 of 2 visits\n"),
+        text.starts_with("resumed review#main at build · build 1 of 2 visits\n"),
         "{text}"
     );
     assert!(!stderr.contains("warning:"), "{stderr}");
@@ -713,7 +705,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let text = success(output);
     assert!(
         text.starts_with(&format!(
-            "extended review#project · every capped step +1 visits · deadline {}",
+            "extended review#main · every capped step +1 visits · deadline {}",
             historical_clock("2000-01-01T00:00:00Z")
         )),
         "{text}"
@@ -727,7 +719,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
-        .args(["workflow", "resume", "review#project"])
+        .args(["workflow", "resume", "review#main"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -739,7 +731,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
-        .args(["workflow", "resume", "review#project"])
+        .args(["workflow", "resume", "review#main"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -764,14 +756,14 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
         .args([
             "workflow",
             "resume",
-            "review#project",
+            "review#main",
             "--extend",
             &format!("deadline={future}"),
         ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(success(output).starts_with("extended review#project"));
+    assert!(success(output).starts_with("extended review#main"));
     assert!(
         !stderr.contains("has used"),
         "an admitted visit does not re-enter the step: {stderr}"
@@ -1076,7 +1068,7 @@ fn run_receipt_hint_selects_its_run_with_a_shared_address() {
     seed(
         &env,
         &env.project_root,
-        &env.home_root.join("linked/project"),
+        &env.home_root.join("linked/main"),
         "parked",
     );
     let receipt = success(
@@ -1143,7 +1135,7 @@ fn run_receipt_preserves_id_and_directory_then_adds_the_address_hint() {
     assert!(Path::new(lines[1]).is_dir(), "{text}");
     assert_eq!(
         lines.get(2),
-        Some(&"→ rimz workflow show 'review#project'"),
+        Some(&"→ rimz workflow show 'review#main'"),
         "{text}"
     );
 }

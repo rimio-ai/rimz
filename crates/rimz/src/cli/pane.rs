@@ -909,7 +909,7 @@ fn filter_panes_by_scope(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     scope: &str,
 ) -> Vec<PaneRef> {
-    let scope = rimz::address::LaneSelector::parse(Some(scope.trim_start_matches('#')), None);
+    let scope = rimz::address::LaneSelector::parse(Some(scope.trim_start_matches('#')));
     let views: HashSet<_> = panes
         .iter()
         .filter(|pane| {

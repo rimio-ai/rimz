@@ -8,6 +8,8 @@ fn unbound_ladder_prefers_hooks_then_mode_then_wired_idle() {
         fix: "enable hooks, then restart".to_owned(),
     };
     let live = pane("term1", "codex", "/repo/main");
+    let own = crate::ids::Lane::own(crate::ids::LaneHome::Worktree, "/repo/main");
+    let own_lanes = BTreeMap::from([("/repo/main".to_owned(), own.clone())]);
     let actual: Vec<_> = [
         (true, true, true),
         (false, true, true),
@@ -31,6 +33,7 @@ fn unbound_ladder_prefers_hooks_then_mode_then_wired_idle() {
             kinds: &kinds,
             default_models: &BTreeMap::new(),
             untracked: &untracked,
+            own_lanes: &own_lanes,
         };
         unbound_agent_row(
             &live,
@@ -47,15 +50,19 @@ fn unbound_ladder_prefers_hooks_then_mode_then_wired_idle() {
             ago(0),
         )
         .map(|bind| {
-            let (row, has_identity) = match bind {
-                AgentPaneRow::Idle(row) => (row, true),
-                AgentPaneRow::NotTracked { kind, row } => (row, kind.is_some()),
+            let (row, has_identity, lane) = match bind {
+                AgentPaneRow::Idle(row) => {
+                    let lane = row.lane.clone();
+                    (row, true, lane)
+                }
+                AgentPaneRow::NotTracked { kind, row, lane } => (row, kind.is_some(), lane),
                 _ => unreachable!("the unbound rung yields only idle or not-tracked rows"),
             };
             (
                 row.is_agent(),
                 row.as_process().and_then(|card| card.not_tracked.clone()),
                 has_identity,
+                lane,
             )
         })
     })
@@ -67,10 +74,10 @@ fn unbound_ladder_prefers_hooks_then_mode_then_wired_idle() {
     assert_eq!(
         actual,
         [
-            Some((false, Some(hook), true)),
-            Some((false, Some(mode.clone()), false)),
-            Some((false, Some(mode), false)),
-            Some((true, None, true)),
+            Some((false, Some(hook), true, Some(own.clone()))),
+            Some((false, Some(mode.clone()), false, None)),
+            Some((false, Some(mode), false, None)),
+            Some((true, None, true, Some(own))),
             None
         ]
     );

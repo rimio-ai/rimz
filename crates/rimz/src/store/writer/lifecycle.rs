@@ -229,6 +229,13 @@ impl Store {
                 let primary_event_id = if append_primary {
                     let mut observation = event::observation_for_event(intent.observation);
                     if prior_status.is_none() {
+                        // The event that creates a row carries its lane, whatever the signal,
+                        // and a native child's is its parent's: a row without one is in no lane.
+                        observation.launch.lane =
+                            intent.observation.launch.lane.clone().or_else(|| {
+                                let parent = intent.observation.parent_agent_id.as_ref()?;
+                                agents.find(&intent.agent_kind, parent)?.lane.clone()
+                            });
                         observation.launch.login = ingress_login(
                             agents,
                             &intent.agent_kind,
@@ -594,9 +601,13 @@ fn append_adoption(
     }
     observation.signal = signal;
     if child_state.is_none() {
-        observation.launch.login = agents
-            .find(&intent.agent_kind, parent_id)
-            .map_or_else(|| login.cloned(), |parent| parent.login.clone());
+        let parent = agents.find(&intent.agent_kind, parent_id);
+        observation.launch.login =
+            parent.map_or_else(|| login.cloned(), |parent| parent.login.clone());
+        // A native child the adoption creates is in its parent's lane.
+        if observation.launch.lane.is_none() {
+            observation.launch.lane = parent.and_then(|parent| parent.lane.clone());
+        }
     }
     let (parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
     observation.parent_agent_id = Some(parent_id);

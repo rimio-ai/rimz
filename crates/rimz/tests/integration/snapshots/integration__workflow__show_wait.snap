@@ -2,7 +2,7 @@
 source: crates/rimz/tests/integration/workflow.rs
 expression: normalized
 ---
-review#project
+review#main
 ☾ waiting at pr <age>: pending, recheck <clock> · gives up <clock>, then @failed
   ci=pending  pr=unread · read <clock>
 started <clock> by hand · 0 attempts
@@ -14,4 +14,4 @@ started <clock> by hand · 0 attempts
 trail  <clock> pr pending → @wait · now
 work dir <work>
 notes <notes>
-all of it: rimz workflow show 'review#project' --history
+all of it: rimz workflow show 'review#main' --history

@@ -336,13 +336,11 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
             BTreeMap::from([(PathBuf::from(marked), "link-notices".to_owned())]);
         let entry = GroupEntry {
             lane: None,
-            stamp: None,
             path,
             branch,
         };
         let entries = std::iter::once(entry).chain(row_root.map(|path| GroupEntry {
             lane: None,
-            stamp: None,
             path: Some(path),
             branch: Some("main"),
         }));
@@ -369,7 +367,7 @@ fn place_table_resolves_the_deepest_known_folder_without_cwd_guesses() {
 }
 
 #[test]
-fn lane_table_uses_the_marker_place_independently_of_the_rows_path() {
+fn a_lane_less_row_takes_a_marked_group_from_its_path_alone() {
     let root = "/repo/rimz";
     let marked = "/repo/rimz-worktrees/link-notices";
     let mut snapshot = room(Vec::new()).with_project_root(Some(PathBuf::from(root)));
@@ -377,17 +375,9 @@ fn lane_table_uses_the_marker_place_independently_of_the_rows_path() {
     snapshot.worktree_channels =
         BTreeMap::from([(PathBuf::from(marked), "link-notices".to_owned())]);
     let resolver = GroupResolver::new(&snapshot, []);
-    let actual = [
-        (Some("docs"), Some(root)),
-        (Some("link-notices"), Some("/elsewhere")),
-        (Some("link-notices"), None),
-        (None, Some(marked)),
-        (Some(""), Some(marked)),
-    ]
-    .map(|(channel, path)| {
+    let actual = [Some(marked), Some("/elsewhere"), None].map(|path| {
         let group = resolver.resolve(GroupEntry {
             lane: None,
-            stamp: channel,
             path,
             branch: None,
         });
@@ -399,45 +389,25 @@ fn lane_table_uses_the_marker_place_independently_of_the_rows_path() {
             group.place.map(|place| (place.path, place.foreign)),
         )
     });
-    let marked_place = Some((PathBuf::from(marked), false));
+    let external = (
+        "external".to_owned(),
+        SidebarWorktreeKind::External,
+        "external".to_owned(),
+        false,
+        None,
+    );
     assert_eq!(
         actual,
         [
             (
-                "channel:docs".to_owned(),
-                SidebarWorktreeKind::Channel,
-                "docs".to_owned(),
-                false,
-                None
-            ),
-            (
                 "channel:link-notices".to_owned(),
                 SidebarWorktreeKind::Channel,
                 "link-notices".to_owned(),
                 false,
-                marked_place.clone()
+                Some((PathBuf::from(marked), false))
             ),
-            (
-                "channel:link-notices".to_owned(),
-                SidebarWorktreeKind::Channel,
-                "link-notices".to_owned(),
-                false,
-                marked_place.clone()
-            ),
-            (
-                "channel:link-notices".to_owned(),
-                SidebarWorktreeKind::Channel,
-                "link-notices".to_owned(),
-                false,
-                marked_place.clone()
-            ),
-            (
-                "channel:link-notices".to_owned(),
-                SidebarWorktreeKind::Channel,
-                "link-notices".to_owned(),
-                false,
-                marked_place
-            ),
+            external.clone(),
+            external,
         ]
     );
 }
@@ -455,19 +425,11 @@ fn duplicate_marker_names_choose_one_lexicographic_place_for_every_row() {
     let identities = [
         GroupEntry {
             lane: None,
-            stamp: Some("topic"),
-            path: None,
-            branch: None,
-        },
-        GroupEntry {
-            lane: None,
-            stamp: None,
             path: Some("/z/topic/src"),
             branch: None,
         },
         GroupEntry {
             lane: None,
-            stamp: None,
             path: Some("/a/topic/src"),
             branch: None,
         },

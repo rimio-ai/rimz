@@ -426,12 +426,14 @@ fn open_fresh(
             lane: &fresh.lane,
         })?;
     }
+    let channel = fresh.lane.pin_name();
+    let channel = channel.as_ref().map(LaneName::as_str);
     let title = if let Some(leader) = &leader {
         leader.loop_task.as_ref().map_or_else(
             || {
                 placement::run_tab_title(
                     store,
-                    fresh.lane.stored_name(),
+                    channel,
                     leader.subagent,
                     &batch.identities()[leader_index].kind,
                 )
@@ -439,7 +441,7 @@ fn open_fresh(
             |task| format!("loop {task}"),
         )
     } else {
-        fresh.lane.stored_name().map_or_else(
+        channel.map_or_else(
             || {
                 crate::harness::spec::default_tab_title(
                     &fresh.layout,
@@ -471,7 +473,7 @@ fn open_fresh(
         identity_env: crate::room::pane_identity_env(
             workspace,
             fresh.checkout.as_deref().map(Path::new).unwrap_or(cwd),
-            fresh.lane.stored_name(),
+            channel,
         ),
         focus: fresh.focus,
         errors: if leader.is_some() {

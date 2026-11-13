@@ -715,11 +715,14 @@ impl RunRecord {
         self.visits.get(node).copied().unwrap_or_default()
     }
 
-    /// Derive the lane without resolving or reading the checkout, which may be gone.
+    /// Derive the lane without resolving or reading the checkout, which may be gone:
+    /// a run scoped to the project root, per project or per worktree, is trunk's.
     pub fn address(&self) -> RunAddress {
-        let home = match self.scope.kind {
-            ScopeKind::Worktree => crate::ids::LaneHome::Worktree,
-            ScopeKind::Project => crate::ids::LaneHome::Trunk,
+        let trunk = self.scope.kind == ScopeKind::Project || self.scope.path == self.project_root;
+        let home = if trunk {
+            crate::ids::LaneHome::Trunk
+        } else {
+            crate::ids::LaneHome::Worktree
         };
         let lane = crate::ids::Lane::own(home, self.scope.path.to_string_lossy());
         RunAddress {

@@ -62,6 +62,7 @@ fn answer_scoped_miss_offers_a_retypeable_root_correction() {
     );
     observation.launch.role = Some("coder".into());
     observation.worktree_path = Some(env.project_root.to_string_lossy().into_owned());
+    crate::common::wait::stamp_hook_lane(&env, &mut observation);
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),

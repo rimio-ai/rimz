@@ -605,7 +605,7 @@ mod tests {
         let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
         let mut leader = AgentState::stub("codex", "leader", AgentStatus::Idle);
         leader.team = Some("forge".into());
-        leader.channel = Some("feat-x".into());
+        crate::testkit::set_lane(&mut leader, "feat-x");
         leader.launch_id = Some("leader-launch".into());
         leader.launched_by = Some(crate::agents::LaunchedBy {
             kind: parent.kind.clone(),

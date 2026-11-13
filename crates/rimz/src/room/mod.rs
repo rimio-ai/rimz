@@ -117,7 +117,8 @@ pub fn resolve_birth_logins(
 }
 
 /// Build the room identity pin carried by a pane opened in a managed session:
-/// `channel` is the stored name of the pane's lane, stated empty when it has none.
+/// `channel` is the routing name of the pane's lane, stated empty for trunk's
+/// own lane and for a pane with none.
 pub fn pane_identity_env(
     workspace: &ResolvedWorkspace,
     cwd: &Path,

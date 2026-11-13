@@ -316,8 +316,9 @@ fn run_address_uses_the_recorded_scope_without_reading_the_checkout() {
     let mut record = record();
     for (kind, path, lane) in [
         (ScopeKind::Worktree, "/project/.worktrees/feat-x", "feat-x"),
-        (ScopeKind::Worktree, "/project", "project"),
-        (ScopeKind::Project, "/project", "project"),
+        // The project root is trunk's checkout whatever the scope's kind.
+        (ScopeKind::Worktree, "/project", "main"),
+        (ScopeKind::Project, "/project", "main"),
         (ScopeKind::Worktree, "/no-longer-present/deleted", "deleted"),
     ] {
         record.scope = Scope {

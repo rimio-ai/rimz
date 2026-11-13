@@ -894,6 +894,7 @@ fn holders_keep_channel_scoped_agents_distinct() {
     for agent in &mut agents {
         agent.name = Some("coder".to_owned());
         agent.name_explicit = true;
+        crate::testkit::set_own_lane(agent);
     }
     let holders = protection_set_from_runtime(&[], &agents, None, Occupancy::Unproven)
         .holders(Path::new("/repo-worktrees/demo"));

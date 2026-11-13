@@ -534,12 +534,7 @@ fn launched_parent_handle(
         },
     };
     let peers = rimz::address::addressable_agents(snapshot);
-    rimz::address::agent_sender_handle(
-        &sender,
-        &peers,
-        child_channel,
-        snapshot.project_root.as_deref(),
-    )
+    rimz::address::agent_sender_handle(&sender, &peers, child_channel)
 }
 
 fn append_turn_entry<'a>(
@@ -651,20 +646,18 @@ pub(super) fn record_turn_error_entry(
     }
 }
 
-/// The lane name a hook transcript entry carries: the row's lane, an older
-/// row's stamp-else-basename reading, or the checkout's own lane when there is
-/// no row.
+/// The lane name a hook transcript entry carries: the row's lane, none for a
+/// row stored without one, and the checkout's own lane when there is no row.
 pub(in crate::cli) fn entry_lane_name(
     workspace: &ResolvedWorkspace,
     state: Option<&rimz::agents::AgentState>,
     checkout: Option<&str>,
 ) -> Option<rimz::ids::LaneName> {
-    let row_name = state.and_then(rimz::agents::AgentState::lane_name);
-    let name = row_name.unwrap_or_else(|| {
-        let dir = checkout.map_or(workspace.worktree_root.as_path(), std::path::Path::new);
-        rimz::harness::lanes::own_lane(&workspace.project_root, dir).routing_name()
-    });
-    Some(name)
+    if let Some(state) = state {
+        return state.lane_name();
+    }
+    let dir = checkout.map_or(workspace.worktree_root.as_path(), std::path::Path::new);
+    Some(rimz::worktree::own_lane(&workspace.project_root, dir).routing_name())
 }
 
 pub(super) fn agent_state(

@@ -1609,3 +1609,45 @@ fn discovery_keeps_an_adopted_provisional_root_a_root_row() {
         Some(&child_pane.pane_id)
     );
 }
+
+#[test]
+fn a_fresh_local_session_takes_its_workspaces_own_lane_and_a_stored_row_keeps_its_own() {
+    use crate::ids::{Lane, LaneHome};
+    let mut pane = pane("%1", "kiro-cli chat --v3", "/repo/main");
+    pane.pane_process_start = Some(ago(21));
+    let trunk = Lane::own(LaneHome::Trunk, "/repo/main");
+    let fold = |agents: Vec<AgentState>| {
+        let mut snapshot = room(agents);
+        snapshot
+            .own_lanes
+            .insert("/repo/main".to_owned(), trunk.clone());
+        snapshot.with_local_sessions(
+            std::slice::from_ref(&pane),
+            vec![event_observation("sess-live", 20, 10)],
+        )
+    };
+
+    let fresh = fold(Vec::new());
+    let agent = rollup_agent(&fresh, "sess-live");
+    assert_eq!(agent.lane, Some(trunk.clone()));
+    assert!(crate::address::agent_in_lane(
+        agent,
+        &crate::address::LaneSelector::parse(Some("main"))
+    ));
+    assert_eq!(agent.channel, None);
+
+    let mut stored = crate::testkit::agent_state("kiro", "sess-live", ago(30));
+    stored.pane = Some(pane.clone());
+    stored.worktree_path = Some("/repo/main".to_owned());
+    let kept = fold(vec![stored]);
+    let agent = rollup_agent(&kept, "sess-live");
+    assert_eq!(
+        agent.transcript_path.as_deref(),
+        Some("/kiro/sess-live/messages.jsonl"),
+        "the observation bound the stored row"
+    );
+    assert_eq!(
+        agent.lane, None,
+        "a row stored without a lane stays lane-less"
+    );
+}

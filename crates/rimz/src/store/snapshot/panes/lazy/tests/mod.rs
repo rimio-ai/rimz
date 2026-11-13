@@ -99,6 +99,7 @@ fn wired_non_lazy_pane_synthesizes_idle_row() {
                 kinds: &[],
                 default_models: &default_models,
                 untracked: &BTreeMap::new(),
+                own_lanes: &BTreeMap::new(),
             },
             ago(0),
         )
@@ -115,6 +116,7 @@ fn wired_non_lazy_pane_synthesizes_idle_row() {
             kinds: &["claude".to_owned()],
             default_models: &default_models,
             untracked: &BTreeMap::new(),
+            own_lanes: &BTreeMap::new(),
         },
         ago(0),
     ) {
@@ -167,6 +169,7 @@ fn untracked_mini_panes_only_have_process_rows() {
                 kinds: &wired,
                 default_models: &models,
                 untracked: &BTreeMap::new(),
+                own_lanes: &BTreeMap::new(),
             };
             let idle = matches!(
                 agent_pane_for_pane(&pane, &[], &pairings, &BTreeSet::new(), &wiring, ago(0)),
@@ -204,6 +207,7 @@ fn a_real_mini_session_wins_over_the_process_fallback() {
             kinds: &["opencode".to_owned()],
             default_models: &BTreeMap::new(),
             untracked: &BTreeMap::new(),
+            own_lanes: &BTreeMap::new(),
         },
         ago(0),
     );

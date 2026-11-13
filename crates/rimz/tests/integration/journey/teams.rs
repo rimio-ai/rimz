@@ -84,7 +84,7 @@ fn standalone_team_role_uses_team_channel_and_role_handle() {
     assert_eq!(planner.team.as_deref(), Some("forge"));
     assert_eq!(
         planner.lane_name().map(String::from).as_deref(),
-        Some("project/forge")
+        Some("forge")
     );
 }
 

@@ -62,8 +62,9 @@ pub(super) fn select<'a>(
 }
 
 pub(super) fn matches_worktree(cohort: &TeamCohort<'_>, worktree: &str) -> bool {
-    let lane = rimz::address::LaneSelector::parse(Some(worktree), None);
-    cohort.instance.lane() == lane.name()
+    let lane = rimz::address::LaneSelector::parse(Some(worktree));
+    lane.name()
+        .is_some_and(|name| cohort.instance.lane() == Some(name))
         || cohort
             .members
             .iter()
@@ -236,7 +237,7 @@ mod tests {
     fn agent(id: &str, team: &str, channel: &str) -> AgentState {
         let mut agent = rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH);
         agent.team = Some(team.to_owned());
-        agent.channel = Some(channel.to_owned());
+        rimz::testkit::set_lane(&mut agent, channel);
         agent
     }
 
@@ -277,6 +278,24 @@ mod tests {
 
         assert!(error.to_string().contains("forge#typo"));
         assert!(error.to_string().contains("#auth, #docs"));
+    }
+
+    #[test]
+    fn main_selects_only_the_trunk_cohort() {
+        let external = vec![agent("ext", "forge", "external")];
+        let error = select("forge", Some("main"), None, &external).expect_err("no trunk cohort");
+        assert!(
+            error
+                .to_string()
+                .contains("no live cohort matching `forge#main`"),
+            "{error}"
+        );
+
+        let mut trunk = agent("trunk", "forge", "forge");
+        rimz::testkit::set_trunk(&mut trunk);
+        let agents = vec![trunk, agent("ext", "forge", "external")];
+        let selected = select("forge", Some("main"), None, &agents).expect("trunk cohort");
+        assert_eq!(selected.members[0].agent_id.as_str(), "trunk");
     }
 
     #[test]

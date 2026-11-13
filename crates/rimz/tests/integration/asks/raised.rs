@@ -406,7 +406,7 @@ fn self_raise_is_armed_until_stop_and_a_later_human_turn_closes_it() {
     let asks = listed_asks(&env);
     assert_eq!(asks.as_array().unwrap().len(), 1);
     assert_eq!(asks[0]["detail"], "Should we ship?");
-    assert_eq!(asks[0]["raised_by"], "@worker#project");
+    assert_eq!(asks[0]["raised_by"], "@worker#main");
     feed_claude_hook(
         &env,
         json!({"hook_event_name": "UserPromptSubmit", "session_id": "raised-session",
@@ -495,7 +495,7 @@ fn raised_answer_enqueues_the_label_from_the_caller_then_closes_with_one_audit()
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text, "fast");
         if agent_caller {
-            assert_eq!(messages[0].sender.render(), "@worker#project");
+            assert_eq!(messages[0].sender.render(), "@worker#main");
         } else {
             assert!(matches!(
                 messages[0].sender,
@@ -517,7 +517,7 @@ fn raised_answer_enqueues_the_label_from_the_caller_then_closes_with_one_audit()
         assert_eq!(closes[0].params_value()["cause"], "answered");
         assert_eq!(
             closes[0].params_value()["actor"].as_str(),
-            agent_caller.then_some("@worker#project")
+            agent_caller.then_some("@worker#main")
         );
     }
 }

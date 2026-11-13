@@ -124,122 +124,6 @@ fn dead(agent: AgentState) -> AgentState {
 }
 
 #[test]
-fn a_directory_classifies_into_the_deepest_checkout_containing_it() {
-    let room = room();
-    let sub = room.root.join("crates/sub");
-    std::fs::create_dir_all(&sub).unwrap();
-    let nested = init_repo(&room.root.join("vendor/nested"));
-    let auth_sub = room.auth.join("src");
-    std::fs::create_dir_all(&auth_sub).unwrap();
-    let foreign = init_repo(&room.parent.join("other"));
-    let foreign_sub = foreign.join("deep");
-    std::fs::create_dir_all(&foreign_sub).unwrap();
-    let plain = room.parent.join("plain/dir");
-    std::fs::create_dir_all(&plain).unwrap();
-    let dotted_auth = room
-        .root
-        .join("..")
-        .join(room.auth.strip_prefix(&room.parent).unwrap());
-
-    for (dir, expect) in [
-        (room.root.clone(), trunk(&room)),
-        (sub, trunk(&room)),
-        (nested, trunk(&room)),
-        (room.auth.clone(), worktree(&room)),
-        (auth_sub, worktree(&room)),
-        (dotted_auth, worktree(&room)),
-        (foreign_sub, Lane::own(LaneHome::Foreign, text(&foreign))),
-        (plain.clone(), Lane::own(LaneHome::Foreign, text(&plain))),
-    ] {
-        assert_eq!(own_lane(&room.root, &dir), expect, "{}", dir.display());
-    }
-
-    let bare = tempfile::tempdir().unwrap();
-    assert_eq!(
-        own_lane(bare.path(), bare.path()),
-        Lane::own(LaneHome::Trunk, text(bare.path())),
-        "a non-repository room's root is its trunk"
-    );
-}
-
-#[test]
-fn a_foreign_directory_is_homed_only_at_a_real_repository_root_off_the_home() {
-    let room = room();
-    let marked = room.parent.join("marked");
-    std::fs::create_dir_all(marked.join(".git")).unwrap();
-    let under_marker = marked.join("work");
-    let home = init_repo(&room.parent.join("home"));
-    let under_home = home.join("scratch");
-    let other = init_repo(&room.parent.join("other"));
-    let other_sub = other.join("deep");
-    let linked = room.parent.join("linked");
-    std::fs::create_dir_all(&linked).unwrap();
-    std::fs::write(
-        linked.join(".git"),
-        "gitdir: /elsewhere/.git/worktrees/linked\n",
-    )
-    .unwrap();
-    let linked_sub = linked.join("src");
-    for dir in [&under_marker, &under_home, &other_sub, &linked_sub] {
-        std::fs::create_dir_all(dir).unwrap();
-    }
-    let home_link = room.parent.join("home-link");
-    std::os::unix::fs::symlink(&home, &home_link).unwrap();
-    let through_link = home_link.join("scratch");
-
-    for (dir, home, expect, why) in [
-        (
-            &under_marker,
-            None,
-            &under_marker,
-            "a bare `.git` marker is no repository",
-        ),
-        (
-            &under_home,
-            Some(&home),
-            &under_home,
-            "a repository at the home homes nothing",
-        ),
-        (
-            &other_sub,
-            Some(&home),
-            &other,
-            "a repository elsewhere homes its subdirectory",
-        ),
-        (
-            &linked_sub,
-            Some(&home),
-            &linked,
-            "a `gitdir:` file is a repository root",
-        ),
-        (
-            &other_sub,
-            Some(&other_sub.join("me")),
-            &other_sub,
-            "nor one containing the home",
-        ),
-        (
-            &under_home,
-            Some(&home_link),
-            &under_home,
-            "a home named through a link still homes nothing",
-        ),
-        (
-            &through_link,
-            Some(&home),
-            &through_link,
-            "nor a directory reached through a link to the home",
-        ),
-    ] {
-        assert_eq!(
-            own_lane_at_home(&room.root, dir, home.map(PathBuf::as_path)),
-            Lane::own(LaneHome::Foreign, text(expect)),
-            "{why}"
-        );
-    }
-}
-
-#[test]
 fn a_managed_worktree_whose_directory_is_main_is_foreign() {
     let room = room();
     let main = room.auth.with_file_name("main");
@@ -249,7 +133,7 @@ fn a_managed_worktree_whose_directory_is_main_is_foreign() {
     );
 
     assert_eq!(
-        own_lane(&room.root, &main),
+        crate::worktree::own_lane(&room.root, &main),
         Lane::own(LaneHome::Foreign, text(&main))
     );
     let typed = LaneRequest {
@@ -265,7 +149,7 @@ fn a_managed_worktree_whose_directory_is_main_is_foreign() {
         &["worktree", "move", &text(&main), &text(&nested)],
     );
     assert_eq!(
-        own_lane(&room.root, &nested.join("src")),
+        crate::worktree::own_lane(&room.root, &nested.join("src")),
         Lane::own(LaneHome::Foreign, text(&nested)),
         "a managed `main` under the project root does not walk on into trunk"
     );
@@ -276,8 +160,9 @@ fn a_typed_name_the_target_owns_is_its_own_lane() {
     let room = room();
     for (target, typed, expect) in [
         (&room.root, "main", trunk(&room)),
-        (&room.root, "repo", trunk(&room)),
         (&room.auth, "auth", worktree(&room)),
+        (&room.root, "repo", trunk(&room).named(name("repo"))),
+        (&room.auth, "repo", worktree(&room).named(name("repo"))),
     ] {
         let request = LaneRequest {
             typed: Some(typed),
@@ -329,9 +214,6 @@ fn a_typed_name_another_checkout_owns_or_that_is_not_flat_is_refused() {
 
     assert!(
         matches!(refuse(&room.auth, "main"), LaneErr::TrunkCollision { name } if name == "main")
-    );
-    assert!(
-        matches!(refuse(&room.auth, "repo"), LaneErr::TrunkCollision { name } if name == "repo")
     );
     let err = refuse(&room.root, "auth");
     assert_eq!(
@@ -388,9 +270,10 @@ fn a_typed_name_held_live_at_another_checkout_is_refused_until_its_holders_end()
         worktree(&room).named(name("design"))
     );
     let old_stamp = [stamped("design", &text(&room.auth))];
-    assert!(
-        matches!(at_trunk(&old_stamp), Err(LaneErr::HeldElsewhere { .. })),
-        "a lane-less row is read through its old stamp"
+    assert_eq!(
+        at_trunk(&old_stamp).unwrap(),
+        trunk(&room).named(name("design")),
+        "a lane-less row holds no lane"
     );
 }
 
@@ -460,58 +343,81 @@ fn a_pin_carries_only_at_its_checkout_and_only_while_admissible() {
 }
 
 #[test]
-fn an_in_place_team_at_trunk_names_its_lane_and_a_joining_role_takes_the_callers() {
+fn an_in_place_team_at_trunk_is_the_named_lane_of_the_team() {
     let room = room();
-    let team = |target: &Path| {
+    let team = |target: &Path, team: &'static str, agents: &[AgentState]| {
         decide(&LaneRequest {
-            team: Some("forge"),
+            team: Some(team),
+            agents,
             ..request(&room, target)
         })
-        .unwrap()
     };
-    assert_eq!(team(&room.root), trunk(&room).named(name("repo/forge")));
-    assert_eq!(team(&room.auth), worktree(&room));
+    let forge = trunk(&room).named(name("forge"));
+    assert_eq!(team(&room.root, "forge", &[]).unwrap(), forge);
+    assert_eq!(team(&room.auth, "forge", &[]).unwrap(), worktree(&room));
+    assert_eq!(
+        team(&room.root, "repo", &[]).unwrap(),
+        trunk(&room).named(name("repo")),
+        "a team named after the project directory is a named lane"
+    );
+    assert_eq!(
+        team(&room.root, "ops v2.1", &[]).unwrap(),
+        trunk(&room).named(LaneName::dashed("ops v2.1")),
+        "a team name outside the flat set is dashed, not refused as a typed name"
+    );
+    assert_eq!(
+        team(&room.root, "forge", &[holder(forge.clone())]).unwrap(),
+        forge,
+        "the running cohort's own lane does not refuse it"
+    );
 
+    let design = trunk(&room).named(name("design"));
     let joining = decide(&LaneRequest {
         team: Some("forge"),
         joins_cohort: true,
-        caller: Some(CallerLane::Agent(trunk(&room).named(name("repo/forge")))),
+        caller: Some(CallerLane::Agent(design.clone())),
         ..request(&room, &room.root)
     });
-    assert_eq!(joining.unwrap(), trunk(&room).named(name("repo/forge")));
+    assert_eq!(
+        joining.unwrap(),
+        design,
+        "a role joining the caller's cohort takes the caller's lane"
+    );
     let caller_over_team = decide(&LaneRequest {
         team: Some("forge"),
-        caller: Some(CallerLane::Agent(trunk(&room).named(name("design")))),
+        caller: Some(CallerLane::Agent(design)),
         ..request(&room, &room.root)
     });
     assert_eq!(
         caller_over_team.unwrap(),
-        trunk(&room).named(name("repo/forge")),
+        forge,
         "a fresh team outranks the caller's lane"
     );
 
+    let err = team(&room.root, "auth", &[]).expect_err("a managed worktree holds the name");
     assert_eq!(
-        in_place_team_name(Path::new("/code/project"), "forge"),
-        name("project/forge")
+        err.to_string(),
+        "channel `auth` is backed by a worktree; use `--worktree auth`"
     );
-    assert_eq!(in_place_team_name(Path::new("/"), "forge"), name("forge"));
+    let err = team(&room.root, "main", &[]).expect_err("trunk owns `main`");
+    assert!(matches!(&err, LaneErr::TeamOwnLane { team } if team == "main"));
     assert_eq!(
-        in_place_team_name(Path::new("/code/my #project"), "forge"),
-        name("my--project/forge")
+        err.to_string(),
+        "team `main` cannot run in place: `main` is the project checkout's own lane; launch it \
+         in a worktree with `--worktree <name>`"
     );
-
-    let spaced = tempfile::tempdir().unwrap();
-    let root = spaced.path().join("my project");
-    std::fs::create_dir_all(&root).unwrap();
-    let at_spaced_trunk = decide(&LaneRequest {
-        project_root: &root,
-        team: Some("forge"),
-        ..request(&room, &root)
-    });
     assert_eq!(
-        at_spaced_trunk.unwrap(),
-        Lane::own(LaneHome::Trunk, text(&root)).named(name("my-project/forge")),
-        "a project directory name with whitespace still names the team's lane"
+        team(&room.auth, "main", &[]).unwrap(),
+        worktree(&room),
+        "the refusal's `--worktree <name>` runs team `main` in that worktree's own lane"
+    );
+    let held = [holder(worktree(&room).named(name("forge")))];
+    assert!(
+        matches!(
+            team(&room.root, "forge", &held),
+            Err(LaneErr::HeldElsewhere { name, .. }) if name == "forge"
+        ),
+        "a lane of the team's name held live at another checkout refuses it"
     );
 }
 
@@ -536,57 +442,49 @@ fn a_directory_channel_is_its_own_lanes_routing_name_and_none_for_trunk() {
 }
 
 #[test]
-fn a_row_lane_is_the_stored_lane_else_the_adopted_stamp() {
-    let room = room();
-    let stored = holder(worktree(&room).named(name("design")));
-    assert_eq!(
-        row_lane(&stored, &room.root),
-        Some(worktree(&room).named(name("design")))
-    );
-    assert_eq!(
-        row_lane(&stamped("auth", &text(&room.auth)), &room.root),
-        Some(worktree(&room))
-    );
-    assert_eq!(
-        row_lane(&stamped("main", &text(&room.root)), &room.root),
-        Some(trunk(&room))
-    );
-    assert_eq!(
-        row_lane(&stamped("design", &text(&room.root)), &room.root),
-        Some(trunk(&room).named(name("design")))
-    );
-    let pathless = crate::testkit::agent_state("claude", "sess", Timestamp::UNIX_EPOCH);
-    assert_eq!(row_lane(&pathless, &room.root), None);
-}
-
-#[test]
 fn worktree_name_admission_refuses_a_lane_live_agents_hold() {
     let room = room();
-    let held = [stamped("design", &text(&room.root))];
+    let dir = |name: &str| room.parent.join("worktrees").join(name);
+    let held = [
+        holder(trunk(&room).named(name("design"))),
+        holder(trunk(&room).named(name("forge"))),
+        holder(trunk(&room).named(name("repo"))),
+    ];
 
-    let err = admit_worktree_name(&held, &room.root, "design").expect_err("occupied lane");
-
-    assert!(matches!(err, LaneErr::LaneOccupied { name } if name == "design"));
-    admit_worktree_name(&held, &room.root, "docs").expect("another name");
+    for taken in ["design", "forge", "repo"] {
+        let err = admit_worktree_name(&held, taken, &dir(taken)).expect_err("occupied lane");
+        assert!(
+            matches!(&err, LaneErr::LaneOccupied { name } if name == taken),
+            "{taken}: {err}"
+        );
+    }
+    admit_worktree_name(&held, "docs", &dir("docs")).expect("another name");
+    admit_worktree_name(&held[..2], "repo", &dir("repo")).expect("the project directory's name");
+    admit_worktree_name(
+        &[stamped("design", &text(&room.root))],
+        "design",
+        &dir("design"),
+    )
+    .expect("a lane-less row holds no lane");
 }
 
 #[test]
 fn worktree_name_admission_ignores_ended_dead_and_worktree_agents() {
     let room = room();
-    let design = room.parent.join("worktrees/design");
-    std::fs::create_dir_all(&design).unwrap();
-    let in_worktree = stamped("design", &text(&design));
-
-    admit_worktree_name(
-        &[
-            ended(stamped("design", &text(&room.root))),
-            dead(stamped("design", &text(&room.root))),
-            in_worktree,
-            // A worktree home inside the project, before the tree exists.
-            stamped("design", &text(&room.root.join(".worktrees/design"))),
-        ],
-        &room.root,
-        "design",
-    )
-    .expect("free lane");
+    let held =
+        |path: &Path| holder(Lane::own(LaneHome::Worktree, text(path)).named(name("design")));
+    let ended_and_dead = [
+        ended(holder(trunk(&room).named(name("design")))),
+        dead(holder(trunk(&room).named(name("design")))),
+    ];
+    // The worktree's own directory, made or not yet made, outside or inside the project.
+    for design in [
+        room.parent.join("worktrees/design"),
+        room.root.join(".worktrees/design"),
+    ] {
+        std::fs::create_dir_all(design.parent().unwrap()).unwrap();
+        let mut agents = ended_and_dead.to_vec();
+        agents.push(held(&design));
+        admit_worktree_name(&agents, "design", &design).expect("free lane");
+    }
 }

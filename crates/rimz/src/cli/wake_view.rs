@@ -629,7 +629,7 @@ mod tests {
         let now = Timestamp::from_second(2_000).unwrap();
         let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, "%1");
         let mut owner = rimz::testkit::agent_state("claude", "owner", now);
-        owner.channel = Some("lane".to_owned());
+        rimz::testkit::set_lane(&mut owner, "lane");
         owner.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
         let mut shadow = rimz::testkit::agent_state("claude", "cleared", now);
         shadow.channel = owner.channel.clone();
@@ -729,7 +729,7 @@ mod tests {
     fn child_header_and_json_parent_ignore_a_pane_shadowed_root() {
         let mut snapshot = pane_shadowed_snapshot();
         let mut child = rimz::testkit::agent_state("codex", "child", snapshot.generated_at);
-        child.channel = Some("lane".into());
+        rimz::testkit::set_lane(&mut child, "lane");
         child.profile = Some("reviewer".into());
         child.name = Some("modern-notch".into());
         child.parent_agent_id = Some("owner".into());

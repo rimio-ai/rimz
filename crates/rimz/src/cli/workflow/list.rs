@@ -438,6 +438,7 @@ mod tests {
         let mut agent = rimz::testkit::agent_state("codex", "leader", Timestamp::UNIX_EPOCH);
         agent.profile = Some("yagni".into());
         agent.worktree_path = Some("/repo/lane".into());
+        rimz::testkit::set_own_lane(&mut agent);
         let pin = WorkflowAttemptRef {
             run: record.id.clone(),
             seq: 7,
@@ -497,6 +498,7 @@ mod tests {
         leader.name = Some("pet".into());
         leader.profile = Some("yagni".into());
         leader.worktree_path = Some("/repo/lane".into());
+        rimz::testkit::set_own_lane(&mut leader);
         leader.workflow = Some(WorkflowAttemptRef {
             run: record.id.clone(),
             seq: 7,

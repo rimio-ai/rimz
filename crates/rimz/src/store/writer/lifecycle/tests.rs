@@ -1623,3 +1623,60 @@ fn a_ping_to_a_row_parked_on_background_work_is_audited_as_a_no_op() {
     assert_eq!(pinged.turn_ended_at, rested.turn_ended_at);
     assert!(pinged.pinged_at > rested.turn_ended_at);
 }
+
+#[test]
+fn a_native_child_row_takes_its_parents_lane_on_either_creating_path() {
+    let (_dir, store) = test_store();
+    let kind = AgentKind::new_unchecked("claude");
+    let lane = crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
+        .named("design".parse().unwrap());
+    let append = |observation: &AgentLifecycleObservation, spawned: &[SpawnedSubagent]| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: kind.clone(),
+                event_name: "fixture",
+                observation,
+                spawned_subagents: spawned,
+            })
+            .unwrap();
+    };
+    let mut parent = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parent")),
+        LifecycleSignal::Registered,
+    );
+    parent.launch.lane = Some(lane.clone());
+    append(&parent, &[]);
+    let mut started = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("started")),
+        LifecycleSignal::SubagentStarted,
+    );
+    started.parent_agent_id = Some(AgentSessionId::from("parent"));
+    append(&started, &[]);
+    parent.launch.lane = None;
+    parent.signal = LifecycleSignal::ToolUsed {
+        effect: ToolEffect::Observed,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    };
+    let spawned = SpawnedSubagent {
+        child_agent_id: AgentSessionId::from("spawned"),
+        agent_name: Some("spawned".to_owned()),
+        role: None,
+        prompt: Some("child task".to_owned()),
+        model: None,
+        usage: Default::default(),
+    };
+    append(&parent, std::slice::from_ref(&spawned));
+
+    let snapshot = store.snapshot_cached().unwrap();
+    for id in ["started", "spawned"] {
+        let child = snapshot
+            .agents
+            .iter()
+            .find(|state| state.agent_id == id)
+            .unwrap_or_else(|| panic!("{id} row"));
+        assert_eq!(child.lane.as_ref(), Some(&lane), "{id}");
+    }
+}

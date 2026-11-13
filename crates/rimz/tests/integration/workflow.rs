@@ -957,7 +957,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
     let warning = String::from_utf8_lossy(&receipt.stderr).into_owned();
     let receipt = success(receipt);
     assert!(
-        receipt.starts_with("extended review#project · deadline "),
+        receipt.starts_with("extended review#main · deadline "),
         "{receipt}"
     );
     assert!(
@@ -1441,10 +1441,7 @@ fn human_show_wait_and_journal_are_readable() {
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let text = success(command(&env, &["workflow", "show", &id]));
-    assert!(
-        text.starts_with("review#project\n☾ waiting at pr"),
-        "{text}"
-    );
+    assert!(text.starts_with("review#main\n☾ waiting at pr"), "{text}");
     assert_eq!(text.matches("pending, recheck").count(), 1, "{text}");
     assert!(text.contains("trail  "), "{text}");
     let zone = jiff::tz::TimeZone::system();

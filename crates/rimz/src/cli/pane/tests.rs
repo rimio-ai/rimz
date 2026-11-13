@@ -199,7 +199,7 @@ fn pane(raw: &str, view: &str, name: &str, command: &str, cwd: &str) -> PaneRef 
 
 fn agent_on(pane_raw: &str, kind: &str, branch: &str) -> AgentState {
     let now = Timestamp::now();
-    AgentState {
+    let mut agent = AgentState {
         kind_ordinal: Some(1),
         status: AgentStatus::Running,
         phase: rimz::agents::TurnPhase::Reasoning,
@@ -210,7 +210,13 @@ fn agent_on(pane_raw: &str, kind: &str, branch: &str) -> AgentState {
         worktree_path: Some(format!("/repo/{branch}")),
         worktree_branch: Some(branch.to_owned()),
         ..rimz::testkit::agent_state(kind, "sess-1", now)
+    };
+    if branch == rimz::ids::LaneName::TRUNK {
+        rimz::testkit::set_trunk(&mut agent);
+    } else {
+        rimz::testkit::set_own_lane(&mut agent);
     }
+    agent
 }
 
 #[test]
@@ -371,6 +377,7 @@ fn pane_list_role_handle_counts_only_same_lane_historical_roots() {
         if same_lane {
             historical.worktree_path = Some("/repo/main".to_owned());
             historical.worktree_branch = Some("main".to_owned());
+            rimz::testkit::set_trunk(&mut historical);
         }
         let pane = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main");
         let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(

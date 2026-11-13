@@ -555,7 +555,14 @@ fn assert_agent_folder_launch(shape: &str) {
     }
     let workspace = env.resolve_workspace(&env.project_root);
     env.store().record_workspace(&workspace).unwrap();
-    crate::common::wait::register_calling_agent(&env);
+    // The caller was launched in the checkout it registers in below.
+    crate::common::wait::register_calling_agent_with_launch(
+        &env,
+        LaunchParams {
+            lane: (shape == "linked").then(|| rimz::worktree::own_lane(&env.project_root, &target)),
+            ..LaunchParams::default()
+        },
+    );
     if shape == "linked" {
         let mut observation = AgentLifecycleObservation::new(
             Some("provider-session".into()),
@@ -957,6 +964,11 @@ fn explicit_channel_launch_refuses_a_managed_worktree_name() {
 }
 
 #[test]
+fn in_place_team_launch_refuses_a_managed_worktree_name_and_writes_nothing() {
+    assert_launch_focus(&["teams", "duo"], true, "team-worktree");
+}
+
+#[test]
 fn agent_restart_refuses_a_login_without_hooks() {
     assert_launch_focus(&["agents", "restart", "@planner"], true, "unhooked");
 }
@@ -1149,7 +1161,16 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
         .args(["worktree", "new", "feature", "--base", tip])
         .assert()
         .success();
-    crate::common::wait::register_calling_agent(&env);
+    // A cohort's holder is the caller, launched in the worktree it registers in below.
+    crate::common::wait::register_calling_agent_with_launch(
+        &env,
+        LaunchParams {
+            lane: cohort
+                .is_some()
+                .then(|| rimz::worktree::own_lane(&env.project_root, &holder)),
+            ..LaunchParams::default()
+        },
+    );
     crate::common::write_definition(
         &env,
         "agents",
@@ -1314,10 +1335,22 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         env.install_agent_hooks("claude");
     }
     let automation = serde_json::json!({"by": "workflow", "workflow": "land", "step": "triage"});
-    crate::common::wait::register_calling_agent_with_launch(
-        &env,
-        serde_json::from_value(serde_json::json!({"automation": automation})).unwrap(),
-    );
+    let mut launch: LaunchParams =
+        serde_json::from_value(serde_json::json!({"automation": automation})).unwrap();
+    // A relaunched caller is the session registered below, so its launch decided
+    // that registration's lane: a row's lane never changes.
+    if matches!(args[1], "restart" | "resume")
+        && action != "cohort"
+        && !action.starts_with("hold-")
+        && !unregistered
+    {
+        launch.lane = Some(crate::common::wait::stamped_lane(
+            &env,
+            &env.project_root,
+            "review",
+        ));
+    }
+    crate::common::wait::register_calling_agent_with_launch(&env, launch);
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",
@@ -1365,10 +1398,18 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     let shim = write_env_dump_shim(&env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
     env.store().record_workspace(&workspace).unwrap();
-    if action == "channel-worktree" {
+    if let "channel-worktree" | "team-worktree" = action {
         assert!(init_launch_repo(&env.project_root));
         env.rimz()
-            .args(["worktree", "new", "demo"])
+            .args([
+                "worktree",
+                "new",
+                if action == "team-worktree" {
+                    "duo"
+                } else {
+                    "demo"
+                },
+            ])
             .assert()
             .success();
     }
@@ -1571,16 +1612,24 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         assert!(!log.exists(), "a refused launch must not reach the mux");
         return;
     }
-    if let "channel-name" | "channel-worktree" = action {
+    if let "channel-name" | "channel-worktree" | "team-worktree" = action {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{stderr}");
         assert!(
-            stderr.contains(if action == "channel-name" {
-                "invalid channel name `bad/name`"
-            } else {
-                "channel `demo` is backed by a worktree; use `--worktree demo`"
+            stderr.contains(match action {
+                "channel-name" => "invalid channel name `bad/name`",
+                "channel-worktree" => {
+                    "channel `demo` is backed by a worktree; use `--worktree demo`"
+                }
+                _ => "channel `duo` is backed by a worktree; use `--worktree duo`",
             }),
             "{stderr}"
+        );
+        let notes = env.state_path_for(&env.project_root).team_notes_dir;
+        assert!(
+            std::fs::read_dir(&notes).map_or(true, |mut entries| entries.next().is_none()),
+            "a refused team writes no notes under {}",
+            notes.display()
         );
         assert_eq!(
             serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
@@ -2614,7 +2663,7 @@ fn live_rimz(env: &Env) -> std::process::Command {
 
 #[cfg(unix)]
 #[test]
-fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() {
+fn user_shell_subagents_list_names_root_children_main_in_text_and_json() {
     let env = Env::new();
     env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
@@ -2637,6 +2686,10 @@ fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() 
                         parent_agent_id: parent.map(AgentSessionId::from),
                         parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
                         launch_depth: parent.map(|_| 1),
+                        lane: Some(rimz::worktree::own_lane(
+                            &env.project_root,
+                            &env.project_root,
+                        )),
                         ..Default::default()
                     },
                     state: AgentLaunchState::Bound,
@@ -2668,7 +2721,7 @@ fn user_shell_subagents_list_labels_root_children_main_but_keeps_json_channel() 
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(rows[0]["channel"], "project");
+    assert_eq!(rows[0]["channel"], "main");
     assert!(rows[0].get("lane_label").is_none());
 }
 

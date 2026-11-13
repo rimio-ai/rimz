@@ -729,6 +729,7 @@ fn register_cleared_and_owner_sessions(env: &Env) -> rimz::pane::PaneRef {
         observation.pane_id = Some(pane.pane_id.clone());
         observation.worktree_path = Some(env.project_root.display().to_string());
         observation.worktree_branch = Some("lane".into());
+        crate::common::wait::stamp_hook_lane(env, &mut observation);
         env.store()
             .append_agent_lifecycle(AgentLifecycleIntent {
                 session_name: "rimz-test",

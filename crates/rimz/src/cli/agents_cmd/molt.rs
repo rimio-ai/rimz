@@ -130,14 +130,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
-            &restart::relaunch_request(
-                &agent,
-                &posture,
-                action.clone(),
-                login.clone(),
-                None,
-                &workspace.project_root,
-            ),
+            &restart::relaunch_request(&agent, &posture, action.clone(), login.clone(), None),
             &cwd,
             Some(store.runtime_paths()),
         )?;
@@ -145,13 +138,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     let room = RoomContext::live_tab(workspace, machine, globals.mux)?;
     let mux = room.mux_name();
     let batch = store.begin_agent_launch_batch(
-        &[molt_request(
-            &agent,
-            &posture,
-            login.clone(),
-            &note,
-            &workspace.project_root,
-        )?],
+        &[molt_request(&agent, &posture, login.clone(), &note)?],
         AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: cwd.clone(),
@@ -160,16 +147,9 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         },
     )?;
     let launch = batch.single_identity()?;
-    let mut invocation = restart::relaunch_request(
-        &agent,
-        &posture,
-        action,
-        login,
-        Some(launch),
-        &workspace.project_root,
-    );
+    let mut invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
     invocation.identity.params.clone_from(&launch.launch);
-    let (title, pane_name) = molt_tab_names(&agent, &workspace.project_root, &posture, launch);
+    let (title, pane_name) = molt_tab_names(&agent, &posture, launch);
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),
@@ -346,14 +326,13 @@ fn replacement_posture(
 /// same seat would be.
 fn molt_tab_names(
     agent: &AgentState,
-    project_root: &Path,
     posture: &ResumePosture,
     launch: &AgentLaunchIdentity,
 ) -> (String, rimz::pane::PaneTitle) {
-    let lane = rimz::harness::lanes::row_lane(agent, project_root);
+    let lane = agent.lane.clone();
     let title = lane
         .as_ref()
-        .and_then(rimz::ids::Lane::stored_name)
+        .and_then(rimz::ids::Lane::pin_name)
         .map_or_else(
             || {
                 rimz::harness::spec::default_tab_title(
@@ -380,13 +359,11 @@ fn molt_request(
     posture: &ResumePosture,
     login: Option<rimz::ids::LoginName>,
     note: &str,
-    project_root: &std::path::Path,
 ) -> Result<AgentLaunchRequest> {
     let mut request = restart::fresh_launch_request(
         agent,
         restart::restart_cell(agent, posture),
         posture.launch.mode,
-        project_root,
     )?;
     request.launch.molted_from = Some(
         agent
@@ -540,8 +517,8 @@ mod tests {
         agent.team = Some("forge".into());
         agent.role = Some("coder".into());
         agent.profile = Some("worker".into());
-        agent.channel = Some("lane".into());
         agent.worktree_path = Some("/repo".into());
+        rimz::testkit::set_lane(&mut agent, "lane");
         agent.launch_group = Some("group".into());
         agent.launch_ordinal = Some(2);
         agent.launch_depth = Some(3);
@@ -555,14 +532,8 @@ mod tests {
             launch: Default::default(),
             degraded: None,
         };
-        let request = molt_request(
-            &agent,
-            &posture,
-            Some("work".parse().unwrap()),
-            "the note",
-            std::path::Path::new("/repo"),
-        )
-        .unwrap();
+        let request =
+            molt_request(&agent, &posture, Some("work".parse().unwrap()), "the note").unwrap();
         assert_eq!(request.launch.molted_from, agent.launch_id);
         assert_eq!(request.prompt.as_deref(), Some("the note"));
         assert_eq!(request.launch.launch_depth, agent.launch_depth);
@@ -580,8 +551,8 @@ mod tests {
                 .launch
                 .lane
                 .as_ref()
-                .and_then(rimz::ids::Lane::stored_name),
-            Some("lane")
+                .map(|lane| String::from(lane.routing_name())),
+            Some("lane".to_owned())
         );
         assert_eq!(request.launch.launch_group, agent.launch_group);
         assert_eq!(request.launch.launch_ordinal, agent.launch_ordinal);
@@ -605,8 +576,10 @@ mod tests {
             let mut agent =
                 rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
             agent.profile = profile.map(Into::into);
-            agent.channel = channel.map(Into::into);
             agent.worktree_path = Some("/repo".into());
+            if let Some(name) = channel {
+                rimz::testkit::set_lane(&mut agent, name);
+            }
             agent.team = team.map(Into::into);
             let launch = AgentLaunchIdentity {
                 kind: agent.kind.clone(),
@@ -621,8 +594,7 @@ mod tests {
                 run_id: None,
                 prompt: None,
             };
-            let (title, pane) =
-                molt_tab_names(&agent, std::path::Path::new("/repo"), &posture, &launch);
+            let (title, pane) = molt_tab_names(&agent, &posture, &launch);
             (title, pane.to_string())
         };
         let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());

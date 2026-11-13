@@ -39,10 +39,9 @@ enum Picked {
 /// Whether a requested address names `record`'s workflow and lane, each lane
 /// read through the one lane parser against the run's project.
 fn address_selects(address: &RunAddress, record: &RunRecord) -> bool {
-    let project_root = Some(record.project_root.as_path());
     address.workflow == record.workflow
-        && rimz::address::LaneSelector::parse(Some(address.lane.as_str()), project_root)
-            .holds_record(Some(&record.address().lane), project_root)
+        && rimz::address::LaneSelector::parse(Some(address.lane.as_str()))
+            .holds_record(Some(&record.address().lane))
 }
 
 pub(in crate::cli) fn caller(globals: &GlobalFlags) -> Option<rimz::ResolvedWorkspace> {
@@ -550,8 +549,11 @@ mod tests {
         for raw in ["other#feat-x", "review#feat-y"] {
             assert!(!selects(raw, &feat), "{raw}");
         }
-        for raw in ["review#main", "review#repo", "review#/repo"] {
-            assert!(selects(raw, &trunk), "{raw}");
+        assert!(selects("review#main", &trunk));
+        assert!(!selects("review#main", &feat));
+        // Trunk's lane is `main` alone: its directory and path name no lane.
+        for raw in ["review#repo", "review#/repo"] {
+            assert!(!selects(raw, &trunk), "{raw}");
             assert!(!selects(raw, &feat), "{raw}");
         }
     }

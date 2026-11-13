@@ -1741,7 +1741,7 @@ fn stop_failure_records_turn_error_transcript_entry() {
     assert_eq!(entry.agent_id.as_str(), "sess-1");
     assert_eq!(
         entry.channel.as_ref().map(rimz::ids::LaneName::as_str),
-        Some("hooks-test")
+        Some("main")
     );
     assert_eq!(
         entry.text,

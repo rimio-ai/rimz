@@ -7,13 +7,13 @@ pub(super) enum LaneScope {
 }
 
 impl LaneScope {
-    fn contains_channel(&self, channel: Option<&LaneName>, project_root: Option<&Path>) -> bool {
+    /// Whether a record of `channel` shows in this scope: a record with no lane
+    /// shows in none, not even `--all`, and never reads as trunk's.
+    fn contains_channel(&self, channel: Option<&LaneName>) -> bool {
         match self {
-            Self::All => true,
-            Self::Root => LaneSelector::trunk().holds_record(channel, project_root),
-            Self::Named(name) => {
-                LaneSelector::named(name.clone()).holds_record(channel, project_root)
-            }
+            Self::All => channel.is_some(),
+            Self::Root => LaneSelector::trunk().holds_record(channel),
+            Self::Named(name) => LaneSelector::named(name.clone()).holds_record(channel),
         }
     }
 
@@ -236,7 +236,6 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
         } else {
             ctx.channel().map(LaneName::as_str)
         },
-        Some(&ctx.workspace.project_root),
     )?;
     let explicit = inline_channel.as_deref().or(args.channel.as_deref());
     if let Some(explicit) = explicit {
@@ -244,19 +243,17 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
     }
     let mut lane_scope = if args.all {
         LaneScope::All
-    } else if explicit.is_some_and(|channel| {
-        LaneSelector::parse(Some(channel), Some(&ctx.workspace.project_root)).is_trunk()
-    }) || (explicit.is_none()
-        && ctx.address_context().origin == rimz::address::ChannelOrigin::Root)
+    } else if explicit.is_some_and(|channel| LaneSelector::parse(Some(channel)).is_trunk())
+        || (explicit.is_none()
+            && ctx.address_context().origin == rimz::address::ChannelOrigin::Root)
     {
         LaneScope::Root
     } else {
-        LaneSelector::parse(channel.as_deref(), Some(&ctx.workspace.project_root))
+        LaneSelector::parse(channel.as_deref())
             .name()
             .cloned()
             .map_or(LaneScope::Root, LaneScope::Named)
     };
-    let project_root = Some(ctx.workspace.project_root.as_path());
     let target = if let Some(raw) = args.target.as_deref() {
         let mut context = ctx.address_context();
         if args.all {
@@ -281,7 +278,7 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
     };
     let unfiltered_lane = !args.all && args.status.is_none() && args.target.is_none();
     let empty = unfiltered_lane
-        .then(|| other_lanes_line(&messages, &lane_scope, project_root, args.system))
+        .then(|| other_lanes_line(&messages, &lane_scope, args.system))
         .flatten()
         .unwrap_or_else(|| empty_message_digest(&lane_scope, args.status));
     if let Some(agent) = target {
@@ -294,7 +291,7 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
             .matches(agent.card_ref())
         });
     }
-    messages.retain(|message| lane_scope.contains_channel(message.channel.as_ref(), project_root));
+    messages.retain(|message| lane_scope.contains_channel(message.channel.as_ref()));
     if let Some(status) = args.status {
         messages.retain(|message| message.status == status);
     } else if !lane_scope.includes_archived() {
@@ -324,7 +321,6 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
             messages,
             &agents,
             &lane_scope,
-            project_root,
             limit,
             system_hidden,
             &empty,
@@ -339,19 +335,18 @@ fn require_known_channel(
     snapshot: &SidebarSnapshot,
     ctx: &Ctx,
 ) -> Result<()> {
-    let project_root = Some(ctx.workspace.project_root.as_path());
-    let lane = LaneSelector::parse(Some(explicit), project_root);
+    let lane = LaneSelector::parse(Some(explicit));
     if lane.is_trunk() {
         return Ok(());
     }
     let mut known = messages
         .iter()
         .filter_map(|message| {
-            rimz::address::record_lane_label(
-                message.channel.as_ref().map(LaneName::as_str),
-                project_root,
-            )
-            .map(str::to_owned)
+            message
+                .channel
+                .as_ref()
+                .map(LaneName::as_str)
+                .map(str::to_owned)
         })
         .collect::<std::collections::BTreeSet<_>>();
     known.extend(
@@ -369,7 +364,7 @@ fn require_known_channel(
     );
     if known
         .iter()
-        .any(|name| lane.holds_record(Some(&LaneName::dashed(name)), project_root))
+        .any(|name| lane.holds_record(Some(&LaneName::dashed(name))))
     {
         return Ok(());
     }
@@ -400,13 +395,13 @@ fn known_channels_line(known: &std::collections::BTreeSet<String>) -> String {
 fn other_lanes_line(
     messages: &[MessageListRow],
     lane_scope: &LaneScope,
-    project_root: Option<&Path>,
     system: bool,
 ) -> Option<String> {
     let others = messages
         .iter()
         .filter(|message| {
-            !lane_scope.contains_channel(message.channel.as_ref(), project_root)
+            message.channel.is_some()
+                && !lane_scope.contains_channel(message.channel.as_ref())
                 && message.status != MessageStatus::Archived
                 && (system || message.sender.is_conversation())
         })
@@ -416,12 +411,7 @@ fn other_lanes_line(
     }
     let lanes = others
         .iter()
-        .map(|message| {
-            rimz::address::record_lane_label(
-                message.channel.as_ref().map(LaneName::as_str),
-                project_root,
-            )
-        })
+        .map(|message| message.channel.as_ref().map(LaneName::as_str))
         .collect::<std::collections::BTreeSet<_>>()
         .len();
     let undelivered = others
@@ -477,18 +467,12 @@ struct CollapsedMessageRow<'a> {
     count: usize,
 }
 
-fn collapsed_message_rows<'a>(
-    messages: &'a [MessageListRow],
-    project_root: Option<&Path>,
-) -> Vec<CollapsedMessageRow<'a>> {
+fn collapsed_message_rows<'a>(messages: &'a [MessageListRow]) -> Vec<CollapsedMessageRow<'a>> {
     let mut rows = Vec::<CollapsedMessageRow<'_>>::new();
     let mut last_by_lane =
         std::collections::BTreeMap::<Option<&str>, (usize, &MessageListRow)>::new();
     for message in messages {
-        let lane = rimz::address::record_lane_label(
-            message.channel.as_ref().map(LaneName::as_str),
-            project_root,
-        );
+        let lane = message.channel.as_ref().map(LaneName::as_str);
         if let Some(&(index, previous)) = last_by_lane.get(&lane)
             && previous.same_notice(message)
         {
@@ -514,13 +498,12 @@ pub(super) fn render_message_digest(
     messages: Vec<MessageListRow>,
     agents: &[&AgentState],
     lane_scope: &LaneScope,
-    project_root: Option<&Path>,
     limit: usize,
     system_hidden: usize,
     empty: &str,
 ) -> Result<()> {
     let now = Timestamp::now();
-    let mut rows = collapsed_message_rows(&messages, project_root);
+    let mut rows = collapsed_message_rows(&messages);
     if limit != 0 {
         rows.truncate(limit);
     }
@@ -528,22 +511,19 @@ pub(super) fn render_message_digest(
     if rows.is_empty() {
         writeln!(out, "{}", render::paint(render::palette::faint(), empty))?;
     } else if matches!(lane_scope, LaneScope::All) {
-        for (index, (channel, rows)) in message_digest_groups(rows, project_root)
-            .into_iter()
-            .enumerate()
-        {
+        for (index, (channel, rows)) in message_digest_groups(rows).into_iter().enumerate() {
             if index > 0 {
                 writeln!(out)?;
             }
             writeln!(
                 out,
                 "{}",
-                render::paint(render::palette::header(), &lane_header(channel.as_deref()))
+                render::paint(render::palette::header(), &lane_header(channel.as_str()))
             )?;
-            render_message_rows(out, rows, agents, project_root, now, 2, 4)?;
+            render_message_rows(out, rows, agents, now, 2, 4)?;
         }
     } else {
-        render_message_rows(out, rows, agents, project_root, now, 0, 2)?;
+        render_message_rows(out, rows, agents, now, 0, 2)?;
     }
     if hidden > 0 {
         writeln!(
@@ -564,7 +544,6 @@ fn render_message_rows(
     out: &mut impl Write,
     rows: Vec<CollapsedMessageRow<'_>>,
     agents: &[&AgentState],
-    project_root: Option<&Path>,
     now: Timestamp,
     row_indent: usize,
     snippet_indent: usize,
@@ -574,20 +553,9 @@ fn render_message_rows(
     let snippet_width = render::terminal_columns(120).saturating_sub(snippet_indent);
     for row in rows {
         let message = row.latest;
-        let lane = rimz::address::record_lane_label(
-            message.channel.as_ref().map(LaneName::as_str),
-            project_root,
-        );
-        let target = scoped_handle(
-            message_target(message, agents, project_root),
-            lane,
-            project_root,
-        );
-        let sender = scoped_handle(
-            message_sender(&message.sender, agents, project_root),
-            lane,
-            project_root,
-        );
+        let lane = message.channel.as_ref().map(LaneName::as_str);
+        let target = scoped_handle(message_target(message, agents), lane);
+        let sender = scoped_handle(message_sender(&message.sender, agents), lane);
         let status = if row.count > 1 {
             format!("{} ×{}", message.status.as_str(), row.count)
         } else {
@@ -630,7 +598,7 @@ pub(super) fn empty_message_digest(
         LaneScope::All => format!("no {kind}"),
         LaneScope::Root => format!("no {kind} in #main"),
         LaneScope::Named(channel) => {
-            format!("no {kind} in {}", lane_header(Some(channel.as_str())))
+            format!("no {kind} in {}", lane_header(channel.as_str()))
         }
     };
     if !matches!(lane_scope, LaneScope::All) {
@@ -641,15 +609,12 @@ pub(super) fn empty_message_digest(
 
 fn message_digest_groups<'a>(
     messages: Vec<CollapsedMessageRow<'a>>,
-    project_root: Option<&Path>,
-) -> Vec<(Option<String>, Vec<CollapsedMessageRow<'a>>)> {
-    let mut groups: Vec<(Option<String>, Vec<CollapsedMessageRow<'_>>)> = Vec::new();
+) -> Vec<(&'a LaneName, Vec<CollapsedMessageRow<'a>>)> {
+    let mut groups: Vec<(&LaneName, Vec<CollapsedMessageRow<'_>>)> = Vec::new();
     for message in messages {
-        let lane = rimz::address::record_lane_label(
-            message.latest.channel.as_ref().map(LaneName::as_str),
-            project_root,
-        )
-        .map(str::to_owned);
+        let Some(lane) = message.latest.channel.as_ref() else {
+            continue;
+        };
         if let Some((_, rows)) = groups.iter_mut().find(|(channel, _)| channel == &lane) {
             rows.push(message);
         } else {
@@ -669,22 +634,12 @@ pub(super) fn rendered_sender(sender: &MessageSender, rendered: &str) -> String 
     }
 }
 
-pub(super) fn lane_header(channel: Option<&str>) -> String {
-    channel
-        .filter(|channel| !channel.is_empty())
-        .map(|channel| format!("#{channel}"))
-        .unwrap_or_else(|| "#main".to_owned())
+pub(super) fn lane_header(channel: &str) -> String {
+    format!("#{channel}")
 }
 
-pub(super) fn message_target(
-    message: &MessageListRow,
-    agents: &[&AgentState],
-    project_root: Option<&Path>,
-) -> String {
-    let channel = rimz::address::record_lane_label(
-        message.channel.as_ref().map(LaneName::as_str),
-        project_root,
-    );
+pub(super) fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
+    let channel = message.channel.as_ref().map(LaneName::as_str);
     address::message_target(
         message.address.as_deref(),
         &message.kind,
@@ -695,35 +650,18 @@ pub(super) fn message_target(
     )
 }
 
-pub(super) fn message_sender(
-    sender: &MessageSender,
-    agents: &[&AgentState],
-    project_root: Option<&Path>,
-) -> String {
-    let mut sender = sender.clone();
-    if let MessageSender::Agent { channel, .. } = &mut sender {
-        *channel =
-            rimz::address::record_lane_label(channel.as_ref().map(LaneName::as_str), project_root)
-                .map(LaneName::dashed);
-    }
-    rimz::address::agent_sender_handle(&sender, agents, None, project_root)
-        .unwrap_or_else(|| sender.render())
+pub(super) fn message_sender(sender: &MessageSender, agents: &[&AgentState]) -> String {
+    rimz::address::agent_sender_handle(sender, agents, None).unwrap_or_else(|| sender.render())
 }
 
-pub(super) fn scoped_handle(
-    rendered: String,
-    filter_channel: Option<&str>,
-    project_root: Option<&Path>,
-) -> String {
+pub(super) fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {
     let Some(filter) = filter_channel else {
         return rendered;
     };
     let Some((base, channel)) = rendered.rsplit_once('#') else {
         return rendered;
     };
-    if LaneSelector::parse(Some(filter), project_root)
-        .holds_record(Some(&LaneName::dashed(channel)), project_root)
-    {
+    if LaneSelector::parse(Some(filter)).holds_record(Some(&LaneName::dashed(channel))) {
         base.to_owned()
     } else {
         rendered

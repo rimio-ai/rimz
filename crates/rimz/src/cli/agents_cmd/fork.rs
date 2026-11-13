@@ -67,7 +67,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let catalog = rimz::agents::machine_login_catalog();
     let mut seed = validate_fork_source(
         &source,
-        &workspace.project_root,
         launch_caller,
         &logins,
         &catalog,
@@ -79,8 +78,8 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         .launch
         .lane
         .as_ref()
-        .and_then(|lane| lane.stored_name())
-        .map(ToOwned::to_owned);
+        .and_then(rimz::ids::Lane::pin_name)
+        .map(String::from);
 
     if let Some(name) = args.name.as_deref() {
         validate_agent_name(name)?;
@@ -360,7 +359,6 @@ fn resolve_fork_source(
 
 fn validate_fork_source(
     agent: &AgentState,
-    project_root: &Path,
     caller: Option<&AgentState>,
     logins: &rimz::agents::RoomAccounts,
     catalog: &rimz::agents::LoginCatalog,
@@ -432,7 +430,7 @@ fn validate_fork_source(
             // peer launch, so it neither counts a new generation nor names a
             // launcher.
             launch_depth: agent.launch_depth,
-            lane: rimz::harness::lanes::row_lane(agent, project_root),
+            lane: agent.lane.clone(),
             ..rimz::agents::LaunchParams::default()
         },
     })

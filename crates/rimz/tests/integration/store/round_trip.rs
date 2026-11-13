@@ -121,10 +121,10 @@ fn root_lane_is_stamped_through_every_fold_reader() {
         },
     )
     .unwrap();
-    for (index, (id, path, channel)) in [
-        ("root", "/repo/project", None),
-        ("worktree", "/repo/feature", None),
-        ("named", "/repo/project", Some("design")),
+    for (index, (id, home, path, channel)) in [
+        ("root", "trunk", "/repo/project", None),
+        ("worktree", "worktree", "/repo/feature", None),
+        ("named", "trunk", "/repo/project", Some("design")),
     ]
     .into_iter()
     .enumerate()
@@ -137,8 +137,11 @@ fn root_lane_is_stamped_through_every_fold_reader() {
             format!("%{index}"),
         ));
         observation.agent_pid = Some(std::process::id());
-        observation.launch.lane = channel
-            .map(|name| crate::common::wait::lane("trunk", std::path::Path::new(path), Some(name)));
+        observation.launch.lane = Some(crate::common::wait::lane(
+            home,
+            std::path::Path::new(path),
+            channel,
+        ));
         h.store
             .append_event(&rimz::EventEnvelope::agent_lifecycle(
                 h.workspace_id.clone(),

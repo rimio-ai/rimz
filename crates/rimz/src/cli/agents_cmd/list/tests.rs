@@ -187,11 +187,11 @@ fn fast_model_cell_uses_the_resolved_glyph_without_marking_missing_models() {
 fn list_channel_filter_resolves_explicit_all_and_current_channel() {
     let mut root = test_agent("root");
     root.worktree_path = Some("/repo/checkout".into());
-    root.root_lane = true;
+    rimz::testkit::set_trunk(&mut root);
     let filter = list_channel_filter_for_current(false, Some("#main"), None).unwrap();
     assert!(rimz::address::agent_in_lane(
         &root,
-        &rimz::address::LaneSelector::parse(Some(&filter), None)
+        &rimz::address::LaneSelector::parse(Some(&filter))
     ));
     assert_eq!(
         list_channel_filter_for_current(true, Some("manual"), Some("feature".to_owned()))
@@ -339,12 +339,12 @@ fn model_label_prefers_live_context_then_durable_launch_fields() {
 fn json_entries_add_pr_only_to_agents_in_the_linked_group() {
     let now = jiff::Timestamp::UNIX_EPOCH;
     let mut linked = test_agent("linked");
-    linked.channel = Some("feature".to_owned());
     linked.worktree_path = Some("/repo/worktrees/feature".to_owned());
+    rimz::testkit::set_lane(&mut linked, "feature");
     linked.worktree_branch = Some("feature".to_owned());
     let mut plain = test_agent("plain");
-    plain.channel = Some("docs".to_owned());
     plain.worktree_path = Some("/repo/main".to_owned());
+    rimz::testkit::set_lane(&mut plain, "docs");
     plain.worktree_branch = Some("main".to_owned());
     let mut snapshot = SidebarSnapshot::build_with_agents(
         rimz::WorkspaceId::from_project_root(Path::new("/repo/main")),
@@ -502,7 +502,9 @@ fn test_pane_agent(agent_id: &str, pane: &str) -> PaneAgent {
 #[test]
 fn list_json_carries_each_row_flat_beside_its_detail() {
     let now = jiff::Timestamp::UNIX_EPOCH;
-    let root = test_agent("sess-root");
+    let mut root = test_agent("sess-root");
+    root.worktree_path = Some("/code/query-engine".to_owned());
+    rimz::testkit::set_trunk(&mut root);
     let mut child = test_agent("sess-child");
     child.parent_agent_id = Some("sess-root".into());
     child.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
@@ -561,6 +563,7 @@ fn list_json_carries_each_row_flat_beside_its_detail() {
         .unwrap();
     assert_eq!(child["parent"], root["handle"]);
     assert!(root["parent"].is_null());
+    assert_eq!(root["placement"]["channel"], "main", "{root:#}");
     assert_eq!(child["live"], true);
     assert_eq!(child["account"], "default");
 }

@@ -3413,7 +3413,7 @@ fn account_room_journey(history: &str) {
             .env("PATH", &agent_path)
             .env("TMUX", tmux_env(&socket))
             .env_remove("CLAUDE_CONFIG_DIR")
-            .args(["--mux", "tmux", "agents", "resume", "#project"])
+            .args(["--mux", "tmux", "agents", "resume", "#main"])
             .bounded_output_within(Duration::from_secs(45))
             .expect("resume the work lane")
     };

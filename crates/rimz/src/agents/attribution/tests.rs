@@ -23,6 +23,15 @@ fn agent(path: &Path, id: &str, kind: &str, registered: i64) -> AgentState {
         "last_activity": at(registered + 10),
         "registered_at": at(registered),
     }))
+    .map(|mut agent: AgentState| {
+        let home = if path == Path::new("/repo") {
+            crate::ids::LaneHome::Trunk
+        } else {
+            crate::ids::LaneHome::Worktree
+        };
+        agent.lane = Some(crate::ids::Lane::own(home, path.to_string_lossy()));
+        agent
+    })
     .expect("test agent")
 }
 
@@ -188,6 +197,7 @@ fn common_since_requires_one_managed_lane() {
     let unmarked = agent(Path::new("/repo/unmarked"), "unmarked", "claude", 1);
     let mut unstamped = first.clone();
     unstamped.worktree_path = None;
+    unstamped.lane = None;
     let removed = agent(Path::new("/repo/removed"), "removed", "claude", 21);
     let lifetimes = LaneLifetimes::new(HashMap::from([
         (lane, LaneLifetime::Since(at(20))),
@@ -1294,12 +1304,12 @@ fn launched_child_in_another_lane_follows_its_parent() {
     )
     .expect("write child transcript");
     let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
-    parent.channel = Some("feature".to_owned());
+    crate::testkit::set_lane(&mut parent, "feature");
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     let mut child = agent(Path::new("/repo/lane"), "child", "claude", 30);
-    child.channel = Some("sibling".to_owned());
     child.worktree_path = Some("/repo/sibling".to_owned());
+    crate::testkit::set_lane(&mut child, "sibling");
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
@@ -1464,12 +1474,12 @@ fn identical_team_roles_in_different_lanes_keep_distinct_slots() {
     let mut auth = agent(Path::new("/repo/lane"), "auth-coder", "codex", 10);
     auth.team = Some("forge".to_owned());
     auth.role = Some("coder".to_owned());
-    auth.channel = Some("auth".to_owned());
+    crate::testkit::set_lane(&mut auth, "auth");
     auth.tool_calls.insert("exec".to_owned(), 1);
     let mut docs = agent(Path::new("/repo/lane"), "docs-coder", "codex", 20);
     docs.team = Some("forge".to_owned());
     docs.role = Some("coder".to_owned());
-    docs.channel = Some("docs".to_owned());
+    crate::testkit::set_lane(&mut docs, "docs");
     docs.tool_calls.insert("exec".to_owned(), 1);
 
     let report = build_for(&[auth, docs]);
@@ -1639,15 +1649,15 @@ fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
     let mut planner = agent(Path::new("/repo/lane"), "planner-session", "claude", 10);
     planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
-    planner.channel = Some("feature".to_owned());
+    crate::testkit::set_lane(&mut planner, "feature");
     let mut coder = agent(Path::new("/repo/lane"), "coder-session", "codex", 20);
     coder.team = Some("forge".to_owned());
     coder.role = Some("coder".to_owned());
-    coder.channel = Some("feature".to_owned());
+    crate::testkit::set_lane(&mut coder, "feature");
     let mut docs_coder = agent(Path::new("/repo/lane"), "docs-coder", "codex", 30);
     docs_coder.team = Some("forge".to_owned());
     docs_coder.role = Some("coder".to_owned());
-    docs_coder.channel = Some("docs".to_owned());
+    crate::testkit::set_lane(&mut docs_coder, "docs");
 
     let entry = |kind: &str, id: &str, entry| {
         TranscriptEntry::new(
@@ -1796,9 +1806,8 @@ fn sent_messages_alone_are_a_contribution() {
 
 #[test]
 fn a_message_sent_under_trunks_routing_name_credits_the_trunk_member() {
-    for suffix in ["main", "repo"] {
-        let mut trunk = agent(Path::new("/repo"), "trunk", "claude", 10);
-        trunk.lane = Some(crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo"));
+    for (suffix, credited) in [(Some("main"), 1), (None, 1), (Some("repo"), 0)] {
+        let trunk = agent(Path::new("/repo"), "trunk", "claude", 10);
         let mut sent = TranscriptEntry::new(
             at(50),
             AgentKind::new_unchecked("codex"),
@@ -1806,13 +1815,15 @@ fn a_message_sent_under_trunks_routing_name_credits_the_trunk_member() {
             TranscriptKind::Message,
             "hello".to_owned(),
         );
-        sent.channel = Some(crate::ids::LaneName::dashed("repo"));
-        sent.from = Some(format!("@claude#{suffix}"));
+        sent.channel = Some(crate::ids::LaneName::dashed(crate::ids::LaneName::TRUNK));
+        sent.from = Some(suffix.map_or_else(|| "@claude".to_owned(), |s| format!("@claude#{s}")));
         let report = build_with(&[trunk], &[], &[sent]);
-        assert_eq!(
-            report.groups[0].members[0].messages.to_teammates, 1,
-            "{suffix}"
-        );
+        // A seat with no contribution leaves the report.
+        let sent_by_trunk = report
+            .groups
+            .first()
+            .map_or(0, |group| group.members[0].messages.to_teammates);
+        assert_eq!(sent_by_trunk, credited, "{suffix:?}");
     }
 }
 

@@ -348,8 +348,8 @@ fn catalog_projects_cohort_observability_by_worktree() {
         let mut agent = AgentState::stub("codex", lane, AgentStatus::Running);
         agent.team = Some("forge".into());
         agent.role = Some("coder".into());
-        agent.channel = Some(lane.into());
         agent.worktree_path = Some(path.join(".").to_string_lossy().into_owned());
+        rimz::testkit::set_lane(&mut agent, lane);
         agent.worktree_branch = Some(format!("branch-{lane}"));
         agent.last_activity = jiff::Timestamp::UNIX_EPOCH;
         agent.last_seen = jiff::Timestamp::from_second(600).unwrap();
@@ -550,8 +550,8 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
     let mut agent = AgentState::stub("codex", "main", AgentStatus::Running);
     agent.team = Some("forge".into());
     agent.role = Some("planner".into());
-    agent.channel = Some("main".into());
     agent.worktree_path = Some(root.to_owned());
+    rimz::testkit::set_trunk(&mut agent);
     agent.worktree_branch = Some("main".into());
     agent.last_activity = jiff::Timestamp::UNIX_EPOCH;
     let mut group: SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
@@ -631,7 +631,7 @@ fn catalog_member_handles_round_trip_beside_teamless_role_rivals() {
     let mut member = AgentState::stub("codex", "team-reviewer", AgentStatus::Running);
     member.team = Some("forge".to_owned());
     member.role = Some("reviewer".to_owned());
-    member.channel = Some("feat-x".to_owned());
+    rimz::testkit::set_lane(&mut member, "feat-x");
     member.kind_ordinal = Some(1);
     let mut rival = member.clone();
     rival.agent_id = "inline-reviewer".into();
@@ -696,7 +696,7 @@ fn catalog_merges_definition_and_live_instance() {
     let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
     agent.team = Some("forge".to_owned());
     agent.role = Some("planner".to_owned());
-    agent.channel = Some("feat-x".to_owned());
+    rimz::testkit::set_lane(&mut agent, "feat-x");
     agent.isolation = Some(Isolation::Scoped);
     agent.last_activity = jiff::Timestamp::UNIX_EPOCH;
     let mut reviewer = agent.clone();
@@ -827,7 +827,8 @@ fn live_member_cost_comes_from_its_audit_slot() {
     let mut agent = AgentState::stub("opencode", "sess-planner", AgentStatus::Running);
     agent.team = Some("forge".to_owned());
     agent.role = Some("planner".to_owned());
-    agent.channel = Some("feat-x".to_owned());
+    agent.worktree_path = Some(dir.path().to_string_lossy().into_owned());
+    rimz::testkit::set_lane(&mut agent, "feat-x");
     agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
     let lifetimes = rimz::worktree::lane_lifetimes(std::iter::once(&agent));
     let reports = build_catalog(
@@ -894,14 +895,15 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
     let mut current = AgentState::stub("opencode", "current-planner", AgentStatus::Running);
     current.team = Some("forge".to_owned());
     current.role = Some("planner".to_owned());
-    current.channel = Some("feat-x".to_owned());
     current.worktree_path = Some(worktree.to_string_lossy().into_owned());
+    rimz::testkit::set_lane(&mut current, "feat-x");
     current.registered_at = Some("2026-06-02T10:00:01Z".parse().unwrap());
     current.transcript_path = Some(transcript.to_string_lossy().into_owned());
     let mut old = AgentState::stub("opencode", "old-planner", AgentStatus::Success);
     old.team = current.team.clone();
     old.role = current.role.clone();
     old.channel = current.channel.clone();
+    old.lane = current.lane.clone();
     old.worktree_path = current.worktree_path.clone();
     old.registered_at = Some("2026-06-02T09:59:59Z".parse().unwrap());
     old.transcript_path = current.transcript_path.clone();
@@ -1316,8 +1318,8 @@ fn human_catalog_prioritizes_attention_and_collapses_definitions() {
             }
             .into(),
         );
-        agent.channel = Some(lane.into());
         agent.worktree_path = Some(path.display().to_string());
+        rimz::testkit::set_lane(&mut agent, lane);
         agent.last_activity = jiff::Timestamp::from_second(second).unwrap();
         agents.push(agent);
         flips.push(StageSignal {
@@ -1391,13 +1393,14 @@ fn human_catalog_prioritizes_attention_and_collapses_definitions() {
 }
 
 #[test]
-fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
+fn catalog_filter_matches_an_exact_lane_and_never_a_member_worktree_path() {
     let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team())]));
     let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
     agent.team = Some("forge".to_owned());
     agent.role = Some("planner".to_owned());
     agent.channel = None;
     agent.worktree_path = Some("/repo-worktrees/feat-x".to_owned());
+    rimz::testkit::set_own_lane(&mut agent);
     let build = |filter| {
         build_catalog(
             &teams,
@@ -1421,9 +1424,8 @@ fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
     };
 
     assert_eq!(build(Some("feat-x"))[0].instances[0].channel, "feat-x");
-    assert_eq!(
-        build(Some("/repo-worktrees/feat-x"))[0].instances[0].channel,
-        "feat-x"
-    );
-    assert!(build(Some("other"))[0].instances.is_empty());
+    // A path is a second name for a lane, and no filter reads one.
+    for filter in ["/repo-worktrees/feat-x", "other"] {
+        assert!(build(Some(filter))[0].instances.is_empty(), "{filter}");
+    }
 }

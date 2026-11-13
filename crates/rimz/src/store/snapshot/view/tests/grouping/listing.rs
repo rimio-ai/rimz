@@ -263,7 +263,7 @@ fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
     let mut design = agent("claude", "design", AgentStatus::Running, 20)
         .worktree("/repo/main")
         .branch("main");
-    design.channel = Some("design".to_owned());
+    crate::testkit::set_lane(&mut design, "design");
     let snapshot = room(vec![design]);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 

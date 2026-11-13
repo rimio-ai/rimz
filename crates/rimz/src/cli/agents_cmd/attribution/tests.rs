@@ -197,7 +197,7 @@ fn panel_groups_team_and_stray_members() {
 
 #[test]
 fn report_scope_reports_the_applied_branch() {
-    let record: AgentState = serde_json::from_value(serde_json::json!({
+    let mut record: AgentState = serde_json::from_value(serde_json::json!({
         "agent_id": "session",
         "kind": "codex",
         "status": "idle",
@@ -206,9 +206,9 @@ fn report_scope_reports_the_applied_branch() {
         "last_activity": jiff::Timestamp::UNIX_EPOCH,
         "worktree_path": "/repo/lane",
         "worktree_branch": "old",
-        "channel": "lane"
     }))
     .expect("agent fixture");
+    rimz::testkit::set_lane(&mut record, "lane");
     let since = jiff::Timestamp::UNIX_EPOCH;
     let lifetimes = LaneLifetimes::new(std::collections::HashMap::from([(
         std::path::PathBuf::from("/repo/lane"),

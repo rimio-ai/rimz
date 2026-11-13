@@ -15,13 +15,13 @@ pub fn admit_launch_worktree_name(
         return Ok(());
     };
     let requested = crate::worktree::parse_requested_name(name)?;
-    if crate::worktree::worktree_path(workspace.launch_repo_root(), config, &requested.name)?
-        .exists()
-    {
+    let dir =
+        crate::worktree::worktree_path(workspace.launch_repo_root(), config, &requested.name)?;
+    if dir.exists() {
         return Ok(());
     }
     crate::worktree::admit_fresh_name(&requested.name)?;
-    crate::harness::lanes::admit_worktree_name(agents, &workspace.project_root, &requested.name)?;
+    crate::harness::lanes::admit_worktree_name(agents, &requested.name, &dir)?;
     Ok(())
 }
 

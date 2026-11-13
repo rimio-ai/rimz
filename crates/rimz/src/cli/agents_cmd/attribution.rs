@@ -47,9 +47,9 @@ pub(super) fn attribution(
             roots.push(agent);
         }
     }
-    let lane = channel.as_deref().map(|filter| {
-        rimz::address::LaneSelector::parse(Some(filter), Some(&ctx.workspace.project_root))
-    });
+    let lane = channel
+        .as_deref()
+        .map(|filter| rimz::address::LaneSelector::parse(Some(filter)));
     let roots = roots
         .into_iter()
         .filter(|agent| {
@@ -125,7 +125,7 @@ pub(super) fn attribution(
     report.scope.channel =
         common_optional(roots.iter().map(|agent| rimz::address::lane_label(agent))).or_else(|| {
             report.scope.channel.as_deref().map(|channel| {
-                rimz::address::LaneSelector::parse(Some(channel), Some(&ctx.workspace.project_root))
+                rimz::address::LaneSelector::parse(Some(channel))
                     .label()
                     .to_owned()
             })

@@ -947,7 +947,7 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams, registratio
         && !(registration && state.checkout.is_some())
         && let Some(lane) = &launch.lane
     {
-        state.lane = Some(lane.clone().adopt(state.channel.as_deref()));
+        state.lane = Some(lane.clone());
     }
     if state.lane.is_none()
         && let Some(channel) = &launch.channel
@@ -1212,10 +1212,7 @@ fn inherit_launch_identity(
     successor.lane = match &predecessor.lane {
         Some(lane) => Some(lane.clone()),
         None if predecessor.checkout.is_some() => None,
-        None => successor
-            .lane
-            .take()
-            .map(|lane| lane.adopt(predecessor.channel.as_deref())),
+        None => successor.lane.take(),
     };
     successor.channel.clone_from(&predecessor.channel);
     successor.project_lane();

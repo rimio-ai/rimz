@@ -515,6 +515,7 @@ fn children_keep_live_launches_and_launched_cohorts_once_without_ended_or_stoppe
     std::fs::write(&board, "Stage: review (@seat)\n").unwrap();
     let mut staged = seat(launched_by(row("staged", 30), "leader"), "crew");
     staged.worktree_path = Some(lane.path().display().to_string());
+    crate::testkit::set_own_lane(&mut staged);
     let observed = Readers::new(&[], &[]).observe(
         &leader_run(&leader),
         &snapshot(vec![

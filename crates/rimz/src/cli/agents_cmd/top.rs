@@ -138,8 +138,7 @@ fn sample_snapshot(
     reader: &address::AddressContext,
     demotion: &rimz::agents::ParkDemotion,
 ) -> TopSample {
-    let lane = channel
-        .map(|filter| address::LaneSelector::parse(Some(filter), snapshot.project_root.as_deref()));
+    let lane = channel.map(|filter| address::LaneSelector::parse(Some(filter)));
     let in_room: HashMap<AgentSessionId, Option<u32>> = snapshot
         .agent_panes
         .iter()
@@ -618,7 +617,7 @@ mod tests {
                 .map(|lane| {
                     let mut agent = rimz::testkit::agent_state("claude", lane, now);
                     agent.role = Some("coder".to_owned());
-                    agent.channel = Some(lane.to_owned());
+                    rimz::testkit::set_lane(&mut agent, lane);
                     agent.status = AgentStatus::Running;
                     let mut context = rimz::agents::AgentContext::new("claude", now);
                     context.turn_error = Some(rimz::agents::AgentTurnError {

@@ -78,9 +78,9 @@ fn marked_worktree_subfolder_shells_keep_one_place_and_its_git_facts() {
     for with_agent in [true, false] {
         for fresh in [true, false] {
             let mut agent = root_agent("claude", "stamped", None);
-            agent.channel = Some("link-notices".to_owned());
             agent.worktree_path = Some(worktree.display().to_string());
             agent.worktree_branch = Some("link-notices".to_owned());
+            crate::testkit::set_lane(&mut agent, "link-notices");
             agent.pane = Some(pane("%1", "claude", worktree.to_str().unwrap()));
             let mut panes = vec![pane("%2", "zsh", subfolder.to_str().unwrap())];
             if with_agent {
@@ -770,12 +770,12 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
 }
 
 #[test]
-fn diff_projection_requires_an_exact_channel_marker_name() {
+fn a_named_lane_carries_its_homes_git_facts_whatever_the_checkouts_marker_name() {
     let (dir, worktree, snapshot) = channel_snapshot("codex-resets", false);
     let mut agent = root_agent("claude", "stamped", None);
-    agent.channel = Some("codex-resets".to_owned());
     agent.worktree_path = Some(worktree.display().to_string());
     agent.worktree_branch = Some("main".to_owned());
+    crate::testkit::set_lane(&mut agent, "codex-resets");
     let mut snapshot =
         SidebarSnapshot::build_with_agents(snapshot.workspace_id, vec![agent], snapshot.now)
             .with_project_root(Some(dir.path().to_path_buf()))
@@ -795,9 +795,10 @@ fn diff_projection_requires_an_exact_channel_marker_name() {
     );
     project_diff_stats(&mut snapshot, &cache);
     let group = &snapshot.worktree_groups[0];
-    assert!(!group.worktree_backed());
-    assert_eq!(group.git_checkout(), None);
-    assert_eq!(group.diff_added, None);
+    assert_eq!(group.label, "codex-resets");
+    assert!(group.worktree_backed());
+    assert_eq!(group.git_checkout(), Some(worktree.as_path()));
+    assert_eq!(group.diff_added, Some(17));
 }
 
 #[test]

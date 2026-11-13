@@ -32,7 +32,10 @@ mod hooks;
 mod include;
 mod landed_memo;
 mod link;
+mod own_lane;
 mod pr;
+
+pub use own_lane::own_lane;
 
 pub use exclude::exclude_team_scratch;
 pub use landed_memo::LandedMemo;

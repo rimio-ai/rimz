@@ -6,19 +6,23 @@ use super::*;
 #[test]
 fn cohort_resume_counts_matching_closed_lanes_and_names_the_newest() {
     for old_path in ["/repo/old", "/repo/new"] {
-        let old = AgentState {
-            channel: Some("old".to_owned()),
-            ..team_agent("codex", "old", "coder", old_path, 20)
-        };
+        let old = in_lane(
+            AgentState {
+                ..team_agent("codex", "old", "coder", old_path, 20)
+            },
+            "old",
+        );
         let duplicate = AgentState {
             agent_id: "older-in-old".into(),
             last_activity: old.last_activity - std::time::Duration::from_secs(10),
             ..old.clone()
         };
-        let newest = AgentState {
-            channel: Some("new".to_owned()),
-            ..team_agent("codex", "new", "coder", "/repo/new", 1)
-        };
+        let newest = in_lane(
+            AgentState {
+                ..team_agent("codex", "new", "coder", "/repo/new", 1)
+            },
+            "new",
+        );
         let unrelated = AgentState {
             team: Some("other-team".to_owned()),
             ..team_agent("codex", "other", "coder", "/repo/other", 0)
@@ -48,10 +52,7 @@ fn cohort_resume_counts_matching_closed_lanes_and_names_the_newest() {
 
 #[test]
 fn cohort_resume_counts_the_chosen_lane_when_its_own_seat_is_live() {
-    let lane = |agent: AgentState, channel: &str| AgentState {
-        channel: Some(channel.to_owned()),
-        ..agent
-    };
+    let lane = |agent: AgentState, channel: &str| in_lane(AgentState { ..agent }, channel);
     let agents = [
         lane(team_agent("claude", "a-plan", "planner", "/repo/a", 1), "a"),
         lane(team_agent("codex", "a-code", "coder", "/repo/a", 5), "a"),
@@ -200,14 +201,18 @@ fn fresh_cohort_seeds_retain_the_parked_session_key() {
 fn team_restore_warns_when_the_definition_is_absent() {
     let (_, profiles, commands) = team_configs();
     let agents = [
-        AgentState {
-            channel: Some("design".into()),
-            ..team_agent("claude", "planner", "planner", "/repo/forge", 1)
-        },
-        AgentState {
-            channel: Some("old".into()),
-            ..team_agent("codex", "coder", "coder", "/repo/forge", 2)
-        },
+        in_lane(
+            AgentState {
+                ..team_agent("claude", "planner", "planner", "/repo/forge", 1)
+            },
+            "design",
+        ),
+        in_lane(
+            AgentState {
+                ..team_agent("codex", "coder", "coder", "/repo/forge", 2)
+            },
+            "old",
+        ),
     ];
     let failure = "/definitions/teams/forge.md: team 'forge' role 'coder' selects unknown agent \
                    'missing'; team roles can select definitions from agents only";
@@ -1450,19 +1455,23 @@ fn unavailable_resume_tier_keeps_the_requested_row() {
 fn team_hold_table() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_str().unwrap();
-    let present = AgentState {
-        channel: Some("held".into()),
-        ..team_agent("claude", "present", "lead", path, 10)
-    };
+    let present = in_lane(
+        AgentState {
+            ..team_agent("claude", "present", "lead", path, 10)
+        },
+        "held",
+    );
     let ended = AgentState {
         ended_at: Some(Timestamp::now()),
         ..present.clone()
     };
-    let other = AgentState {
-        team: Some("other".into()),
-        channel: Some("held".into()),
-        ..team_agent("claude", "other", "lead", path, 0)
-    };
+    let other = in_lane(
+        AgentState {
+            team: Some("other".into()),
+            ..team_agent("claude", "other", "lead", path, 0)
+        },
+        "held",
+    );
     let ended_other = AgentState {
         ended_at: Some(Timestamp::now()),
         ..other.clone()
@@ -1499,10 +1508,14 @@ fn team_hold_table() {
             live_hold.clone(),
         ),
         (
-            vec![AgentState {
-                worktree_path: Some(root.path().join("child/..").display().to_string()),
-                ..present.clone()
-            }],
+            vec![in_lane(
+                AgentState {
+                    worktree_path: Some(root.path().join("child/..").display().to_string()),
+                    lane: None,
+                    ..present.clone()
+                },
+                "held",
+            )],
             None,
             Some(TeamHold {
                 instance: "forge#held".parse().unwrap(),
@@ -1605,10 +1618,12 @@ fn channel_hold_table() {
     let root = tempfile::tempdir().unwrap();
     let checkout = root.path().join("X");
     std::fs::create_dir(&checkout).unwrap();
-    let present = AgentState {
-        channel: Some("X".into()),
-        ..team_agent("claude", "present", "lead", checkout.to_str().unwrap(), 10)
-    };
+    let present = in_lane(
+        AgentState {
+            ..team_agent("claude", "present", "lead", checkout.to_str().unwrap(), 10)
+        },
+        "X",
+    );
     let ended = AgentState {
         ended_at: Some(Timestamp::now()),
         ..present.clone()
@@ -1618,21 +1633,27 @@ fn channel_hold_table() {
         checkout: checkout.clone(),
         reason: TeamHoldReason::LiveMember,
     };
-    let other = AgentState {
-        channel: Some("X".into()),
-        team: Some("other".into()),
-        ..team_agent("claude", "other", "lead", checkout.to_str().unwrap(), 0)
-    };
-    let ended_on_y = |secs_ago| AgentState {
-        channel: Some("Y".into()),
-        team: Some("other".into()),
-        ended_at: Some(Timestamp::now()),
-        ..team_agent(
-            "claude",
-            "on-y",
-            "lead",
-            checkout.to_str().unwrap(),
-            secs_ago,
+    let other = in_lane(
+        AgentState {
+            team: Some("other".into()),
+            ..team_agent("claude", "other", "lead", checkout.to_str().unwrap(), 0)
+        },
+        "X",
+    );
+    let ended_on_y = |secs_ago| {
+        in_lane(
+            AgentState {
+                team: Some("other".into()),
+                ended_at: Some(Timestamp::now()),
+                ..team_agent(
+                    "claude",
+                    "on-y",
+                    "lead",
+                    checkout.to_str().unwrap(),
+                    secs_ago,
+                )
+            },
+            "Y",
         )
     };
     let cases = [
@@ -1669,16 +1690,14 @@ fn channel_hold_table() {
             Some(live_hold.clone()),
         ),
         (
-            vec![AgentState {
-                channel: Some("Y".into()),
-                ..present.clone()
-            }],
+            vec![in_lane(AgentState { ..present.clone() }, "Y")],
             None,
             None,
         ),
         (
             vec![AgentState {
                 worktree_path: None,
+                lane: None,
                 ..present.clone()
             }],
             None,
@@ -1918,6 +1937,7 @@ fn cohort_resume_ignores_launched_children() {
         profile: Some("astra".to_owned()),
         launch_depth: Some(1),
         ended_at: Some(Timestamp::UNIX_EPOCH),
+        lane: Some(checkout_lane("/code/feature")),
         ..agent("codex", "parent", "/code/feature", 30)
     };
     let child = AgentState {
@@ -2158,7 +2178,6 @@ fn unregistered_team_board(board: Option<&str>) -> (tempfile::TempDir, AgentStat
         std::fs::write(path, board).unwrap();
     }
     let member = AgentState {
-        channel: Some("feature-team".into()),
         ended_at: Some(Timestamp::UNIX_EPOCH),
         pane: None,
         ..team_agent(
@@ -2169,7 +2188,7 @@ fn unregistered_team_board(board: Option<&str>) -> (tempfile::TempDir, AgentStat
             1,
         )
     };
-    (root, member)
+    (root, in_lane(member, "feature-team"))
 }
 
 #[test]
@@ -2207,7 +2226,7 @@ fn board_resume_selects_the_newest_held_checkout_in_scope() {
     first.agent_id = "launch_older".into();
     first.last_activity = Timestamp::now() - std::time::Duration::from_secs(30);
     second.agent_id = "launch_newer".into();
-    second.channel = Some("newer".into());
+    set_lane(&mut second, "newer");
     let agents = [first, second];
     for (all, checkout, channel) in [
         (true, newer.path(), "newer"),
@@ -2329,10 +2348,12 @@ fn team_restore_does_not_reopen_a_placeholder_only_board() {
 #[test]
 fn cohort_resume_selects_newest_team_member_per_role() {
     let old_planner = team_agent("claude", "old-planner", "planner", "/code/forge", 30);
-    let planner = AgentState {
-        channel: Some("design".to_owned()),
-        ..team_agent("claude", "planner", "planner", "/code/forge", 2)
-    };
+    let planner = in_lane(
+        AgentState {
+            ..team_agent("claude", "planner", "planner", "/code/forge", 2)
+        },
+        "design",
+    );
     let coder = team_agent("codex", "coder", "coder", "/code/forge", 4);
     let cells = vec![
         cohort_cell("claude", Some("planner")),
@@ -2535,6 +2556,10 @@ fn cohort_relaunches_an_unresumable_match_fresh() {
             "a session the provider never persisted",
             vec![AgentState {
                 root_lane: true,
+                lane: Some(crate::ids::Lane::own(
+                    crate::ids::LaneHome::Trunk,
+                    "/code/query-engine",
+                )),
                 ..agent("claude", "a1", "/code/query-engine", 1)
             }],
             vec![cohort_cell("claude", None)],
@@ -2704,6 +2729,7 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
         runtime_owner: Some(owner(id)),
         team: Some("forge".to_owned()),
         role: Some("coder".to_owned()),
+        lane: Some(checkout_lane("/code/feature")),
         ..agent_on_pane("codex", id, "/code/feature", secs_ago, "terminal_coder")
     };
     let old = member("old", 10);
@@ -2817,21 +2843,27 @@ fn cohort_relaunch_selects_the_leader_not_the_freshest_member() {
 
 #[test]
 fn closed_team_relaunch_carries_the_newest_members_channel() {
-    let older = AgentState {
-        channel: Some("old-lane".into()),
-        ended_at: Some(Timestamp::UNIX_EPOCH),
-        ..team_agent("claude", "planner", "planner", "/code/review", 20)
-    };
-    let newest = AgentState {
-        channel: Some("triage".into()),
-        ended_at: Some(Timestamp::UNIX_EPOCH),
-        ..team_agent("codex", "coder", "coder", "/code/review", 1)
-    };
-    let foreign = AgentState {
-        team: Some("other".into()),
-        channel: Some("foreign".into()),
-        ..team_agent("codex", "foreign", "coder", "/code/review", 0)
-    };
+    let older = in_lane(
+        AgentState {
+            ended_at: Some(Timestamp::UNIX_EPOCH),
+            ..team_agent("claude", "planner", "planner", "/code/review", 20)
+        },
+        "old-lane",
+    );
+    let newest = in_lane(
+        AgentState {
+            ended_at: Some(Timestamp::UNIX_EPOCH),
+            ..team_agent("codex", "coder", "coder", "/code/review", 1)
+        },
+        "triage",
+    );
+    let foreign = in_lane(
+        AgentState {
+            team: Some("other".into()),
+            ..team_agent("codex", "foreign", "coder", "/code/review", 0)
+        },
+        "foreign",
+    );
     let mut agents = vec![older, newest, foreign];
     for _ in 0..2 {
         assert_eq!(
@@ -2856,10 +2888,12 @@ fn cohort_relaunch_presence_table() {
     let two_cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
     let closed = |agent: AgentState| AgentState {
         ended_at: Some(Timestamp::UNIX_EPOCH),
+        lane: agent.worktree_path.as_deref().map(checkout_lane),
         ..agent
     };
     let paneless = |agent: AgentState| AgentState {
         pane: None,
+        lane: agent.worktree_path.as_deref().map(checkout_lane),
         ..agent
     };
     let member = |kind, id, group, ordinal, secs| {
@@ -3016,6 +3050,34 @@ fn cohort_relaunch_presence_table() {
     }
 }
 
+/// A team restored at trunk names trunk's lane, never the project directory.
+#[test]
+fn a_team_restore_tab_at_trunk_is_labelled_main() {
+    let (teams, profiles, commands) = team_configs();
+    let mut planner = team_agent("claude", "planner", "planner", "/repo", 3);
+    set_trunk(&mut planner);
+    let tabs = plan_team_restore_tabs(
+        &[planner],
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        false,
+        &[],
+        dead,
+        |_| None,
+    )
+    .tabs;
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].label, "#main");
+    assert_eq!(tabs[0].cohort.channel, None);
+}
+
 /// A restorable team tab carries one seed per declared role, in the team's own
 /// layout order: a prior member resumes, a missing one launches fresh, and a
 /// group whose team no longer resolves is left for flat recovery.
@@ -3092,16 +3154,16 @@ fn team_restore_tabs_seed_every_declared_role() {
 }
 
 #[test]
-fn a_resumed_cohort_seat_without_a_lane_adopts_its_row_lane() {
+fn a_resumed_cohort_seat_carries_its_rows_lane() {
     let (teams, profiles, commands) = team_configs();
-    let planner = AgentState {
-        channel: Some("design".to_owned()),
-        ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
-    };
     let design = Some(
         crate::ids::Lane::own(crate::ids::LaneHome::Trunk, "/repo")
             .named("design".parse().expect("lane name")),
     );
+    let planner = AgentState {
+        lane: design.clone(),
+        ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
+    };
     let seed_lane = |seeds: &[CohortSeed]| match seeds.first() {
         Some(CohortSeed::Resume(seed)) => seed.lane.clone(),
         other => panic!("expected a resume seed, got {other:?}"),
@@ -3178,7 +3240,6 @@ fn cohort_resume_refuses_a_member_from_another_account() {
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
-        Path::new("/code"),
         |_| true,
         |_| true,
     )
@@ -3195,7 +3256,6 @@ fn cohort_resume_refuses_a_member_from_another_account() {
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
-        Path::new("/code"),
         |_| true,
         |_| true,
     )

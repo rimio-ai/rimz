@@ -31,6 +31,7 @@ fn agent(id: &str, pane: &str) -> AgentState {
     agent.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, pane)));
     agent.worktree_path = Some("/repo/feat".to_owned());
     agent.worktree_branch = Some("feat".to_owned());
+    crate::testkit::set_own_lane(&mut agent);
     agent
 }
 

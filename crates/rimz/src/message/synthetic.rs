@@ -130,7 +130,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workspace = workspace(dir.path());
         let mut agent = AgentState::stub("claude", "sess-parked", AgentStatus::Paused);
-        agent.channel = Some("auth".to_owned());
+        crate::testkit::set_lane(&mut agent, "auth");
         let message = SyntheticMessage {
             agent: &agent,
             text: "continue".to_owned(),
@@ -160,7 +160,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workspace = workspace(dir.path());
         let mut agent = AgentState::stub("claude", "sess-idle", AgentStatus::Idle);
-        agent.channel = Some("auth".to_owned());
+        crate::testkit::set_lane(&mut agent, "auth");
         let sender = MessageSender::Harness {
             notice: HarnessNotice::TeamReport,
         };

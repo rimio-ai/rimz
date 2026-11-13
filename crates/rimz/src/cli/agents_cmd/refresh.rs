@@ -86,9 +86,7 @@ pub(super) fn refresh_targets<'a>(
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     channel: Option<&str>,
 ) -> Vec<&'a AgentState> {
-    let lane = channel.map(|filter| {
-        rimz::address::LaneSelector::parse(Some(filter), snapshot.project_root.as_deref())
-    });
+    let lane = channel.map(|filter| rimz::address::LaneSelector::parse(Some(filter)));
     rimz::address::addressable_agents(snapshot)
         .into_iter()
         .filter(|agent| !agent.agent_id.is_empty())

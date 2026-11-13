@@ -320,7 +320,7 @@ fn a_staying_step_never_hears_lifecycle_signals_from_its_leaders_session() {
 
 #[test]
 fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
-    let (dir, state, record) = setup(&STAY.replace(
+    let (_dir, state, record) = setup(&STAY.replace(
         "subscribe=['ci.failed',",
         "subscribe=['team.idle', {signal='agent.done', match={handle='@other'}}, ",
     ));
@@ -329,8 +329,7 @@ fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
         ..signal(name, payload)
     };
     let cohort = |channel: &str| json!({"team": "forge", "instance": format!("forge#{channel}")});
-    let here = crate::harness::lanes::in_place_team_name(dir.path(), "forge").to_string();
-    let idle = lifecycle("team.idle", cohort(&here));
+    let idle = lifecycle("team.idle", cohort("forge"));
     assert!(
         !hears_lifecycle(&state, &idle, &|_| None).unwrap(),
         "nothing is live before the leader launches"

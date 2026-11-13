@@ -870,19 +870,19 @@ fn child_reports_name_each_parent_and_channel() {
         rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
     planner.name = Some("planner".to_owned());
     planner.name_explicit = true;
-    planner.channel = Some("feat-x".to_owned());
+    rimz::testkit::set_lane(&mut planner, "feat-x");
     let mut coder =
         rimz::agents::AgentState::stub("codex", "coder", rimz::agents::AgentStatus::Idle);
     coder.name = Some("coder".to_owned());
     coder.name_explicit = true;
-    coder.channel = Some("feat-x".to_owned());
+    rimz::testkit::set_lane(&mut coder, "feat-x");
     let mut first =
         rimz::agents::AgentState::stub("codex", "child-a", rimz::agents::AgentStatus::Success);
     first.name = Some("swift-otter".to_owned());
     first.parent_agent_id = Some(planner.agent_id.clone());
     first.parent_agent_kind = Some(planner.kind.clone());
     first.launch_depth = Some(1);
-    first.channel = Some("feat-x".to_owned());
+    rimz::testkit::set_lane(&mut first, "feat-x");
     first.pending_waits.push(rimz::agents::PendingWait {
         class: rimz::agents::PendingWaitClass::Working,
         name: "wait-command".to_owned(),
@@ -897,7 +897,7 @@ fn child_reports_name_each_parent_and_channel() {
     second.parent_agent_id = Some(coder.agent_id.clone());
     second.parent_agent_kind = Some(coder.kind.clone());
     second.launch_depth = Some(1);
-    second.channel = Some("feat-x".to_owned());
+    rimz::testkit::set_lane(&mut second, "feat-x");
     let mut orphan = second.clone();
     orphan.agent_id = "child-orphan".into();
     orphan.parent_agent_id = Some("missing-parent".into());
@@ -938,7 +938,6 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         handle: "@swift-otter".to_owned(),
         parent: "@planner".to_owned(),
         channel: None,
-        lane_label: None,
         kind: "codex".to_owned(),
         status: "running".to_owned(),
         description: None,
@@ -1447,31 +1446,39 @@ fn list_json_keeps_todays_keys_beside_the_row_keys() {
 
 #[test]
 fn preset_scopes_to_own_children_or_the_lane_and_never_admits_a_non_child() {
-    let lane_of = |name: &str| rimz::address::LaneSelector::parse(Some(name), None);
-    let mut planner =
-        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    let lane_of = |name: &str| rimz::address::LaneSelector::parse(Some(name));
+    // Each row is homed in its worktree's own lane, named by its directory.
+    let homed = |mut agent: AgentState, worktree: &str| {
+        agent.lane = serde_json::from_value(serde_json::json!({
+            "home": "worktree", "path": format!("/repo/{worktree}"),
+        }))
+        .expect("lane");
+        agent
+    };
+    let mut planner = homed(
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle),
+        "feat-x",
+    );
     planner.name = Some("planner".to_owned());
-    planner.channel = Some("feat-x".to_owned());
-    let mut other =
-        rimz::agents::AgentState::stub("claude", "other", rimz::agents::AgentStatus::Idle);
+    let mut other = homed(
+        rimz::agents::AgentState::stub("claude", "other", rimz::agents::AgentStatus::Idle),
+        "other",
+    );
     other.name = Some("other".to_owned());
-    other.channel = Some("other".to_owned());
-    let mut kid = launched_child(&planner, "kid");
-    kid.channel = Some("feat-x".to_owned());
-    let mut done = launched_child(&planner, "done");
-    done.channel = Some("feat-x".to_owned());
+    let mut kid = homed(launched_child(&planner, "kid"), "feat-x");
+    let mut done = homed(launched_child(&planner, "done"), "feat-x");
     done.ended_at = Some(Timestamp::now());
-    let mut stranger = launched_child(&other, "stranger");
-    stranger.channel = Some("other".to_owned());
-    let mut lead = rimz::agents::AgentState::stub("codex", "lead", rimz::agents::AgentStatus::Idle);
-    lead.channel = Some("feat-x".to_owned());
-    // No channel stamp: its lane reads from its worktree.
-    let mut cousin = launched_child(&lead, "cousin");
+    let mut stranger = homed(launched_child(&other, "stranger"), "other");
+    let mut lead = homed(
+        rimz::agents::AgentState::stub("codex", "lead", rimz::agents::AgentStatus::Idle),
+        "feat-x",
+    );
+    // No channel stamp: the lane alone puts it in `feat-x`.
+    let mut cousin = homed(launched_child(&lead, "cousin"), "feat-x");
     cousin.worktree_path = Some("/repo/feat-x".to_owned());
     cousin.worktree_branch = Some("feat-x".to_owned());
     // A provider-native child carries a parent but no launch depth.
-    let mut native = launched_child(&planner, "native");
-    native.channel = Some("feat-x".to_owned());
+    let mut native = homed(launched_child(&planner, "native"), "feat-x");
     native.launch_depth = None;
     let panes = ["%2", "%3", "%1", "%4", "%5", "%6", "%7"].map(|pane| {
         serde_json::from_value::<rimz::pane::PaneRef>(serde_json::json!({
@@ -1631,7 +1638,7 @@ fn explicit_child_resolution_uses_the_shared_address_grammar() {
     let mut child =
         rimz::agents::AgentState::stub("codex", "child", rimz::agents::AgentStatus::Running);
     child.name = Some("swift-otter".to_owned());
-    child.channel = Some("review".to_owned());
+    rimz::testkit::set_lane(&mut child, "review");
 
     assert_eq!(
         resolve_child_names(

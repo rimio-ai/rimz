@@ -192,22 +192,18 @@ fn new_worktree(
         .map(rimz::worktree::parse_requested_name)
         .transpose()?;
     // An existing managed tree is reused or refused by creation, as a launch's is.
-    if let Some(name) = requested_name
+    if let Some((name, dir)) = requested_name
         .as_ref()
         .map(|requested| requested.name.as_str())
-        .filter(|name| {
-            !rimz::worktree::worktree_path(&workspace.project_root, config, name)
-                .is_ok_and(|path| path.exists())
+        .and_then(|name| {
+            let dir = rimz::worktree::worktree_path(&workspace.project_root, config, name).ok()?;
+            (!dir.exists()).then_some((name, dir))
         })
     {
         rimz::worktree::admit_fresh_name(name)?;
         // An unreadable snapshot holds no lane, so the name stays available.
         if let Ok(snapshot) = store.snapshot_cached() {
-            rimz::harness::lanes::admit_worktree_name(
-                &snapshot.agents,
-                &workspace.project_root,
-                name,
-            )?;
+            rimz::harness::lanes::admit_worktree_name(&snapshot.agents, name, &dir)?;
         }
     }
     let created = if let Some(pr) = from_pr.as_ref() {
@@ -245,8 +241,7 @@ fn new_worktree(
         )?
     };
     if !created.reused {
-        let lane =
-            rimz::harness::lanes::own_lane(&workspace.project_root, &created.marker.worktree_path);
+        let lane = rimz::worktree::own_lane(&workspace.project_root, &created.marker.worktree_path);
         let archival = store.archive_channel_messages(
             &lane.routing_name(),
             "channel recreated",
