@@ -1397,6 +1397,7 @@ fn classify_diagnostic(
         | DiagEvent::HookIngressDropped { .. }
         | DiagEvent::WorkflowRetry { .. }
         | DiagEvent::WorkflowRerun { .. }
+        | DiagEvent::WorkflowRunsEnded { .. }
         | DiagEvent::FrameRejected { .. }
         | DiagEvent::PaneCarryForward { .. }
         | DiagEvent::GateHold { .. }

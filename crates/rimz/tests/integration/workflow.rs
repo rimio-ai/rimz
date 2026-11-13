@@ -14,6 +14,7 @@ mod refusals;
 mod scope;
 mod shells;
 mod sleep;
+mod stranded;
 mod tasks;
 mod ticks;
 mod wakes;
@@ -68,13 +69,11 @@ fn new_runs_seal_definitions_at_the_current_record_version() {
 }
 
 #[test]
-fn runs_another_rimz_wrote_stay_out_of_listings_and_refuse_changes_by_id() {
+fn runs_another_rimz_wrote_stay_out_of_listings_and_end_only_by_cancel_or_advance() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env);
-    until(&env, &id, |value| value["record"]["wait"].is_object());
     let state = env.state_path_for(&env.project_root);
-    let paths = state.workflow(&id.parse().unwrap());
-    let rewrite = |version: u64| {
+    let rewrite = |id: &str, version: u64| {
+        let paths = state.workflow(&id.parse().unwrap());
         let _guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
         let mut value: Value = serde_json::from_slice(&fs::read(&paths.record).unwrap()).unwrap();
         value["version"] = json!(version);
@@ -84,8 +83,12 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_refuse_changes_by_id() {
     let stderr =
         |output: &std::process::Output| String::from_utf8_lossy(&output.stderr).into_owned();
     let newer = u64::from(rimz::store::workflow::VERSION) + 1;
-    for version in [3, newer] {
-        let before = rewrite(version);
+    let older = newer - 2;
+    for version in [newer, older] {
+        let id = start(&env);
+        until(&env, &id, |value| value["record"]["wait"].is_object());
+        let paths = state.workflow(&id.parse().unwrap());
+        let before = rewrite(&id, version);
         let listed = command(&env, &["workflow", "list"]);
         assert!(
             listed.status.success() && !stderr(&listed).contains(&id),
@@ -93,12 +96,12 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_refuse_changes_by_id() {
             stderr(&listed)
         );
         let shown = command(&env, &["workflow", "show", &id]);
-        if version == 3 {
+        if version == older {
             let text = String::from_utf8_lossy(&shown.stdout);
             assert!(
                 shown.status.success()
                     && text.contains("this RimZ cannot continue the run")
-                    && text.contains("record version 3")
+                    && text.contains(&format!("record version {older}"))
                     && !text.contains("rimz "),
                 "{text}{}",
                 stderr(&shown)
@@ -113,9 +116,14 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_refuse_changes_by_id() {
                 stderr(&shown)
             );
         }
-        for verb in ["cancel", "advance", "resume", "restart"] {
+        let refusing: &[&str] = if version == older {
+            &["resume", "restart"]
+        } else {
+            &["cancel", "advance", "resume", "restart"]
+        };
+        for verb in refusing {
             let refused = command(&env, &["workflow", verb, &id]);
-            let expected = if version == 3 {
+            let expected = if version == older {
                 format!("this RimZ cannot continue workflow run {id}")
             } else {
                 format!("workflow run {id} has record version {newer}")
@@ -132,7 +140,44 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_refuse_changes_by_id() {
             );
         }
         assert_eq!(fs::read(&paths.record).unwrap(), before, "nothing changed");
+        if version == newer {
+            fs::remove_dir_all(&paths.home).unwrap();
+            continue;
+        }
+        let receipt = success(command(&env, &["workflow", "cancel", &id]));
+        assert!(
+            receipt.contains(&format!(
+                "ended {id} as failed: this RimZ cannot continue it: an older RimZ wrote it \
+                 (record version {older})"
+            )) && receipt.contains("no agent was pinned to it"),
+            "{receipt}"
+        );
+        assert!(!paths.home.exists(), "the ended run moved");
+        let ended: Value = serde_json::from_slice(
+            &fs::read(state.finished_workflow(&id.parse().unwrap()).record).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (&ended["state"], &ended["stranded"]),
+            (&json!("failed"), &json!(true))
+        );
+        let again = success(command(&env, &["workflow", "cancel", &id]));
+        assert!(
+            !again.contains("ended "),
+            "a second cancel ends nothing: {again}"
+        );
     }
+    // Advance on a run this RimZ cannot continue ends it the same way.
+    let id = start(&env);
+    until(&env, &id, |value| value["record"]["wait"].is_object());
+    rewrite(&id, 3);
+    success(command(&env, &["workflow", "advance", &id]));
+    assert!(!state.workflow(&id.parse().unwrap()).home.exists());
+    let ended: Value = serde_json::from_slice(
+        &fs::read(state.finished_workflow(&id.parse().unwrap()).record).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(ended["state"], "failed");
     // A run this RimZ cannot continue holds no checkout against a new run.
     let again = start(&env);
     let value = until(&env, &again, |value| value["record"]["wait"].is_object());
@@ -484,7 +529,7 @@ fn happy_path_context_and_cross_directory_lookup() {
 }
 
 #[test]
-fn list_skips_unreadable_homes_but_named_commands_fail() {
+fn list_skips_unreadable_homes_and_named_commands_refuse_or_set_them_aside() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
@@ -520,7 +565,7 @@ fn list_skips_unreadable_homes_but_named_commands_fail() {
             (broken, broken_reason.clone()),
             (newer, newer_reason.clone()),
         ] {
-            if verb == "show" && bad_id == broken {
+            if bad_id == broken && verb != "resume" {
                 continue;
             }
             let output = command(&env, &["workflow", verb, bad_id.as_str()]);
@@ -530,6 +575,28 @@ fn list_skips_unreadable_homes_but_named_commands_fail() {
             assert!(state.workflow(bad_id).home.exists(), "{verb} {bad_id}");
         }
     }
+    // Cancel and advance set a record holding no JSON object aside, unmodified.
+    let receipt = success(command(&env, &["workflow", "cancel", broken.as_str()]));
+    assert!(
+        receipt.contains(&format!(
+            "set aside {broken}: its record holds no JSON object"
+        )),
+        "{receipt}"
+    );
+    assert!(!state.workflow(broken).home.exists());
+    assert_eq!(
+        fs::read(state.finished_workflow(broken).record).unwrap(),
+        b"corrupt"
+    );
+    let [_, advanced, _] = &unreadable_homes(&env, &value)[..] else {
+        unreachable!("unreadable_homes writes three homes")
+    };
+    success(command(&env, &["workflow", "advance", advanced.as_str()]));
+    assert!(!state.workflow(advanced).home.exists());
+    assert_eq!(
+        fs::read(state.finished_workflow(advanced).record).unwrap(),
+        b"corrupt"
+    );
     success(command(&env, &["workflow", "cancel", &id]));
 }
 

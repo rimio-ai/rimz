@@ -327,6 +327,14 @@ pub enum DiagEvent {
         node: String,
         seq: u64,
     },
+    /// One workflow pass ended runs this RimZ cannot continue, or set aside records holding no
+    /// JSON object, releasing their agents as ordinary sessions.
+    WorkflowRunsEnded {
+        runs: Vec<crate::ids::WorkflowRunId>,
+        causes: Vec<String>,
+        released: Vec<String>,
+        unreported: u64,
+    },
     HookDrainLag {
         ingress: EventId,
         hook_event: Option<String>,
@@ -885,6 +893,7 @@ impl DiagEvent {
             | Self::FrameShrinkVerified { .. }
             | Self::WorkflowRetry { .. }
             | Self::WorkflowRerun { .. }
+            | Self::WorkflowRunsEnded { .. }
             | Self::ResolutionFallback { .. }
             | Self::SidebarWidthIntent { .. }
             | Self::SidebarWidthNudge { .. }
@@ -937,6 +946,7 @@ impl DiagEvent {
             Self::HookDrainerUnreachable { .. } => "hook_drainer_unreachable",
             Self::WorkflowRetry { .. } => "workflow_retry",
             Self::WorkflowRerun { .. } => "workflow_rerun",
+            Self::WorkflowRunsEnded { .. } => "workflow_runs_ended",
             Self::HookDrainLag { .. } => "hook_drain_lag",
             Self::HookApplyFailed { .. } => "hook_apply_failed",
             Self::HookIngressSkipped { .. } => "hook_ingress_skipped",
@@ -1011,6 +1021,10 @@ impl DiagEvent {
             Self::WorkflowRetry { run, node, seq, .. } | Self::WorkflowRerun { run, node, seq } => {
                 format!("{}:{run}:{node}:{seq}", self.kind_name())
             }
+            Self::WorkflowRunsEnded { runs, .. } => match runs.first() {
+                Some(run) => format!("{}:{run}", self.kind_name()),
+                None => self.kind_name().to_owned(),
+            },
             Self::HookDrainLag { .. } => self.kind_name().to_owned(),
             Self::HookApplyFailed { ingress, .. }
             | Self::HookIngressDropped {
@@ -1460,6 +1474,18 @@ impl DiagEvent {
             Self::WorkflowRerun { run, node, seq } => {
                 format!("workflow {run} {node} #{seq} rerun after host death")
             }
+            Self::WorkflowRunsEnded {
+                runs,
+                causes,
+                released,
+                unreported,
+            } => format!(
+                "workflow pass ended {} run(s) ({}); released {} agent(s); {unreported} report(s) \
+                 not landed",
+                runs.len(),
+                causes.join(", "),
+                released.len()
+            ),
             Self::HookDrainLag {
                 lag_ms,
                 pending_bytes,

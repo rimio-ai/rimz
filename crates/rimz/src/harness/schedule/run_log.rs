@@ -376,17 +376,24 @@ pub fn collect_run(state: &crate::StatePaths, run: &crate::ids::WorkflowRunId) {
     }
 }
 
-fn try_collect_run(
+/// [`collect_run`], returning why a report did not land instead of warning. A finished run this
+/// RimZ does not decode is reported from its header, without moving a strike.
+pub fn try_collect_run(
     state: &crate::StatePaths,
     run: &crate::ids::WorkflowRunId,
 ) -> anyhow::Result<()> {
     use crate::store::workflow;
     let paths = state.workflow(run);
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
-    // A run that left the live directory owes nothing, and one this RimZ does not run is the
-    // workflow pass's to report.
-    let workflow::RunClass::Current(mut record) = workflow::classify(&paths)? else {
-        return Ok(());
+    // A run that left the live directory owes nothing.
+    let mut record = match workflow::classify(&paths)? {
+        workflow::RunClass::Current(record) => record,
+        workflow::RunClass::Ended(header) if header.owes_loop_report() => {
+            report_header(state, run, &header)?;
+            workflow::mark_header_report_sent(&paths, &guard)?;
+            return Ok(());
+        }
+        _ => return Ok(()),
     };
     if !record.owes_loop_report() {
         return Ok(());
@@ -405,6 +412,84 @@ fn try_collect_run(
             std::fs::remove_dir_all(&paths.home)?;
         }
     }
+    Ok(())
+}
+
+/// Report a finished run this RimZ does not decode from its record's header: the report row and
+/// the launch-memory rule its header supports, without moving a strike, settling its fire's tree
+/// or consuming an `--until` row, since the body that would say what the run did is unread.
+fn report_header(
+    state: &crate::StatePaths,
+    run: &crate::ids::WorkflowRunId,
+    header: &crate::store::workflow::RunHeader,
+) -> Result<(), ReportError> {
+    use crate::store::workflow::{RunEnding, RunOutcome, RunState};
+    let (Some(task), Some(ended)) = (header.task.as_deref(), header.state) else {
+        return Ok(());
+    };
+    let root = match &header.project_root {
+        Some(root) => root.clone(),
+        None => {
+            crate::workspace::record::read(&state.workspace_record)
+                .map_err(|error| ReportFailure::Forget(error.into()))?
+                .project_root
+        }
+    };
+    let ending = header.ending.clone().unwrap_or(match ended {
+        RunState::Done => RunEnding::Done,
+        RunState::Canceled => RunEnding::Canceled,
+        _ => RunEnding::Failed,
+    });
+    let outcome = RunOutcome {
+        ending,
+        cost_usd: None,
+        // A header that does not say whether its run acted keeps its launch memory.
+        acted: header.acted.unwrap_or(true),
+        reason: header.reason.clone(),
+        quiet: false,
+    };
+    let checkout = if header.fire_tree {
+        Some(&root)
+    } else {
+        header.scope_path.as_ref()
+    };
+    let facts = ReportFacts {
+        task,
+        run,
+        manual: header.manual,
+        created_at: header
+            .created_at
+            .or(header.terminal_at)
+            .unwrap_or_else(Timestamp::now),
+        terminal_at: header.terminal_at,
+        checkout: checkout.unwrap_or(&root),
+        fire_facts: header.fire_facts.as_ref(),
+    };
+    report_neutral(state, &facts, &outcome, ended, &root)
+}
+
+/// Report a run without moving a strike or the quiet streak: forget its launch memory by the
+/// ending rule, append its row, and drain the task's waiting triggers.
+fn report_neutral(
+    state: &crate::StatePaths,
+    facts: &ReportFacts<'_>,
+    outcome: &crate::store::workflow::RunOutcome,
+    ended: crate::store::workflow::RunState,
+    project_root: &Path,
+) -> Result<(), ReportError> {
+    forget_unkept_launch(state, ended, facts.task, facts.run, outcome.acted)
+        .map_err(ReportFailure::Forget)?;
+    let mut record = report_row(facts, outcome);
+    let catalog = super::catalog::TaskCatalog::load_lenient(Some(project_root));
+    let root = match catalog.for_run(facts.task) {
+        Some(loaded) => {
+            record.kind = Some(loaded.kind());
+            loaded.entry().resolved_root()
+        }
+        None => project_root.to_path_buf(),
+    };
+    try_append_for_root(&root, &record).map_err(ReportFailure::from)?;
+    drain_waiting(facts.task, &root);
     Ok(())
 }
 
@@ -617,6 +702,18 @@ pub(in crate::harness) fn report_run(
         return Ok(Collected::Reported(RunTransition::Recorded));
     };
     if !run.state.is_terminal() {
+        return Ok(Collected::Reported(RunTransition::Recorded));
+    }
+    if run.stranded {
+        let state = crate::StatePaths::for_project_root(&run.project_root)
+            .map_err(|error| ReportFailure::Forget(error.into()))?;
+        report_neutral(
+            &state,
+            &ReportFacts::of(run, task),
+            outcome,
+            run.state,
+            &run.project_root,
+        )?;
         return Ok(Collected::Reported(RunTransition::Recorded));
     }
     let acted = outcome.acted;

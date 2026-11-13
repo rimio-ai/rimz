@@ -459,6 +459,7 @@ fn publish(
         launch_retry: false,
         engaged: Some(false),
         fire_facts: start.fire_facts,
+        stranded: false,
     };
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     refuse_existing(

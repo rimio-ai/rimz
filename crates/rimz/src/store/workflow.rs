@@ -688,6 +688,10 @@ pub struct RunRecord {
     /// for its one report row; opaque to the store and the engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_facts: Option<Value>,
+    /// This RimZ found the run unfinished in a record it could not continue and ended it as
+    /// failed in place ([`end_stranded`]); its loop report moves no strike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stranded: bool,
 }
 
 impl RunRecord {
@@ -1171,6 +1175,10 @@ pub struct RunHeader {
     pub reason: Option<String>,
     pub acted: Option<bool>,
     pub notes: Option<PathBuf>,
+    pub fire_facts: Option<Value>,
+    /// Why this RimZ could not continue the run, when the record was ended in place as stranded
+    /// ([`end_stranded`]): read again from the version and the reason that ending kept.
+    pub stranded: Option<StrandedCause>,
 }
 
 impl RunHeader {
@@ -1197,6 +1205,11 @@ impl RunHeader {
             reason: field(outcome.and_then(|outcome| outcome.get("reason"))),
             acted: field(outcome.and_then(|outcome| outcome.get("acted"))),
             notes: field(record.get("notes")),
+            fire_facts: record.get("fire_facts").cloned(),
+            stranded: field(record.get("stranded")).unwrap_or(false).then(|| {
+                let reason = field::<String>(outcome.and_then(|outcome| outcome.get("reason")));
+                StrandedCause::kept(record.get("version"), reason.as_deref())
+            }),
         }
     }
 
@@ -1250,6 +1263,42 @@ impl std::fmt::Display for StrandedCause {
     }
 }
 
+impl StrandedCause {
+    /// The cause of a record ended as stranded, from what the ending kept: the record's version
+    /// member and the reason [`end_stranded`] wrote, whose text carries a decode error.
+    fn kept(version: Option<&Value>, reason: Option<&str>) -> Self {
+        let Some(version) = version else {
+            return Self::MissingVersion;
+        };
+        match version.as_u64() {
+            None => Self::InvalidVersion,
+            Some(version) if version != u64::from(VERSION) => Self::Older { version },
+            Some(_) => {
+                let empty = Self::Undecodable {
+                    error: String::new(),
+                };
+                let undecodable = format!("{STRANDED}{empty}");
+                let error = reason.map(|reason| {
+                    reason
+                        .strip_prefix(&undecodable)
+                        .and_then(|error| error.strip_suffix(&stranded_tail()))
+                        .unwrap_or(reason)
+                });
+                Self::Undecodable {
+                    error: error.unwrap_or_default().into(),
+                }
+            }
+        }
+    }
+}
+
+/// How the reason [`end_stranded`] writes begins: the cause follows, then [`stranded_tail`].
+const STRANDED: &str = "this RimZ cannot continue the run: ";
+
+fn stranded_tail() -> String {
+    format!("; it reads only record version {VERSION}")
+}
+
 /// What a run home's record is to this RimZ.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunClass {
@@ -1271,6 +1320,17 @@ pub enum RunClass {
 }
 
 impl RunClass {
+    /// Whether the room's workflow pass has work in a live home of this class: anything but a
+    /// run this RimZ continues, a newer RimZ's run, and a home without a record. A finished run
+    /// this RimZ reads that still owes its loop report is left to its paced advance.
+    pub fn awaits_pass(&self) -> bool {
+        match self {
+            Self::Current(record) => record.state.is_terminal() && !record.owes_loop_report(),
+            Self::Stranded { .. } | Self::Ended(_) | Self::NotObject => true,
+            Self::Newer { .. } | Self::Recordless => false,
+        }
+    }
+
     /// The record's header, where this RimZ read one.
     pub fn header(&self) -> Option<std::borrow::Cow<'_, RunHeader>> {
         match self {
@@ -1307,6 +1367,14 @@ impl RunRecord {
                 .and_then(|outcome| outcome.reason.clone()),
             acted: self.outcome.as_ref().map(|outcome| outcome.acted),
             notes: self.notes.clone(),
+            fire_facts: self.fire_facts.clone(),
+            stranded: self.stranded.then(|| {
+                let reason = self
+                    .outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.reason.as_deref());
+                StrandedCause::kept(Some(&Value::from(self.version)), reason)
+            }),
         }
     }
 }
@@ -1359,6 +1427,71 @@ pub fn classify(paths: &WorkflowPaths) -> Result<RunClass> {
         },
     };
     Ok(RunClass::Stranded { header, cause })
+}
+
+/// End a stranded run in its record, in place: the record names the run failed with why this
+/// RimZ cannot continue it, owes its loop task the report when it names one, and keeps every
+/// other member and its version, so a RimZ that reads that version still reads the body. A first
+/// `terminal_at` and a recorded `acted` are kept. Returns why the run was stranded when this call
+/// ended it; a record that is no longer stranded is left as it is.
+#[must_use = "durability barrier; check the result"]
+pub fn end_stranded(
+    paths: &WorkflowPaths,
+    _guard: &WorkspaceLock,
+) -> Result<Option<StrandedCause>> {
+    let RunClass::Stranded { header, cause } = classify(paths)? else {
+        return Ok(None);
+    };
+    let mut record = read_object(paths)?;
+    let reason = format!("{STRANDED}{cause}{}", stranded_tail());
+    record.insert("state".into(), serde_json::json!(RunState::Failed));
+    if header.terminal_at.is_none() {
+        record.insert("terminal_at".into(), serde_json::json!(Timestamp::now()));
+    }
+    let mut outcome = match record.remove("outcome") {
+        Some(Value::Object(outcome)) => outcome,
+        _ => serde_json::Map::new(),
+    };
+    outcome.insert("ending".into(), serde_json::json!(RunEnding::Failed));
+    outcome.insert("reason".into(), serde_json::json!(reason));
+    outcome.entry("acted").or_insert(serde_json::json!(false));
+    record.insert("outcome".into(), Value::Object(outcome));
+    if header.task.is_some() {
+        record.insert("loop_report".into(), serde_json::json!(LoopReport::Owed));
+    }
+    record.insert("stranded".into(), serde_json::json!(true));
+    crate::disk::atomic::write_temp_then_rename(&paths.record, &Value::Object(record))?;
+    Ok(Some(cause))
+}
+
+/// Mark the loop report of a run this RimZ does not decode as sent, in place, leaving every
+/// other member of its record as it is.
+#[must_use = "durability barrier; check the result"]
+pub fn mark_header_report_sent(paths: &WorkflowPaths, _guard: &WorkspaceLock) -> Result<()> {
+    let mut record = read_object(paths)?;
+    record.insert("loop_report".into(), serde_json::json!(LoopReport::Sent));
+    Ok(crate::disk::atomic::write_temp_then_rename(
+        &paths.record,
+        &Value::Object(record),
+    )?)
+}
+
+fn read_object(paths: &WorkflowPaths) -> Result<serde_json::Map<String, Value>> {
+    let bytes = std::fs::read(&paths.record).map_err(WorkflowStoreErr::io(&paths.record))?;
+    match serde_json::from_slice(&bytes) {
+        Ok(Value::Object(record)) => Ok(record),
+        Ok(_) => Err(WorkflowStoreErr::Io {
+            path: paths.record.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the record holds no JSON object",
+            ),
+        }),
+        Err(source) => Err(WorkflowStoreErr::Json {
+            path: paths.record.clone(),
+            source,
+        }),
+    }
 }
 
 /// One home of a room's live directory.

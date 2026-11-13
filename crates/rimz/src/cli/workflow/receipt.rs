@@ -38,6 +38,9 @@ pub(super) fn cancel(
     let run = match select(target, "cancel", globals, None, &[])? {
         Ok(run) => run,
         Err(other) => {
+            if other.is_stranded() {
+                return cancel_stranded(&other, globals);
+            }
             if let Some(refusal) = other.refusal() {
                 bail!("{refusal}");
             }
@@ -74,7 +77,7 @@ pub(super) fn cancel(
     );
     run_log::collect_run(&run.state, &run.record.id);
     let changed = changed?;
-    let record = finish_run(&run.state, &run.record.id)?;
+    let record = finish_run(&run.state, &run.record.id)?.record;
     let address = run.record.address().to_string();
     let mut out = render::out();
     if changed {
@@ -90,6 +93,48 @@ pub(super) fn cancel(
         "→ {}",
         resolve::run_command(&run.record, "show", globals, None, &[], &[])
     )?;
+    Ok(())
+}
+
+/// End a run this RimZ cannot continue, keeping its evidence in the finished directory, and say
+/// why, that its agents were left running, and how to read it.
+fn cancel_stranded(other: &resolve::Other, globals: &super::super::GlobalFlags) -> Result<()> {
+    let settled = super::reconcile::end_named(&other.state, &other.id, globals, false)?;
+    let mut out = render::out();
+    let Some(ended) = settled.ended else {
+        writeln!(out, "{} is already ended; unchanged", other.id)?;
+        writeln!(out, "→ {}", other.show_command(globals))?;
+        return Ok(());
+    };
+    match &ended.cause {
+        super::reconcile::Cause::Stranded(cause) => writeln!(
+            out,
+            "ended {} as failed: this RimZ cannot continue it: {cause}",
+            ended.id
+        )?,
+        super::reconcile::Cause::NotObject => writeln!(
+            out,
+            "set aside {}: its record holds no JSON object",
+            ended.id
+        )?,
+    }
+    // A release that failed or never ran leaves the agents unnamed: end_named printed why.
+    if ended.released.is_empty() && settled.warning.is_none() {
+        writeln!(out, "no agent was pinned to it")?;
+    } else if !ended.released.is_empty() {
+        writeln!(
+            out,
+            "its agents were left running: {}",
+            ended.released.join(", ")
+        )?;
+    }
+    if settled.unreported {
+        writeln!(
+            out,
+            "its loop report did not land yet; the workflow pass retries it"
+        )?;
+    }
+    writeln!(out, "→ {}", other.show_command(globals))?;
     Ok(())
 }
 
@@ -188,7 +233,9 @@ pub(in crate::cli) fn restart(
     let (restarted, advance) = restarted?;
     // A run that ended meanwhile may already have left the live directory.
     let record = first_pass(&run.paths, advance.as_ref())?.unwrap_or_else(|| restarted.clone());
-    let record = finish_run(&run.state, &run.record.id)?.unwrap_or(record);
+    let record = finish_run(&run.state, &run.record.id)?
+        .record
+        .unwrap_or(record);
     let step = restarted
         .session_attempt()
         .map_or(&restarted.node, |attempt| &attempt.node);

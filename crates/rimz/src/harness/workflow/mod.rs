@@ -81,6 +81,17 @@ pub fn advance_args(
     args
 }
 
+/// The argv of the room's workflow pass, which ends the runs this RimZ cannot continue and moves
+/// finished runs out of the live directory.
+pub fn reconcile_args(project_root: &Path) -> Vec<std::ffi::OsString> {
+    vec![
+        "--root".into(),
+        project_root.as_os_str().into(),
+        "workflow".into(),
+        "reconcile".into(),
+    ]
+}
+
 pub fn cancel_args(id: &WorkflowRunId, reason: &str) -> Vec<std::ffi::OsString> {
     ["workflow", "cancel", id.as_str(), "--reason", reason]
         .map(std::ffi::OsString::from)

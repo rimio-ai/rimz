@@ -163,6 +163,47 @@ fn an_owed_reports_retry_gap_doubles_from_one_tick_up_to_an_hour() {
     }
 }
 
+#[test]
+fn a_home_awaiting_the_pass_spawns_it_at_most_once_a_tick() {
+    let root = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&state).unwrap();
+    let cache = runtime.lane_path("workflow-reconcile.json");
+    let paths = state.workflow(&"wf_0190b8172c0070008000000000000003".parse().unwrap());
+    std::fs::create_dir_all(&paths.home).unwrap();
+    let tick = |now: i64| {
+        tick_workflows(
+            &runtime,
+            root.path(),
+            Timestamp::from_second(now).unwrap(),
+            LoopRunHost::Detached,
+        );
+        crate::disk::atomic::read_json_cache::<Option<Timestamp>>(&cache).map(|at| at.as_second())
+    };
+    // A home without a record leaves the pass alone.
+    assert_eq!(tick(1000), None);
+    let older = crate::store::workflow::VERSION - 1;
+    std::fs::write(
+        &paths.record,
+        format!(r#"{{"version":{older},"state":"active"}}"#),
+    )
+    .unwrap();
+    let actual: Vec<_> = [1000, 1059, 1060, 1100, 1120]
+        .into_iter()
+        .map(|now| (now, tick(now)))
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (1000, Some(1000)),
+            (1059, Some(1000)),
+            (1060, Some(1060)),
+            (1100, Some(1060)),
+            (1120, Some(1120))
+        ]
+    );
+}
+
 fn worktree_tasks(
     hold: Option<&str>,
 ) -> (

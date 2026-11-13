@@ -225,6 +225,8 @@ pub enum NotificationKind {
     Paused,
     #[serde(alias = "loop_paused")]
     LoopDisabled,
+    /// A workflow pass ended runs this RimZ cannot continue; it names no agent.
+    WorkflowEnded,
     Success,
     Coalesced,
     LinkLost,
@@ -239,6 +241,7 @@ impl NotificationKind {
             Self::Failed => "failed",
             Self::Paused => "paused",
             Self::LoopDisabled => "loop_disabled",
+            Self::WorkflowEnded => "workflow_ended",
             Self::Success => "success",
             Self::Coalesced => "coalesced",
             Self::LinkLost => "link_lost",

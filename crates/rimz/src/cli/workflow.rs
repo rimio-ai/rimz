@@ -19,6 +19,7 @@ mod list;
 mod node;
 mod rail;
 mod receipt;
+mod reconcile;
 mod show;
 
 use host::Host;
@@ -221,6 +222,8 @@ enum Command {
     },
     /// Print the workflow specification's JSON Schema.
     Schema,
+    #[command(hide = true)]
+    Reconcile,
 }
 
 pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()> {
@@ -260,6 +263,10 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             let (state, found) = resolve::locate(&id)?;
             if !matches!(found.class, records::RunClass::Current(_)) || found.finished {
                 let other = resolve::Other { state, id, found };
+                if other.is_stranded() {
+                    reconcile::end_named(&other.state, &other.id, globals, true)?;
+                    return Ok(());
+                }
                 return match other.refusal() {
                     Some(refusal) => bail!("{refusal}"),
                     None => Ok(()),
@@ -286,6 +293,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),
+        Command::Reconcile => reconcile::run(globals),
         Command::Validate { dir, json } => validate(dir, json, globals),
     }
 }
@@ -303,45 +311,96 @@ fn live_record(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<Option<Ru
     })
 }
 
+/// What [`finish_run`] found and did.
+struct Finish {
+    /// The record as last read in the live directory, or none when the run is not a live run
+    /// this RimZ reads.
+    record: Option<RunRecord>,
+    /// This call moved the home to the finished directory.
+    moved: bool,
+}
+
 /// The tail of a command that may have ended a run: once the run has ended and owes its loop
 /// nothing, save its rendered history in its home and in its notes archive, and move the home to
-/// the finished directory. Returns the record as last read in the live directory, or none when
-/// the run is not a live run this RimZ reads. A failure warns and leaves the home where it is.
-fn finish_run(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<Option<RunRecord>> {
+/// the finished directory. A home already moved has the move's barriers completed. A failure
+/// warns and leaves the home where it is.
+fn finish_run(state: &rimz::StatePaths, id: &WorkflowRunId) -> Result<Finish> {
+    let unmoved = |record| Finish {
+        record,
+        moved: false,
+    };
     let found = match records::find(state, id) {
         Ok(Some(found)) if !found.finished => found,
-        Ok(_) => return Ok(None),
+        Ok(Some(_)) => {
+            move_home(state, id, None, None)?;
+            return Ok(unmoved(None));
+        }
+        Ok(None) => return Ok(unmoved(None)),
         Err(error) => {
             writeln!(render::err(), "warning: could not read run `{id}`: {error}")?;
-            return Ok(None);
+            return Ok(unmoved(None));
         }
     };
     let records::RunClass::Current(record) = found.class else {
-        return Ok(None);
+        return Ok(unmoved(None));
     };
     if !record.state.is_terminal() || record.owes_loop_report() {
-        return Ok(Some(*record));
+        return Ok(unmoved(Some(*record)));
     }
     let history =
         workflow_view::history::saved(&found.paths, &state.finished_workflow(id), &record);
-    let moved = workflow_view::history::copy_to_notes(state, record.notes.as_deref(), &history)
+    let moved = move_home(state, id, record.notes.as_deref(), Some(&history))?;
+    Ok(Finish {
+        record: Some(*record),
+        moved,
+    })
+}
+
+/// Save an ended run's history, when given, in its notes archive and its home, then move the
+/// home to the finished directory. Returns whether this call moved it. A failure warns, and a
+/// home it left in the live directory stays there.
+fn move_home(
+    state: &rimz::StatePaths,
+    id: &WorkflowRunId,
+    notes: Option<&std::path::Path>,
+    history: Option<&[u8]>,
+) -> Result<bool> {
+    let moved = history
+        .map_or(Ok(()), |history| {
+            workflow_view::history::copy_to_notes(state, notes, history)
+        })
         .and_then(|()| {
             let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock)?;
-            Ok(records::finish(state, id, Some(&history), &guard)?)
+            Ok(records::finish(state, id, history, &guard)?)
         });
     match moved {
-        Ok(records::Finished::Collision) => writeln!(
-            render::err(),
-            "warning: run `{id}` stays in the live directory: the finished directory already \
-             holds a run of that id"
-        )?,
-        Ok(_) => {}
-        Err(error) => writeln!(
-            render::err(),
-            "warning: could not finish run `{id}`: {error}; it stays in the live directory"
-        )?,
+        Ok(records::Finished::Moved) => Ok(true),
+        Ok(records::Finished::Collision) => {
+            writeln!(
+                render::err(),
+                "warning: run `{id}` stays in the live directory: the finished directory already \
+                 holds a run of that id"
+            )?;
+            Ok(false)
+        }
+        Ok(_) => Ok(false),
+        // The rename is the move; an error after it leaves the home finished.
+        Err(error) if !state.workflow(id).home.exists() => {
+            writeln!(
+                render::err(),
+                "warning: run `{id}` moved to the finished directory, but completing the move \
+                 failed: {error}"
+            )?;
+            Ok(true)
+        }
+        Err(error) => {
+            writeln!(
+                render::err(),
+                "warning: could not finish run `{id}`: {error}; it stays in the live directory"
+            )?;
+            Ok(false)
+        }
     }
-    Ok(Some(*record))
 }
 
 /// Refuses before `action` changes anything when the detached engine could not open the

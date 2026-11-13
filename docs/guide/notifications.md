@@ -43,7 +43,7 @@ It is not your login shell. No `.zshrc`, no aliases, no functions: give your own
 
 Nobody reads its output. stdin, stdout, and stderr go to `/dev/null` and RimZ never waits for the exit code, so a handler that fails fails silently. Write anything you want to read later to a file of your own.
 
-It runs on the machine the notification came from. Agent notifications and the 60-second nudges fire from the room's sidebar, so handlers for a room on a server run on that server, with that server's credentials. `link_lost` and `link_restored` fire from `rimz remote connect` on the machine you typed it into, and `loop_disabled` from `rimz loop` wherever the task runs.
+It runs on the machine the notification came from. Agent notifications and the 60-second nudges fire from the room's sidebar, so handlers for a room on a server run on that server, with that server's credentials. `link_lost` and `link_restored` fire from `rimz remote connect` on the machine you typed it into, `loop_disabled` from `rimz loop` wherever the task runs, and `workflow_ended` from the room's scheduler pass on the room's machine.
 
 A fourth trap is in the file rather than the spawn, and it costs more than the handler carrying it. An unknown `{{name}}`, an invalid glob, or an empty command makes the whole `[notifications]` table invalid. With notifications enabled, `rimz start` warns, records the problem, and opens the room using the built-in defaults, which have no handlers at all. `rimz doctor` reports the error even when notifications are disabled. Fix the table before relying on it, and check a new template against the table below.
 
@@ -51,11 +51,11 @@ A fourth trap is in the file rather than the spawn, and it costs more than the h
 
 An empty `when` matches every notification. Add one clause and it has to match; add several and all of them do. Each takes a list, and one value matching is enough for its clause.
 
-`kind` names notification kinds: the four agent statuses (`waiting`, `failed`, `paused`, `success`), `coalesced` for a batch of them, `reminder` for the 60-second nudge, `loop_disabled` when a scheduled task disables itself after three failed runs ([loops](./loops.md#budgets-and-strikes)), and `link_lost` or `link_restored` when a supervised SSH link drops or recovers ([remote](./remote.md#a-link-that-heals-itself)).
+`kind` names notification kinds: the four agent statuses (`waiting`, `failed`, `paused`, `success`), `coalesced` for a batch of them, `reminder` for the 60-second nudge, `loop_disabled` when a scheduled task disables itself after three failed runs ([loops](./loops.md#budgets-and-strikes)), `workflow_ended` when RimZ ends workflow runs an older or broken install left behind that it cannot continue, once per batch, and `link_lost` or `link_restored` when a supervised SSH link drops or recovers ([remote](./remote.md#a-link-that-heals-itself)).
 
 `worktree` glob-matches the agent's branch, or its worktree path when it has no branch. `handle` glob-matches its handle or role, with or without the leading `@`. So `when = { kind = ["waiting"], handle = ["@planner"], worktree = ["release/*"] }` sends one agent's questions on a release branch to your phone, while the noisy experiment beside it stays quiet.
 
-One trap: a `reminder`, a `loop_disabled`, and both link kinds name no agent, so a handler carrying a `worktree` or `handle` clause never sees them. On a `coalesced` batch, each clause may be satisfied by a different agent.
+One trap: a `reminder`, a `loop_disabled`, a `workflow_ended`, and both link kinds name no agent, so a handler carrying a `worktree` or `handle` clause never sees them. On a `coalesced` batch, each clause may be satisfied by a different agent.
 
 ### What the handler receives
 
@@ -137,7 +137,7 @@ Leave what you did not decide. Whatever the handler ignores stays `? waiting`, r
 
 Everything above is what RimZ does untouched, and `[notifications]` in `~/.rimz/config.toml` changes it.
 
-Four keys quiet it. `sound = "off"` stops the bell and the tab marker, `desktop = "off"` stops the banner, `remind_secs = 0` stops the 60-second nudge, and `enabled = false` stops all of that and every handler, including `loop_disabled`, leaving the unread cards in the sidebar untouched.
+Four keys quiet it. `sound = "off"` stops the bell and the tab marker, `desktop = "off"` stops the banner, `remind_secs = 0` stops the 60-second nudge, and `enabled = false` stops all of that and every handler, including `loop_disabled` and `workflow_ended`, leaving the unread cards in the sidebar untouched.
 
 Two widen it. `triggers = ["waiting", "failed", "success", "paused"]` adds the two statuses that stay quiet by default, so a finished run pings you too, and `suppress_focused = false` pushes even for the pane you are watching.
 

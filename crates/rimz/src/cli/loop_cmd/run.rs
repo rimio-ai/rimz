@@ -358,39 +358,14 @@ pub(super) fn handle_run_transition(name: &str, root: &Path, transition: RunTran
 
 /// The strike-out notice: a desktop notification and a sidebar toast.
 pub(super) fn notify_loop_disabled(name: &str, root: &Path, count: u32) {
-    let notification = rimz::sidebar::notify::Notification {
-        agents: Vec::new(),
-        notification_kind: rimz::sidebar::notify::NotificationKind::LoopDisabled,
-        title: format!("RimZ: loop {name} disabled"),
-        body: format!(
+    super::super::room_notice::send(
+        root,
+        rimz::sidebar::notify::NotificationKind::LoopDisabled,
+        format!("RimZ: loop {name} disabled"),
+        format!(
             "{count} consecutive failed fires; inspect with `rimz loop show {name}`, enable with `rimz loop enable {name}`"
         ),
-        unread_count: None,
-    };
-    let prefs = MachineConfig::load_lenient().notifications.clone();
-    rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
-
-    let runtime = match RuntimePaths::for_project_root(root) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            tracing::debug!(task = name, error = %err, "loop auto-disable runtime unavailable");
-            return;
-        }
-    };
-    let notification_kind = notification.kind_env().to_owned();
-    if let Err(err) = rimz::wakeup::broadcast(
-        &runtime,
-        None,
-        rimz::wakeup::events::SidebarEvent::Notify {
-            title: notification.title,
-            body: notification.body,
-            panes: Vec::new(),
-            recheck_unread: false,
-            notification_kind: Some(notification_kind),
-        },
-    ) {
-        tracing::debug!(task = name, error = %err, "loop auto-disable notification broadcast failed");
-    }
+    );
 }
 
 fn present_finished(

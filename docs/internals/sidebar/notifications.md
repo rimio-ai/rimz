@@ -16,7 +16,7 @@ This page owns the push path: who decides a notification, who delivers it on eac
 | [`osc.rs`](../../../crates/rimz/src/osc.rs) | OSC 777 and BEL bytes, the tmux DCS wrap, and the terminal-local variant for processes outside a sidebar pane |
 | [`config/notifications.rs`](../../../crates/rimz/src/config/notifications.rs) | `NotificationsPrefs`, `NotificationKind`, handler conditions, template rendering and validation |
 | [`diag/notify.rs`](../../../crates/rimz/src/diag/notify.rs) | The `audit/notify.log.jsonl` record schema |
-| [`cli/remote/supervisor.rs`](../../../crates/rimz/src/cli/remote/supervisor.rs), [`cli/loop_cmd/run.rs`](../../../crates/rimz/src/cli/loop_cmd/run.rs), [`cli/sidebar.rs`](../../../crates/rimz/src/cli/sidebar.rs) | The CLI emitters: remote link alerts, `loop_disabled`, and `notify-test` |
+| [`cli/remote/supervisor.rs`](../../../crates/rimz/src/cli/remote/supervisor.rs), [`cli/loop_cmd/run.rs`](../../../crates/rimz/src/cli/loop_cmd/run.rs), [`cli/workflow/reconcile.rs`](../../../crates/rimz/src/cli/workflow/reconcile.rs), [`cli/room_notice.rs`](../../../crates/rimz/src/cli/room_notice.rs), [`cli/sidebar.rs`](../../../crates/rimz/src/cli/sidebar.rs) | The CLI emitters: remote link alerts, `loop_disabled`, `workflow_ended`, and `notify-test`; `room_notice.rs` sends the two room notices that name no agent |
 
 ## Channels
 
@@ -39,6 +39,7 @@ Five code paths construct a notification, and each sets its `NotificationKind`. 
 | `reminder` | The host, over the room's unread scope ([unread reminders](#unread-reminders)) | Handlers once, then `SidebarEvent::Notify` to every renderer |
 | `link_lost`, `link_restored` | The local `rimz remote connect` supervisor ([remote link alerts](#remote-link-alerts)) | OSC and BEL on the supervisor's stderr, and handlers |
 | `loop_disabled` | `rimz loop` when a task auto-disables after consecutive failed fires (`crates/rimz/src/cli/loop_cmd/run.rs::notify_loop_disabled`) | Handlers, then a broadcast `Notify` event with no panes |
+| `workflow_ended` | The room's workflow pass, or `rimz workflow advance` on one run, when it moves the homes of runs this RimZ cannot continue to the finished directory (`crates/rimz/src/cli/workflow/reconcile.rs::report`); once per pass that moved any, never for a pass that moved none, so each such run is announced once | Handlers, then a broadcast `Notify` event with no panes |
 | any but the two link kinds | `rimz sidebar notify-test <target>`, a hidden verb in `cli/sidebar.rs` | Handlers unless `--no-command`, then a broadcast `Notify` event for the target rows' panes |
 
 Only the agent episode path applies triggers, debounce, and coalescing. Agent notifications and reminders both honour focus suppression, and the host writes a `notification_emitted` trace record for each one it delivers. The CLI emitters write no such record.
@@ -77,7 +78,7 @@ The first addition to an empty batch starts the coalesce window, and the batch f
 | One agent | The agent's status kind, titled `RimZ: <label> needs you`, `failed`, `paused`, or `finished` for `waiting`, `failed`, `paused`, and `success` |
 | Several agents | One `coalesced` notification titled `RimZ: <N> agents need attention`, its body joining `<label>: <status>` pairs with ` \| ` |
 
-`[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`. Reminders, link alerts, `loop_disabled`, and `notify-test` keep their own text. A template that fails to render leaves the built-in text in place.
+`[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`. Reminders, link alerts, `loop_disabled`, `workflow_ended`, and `notify-test` keep their own text. A template that fails to render leaves the built-in text in place.
 
 #### Raised asks and card alerts
 
@@ -111,7 +112,7 @@ The bell is bound to current unread attention. A BEL sets a tab or window marker
 | A target pane is one of the view's working panes | `pane_not_in_view` |
 | With `recheck_unread`, a target pane in the view maps to a row with `SidebarRow::unread` set | `not_unread` |
 
-A bell that passes writes BEL when `sound = "bell"`. The unread bit stays set until a read receipt reaches the episode, so the row stays unread exactly as long as the marker has something to point at. A `Notify` event with no panes (`loop_disabled`) never rings. The host sends `recheck_unread: true` for every kind but `reminder`, whose scope is already unread. Reminders, `loop_disabled`, and `notify-test --force-bell` send `false`.
+A bell that passes writes BEL when `sound = "bell"`. The unread bit stays set until a read receipt reaches the episode, so the row stays unread exactly as long as the marker has something to point at. A `Notify` event with no panes (`loop_disabled`, `workflow_ended`) never rings. The host sends `recheck_unread: true` for every kind but `reminder`, whose scope is already unread. Reminders, `loop_disabled`, `workflow_ended`, and `notify-test --force-bell` send `false`.
 
 ### The desktop banner
 
@@ -162,11 +163,11 @@ A handler is a user command spawned when a notification matches. `[[notification
 
 | Clause | Matches when |
 | --- | --- |
-| `kind` | The notification's kind is listed: `waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `link_lost`, `link_restored` (`loop_paused` is accepted as an alias of `loop_disabled`) |
+| `kind` | The notification's kind is listed: `waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `workflow_ended`, `link_lost`, `link_restored` (`loop_paused` is accepted as an alias of `loop_disabled`) |
 | `worktree` | Some agent's worktree, its branch or else its path, matches a glob |
 | `handle` | Some agent's handle matches a glob, falling back to the agent kind for an agent without one. A leading `@` in the pattern is stripped |
 
-For a coalesced notification each clause may be satisfied by a different agent. A notification that names no agent (`reminder`, link alerts, `loop_disabled`) never matches a handler with a `worktree` or `handle` clause.
+For a coalesced notification each clause may be satisfied by a different agent. A notification that names no agent (`reminder`, link alerts, `loop_disabled`, `workflow_ended`) never matches a handler with a `worktree` or `handle` clause.
 
 ### Templates
 

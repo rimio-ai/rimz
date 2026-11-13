@@ -187,11 +187,8 @@ fn task_roots() -> BTreeSet<PathBuf> {
         .map(|task| task.entry().resolved_root())
         .collect::<BTreeSet<_>>();
     roots.extend(rimz::harness::schedule::catalog::workspace_instance_roots());
-    match rimz::store::workflow::unfinished_under(
-        &rimz::disk::paths::rimz_home(),
-        rimz::store::workflow::RunRead::BestEffort,
-    ) {
-        Ok(runs) => roots.extend(runs.into_iter().map(|run| run.project_root)),
+    match workflow_roots() {
+        Ok(workflow) => roots.extend(workflow),
         Err(error) => tracing::warn!(%error, "loop tick could not enumerate workflow roots"),
     }
     match rimz::trust::granted_roots() {
@@ -211,6 +208,33 @@ fn task_roots() -> BTreeSet<PathBuf> {
         }
     }
     roots
+}
+
+/// The roots whose live workflow directory needs a tick: the project root of an unfinished run
+/// or one that owes its loop report, and the room of every home the workflow pass has work in. A
+/// room that cannot be read is skipped.
+fn workflow_roots() -> std::result::Result<BTreeSet<PathBuf>, rimz::disk::paths::PathErr> {
+    let mut roots = BTreeSet::new();
+    for state in rimz::disk::paths::recorded_rooms_under(&rimz::disk::paths::rimz_home())? {
+        let Ok(homes) = rimz::store::workflow::live(&state) else {
+            continue;
+        };
+        let mut pass = false;
+        for home in homes {
+            match &home.class {
+                rimz::store::workflow::RunClass::Current(record)
+                    if !record.state.is_terminal() || record.owes_loop_report() =>
+                {
+                    roots.insert(record.project_root.clone());
+                }
+                class => pass |= class.awaits_pass(),
+            }
+        }
+        if pass && let Ok(workspace) = rimz::workspace::record::read(&state.workspace_record) {
+            roots.insert(workspace.project_root);
+        }
+    }
+    Ok(roots)
 }
 
 fn runtime_is_open(runtime: &RuntimePaths) -> bool {

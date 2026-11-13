@@ -218,6 +218,24 @@ fn sidebar_view_repairs_are_recovered_information() {
 }
 
 #[test]
+fn workflow_runs_a_pass_ended_are_contained_information() {
+    let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+        "kind": "workflow_runs_ended", "runs": ["wf_0190b8172c0070008000000000000001"],
+        "causes": ["1 written by an older RimZ (record version 3)"],
+        "released": [], "unreported": 1,
+    }));
+    assert!(
+        event.is_ok(),
+        "doctor must recognize a workflow pass: {event:?}"
+    );
+    let event = event.unwrap();
+    assert_eq!(
+        classify_diagnostic(&event, event.severity()),
+        (model::DoctorState::Contained, model::DoctorImpact::Info)
+    );
+}
+
+#[test]
 fn sidebar_view_repair_failures_need_investigation_as_warnings() {
     let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
         "kind": "sidebar_view_repair_failed", "view": "@0", "step": "close",

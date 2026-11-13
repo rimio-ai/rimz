@@ -172,7 +172,7 @@ when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 
 Each substituted value in a command is shell-quoted as one token, so write `ntfy publish --title {{title}} rimz {{body}}`, never `--title "{{title}}"`. Handlers also receive the same event as `RIMZ_NOTIFY_*` environment variables, listed beside the templates in [what the handler receives](./notifications.md#what-the-handler-receives).
 
-A handler's `when` clauses filter it. `kind` names notification kinds (`waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `link_lost`, `link_restored`), `worktree` glob-matches an agent's branch or path, and `handle` glob-matches its handle or role, with a leading `@` accepted in the pattern.
+A handler's `when` clauses filter it. `kind` names notification kinds (`waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `workflow_ended`, `link_lost`, `link_restored`), `worktree` glob-matches an agent's branch or path, and `handle` glob-matches its handle or role, with a leading `@` accepted in the pattern.
 
 ### Resume
 
