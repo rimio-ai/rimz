@@ -12904,7 +12904,7 @@ reason = "Registration, board writers and launch grants share the read-only curr
 [[verdict]]
 kind = "item"
 key = "agents::capabilities::LaunchCapability::allow_team_notes_args"
-reason = "The process compiler grants one archived run through a provider-neutral, default-noop capability."
+reason = "The process compiler grants each notes folder (a launch's archived runs and the home-wide note store) through a provider-neutral, default-noop capability."
 
 [[verdict]]
 kind = "item"

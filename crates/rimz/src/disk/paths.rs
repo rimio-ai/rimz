@@ -372,6 +372,11 @@ impl StatePaths {
         &self.home
     }
 
+    /// [`notes_dir`] under this home.
+    pub(crate) fn notes_store(&self) -> PathBuf {
+        notes_dir_under(&self.home)
+    }
+
     pub fn notes_run(&self, class: Class, relative: &Path) -> PathBuf {
         class.path_under(&self.root).join(relative)
     }
@@ -1890,7 +1895,11 @@ pub fn handoffs_dir() -> PathBuf {
 
 /// The home-wide note store `rimz notes` writes, `notes/<kind>/<YYYYMMDD>/`.
 pub fn notes_dir() -> PathBuf {
-    rimz_home().join("notes")
+    notes_dir_under(&rimz_home())
+}
+
+fn notes_dir_under(home: &Path) -> PathBuf {
+    home.join("notes")
 }
 
 /// `$XDG_RUNTIME_DIR`, else `/tmp/rimz-<uid>`.

@@ -881,6 +881,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             })
         })
         .collect();
+    reminders.notes_store = inputs.state.notes_store().canonicalize().ok();
     if inputs
         .effective
         .is_none_or(|effective| effective.allow_routine_rimz)
