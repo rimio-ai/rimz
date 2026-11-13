@@ -3209,7 +3209,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         (190 * 60, "▸ running 3h"),
         (-5, "▸ running 0s"),
     ] {
-        assert_eq!(running_text(Some(holder(age)), now), text);
+        assert_eq!(running_text(Some(holder(age).started_at), now), text);
     }
     assert_eq!(running_text(None, now), "▸ running");
     let holderless = InFlightRun {
@@ -4770,7 +4770,12 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         waiting(43, "/repo/.worktrees/c", None, 4),
     ];
     assert_eq!(
-        in_flight_text(Some(running), &held, 2, now),
+        in_flight_text(Some(running), Some(running.started_at), &held, 2, now),
+        "▸ running 2m · ○ 2 held"
+    );
+    // A lock-free newer run reads the same, aged from its own start.
+    assert_eq!(
+        in_flight_text(None, Some(running.started_at), &held, 2, now),
         "▸ running 2m · ○ 2 held"
     );
     let in_flight = InFlightRun {
@@ -4791,11 +4796,17 @@ fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
         waiting(42, "/repo/.worktrees/b", Some("queued: 1 start ahead"), 2),
         waiting(41, "/repo/.worktrees/a", Some("cpu pressure 41% ≥ 25%"), 3),
     ];
-    assert_eq!(in_flight_text(Some(running), &held, 2, now), "○ 2 held");
+    assert_eq!(
+        in_flight_text(Some(running), Some(running.started_at), &held, 2, now),
+        "○ 2 held"
+    );
     let (own, _) = split_held(Some(running), &held);
     assert_eq!(own.map(|held| held.pid), Some(41));
     // A holder the lock does not name owns no ticket.
-    assert_eq!(in_flight_text(None, &held, 2, now), "▸ running · ○ 2 held");
+    assert_eq!(
+        in_flight_text(None, None, &held, 2, now),
+        "▸ running · ○ 2 held"
+    );
 }
 
 #[test]
