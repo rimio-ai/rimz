@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+use super::spec::Cause;
 use super::{Definition, Fireability, HopKind, Invocation, Kind, Node, Target, routing_hop};
 use crate::disk::paths::WorkflowPaths;
 use crate::disk::summary::FileSummary;
@@ -34,7 +35,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
                 "The user restarted this step; its visits start over.".into()
             }
             Some(hop) if hop.kind == HopKind::Resume => {
-                "The user resumed the run at this step after it parked.".into()
+                "The user resumed the run at this step.".into()
             }
             Some(hop) => {
                 // A routing hop always names its outcome.
@@ -46,7 +47,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
                             span(&hop.node)
                         )
                     }
-                    Some(check) if !matches!(outcome, "invalid" | "timeout" | "deadline") => {
+                    Some(check) if Cause::parse(outcome).is_none() => {
                         let detail = record
                             .input
                             .as_ref()
@@ -420,10 +421,11 @@ fn visits(spec: &Definition, step: &Node, record: &RunRecord) -> Option<String> 
     let used = record.visits_to(&record.node);
     let mut text = format!("This is visit {used} of {max} to {}", span(&record.node));
     if used == max {
-        // Every step has a cap destination, including an unfireable cap.
-        let target = spec.target(&record.node, "cap").expect("step cap target");
+        // Every step has a visits destination, the chain ending at @failed.
+        let target = spec
+            .target(&record.node, "visits")
+            .expect("step visits target");
         let destination = match &target {
-            Target::User => "parks the run for the user".into(),
             Target::Done => "ends the run as done".into(),
             Target::Failed => "ends the run as failed".into(),
             target => format!("sends the run to {}", span(target.as_str())),
@@ -434,12 +436,6 @@ fn visits(spec: &Definition, step: &Node, record: &RunRecord) -> Option<String> 
 }
 
 fn lifecycle(spec: &Definition, step: &Node, record: &RunRecord) -> (String, String) {
-    if spec.is_break(&record.node) {
-        return (
-            "You stay open across turns. Fix the cause and resume the run, cancel it, or wait for the user. RimZ detaches rather than stops you on resume or cancel. Closing your pane ends the run @failed.".into(),
-            "If the user must act now, ask through your own native question; otherwise end your turn and wait for their instructions.".into(),
-        );
-    }
     // Validation requires `then`: a check, @done, or @failed.
     let then = step.then().first().expect("validated step then");
     let next = if matches!(then, Target::Done | Target::Failed) {

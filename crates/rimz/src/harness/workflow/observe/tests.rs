@@ -647,26 +647,6 @@ fn a_detach_releases_every_pinned_row_and_reports_live_ones_but_the_leader() {
 }
 
 #[test]
-fn an_excluded_handle_leaves_with_its_live_launched_tree() {
-    let room = snapshot(vec![
-        row("leader", 50),
-        child("child", "leader", 48),
-        launched_by(row("peer", 46), "leader"),
-        row("other", 40),
-    ]);
-    let ids = |snapshot: &SidebarSnapshot| {
-        snapshot
-            .agents
-            .iter()
-            .map(|agent| agent.agent_id.to_string())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(ids(&without_excluded(room.clone(), &[])), ids(&room));
-    let kept = without_excluded(room, &["@leader".into(), "@missing".into()]);
-    assert_eq!(ids(&kept), ["peer", "other"]);
-}
-
-#[test]
 fn a_leader_turn_observation_rests_past_only_the_waking_frame() {
     use crate::disk::lock::{SharedAppendLock, WorkspaceLock};
     use crate::store::ingress::{self, HookIngress};

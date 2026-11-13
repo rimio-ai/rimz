@@ -221,7 +221,9 @@ fn node_view_and_live_rail_list_a_session_subscriptions_with_their_scope() {
             .output()
             .unwrap(),
     );
-    let current = rail.lines().find(|line| line.contains("since "));
+    // The current row wraps at a " · " part to fit the terminal width; read it unwrapped.
+    let unwrapped = rail.replace("\n│   ", " · ");
+    let current = unwrapped.lines().find(|line| line.contains("since "));
     assert!(
         current.is_some_and(|line| line.contains(" · receives ci.failed deploy.done")),
         "{rail}"

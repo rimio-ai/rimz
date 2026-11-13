@@ -1,11 +1,12 @@
 use super::*;
 
-const SIMPLE: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
-const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[condition.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
-const SESSION_PICK: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nrest-check=['pick']\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
+const SIMPLE: &str =
+    "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
+const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[condition.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
+const SESSION_PICK: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nrest-check=['pick']\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
 /// One acyclic graph with a node of every kind, each written in full; `then='after'` on the
 /// agent is where a case adds a field.
-const KINDS: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n\
+const KINDS: &str = "[workflow]\nscope='worktree'\nstart='build'\n\
 [agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='turn'\nthen='after'\n\
 [script.after]\nrun='true'\non.ok='tell'\n\
 [message.tell]\nmessage='@planner'\nthen='run'\n\
@@ -25,9 +26,7 @@ fn loaded(text: &str) -> Result<Definition, SpecErr> {
 fn refusal(text: &str) -> (String, String) {
     match loaded(text) {
         Err(SpecErr::Toml { path, source }) => (path, source.message().to_owned()),
-        Err(error @ (SpecErr::ReservedTarget { .. } | SpecErr::ReservedNode { .. })) => {
-            (String::new(), error.to_string())
-        }
+        Err(error @ SpecErr::ReservedTarget { .. }) => (String::new(), error.to_string()),
         Err(error @ SpecErr::DuplicateNode { .. }) => (String::new(), error.to_string()),
         other => (format!("{other:?}"), String::new()),
     }
@@ -66,13 +65,6 @@ fn unknown_fields_refuse_at_their_dotted_path_in_every_kind() {
         (
             SIMPLE.replace("[workflow]", "[workflow]\non.future='@done'"),
             "workflow.on.future".into(),
-        ),
-        (
-            SIMPLE.replace(
-                "on-break='@failed'",
-                "on-break={agent='claude',future=true}",
-            ),
-            "workflow.on-break.future".into(),
         ),
         (
             SIMPLE.replace(
@@ -204,11 +196,6 @@ fn a_field_of_another_kind_refuses_at_its_path() {
         ),
         (
             "[command.run]",
-            "on.failed='@failed'",
-            "command.run.on.failed",
-        ),
-        (
-            "[command.run]",
             "subscribe=['ci.failed']",
             "command.run.subscribe",
         ),
@@ -245,11 +232,6 @@ fn a_field_of_another_kind_refuses_at_its_path() {
             "[message.tell]",
             "on.invalid='@done'",
             "message.tell.on.invalid",
-        ),
-        (
-            "[message.tell]",
-            "on.failed='@failed'",
-            "message.tell.on.failed",
         ),
         (
             "[message.tell]",
@@ -354,7 +336,10 @@ fn wrong_typed_values_refuse_at_their_path() {
             with("[agent.build]", "on.invalid={to=5}"),
             "agent.build.on.invalid",
         ),
-        (with("[agent.build]", "on.cap=5"), "agent.build.on.cap"),
+        (
+            with("[agent.build]", "on.visits=5"),
+            "agent.build.on.visits",
+        ),
         (with("[agent.build]", "on.asked=5"), "agent.build.on.asked"),
         (
             with("[agent.build]", "on.capacity=5"),
@@ -397,15 +382,8 @@ fn wrong_typed_values_refuse_at_their_path() {
             "workflow.on",
         ),
         (
-            SIMPLE.replace("start='pick'", "start='pick'\non.deadline=5"),
-            "workflow.on.deadline",
-        ),
-        (
-            SIMPLE.replace(
-                "on-break='@failed'",
-                "on-break={agent='claude',prompt-file=42}",
-            ),
-            "workflow.on-break.prompt-file",
+            SIMPLE.replace("start='pick'", "start='pick'\non.failed=5"),
+            "workflow.on.failed",
         ),
     ];
     let actual = cases
@@ -645,49 +623,27 @@ fn a_name_two_kinds_share_refuses() {
 }
 
 #[test]
-fn only_agents_ask_requires_each_fireable_failure_route() {
+fn fireable_failures_need_no_route_and_take_written_ones() {
     let text = "[workflow]\nscope='worktree'\nstart='pick'\ndeadline='2099-01-01T00:00:00Z'\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='work'\n[agent.work]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompts/build.md'\nthen='pick'\nmax-visits=2\n";
     let (_home, dir) = fixture();
-    fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, &LoadedDefinitions::default(), None);
-    for path in [
-        "script.pick.on.timeout",
-        "script.pick.on.invalid",
-        "agent.work.on.invalid",
-        "agent.work.on.cap",
-        "workflow.on.deadline",
-    ] {
-        assert!(
-            report.errors.iter().any(|issue| issue.path == path
-                && issue.message.contains("route")
-                && issue.message.contains("[workflow] on-break")),
-            "{path}: {report:?}"
-        );
-    }
     let explicit = text
-        .replace("[workflow]", "[workflow]\non.deadline='@failed'")
+        .replace("[workflow]", "[workflow]\non.failed='@failed'")
         .replace(
             "[script.pick]",
             "[script.pick]\non.invalid='@failed'\non.timeout='@failed'",
         )
         .replace(
             "[agent.work]",
-            "[agent.work]\non.invalid='@failed'\non.cap='@failed'",
+            "[agent.work]\non.died='@failed'\non.visits='@failed'",
         );
     let unfireable = explicit
         .replace("deadline='2099-01-01T00:00:00Z'\n", "")
-        .replace("on.deadline='@failed'\n", "")
         .replace("timeout='1h'\n", "")
         .replace("on.timeout='@failed'\n", "")
         .replace("max-visits=2\n", "")
-        .replace("on.cap='@failed'\n", "")
+        .replace("on.visits='@failed'\n", "")
         .replace("on.ok='work'", "on.ok='@done'");
-    for text in [
-        explicit,
-        unfireable,
-        text.replace("[workflow]", "[workflow]\non-break='@failed'"),
-        text.replace("[workflow]", "[workflow]\non-break={agent='claude'}"),
-    ] {
+    for text in [text.to_owned(), explicit, unfireable] {
         fs::write(dir.join("workflow.toml"), &text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(report.errors.is_empty(), "{text}: {report:?}");
@@ -723,20 +679,16 @@ fn only_agents_ask_refuses_human_targets_on_every_route() {
             ),
         ),
         (
-            "command.work.on.cap",
-            format!("{SIMPLE}{command}on.cap='@user'\n"),
+            "command.work.on.visits",
+            format!("{SIMPLE}{command}max-visits=2\non.visits='@user'\n"),
         ),
         (
             "command.work.then",
             format!("{SIMPLE}{}", command.replace("then='pick'", "then='@user'")),
         ),
         (
-            "workflow.on.deadline",
-            SIMPLE.replace("[workflow]", "[workflow]\non.deadline='@user'"),
-        ),
-        (
-            "workflow.on-break",
-            SIMPLE.replace("on-break='@failed'", "on-break='@user'"),
+            "workflow.on.failed",
+            SIMPLE.replace("[workflow]", "[workflow]\non.failed='@user'"),
         ),
     ] {
         let (_home, dir) = fixture();
@@ -745,41 +697,15 @@ fn only_agents_ask_refuses_human_targets_on_every_route() {
         assert!(
             report.errors.iter().any(|issue| issue.path == path
                 && issue.message.contains("@user is not a route target")
-                && issue.message.contains("route to a node")
-                && issue.message.contains("[workflow] on-break")),
+                && issue.message.contains("route to a node")),
             "{path}: {report:?}"
         );
     }
 }
 
 #[test]
-fn an_invalid_catchall_refuses_whether_or_not_it_is_needed() {
-    let (_home, dir) = fixture();
-    for handler in ["42", "[]", "{}", "{agent=42}"] {
-        let text = SIMPLE.replace("on-break='@failed'", &format!("on-break={handler}"));
-        for text in [text.clone(), text + "on.invalid='@failed'\n"] {
-            fs::write(dir.join("workflow.toml"), &text).unwrap();
-            let report = validate(&dir, &LoadedDefinitions::default(), None);
-            assert_eq!(
-                report
-                    .errors
-                    .iter()
-                    .map(|issue| issue.path.as_str())
-                    .collect::<Vec<_>>(),
-                [if handler.starts_with('{') {
-                    "workflow.on-break.agent"
-                } else {
-                    "workflow.on-break"
-                }],
-                "{report:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn only_agents_ask_reserves_break_for_the_handler() {
-    let base = SIMPLE.replace("on-break='@failed'", "on-break={agent='claude'}");
+fn at_break_is_neither_a_route_target_nor_a_node_name() {
+    let base = SIMPLE.to_owned();
     for (path, text) in [
         (
             "script.pick.on.ok",
@@ -806,9 +732,10 @@ fn only_agents_ask_reserves_break_for_the_handler() {
         fs::write(dir.join("workflow.toml"), text).unwrap();
         let report = validate(&dir, &LoadedDefinitions::default(), None);
         assert!(
-            report.errors.iter().any(|issue| issue.path == path
-                && issue.message.contains("@break")
-                && issue.message.contains("on-break")),
+            report
+                .errors
+                .iter()
+                .any(|issue| issue.path == path && issue.message.contains("@break")),
             "{path}: {report:?}"
         );
     }
@@ -994,7 +921,7 @@ fn syntax_errors_keep_line_column_and_excerpt() {
 
 #[test]
 fn required_fields_refuse_at_the_exact_dotted_path() {
-    let session = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nthen='@done'\n";
+    let session = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nthen='@done'\n";
     let actual = [
         (SIMPLE.replace("scope='worktree'\n", ""), "workflow.scope"),
         (SIMPLE.replace("start='pick'\n", ""), "workflow.start"),
@@ -1004,10 +931,7 @@ fn required_fields_refuse_at_the_exact_dotted_path() {
             "workflow.scope",
         ),
         (
-            SIMPLE.replace(
-                "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n",
-                "",
-            ),
+            SIMPLE.replace("[workflow]\nscope='worktree'\nstart='pick'\n", ""),
             "workflow",
         ),
         (
@@ -1115,7 +1039,7 @@ fn create_and_validate_agree_on_refusals() {
             "[script.pick]\nrun='true'",
             "[judge.pick]\nagent='claude'\nprompt-file=5",
         ),
-        SIMPLE.replace("on-break='@failed'\n", ""),
+        SIMPLE.replace("[workflow]", "[workflow]\non-break='@failed'"),
         SIMPLE.replace("on.ok='@done'", "on.ok='@user'"),
     ] {
         let (_home, dir) = fixture();

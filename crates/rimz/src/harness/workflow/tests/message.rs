@@ -3,7 +3,7 @@ use crate::disk::paths::WorkflowPaths;
 use crate::ids::MessageId;
 use crate::store::workflow::{self as records, AttemptOutcome, JournalEvent, RunState};
 
-const TELL: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+const TELL: &str = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
 
 fn attempt_rows(paths: &WorkflowPaths) -> Vec<(AttemptOutcome, Option<String>, Option<MessageId>)> {
     records::journal(paths)
@@ -282,7 +282,7 @@ fn a_cancel_or_deadline_after_the_host_died_retires_its_queued_notice() {
 #[test]
 fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[script.done]\nrun='true'\non.ok='@done'\n";
+    let base = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[script.done]\nrun='true'\non.ok='@done'\n";
     fs::write(dir.join("workflow.toml"), base).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -374,24 +374,10 @@ fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
 }
 
 #[test]
-fn a_message_step_row_lists_then_undelivered_cap_and_deadline() {
+fn a_message_step_row_lists_then_undelivered_visits_and_deadline() {
     let (_home, dir) = fixture();
     let text = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nthen='@done'\n";
     fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, &LoadedDefinitions::default(), None);
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|error| error.path == "message.tell.on.undelivered"),
-        "an unfilled undelivered edge refuses: {:?}",
-        report.errors
-    );
-    fs::write(
-        dir.join("workflow.toml"),
-        text.replace("scope='worktree'", "on-break='@failed'\nscope='worktree'"),
-    )
-    .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     let row = &report.rows[0];
@@ -410,9 +396,9 @@ fn a_message_step_row_lists_then_undelivered_cap_and_deadline() {
             .collect::<Vec<_>>(),
         vec![
             ("then", "@done", EdgeSource::Explicit),
-            ("undelivered", "@failed", EdgeSource::OnBreak),
-            ("cap", "@failed", EdgeSource::OnBreak),
-            ("deadline", "@failed", EdgeSource::OnBreak),
+            ("undelivered", "@failed", EdgeSource::Default),
+            ("visits", "@failed", EdgeSource::Default),
+            ("deadline", "@failed", EdgeSource::Default),
         ]
     );
 }
@@ -422,7 +408,7 @@ fn a_bounded_message_step_cycle_validates_without_a_never_waits_warning() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nthen='tell'\nmax-visits=3\n",
+        "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nthen='tell'\nmax-visits=3\n",
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);

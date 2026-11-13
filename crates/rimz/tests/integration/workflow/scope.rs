@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
     let (env, _) = fixture(
-        &format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
+        &format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
         PENDING,
     );
     for args in [
@@ -80,12 +80,12 @@ fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
 }
 
 #[test]
-fn script_canceled_and_limited_are_routes_not_engine_diagnostics() {
+fn a_script_canceled_outcome_is_a_route_not_an_engine_diagnostic() {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.canceled='next'\n[script.next]\nrun='sh checks/pr.sh'\non.limited='@done'\n"
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.canceled='next'\n[script.next]\nrun='sh checks/pr.sh'\non.ready='@done'\n"
         ),
-        "if test -f \"$RIMZ_WORKFLOW_DIR/called\"; then printf '{\"outcome\":\"limited\"}'; else touch \"$RIMZ_WORKFLOW_DIR/called\"; printf '{\"outcome\":\"canceled\"}'; fi",
+        "if test -f \"$RIMZ_WORKFLOW_DIR/called\"; then printf '{\"outcome\":\"ready\"}'; else touch \"$RIMZ_WORKFLOW_DIR/called\"; printf '{\"outcome\":\"canceled\"}'; fi",
     );
     let id = start(&env);
     let value = settled(&env, &id, "done");

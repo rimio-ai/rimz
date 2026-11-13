@@ -192,7 +192,7 @@ pub(super) fn prepare(
             .step(&t.record.node)
             .expect("a held session sits at its step");
         if let Some((visits, max)) = step.tripped_visit_bound(&t.record) {
-            let route = t.cap_route(visits, max);
+            let route = t.visits_failure(visits, max);
             t.stage_agent_end(
                 Ending {
                     outcome: AttemptOutcome::Ended,
@@ -244,11 +244,9 @@ pub(super) fn prepare(
         t.close_wait();
         t.turn_end(&attempt, TurnEndAction::Kept, Some(&verdict), None);
         t.record.held.as_mut().expect("moving held session").verdict = None;
-        t.record.node = verdict.target;
-        t.record.entered_at = t.now;
-        t.record.check_retry = 0;
-        t.record.check_retry_context = None;
-        t.record.launch_retry = false;
+        t.enter(verdict.target);
+        // A move between listed checks keeps the input; a failure hands on its own.
+        t.hand_on(verdict.object, true);
         persist(t, guard)?;
         return Ok(Some(Decision::Again));
     }

@@ -261,28 +261,6 @@ pub fn detach_cohort<'a>(
     }
 }
 
-/// `snapshot` without the agents an occupancy read excludes: each handle in `excluded` that
-/// resolves, with its live launched descendants.
-pub fn without_excluded(mut snapshot: SidebarSnapshot, excluded: &[String]) -> SidebarSnapshot {
-    if excluded.is_empty() {
-        return snapshot;
-    }
-    let peers = crate::address::addressable_agents(&snapshot);
-    let context = crate::address::AddressContext {
-        channel: None,
-        origin: crate::address::ChannelOrigin::Explicit,
-    };
-    let excluded = excluded
-        .iter()
-        .filter_map(|handle| crate::address::resolve_agent(handle, None, &context, &peers).ok())
-        .flat_map(|agent| std::iter::once(agent).chain(descendants(&snapshot.agents, agent)))
-        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-        .collect::<BTreeSet<_>>();
-    std::sync::Arc::make_mut(&mut snapshot.agents)
-        .retain(|agent| !excluded.contains(&(agent.kind.clone(), agent.agent_id.clone())));
-    snapshot
-}
-
 /// `root`'s live launched descendants, depth first. An ended child is skipped with its whole
 /// subtree, so its live children are never reached.
 fn descendants<'a>(agents: &'a [AgentState], root: &AgentState) -> Vec<&'a AgentState> {

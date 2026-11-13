@@ -2375,7 +2375,7 @@ path = "crates/rimz/src/harness"
 # The `task_login` module resolves a loop task's account outside the sidebar graph that `loop_task` joins (+1).
 # The neutral homes (`check_run`, `signal`, `throttle`, `when` and the rest) kept their items' surface once the trunk's fleet-report items took the slack they fitted in before (+3).
 # workflow::observe projects an observed agent attempt in the library for the CLI host (+1).
-# workflow::{Cohort, stop_cohort, detach_cohort, without_excluded, leader} pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot workflow::leader_turn left (+4).
+# workflow::{Cohort, stop_cohort, detach_cohort, leader} pick the agents an attempt's stop, detach, push and forward reach; one fits the slot workflow::leader_turn left.
 # AttemptHost::{orphan, leader_session, start_groups}, workflow::{orphan, launch_groups}, and throttle::StartGroup close the engine's reads around the attempt host (+6).
 # harness::lanes and its LaneErr, CallerLane, LaneRequest, decide, team_lane, directory_channel and admit_worktree_name replace spec::resolve_room_channel and the channel module as the one lane constructor.
 # deadline::interrupt_expired and run::{hold_interrupted_turn, expire_interrupt} let the timeout helper stamp, expire and settle an interrupted subagent turn's hold (+3).
@@ -2527,11 +2527,6 @@ reason = "The library decides which agents an attempt's stop reaches; the CLI ho
 kind = "item"
 key = "harness::workflow::detach_cohort"
 reason = "The library decides which pins an attempt's detach clears and which agents it reports live; the CLI host clears them."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::without_excluded"
-reason = "Occupancy and eviction reads drop an excluded agent's launched tree by the library's cohort walk."
 
 [[verdict]]
 kind = "item"
@@ -5765,7 +5760,7 @@ allowed-dependencies = [
     "worktree",
 ]
 # observe projects an observed agent attempt for the CLI host (+1).
-# Cohort, stop_cohort, detach_cohort, without_excluded and leader pick the agents an attempt's stop, detach, occupancy read, push and forward reach; one fits the slot leader_turn left (+4).
+# Cohort, stop_cohort, detach_cohort and leader pick the agents an attempt's stop, detach, push and forward reach; one fits the slot leader_turn left.
 # AttemptHost::{orphan, leader_session, start_groups}, orphan and launch_groups close the engine's reads around the attempt host (+5).
 surface-budget = 94
 
@@ -12088,7 +12083,7 @@ reason = "The CLI rails and the sidebar strip share one reached rule over workfl
 [[verdict]]
 kind = "item"
 key = "harness::workflow::routing_hop"
-reason = "Workflow park views and launch briefs share the newest parked or on-break resume or route into the current node, ignoring active-run extensions."
+reason = "Workflow park views and launch briefs share the newest parked resume, `resume --at` move, or route into the current node, ignoring active-run extensions."
 
 [[verdict]]
 kind = "item"

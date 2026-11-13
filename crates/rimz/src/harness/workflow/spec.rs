@@ -52,72 +52,91 @@ pub struct Header {
     pub start: String,
     pub deadline: Option<String>,
     pub limit: Option<Limit>,
-    #[serde(rename = "on-break")]
-    pub(super) on_break: Option<OnBreak>,
     #[serde(default)]
     pub on: HeaderEdges,
 }
-#[derive(Clone, Debug, Serialize, JsonSchema)]
-#[serde(untagged, rename_all = "kebab-case")]
-#[schemars(deny_unknown_fields)]
-pub(super) enum OnBreak {
-    Target(String),
-    Agent {
-        agent: String,
-        #[serde(rename = "prompt-file")]
-        prompt_file: Option<String>,
-    },
-}
-
-impl<'de> Deserialize<'de> for OnBreak {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = OnBreak;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("@failed, @done, or a table with agent and optional prompt-file")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<OnBreak, E> {
-                Ok(OnBreak::Target(value.into()))
-            }
-
-            fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<OnBreak, M::Error> {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-                struct Handler {
-                    agent: String,
-                    prompt_file: Option<String>,
-                }
-                let handler =
-                    Handler::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                Ok(OnBreak::Agent {
-                    agent: handler.agent,
-                    prompt_file: handler.prompt_file,
-                })
-            }
-        }
-        deserializer.deserialize_any(Visitor)
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct HeaderEdges {
-    pub deadline: Option<String>,
+    /// Where a failure goes that its node routes neither by cause nor by `on.failed`.
+    pub failed: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct StepEdges {
     pub asked: Option<String>,
-    pub cap: Option<String>,
-    pub capacity: Option<String>,
-    pub invalid: Option<String>,
-    pub undelivered: Option<String>,
-    /// An agent step's ending that died, timed out, or was limited; without it, `then` takes it.
+    /// Where a failure goes that the step routes by no cause of its own.
     pub failed: Option<String>,
+    /// Each failure cause the step routes, by the cause's word.
+    pub causes: BTreeMap<String, String>,
+}
+
+/// Why a node failed: the closed set of causes, and which node kinds raise each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Cause {
+    Died,
+    Invalid,
+    Timeout,
+    Limited,
+    Undelivered,
+    Visits,
+    Capacity,
+    Deadline,
+}
+
+impl Cause {
+    pub const ALL: [Self; 8] = [
+        Self::Died,
+        Self::Invalid,
+        Self::Timeout,
+        Self::Limited,
+        Self::Undelivered,
+        Self::Visits,
+        Self::Capacity,
+        Self::Deadline,
+    ];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Died => "died",
+            Self::Invalid => "invalid",
+            Self::Timeout => "timeout",
+            Self::Limited => "limited",
+            Self::Undelivered => "undelivered",
+            Self::Visits => "visits",
+            Self::Capacity => "capacity",
+            Self::Deadline => "deadline",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.word() == word)
+    }
+
+    /// The causes a node written under the kind table `table` raises, in the order a view
+    /// lists them; none for a word that names no kind.
+    pub fn raised_by(table: &str) -> &'static [Self] {
+        use Cause::{Capacity, Deadline, Died, Invalid, Limited, Timeout, Undelivered, Visits};
+        match table {
+            "agent" => &[Died, Timeout, Limited, Visits, Capacity, Deadline],
+            "command" => &[Died, Timeout, Visits, Deadline],
+            "message" => &[Undelivered, Visits, Deadline],
+            "test" => &[Died, Timeout, Deadline],
+            "script" => &[Died, Invalid, Timeout, Deadline],
+            "judge" => &[Died, Invalid, Timeout, Limited, Deadline],
+            "condition" => &[Timeout, Deadline],
+            "sleep" => &[Deadline],
+            _ => &[],
+        }
+    }
+}
+
+/// Whether `word` is the engine's and no author may write it as an outcome: a cause, the
+/// failure input's own `failed`, an agent's `asked`, a reading's `unknown`, and a held
+/// condition's `hold`.
+pub(super) fn reserved(word: &str) -> bool {
+    Cause::parse(word).is_some() || matches!(word, "failed" | "asked" | "unknown" | "hold")
 }
 
 /// The kind table a check was written in.
@@ -396,10 +415,6 @@ impl Check {
     }
 }
 
-pub(super) const RESERVED_OUTCOMES: [&str; 7] = [
-    "timeout", "invalid", "cap", "capacity", "deadline", "unknown", "hold",
-];
-
 /// A step as the definition compiles it, from its kind table.
 #[derive(Clone, Debug)]
 pub struct Step {
@@ -534,13 +549,8 @@ impl Step {
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum SpecErr {
-    #[error(
-        "{path}: {target} is not a route target; route to a node, @done, or @failed, \
-         or set [workflow] on-break"
-    )]
+    #[error("{path}: {target} is not a route target; route to a node, @done, or @failed")]
     ReservedTarget { path: String, target: String },
-    #[error("{path}: @break is reserved for workflow.on-break; choose another node name")]
-    ReservedNode { path: String },
     #[error("{path}: {other}.{name} has the same name; a node name is unique across every kind")]
     DuplicateNode {
         path: String,
@@ -597,62 +607,21 @@ pub(crate) fn parse(text: &str) -> Result<Definition, SpecErr> {
     })?;
     reject_reserved_targets(&value)?;
     let file = kinds::deserialize(value)?;
-    let mut spec = file.lower()?;
-    if let Some(OnBreak::Agent { agent, prompt_file }) = &spec.workflow.on_break {
-        spec.steps.insert(
-            "@break".into(),
-            Step {
-                table: StepTable::Agent,
-                summary: Some("Investigate the workflow failure with the user".into()),
-                agent: Some(agent.clone()),
-                prompt_file: prompt_file.clone(),
-                lifecycle: Some(StepLifecycle::Session),
-                rest_check: None,
-                then: vec!["@failed".into()],
-                on: StepEdges {
-                    invalid: Some("@failed".into()),
-                    ..Default::default()
-                },
-                run: None,
-                shell: None,
-                message: None,
-                keep: None,
-                notes: None,
-                window: None,
-                occupancy: None,
-                subscribe: None,
-                throttle: None,
-                capacity_wait: None,
-                limit: None,
-                max_visits: None,
-                timeout: None,
-                account: None,
-                mode: None,
-                effort: None,
-                fast: None,
-                budget: None,
-                system_prompt_file: None,
-                worktree: None,
-                session: None,
-            },
-        );
-    }
+    let spec = file.lower()?;
     Ok(Definition::compile(spec))
 }
 
 fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {
     if let Some(header) = value.get("workflow") {
-        for key in ["start", "on-break"] {
-            reject_reserved_target(
-                &format!("workflow.{key}"),
-                header.get(key).and_then(toml::Value::as_str),
-            )?;
-        }
         reject_reserved_target(
-            "workflow.on.deadline",
+            "workflow.start",
+            header.get("start").and_then(toml::Value::as_str),
+        )?;
+        reject_reserved_target(
+            "workflow.on.failed",
             header
                 .get("on")
-                .and_then(|on| on.get("deadline"))
+                .and_then(|on| on.get("failed"))
                 .and_then(toml::Value::as_str),
         )?;
     }
@@ -662,9 +631,6 @@ fn reject_reserved_targets(value: &toml::Value) -> Result<(), SpecErr> {
         };
         for (name, node) in nodes {
             let path = format!("{kind}.{name}");
-            if name == "@break" {
-                return Err(SpecErr::ReservedNode { path });
-            }
             if let Some(then) = node.get("then") {
                 reject_reserved_target(&format!("{path}.then"), then.as_str())?;
                 for target in then.as_array().into_iter().flatten() {

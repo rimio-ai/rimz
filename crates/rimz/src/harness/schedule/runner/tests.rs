@@ -1172,7 +1172,7 @@ fn a_fired_run_keeps_its_rows_surplus_gate_for_inline_and_named_workflows() {
     std::fs::write(
         crate::disk::paths::workflow_spec_file(&dir),
         "[workflow]\nscope='worktree'\nstart='check'\n[test.check]\nshell='true'\n\
-         on={pass='@done',fail='@failed',invalid='@failed'}\n",
+         on={pass='@done',fail='@failed',died='@failed'}\n",
     )
     .unwrap();
     let mut kept = Vec::new();

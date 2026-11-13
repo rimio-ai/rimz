@@ -34,7 +34,7 @@ pub use inspect::{
     Hop, HopKind, evaluation_target, hold_until, hops, next_bound, reached, repeats_evaluation,
     routing_hop, timeout_at,
 };
-pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
+pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse;
 pub use spec::{
@@ -99,12 +99,7 @@ pub fn cancel_args(id: &WorkflowRunId, reason: &str) -> Vec<std::ffi::OsString> 
 }
 
 pub trait AttemptHost {
-    fn occupancy(
-        &self,
-        scope: &Path,
-        project_root: &Path,
-        excluded: &[String],
-    ) -> Result<Occupancy, WorkflowErr>;
+    fn occupancy(&self, scope: &Path, project_root: &Path) -> Result<Occupancy, WorkflowErr>;
     fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, NotLaunched>, WorkflowErr>;
     fn observe(&self, run: &AttemptRun, observation: Observation) -> Result<Observed, WorkflowErr>;
     fn push(
@@ -202,7 +197,6 @@ pub struct StepLaunch {
 pub struct Eviction {
     pub checkout: PathBuf,
     pub project_root: PathBuf,
-    pub excluded: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
