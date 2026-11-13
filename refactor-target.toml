@@ -849,6 +849,11 @@ reason = "Pane-opening commands share the watched/unattended hook-trust verdict 
 
 [[verdict]]
 kind = "item"
+key = "config::definitions::ConsensusPieces"
+reason = "MachineConfig carries one definitions load's trait claims to the project TOML teams compiled after it, which name consensus pieces from the same tree."
+
+[[verdict]]
+kind = "item"
 key = "config::definitions::hook_trust_fix"
 reason = "CLI launch refusals and rebirth share one user-run fix, resolving team seats to a standalone base profile or kind."
 
@@ -1105,7 +1110,8 @@ upward-dependencies = [
 # keep both backend compilers exhaustive (+3).
 # TaskWorktree and TaskEntry::task_worktree are the one reader of a task's worktree placement (+2).
 # RoomStyle's export lets setup's room-keys question name the stored style (+1).
-surface-budget = 294
+# ConsensusPieces carries the definitions' trait claims on MachineConfig to project teams' `consensus` (+1).
+surface-budget = 295
 
 [[verdict]]
 kind = "item"
@@ -2395,6 +2401,16 @@ reason = "The tune handler removes only the cache-class ledger addressed by the 
 kind = "item"
 key = "harness::cache_keepalive::ConfiguredValues"
 reason = "The CLI reads configured seat values without exposing config's crate-private resolvers."
+
+[[verdict]]
+kind = "item"
+key = "harness::team_prompt::SHIPPED_REFLECT"
+reason = "Team definitions and project teams resolve an unclaimed `reflect` consensus piece to the one embedded text its inspection copy shows."
+
+[[verdict]]
+kind = "item"
+key = "harness::team_prompt::reflect_copy_path"
+reason = "The shipped `reflect` piece's origin is its copy path, so explain labels it and the launch copy refresh finds it by the same path."
 
 [[verdict]]
 kind = "item"

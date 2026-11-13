@@ -5441,8 +5441,8 @@ fn explain_seat_replays_the_team_prompt_layer() {
         &env,
         "teams",
         "forge",
-        "layout: lead\nleader: lead\nstages: [Build]\n\
-         roles:\n  - {role: lead, agent: worker, owns: [Build]}",
+        "layout: lead\nleader: lead\nstages: [Build, Reflect]\nconsensus: [reflect]\n\
+         roles:\n  - {role: lead, agent: worker, owns: [Build, Reflect]}",
         "Team instructions.",
     );
     let workspace = env.resolve_workspace(&env.project_root);
@@ -5498,12 +5498,22 @@ fn explain_seat_replays_the_team_prompt_layer() {
             .iter()
             .map(|source| source["builtin"].as_str())
             .collect::<Vec<_>>(),
-        [None, None, Some("team consensus"), None]
+        [
+            None,
+            None,
+            Some("team consensus"),
+            Some("consensus piece reflect"),
+            None
+        ]
     );
     let role = composed.find("Profile instructions.").unwrap();
     let consensus = composed.find("# Team consensus").unwrap();
+    let piece = composed.find("### Reflection").unwrap();
     let team = composed.find("Team instructions.").unwrap();
-    assert!(role < consensus && consensus < team, "{composed}");
+    assert!(
+        role < consensus && consensus < piece && piece < team,
+        "{composed}"
+    );
     assert_eq!(
         serde_json::to_value(store.read_events().unwrap()).unwrap(),
         before

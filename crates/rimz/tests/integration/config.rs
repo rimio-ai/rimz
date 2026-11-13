@@ -685,14 +685,17 @@ fn project_team_consensus_composes_the_kind_base() {
     let env = Env::new();
     let base = env.rimz_home().join("agents/claude.md");
     write_machine_file(&base, "---\ndescription: Base\n---\nKind base.\n");
+    write_machine_file(&env.rimz_home().join("traits/house.md"), "House rules.\n");
     env.write_config(
         &env.project_root,
         "[profiles.worker]\nagent = 'claude'\n\
          [agents.teams.crew]\nconsensus-file = 'consensus.md'\n\
-         roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
+         consensus = ['reflect', 'house']\nappend-system-prompt-files = ['pipeline.md']\n\
+         roles = [{role = 'lead', profile = 'worker', owns = ['Plan', 'Reflect']}]\n",
     );
     let consensus = env.project_root.join(".rimz/consensus.md");
     write_machine_file(&consensus, "Consensus text.\n");
+    write_machine_file(&env.project_root.join(".rimz/pipeline.md"), "Pipeline.\n");
     let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 0);
     let shell = crate::common::write_fake_login_shell(&env, "team-base-test-sh", &[]);
     let path = format!(
@@ -701,17 +704,46 @@ fn project_team_consensus_composes_the_kind_base() {
         std::env::var("PATH").unwrap_or_default()
     );
     env.rimz().args(["trust", "grant"]).assert().success();
+    let composed = format!(
+        "Kind base.\n\nConsensus text.\n\n{}\n\nHouse rules.\n\nPipeline.",
+        rimz::harness::team_prompt::SHIPPED_REFLECT.trim()
+    );
+    for target in ["crew", "crew.lead"] {
+        env.rimz()
+            .args(["agents", "explain", target])
+            .env("SHELL", &shell)
+            .env("PATH", &path)
+            .assert()
+            .success()
+            .stdout(
+                contains("--system-prompt-file")
+                    .and(contains(composed.as_str()))
+                    .and(contains(consensus.display().to_string()))
+                    .and(contains("built-in consensus piece reflect")),
+            );
+    }
+}
+
+#[test]
+fn project_team_consensus_refuses_reflect_without_its_stage() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[profiles.worker]\nagent = 'claude'\n\
+         [agents.teams.crew]\nconsensus = ['reflect']\n\
+         roles = [{role = 'lead', profile = 'worker', owns = ['Plan']}]\n",
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
     env.rimz()
         .args(["agents", "explain", "crew"])
-        .env("SHELL", shell)
-        .env("PATH", path)
         .assert()
-        .success()
-        .stdout(
-            contains("--system-prompt-file")
-                .and(contains("Kind base.\n\nConsensus text."))
-                .and(contains(consensus.display().to_string())),
-        );
+        .code(1)
+        .stderr(contains(format!(
+            "invalid project agents config at {}: team 'crew' lists the shipped `reflect` \
+             consensus piece but declares no `Reflect` stage; add a `Reflect` stage, or drop \
+             `reflect` from `consensus`",
+            env.project_root.join(".rimz/config.toml").display()
+        )));
 }
 
 #[test]
@@ -763,7 +795,8 @@ fn project_team_consensus_without_a_base_refuses_only_the_team() {
         .assert()
         .code(1)
         .stderr(contains(format!(
-            "team `crew` sets consensus-file or append-system-prompt-files but role `lead` \
+            "team `crew` sets consensus-file, consensus, or \
+             append-system-prompt-files but role `lead` \
              (claude) has no base system prompt to compose them onto; add system-prompt-file to \
              role lead or its profile, or write {} with a nonempty body as the claude kind base \
              (run `rimz agents validate` if it did not load)",

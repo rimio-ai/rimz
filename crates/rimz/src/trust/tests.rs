@@ -744,6 +744,8 @@ fn hash_covers_every_documented_surface_field() {
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nfast = false\n",
         "[agents.teams.review]\nconsensus-file = \"prompts/consensus.md\"\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[agents.teams.review]\nappend-system-prompt-files = [\"prompts/pipeline.md\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
+        "[agents.teams.review]\nconsensus = [\"reflect\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
+        "[agents.teams.review]\nconsensus = [\"reflect\", \"house\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[tasks.x]\n",
         "[tasks.x]\nagent = \"codex\"\n",
         "[tasks.x]\nworkflow = \"review\"\n",
@@ -850,8 +852,14 @@ fn empty_team_signals_preserve_executable_surface_hash() {
     let config: ProjectConfig = toml::from_str(legacy).expect("legacy team");
     let explicit: ProjectConfig =
         toml::from_str(&format!("{legacy}signals = []\n")).expect("empty signals");
+    let no_pieces: ProjectConfig = toml::from_str(&legacy.replace(
+        "layout = \"coder\"\n",
+        "layout = \"coder\"\nconsensus = []\n",
+    ))
+    .expect("empty consensus");
     let snapshot = surface_snapshot(&config);
     assert_eq!(snapshot.hash, executable_surface_hash(&explicit));
+    assert_eq!(snapshot.hash, executable_surface_hash(&no_pieces));
     assert_eq!(
         serde_json::to_string(&ExecutableSurface::from(&config).teams).expect("team surface"),
         r#"[{"name":"review","layout":"coder","roles":[{"role":"coder","profile":"codex","mode":null,"model":null,"effort":null,"system_prompt_file":null,"append_system_prompt_file":null,"args":null}]}]"#,

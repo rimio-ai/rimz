@@ -138,11 +138,6 @@ fn shared_skill_and_trait_text_is_read_once_per_load() {
     let root = fixture();
     write(
         root.path(),
-        "skills/reflect/SKILL.md",
-        "---\ndescription: Reflect.\n---\nReflect.",
-    );
-    write(
-        root.path(),
         "skills/one/SKILL.md",
         "---\ndescription: Shared.\n---\nSkill.",
     );
@@ -161,7 +156,7 @@ fn shared_skill_and_trait_text_is_read_once_per_load() {
     }
     team_definition(
         root.path(),
-        TEAM_STAGES,
+        &format!("{TEAM_STAGES}\nconsensus: [shared]"),
         "  - agent: worker\n    role: lead\n    owns: [Plan, Implement]\n  - agent: reviewer\n    role: judge\n    owns: [Review]",
         "Pipeline.",
     );
@@ -170,7 +165,10 @@ fn shared_skill_and_trait_text_is_read_once_per_load() {
         TEXT_READS.with(|reads| reads.borrow_mut().clear());
         let loaded = load_checked(root.path());
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        assert!(loaded.teams.0.contains_key("probe"));
+        assert!(matches!(
+            &loaded.teams.0["probe"].append_system_prompt_files[0],
+            PromptSource::Text { text: piece, .. } if piece == text
+        ));
         for (name, kind) in [("worker", "claude"), ("reviewer", "codex")] {
             let profile = &loaded.agent_profiles.0[name];
             assert_eq!(profile.agent, kind);
@@ -1298,6 +1296,7 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
     assert!(team.staged());
     assert!(team.scratch_files.is_none());
     assert!(team.consensus_file.is_none());
+    assert!(team.consensus.is_empty());
     assert_eq!(team.leader.as_deref(), Some("lead"));
     assert_eq!(team.owner_of("Review"), Some("judge"));
     assert_eq!(team.roles[0].flip_compact, None);
@@ -1315,7 +1314,7 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
                 .iter()
                 .map(SkillName::as_str)
                 .collect::<Vec<_>>(),
-            ["work", "reflect"]
+            ["work"]
         );
         assert_eq!(profile.subagents.as_ref().unwrap(), &["general"]);
         assert_eq!(texts(profile), ["Craft."]);
@@ -2049,9 +2048,9 @@ fn duplicate_agent_names_record_both_sources_in_one_namespace() {
 }
 
 #[test]
-fn team_skills_check_reflect_and_the_overridden_runtime() {
+fn team_skills_check_rimz_reflect_and_the_overridden_runtime() {
     let root = team_fixture();
-    for name in ["work", "reflect"] {
+    for name in ["work", "rimz-reflect"] {
         write(
             root.path(),
             &format!("skills/{name}/SKILL.md"),
@@ -2063,10 +2062,16 @@ fn team_skills_check_reflect_and_the_overridden_runtime() {
         "skills/work/agents/openai.yaml",
         "policy:\n  allow_implicit_invocation: false\n",
     );
+    definition(
+        root.path(),
+        "agents/plain.md",
+        "model: opus\ntools: [Bash]",
+        "Plain.",
+    );
     team_definition(
         root.path(),
-        TEAM_STAGES,
-        &format!("{TEAM_ROLES}\n    model: astra"),
+        &format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
+        &format!("{REFLECT_ROLES}\n    model: astra"),
         "Pipeline.",
     );
     let loaded = load_checked(root.path());
@@ -2080,16 +2085,218 @@ fn team_skills_check_reflect_and_the_overridden_runtime() {
     assert!(!loaded.agent_profiles.0.contains_key("probe.judge"));
     assert!(loaded.teams.0.is_empty());
     std::fs::remove_file(root.path().join("skills/work/agents/openai.yaml")).unwrap();
-    std::fs::remove_file(root.path().join("skills/reflect/SKILL.md")).unwrap();
+    std::fs::remove_file(root.path().join("skills/rimz-reflect/SKILL.md")).unwrap();
     let loaded = load_checked(root.path());
     assert_eq!(loaded.errors.len(), 2);
     assert!(
         loaded
             .errors
             .iter()
-            .all(|error| error.message.contains("reflect"))
+            .all(|error| error.message.contains("rimz-reflect"))
     );
     assert!(loaded.teams.0.is_empty());
+}
+
+const REFLECT_ROLES: &str = "  - agent: worker\n    role: lead\n    owns: [Plan, Implement]\n  - agent: plain\n    role: aide\n  - agent: worker\n    role: judge\n    owns: [Review, Reflect]";
+const REFLECT_STAGES: &str = "leader: lead\nstages: [Plan, Implement, Review, Reflect]";
+
+fn seat_skills(loaded: &LoadedDefinitions, seat: &str) -> Option<Vec<String>> {
+    loaded.agent_profiles.0[seat].skills.as_ref().map(|skills| {
+        skills
+            .iter()
+            .map(|skill| skill.as_str().to_owned())
+            .collect()
+    })
+}
+
+fn piece(origin: PathBuf, text: &str) -> PromptSource {
+    PromptSource::Text {
+        origin,
+        text: text.trim().to_owned(),
+    }
+}
+
+#[test]
+fn team_consensus_pieces_follow_the_consensus_in_list_order() {
+    let root = team_fixture();
+    definition(
+        root.path(),
+        "agents/plain.md",
+        "model: opus\ntools: [Bash]",
+        "Plain.",
+    );
+    write(root.path(), "traits/house.md", " House rules.\n");
+    team_definition(
+        root.path(),
+        &format!("{REFLECT_STAGES}\nconsensus: [reflect, house, reflect]"),
+        &format!("{REFLECT_ROLES}\n    skills: []"),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let team = &loaded.teams.0["probe"];
+    let body = piece(root.path().join("teams/probe.md"), "Pipeline.");
+    let house = piece(root.path().join("traits/house.md"), "House rules.");
+    assert_eq!(team.consensus, ["reflect", "house", "reflect"]);
+    assert_eq!(
+        team.append_system_prompt_files,
+        [
+            piece(
+                crate::harness::team_prompt::reflect_copy_path(root.path()),
+                crate::harness::team_prompt::SHIPPED_REFLECT
+            ),
+            house.clone(),
+            body.clone(),
+        ]
+    );
+    assert_eq!(
+        seat_skills(&loaded, "probe.lead").unwrap(),
+        ["work", "rimz-reflect"]
+    );
+    assert_eq!(seat_skills(&loaded, "probe.judge"), Some(Vec::new()));
+    assert_eq!(seat_skills(&loaded, "probe.aide"), None);
+
+    write(root.path(), "traits/reflect.md", "Home reflection.");
+    team_definition(
+        root.path(),
+        &format!("{TEAM_STAGES}\nconsensus: [reflect, house]"),
+        TEAM_ROLES,
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    assert_eq!(
+        loaded.teams.0["probe"].append_system_prompt_files,
+        [
+            piece(root.path().join("traits/reflect.md"), "Home reflection."),
+            house,
+            body,
+        ]
+    );
+    assert_eq!(seat_skills(&loaded, "probe.lead").unwrap(), ["work"]);
+}
+
+#[test]
+fn a_pack_reflect_trait_replaces_the_shipped_piece_below_a_home_one() {
+    let home = team_fixture();
+    let pack = linked_pack(home.path(), "crew");
+    write(pack.path(), "traits/reflect.md", "Pack reflection.");
+    team_definition(
+        home.path(),
+        &format!("{TEAM_STAGES}\nconsensus: [reflect]"),
+        TEAM_ROLES,
+        "Pipeline.",
+    );
+    let first =
+        |loaded: &LoadedDefinitions| loaded.teams.0["probe"].append_system_prompt_files[0].clone();
+    let loaded = clean(home.path());
+    let pack_trait = pack.path().join("traits/reflect.md");
+    assert_eq!(
+        first(&loaded).origin().canonicalize().unwrap(),
+        pack_trait.canonicalize().unwrap()
+    );
+    assert!(
+        matches!(first(&loaded), PromptSource::Text { text, .. } if text == "Pack reflection.")
+    );
+    assert_eq!(seat_skills(&loaded, "probe.lead").unwrap(), ["work"]);
+    write(home.path(), "traits/reflect.md", "Home reflection.");
+    let loaded = clean(home.path());
+    assert_eq!(
+        first(&loaded),
+        piece(home.path().join("traits/reflect.md"), "Home reflection.")
+    );
+}
+
+#[test]
+fn team_consensus_pieces_refuse_the_team_with_the_trait_wording() {
+    let root = team_fixture();
+    write(root.path(), "traits/loud.md", "Ask @ghost first.");
+    std::fs::write(root.path().join("traits/broken.md"), [0xff]).unwrap();
+    let refusal = |consensus: &str, stages: &str| {
+        team_definition(
+            root.path(),
+            &format!("{stages}\nconsensus: {consensus}"),
+            TEAM_ROLES,
+            "Pipeline.",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &root.path().join("config.toml"),
+            &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
+        );
+        assert!(!loaded.teams.0.contains_key("probe"));
+        assert_eq!(loaded.errors.len(), 1, "{:#?}", loaded.errors);
+        assert_eq!(loaded.errors[0].path, root.path().join("teams/probe.md"));
+        loaded.errors[0].message.clone()
+    };
+    assert_eq!(
+        refusal("[reflect]", TEAM_STAGES),
+        "team 'probe' lists the shipped `reflect` consensus piece but declares no `Reflect` \
+         stage; add a `Reflect` stage, or drop `reflect` from `consensus`"
+    );
+    assert_eq!(
+        refusal("[nope]", TEAM_STAGES),
+        format!(
+            "team 'probe' consensus: cannot read trait '{}': no such trait",
+            root.path().join("traits/nope.md").display()
+        )
+    );
+    assert_eq!(
+        refusal("['../house']", TEAM_STAGES),
+        "team 'probe' consensus: invalid trait name '../house'"
+    );
+    assert_eq!(
+        refusal("[broken]", TEAM_STAGES),
+        format!(
+            "team 'probe' consensus: cannot read trait '{}': stream did not contain valid UTF-8",
+            root.path().join("traits/broken.md").display()
+        )
+    );
+    assert_eq!(
+        refusal("[loud]", TEAM_STAGES),
+        "team 'probe' references undeclared handle '@ghost'"
+    );
+}
+
+#[test]
+fn a_conflicting_consensus_piece_claim_refuses_the_team() {
+    let home = team_fixture();
+    let packs = ["one", "two"].map(|name| {
+        let pack = linked_pack(home.path(), name);
+        write(pack.path(), "traits/reflect.md", name);
+        pack
+    });
+    team_definition(
+        home.path(),
+        &format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
+        "  - agent: worker\n    role: lead\n    owns: [Plan, Implement, Reflect]\n  - agent: worker\n    role: judge\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = load(
+        home.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &home.path().join("config.toml"),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    assert!(!loaded.teams.0.contains_key("probe"));
+    let conflict = loaded
+        .errors
+        .iter()
+        .find(|error| error.cause == DefinitionCause::PackProblem)
+        .unwrap();
+    let team = loaded
+        .errors
+        .iter()
+        .find(|error| error.path == home.path().join("teams/probe.md"))
+        .unwrap();
+    assert_eq!(
+        team.message,
+        format!("team 'probe' consensus: {}", conflict.message)
+    );
+    drop(packs);
 }
 
 #[test]
@@ -2263,8 +2470,20 @@ fn missing_trees_and_documentation_are_not_definitions() {
 fn the_published_consensus_copy_is_not_a_team_definition() {
     let root = team_fixture();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Team.");
-    let copy = crate::harness::team_prompt::consensus_copy_path(root.path());
-    crate::harness::team_prompt::publish_consensus_copy(root.path()).unwrap();
+    let copies = crate::harness::team_prompt::publish_consensus_copy(root.path()).unwrap();
+    assert_eq!(copies.len(), 2);
+    team_definition(
+        root.path(),
+        &format!("{REFLECT_STAGES}\nconsensus: [reflect]"),
+        REFLECT_ROLES,
+        "Team.",
+    );
+    definition(
+        root.path(),
+        "agents/plain.md",
+        "model: opus\ntools: [Bash]",
+        "Plain.",
+    );
     let loaded = clean(root.path());
     assert_eq!(
         loaded.teams.0.keys().collect::<Vec<_>>(),
@@ -2272,7 +2491,20 @@ fn the_published_consensus_copy_is_not_a_team_definition() {
         "{:#?}",
         loaded.rows
     );
-    assert!(!source_paths(root.path()).contains(&copy));
+    assert_eq!(
+        loaded.teams.0["probe"].append_system_prompt_files[0],
+        piece(
+            crate::harness::team_prompt::reflect_copy_path(root.path()),
+            crate::harness::team_prompt::SHIPPED_REFLECT
+        )
+    );
+    assert_eq!(
+        seat_skills(&loaded, "probe.lead").unwrap(),
+        ["work", "rimz-reflect"]
+    );
+    for copy in copies {
+        assert!(!source_paths(root.path()).contains(&copy));
+    }
 }
 
 #[test]

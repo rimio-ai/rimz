@@ -698,7 +698,8 @@ fn member_posture_rejects_undeliverable_team_layers() {
         actual,
         [
             Some(format!(
-                "team `forge` sets consensus-file or append-system-prompt-files but role \
+                "team `forge` sets consensus-file, consensus, or \
+                     append-system-prompt-files but role \
                      `planner` (claude) has no base system prompt to compose them onto; add \
                      system-prompt-file to role planner or its profile, or write {} with a \
                      nonempty body as the claude kind base \
@@ -708,14 +709,16 @@ fn member_posture_rejects_undeliverable_team_layers() {
                     .display()
             )),
             Some(
-                "team `forge` sets consensus-file or append-system-prompt-files but role \
+                "team `forge` sets consensus-file, consensus, or \
+                 append-system-prompt-files but role \
                  `planner` (claude) has no base system prompt to compose them onto; add \
                  system-prompt-file to role planner or its profile, or add system-prompt-file \
                  to profile `claude`, which replaces the claude kind base, or remove that profile"
                     .into()
             ),
             Some(
-                "team `forge` sets consensus-file or append-system-prompt-files but declares no \
+                "team `forge` sets consensus-file, consensus, or \
+                 append-system-prompt-files but declares no \
                  stages; add stages (or owns) or remove the team prompt fields"
                     .into()
             ),

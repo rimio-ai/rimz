@@ -564,11 +564,11 @@ pub enum LayoutErr {
     #[error("team `{team}` layout places role `{role}` more than once")]
     DuplicateRoleInLayout { team: String, role: String },
     #[error(
-        "team `{team}` sets consensus-file or append-system-prompt-files but declares no stages; add stages (or owns) or remove the team prompt fields"
+        "team `{team}` sets consensus-file, consensus, or append-system-prompt-files but declares no stages; add stages (or owns) or remove the team prompt fields"
     )]
     TeamPromptWithoutStages { team: String },
     #[error(
-        "team `{team}` sets consensus-file or append-system-prompt-files but role `{role}` ({kind}) has no base system prompt to compose them onto; add system-prompt-file to role {role} or its profile{kind_base_fix}",
+        "team `{team}` sets consensus-file, consensus, or append-system-prompt-files but role `{role}` ({kind}) has no base system prompt to compose them onto; add system-prompt-file to role {role} or its profile{kind_base_fix}",
         kind_base_fix = team_kind_base_fix(.kind, *.kind_base_shadowed)
     )]
     TeamPromptWithoutBase {

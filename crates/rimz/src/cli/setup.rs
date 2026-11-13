@@ -376,16 +376,21 @@ fn report_remote_template() -> Result<()> {
     Ok(())
 }
 
-/// Refresh the read-only copy of the built-in team consensus. It is generated
-/// output, not a setting or a definition, so setup rewrites it whenever the
-/// embedded text or the version header changed.
+/// Refresh the read-only copies of the built-in team consensus and the shipped
+/// `reflect` piece. They are generated output, not settings or definitions, so
+/// setup rewrites each whenever the embedded text or the version header changed.
 fn report_consensus_copy() -> Result<()> {
     let home = rimz::disk::paths::agents_home();
-    if let Some(path) = rimz::harness::team_prompt::publish_consensus_copy(&home)
+    for path in rimz::harness::team_prompt::publish_consensus_copy(&home)
         .context("publishing the team consensus copy")?
     {
+        let copied = if path == rimz::harness::team_prompt::consensus_copy_path(&home) {
+            "the built-in team consensus"
+        } else {
+            "the shipped `reflect` consensus piece"
+        };
         print_line(&format!(
-            "Wrote {} (read-only copy of the built-in team consensus)",
+            "Wrote {} (read-only copy of {copied})",
             path.display()
         ))?;
     }

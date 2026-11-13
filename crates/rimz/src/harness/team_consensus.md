@@ -15,7 +15,7 @@ Every turn has the same shape.
 2. Do the stage work your craft defines. Its product goes in your stage file.
 3. End the turn with a flip, a message, or a rest. A finished stage is a flip. A question, an answer, or a changed file a teammate builds on is a message. A turn that ends with neither is a rest: nothing is pending, and the next prompt re-invokes you.
 
-The flip is `rimz teams flip <Stage> "<note>"`, naming the stage that opens next by its exact name. The note says what is done; the reasoning stays in your stage file, because a judging stage reads the board before it judges and your account only after. The flip wakes that stage's owner at its next turn boundary. A flip to a stage you own wakes nobody: carry on into it in the same turn. The flip is the last call of the turn and runs alone, after every file write has returned.
+The flip is `rimz teams flip <Stage> "<note>"`, naming the stage that opens next by its exact name. The note says what is done; the reasoning stays in your stage file, because a judging stage reads the board before it judges and your account only after. The flip wakes that stage's owner at its next turn boundary. A flip to a stage you own wakes nobody: carry on into it in the same turn. `Done` closes the board and wakes nobody; a later flip reopens it. The flip is the last call of the turn and runs alone, after every file write has returned.
 
 ## Memory
 
@@ -54,12 +54,6 @@ The Stage line and the Progress records belong to `rimz teams flip`. Progress ho
 
 The pipeline says what the file must hold. Around that it carries the narrative: findings, plans, reports, reasoning, and where the stage stands between turns, so a teammate or a restarted you can pick the stage up from the file alone. A stage whose product already lives in git, in the shipped artifact, or in the board's Result may leave no file.
 
-### Reflection
-
-When you complete a stage, run Skill(reflect) on it and end the stage file with a terse `## Reflection`: each entry one fix and where it lands, and none for a smooth stage. A defect in your file that a later stage surfaces is your entry, written when you amend the file. An entry whose fix lives in the worktree goes to the building stage's owner while the run is still open, so it lands as a commit.
-
-Reflect is the last stage of every pipeline. Its owner runs Skill(reflect) in distill mode, writes `.rimz/team/reflect-notes.md` in the shape that skill gives, and flips to `Done`. `Done` closes the board and wakes nobody; a later flip reopens it.
-
 ## Speaking
 
 A message carries a question, an answer, or a pointer to a changed file someone builds on; the substance stays in the file. `plan amended at .rimz/team/plan-notes.md:40-58, re-read before step 3` is a whole message. Each one wakes its reader for a full turn, so send it when what you have changes something for the reader: as many rounds as the work needs, none for courtesy.
@@ -90,6 +84,6 @@ A crash, restart, or compaction can interrupt the team at any point. The state s
 
 ## Precedence
 
-An explicit pipeline rule (a reader barred from a file, an escalation reassigned) wins over these defaults, and these defaults win over the craft, which was written for a user in the loop. Inside the stage you own, the craft's solo constraints hold, widened by the shared files: a read-only craft writes the board and its stage file. A change to another repository or to the user's installed configuration is the user's to make, unless the request asks the team for it. Where the shipped change does not work without one, record the exact lines and the path they go in under the board's Result. Any other is an entry in your stage file's `## Reflection`.
+An explicit pipeline rule (a reader barred from a file, an escalation reassigned) wins over these defaults, and these defaults win over the craft, which was written for a user in the loop. Inside the stage you own, the craft's solo constraints hold, widened by the shared files: a read-only craft writes the board and its stage file. A change to another repository or to the user's installed configuration is the user's to make, unless the request asks the team for it. Where the shipped change does not work without one, record the exact lines and the path they go in under the board's Result. Any other is an entry in your stage file.
 
 The pipeline orders information, and a turn may run ahead of it when the work asks: pull the judge in early on a scary change, reopen the plan when an assumption breaks mid-build. Three things never bend: the user's single channel through the leader, the judge's independence, and a flip at every hand-off.

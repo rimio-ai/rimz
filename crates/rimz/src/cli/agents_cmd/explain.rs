@@ -461,9 +461,19 @@ impl<'a> ExplainReport<'a> {
                     .len(),
             })
         };
+        let agents_home = rimz::disk::paths::agents_home();
+        let reflect_copy = team_prompt::reflect_copy_path(&agents_home);
         let prompt_source = |source: &'a rimz::config::PromptSource| -> Result<PromptSource<'a>> {
             match source {
                 rimz::config::PromptSource::File(path) => file_source(path),
+                rimz::config::PromptSource::Text { origin, text } if *origin == reflect_copy => {
+                    Ok(PromptSource {
+                        path: None,
+                        builtin: Some("consensus piece reflect"),
+                        bytes: text.len() as u64,
+                        copy: Some(origin.clone()).filter(|path| path.is_file()),
+                    })
+                }
                 rimz::config::PromptSource::Text { origin, text } => Ok(PromptSource {
                     path: Some(origin),
                     builtin: None,
@@ -484,10 +494,8 @@ impl<'a> ExplainReport<'a> {
                     path: None,
                     builtin: Some("team consensus"),
                     bytes: BUILT_IN_CONSENSUS.len() as u64,
-                    copy: Some(team_prompt::consensus_copy_path(
-                        &rimz::disk::paths::agents_home(),
-                    ))
-                    .filter(|path| path.is_file()),
+                    copy: Some(team_prompt::consensus_copy_path(&agents_home))
+                        .filter(|path| path.is_file()),
                 },
                 Consensus::File(path) => file_source(path)?,
             });

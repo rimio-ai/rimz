@@ -64,6 +64,11 @@ fn template_defaults_deserialize_to_machine_defaults() {
     )
     .expect("template defaults parse");
 
+    // The trait claims keep the home they were loaded from.
+    let parsed = MachineConfig {
+        consensus_pieces: Default::default(),
+        ..parsed
+    };
     assert_eq!(
         parsed,
         template_comparison_defaults(MachineConfig::default())
