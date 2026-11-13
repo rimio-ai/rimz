@@ -1,8 +1,9 @@
 //! Layer 2 — palette resolution: the scheme's raw tones (Layer 1) derived
 //! into the depth-resolved semantic slots the renderer paints, plus the
-//! heat/calm ramps and the derived expense, fast-mode, and expired-cache
-//! tones. Component tokens (Layer 3) and the Theme facade read these slots;
-//! this is the one place depth quantization and slot overrides are applied.
+//! heat/calm ramps and the derived expense, fast-mode, expired-cache, and
+//! exhausted-budget tones. Component tokens (Layer 3) and the Theme facade
+//! read these slots; this is the one place depth quantization and slot
+//! overrides are applied.
 
 use crate::agents::context::PaceReading;
 use crate::config::{
@@ -46,6 +47,10 @@ const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 /// cache, not the full bar's live red.
 const CACHE_EXPIRED_GREY: f32 = 0.5;
 
+/// Pull `alarm` about a third toward the background: an empty strip tinted
+/// red for a fully spent budget bar, clearly quieter than a red fill.
+const BUDGET_EXHAUSTED_DIM: f32 = 0.35;
+
 /// Step the fast-mode amber away from the background to separate it from `warn`.
 /// `LIGHTNESS_STEP` is the first step; the shared readability floor then checks
 /// the emitted color, truecolor or indexed cell, against the background.
@@ -72,6 +77,9 @@ pub struct Palette {
     /// The context meter's fixed expired-cache tone, also worn by its age clock
     /// and the stale line's age; derived, not a tunable slot.
     pub(crate) cache_expired: Tone,
+    /// The pixel budget bar's fully spent strip, `alarm` dimmed toward the
+    /// background; derived, not a tunable slot.
+    pub(crate) budget_exhausted: Tone,
     pub(crate) accent: Tone,
     /// The fast-mode bolt's amber, derived from `warn` and kept readable against
     /// the scheme background at the emitted depth; not a tunable slot.
@@ -171,6 +179,10 @@ impl Palette {
             alarm: slot(theme.alarm, tones.alarm),
             expense,
             cache_expired,
+            budget_exhausted: rgb_color(
+                oklab::blend(heat_ramp[3], raw.background, BUDGET_EXHAUSTED_DIM),
+                depth,
+            ),
             accent: slot(theme.accent, tones.accent),
             fast_mode: readable_rgb(fast_mode, depth, raw.background),
             cool: slot(theme.cool, tones.cool),
@@ -1022,6 +1034,29 @@ mod tests {
             };
             assert_eq!(palette.budget_tone(30, &misordered), stop(1.0));
             assert_ne!(palette.budget_tone(50, &misordered), stop(1.0));
+        }
+    }
+
+    #[test]
+    fn budget_exhausted_blends_alarm_toward_the_background_and_follows_alarm() {
+        const ALARM: (u8, u8, u8) = (0xd7, 0x00, 0x00);
+        let overridden = ThemeConfig {
+            alarm: Some(ThemeColor::Rgb(ALARM.0, ALARM.1, ALARM.2)),
+            ..ThemeConfig::default()
+        };
+        let raw = raw_palette_for_theme(&ThemeConfig::default());
+        let scheme = raw.derive_tones();
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            for (theme, alarm) in [
+                (ThemeConfig::default(), scheme.alarm),
+                (overridden.clone(), ALARM),
+            ] {
+                assert_eq!(
+                    Palette::resolve(&theme, depth).budget_exhausted,
+                    rgb_color(oklab::blend(alarm, raw.background, 0.35), depth),
+                    "alarm {alarm:?} at {depth:?}"
+                );
+            }
         }
     }
 

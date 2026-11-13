@@ -1,14 +1,17 @@
 //! The provider budget bar's raster: the `▰▱` text bar drawn as one continuous
 //! slanted bar, cut at the exact percent.
 //!
-//! The geometry is Cascadia Code's `▰`/`▱` outline in font units, a cell 1200
-//! wide and 2380 tall with its baseline 1900 below the top, so the image the
+//! The geometry is Cascadia Code's `▰` outline in font units, a cell 1200 wide
+//! and 2380 tall with its baseline 1900 below the top, so the image the
 //! terminal stretches over the bar's cells keeps the glyph's height and lean.
+//! The spent part is a solid strip inset from the bar's top and bottom, so it
+//! reads quieter than the budget left.
 
 use super::super::RgbaImage;
 
-/// Raster pixels per cell. Fine enough that the hollow walls are about three
-/// pixels and the lean several; coverage sampling smooths the slanted edges.
+/// Raster pixels per cell. Fine enough that the strip's inset is about a
+/// pixel and a half and the lean several; coverage sampling smooths the
+/// slanted edges.
 const CELL_W: u32 = 24;
 const CELL_H: u32 = 48;
 const SAMPLES: u32 = 4;
@@ -20,12 +23,9 @@ const ASCENT: f64 = 1900.0;
 const BAR_BOTTOM: f64 = 410.0;
 const BAR_TOP: f64 = 1010.0;
 const LEAN: f64 = 170.0 / 600.0;
-/// The `▱` hollow: its band, its left edge at the band's bottom, and its right
-/// edge's inset from the bar's bottom-right corner there.
-const HOLLOW_BOTTOM: f64 = 560.0;
-const HOLLOW_TOP: f64 = 860.0;
-const HOLLOW_LEFT: f64 = 198.0;
-const HOLLOW_RIGHT_INSET: f64 = 113.0;
+/// How far the spent strip sits in from the bar's top and bottom, leaving it
+/// three quarters of the bar's height.
+const TRACK_INSET: f64 = 75.0;
 /// A tick's vertical reach, its ink half-width, and the half-width of the gap
 /// it clears through the bar beneath it.
 const TICK_BOTTOM: f64 = 50.0;
@@ -41,7 +41,7 @@ pub(in crate::sidebar_pane) struct BudgetRaster {
     pub(in crate::sidebar_pane) width_cells: u16,
     remaining: u8,
     fill: [u8; 3],
-    outline: [u8; 3],
+    track: [u8; 3],
     ticks: Vec<BudgetTick>,
 }
 
@@ -55,10 +55,10 @@ pub(in crate::sidebar_pane) struct BudgetTick {
 }
 
 impl BudgetRaster {
-    /// A bar with `remaining` percent left in `fill` and the spent outline in
-    /// `spent`; `None` is an unknown reading, the whole outline in `spent`. A
-    /// spent bar is the whole outline in `fill` with no ticks, and a full bar
-    /// has no outline left to show. Colors and ticks the bar cannot show stay
+    /// A bar with `remaining` percent left in `fill` and the spent strip in
+    /// `spent`; `None` is an unknown reading, the whole strip in `spent`. A
+    /// spent bar is the whole strip in `fill` with no ticks, and a full bar
+    /// has no strip left to show. Colors and ticks the bar cannot show stay
     /// out of the key, so equal pixels share one image.
     pub(in crate::sidebar_pane) fn new(
         width_cells: u16,
@@ -67,7 +67,7 @@ impl BudgetRaster {
         spent: [u8; 3],
         mut ticks: Vec<BudgetTick>,
     ) -> Self {
-        let (remaining, fill, outline) = match remaining.map(|pct| pct.min(100)) {
+        let (remaining, fill, track) = match remaining.map(|pct| pct.min(100)) {
             None => (0, [0; 3], spent),
             Some(0) => (0, [0; 3], fill),
             Some(100) => (100, fill, [0; 3]),
@@ -82,7 +82,7 @@ impl BudgetRaster {
             width_cells,
             remaining,
             fill,
-            outline,
+            track,
             ticks,
         }
     }
@@ -162,11 +162,9 @@ fn sample(raster: &BudgetRaster, end: f64, x: f64, y: f64) -> Option<[u8; 3]> {
     if raster.remaining > 0 && x <= cut + lean {
         return Some(raster.fill);
     }
-    let hollow_lean = (y - HOLLOW_BOTTOM) * LEAN;
-    let hollow = (HOLLOW_BOTTOM..=HOLLOW_TOP).contains(&y)
-        && x > HOLLOW_LEFT + hollow_lean
-        && x < end - HOLLOW_RIGHT_INSET + hollow_lean;
-    (!hollow).then_some(raster.outline)
+    (BAR_BOTTOM + TRACK_INSET..=BAR_TOP - TRACK_INSET)
+        .contains(&y)
+        .then_some(raster.track)
 }
 
 fn tick_hit(tick: &BudgetTick, end: f64, x: f64, y: f64) -> TickHit {
@@ -198,7 +196,7 @@ mod tests {
     const SPENT: [u8; 3] = [70, 70, 80];
     const SUB_CAP: [u8; 3] = [210, 180, 20];
     const CEILING: [u8; 3] = [20, 120, 230];
-    /// The pixel row through the hollow's middle.
+    /// The pixel row through the bar's middle.
     const MID_ROW: u32 = 24;
 
     fn bar(remaining: Option<u8>, ticks: Vec<BudgetTick>) -> BudgetRaster {
@@ -268,36 +266,70 @@ mod tests {
         assert_eq!(
             opaque_colors(&spent),
             [FILL].into(),
-            "a spent outline wears the fill"
+            "a spent strip wears the fill"
         );
         assert_eq!(
-            spent.pixel(spent.width / 2, MID_ROW)[3],
-            0,
-            "and stays hollow"
+            spent.pixel(spent.width / 2, MID_ROW),
+            [FILL[0], FILL[1], FILL[2], 255],
+            "and is solid"
         );
-        assert!(!solid(&spent, MID_ROW, FILL).is_empty(), "its walls show");
 
         let full = rasterize(&bar(Some(100), Vec::new()));
         let row = solid(&full, MID_ROW, FILL);
         let (first, last) = (row[0], *row.last().unwrap());
-        assert_eq!(
-            row.len() as u32,
-            last - first + 1,
-            "a full bar has no hollow"
-        );
+        assert_eq!(row.len() as u32, last - first + 1, "a full bar is solid");
         assert_eq!(opaque_colors(&full), [FILL].into());
 
         let unknown = rasterize(&bar(None, Vec::new()));
         assert_eq!(
             opaque_colors(&unknown),
             [SPENT].into(),
-            "unknown is outline only"
+            "unknown is the strip only"
         );
-        assert_eq!(unknown.pixel(unknown.width / 2, MID_ROW)[3], 0);
+        assert_eq!(
+            unknown.pixel(unknown.width / 2, MID_ROW),
+            [SPENT[0], SPENT[1], SPENT[2], 255]
+        );
 
         let ticks = vec![tick(false, 40, SUB_CAP), tick(true, 60, CEILING)];
         assert_eq!(bar(Some(0), ticks.clone()), bar(Some(0), Vec::new()));
         assert_eq!(bar(None, ticks), bar(None, Vec::new()));
+    }
+
+    #[test]
+    fn the_spent_strip_is_solid_and_inset_from_the_fills_height() {
+        let image = rasterize(&bar(Some(50), Vec::new()));
+        assert_eq!(
+            image.pixel(image.width * 3 / 4, MID_ROW),
+            [SPENT[0], SPENT[1], SPENT[2], 255],
+            "the strip is solid past the cut"
+        );
+        let row_bounds = |row: u32| {
+            let top = ASCENT - f64::from(row) * UNITS_H / f64::from(CELL_H);
+            (top - UNITS_H / f64::from(CELL_H), top)
+        };
+        let inset_rows = (0..CELL_H)
+            .filter(|row| {
+                let (bottom, top) = row_bounds(*row);
+                (bottom >= BAR_BOTTOM && top <= BAR_BOTTOM + TRACK_INSET)
+                    || (bottom >= BAR_TOP - TRACK_INSET && top <= BAR_TOP)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(inset_rows.len(), 2, "one row inside each band");
+        for row in inset_rows {
+            assert!(!solid(&image, row, FILL).is_empty(), "row {row}: the fill");
+            assert!(solid(&image, row, SPENT).is_empty(), "row {row}: no strip");
+            assert_eq!(image.pixel(image.width * 3 / 4, row)[3], 0, "row {row}");
+        }
+    }
+
+    #[test]
+    fn a_spent_bar_and_a_nearly_spent_bar_take_their_own_images() {
+        let mut pixels = super::super::MeterPixels::new(0x120000);
+        pixels.begin_frame();
+        let spent = pixels.intern(bar(Some(0), Vec::new())).unwrap();
+        let nearly = pixels.intern(bar(Some(3), Vec::new())).unwrap();
+        assert_ne!(spent, nearly);
     }
 
     #[test]

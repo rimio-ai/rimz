@@ -158,7 +158,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 
 | mark | meaning |
 |------|---------|
-| `▰▰▰▱▱` | budget bar: the filled part is the budget left, the quieter track the share spent; where pixels paint, one slanted bar in the same cells, its spent part a hollow outline ([budget bars](#budget-bars)) |
+| `▰▰▰▱▱` | budget bar: the filled part is the budget left, the quieter track the share spent; where pixels paint, one slanted bar in the same cells, its spent part a thinner solid strip ([budget bars](#budget-bars)) |
 | `╱` | a model's own sub-cap, as a tick on its parent window's bar |
 | `╎` | a tighter longer window's allowance, measured on this bar's scale |
 | `5h` `7d` `mo` | an included budget window, labeled by its length (`mo` covers 28 to 31 days) |
@@ -867,7 +867,7 @@ Stacked blocks (`provider_tabs = "never"`):
 
 A bar's filled part is the budget left, and the spent part is drawn one step quieter than the labels beside it so the budget left leads. Every bar starts and ends on the same columns, so the rows compare at a glance.
 
-Where the context meter paints in pixels ([theming: display](../guide/theme.md#display)), each bar is one continuous slanted pixel bar in the cells of its `▰▱` text bar: the budget left solid, the spent part a hollow outline in the quieter tone, and the cut between them at the reading's whole percent, so a few percent spent is visible on a full bar. A spent bar is the whole outline in red, an unknown reading the whole outline in the quieter tone, and a full or `∞` bar solid. A model's `╱` tick is a slanted line at its exact percent and a `╎` ceiling a dashed upright mark, each in its text tick's color and drawn even where the text bar would let one cell hide the other. A bar the pixel path cannot match keeps the text bar in the same cells: a theme that overrides a mana glyph, a terminal without truecolor or `NO_COLOR`, and a frame with no free image id.
+Where the context meter paints in pixels ([theming: display](../guide/theme.md#display)), each bar is one continuous slanted pixel bar in the cells of its `▰▱` text bar: the budget left solid, the spent part a solid strip three quarters of the bar's height in the quieter tone, and the cut between them at the reading's whole percent, where the strip meets the fill's slanted edge, so a few percent spent is visible on a full bar. A spent bar is the whole strip in a dimmed red, quieter than a red fill, an unknown reading the whole strip in the quieter tone, and a full or `∞` bar solid. The text bar keeps its red `▱` track at 0 left. A model's `╱` tick is a slanted line at its exact percent and a `╎` ceiling a dashed upright mark, each in its text tick's color and drawn even where the text bar would let one cell hide the other. A bar the pixel path cannot match keeps the text bar in the same cells: a theme that overrides a mana glyph, a terminal without truecolor or `NO_COLOR`, and a frame with no free image id.
 
 A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. An API-billed login never shows this alarm. The header uses the account's valid display label or its name (here `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
 

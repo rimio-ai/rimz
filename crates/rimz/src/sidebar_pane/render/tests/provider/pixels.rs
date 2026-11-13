@@ -1,6 +1,8 @@
 use super::*;
 use crate::sidebar_pane::pixel::meter::{MeterPixels, MeterRaster};
+use crate::sidebar_pane::render::labels::mana_style;
 use crate::sidebar_pane::render::layout::{spans_width, text_width};
+use crate::sidebar_pane::render::theme::Component;
 
 /// The columns of a line's text bar cells and of its image placeholders.
 fn bar_cells(line: &Line<'_>) -> (Vec<usize>, Vec<(usize, u32)>) {
@@ -191,4 +193,49 @@ fn budget_bars_keep_the_text_bar_where_pixels_cannot_match_it() {
         "a full id table keeps the text bar"
     );
     assert_eq!(line_texts(&lines), line_texts(&text));
+}
+
+#[test]
+fn a_spent_pixel_bar_wears_the_exhausted_tone_while_its_text_bar_stays_alarm() {
+    use crate::sidebar_pane::pixel::meter::{BudgetRaster, MeterImage};
+    let theme = truecolor_sidebar_theme();
+    let panel = provider_panel("claude", "Claude", 173, true, false, Some((100, 40)));
+    let dashboard = Dashboard::stacked(&theme, std::slice::from_ref(&panel)).width(40);
+    let mut pixels = MeterPixels::new(0x120000);
+    pixels.begin_frame();
+    let drawn = dashboard.block_with(Some(&mut pixels)).lines;
+    pixels.observe_visible(&drawn);
+    let exhausted = theme
+        .pixel_rgb(theme.component(Component::BudgetExhausted))
+        .expect("a truecolor tone");
+    let alarm = theme
+        .pixel_rgb(mana_style(&theme, 0, &Default::default()).fg.unwrap())
+        .unwrap();
+    assert_ne!(exhausted, alarm);
+    let spent_bars = pixels
+        .visible_images()
+        .filter_map(|(_, image)| match image {
+            MeterImage::Budget(raster) => Some(raster),
+            MeterImage::Context(_) => None,
+        })
+        .filter(|raster| {
+            **raster
+                == BudgetRaster::new(raster.width_cells, Some(0), exhausted, [0; 3], Vec::new())
+        })
+        .count();
+    assert_eq!(
+        spent_bars, 1,
+        "the spent 5h bar is keyed on the exhausted tone"
+    );
+
+    let alarm_fg = mana_style(&theme, 0, &Default::default()).fg;
+    let track = dashboard
+        .lines()
+        .iter()
+        .flat_map(|line| line.spans.clone())
+        .find(|span| span.content.contains('▱') && span.style.fg == alarm_fg);
+    assert!(
+        track.is_some(),
+        "the text bar at 0 left keeps its alarm track"
+    );
 }
