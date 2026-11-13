@@ -213,6 +213,8 @@ fn ended_keys<'a>(
 /// liveness — see `docs/internals/agents/model.md`); a known owner that is known-dead
 /// suppresses the stale overlay. A launched child's liveness follows its visible
 /// parent, matching a native child whose runtime owner is the parent's process.
+/// The same rule as `sidebar::produce::hosting::runtime_visible`: a change to one is made in
+/// both.
 fn agent_is_runtime_visible(agent: &AgentState) -> bool {
     agent.ended_at.is_none() && agent.runtime_owner.as_ref().is_none_or(owner_is_live)
 }
