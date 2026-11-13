@@ -156,6 +156,9 @@ pub(crate) enum Component {
     /// The context meter's expired prompt-cache fill: greyed `alarm`, red
     /// enough to read as lost without looking like the full bar.
     CacheExpired,
+    /// A fully spent provider budget bar's pixel strip: `alarm` dimmed toward
+    /// the background, quieter than a red fill. The text bar keeps `alarm`.
+    BudgetExhausted,
     /// The compacted-context empty track while its size is unknown.
     ContextCompacted,
     /// The native-compaction wall and its matching identity-line point label.
@@ -247,6 +250,7 @@ impl Component {
         Component::WindowHuge,
         Component::BudgetSpent,
         Component::CacheExpired,
+        Component::BudgetExhausted,
         Component::ContextCompacted,
         Component::CompactionPoint,
         Component::FastMode,
@@ -289,6 +293,7 @@ impl Component {
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
+            BudgetExhausted => palette.budget_exhausted,
             FastMode => palette.fast_mode(),
             WorktreeQualifier | WorktreeBranchName | WorktreeMerged | InactiveChip
             | WindowMedium | RemoteControlOff | ContextCompacted | WorkflowVisits

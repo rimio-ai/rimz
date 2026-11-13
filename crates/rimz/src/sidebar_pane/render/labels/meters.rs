@@ -632,7 +632,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
 /// the account reading is older than the longest reset. Paint a plain empty
 /// track in the spent tone, distinct from a full green bar and from the
 /// fully-spent red track. This is the text track; [`budget_bar_spans`] draws
-/// its pixel twin, the whole outline in the same tone, when it can.
+/// its pixel twin, the whole strip in the same tone, when it can.
 pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
     theme: &Theme,
     width: usize,
@@ -676,9 +676,10 @@ pub(in crate::sidebar_pane::render) fn budget_bar_spans(
 }
 
 /// One continuous slanted bar over the text bar's cells, cut at the exact
-/// percent, with each tick at its own percent. `None` keeps the text bar: a
-/// user's own mana glyph (the pixels would swap against it), a tone without a
-/// truecolor value, a width past the placeholder limit, or a full id table.
+/// percent, with each tick at its own percent; a spent bar is the strip in
+/// [`Component::BudgetExhausted`]. `None` keeps the text bar: a user's own
+/// mana glyph (the pixels would swap against it), a tone without a truecolor
+/// value, a width past the placeholder limit, or a full id table.
 fn pixel_budget_bar_spans(
     theme: &Theme,
     remaining_pct: Option<u8>,
@@ -696,7 +697,10 @@ fn pixel_budget_bar_spans(
         return None;
     }
     let tone = |remaining_pct| theme.pixel_rgb(mana_style(theme, remaining_pct, zones).fg?);
-    let fill = tone(remaining_pct.unwrap_or(0))?;
+    let fill = match remaining_pct {
+        Some(0) => theme.pixel_rgb(theme.component(Component::BudgetExhausted))?,
+        _ => tone(remaining_pct.unwrap_or(0))?,
+    };
     let spent = theme.pixel_rgb(theme.component(Component::BudgetSpent))?;
     let ticks = ticks
         .iter()
