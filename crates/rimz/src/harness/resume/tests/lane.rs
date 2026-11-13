@@ -683,6 +683,51 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
     );
 }
 
+#[test]
+fn a_split_pane_pins_the_lanes_pin_name_and_prints_its_routing_name() {
+    use crate::ids::{Lane, LaneHome};
+    for (home, path, scope, pin) in [
+        (LaneHome::Foreign, "/elsewhere/other", "#other", None),
+        (
+            LaneHome::Worktree,
+            "/repo-worktrees/feat",
+            "#feat",
+            Some("feat"),
+        ),
+        (LaneHome::Trunk, "/repo", "#main", None),
+    ] {
+        let agents = [
+            agent_on_pane("claude", "live", path, 1, "live-pane"),
+            agent_on_pane("codex", "closed", path, 2, "closed-pane"),
+        ]
+        .map(|mut agent| {
+            agent.lane = Some(Lane::own(home, path));
+            agent.project_lane();
+            agent
+        });
+        let action = LaneCase::new(LaneResumeSelector::Scope(scope.into()), &agents)
+            .liveness(|agent| {
+                if agent.agent_id.as_str() == "live" {
+                    AgentLiveness::Live { pid: 7 }
+                } else {
+                    AgentLiveness::Dead
+                }
+            })
+            .run()
+            .unwrap();
+        let LaneResumeAction::SplitClosed {
+            lane_label,
+            channel,
+            ..
+        } = action
+        else {
+            panic!("{scope}: expected partial split");
+        };
+        assert_eq!(channel.as_ref().map(LaneName::as_str), pin, "{scope}");
+        assert_eq!(lane_label, scope);
+    }
+}
+
 fn split_team_restore(root: &Path) -> LaneRestoreConfig {
     let (mut teams, profiles, commands) = team_configs();
     let team = teams.0.get_mut("forge").unwrap();

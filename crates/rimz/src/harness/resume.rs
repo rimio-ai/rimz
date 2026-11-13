@@ -240,6 +240,7 @@ pub enum LaneResumeAction {
     SplitClosed {
         lane_label: String,
         cwd: PathBuf,
+        /// The pin the split panes carry: the lane's [`crate::ids::Lane::pin_name`].
         channel: Option<LaneName>,
         target_pane_id: PaneId,
         commands: Vec<crate::mux::PaneCmd>,
@@ -1686,10 +1687,14 @@ fn plan_live_lane_split(
 ) -> Result<LaneResumeAction, LaneResumeError> {
     // Handles disambiguate against the whole lane, live and closed alike.
     let peers = live.iter().chain(closed.iter()).collect::<Vec<_>>();
-    let channel = lane
+    let routing = lane
         .channel
         .clone()
         .or_else(|| closed.first().and_then(AgentState::lane_name));
+    let channel = closed
+        .first()
+        .and_then(|agent| agent.lane.as_ref())
+        .and_then(crate::ids::Lane::pin_name);
     let candidates = closed
         .iter()
         .filter_map(|agent| {
@@ -1706,7 +1711,7 @@ fn plan_live_lane_split(
         Some(SplitMemberRestore {
             restore,
             peers: &peers,
-            label: channel_label(channel.as_ref().map(LaneName::as_str), &lane.path),
+            label: channel_label(routing.as_ref().map(LaneName::as_str), &lane.path),
         }),
     )
     .0
