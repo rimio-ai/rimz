@@ -7,10 +7,14 @@
 use crate::policy::{self, PaneFields};
 
 mod keymap;
-pub use keymap::Keymap;
+pub use keymap::{Direction, Guard, GuardedAction, Keymap};
 
 /// Keybind payloads index the complete command vectors supplied by the host.
 pub const KEY_PIPE: &str = "rimz:key";
+
+/// A keybind's guarded split, close, or swap, decided against the pressing
+/// client's focused pane; the payload is the step `Keymap::guard` decodes.
+pub const GUARD_PIPE: &str = "rimz:guard";
 
 /// Pipe message name for opening the host-side palette with this client's focus.
 pub const PALETTE_PIPE: &str = "rimz:palette";
@@ -409,6 +413,14 @@ fn push_session(ctx: &WakeContext<'_>, argv: &mut Vec<String>) -> Option<()> {
     Some(())
 }
 
+/// A pane as the normalized id a `rimz` argument takes.
+pub(crate) fn pane_id_arg(pane: policy::ClientPaneId) -> String {
+    match pane {
+        policy::ClientPaneId::Terminal(id) => format!("zellij:terminal_{id}"),
+        policy::ClientPaneId::Plugin(id) => format!("zellij:plugin_{id}"),
+    }
+}
+
 pub fn palette_argv(
     ctx: &WakeContext<'_>,
     mode: &str,
@@ -422,11 +434,7 @@ pub fn palette_argv(
         mode.to_owned(),
     ];
     if let Some(pane) = pane {
-        let pane = match pane {
-            policy::ClientPaneId::Terminal(id) => format!("zellij:terminal_{id}"),
-            policy::ClientPaneId::Plugin(id) => format!("zellij:plugin_{id}"),
-        };
-        argv.extend(["--from-pane".to_owned(), pane]);
+        argv.extend(["--from-pane".to_owned(), pane_id_arg(pane)]);
     }
     push_session(ctx, &mut argv);
     argv.extend(["--mux".to_owned(), "zellij".to_owned()]);

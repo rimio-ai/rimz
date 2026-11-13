@@ -50,6 +50,12 @@ pub enum Effect {
     ListClients,
     /// Toggle fullscreen for the host-selected pane id.
     TogglePaneFullscreen(ProjectedPaneId),
+    /// Close this pane by id, for this replica's client.
+    ClosePane(ProjectedPaneId),
+    /// Move this client's focused pane, as the native `MovePane`.
+    MovePane(wire::Direction),
+    /// Split this client's focused pane, as the native `NewPane`.
+    SplitPane(wire::Direction),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -950,6 +956,83 @@ impl Engine {
         vec![Effect::RunKeyCommand {
             argv: wire::palette_argv(&self.wake_context(), mode, focus),
         }]
+    }
+
+    /// A guarded key (`rimz:guard`) pressed by this replica's client, with the
+    /// pane Zellij reports that client focusing.
+    pub fn on_guard_pipe(
+        &mut self,
+        payload: Option<&str>,
+        focus: Option<ProjectedPaneId>,
+    ) -> Vec<Effect> {
+        // Like `on_key_pipe`, this reaches the pressing client's replica alone,
+        // so topology muting must not silence it. A press with no focused pane
+        // does nothing, and so does a close on a pane this replica cannot place
+        // (no manifest yet, or no sidebar named): close on the sidebar would be
+        // destructive. Split and swap there keep the native action.
+        let (Some(keymap), Some(focus)) = (self.config.keymap.as_ref(), focus) else {
+            return Vec::new();
+        };
+        let Some(guard) = keymap.guard(payload).filter(|_| self.granted) else {
+            return Vec::new();
+        };
+        let is_sidebar = |pane: &PaneFields| {
+            !pane.is_plugin && !pane.is_floating && keymap.sidebar.as_ref() == Some(&pane.title)
+        };
+        let focused = self
+            .room
+            .panes
+            .get(&PaneKey::from(focus))
+            .and_then(|state| state.manifest.as_ref());
+        if focused.is_some_and(is_sidebar) {
+            let rimz_bin = self.config.rimz_bin.as_deref();
+            return guard
+                .run
+                .and_then(|index| keymap.command(index, rimz_bin))
+                .map(|mut argv| {
+                    argv.extend(["--from-pane".to_owned(), wire::pane_id_arg(focus)]);
+                    Effect::RunKeyCommand { argv }
+                })
+                .into_iter()
+                .collect();
+        }
+        match guard.action {
+            wire::GuardedAction::Close if focused.is_none() || keymap.sidebar.is_none() => {
+                Vec::new()
+            }
+            wire::GuardedAction::Close => vec![Effect::ClosePane(focus)],
+            wire::GuardedAction::Split(direction) => vec![Effect::SplitPane(direction)],
+            wire::GuardedAction::Move(wire::Direction::Left)
+                if focused.is_some_and(|focused| {
+                    !focused.is_floating && self.sidebar_meets_left_edge(focused, is_sidebar)
+                }) =>
+            {
+                Vec::new()
+            }
+            wire::GuardedAction::Move(direction) => vec![Effect::MovePane(direction)],
+        }
+    }
+
+    /// Zellij's `MovePane Left` partner is the pane whose right edge meets the
+    /// focused pane's left edge, with no wrap-around; the sidebar docks at the
+    /// left edge at full height, so only `Left` can reach it.
+    fn sidebar_meets_left_edge(
+        &self,
+        focused: &PaneFields,
+        is_sidebar: impl Fn(&PaneFields) -> bool,
+    ) -> bool {
+        self.room
+            .panes
+            .values()
+            .filter_map(|state| state.manifest.as_ref())
+            .filter(|pane| pane.tab_position == focused.tab_position && is_sidebar(pane))
+            .any(|sidebar| {
+                sidebar
+                    .pane_x
+                    .zip(sidebar.pane_columns)
+                    .map(|(x, columns)| x + columns)
+                    == focused.pane_x
+            })
     }
 
     pub fn on_toggle_fullscreen_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {

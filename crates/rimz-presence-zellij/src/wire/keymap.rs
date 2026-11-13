@@ -9,6 +9,34 @@ pub struct Keymap {
     pub report_modes: bool,
     commands: Vec<Vec<String>>,
     modes: Vec<Value>,
+    /// The sidebar pane's title, which a guarded step tests the pressed pane against.
+    #[serde(default)]
+    pub sidebar: Option<String>,
+}
+
+/// A pane direction a guarded step names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// The native action a guarded step performs when the pressed pane allows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardedAction {
+    Close,
+    Move(Direction),
+    Split(Direction),
+}
+
+/// A decoded `rimz:guard` payload: the action, and the command to run instead
+/// when the key was pressed on the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Guard {
+    pub action: GuardedAction,
+    pub run: Option<usize>,
 }
 
 impl Keymap {
@@ -60,12 +88,47 @@ impl Keymap {
         format!("keybinds {{\n{modes}}}\n")
     }
 
+    /// Decodes a `rimz:guard` payload that this keymap's KDL renders.
+    pub fn guard(&self, payload: Option<&str>) -> Option<Guard> {
+        let words: Vec<String> = payload?.split(' ').map(str::to_owned).collect();
+        let (action, run) = match words.last()?.parse::<usize>() {
+            Ok(index) => (&words[..words.len() - 1], Some(index)),
+            Err(_) => (&words[..], None),
+        };
+        self.decode_guard(action, run)
+    }
+
+    fn decode_guard(&self, action: &[String], run: Option<usize>) -> Option<Guard> {
+        if run.is_some_and(|index| self.commands.get(index).is_none()) {
+            return None;
+        }
+        let direction = |word: &str| match word {
+            "Left" => Some(Direction::Left),
+            "Right" => Some(Direction::Right),
+            "Up" => Some(Direction::Up),
+            "Down" => Some(Direction::Down),
+            _ => None,
+        };
+        let action = match action {
+            [name] if name == "CloseFocus" => GuardedAction::Close,
+            [name, arg] if name == "MovePane" => GuardedAction::Move(direction(arg)?),
+            [name, arg] if name == "NewPane" && matches!(arg.as_str(), "Right" | "Down") => {
+                GuardedAction::Split(direction(arg)?)
+            }
+            _ => return None,
+        };
+        Some(Guard { action, run })
+    }
+
     pub(crate) fn command_argv(
         &self,
         payload: Option<&str>,
         rimz_bin: Option<&str>,
     ) -> Option<Vec<String>> {
-        let index = payload?.parse::<usize>().ok()?;
+        self.command(payload?.parse::<usize>().ok()?, rimz_bin)
+    }
+
+    pub(crate) fn command(&self, index: usize, rimz_bin: Option<&str>) -> Option<Vec<String>> {
         let args = self.commands.get(index)?;
         Some(
             std::iter::once(rimz_bin.unwrap_or("rimz").to_owned())
@@ -92,6 +155,20 @@ impl Keymap {
                 Some(format!("SwitchToMode {};", kdl_string(mode)))
             }
             Step::Action(args) => action_kdl(args),
+            Step::Guard(guard) => {
+                self.decode_guard(&guard.action, guard.run)?;
+                let payload = guard
+                    .action
+                    .iter()
+                    .cloned()
+                    .chain(guard.run.map(|index| index.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Some(format!(
+                    "MessagePluginId {plugin_id} {{ name \"rimz:guard\"; payload {}; }}",
+                    kdl_string(&payload)
+                ))
+            }
             Step::Float(index) => {
                 let args = self.commands.get(*index)?;
                 let command = std::iter::once(rimz_bin)
@@ -132,6 +209,15 @@ enum Step {
     Mode(String),
     Palette(String),
     Float(usize),
+    Guard(GuardStep),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuardStep {
+    action: Vec<String>,
+    #[serde(default)]
+    run: Option<usize>,
 }
 
 fn valid_mode(mode: &str) -> bool {
@@ -342,6 +428,59 @@ mod tests {
             "SearchToggleOption \"WholeWord\";",
         ] {
             assert!(kdl.contains(expected), "{expected}: {kdl}");
+        }
+    }
+
+    #[test]
+    fn guard_steps_render_a_message_to_self_whose_payload_decodes_back() {
+        let map = map(json!([{"mode":"pane","clear":true,"binds":[
+            {"key":"x","steps":[{"guard":{"action":["CloseFocus"]}}]},
+            {"key":"h","steps":[{"guard":{"action":["MovePane","Left"]}}]},
+            {"key":"d","steps":[{"guard":{"action":["NewPane","Down"],"run":1}},{"mode":"locked"}]},
+            {"key":"a","steps":[{"guard":{"action":["NewPane","Up"]}}]},
+            {"key":"b","steps":[{"guard":{"action":["MovePane","Left"],"run":9}}]},
+            {"key":"c","steps":[{"guard":{"action":["Detach"]}}]},
+            {"key":"e","steps":[{"guard":{"action":["CloseFocus"],"raw":"Run sh"}}]}
+        ]}]));
+        let kdl = map.kdl(42, "/bin/rimz");
+        assert_eq!(kdl.matches("bind ").count(), 3, "{kdl}");
+        let guard = |payload: &str| {
+            format!("MessagePluginId 42 {{ name \"rimz:guard\"; payload \"{payload}\"; }}")
+        };
+        for payload in ["CloseFocus", "MovePane Left", "NewPane Down 1"] {
+            assert!(kdl.contains(&guard(payload)), "{payload}: {kdl}");
+        }
+        assert_eq!(
+            map.guard(Some("CloseFocus")),
+            Some(Guard {
+                action: GuardedAction::Close,
+                run: None
+            })
+        );
+        assert_eq!(
+            map.guard(Some("MovePane Left")),
+            Some(Guard {
+                action: GuardedAction::Move(Direction::Left),
+                run: None
+            })
+        );
+        assert_eq!(
+            map.guard(Some("NewPane Down 1")),
+            Some(Guard {
+                action: GuardedAction::Split(Direction::Down),
+                run: Some(1)
+            })
+        );
+        for payload in [
+            None,
+            Some(""),
+            Some("NewPane Up"),
+            Some("NewPane Down 9"),
+            Some("MovePane Left; Run sh"),
+            Some("Detach"),
+            Some("CloseFocus 0 0"),
+        ] {
+            assert_eq!(map.guard(payload), None, "{payload:?}");
         }
     }
 

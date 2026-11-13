@@ -15,7 +15,8 @@ mod shell {
     };
     use rimz_presence_zellij::policy::{self, PaneFields, RawStablePaneFields};
     use rimz_presence_zellij::wire::{
-        self, DUMP_TOPOLOGY_PIPE, KEY_PIPE, PALETTE_PIPE, RETIRE_PIPE, TOGGLE_FULLSCREEN_PIPE,
+        self, DUMP_TOPOLOGY_PIPE, GUARD_PIPE, KEY_PIPE, PALETTE_PIPE, RETIRE_PIPE,
+        TOGGLE_FULLSCREEN_PIPE,
     };
     use zellij_tile::prelude::*;
     use zellij_utils::input::mouse::MouseEventType;
@@ -73,6 +74,7 @@ mod shell {
                 PermissionType::Reconfigure,
                 PermissionType::ChangeApplicationState,
                 PermissionType::InterceptInput,
+                PermissionType::RunActionsAsUser,
             ];
             request_permission(&permissions);
             let keymap = configuration
@@ -248,10 +250,12 @@ mod shell {
                 execute(engine.on_key_pipe(pipe_message.payload.as_deref()));
                 return false;
             }
+            if pipe_message.name == GUARD_PIPE {
+                execute(engine.on_guard_pipe(pipe_message.payload.as_deref(), focused_pane()));
+                return false;
+            }
             if pipe_message.name == PALETTE_PIPE {
-                let focus = get_focused_pane_info()
-                    .ok()
-                    .map(|(_, pane)| project_pane_id(pane));
+                let focus = focused_pane();
                 let sender = match pipe_message.source {
                     PipeSource::Keybind if pipe_message.is_private => PaletteSender::OwnClientKey,
                     _ => PaletteSender::Broadcast,
@@ -280,7 +284,7 @@ mod shell {
             // pipe --plugin`, the one load verb that works on a clientless
             // session. The message carries nothing — loading was the point —
             // and delivery itself releases the CLI (an explicit
-            // `unblock_cli_pipe_input` would need a third permission,
+            // `unblock_cli_pipe_input` would need another permission,
             // `ReadCliPipes`, for nothing). The CLI blocks only while the
             // launch is permission-pending, which rimz bounds with its command
             // deadline.
@@ -314,13 +318,45 @@ mod shell {
                 Effect::SetTimeout(delay_ms) => set_timeout(delay_ms as f64 / 1_000.0),
                 Effect::ListClients => list_clients(),
                 Effect::TogglePaneFullscreen(pane) => {
-                    let pane = match pane {
-                        ProjectedPaneId::Terminal(id) => PaneId::Terminal(id),
-                        ProjectedPaneId::Plugin(id) => PaneId::Plugin(id),
-                    };
-                    toggle_pane_id_fullscreen(pane);
+                    toggle_pane_id_fullscreen(zellij_pane_id(pane))
                 }
+                Effect::ClosePane(pane) => close_pane_with_id(zellij_pane_id(pane)),
+                Effect::MovePane(direction) => {
+                    move_pane_with_direction(zellij_direction(direction))
+                }
+                Effect::SplitPane(direction) => run_action(
+                    actions::Action::NewPane {
+                        direction: Some(zellij_direction(direction)),
+                        pane_name: None,
+                        start_suppressed: false,
+                    },
+                    BTreeMap::new(),
+                ),
             }
+        }
+    }
+
+    /// The pane this replica's client focuses, or `None` when Zellij cannot say
+    /// within its 100 ms query bound.
+    fn focused_pane() -> Option<ProjectedPaneId> {
+        get_focused_pane_info()
+            .ok()
+            .map(|(_, pane)| project_pane_id(pane))
+    }
+
+    fn zellij_pane_id(pane: ProjectedPaneId) -> PaneId {
+        match pane {
+            ProjectedPaneId::Terminal(id) => PaneId::Terminal(id),
+            ProjectedPaneId::Plugin(id) => PaneId::Plugin(id),
+        }
+    }
+
+    fn zellij_direction(direction: wire::Direction) -> Direction {
+        match direction {
+            wire::Direction::Left => Direction::Left,
+            wire::Direction::Right => Direction::Right,
+            wire::Direction::Up => Direction::Up,
+            wire::Direction::Down => Direction::Down,
         }
     }
 
