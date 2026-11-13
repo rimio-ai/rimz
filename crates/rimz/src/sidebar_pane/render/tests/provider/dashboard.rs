@@ -786,7 +786,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     );
 }
 
-/// The `↻` credit header shows for any kind with credits to report: a zero
+/// The `▬` credit header shows for any kind with credits to report: a zero
 /// count and an absent record leave the header off.
 #[test]
 fn reset_credit_header_shows_for_any_kind_with_credits() {
@@ -812,7 +812,7 @@ fn reset_credit_header_shows_for_any_kind_with_credits() {
     manual.redeem_forecast = Some(crate::store::snapshot::RedeemForecast::Manual);
     for panel in [codex, manual, non_codex] {
         assert!(
-            Dashboard::stacked(&theme, &[panel]).text().contains("↻ 3"),
+            Dashboard::stacked(&theme, &[panel]).text().contains("▬ 3"),
             "an account with credits shows the manual header"
         );
     }
@@ -822,7 +822,7 @@ fn reset_credit_header_shows_for_any_kind_with_credits() {
     ] {
         let rendered = Dashboard::stacked(&theme, &[panel]).text();
         assert!(
-            !rendered.contains('↻'),
+            !rendered.contains('▬'),
             "{why} hides the header:\n{rendered}"
         );
     }
@@ -865,14 +865,14 @@ fn codex_reset_marker_reads_the_forecast_without_motion() {
     use crate::store::snapshot::RedeemForecast;
     let theme = Theme::fixed(false);
     for (forecast, glyph, tone) in [
-        (None, "↻", theme.body()),
-        (Some(RedeemForecast::Manual), "↻", theme.body()),
+        (None, "▬", theme.body()),
+        (Some(RedeemForecast::Manual), "▬", theme.body()),
         (
             Some(RedeemForecast::Armed),
             "⟳",
             theme.good(Modifier::empty()),
         ),
-        (Some(RedeemForecast::Holding), "‖", theme.muted()),
+        (Some(RedeemForecast::Holding), "⟳", theme.muted()),
     ] {
         let panel = codex_credit_panel(forecast, 36);
         assert_eq!(
@@ -890,15 +890,15 @@ fn codex_reset_marker_shows_expiry_within_a_week() {
     use crate::store::snapshot::RedeemForecast;
     let theme = Theme::fixed(false);
     for (hours, text) in [
-        (3, Some("↻ 2 · 3h")),
-        (6 * 24, Some("↻ 2 · 6d")),
+        (3, Some("▬ 2 · 3h")),
+        (6 * 24, Some("▬ 2 · 6d")),
         (7 * 24, None),
     ] {
         let rendered = Dashboard::stacked(&theme, &[codex_credit_panel(None, hours)]).text();
         match text {
             Some(text) => assert!(rendered.contains(text), "{hours}h:\n{rendered}"),
             None => assert!(
-                rendered.contains("↻ 2") && !rendered.contains("↻ 2 ·"),
+                rendered.contains("▬ 2") && !rendered.contains("▬ 2 ·"),
                 "a week out hides the expiry:\n{rendered}"
             ),
         }
