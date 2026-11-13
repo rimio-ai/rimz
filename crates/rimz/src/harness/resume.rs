@@ -1569,9 +1569,10 @@ fn worktree_matches_scope(worktree: &LaneWorktree, scope: &str) -> bool {
 }
 
 fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<AgentState> {
+    let holders = crate::agents::state::LaunchHolders::new(agents);
     let mut candidates = agents
         .iter()
-        .filter(|agent| root_session(agent))
+        .filter(|agent| root_session(agent) && !holders.replaced(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(lane.path.as_path()))
         .filter(|agent| {
             lane.channel
@@ -3397,9 +3398,12 @@ fn cohort_candidates<'a>(
     liveness: &impl Fn(&AgentState) -> AgentLiveness,
     worktree_exists: impl Fn(&Path) -> bool,
 ) -> Vec<&'a AgentState> {
+    // Holders are read over every row before narrowing: a failed bound
+    // replacement that the liveness filter drops still replaces its session.
+    let holders = crate::agents::state::LaunchHolders::new(agents);
     agents
         .iter()
-        .filter(|agent| cohort_admits(agent, liveness))
+        .filter(|agent| !holders.replaced(agent) && cohort_admits(agent, liveness))
         .filter(|agent| {
             agent.checkout.is_some()
                 || agent_worktree(agent).is_some_and(|path| worktree_exists(&path))
@@ -3539,10 +3543,12 @@ pub fn inspect_cohort_relaunch(
     leader_index: Option<usize>,
 ) -> CohortRelaunchState {
     let target = crate::utils::path::normalize_path_lexical(worktree);
+    let holders = crate::agents::state::LaunchHolders::new(agents);
     let candidates = agents
         .iter()
         .filter(|agent| {
-            cohort_admits(agent, crate::store::runtime::agent_liveness)
+            !holders.replaced(agent)
+                && cohort_admits(agent, crate::store::runtime::agent_liveness)
                 && agent.lane_path().is_some_and(|path| {
                     crate::utils::path::normalize_path_lexical(Path::new(path)) == target
                 })

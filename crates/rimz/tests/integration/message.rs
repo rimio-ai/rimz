@@ -27,64 +27,62 @@ mod soft_compact;
 mod typing_hold;
 
 #[test]
-fn role_send_crosses_an_ended_molt_intermediate() {
+fn role_send_reaches_only_the_holder_of_a_swapped_agent() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    for (id, predecessor) in [
-        ("old", None),
-        ("middle", Some("old")),
-        ("new", Some("middle")),
-    ] {
-        append_lifecycle(
-            &env,
-            "claude",
-            "seed",
-            id,
-            LifecycleSignal::Registered,
-            |observation| {
-                observation.agent_name = Some(format!("{id}-coder"));
-                observation.launch.role = Some("coder".to_owned());
-                observation.launch.molted_from = predecessor.map(AgentSessionId::from);
-                // reap_stale_sessions collapses paneless same-kind sessions sharing a worktree, hiding this bug.
-                observation.pane_id = Some(PaneId::from_parts(
-                    MuxName::Zellij,
-                    match id {
-                        "old" => "terminal_3",
-                        "middle" => "terminal_4",
-                        _ => "terminal_5",
-                    },
-                ));
-            },
-        );
-    }
-    append_lifecycle(
-        &env,
-        "claude",
-        "seed",
-        "middle",
-        LifecycleSignal::Ended,
-        |_| {},
-    );
-    for id in ["old", "new"] {
-        append_lifecycle(
-            &env,
-            "claude",
-            "seed",
-            id,
-            LifecycleSignal::TurnStarted { turn_id: None },
-            |_| {},
-        );
-    }
-    let snapshot = env.store().snapshot().unwrap();
-    assert_eq!(
-        snapshot
-            .agents
-            .iter()
-            .map(|agent| (agent.agent_id.as_str(), agent.molted_from.as_deref()))
-            .collect::<Vec<_>>(),
-        [("new", Some("middle")), ("old", None)]
-    );
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let scope = rimz::store::writer::AgentLaunchScope {
+        session_name: workspace.session_name.clone(),
+        cwd: env.project_root.clone(),
+        branch: None,
+        description: None,
+    };
+    let request = |key: &str| rimz::store::writer::AgentLaunchRequest {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: key.into(),
+        name: rimz::store::writer::AgentLaunchName::Explicit("old-coder".into()),
+        login: rimz::store::writer::LaunchLogin::RoomDefault,
+        launch: rimz::agents::LaunchParams {
+            role: Some("coder".to_owned()),
+            ..Default::default()
+        },
+        run_id: None,
+        prompt: None,
+    };
+    let bind = |identity: &rimz::store::writer::AgentLaunchIdentity, pane: &str| {
+        store
+            .bind_agent_launch(
+                identity,
+                &workspace.session_name,
+                &env.project_root,
+                &PaneId::from_parts(MuxName::Zellij, pane),
+                None,
+            )
+            .unwrap();
+    };
+    let first = store
+        .begin_agent_launch_batch(&[request("launch_old")], scope.clone())
+        .unwrap();
+    bind(first.single_identity().unwrap(), "terminal_3");
+    let old = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.agent_id == "launch_old")
+        .cloned()
+        .unwrap();
+    let failed = store
+        .begin_agent_swap(&old, &request("launch_middle"), scope.clone())
+        .unwrap();
+    store
+        .abort_agent_swap(failed.single_identity().unwrap(), &scope)
+        .unwrap();
+    let swap = store
+        .begin_agent_swap(&old, &request("launch_new"), scope)
+        .unwrap();
+    bind(swap.single_identity().unwrap(), "terminal_5");
     let panes = ["terminal_3", "terminal_5"].map(|id| {
         let mut pane = agent_pane(&env, "claude");
         pane.pane_id = PaneId::from_parts(MuxName::Zellij, id);
@@ -92,17 +90,22 @@ fn role_send_crosses_an_ended_molt_intermediate() {
     });
     let pane_fixture = env.write_pane_fixture(&panes);
     let output = run_success(
-        traced_rimz(&env, "molt-role.log")
+        traced_rimz(&env, "swap-role.log")
             .env("RIMZ_TEST_PANE_LIST", pane_fixture)
             .args(["message", "@coder", "Review the handoff."]),
-        "send to molt successor",
+        "send to the swapped agent",
     );
     let receipt = String::from_utf8_lossy(&output.stdout);
-    assert!(receipt.starts_with("queued for @coder"), "{receipt}");
-    assert!(!receipt.contains("@old-coder"), "{receipt}");
+    assert!(receipt.contains("@coder"), "{receipt}");
     let messages = env.store().list_messages().unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].agent_id.as_str(), "new");
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["launch_new"],
+        "the role send goes to the holder alone"
+    );
 }
 
 #[test]
@@ -4452,6 +4455,107 @@ fn stop_terms_a_process_that_outlives_its_closed_pane() {
     assert!(ignores.try_wait().unwrap().is_none(), "it is still running");
     ignores.kill().unwrap();
     ignores.wait().unwrap();
+}
+
+/// A stop that took a swap's bound reservation for the agent follows it to the session
+/// whose registration absorbed it between two of the stop's reads: it closes that
+/// session's pane, ends its process, and reports the agent stopped.
+#[cfg(unix)]
+#[test]
+fn stop_follows_a_swap_reservation_to_the_session_that_registers_over_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let old = dummy_agent_process();
+    let mut new = dummy_agent_process();
+    crate::common::wait::register_agent_with_owner(
+        &env,
+        "sess-old",
+        "launch-planner",
+        "planner",
+        rimz::agents::LaunchParams::default(),
+        Some(agent_owner("sess-old", &old)),
+    );
+    reap_later(old);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let source = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.agent_id == "sess-old")
+        .cloned()
+        .unwrap();
+    let scope = rimz::store::writer::AgentLaunchScope {
+        session_name: workspace.session_name.clone(),
+        cwd: env.project_root.clone(),
+        branch: None,
+        description: None,
+    };
+    let reservation = store
+        .begin_agent_swap(
+            &source,
+            &rimz::store::writer::AgentLaunchRequest {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "launch_swap".into(),
+                name: rimz::store::writer::AgentLaunchName::Explicit("planner".into()),
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                launch: rimz::agents::LaunchParams::default(),
+                run_id: None,
+                prompt: None,
+            },
+            scope,
+        )
+        .unwrap()
+        .single_identity()
+        .unwrap()
+        .clone();
+    store
+        .bind_agent_launch(
+            &reservation,
+            &workspace.session_name,
+            &env.project_root,
+            &PaneId::from_parts(MuxName::Zellij, "terminal_4"),
+            None,
+        )
+        .unwrap();
+    let target = DeliveryRendezvous::new(&env, "stop-target");
+    let panes = list_stop_panes(&env, &[4]);
+    let stop = stop_command(&env, &panes, 3000)
+        .env("RIMZ_TEST_STOP_AFTER_TARGET", &target.path)
+        .args(["agents", "stop", "@planner"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut held = target.arrive();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-new",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("planner".to_owned());
+            observation.launch_id = Some("launch-planner".into());
+            observation.launch.epoch = reservation.launch.epoch;
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_4"));
+            observation.runtime_owner = Some(agent_owner("sess-new", &new));
+        },
+    );
+    assert!(
+        store
+            .audit_rows()
+            .unwrap()
+            .iter()
+            .all(|row| row.agent_id != reservation.agent_id),
+        "the registration absorbs the reservation"
+    );
+    held.write_all(&[0]).unwrap();
+    let stop = stop.wait_with_output().unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(closed_stop_panes(&env), ["terminal_4"]);
+    assert!(new.try_wait().unwrap().is_some(), "SIGTERM ended it");
 }
 
 /// An agent no listed pane hosts while its process lives is not stopped, and nothing is

@@ -127,6 +127,7 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let mut provisional_identity = None;
+    let mut attached_swap = None;
     let launched = exec_launch_identity(envelope.request()).and_then(|identity| {
         provisional_identity = identity;
         launch_and_supervise(
@@ -135,12 +136,31 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             &mut invocation,
             run_context.as_ref(),
             provisional_identity.as_ref(),
+            &mut attached_swap,
         )
     });
     // The one place a wrapper error settles its launch and its run: every exit
     // below the run context returns here, so none can forget either.
     if let Err(err) = &launched {
-        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
+        // A bound replacement that fails can end an agent whose old session
+        // ended first, so the failure settles the agent here, as an exit does.
+        // A resumed swap's attach absorbed its reservation into the resumed
+        // session, which now holds the agent at the new epoch and ends here.
+        if let Some((identity, (kind, session))) =
+            provisional_identity.as_ref().zip(attached_swap.as_ref())
+        {
+            end_attached_swap_session(&invocation, identity, kind, session);
+            settle_ended_agent(&invocation, kind, session, Some(&identity.name));
+        } else if mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref())
+            && let Some(identity) = provisional_identity.as_ref()
+        {
+            settle_ended_agent(
+                &invocation,
+                &identity.kind,
+                &identity.agent_id,
+                Some(&identity.name),
+            );
+        }
         if let Some(context) = run_context.as_ref() {
             fail_run_if_nonterminal(context, &crate::cli::render::error_line(err));
         }
@@ -154,6 +174,7 @@ fn launch_and_supervise(
     invocation: &mut ExecInvocationContext<'_>,
     run_context: Option<&RunExecContext>,
     provisional_identity: Option<&LaunchIdentity>,
+    attached_swap: &mut Option<(AgentKind, AgentSessionId)>,
 ) -> Result<()> {
     let workspace = invocation.workspace;
     let mut launch_warnings = Vec::new();
@@ -372,7 +393,7 @@ fn launch_and_supervise(
         }
     }
     if let Some(target) = attach_target.as_ref() {
-        record_own_resume_pane(
+        let attached = record_own_resume_pane(
             invocation,
             target,
             request
@@ -386,6 +407,15 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
+        // From here a swap's resumed session holds the agent, so a later
+        // error ends it rather than the reservation its attach absorbed.
+        if attached
+            && launch_identity
+                .as_ref()
+                .is_some_and(|identity| identity.launch.epoch.is_some_and(|epoch| epoch > 0))
+        {
+            attached_swap.clone_from(&attach_target);
+        }
     }
     let warning_target = attach_target
         .as_ref()
@@ -1561,7 +1591,9 @@ fn record_own_launch_pane(
         Ok(())
     }) {
         Ok(()) => {}
-        Err(err) if identity.launch.molted_from.is_some() => return Err(err),
+        // A swap's replacement whose bind was refused is not the agent; it
+        // must not start beside the session that still holds it.
+        Err(err) if identity.launch.epoch.is_some_and(|epoch| epoch > 0) => return Err(err),
         Err(err) => tracing::debug!(
             agent_name = %identity.name,
             pane = %pane_id,
@@ -1623,13 +1655,13 @@ fn record_own_resume_pane(
     launch_id: Option<AgentSessionId>,
     runtime_owner: rimz::pane::RuntimeOwner,
     params: &rimz::agents::LaunchParams,
-) {
+) -> bool {
     let isolation = params.isolation;
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
-        return;
+        return false;
     };
     let workspace = invocation.workspace;
-    if let Err(err) = invocation.store().and_then(|store| {
+    let Err(err) = invocation.store().and_then(|store| {
         store.attach_agent_pane(
             &target.0,
             &target.1,
@@ -1643,24 +1675,26 @@ fn record_own_resume_pane(
             Some(params),
         )?;
         Ok(())
-    }) {
-        if let Some(isolation) = isolation {
-            let _ = writeln!(
-                crate::cli::render::err(),
-                "rimz: could not record isolation {isolation} for resumed {} {}: {err}",
-                target.0,
-                target.1,
-            );
-            return;
-        }
-        tracing::debug!(
-            kind = %target.0,
-            agent_id = %target.1,
-            pane = %pane_id,
-            error = %err,
-            "could not persist resumed agent pane attach",
+    }) else {
+        return true;
+    };
+    if let Some(isolation) = isolation {
+        let _ = writeln!(
+            crate::cli::render::err(),
+            "rimz: could not record isolation {isolation} for resumed {} {}: {err}",
+            target.0,
+            target.1,
         );
+        return false;
     }
+    tracing::debug!(
+        kind = %target.0,
+        agent_id = %target.1,
+        pane = %pane_id,
+        error = %err,
+        "could not persist resumed agent pane attach",
+    );
+    false
 }
 
 fn record_launch_failed(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
@@ -1675,6 +1709,33 @@ fn record_launch_failed(invocation: &ExecInvocationContext<'_>, identity: &Launc
             "could not mark provisional agent launch failed",
         );
     }
+}
+
+/// End a resumed swap's session at the swap's epoch when its wrapper fails
+/// after the attach that made the session the agent's holder.
+fn end_attached_swap_session(
+    invocation: &ExecInvocationContext<'_>,
+    identity: &LaunchIdentity,
+    kind: &AgentKind,
+    session: &AgentSessionId,
+) {
+    let stamp = rimz::harness::launch::ExecIdentity {
+        launch_id: Some(identity.launch_id().to_string()),
+        params: rimz::agents::LaunchParams {
+            epoch: identity.launch.epoch,
+            ..rimz::agents::LaunchParams::default()
+        },
+        ..rimz::harness::launch::ExecIdentity::default()
+    };
+    append_agent_lifecycle_trace(
+        invocation,
+        &stamp,
+        kind.clone(),
+        session.clone(),
+        rimz::agents::LifecycleSignal::Ended,
+        AGENT_ENDED_EVENT,
+        "failed swap end stamp",
+    );
 }
 
 fn mark_launch_failed_if_provisional(

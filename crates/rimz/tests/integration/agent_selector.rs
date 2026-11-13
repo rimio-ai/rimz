@@ -549,6 +549,7 @@ fn relaunchable(env: &Env, command: &mut Command) {
     let shell = write_fake_login_shell(env, "restart-shell", &[]);
     let session = env.resolve_workspace(&env.project_root).session_name;
     command
+        .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&provider))
         .env("ZELLIJ_SESSION_NAME", &session)
@@ -588,19 +589,13 @@ fn restart_selects_by_filter_and_stdin_alike() {
     assert_eq!(new_panes(&filtered), 2, "{}", text(&by_filter));
     assert_eq!(new_panes(&piped), new_panes(&filtered));
     // A fixture agent has no recorded conversation, so each restart starts
-    // fresh under a newly minted handle: compare the receipts without it. The
-    // selected address starts each line, since the new handle names neither.
-    let receipts = |out: &Output| {
-        sorted_lines(&out.stdout)
-            .into_iter()
-            .map(|line| line.split(" as @").next().unwrap_or_default().to_owned())
-            .collect::<Vec<_>>()
-    };
+    // fresh, and the agent keeps its handle across the swap.
+    let receipts = |out: &Output| sorted_lines(&out.stdout);
     assert_eq!(
         receipts(&by_filter),
         [
-            "@seat-parent: restarted fresh",
-            "@seat-peer: restarted fresh"
+            "@seat-parent: restarted @seat-parent fresh — no recorded conversation",
+            "@seat-peer: restarted @seat-peer fresh — no recorded conversation"
         ]
     );
     assert_eq!(receipts(&by_stdin), receipts(&by_filter));

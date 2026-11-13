@@ -273,7 +273,7 @@ fn shared_hold(hold: super::idle_stop::Hold) -> Hold {
         StopHold::Message => Hold::Message,
         StopHold::OpenRun => Hold::OpenRun,
         // Only resting/debt reach this conversion; neither evaluates stop-specific holds.
-        StopHold::Board | StopHold::Tree | StopHold::MoltSuccessor => {
+        StopHold::Board | StopHold::Tree => {
             unreachable!("stop-specific hold from shared rest/debt")
         }
     }

@@ -137,6 +137,17 @@ impl AgentLaunchIdentity {
     }
 }
 
+/// How long a swap's coordinator waits for its replacement to bind before it
+/// aborts the swap. The wrapper binds before its provider starts: about 50 ms
+/// on host and 70 ms under scoped isolation in a sandbox room, so this leaves
+/// room for a cold binary and a loaded host.
+pub const SWAP_BIND_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long an unstood swap reservation counts as starting: the routine's
+/// longest wait (placement plus [`SWAP_BIND_WAIT`]) with margin. Past it the
+/// coordinator is gone, and the next swap fails the reservation.
+const SWAP_RESERVATION_OPEN: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// What [`Store::abort_agent_swap`] found under the workspace lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwapAbort {
@@ -151,6 +162,10 @@ pub enum SwapAbort {
 impl AgentLaunchBatch {
     pub fn identities(&self) -> &[AgentLaunchIdentity] {
         &self.identities
+    }
+
+    pub fn scope(&self) -> &AgentLaunchScope {
+        &self.scope
     }
 
     pub fn single_identity(&self) -> Result<&AgentLaunchIdentity> {
@@ -693,18 +708,7 @@ impl Store {
         requests: &[AgentLaunchRequest],
         scope: AgentLaunchScope,
     ) -> Result<AgentLaunchBatch> {
-        self.reserve_agent_launch_batch(requests, scope, None)
-    }
-
-    /// Reserve a fresh restart without treating the replaced row as a rival.
-    #[must_use = "durability barrier; check the result"]
-    pub fn begin_agent_launch_replacement(
-        &self,
-        replaced: &AgentState,
-        request: &AgentLaunchRequest,
-        scope: AgentLaunchScope,
-    ) -> Result<AgentLaunchBatch> {
-        self.reserve_agent_launch_batch(std::slice::from_ref(request), scope, Some(replaced))
+        self.reserve_agent_launch_batch(requests, scope)
     }
 
     /// Reserve a RimZ swap of `source`'s agent: one Starting launch event
@@ -712,7 +716,10 @@ impl Store {
     /// agent's launch id and handle at one epoch past the highest on its
     /// launch, failed reservations included. Refused under the lock unless
     /// `source` is a live holder row and the launch has no reservation that
-    /// is still starting. The handle's temp and out dirs stay.
+    /// is still starting. A reservation that has not stood within
+    /// `SWAP_RESERVATION_OPEN` of its launch was abandoned by its
+    /// coordinator: it no longer counts as starting, and is failed under the
+    /// same lock first. The handle's temp and out dirs stay.
     #[must_use = "durability barrier; check the result"]
     pub fn begin_agent_swap(
         &self,
@@ -720,8 +727,39 @@ impl Store {
         request: &AgentLaunchRequest,
         scope: AgentLaunchScope,
     ) -> Result<AgentLaunchBatch> {
+        self.begin_agent_swap_with(source, request, scope, jiff::Timestamp::now)
+    }
+
+    /// [`Store::begin_agent_swap`] reading the present from `clock` once the
+    /// lock is held.
+    fn begin_agent_swap_with(
+        &self,
+        source: &AgentState,
+        request: &AgentLaunchRequest,
+        scope: AgentLaunchScope,
+        clock: impl FnOnce() -> jiff::Timestamp,
+    ) -> Result<AgentLaunchBatch> {
         self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let now = clock();
+            let abandoned = abandoned_swaps(&base_agents, source, now);
+            for row in &abandoned {
+                txn.append(&self.agent_launch_event(
+                    &reservation_identity(row),
+                    AgentLaunchState::Failed,
+                    &scope.session_name,
+                    &scope.cwd,
+                    None,
+                    None,
+                    None,
+                    None,
+                ))?;
+            }
+            let base_agents = if abandoned.is_empty() {
+                base_agents
+            } else {
+                snapshot::catch_up_rollup(txn.paths)?.1
+            };
             let identity = swap_identity(&base_agents, source, request, || {
                 crate::agents::room_accounts(
                     &txn.paths.workspace_record,
@@ -741,7 +779,7 @@ impl Store {
                 None,
                 None,
             );
-            event.timestamp = jiff::Timestamp::now();
+            event.timestamp = now;
             txn.append(&event)?;
             Ok(AgentLaunchBatch {
                 identities: vec![identity],
@@ -782,43 +820,9 @@ impl Store {
         &self,
         requests: &[AgentLaunchRequest],
         scope: AgentLaunchScope,
-        replaced: Option<&AgentState>,
     ) -> Result<AgentLaunchBatch> {
         let batch = self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
-            let replaced = base_agents
-                .iter()
-                .find(|agent| {
-                    replaced
-                        .is_some_and(|row| agent.kind == row.kind && agent.agent_id == row.agent_id)
-                })
-                .cloned()
-                .map(|mut agent| {
-                    // Preserve its links for traversal without counting it as a rival.
-                    agent.ended_at = Some(agent.last_seen);
-                    agent
-                });
-            for predecessor in requests
-                .iter()
-                .filter_map(|request| request.launch.molted_from.as_ref())
-            {
-                let candidates = base_agents.iter().map(|agent| {
-                    replaced
-                        .as_ref()
-                        .filter(|row| agent.kind == row.kind && agent.agent_id == row.agent_id)
-                        .unwrap_or(agent)
-                });
-                if let Some(successor) =
-                    crate::agents::state::standing_successor(candidates, predecessor)
-                {
-                    return Err(StoreErr::MoltSuccessor {
-                        successor: successor
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| successor.agent_id.to_string()),
-                    });
-                }
-            }
             let accounts = if requests
                 .iter()
                 .any(|request| request.login == LaunchLogin::RoomDefault)
@@ -905,18 +909,22 @@ impl Store {
         })
     }
 
-    /// Cancel a pane-less molt reservation; its wrapper may no longer bind it.
+    /// Cancel a swap reservation that has no pane yet; its wrapper may no
+    /// longer bind it. False when the reservation has stood or is over.
     #[must_use = "durability barrier; check the result"]
-    pub fn cancel_unbound_molt_launch(
+    pub fn cancel_unbound_swap(
         &self,
-        kind: &crate::ids::AgentKind,
-        launch_id: &AgentSessionId,
+        reservation: &AgentState,
         session_name: &str,
         cwd: &Path,
     ) -> Result<bool> {
-        self.cancel_unbound_launch(kind, launch_id, session_name, cwd, |agent| {
-            agent.molted_from.is_some() && agent.pane.is_none()
-        })
+        self.cancel_unbound_launch(
+            &reservation.kind,
+            &reservation.agent_id,
+            session_name,
+            cwd,
+            is_open_swap,
+        )
     }
 
     /// Cancel a launch that no wrapper has bound, or accept its existing failure.
@@ -955,21 +963,8 @@ impl Store {
             if agent.status == crate::agents::AgentStatus::Failed {
                 return Ok(true);
             }
-            let identity = AgentLaunchIdentity {
-                kind: kind.clone(),
-                agent_id: launch_id.clone(),
-                name: agent.name.clone().unwrap_or_else(|| launch_id.to_string()),
-                name_explicit: agent.name_explicit,
-                launch: LaunchParams {
-                    molted_from: agent.molted_from.clone(),
-                    ..Default::default()
-                },
-                launch_id: None,
-                run_id: None,
-                prompt: None,
-            };
             txn.append(&self.agent_launch_event(
-                &identity,
+                &reservation_identity(agent),
                 AgentLaunchState::Failed,
                 session_name,
                 cwd,
@@ -994,10 +989,9 @@ impl Store {
         system_prompt_digest: Option<&str>,
     ) -> Result<()> {
         self.commit(|txn| {
-            if identity.launch.molted_from.is_some() || identity.launch.epoch.is_some_and(|e| e > 0)
-            {
+            if identity.launch.epoch.is_some_and(|epoch| epoch > 0) {
                 let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
-                let message = "restart or molt launch was cancelled or failed before binding; do not retry this command";
+                let message = "this restart or molt was cancelled or failed before its replacement bound; the agent stays in its old session; do not retry this command";
                 if agents.iter().any(|agent| {
                     agent.kind == identity.kind
                         && agent.agent_id == identity.agent_id
@@ -1405,10 +1399,7 @@ fn swap_identity(
     if !holds {
         return Err(StoreErr::SwapNotHolder { agent: handle });
     }
-    if members
-        .iter()
-        .any(|row| row.agent_id.is_provisional() && !row.launch_bound && !row.session_over())
-    {
+    if members.iter().any(|row| is_open_swap(row)) {
         return Err(StoreErr::SwapInFlight { agent: handle });
     }
     let epoch = members
@@ -1437,6 +1428,50 @@ fn swap_identity(
         run_id: request.run_id.clone(),
         prompt: request.prompt.clone(),
     })
+}
+
+/// A swap reservation that is still starting: provisional, unbound, not over.
+fn is_open_swap(row: &AgentState) -> bool {
+    row.agent_id.is_provisional() && row.epoch > 0 && !row.launch_bound && !row.session_over()
+}
+
+/// The open reservations of `source`'s launch launched longer ago than
+/// [`SWAP_RESERVATION_OPEN`]: their coordinator died before placing or
+/// binding them.
+fn abandoned_swaps(
+    agents: &snapshot::AgentRollup,
+    source: &AgentState,
+    now: jiff::Timestamp,
+) -> Vec<AgentState> {
+    let open_for = jiff::SignedDuration::try_from(SWAP_RESERVATION_OPEN).unwrap_or_default();
+    crate::agents::state::launch_members(agents.iter(), &source.kind, source.launch_key())
+        .into_iter()
+        .filter(|row| {
+            is_open_swap(row)
+                && row
+                    .last_seen
+                    .saturating_add(open_for)
+                    .is_ok_and(|expires| expires <= now)
+        })
+        .cloned()
+        .collect()
+}
+
+/// The launch identity a reservation row was written with, enough to fail it.
+fn reservation_identity(row: &AgentState) -> AgentLaunchIdentity {
+    AgentLaunchIdentity {
+        kind: row.kind.clone(),
+        agent_id: row.agent_id.clone(),
+        launch_id: row.launch_id.clone(),
+        name: row.name.clone().unwrap_or_else(|| row.agent_id.to_string()),
+        name_explicit: row.name_explicit,
+        launch: LaunchParams {
+            epoch: Some(row.epoch),
+            ..Default::default()
+        },
+        run_id: None,
+        prompt: None,
+    }
 }
 
 fn validate_agent_launch_name(name: &str) -> Result<()> {

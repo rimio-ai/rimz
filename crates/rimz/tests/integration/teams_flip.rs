@@ -197,56 +197,89 @@ fn done_stops_the_checkout_language_server_not_the_archive() {
 }
 
 #[test]
-fn stage_wake_crosses_an_ended_molt_intermediate() {
+fn stage_wake_reaches_the_holder_of_a_swapped_seat() {
     let fixture = Fixture::new();
     let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
-    for (name, predecessor) in [
-        ("first", None),
-        ("middle", Some("launch_first")),
-        ("successor", Some("launch_middle")),
-    ] {
-        fixture.seed_member(
-            "claude",
-            name,
-            "coder",
-            None,
-            "feature-team",
-            &fixture.env.project_root,
-        );
-        let mut observation = AgentLifecycleObservation::new(
-            Some(format!("session-{name}").into()),
-            LifecycleSignal::Registered,
-        );
-        observation.agent_name = Some(name.to_owned());
-        observation.launch.molted_from = predecessor.map(AgentSessionId::from);
-        // reap_stale_sessions collapses paneless same-kind sessions sharing a worktree, hiding this bug.
-        observation.pane_id = Some(PaneId::from_parts(
-            MuxName::Zellij,
-            match name {
-                "first" => "terminal_3",
-                "middle" => "terminal_4",
-                _ => "terminal_5",
-            },
-        ));
-        fixture
-            .env
-            .store()
-            .append_event(&EventEnvelope::agent_lifecycle(
-                workspace.workspace_id.clone(),
-                &workspace.session_name,
-                "claude",
-                "seed",
-                &observation,
-            ))
-            .unwrap();
-    }
-    let observation =
-        AgentLifecycleObservation::new(Some("session-middle".into()), LifecycleSignal::Ended);
-    fixture
-        .env
-        .store()
+    let store = fixture.env.store();
+    fixture.seed_member(
+        "claude",
+        "coder",
+        "coder",
+        None,
+        "feature-team",
+        &fixture.env.project_root,
+    );
+    fixture.seed_member(
+        "claude",
+        "reviewer",
+        "reviewer",
+        None,
+        "feature-team",
+        &fixture.env.project_root,
+    );
+    let mut observation =
+        AgentLifecycleObservation::new(Some("session-first".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("coder".to_owned());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"));
+    store
         .append_event(&EventEnvelope::agent_lifecycle(
-            workspace.workspace_id,
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "seed",
+            &observation,
+        ))
+        .unwrap();
+    let source = store
+        .audit_rows()
+        .unwrap()
+        .iter()
+        .find(|row| row.agent_id == "session-first")
+        .cloned()
+        .unwrap();
+    let swap = store
+        .begin_agent_swap(
+            &source,
+            &rimz::store::writer::AgentLaunchRequest {
+                kind: source.kind.clone(),
+                agent_id: "launch_swap".into(),
+                name: rimz::store::writer::AgentLaunchName::Soft("coder".into()),
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                launch: rimz::agents::LaunchParams {
+                    team: source.team.clone(),
+                    role: source.role.clone(),
+                    lane: source.lane.clone(),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            },
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: fixture.env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    store
+        .bind_agent_launch(
+            swap.single_identity().unwrap(),
+            &workspace.session_name,
+            &fixture.env.project_root,
+            &PaneId::from_parts(MuxName::Zellij, "terminal_5"),
+            None,
+        )
+        .unwrap();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("session-new".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("coder".to_owned());
+    observation.launch_id = Some("launch_coder".into());
+    observation.launch.epoch = Some(1);
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_5"));
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
             &workspace.session_name,
             "claude",
             "seed",
@@ -259,22 +292,22 @@ fn stage_wake_crosses_an_ended_molt_intermediate() {
     )
     .unwrap();
     fixture.live_panes(&["terminal_3", "terminal_5"]);
-    let snapshot = fixture.env.store().snapshot().unwrap();
-    assert_eq!(
-        snapshot
-            .agents
-            .iter()
-            .map(|agent| (agent.agent_id.as_str(), agent.molted_from.as_deref()))
-            .collect::<Vec<_>>(),
-        [
-            ("session-first", None),
-            ("session-successor", Some("launch_middle"))
-        ]
-    );
-    success(fixture.flip("Build", None, Some("Continue with the successor.")));
+    // The swap's bind stamps this test process as the holder's runtime
+    // owner, so a flip without a caller would resolve the holder itself.
+    success(fixture.flip(
+        "Build",
+        Some("reviewer"),
+        Some("Continue with the new session."),
+    ));
     let records = fixture.stage_records();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].agent_id.as_str(), "session-successor");
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["session-new"],
+        "the stage wake goes to the holder, never the replaced session"
+    );
 }
 
 #[test]

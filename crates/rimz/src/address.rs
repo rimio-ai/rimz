@@ -1117,7 +1117,7 @@ pub fn role_holders<'a>(
         members
             .into_iter()
             .filter(|member| member.role.as_deref() == Some(role))
-            .filter(|member| !member.yields_molt_seat())
+            .filter(|member| !member.replaced)
             .collect(),
     )
 }
@@ -1399,11 +1399,15 @@ pub fn is_launch_row<'a>(
 /// One representative per launch instance. Every conversation in an agent
 /// instance shares its `launch_id`; this selector alone decides which row the
 /// launch currently is. It reads `holds_open_turn`, so callers that need the
-/// current answer must attach rest certificates first.
+/// current answer must attach rest certificates first. A session its agent's
+/// holder replaced (an earlier session in another pane, a swap that failed
+/// before binding) is no representative.
 pub(crate) fn launch_occupants<'a>(
     agents: impl IntoIterator<Item = &'a AgentState>,
 ) -> Vec<&'a AgentState> {
-    launch_groups(agents)
+    let agents: Vec<&AgentState> = agents.into_iter().collect();
+    let holders = crate::agents::state::LaunchHolders::new(agents.iter().copied());
+    launch_groups(agents.into_iter().filter(|agent| !holders.replaced(agent)))
         .into_iter()
         .filter_map(|group| launch_occupant(&group))
         .collect()

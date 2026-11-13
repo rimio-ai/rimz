@@ -1180,11 +1180,6 @@ impl<T: serde::de::DeserializeOwned + PartialEq> TuneOverride<T> {
 pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub molted_from: Option<AgentSessionId>,
-    /// A standing successor exists on this row's molt chain, directly or through
-    /// ended intermediates. Derived by the runtime projection over every retained
-    /// row in both scopes; the fold never sets it, and projection overwrites it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub molt_superseded: bool,
     /// Another session of this row's launch holds the agent now: the launch
     /// has a standing row at a higher epoch, or this row never stood beside
     /// one at its own. Derived by the runtime projection from every retained
@@ -1608,32 +1603,6 @@ pub struct AgentState {
     pub on_screen_at: Option<Timestamp>,
 }
 
-/// The live molt successor, following ended or failed intermediates in `agents`.
-pub fn standing_successor<'a>(
-    agents: impl IntoIterator<Item = &'a AgentState>,
-    predecessor: &AgentSessionId,
-) -> Option<&'a AgentState> {
-    let agents: Vec<_> = agents.into_iter().collect();
-    let mut pending = vec![predecessor];
-    let mut visited = BTreeSet::new();
-    while let Some(predecessor) = pending.pop() {
-        if !visited.insert(predecessor) {
-            continue;
-        }
-        for agent in agents
-            .iter()
-            .copied()
-            .filter(|agent| agent.molted_from.as_ref() == Some(predecessor))
-        {
-            if molt_stands(agent) {
-                return Some(agent);
-            }
-            pending.extend(agent.identity_ids());
-        }
-    }
-    None
-}
-
 /// A row's turn stamps as they stood before a turn opened: what its last request reads as if
 /// that turn had never run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1642,12 +1611,6 @@ pub struct PriorTurn {
     started_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ended_at: Option<Timestamp>,
-}
-
-/// A row stands unless it ended or its provisional launch failed.
-pub(crate) fn molt_stands(agent: &AgentState) -> bool {
-    agent.ended_at.is_none()
-        && !(agent.status == AgentStatus::Failed && agent.agent_id.is_provisional())
 }
 
 fn is_zero_u32(n: &u32) -> bool {
@@ -1787,11 +1750,6 @@ impl AgentState {
             .as_ref()
             .and_then(|context| context.fast)
             .unwrap_or_else(|| self.record.as_ref().is_some_and(|record| record.fast))
-    }
-
-    /// Superseded predecessors and non-standing successors yield their role seat.
-    pub(crate) fn yields_molt_seat(&self) -> bool {
-        (self.molted_from.is_some() && !molt_stands(self)) || self.molt_superseded
     }
 
     /// Record a prompt and own the set-once rule for the first usable prompt.
@@ -2037,7 +1995,6 @@ impl AgentState {
         Self {
             agent_id,
             molted_from: None,
-            molt_superseded: false,
             replaced: false,
             launch_id: None,
             prior_launch_ids: Vec::new(),

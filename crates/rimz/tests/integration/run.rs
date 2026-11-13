@@ -2791,6 +2791,7 @@ fn assert_subagent_checkout_case(
         }
         let output = env.rimz()
             .args(["--mux", "zellij", "agents", "restart", &address])
+            .env("RIMZ_TEST_SWAP_BIND_AS_WRAPPER", "1")
             .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":1,"title":"codex"}]"#)
             .bounded_output().unwrap();

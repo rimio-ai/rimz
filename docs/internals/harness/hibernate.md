@@ -115,7 +115,7 @@ A helper started inside a scoped agent runs `systemd-run` inside the bubblewrap 
 | 8 | `ForeignProcess { pid, comm }` | A member is neither on the provider's in-scope ancestor chain (such as `bwrap` and `sh`) nor able to reach the provider through its parent chain. Siblings under those ancestors are foreign, and so is a member whose chain breaks on an unreadable parent. `comm` is `unknown` when the member's own command cannot be read. |
 | 9 | `Owed`, `Message`, `OpenRun` | `idle_stop::debt`: an owed wake, a queued message, or an open run. |
 
-`decide` shares idle-stop's resting, rest-clock, and debt predicates. It does not take idle-stop's board, tree, or molt-successor vetoes. `Policy` resolves the schedule and the keep-warm definitions once, before any decision.
+`decide` shares idle-stop's resting, rest-clock, and debt predicates. It does not take idle-stop's board or tree vetoes. `Policy` resolves the schedule and the keep-warm definitions once, before any decision.
 
 ## Freeze and deepen
 

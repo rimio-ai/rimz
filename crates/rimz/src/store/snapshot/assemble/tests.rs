@@ -474,44 +474,6 @@ fn pre_molt_latest_snapshot_refolds_the_succession_link() {
 }
 
 #[test]
-fn pre_supersession_latest_snapshot_reprojects_the_molt_chain() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let paths = checkpoint_paths(workspace.clone(), dir.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    for (id, name, predecessor, pane) in [
-        ("launch_old", "predecessor", None, "tmux:%3"),
-        ("launch_new", "successor", Some("launch_old"), "tmux:%4"),
-    ] {
-        event_log::append(&paths.events_log, &EventEnvelope::new(
-            workspace.clone(), "session", "claude", "agent", "agent.launched",
-            serde_json::json!({"agent_id": id, "agent_name": name, "molted_from": predecessor, "pane_id": pane}),
-        )).unwrap();
-    }
-    let snapshot = rebuild(&paths).unwrap();
-    assert_eq!(snapshot.agents.len(), 2);
-    let mut legacy = serde_json::to_value(snapshot).unwrap();
-    legacy["snapshot_version"] = serde_json::json!(41);
-    for agent in legacy["agents"].as_array_mut().unwrap() {
-        agent.as_object_mut().unwrap().remove("molt_superseded");
-    }
-    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
-    assert!(
-        read_fresh_latest_cold(&paths).is_none(),
-        "a pre-42 latest.json cannot restore a superseded role holder"
-    );
-    let rebuilt = build_from(&paths).unwrap();
-    assert!(
-        rebuilt
-            .agents
-            .iter()
-            .find(|agent| agent.agent_id == "launch_old")
-            .unwrap()
-            .molt_superseded
-    );
-}
-
-#[test]
 fn pre_rewarm_estimate_snapshot_is_stale() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -527,7 +489,7 @@ fn pre_rewarm_estimate_snapshot_is_stale() {
 }
 
 #[test]
-fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
+fn a_reaped_unended_swap_holder_keeps_the_replaced_session_out_of_the_role() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = checkpoint_paths(workspace, dir.path()).unwrap();
@@ -541,9 +503,10 @@ fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
         now.as_second() - crate::store::session_death::GHOST_SESSION_TTL_SECS - 1,
     )
     .unwrap();
-    let mut successor = crate::testkit::agent_state("claude", "successor", stale);
-    successor.launch_id = Some("launch_new".into());
-    successor.molted_from = predecessor.launch_id.clone();
+    let mut successor = crate::testkit::agent_state("claude", "launch_successor", stale);
+    successor.launch_id = predecessor.launch_id.clone();
+    successor.epoch = 1;
+    successor.launch_bound = true;
     successor.role = predecessor.role.clone();
     successor.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%4")));
 
@@ -564,7 +527,8 @@ fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
             .iter()
             .map(|agent| agent.agent_id.as_str())
             .collect::<Vec<_>>(),
-        ["predecessor"]
+        Vec::<&str>::new(),
+        "the replaced session never comes back as the agent's card"
     );
     assert!(crate::address::role_holders(snapshot.agents.iter(), "reviewer").is_empty());
 }

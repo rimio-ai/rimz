@@ -1011,3 +1011,112 @@ fn workspace_id() -> WorkspaceId {
 fn agent(id: &str, status: AgentStatus) -> AgentState {
     AgentState::stub("claude", id, status)
 }
+
+/// A replacement that fails after it bound ends the agent in either order of
+/// the two sessions' ends; the messages parked on the old session's card are
+/// archived once the agent has ended, and not before.
+#[test]
+fn a_replacement_failing_after_bind_archives_the_agents_messages_in_either_order() {
+    use crate::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let request = |id: &str, name| AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
+        kind: kind.clone(),
+        agent_id: crate::ids::AgentSessionId::from(id),
+        name,
+        launch: Default::default(),
+        run_id: None,
+        prompt: None,
+    };
+    for old_ends_first in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(
+            crate::StatePaths::under(workspace_id(), dir.path()).unwrap(),
+            RuntimePaths::under(workspace_id(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        let scope = AgentLaunchScope {
+            session_name: "session".into(),
+            cwd: dir.path().into(),
+            branch: None,
+            description: None,
+        };
+        let pane = |raw| PaneId::parse(raw).unwrap();
+        let row = |key: &str| {
+            store
+                .audit_rows()
+                .unwrap()
+                .iter()
+                .find(|agent| agent.agent_id == key)
+                .cloned()
+                .unwrap()
+        };
+        let first = store
+            .begin_agent_launch_batch(
+                &[request(
+                    "launch_a",
+                    AgentLaunchName::Explicit("coder".into()),
+                )],
+                scope.clone(),
+            )
+            .unwrap();
+        let old = first.single_identity().unwrap();
+        store
+            .bind_agent_launch(old, "session", dir.path(), &pane("tmux:%1"), None)
+            .unwrap();
+        let parked = message(&row("launch_a"), 1, "rebase first");
+        store.queue_message(&parked, "session").unwrap();
+        let swap = store
+            .begin_agent_swap(
+                &row("launch_a"),
+                &request("launch_b", AgentLaunchName::Mint),
+                scope,
+            )
+            .unwrap();
+        let replacement = swap.single_identity().unwrap();
+        store
+            .bind_agent_launch(replacement, "session", dir.path(), &pane("tmux:%2"), None)
+            .unwrap();
+        let archive = |store: &Store, session: &str| {
+            super::archive_for_ended_agent(store, "session", &kind, &session.into(), Some("coder"))
+                .unwrap()
+        };
+        let end_old = || {
+            let ended = crate::agents::AgentLifecycleObservation::new(
+                Some("launch_a".into()),
+                crate::agents::LifecycleSignal::Ended,
+            );
+            store
+                .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                    session_name: "session",
+                    agent_kind: kind.clone(),
+                    event_name: "fixture",
+                    observation: &ended,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+            archive(&store, "launch_a")
+        };
+        let fail_replacement = || {
+            store
+                .fail_agent_launch(replacement, "session", dir.path())
+                .unwrap();
+            archive(&store, "launch_b")
+        };
+        let open = |store: &Store| {
+            store
+                .list_messages()
+                .unwrap()
+                .iter()
+                .any(|record| record.message_id == parked.message_id && record.status.is_open())
+        };
+        if old_ends_first {
+            assert!(!end_old(), "the replacement still holds the agent");
+            assert!(open(&store));
+            assert!(fail_replacement());
+        } else {
+            assert!(fail_replacement(), "a bound replacement holds the agent");
+        }
+        assert!(!open(&store), "old_ends_first={old_ends_first}");
+    }
+}

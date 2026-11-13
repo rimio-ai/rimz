@@ -1,78 +1,6 @@
 use super::*;
 
 #[test]
-fn a_fresh_restart_of_a_molt_successor_keeps_its_predecessor_superseded() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
-    let store = rimz::Store::open(
-        rimz::StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state")).unwrap(),
-        rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
-            .unwrap(),
-    )
-    .unwrap();
-    let mut successor =
-        rimz::testkit::agent_state("claude", "launch_middle", jiff::Timestamp::now());
-    successor.launch_id = Some(successor.agent_id.clone());
-    successor.molted_from = Some("launch_old".into());
-    successor.role = Some("coder".into());
-    let posture = ResumePosture::default();
-    let mut predecessor = successor.clone();
-    predecessor.agent_id = "launch_old".into();
-    predecessor.launch_id = Some(predecessor.agent_id.clone());
-    predecessor.molted_from = None;
-    let mut predecessor_request =
-        fresh_launch_request(&predecessor, restart_cell(&predecessor, &posture), None).unwrap();
-    predecessor_request.agent_id = predecessor.agent_id;
-    let mut request =
-        fresh_launch_request(&successor, restart_cell(&successor, &posture), None).unwrap();
-    request.agent_id = successor.agent_id.clone();
-    store
-        .begin_agent_launch_batch(
-            &[predecessor_request, request],
-            AgentLaunchScope {
-                session_name: workspace.session_name.clone(),
-                cwd: dir.path().into(),
-                branch: None,
-                description: None,
-            },
-        )
-        .unwrap();
-    let restarted = append_fresh_launch(
-        &store,
-        &workspace,
-        &successor,
-        dir.path(),
-        restart_cell(&successor, &posture),
-        None,
-        None,
-    );
-    assert!(restarted.is_ok(), "{restarted:?}");
-    let restarted = restarted.unwrap();
-    let replacement = restarted.single_identity().unwrap();
-    assert_eq!(replacement.launch.molted_from, successor.molted_from);
-    let audit = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
-    let holders = rimz::address::role_holders(&audit.agents, "coder");
-    assert!(holders.iter().all(|agent| agent.agent_id != "launch_old"));
-    assert!(
-        holders
-            .iter()
-            .any(|agent| agent.agent_id == replacement.agent_id)
-    );
-}
-
-#[test]
-fn a_failed_retirement_still_counts_the_waits_it_dropped() {
-    let mut err = Vec::new();
-    let failure = rimz::harness::schedule::arm::RetireFailure::after_dropping(2);
-    assert_eq!(retired_count(Err(failure), &mut err).unwrap(), 2);
-    assert_eq!(
-        String::from_utf8(err).unwrap(),
-        "rimz: retiring session deliveries: withdrawal failed\n"
-    );
-    assert_eq!(retired_count(Ok(3), &mut Vec::new()).unwrap(), 3);
-}
-
-#[test]
 fn restarting_peer_fails_only_its_open_turn() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
@@ -140,10 +68,29 @@ fn resume_classification_names_each_fresh_reason() {
 }
 
 #[test]
-fn restart_reports_only_the_waits_no_registration_arms_again() {
-    assert_eq!(dropped_note(0), "");
-    assert_eq!(dropped_note(1), "; 1 armed wait dropped");
-    assert_eq!(dropped_note(3), "; 3 armed waits dropped");
+fn a_briefing_lists_what_is_outstanding_and_nothing_when_nothing_is() {
+    assert_eq!(briefing_section(&[], &[], 0, 0), None);
+    let section = briefing_section(&["@otter".into()], &["ci-green".into()], 2, 1).unwrap();
+    assert_eq!(
+        section,
+        "Type: SWAP_BRIEFING\nFrom: @rimz\nContent:\nThis is a fresh session of the same agent; \
+         the earlier conversation is gone, and RimZ kept what was outstanding for it.\n\
+         - 1 subagent still running (@otter); their results come to you: `rimz subagents list`\n\
+         - 1 wait or delivery still armed for you (ci-green): `rimz wait list`\n\
+         - 2 messages queued for your next turn: `rimz message list`\n\
+         Sent into the earlier session and not yet confirmed as read; RimZ sends a \
+         message again, a command it does not:\n\
+         - 1 message: `rimz message list`\n"
+    );
+    let origins = rimz::store::message::classify_submitted_prompt(&section, &[], &[])
+        .into_iter()
+        .map(|part| part.origin)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        origins,
+        [rimz::transcript::SectionOrigin::Notice("@rimz".into())],
+        "the briefing reads as an @rimz notice, never as the user"
+    );
 }
 
 #[test]

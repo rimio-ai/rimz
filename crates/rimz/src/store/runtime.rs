@@ -4,7 +4,7 @@
 //! recorded owner process is still the same live process. Audit views bypass
 //! this filter and read durable history as written.
 
-use crate::agents::state::{LaunchHolders, standing_successor};
+use crate::agents::state::LaunchHolders;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
@@ -18,13 +18,12 @@ pub enum RuntimeScope {
     Audit,
 }
 
-/// Shared durable rows, including ended sessions, without derived molt marks.
-/// Role decisions require the molt marks of [`RuntimeProjection`] in [`RuntimeScope::Audit`],
+/// Shared durable rows, including ended sessions, without derived replaced marks.
+/// Role decisions require the replaced marks of [`RuntimeProjection`] in [`RuntimeScope::Audit`],
 /// not these raw rows.
 #[derive(Clone, Debug, Default)]
 pub struct AuditRows {
     agents: super::snapshot::AgentRollup,
-    superseded: Arc<OnceLock<HashSet<AgentSessionId>>>,
     replaced: Arc<OnceLock<HashSet<(AgentKind, AgentSessionId)>>>,
 }
 
@@ -32,7 +31,6 @@ impl AuditRows {
     pub(super) fn new(agents: super::snapshot::AgentRollup) -> Self {
         Self {
             agents,
-            superseded: Arc::default(),
             replaced: Arc::default(),
         }
     }
@@ -45,15 +43,8 @@ impl AuditRows {
         self.agents.find(kind, agent_id)
     }
 
-    /// Copy one row with the same molt and replaced marks as the full Audit
-    /// projection.
+    /// Copy one row with the same replaced mark as the full Audit projection.
     pub(crate) fn marked_copy(&self, agent: &AgentState) -> AgentState {
-        let superseded = self.superseded.get_or_init(|| {
-            superseded_molt_ids(self.iter())
-                .into_iter()
-                .cloned()
-                .collect()
-        });
         let replaced = self.replaced.get_or_init(|| {
             let holders = LaunchHolders::new(self.iter());
             self.iter()
@@ -62,8 +53,6 @@ impl AuditRows {
                 .collect()
         });
         let mut projected = agent.clone();
-        projected.molt_superseded =
-            superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
         projected.replaced = replaced.contains(&(agent.kind.clone(), agent.agent_id.clone()));
         super::snapshot::count_rows_materialized(1);
         projected
@@ -117,12 +106,9 @@ impl RuntimeProjection {
     ) -> Self {
         match scope {
             RuntimeScope::Audit => {
-                let superseded = superseded_molt_ids(agents.iter());
                 let holders = LaunchHolders::new(agents.iter());
                 let mut projected = agents.to_vec();
                 for agent in &mut projected {
-                    agent.molt_superseded =
-                        superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
                     agent.replaced = holders.replaced(agent);
                 }
                 Self {
@@ -160,7 +146,6 @@ impl RuntimeProjection {
                 )
             })
             .collect::<Vec<_>>();
-        let superseded = superseded_molt_ids(agents.iter().map(|(agent, ..)| *agent));
         let visible_parents = agents
             .iter()
             .filter(|(agent, _, visible)| agent.parent_agent_id.is_none() && *visible)
@@ -188,11 +173,9 @@ impl RuntimeProjection {
                 if !visible && agent.ended_at.is_none() {
                     expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
                 }
-                visible.then(|| {
-                    let mut projected = (*agent).clone();
-                    projected.molt_superseded =
-                        superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
-                    projected
+                visible.then(|| AgentState {
+                    replaced: false,
+                    ..(*agent).clone()
                 })
             })
             .collect::<Vec<_>>();
@@ -204,28 +187,6 @@ impl RuntimeProjection {
             resume_outcomes,
         }
     }
-}
-
-fn superseded_molt_ids<'a>(
-    agents: impl Iterator<Item = &'a AgentState> + Clone,
-) -> HashSet<&'a AgentSessionId> {
-    let predecessors = agents
-        .clone()
-        .filter_map(|agent| agent.molted_from.as_ref())
-        .collect::<HashSet<_>>();
-    if predecessors.is_empty() {
-        return HashSet::new();
-    }
-    agents
-        .clone()
-        .filter_map(|agent| {
-            if !agent.identity_ids().any(|id| predecessors.contains(id)) {
-                return None;
-            }
-            let id = agent.launch_id.as_ref().unwrap_or(&agent.agent_id);
-            standing_successor(agents.clone(), id).map(|_| id)
-        })
-        .collect()
 }
 
 fn ended_keys<'a>(
@@ -346,51 +307,90 @@ mod tests {
         }
     }
 
-    fn molt_chain() -> Vec<AgentState> {
-        let mut predecessor = agent(None);
-        predecessor.launch_id = Some("launch_old".into());
-        let mut intermediate = agent(None);
-        intermediate.agent_id = "middle".into();
-        intermediate.launch_id = Some("launch_middle".into());
-        intermediate.molted_from = predecessor.launch_id.clone();
-        intermediate.ended_at = Some(Timestamp::UNIX_EPOCH);
-        let mut successor = agent(None);
-        successor.agent_id = "launch_new".into();
-        successor.launch_id = Some(successor.agent_id.clone());
-        successor.molted_from = intermediate.launch_id.clone();
-        successor.status = AgentStatus::Running;
-        vec![predecessor, intermediate, successor]
+    /// One agent swapped twice: its first session, a reservation that failed
+    /// before binding, and the bound replacement that holds it now.
+    fn swap_chain() -> Vec<AgentState> {
+        let mut first = agent(None);
+        first.launch_id = Some("launch_old".into());
+        let mut failed = agent(None);
+        failed.agent_id = "launch_middle".into();
+        failed.launch_id = first.launch_id.clone();
+        failed.epoch = 1;
+        failed.status = AgentStatus::Failed;
+        let mut holder = agent(None);
+        holder.agent_id = "launch_new".into();
+        holder.launch_id = first.launch_id.clone();
+        holder.epoch = 2;
+        holder.launch_bound = true;
+        holder.status = AgentStatus::Running;
+        vec![first, failed, holder]
     }
 
     #[test]
-    fn runtime_supersession_crosses_an_ended_molt_intermediate() {
-        let agents = molt_chain();
+    fn runtime_scope_keeps_only_the_holder_across_a_failed_swap() {
+        let agents = swap_chain();
         let projection = RuntimeProjection::runtime_from_refs(&agents, Vec::new());
-        assert_eq!(projection.agents.len(), 2);
-        assert!(projection.agents[0].molt_superseded);
-        assert!(!projection.agents[1].molt_superseded);
+        let kept: Vec<_> = projection
+            .agents
+            .iter()
+            .map(|row| row.agent_id.as_str())
+            .collect();
+        assert_eq!(kept, ["launch_new"]);
         let from_parts =
             RuntimeProjection::from_parts(&agents.into(), RuntimeScope::Runtime, Vec::new());
         assert_eq!(projection, from_parts);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn audit_supersession_crosses_an_ended_molt_intermediate() {
-        let projection =
-            RuntimeProjection::from_parts(&molt_chain().into(), RuntimeScope::Audit, Vec::new());
-        assert_eq!(projection.agents.len(), 3);
-        assert!(projection.agents[0].molt_superseded);
-        assert!(projection.agents[1].molt_superseded);
-        assert!(!projection.agents[2].molt_superseded);
+    fn a_bound_replacement_that_failed_stays_under_the_handle_after_its_wrapper_dies() {
+        let dead = || {
+            Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "w",
+                u32::MAX,
+                None,
+            ))
+        };
+        let mut agents = swap_chain();
+        agents[2].status = AgentStatus::Failed;
+        agents[2].runtime_owner = dead();
+        let projection = RuntimeProjection::runtime_from_refs(&agents, Vec::new());
+        let kept: Vec<_> = projection
+            .agents
+            .iter()
+            .map(|row| row.agent_id.as_str())
+            .collect();
+        assert_eq!(
+            kept,
+            ["launch_new"],
+            "the failed holder keeps the agent's card"
+        );
+
+        let mut lone = agents.pop().unwrap();
+        lone.epoch = 0;
+        let projection = RuntimeProjection::runtime_from_refs([&lone], Vec::new());
+        assert!(
+            projection.agents.is_empty(),
+            "an ordinary failed launch still drops out"
+        );
     }
 
     #[test]
-    fn team_signal_handles_match_owned_audit_across_a_molt() {
+    fn audit_scope_marks_every_session_the_holder_replaced() {
+        let projection =
+            RuntimeProjection::from_parts(&swap_chain().into(), RuntimeScope::Audit, Vec::new());
+        let marks: Vec<_> = projection.agents.iter().map(|row| row.replaced).collect();
+        assert_eq!(marks, [true, true, false]);
+    }
+
+    #[test]
+    fn team_signal_handles_match_owned_audit_across_a_swap() {
         use crate::agents::{AskKind, LifecycleEvent, LifecycleSignal};
         use crate::harness::schedule::signal::team_lifecycle_signals;
         use crate::ids::{EventId, WorkspaceId};
 
-        let mut rows = molt_chain();
+        let mut rows = swap_chain();
         for row in &mut rows {
             row.team = Some("forge".to_owned());
             row.channel = Some("auth".to_owned());
@@ -430,7 +430,7 @@ mod tests {
         let member = rows.find(&event.kind, &event.agent_id).unwrap();
         let cohorts = crate::address::team_cohorts(rows.iter());
         assert_eq!(cohorts.len(), 1);
-        assert_eq!(cohorts[0].members.len(), 2);
+        assert_eq!(cohorts[0].members.len(), 1, "only the holder is the member");
         let actual = team_lifecycle_signals(
             &event,
             member,
@@ -466,24 +466,25 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_provisional_molt_restores_the_predecessor() {
-        let mut agents = molt_chain();
-        agents[2].status = AgentStatus::Failed;
+    fn a_swap_that_fails_before_binding_leaves_the_first_session_the_agent() {
+        let mut agents = swap_chain();
+        agents.pop();
         for scope in [RuntimeScope::Runtime, RuntimeScope::Audit] {
             let projection =
                 RuntimeProjection::from_parts(&agents.clone().into(), scope, Vec::new());
-            assert!(projection.agents.iter().all(|agent| !agent.molt_superseded));
+            let first = &projection.agents[0];
+            assert_eq!((first.agent_id.as_str(), first.replaced), ("sess-1", false));
         }
     }
 
     #[test]
-    fn projections_overwrite_cached_molt_supersession() {
+    fn projections_overwrite_a_cached_replaced_mark() {
         let mut agent = agent(None);
-        agent.molt_superseded = true;
+        agent.replaced = true;
         for scope in [RuntimeScope::Runtime, RuntimeScope::Audit] {
             let projection =
                 RuntimeProjection::from_parts(&vec![agent.clone()].into(), scope, Vec::new());
-            assert!(!projection.agents[0].molt_superseded);
+            assert!(!projection.agents[0].replaced);
         }
     }
 
