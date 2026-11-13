@@ -199,7 +199,7 @@ The held dashboard passes a ranked model union through `crates/rimz/src/cli/rend
 
 Readability cannot assume the scheme hues or brand colors are safe: 205 of 533 bundled schemes have a normal hue under 3:1 against their background, and Claude's and Codex's brands miss that floor on 79 and 110 schemes. Rules promising readable or distinct colors are tested over `config::scheme_swatches()` at both depths. `crates/rimz/src/theme/palette.rs::emitted_rgb` reads ANSI indices 0 to 15 as their xterm default RGB, so a terminal's custom ANSI palette can change their actual contrast or separation.
 
-Identity depends only on the provider kind and the theme config, never on whether the dashboard shows that provider's panel. Human-facing provider names, agent handles, tabs, and emblems all resolve through it, and JSON fields keep the definition's own values. One field breaks that rule: `rimz accounts --json` serializes `product_name` from the resolved identity, so it carries a `[theme.providers.<kind>] product_name` override (`crates/rimz/src/cli/accounts/report.rs::ProviderReport`).
+Identity depends only on the provider kind and the theme config, never on whether the dashboard shows that provider's panel. Human-facing provider names, agent handles, tabs, emblems, and the logo's brand color all resolve through it, and JSON fields keep the definition's own values. One field breaks that rule: `rimz accounts --json` serializes `product_name` from the resolved identity, so it carries a `[theme.providers.<kind>] product_name` override (`crates/rimz/src/cli/accounts/report.rs::ProviderReport`).
 
 ## Interface language
 
@@ -207,7 +207,7 @@ Four meanings cover every human-facing use of color, and a new surface picks fro
 
 | meaning | rule | home |
 | --- | --- | --- |
-| Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. Model spend markers use readable scheme hues nearest that brand. Statuses, plans, and headings use their own roles. RimZ's own wordmarks (stats, the sessions picker and `rimz web`, the installer) wear fixed Rimio amber (`Identity::Rimio`), for logos only. | `theme/provider.rs`, `theme/identity.rs`, `theme/palette.rs` |
+| Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. A provider logo image is identity that carries its own colors: `currentColor` in its SVG takes the resolved brand and every other color stays as the file draws it ([pixel logos](./sidebar/pets.md#provider-logos)). Model spend markers use readable scheme hues nearest that brand. Statuses, plans, and headings use their own roles. RimZ's own wordmarks (stats, the sessions picker and `rimz web`, the installer) wear fixed Rimio amber (`Identity::Rimio`), for logos only. | `theme/provider.rs`, `theme/identity.rs`, `theme/palette.rs` |
 | State | typed lifecycle values map to a state role, and a glyph or status word carries the same meaning without color | `cli/render/status.rs` |
 | Hierarchy | `body` for primary content, `muted` for labels and metadata, `faint` for separators and placeholders, bold for emphasis. Headings are muted bold except the held stats dashboard's body-bold section titles. `accent` marks categories. | every renderer |
 | Quantity | dollar green (`Identity::Money`) for currency, the token-category tones, and the heat ramp plus shape-readable bars for percentages and budgets | `theme/identity.rs`, `theme/palette.rs` |
