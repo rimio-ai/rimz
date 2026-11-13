@@ -53,8 +53,10 @@ pub(crate) use panes::{
 pub(crate) use process::pane_agent_kind;
 pub(crate) use process::{pane_worktree_path, process_is_active};
 pub use row::{
-    AgentCard, CacheClock, CardDescription, PaneAgent, ProcessCard, ProcessState, RowCallSplit,
-    RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
+    AgentCard, BookingBand, BookingBlocker, BookingFire, BookingLive, BookingPr, BookingSibling,
+    BookingStage, BookingStarts, BookingState, BookingWait, CacheClock, CardDescription, PaneAgent,
+    ProcessCard, ProcessState, RowCallSplit, RowCard, SiblingState, SidebarBooking, SidebarRow,
+    SidebarSubAgent, SubAgentTokens,
 };
 pub(crate) use view::sort_windows;
 pub use view::{

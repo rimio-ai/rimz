@@ -1,5 +1,7 @@
 //! Unit tests for the agent-address grammar.
 
+use std::collections::HashMap;
+
 use jiff::Timestamp;
 
 use super::*;
@@ -2130,6 +2132,50 @@ fn team_cohorts_group_live_root_members_by_team_and_lane() {
             .collect::<Vec<_>>(),
         vec![("forge", "auth", 3), ("forge", "docs", 1)]
     );
+}
+
+#[test]
+fn focus_member_ranks_actionable_members_then_the_leader_then_the_first() {
+    let member = |id: &str, role: &str, status: AgentStatus| {
+        let mut agent = agent("codex", id, Some("docs"), id);
+        agent.team = Some("forge".to_owned());
+        agent.channel = Some("docs".to_owned());
+        agent.role = Some(role.to_owned());
+        agent.status = status;
+        agent
+    };
+    let focus = |agents: &[AgentState], leader: Option<&str>| {
+        let scores = HashMap::from([("asking", 10), ("urgent", 50)]);
+        let cohorts = team_cohorts(agents);
+        let [cohort] = cohorts.as_slice() else {
+            panic!("one cohort");
+        };
+        cohort
+            .focus_member(leader, &scores, Timestamp::UNIX_EPOCH)
+            .agent_id
+            .to_string()
+    };
+    let asking = member("asking", "coder", AgentStatus::Waiting);
+    let urgent = member("urgent", "reviewer", AgentStatus::Failed);
+    let first = member("first", "scout", AgentStatus::Idle);
+    let lead = member("lead", "planner", AgentStatus::Idle);
+
+    assert_eq!(
+        focus(&[asking.clone(), urgent, first.clone()], Some("planner")),
+        "urgent",
+        "the actionable member with the highest score wins over the leader"
+    );
+    assert_eq!(
+        focus(&[first.clone(), lead.clone()], Some("planner")),
+        "lead",
+        "with nothing actionable, the leader role"
+    );
+    assert_eq!(
+        focus(&[first.clone(), lead], None),
+        focus(std::slice::from_ref(&first), None),
+        "without a leader, the first member"
+    );
+    assert_eq!(focus(&[first], Some("absent")), "first");
 }
 
 #[test]

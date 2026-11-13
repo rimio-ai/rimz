@@ -204,7 +204,21 @@ impl<'a> ForgeKey<'a> {
     }
 }
 
+/// The branch a forge key names (`pr[feature]` names `feature`); `None` for a forge key
+/// that reads its scope's own checkout, and for any other key.
+pub fn forge_branch(key: &str) -> Option<&str> {
+    ForgeKey::parse(key)?.branch()
+}
+
 impl CiSource {
+    /// `pr[<branch>]` read from `scope` as a condition reads it (`none` once a successful
+    /// probe found no pull request, `None` while unread), with the cached number.
+    pub fn branch_pr(&self, branch: &str, scope: &Path) -> (Option<&'static str>, Option<u64>) {
+        let key = ForgeKey::Pr(Some(branch));
+        let number = key.link(&self.0, scope).and_then(|(link, _)| link?.number);
+        (self.reading(key, scope), number)
+    }
+
     /// The cached PR number for this checkout, without probing the forge.
     pub fn pr_number(&self, scope: &Path) -> Option<u64> {
         self.0.states.get(scope.to_string_lossy().as_ref())?.number

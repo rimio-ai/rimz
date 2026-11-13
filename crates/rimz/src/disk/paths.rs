@@ -1344,6 +1344,10 @@ impl RuntimePaths {
         self.lane_path("pipeline.json")
     }
 
+    pub(crate) fn bookings_path(&self) -> PathBuf {
+        self.lane_path("bookings.json")
+    }
+
     pub(crate) fn keep_warm_path(&self) -> PathBuf {
         self.lane_path("keep-warm.json")
     }

@@ -21,6 +21,7 @@ use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, Store};
 
 pub mod accounts;
+pub(super) mod bookings;
 pub(super) mod cohort_spend;
 pub(super) mod credits;
 pub(super) mod daemon_reap;
@@ -111,6 +112,7 @@ pub struct ProducerRefreshState {
     /// Spawns per step of the last `refresh_heavy_lanes` pass, handed to the
     /// tick meter once.
     pass_spawns: BTreeMap<String, u64>,
+    bookings: bookings::BookingsState,
 }
 
 impl ProducerRefreshState {
@@ -332,11 +334,11 @@ pub(super) fn refresh_heavy_lanes(
             &resume_messages,
         )
     });
-    let policy = if base
+    let seated = base
         .agents
         .iter()
-        .any(|agent| agent.team.is_some() || agent.profile.is_some())
-    {
+        .any(|agent| agent.team.is_some() || agent.profile.is_some());
+    let policy = if seated {
         SeatPolicy::load(config, base.project_root.as_deref())
     } else {
         SeatPolicy::default()
@@ -496,6 +498,16 @@ pub(super) fn refresh_heavy_lanes(
     });
     steps.step("pipeline", || {
         pipeline::refresh_pipeline_for(base, runtime, config, teams)
+    });
+    steps.step("bookings", || {
+        bookings::refresh_bookings_for(
+            base,
+            state_paths,
+            runtime,
+            config,
+            seated.then_some(teams),
+            &mut state.bookings,
+        )
     });
     let pr_cache = steps.step("pr_states", || produce_pr_states(base, runtime, state));
     steps.step("trunk", || {

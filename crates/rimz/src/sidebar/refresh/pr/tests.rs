@@ -2856,3 +2856,152 @@ fn tea_branch_status_errors_leave_unknown_ci_without_failing_checkouts() {
         ]
     );
 }
+
+/// A fired booking's own branch joins the lane's branch demand and reads through to
+/// `Merged` and to a proven `None`, one all-state list and one detail read per probe; a
+/// first probe that fails leaves the branch unread under the lane's backoff.
+#[test]
+fn a_booking_branch_demand_reads_through_to_merged_and_none() {
+    use crate::sidebar::refresh::bookings::{BookingFacts, BookingsCache, FireFacts};
+    use crate::store::snapshot::{BookingPr, BookingStarts};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(&root),
+        &dir.path().join("run"),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let root_key = root.to_string_lossy().into_owned();
+    let bookings = BookingsCache {
+        version: 2,
+        bookings: vec![BookingFacts {
+            task: "feat-y".to_owned(),
+            starts: BookingStarts::Profile("coder".to_owned()),
+            leader: None,
+            booked_by: Vec::new(),
+            branch: Some("feat-y".to_owned()),
+            worktree: true,
+            needs_fix: None,
+            blocking: None,
+            unmet: Vec::new(),
+            timing: None,
+            fire: Some(FireFacts {
+                at: jiff::Timestamp::UNIX_EPOCH,
+                run: None,
+                ended_at: None,
+                pr: BookingPr::Unread,
+                team_done: None,
+                launches: Vec::new(),
+            }),
+        }],
+    };
+    let mut demand = BTreeMap::new();
+    add_booking_demand(&mut demand, &bookings, Some(&root));
+    assert_eq!(
+        demand,
+        BTreeMap::from([(root_key.clone(), BTreeSet::from(["feat-y".to_owned()]))]),
+        "the booking's branch is demanded at the task's root"
+    );
+
+    let checkout = tea_target(&root_key, "main");
+    let repo = checkout.repo_key.clone();
+    let mut branch = tea_target("\0feat-y", "feat-y");
+    branch.branch_only = true;
+    branch.head_sha = None;
+    let groups = group_targets(vec![checkout.clone(), branch]);
+    let group = &groups[&repo];
+    let cold = PrStateCache::default();
+    assert_eq!(
+        cached_due_repo_keys(
+            &demand,
+            &cold,
+            std::slice::from_ref(&checkout.path),
+            &DiffStatsCache::default(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1000,
+        ),
+        None,
+        "an uncached demanded branch bypasses the fresh fast path"
+    );
+
+    let read = |cache: &PrStateCache| {
+        write_pr_state_cache(&runtime.pr_state_path(), cache);
+        crate::sidebar::refresh::bookings::branch_pr(
+            &crate::harness::when::CiSource::read(&runtime),
+            "feat-y",
+            &root,
+        )
+    };
+    let probe = |listed: &'static str| {
+        let mut calls = BTreeMap::<String, usize>::new();
+        let result = probe_tea_repo_group_with(&repo, group, &BTreeMap::new(), |_, _, args| {
+            let endpoint = if args.starts_with(&["pr", "list"]) {
+                args[..4].join(" ")
+            } else {
+                args.join(" ")
+            };
+            *calls.entry(endpoint).or_default() += 1;
+            if args.starts_with(&["pr", "list", "--state", "open"]) {
+                return Some("[]".to_owned());
+            }
+            if args.starts_with(&["pr", "list", "--state", "all"]) {
+                return Some(listed.to_owned());
+            }
+            if args == ["api", "repos/org/repo/pulls/42"] {
+                return Some(
+                    r#"{"state":"closed","merged":true,"merge_commit_sha":"m","head":{"sha":"h"}}"#
+                        .to_owned(),
+                );
+            }
+            Some(r#"{"state":"success"}"#.to_owned())
+        });
+        let mut cache = PrStateCache::default();
+        apply_repo_probe(&mut cache, &PrStateCache::default(), result, 1000);
+        (cache, calls)
+    };
+
+    let (merged, calls) = probe(r#"[{"index":"42","state":"closed","head":"feat-y"}]"#);
+    assert_eq!(read(&merged), BookingPr::Merged { number: Some(42) });
+    assert_eq!(calls.get("pr list --state all"), Some(&1));
+    assert_eq!(calls.get("api repos/org/repo/pulls/42"), Some(&1));
+    let (none, calls) = probe("[]");
+    assert_eq!(
+        read(&none),
+        BookingPr::None,
+        "a successful probe found none"
+    );
+    assert_eq!(calls.get("pr list --state all"), Some(&1));
+    assert_eq!(calls.get("api repos/org/repo/pulls/42"), None);
+
+    let mut failed = PrStateCache::default();
+    apply_repo_probe(
+        &mut failed,
+        &PrStateCache::default(),
+        failed_repo_group_probe(&repo, group),
+        1000,
+    );
+    assert_eq!(
+        read(&failed),
+        BookingPr::Unread,
+        "a failed probe proves nothing"
+    );
+    let within = 1000 + PR_STATE_RETRY_TTL.as_millis() as u64;
+    assert_eq!(
+        due_repo_keys(&groups, &failed, &BTreeSet::new(), &BTreeSet::new(), within),
+        BTreeSet::new(),
+        "the failed first probe waits out the lane's backoff"
+    );
+    assert_eq!(
+        due_repo_keys(
+            &groups,
+            &failed,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            within + 1
+        ),
+        BTreeSet::from([repo.clone()])
+    );
+}

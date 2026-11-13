@@ -1201,6 +1201,51 @@ pub struct TeamCohort<'a> {
     pub members: Vec<&'a AgentState>,
 }
 
+impl<'a> TeamCohort<'a> {
+    /// The member `rimz teams focus` takes you to: the actionable member with the highest
+    /// attention score (the earlier one on a tie), else the member in the `leader` role, else
+    /// the first member. `attention_scores` is keyed by session id; a member it lacks scores
+    /// zero.
+    pub fn focus_member(
+        &self,
+        leader: Option<&str>,
+        attention_scores: &HashMap<&str, u32>,
+        now: jiff::Timestamp,
+    ) -> &'a AgentState {
+        let score = |agent: &AgentState| {
+            attention_scores
+                .get(agent.agent_id.as_str())
+                .copied()
+                .unwrap_or_default()
+        };
+        let actionable = self
+            .members
+            .iter()
+            .copied()
+            .filter(|agent| agent.effective_status(now).is_actionable())
+            .fold(None, |best, candidate| match best {
+                Some(best) if score(best) >= score(candidate) => Some(best),
+                _ => Some(candidate),
+            });
+        actionable
+            .or_else(|| {
+                leader.and_then(|leader| {
+                    self.members
+                        .iter()
+                        .copied()
+                        .find(|agent| agent.role.as_deref() == Some(leader))
+                })
+            })
+            // `team_cohorts` only creates cohorts after inserting a live member.
+            .unwrap_or_else(|| {
+                self.members
+                    .first()
+                    .copied()
+                    .expect("team_cohorts emits non-empty cohorts")
+            })
+    }
+}
+
 impl TeamCohort<'_> {
     pub fn team(&self) -> &str {
         self.instance.team()

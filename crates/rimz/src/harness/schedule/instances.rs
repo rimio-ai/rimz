@@ -63,6 +63,12 @@ pub(super) fn load_strict_from(state_root: &Path) -> Result<Tasks> {
     }
 }
 
+/// Seed a room's instance row for a test outside the scheduler.
+#[cfg(test)]
+pub(crate) fn seed(paths: &StatePaths, name: &str, entry: &TaskEntry) {
+    insert(paths, name, entry).expect("seed the room's instance row");
+}
+
 pub(super) fn insert(paths: &StatePaths, name: &str, entry: &TaskEntry) -> Result<()> {
     mutate(paths, |tasks| {
         tasks.insert(name.to_owned(), entry.clone());

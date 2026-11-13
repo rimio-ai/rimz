@@ -88,6 +88,12 @@ fn read_room_reads_a_seeded_room_without_writing() {
     let closed = read(false);
 
     assert_eq!(
+        open.unmet,
+        ["pr[feature]", "pr[other]"],
+        "every unmet term, each once, in the condition's order"
+    );
+    assert_eq!(open.launch, None, "an unfired task has no launch");
+    assert_eq!(
         (open.attention, open.fired, open.blocking),
         (
             None,
