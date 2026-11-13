@@ -490,6 +490,10 @@ impl Transition<'_> {
                     self.push(None, JournalEvent::Park { reason, text });
                 }
                 Target::Node(node) => {
+                    // A pending restart belongs to the step it restarts.
+                    if *node != self.record.node {
+                        self.record.restart = None;
+                    }
                     self.record.node = node.clone();
                     self.record.entered_at = self.now;
                     self.record.check_retry = 0;

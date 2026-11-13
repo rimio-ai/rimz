@@ -664,6 +664,9 @@ pub struct RunRecord {
     pub attempt: Option<LiveAttempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<HeldSession>,
+    /// A manual restart of the current step, pending until its replacement launch is published.
+    /// A route to another node, a park, a cancel, or a terminal state drops it, so no other step
+    /// launches with its resume session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart: Option<Restart>,
     pub prev_attempt: Option<PreviousAttempt>,
