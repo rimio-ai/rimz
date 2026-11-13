@@ -925,6 +925,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             (10, 0, stay || workflow),
         ] {
             let tick = zdt(2026, 6, 24, 8, minute, second);
+            // Named lost, a resident row keeps its own retry timing.
             let (actions, next_stamps, next_states) = plan(
                 &tasks,
                 &stamps,
@@ -932,7 +933,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
                 &tick,
                 &states,
                 &verdicts,
-                &BTreeSet::new(),
+                &BTreeSet::from([NAME.to_owned()]),
             );
             assert_eq!(
                 actions,
@@ -1079,6 +1080,68 @@ fn condition_fired_period_does_not_refire() {
     );
     assert_eq!(stamps, one(prior));
     assert!(actions.is_empty());
+    assert_eq!(states, one(state));
+}
+
+/// A fired one-shot condition named lost fires again only past the grace and on a true
+/// reading; a repeating condition named lost never does.
+#[test]
+fn lost_once_condition_retries_past_the_grace_on_a_true_reading() {
+    let now = zdt(2026, 6, 24, 9, 0, 0);
+    let since = seconds_before(now.timestamp(), 3600);
+    let state = condition_state(None, since, true);
+    let lost = BTreeSet::from([NAME.to_owned()]);
+    let tick = |once: bool, age: i64, truth: Option<bool>| {
+        plan(
+            &one(loaded(TaskEntry {
+                check: Some("true".into()),
+                when: Some(vec!["team.stage=Done".to_owned()]),
+                once: once.then_some(true),
+                ..TaskEntry::default()
+            })),
+            &one(seconds_before(now.timestamp(), age)),
+            &BTreeMap::new(),
+            &now,
+            &one(state.clone()),
+            &one(Verdict {
+                truth,
+                readings: BTreeMap::new(),
+                unread: Default::default(),
+            }),
+            &lost,
+        )
+    };
+
+    let (actions, stamps, states) = tick(true, FIRE_AT_RETRY_SECS, Some(true));
+    assert_eq!(
+        actions,
+        vec![(NAME.to_owned(), Action::Fire)],
+        "a lost runner past the grace is dispatched again"
+    );
+    assert_eq!(stamps, one(now.timestamp()));
+    assert_eq!(
+        states,
+        one(state.clone()),
+        "the latch and hold start are kept"
+    );
+
+    let young = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS - 1);
+    let (actions, stamps, states) = tick(true, FIRE_AT_RETRY_SECS - 1, Some(true));
+    assert!(actions.is_empty(), "a lost runner inside the grace waits");
+    assert_eq!((stamps, states), (one(young), one(state.clone())));
+
+    let old = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
+    let (actions, stamps, states) = tick(true, FIRE_AT_RETRY_SECS, Some(false));
+    assert!(
+        actions.is_empty() && states.is_empty(),
+        "false drops the latch"
+    );
+    assert_eq!(stamps, one(old));
+    let (actions, _, states) = tick(true, FIRE_AT_RETRY_SECS, None);
+    assert!(actions.is_empty(), "unknown holds");
+    assert_eq!(states, one(state.clone()));
+    let (actions, _, states) = tick(false, FIRE_AT_RETRY_SECS, Some(true));
+    assert!(actions.is_empty(), "a repeating condition is not retried");
     assert_eq!(states, one(state));
 }
 
@@ -2081,6 +2144,92 @@ fn stranded_fire_at_retries_only_when_its_runner_is_lost() {
             LoopRunHost::Detached,
             None,
         );
+        (fired, last_stamps(&runtime)[STRANDED])
+    };
+    let record = |result| {
+        let _ = run_log::record_transition(
+            &task,
+            &LoopRunRecord::new(STRANDED, result, LoopRunMode::Scheduled, 0),
+        );
+    };
+
+    let lock = runtime.lock_path(super::super::run_lock::file_name(STRANDED, None));
+    let crate::disk::lease::LeaseAttempt::Acquired(held) =
+        crate::disk::lease::claim(&lock, |_| Ok(())).unwrap()
+    else {
+        panic!("the test's run lock is free");
+    };
+    assert_eq!(pass(), (vec![], stamp), "a held run lock is a live runner");
+    drop(held);
+
+    record(LoopRunResult::StartFailed);
+    assert_eq!(
+        pass(),
+        (vec![STRANDED.to_owned()], now.timestamp()),
+        "a start failure since the stamp leaves the runner lost"
+    );
+
+    record(LoopRunResult::Delivered);
+    assert_eq!(
+        pass(),
+        (vec![], stamp),
+        "a recorded attempt since the stamp is not retried"
+    );
+}
+
+/// A fired one-shot condition past the grace, still reading true, takes the
+/// `fire-at` row's lost-runner test: a held run lock or a recorded attempt keeps
+/// it carried, and a `start failed` row since the stamp fires it again with its
+/// latch and hold start kept.
+#[test]
+fn stranded_once_condition_retries_only_when_its_runner_is_lost() {
+    const STRANDED: &str = "stranded-once-condition";
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    std::fs::create_dir_all(&runtime.locks_dir).unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
+    let now = zdt(2026, 6, 24, 9, 0, 0);
+    let stamp = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("do it".to_owned()),
+        root: root.path().to_path_buf(),
+        when: Some(vec!["team.stage=Done".to_owned()]),
+        once: Some(true),
+        ..TaskEntry::default()
+    };
+    let latch = BTreeMap::from([(
+        STRANDED.to_owned(),
+        WhenState {
+            fingerprint: Some(("team.stage=Done".to_owned(), None, entry.run_dir())),
+            since: seconds_before(stamp, 60),
+            fired: true,
+        },
+    )]);
+    let task = LoadedTask::new(STRANDED, entry, TaskSource::Config);
+    let tasks = BTreeMap::from([(STRANDED.to_owned(), task.clone())]);
+    let pass = || {
+        write_temp_then_rename_cache(
+            &state_path(&runtime),
+            &BTreeMap::from([(STRANDED.to_owned(), stamp)]),
+        )
+        .unwrap();
+        write_temp_then_rename_cache(&when_state_path(&runtime), &latch).unwrap();
+        let fired = fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        );
+        assert_eq!(last_when_states(&runtime), latch, "the latch is kept");
         (fired, last_stamps(&runtime)[STRANDED])
     };
     let record = |result| {
