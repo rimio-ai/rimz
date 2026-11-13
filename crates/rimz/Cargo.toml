@@ -38,6 +38,7 @@ include = [
     "!**/*_tests.rs",
     "/build.rs",
     "/themes",
+    "/logos",
     "/pricing/litellm-pricing.json",
     "/presence/rimz-presence-zellij.wasm",
     "/presence/rimz-presence-zellij.wasm.provenance.json",

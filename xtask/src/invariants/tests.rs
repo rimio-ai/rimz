@@ -447,10 +447,26 @@ include = [
     "/presence/rimz-presence-zellij.wasm",
     "/presence/rimz-presence-zellij.wasm.provenance.json",
     "/pricing/litellm-pricing.json",
+    "/logos",
 ]
 "#;
 
     ensure_include_covers_build_inputs(manifest).unwrap();
+}
+
+#[test]
+fn package_include_list_flags_missing_provider_logos() {
+    let manifest = r#"
+[package]
+include = [
+    "/presence/rimz-presence-zellij.wasm",
+    "/presence/rimz-presence-zellij.wasm.provenance.json",
+    "/pricing/litellm-pricing.json",
+]
+"#;
+
+    let err = ensure_include_covers_build_inputs(manifest).unwrap_err();
+    assert!(err.to_string().contains("/logos"), "{err}");
 }
 
 #[test]
