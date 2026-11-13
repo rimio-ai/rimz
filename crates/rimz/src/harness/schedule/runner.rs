@@ -20,7 +20,6 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
-use super::super::assist_log::{self, Assist, AssistRecord};
 use super::{
     backlog::{self, StopCause, StopMark, WaitingTrigger},
     backlog_store::{self, LockedBacklog},
@@ -917,6 +916,7 @@ impl<'a> TaskFire<'a> {
         }
         // The last rung: a fresh task's run works in a tree cut for this fire alone.
         self.prepare_fire_tree()?;
+        let fire_facts = Some(self.fire_facts());
         let prompt = || match &source {
             WorkflowSource::Deployed(_) => self.run_prompt().map_err(|error| format!("{error:#}")),
             WorkflowSource::Inline(_) => Ok(None),
@@ -932,6 +932,7 @@ impl<'a> TaskFire<'a> {
                 surplus: self.entry.surplus.clone(),
                 surplus_after: self.entry.surplus_after.clone(),
                 fire: Some(self.run_fire()),
+                fire_facts,
             },
             WorkflowSource::Inline(definition) => {
                 crate::harness::workflow::DefinitionSource::Inline {
@@ -944,6 +945,7 @@ impl<'a> TaskFire<'a> {
                     surplus: self.entry.surplus.clone(),
                     surplus_after: self.entry.surplus_after.clone(),
                     fire: Some(self.run_fire()),
+                    fire_facts,
                 }
             }
         };
@@ -995,16 +997,6 @@ impl<'a> TaskFire<'a> {
             path: tree.path.clone(),
             base_fallback: tree.base_fallback.clone(),
         });
-        assist_log::append(&AssistRecord {
-            at: Timestamp::now(),
-            assist: Assist::WorkflowStart {
-                run: run.id.clone(),
-                workflow: run.workflow.clone(),
-                task: run.task.clone(),
-                checkout: run.scope.path.clone(),
-                prompt: run.prompt.is_some(),
-            },
-        });
         let error = self.record_workflow_launch(
             &state,
             &run.id,
@@ -1016,6 +1008,7 @@ impl<'a> TaskFire<'a> {
         if self.entry.deadline.is_none() {
             self.consume_ephemeral()?;
         }
+        // The run's report is the fire's one history row; this launch only stamps its proof.
         Ok(TaskFirePlan::Done(self.record_terminal_with(
             LoopRunResult::Launched,
             LoopRunPresentation::default(),
@@ -1027,6 +1020,18 @@ impl<'a> TaskFire<'a> {
                 record.error = error;
             },
         )))
+    }
+
+    /// What this fire would log at its launch, sealed into its run for the run's one report row:
+    /// its trigger, waits, lock tenure, fresh tree and kind.
+    fn fire_facts(&self) -> serde_json::Value {
+        let mut record = self.terminal_record(LoopRunResult::Launched);
+        record.run_lock = self.run_lock.as_ref().map(|guard| guard.info);
+        record.worktree = self.fire_tree.as_ref().map(|tree| run_log::FireWorktree {
+            path: tree.path.clone(),
+            base_fallback: tree.base_fallback.clone(),
+        });
+        run_log::fire_facts(&record)
     }
 
     /// What this fire tells its run's briefs, frozen into the run at its creation: the task, and
@@ -1392,6 +1397,8 @@ impl<'a> TaskFire<'a> {
             leader: None,
             destination: None,
         };
+        #[cfg(feature = "testkit")]
+        crate::testkit::rendezvous("RIMZ_TEST_LOOP_BEFORE_LAUNCH_MEMORY");
         let Err(error) = super::launch_ledger_store::record_workflow(
             paths,
             &self.name,
@@ -1400,7 +1407,7 @@ impl<'a> TaskFire<'a> {
             replace_project,
         ) else {
             // The run advances before this write, so its collection may already have forgotten it.
-            if let Err(error) = run_log::forget_collected_launch(paths, run) {
+            if let Err(error) = run_log::forget_collected_launch(paths, &self.name, run) {
                 tracing::warn!(task = %self.name, %run, %error, "launch memory kept");
             }
             return None;

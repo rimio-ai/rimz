@@ -765,7 +765,7 @@ fn runner_lost(runtime: &RuntimePaths, name: &str, task: &LoadedTask, stamp: Tim
     let root = task.entry().resolved_root();
     super::run_lock::held(runtime, name).is_ok_and(|held| !held)
         && !attempt_recorded_since((root.clone(), name.to_owned(), stamp), || {
-            run_log::has_recorded_attempt_since(&logs_dir(), name, &root, stamp)
+            run_log::has_recorded_attempt_since(&logs_dir(), &task.key(name), name, &root, stamp)
         })
 }
 
@@ -916,6 +916,7 @@ pub(super) fn spawn_loop_run(
             if wait_for_scope(pid, name) == ScopeHandoff::ChildGone
                 && !run_log::has_scheduled_row_since(
                     &logs_dir(),
+                    &task.key(name),
                     name,
                     &task.entry().resolved_root(),
                     checkout,

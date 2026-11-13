@@ -402,6 +402,7 @@ fn a_run_in_progress_holds_back_only_the_failure_it_follows() {
             spend_today_usd: 0.0,
             acting: super::super::run_log::acting_run(&[failed]),
             heard: None,
+            quiet: None,
         },
     )]);
     let cause = |seed: &dyn Fn(&Room)| {

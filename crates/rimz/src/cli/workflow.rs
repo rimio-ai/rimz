@@ -395,6 +395,7 @@ fn start(
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         },
         workflow::ScopeRoots {
             checkout: scope.clone(),

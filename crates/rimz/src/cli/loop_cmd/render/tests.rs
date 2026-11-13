@@ -1,5 +1,6 @@
 use super::super::run_report::render_record_detail;
 use super::*;
+use std::collections::BTreeSet;
 
 fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
     super::collapsed_run_rows(records, &refused_fire_attribution(records), true)
@@ -10,7 +11,22 @@ fn write_agent_runs(
     records: &[LoopRunRecord],
     now: Timestamp,
 ) -> std::io::Result<()> {
-    super::write_agent_runs(out, records, &collapsed_run_rows(records), now)
+    super::write_agent_runs(
+        out,
+        records,
+        0,
+        &collapsed_run_rows(records),
+        &BTreeSet::new(),
+        now,
+    )
+}
+
+fn is_agent_run(record: &LoopRunRecord) -> bool {
+    super::is_agent_run(record, &BTreeSet::new())
+}
+
+fn is_agent_run_with(record: &LoopRunRecord, engaged: &BTreeSet<String>) -> bool {
+    super::is_agent_run(record, engaged)
 }
 
 /// `has_active_run` is a run that holds the run lock.
@@ -155,6 +171,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         timing,
         now_zoned: now.to_zoned(jiff::tz::TimeZone::UTC),
         records: vec![failed],
+        quiet: None,
         heard: None,
         launches: BTreeMap::from([
             (
@@ -207,6 +224,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             .into(),
         worktrees_error: None,
         workflow_runs: Vec::new(),
+        engaged_runs: BTreeSet::new(),
         kept_worktrees: Vec::new(),
         runs_workflows: false,
         all: false,
@@ -2035,6 +2053,7 @@ fn last_run(records: &[LoopRunRecord]) -> String {
         records,
         &refused_fire_attribution(records),
         &[],
+        None,
         Timestamp::from_second(100).unwrap(),
         ui::prose::Prose::Raw,
     )
@@ -2058,6 +2077,7 @@ fn logs_text(records: &[LoopRunRecord], limit: usize, failed: bool) -> String {
             .iter()
             .any(|record| record.result == LoopRunResult::SignalSkipped)
             .then_some(records),
+        None,
         None,
         limit,
         failed,
@@ -2388,6 +2408,7 @@ fn logs_heard_without_heard_records_matches_plain_logs_and_limits() {
             &records,
             &refused_fire_attribution(&records),
             Some(&records),
+            None,
             None,
             limit,
             false,
@@ -2723,6 +2744,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
 
     let (healthy, style) = verdict_line(
         &[failed, passed_check, neutral.clone(), completed.clone()],
+        None,
         false,
         now,
     )
@@ -2737,6 +2759,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     let failed = record(20, LoopRunResult::Failed);
     let (failing, style) = verdict_line(
         &[completed.clone(), failed, neutral.clone(), errored.clone()],
+        None,
         false,
         now,
     )
@@ -2747,25 +2770,27 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     );
     assert_eq!(style, ui::palette::alarm());
 
-    let (first, _) = verdict_line(&[completed.clone(), errored.clone()], false, now).unwrap();
+    let (first, _) = verdict_line(&[completed.clone(), errored.clone()], None, false, now).unwrap();
     assert_eq!(
         first,
         "✗ failing · last run 10s ago, error · first since a good run 10s ago"
     );
-    let (unbounded, _) = verdict_line(&[completed.clone(), completed.clone()], false, now).unwrap();
+    let (unbounded, _) =
+        verdict_line(&[completed.clone(), completed.clone()], None, false, now).unwrap();
     assert_eq!(
         unbounded,
         "✓ healthy · last run 10s ago, completed in 5.0s · 2 runs in a row"
     );
-    assert!(verdict_line(&[neutral], false, now).is_none());
+    assert!(verdict_line(&[neutral], None, false, now).is_none());
     // A run in progress takes `failing` back; a good result keeps `healthy`.
-    let (yielded, style) = verdict_line(&[completed.clone(), errored.clone()], true, now).unwrap();
+    let (yielded, style) =
+        verdict_line(&[completed.clone(), errored.clone()], None, true, now).unwrap();
     assert_eq!(
         yielded,
         "✗ last finished run 10s ago, error · first since a good run 10s ago"
     );
     assert_eq!(style, ui::palette::alarm());
-    let (healthy, _) = verdict_line(&[errored, completed], true, now).unwrap();
+    let (healthy, _) = verdict_line(&[errored, completed], None, true, now).unwrap();
     assert_eq!(
         healthy,
         "✓ healthy · last finished run 10s ago, completed in 5.0s · first since a failure 10s ago"
@@ -2787,6 +2812,36 @@ fn agent_run_predicate_counts_spawn_and_delivery_attempts() {
     let mut declined = acted.clone();
     declined.acted = Some(false);
     assert!(!is_agent_run(&declined));
+    // A run in flight is an agent run only once its record says it engaged.
+    let mut in_flight = record(6, LoopRunResult::Launched);
+    in_flight.run_id = acted.run_id.clone();
+    assert!(!is_agent_run(&in_flight));
+    let mut out = Vec::new();
+    super::write_agent_runs(
+        &mut out,
+        std::slice::from_ref(&in_flight),
+        0,
+        &collapsed_run_rows(std::slice::from_ref(&in_flight)),
+        &BTreeSet::new(),
+        Timestamp::from_second(50).unwrap(),
+    )
+    .unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(out.contains("AGENT RUNS — none in 1 fire"), "{out}");
+    let engaged = BTreeSet::from([in_flight.run_id.clone().unwrap()]);
+    assert!(is_agent_run_with(&in_flight, &engaged));
+    let mut out = Vec::new();
+    super::write_agent_runs(
+        &mut out,
+        std::slice::from_ref(&in_flight),
+        0,
+        &collapsed_run_rows(std::slice::from_ref(&in_flight)),
+        &engaged,
+        Timestamp::from_second(50).unwrap(),
+    )
+    .unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(out.contains("AGENT RUNS — 1 of 1 fire"), "{out}");
     for result in [
         LoopRunResult::CheckSkipped,
         LoopRunResult::BudgetSkipped,
@@ -3816,7 +3871,15 @@ fn a_fire_skipped_behind_a_lock_free_run_names_no_lock() {
         let mut out = Vec::new();
         let now = Timestamp::from_second(100).unwrap();
         let attribution = refused_fire_attribution(&records);
-        write_verdict(&mut out, &records, &attribution, Some(&in_progress), now).unwrap();
+        write_verdict(
+            &mut out,
+            &records,
+            None,
+            &attribution,
+            Some(&in_progress),
+            now,
+        )
+        .unwrap();
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
     };
     let since = Timestamp::from_second(20).unwrap();
@@ -3846,6 +3909,7 @@ fn show_verdict_names_a_gate_rows_refused_fire_without_recounting_it() {
     write_verdict(
         &mut out,
         &records,
+        None,
         &refused_fire_attribution(&records),
         None,
         now,
@@ -4296,17 +4360,17 @@ fn detail_index_keeps_the_acting_run_across_refusals() {
     let mut failed = record(20, LoopRunResult::Failed);
     failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
     let mut records = vec![error, failed];
-    assert_eq!(detail_index(&records), Some(1));
+    assert_eq!(detail_index(&records, None), Some(1));
 
     let mut skipped = record(30, LoopRunResult::BudgetSkipped);
     skipped.error = Some("daily budget reached".to_owned());
     records.push(skipped);
-    assert_eq!(detail_index(&records), Some(1));
+    assert_eq!(detail_index(&records, None), Some(1));
 
     let mut recovered = record(40, LoopRunResult::Completed);
     recovered.check = Some(check(Some(0), "ok"));
     records.push(recovered);
-    assert_eq!(detail_index(&records), Some(3));
+    assert_eq!(detail_index(&records, None), Some(3));
 }
 
 #[test]
@@ -4315,7 +4379,7 @@ fn detail_indices_skip_a_trailing_overlap() {
     completed.check = Some(check(Some(0), "ok"));
     let records = vec![completed, overlap(20)];
 
-    assert_eq!(detail_index(&records), Some(0));
+    assert_eq!(detail_index(&records, None), Some(0));
     assert!(last_run(&records).contains("LAST RUN — ✓ completed"));
 }
 
@@ -4328,7 +4392,7 @@ fn detail_indices_skip_last_run_after_a_clean_launch_even_with_a_trailing_overla
     launched.target = Some("@fixer".to_owned());
     let mut records = vec![error, launched];
 
-    assert_eq!(detail_index(&records), None);
+    assert_eq!(detail_index(&records, None), None);
     records.push(overlap(30));
     assert!(!last_run(&records).contains("LAST RUN"));
 }
@@ -5105,6 +5169,7 @@ fn workflow_logs(records: &[LoopRunRecord], runs: &[list::WorkflowRunRow], faile
         &refused_fire_attribution(records),
         None,
         Some(runs),
+        None,
         10,
         failed,
     )
@@ -5210,4 +5275,195 @@ fn workflow_log_overlap_names_its_blocking_run() {
             "{text}"
         );
     }
+}
+
+fn quiet_fires(count: u64, streak: u64, second: i64) -> run_log::QuietFires {
+    let mut last = scheduled(second, LoopRunResult::Completed);
+    last.duration_ms = Some(1_200);
+    last.checkout = Some("/repo".into());
+    last.run_id = Some("wf_quiet".into());
+    last.check = Some(check(Some(0), "nothing to do"));
+    run_log::QuietFires {
+        count,
+        streak,
+        last,
+    }
+}
+
+fn quiet_logs_text(
+    records: &[LoopRunRecord],
+    quiet: &run_log::QuietFires,
+    limit: usize,
+    failed: bool,
+) -> String {
+    let mut out = Vec::new();
+    write_log_records(
+        &mut out,
+        None,
+        records,
+        &refused_fire_attribution(records),
+        None,
+        None,
+        Some(quiet),
+        limit,
+        failed,
+    )
+    .unwrap();
+    anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn show_reads_quiet_fires_beside_the_rows_they_left_out() {
+    let mut view = show_view(false);
+    view.records.clear();
+    let empty = show_text(&view);
+    view.quiet = Some(quiet_fires(3, 3, 90));
+    let quiet_only = show_text(&view);
+    assert_ne!(quiet_only, empty);
+    assert!(quiet_only.contains("✓ healthy"), "{quiet_only}");
+    assert!(quiet_only.contains("LAST RUN"), "{quiet_only}");
+    assert_eq!(
+        quiet_only.matches("nothing to do").count(),
+        1,
+        "{quiet_only}"
+    );
+    assert!(
+        quiet_only.contains("completed without starting an agent"),
+        "{quiet_only}"
+    );
+    assert!(
+        quiet_only.contains("3 quiet fires · 3 in a row"),
+        "{quiet_only}"
+    );
+    assert!(!quiet_only.contains("workflow show"), "{quiet_only}");
+    assert!(!quiet_only.contains("LAST QUIET FIRE"), "{quiet_only}");
+    assert!(
+        quiet_only.contains("AGENT RUNS — none in 3 fires"),
+        "{quiet_only}"
+    );
+
+    let mut failed = scheduled(95, LoopRunResult::Failed);
+    failed.error = Some("check exited 1".into());
+    view.records = vec![failed.clone()];
+    let quiet_then_failure = show_text(&view);
+    assert!(
+        quiet_then_failure.contains("✗ failing"),
+        "{quiet_then_failure}"
+    );
+    assert!(
+        quiet_then_failure.contains("3 quiet fires · 0 in a row"),
+        "{quiet_then_failure}"
+    );
+    assert!(
+        quiet_then_failure.contains("LAST QUIET FIRE"),
+        "{quiet_then_failure}"
+    );
+    assert_eq!(
+        quiet_then_failure.matches("nothing to do").count(),
+        1,
+        "{quiet_then_failure}"
+    );
+
+    failed.at = Timestamp::from_second(50).unwrap();
+    view.records = vec![failed];
+    view.quiet = Some(quiet_fires(4, 1, 90));
+    let failure_then_quiet = show_text(&view);
+    assert!(
+        failure_then_quiet.contains("✓ healthy"),
+        "{failure_then_quiet}"
+    );
+    assert!(
+        failure_then_quiet.contains("completed without starting an agent")
+            && !failure_then_quiet.contains("LAST QUIET FIRE"),
+        "{failure_then_quiet}"
+    );
+
+    // Views that differ only in the quiet summary render apart.
+    let mut other = quiet_fires(4, 1, 90);
+    other.last.check = Some(check(Some(0), "something else"));
+    view.quiet = Some(other);
+    let other_quiet = show_text(&view);
+    assert_ne!(other_quiet, failure_then_quiet);
+    assert!(other_quiet.contains("something else"), "{other_quiet}");
+
+    // A run in flight after quiet fires.
+    let mut launched = scheduled(100, LoopRunResult::Launched);
+    launched.run_id = Some("wf_live".into());
+    view.records = vec![launched];
+    view.quiet = Some(quiet_fires(3, 3, 90));
+    // A run in flight after quiet fires: LAST RUN stays the quiet fire, the streak stands, and
+    // the run is listed as launched.
+    let in_flight = show_text(&view);
+    assert!(
+        in_flight.contains("LAST RUN — ✓ completed")
+            && in_flight.contains("completed without starting an agent")
+            && in_flight.contains("3 quiet fires · 3 in a row"),
+        "{in_flight}"
+    );
+    assert!(in_flight.contains("0s ago  ✓ launched"), "{in_flight}");
+}
+
+#[test]
+fn logs_give_quiet_fires_one_block_in_time_order() {
+    let quiet = quiet_fires(5, 2, 90);
+    let only = quiet_logs_text(&[], &quiet, 10, false);
+    assert!(only.contains("5 quiet fires · 2 in a row"), "{only}");
+    assert_eq!(only.matches("nothing to do").count(), 1, "{only}");
+    assert!(
+        only.contains("completed without starting an agent"),
+        "{only}"
+    );
+
+    let mut older = scheduled(40, LoopRunResult::Failed);
+    older.error = Some("older failure".into());
+    let mut newer = scheduled(95, LoopRunResult::Failed);
+    newer.error = Some("newer failure".into());
+    let text = quiet_logs_text(&[older.clone(), newer.clone()], &quiet, 10, false);
+    let at = |needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {text}"))
+    };
+    assert!(at("older failure") < at("quiet fires") && at("quiet fires") < at("newer failure"));
+
+    let text = quiet_logs_text(&[older.clone()], &quiet, 10, false);
+    assert!(
+        text.find("older failure") < text.find("quiet fires"),
+        "{text}"
+    );
+
+    // `-n` takes the newest blocks, the quiet block among them at its last fire's time.
+    let limited = quiet_logs_text(&[older.clone(), newer.clone()], &quiet, 1, false);
+    assert!(limited.contains("newer failure"), "{limited}");
+    assert!(!limited.contains("quiet fires"), "{limited}");
+    let limited = quiet_logs_text(&[older.clone()], &quiet, 1, false);
+    assert!(!limited.contains("failure"), "{limited}");
+    assert!(limited.contains("quiet fires"), "{limited}");
+    let limited = quiet_logs_text(&[older.clone(), newer.clone()], &quiet, 2, false);
+    assert!(
+        !limited.contains("older failure")
+            && limited.find("quiet fires").expect(&limited)
+                < limited.find("newer failure").expect(&limited),
+        "{limited}"
+    );
+
+    let failed = quiet_logs_text(&[older, newer], &quiet, 10, true);
+    assert!(!failed.contains("quiet"), "{failed}");
+
+    // Records that differ only in the quiet summary render apart.
+    let mut other = quiet_fires(5, 2, 90);
+    other.last.check = Some(check(Some(0), "something else"));
+    let other_text = quiet_logs_text(&[], &other, 10, false);
+    assert_ne!(other_text, only);
+    assert!(other_text.contains("something else"), "{other_text}");
+
+    // A run in flight after the quiet fires comes after their block.
+    let mut launched = scheduled(100, LoopRunResult::Launched);
+    launched.run_id = Some("wf_live".into());
+    let text = quiet_logs_text(&[launched], &quiet, 10, false);
+    let quiet_at = text.find("5 quiet fires").expect(&text);
+    let launched_at = text.find("✓ launched").expect(&text);
+    assert!(
+        quiet_at < launched_at && text.contains("run: wf_live"),
+        "{text}"
+    );
 }

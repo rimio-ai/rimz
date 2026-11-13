@@ -1137,6 +1137,7 @@ fn create_and_validate_agree_on_refusals() {
                 surplus: None,
                 surplus_after: None,
                 fire: None,
+                fire_facts: None,
             },
             ScopeRoots {
                 checkout: dir.clone(),

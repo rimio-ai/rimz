@@ -293,6 +293,8 @@ struct ShowView {
     now_zoned: jiff::Zoned,
     records: Vec<LoopRunRecord>,
     heard: Option<run_log::HeardSummary>,
+    /// The task's quiet fires, which leave no row in `records`.
+    quiet: Option<run_log::QuietFires>,
     launches: BTreeMap<PathBuf, ResidentLaunch>,
     capacity: BTreeMap<PathBuf, list::CapacityWaitView>,
     /// The task's run in progress: its held run lock, or an active workflow run of the task.
@@ -312,6 +314,8 @@ struct ShowView {
     worktrees: Vec<schedule::fanout::CheckoutCondition>,
     worktrees_error: Option<String>,
     workflow_runs: Vec<list::WorkflowRunRow>,
+    /// The task's runs whose records say they started an agent, team, message or judge attempt.
+    engaged_runs: std::collections::BTreeSet<String>,
     /// The task's per-fire trees a fire kept, newest first.
     kept_worktrees: Vec<rimz::worktree::ManagedWorktree>,
     /// The task's fires start workflow runs, named or compiled from its row.
@@ -1071,6 +1075,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     write_verdict(
         out,
         &view.records,
+        view.quiet.as_ref(),
         &attribution,
         view.in_progress.as_ref(),
         now,
@@ -1175,7 +1180,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     } else {
         write!(out, "{}", view.condition)?;
     }
-    if view.records.is_empty() {
+    if view.records.is_empty() && view.quiet.is_none() {
         writeln!(out)?;
         write_empty_history(out, &view.name, Some(&view.entry))?;
     } else {
@@ -1186,18 +1191,30 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             &view.records,
             &attribution,
             &view.workflow_runs,
+            view.quiet.as_ref(),
             now,
             ui::prose::Prose::for_stdout(),
         )?;
+        if let Some(quiet) = &view.quiet {
+            write_quiet_fires(out, view, quiet, now)?;
+        }
         let rows = collapsed_run_rows(&view.records, &attribution, true);
         if view.show_agent_runs {
-            write_agent_runs(out, &view.records, &rows, now)?;
+            write_agent_runs(
+                out,
+                &view.records,
+                view.quiet.as_ref().map_or(0, |quiet| quiet.count),
+                &rows,
+                &view.engaged_runs,
+                now,
+            )?;
         }
         let repeats_detail = rows.len() == 1
             && rows[0].count == 1
             && rows[0].skipped == 0
             && rows[0].waited == 0
-            && detail_index(&view.records)
+            && view.quiet.is_none()
+            && detail_index(&view.records, view.quiet.as_ref())
                 .is_some_and(|index| std::ptr::eq(rows[0].latest, &view.records[index]));
         if !repeats_detail {
             write_runs_table(out, &rows, runs, now)?;
@@ -1484,7 +1501,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 return show_in_flight(&args, &view.root, in_flight);
             }
             let (paths, records) = workflow_records(&view.root)?;
-            let acting_at = run_log::acting_run(&view.history.fires).map(|acting| acting.record.at);
+            let acting_at = view.history.acting().map(|acting| acting.record.at);
             let running =
                 attention::run_in_progress(None, &records, &args.name, &view.root, acting_at)
                     .and_then(|run| in_progress_text(&run, Timestamp::now()));
@@ -1516,6 +1533,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 &attribution,
                 None,
                 Some(&runs),
+                None,
                 args.runs,
                 false,
             )?;
@@ -1674,10 +1692,16 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let runs_workflows = runs_workflows(&task);
     // Every row reads the room's runs, as `loop list` does: a row edited mid-run may no longer
     // compile to a workflow while the run it started still goes.
+    let mut engaged_runs = std::collections::BTreeSet::new();
     let (workflow_runs, capacity, records) = if runs_workflows {
         let paths = StatePaths::for_project_root(&root)?;
         let TaskRuns { records, ended } =
             task_runs(&paths, &args.name, workflow_ledger.tasks.get(&args.name))?;
+        engaged_runs = records
+            .iter()
+            .filter(|record| record.engaged == Some(true))
+            .map(|record| record.id.to_string())
+            .collect();
         let capacity = list::capacity_waits(&records, &args.name, &root)
             .map(|(checkout, wait)| (checkout.to_path_buf(), wait))
             .collect();
@@ -1696,8 +1720,8 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         );
         name_workflow_runs(&mut rows, &records, &root, globals);
         // LAST RUN reads its run's checks and attempts from the journal.
-        let detail =
-            detail_index(&history.fires).and_then(|index| history.fires[index].run_id.as_deref());
+        let detail = detail_index(&history.fires, history.quiet.as_ref())
+            .and_then(|index| history.fires[index].run_id.as_deref());
         for row in rows
             .iter_mut()
             .filter(|row| Some(row.id.as_str()) == detail)
@@ -1711,7 +1735,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         let records = workflow_records(&root).map(|(_, records)| records);
         (Vec::new(), BTreeMap::new(), records.unwrap_or_default())
     };
-    let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
+    let acting_at = history.acting().map(|acting| acting.record.at);
     let in_progress = attention::run_in_progress(in_flight, &records, &args.name, &root, acting_at);
     let view = ShowView {
         kept_worktrees: if entry.fresh_worktree.is_some() {
@@ -1731,6 +1755,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         now_zoned,
         records: history.fires,
         heard: history.heard,
+        quiet: history.quiet,
         launches,
         in_progress,
         backlog,
@@ -1744,6 +1769,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         worktrees,
         worktrees_error,
         workflow_runs,
+        engaged_runs,
         runs_workflows,
         all: args.all,
     };
@@ -1796,7 +1822,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             booked_by: &'a [rimz::agents::LaunchedBy],
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
+            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "quiet": view.quiet, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
             fresh_worktree: view.entry.fresh_worktree.as_deref(),
             kept_worktrees: view
                 .kept_worktrees
@@ -2018,11 +2044,12 @@ fn write_throttle_readings(
 fn write_verdict(
     out: &mut impl Write,
     records: &[LoopRunRecord],
+    quiet: Option<&run_log::QuietFires>,
     attribution: &[FireAttribution],
     in_progress: Option<&InProgress<InFlightRun>>,
     now: Timestamp,
 ) -> std::io::Result<()> {
-    let verdict = verdict_line(records, in_progress.is_some(), now)
+    let verdict = verdict_line(records, quiet, in_progress.is_some(), now)
         .map(|(verdict, style)| ui::paint(style, &verdict));
     let stale = stale_clause(records, attribution, in_progress)
         .map(|clause| ui::paint(ui::palette::warn(), &clause));
@@ -2251,10 +2278,15 @@ fn write_last_run(
     records: &[LoopRunRecord],
     attribution: &[FireAttribution],
     workflow_runs: &[list::WorkflowRunRow],
+    quiet: Option<&run_log::QuietFires>,
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
-    let Some(idx) = detail_index(records) else {
+    if let Some(quiet) = quiet.filter(|quiet| shows_quiet_last(records, quiet)) {
+        writeln!(out)?;
+        return write_quiet_detail(out, name, entry, quiet, "LAST RUN", now, prose);
+    }
+    let Some(idx) = detail_index(records, quiet) else {
         return Ok(());
     };
     let record = &records[idx];
@@ -2298,6 +2330,79 @@ fn write_last_run(
     )
 }
 
+/// Whether LAST RUN is the task's last quiet fire: the newest conclusive run once quiet fires
+/// join the rows.
+fn shows_quiet_last(records: &[LoopRunRecord], quiet: &run_log::QuietFires) -> bool {
+    run_log::with_quiet(run_log::acting_run(records), Some(quiet))
+        .is_some_and(|acting| acting.record == quiet.last)
+}
+
+/// A quiet fire's detail: its time, duration, checkout, exit and output tail, from the row its
+/// summary keeps. Its run left no home, so the detail names no run to show.
+fn write_quiet_detail(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    quiet: &run_log::QuietFires,
+    title: &str,
+    now: Timestamp,
+    prose: ui::prose::Prose,
+) -> std::io::Result<()> {
+    let mut last = quiet.last.clone();
+    last.run_id = None;
+    run_report::render_record_detail(
+        out,
+        entry,
+        &last,
+        title,
+        &format!("rimz loop logs {name}"),
+        None,
+        now,
+        prose,
+    )?;
+    writeln!(
+        out,
+        "  {}",
+        ui::paint(ui::palette::muted(), "completed without starting an agent")
+    )
+}
+
+/// The quiet summary, and the last quiet output when LAST RUN shows another run.
+fn write_quiet_fires(
+    out: &mut impl Write,
+    view: &ShowView,
+    quiet: &run_log::QuietFires,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let plural = if quiet.count == 1 { "" } else { "s" };
+    writeln!(
+        out,
+        "  {}",
+        ui::paint(
+            ui::palette::muted(),
+            &format!(
+                "{} quiet fire{plural} · {} in a row · last {}",
+                quiet.count,
+                quiet.streak_beside(run_log::acting_run(&view.records).as_ref()),
+                ui::rel_age(quiet.last.at, now)
+            )
+        )
+    )?;
+    if shows_quiet_last(&view.records, quiet) {
+        return Ok(());
+    }
+    writeln!(out)?;
+    write_quiet_detail(
+        out,
+        &view.name,
+        &view.entry,
+        quiet,
+        "LAST QUIET FIRE",
+        now,
+        ui::prose::Prose::for_stdout(),
+    )
+}
+
 /// `show` for a fired one-shot whose run consumed its row: the run is all there is.
 fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Result<()> {
     let mut out = ui::out();
@@ -2330,6 +2435,7 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
             None,
             &records,
             &attribution,
+            None,
             None,
             None,
             args.runs,
@@ -2370,7 +2476,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(root) => workflow_records(root).ok(),
         None => None,
     };
-    let acting_at = run_log::acting_run(&history.fires).map(|acting| acting.record.at);
+    let acting_at = history.acting().map(|acting| acting.record.at);
     let running = attention::run_in_progress(
         in_flight,
         records.as_ref().map_or(&[][..], |(_, records)| records),
@@ -2393,6 +2499,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         &attribution,
         args.heard.then_some(history.records.as_slice()),
         workflow_runs.as_deref(),
+        history.quiet.as_ref(),
         args.runs,
         args.failed,
     )?;
@@ -2591,9 +2698,11 @@ fn write_log_records(
     attribution: &[FireAttribution],
     heard: Option<&[LoopRunRecord]>,
     workflow_runs: Option<&[list::WorkflowRunRow]>,
+    quiet: Option<&run_log::QuietFires>,
     limit: usize,
     failed: bool,
 ) -> Result<usize> {
+    let quiet = quiet.filter(|_| !failed && limit > 0);
     let mut rows = collapsed_run_rows(records, attribution, false);
     if let Some(history) = heard {
         let mut folded = rows.into_iter().peekable();
@@ -2611,20 +2720,39 @@ fn write_log_records(
             })
             .collect();
     }
-    let visible = rows
+    let shown = rows
         .iter()
         .filter(|row| {
             !failed
                 || record_is_failure(row.latest)
                 || launched_run_failed(row.latest, workflow_runs.unwrap_or_default())
         })
+        .collect::<Vec<_>>();
+    // The quiet block takes part in the newest-`limit` choice at its last fire's time.
+    let newer = quiet.map_or(0, |quiet| {
+        shown
+            .iter()
+            .rev()
+            .take_while(|row| row.latest.at > quiet.last.at)
+            .count()
+    });
+    let quiet = quiet.filter(|_| newer < limit);
+    let visible = shown
+        .into_iter()
         .rev()
-        .take(limit)
+        .take(limit - usize::from(quiet.is_some()))
         .collect::<Vec<_>>();
     let now = Timestamp::now();
     let prose = ui::prose::Prose::for_stdout();
+    let mut quiet_pending = quiet;
     for (idx, row) in visible.iter().rev().enumerate() {
-        if idx > 0 {
+        if let Some(quiet) = quiet_pending.take_if(|quiet| row.latest.at > quiet.last.at) {
+            if idx > 0 {
+                writeln!(out)?;
+            }
+            write_quiet_block(out, entry, quiet, now, prose)?;
+        }
+        if idx > 0 || quiet_pending.is_none() && quiet.is_some() {
             writeln!(out)?;
         }
         let record = row.latest;
@@ -2652,17 +2780,7 @@ fn write_log_records(
             if let Some(span) = row.span_note() {
                 write!(out, " · {span}")?;
             }
-            write!(
-                out,
-                " · {}",
-                if record.mode == Some(LoopRunMode::Manual) {
-                    "manual".to_owned()
-                } else if let Some(signal) = &record.signal {
-                    format!("signal {}", signal.name)
-                } else {
-                    "scheduled".to_owned()
-                }
-            )?;
+            write!(out, " · {}", fire_cause(record))?;
             if let Some(exit) = run_report::detail_exit_segment(record) {
                 write!(out, " · {exit}")?;
             }
@@ -2687,7 +2805,64 @@ fn write_log_records(
         };
         run_report::write_record_forensics(out, entry, record, workflow_runs, prose, detail)?;
     }
-    Ok(visible.len())
+    if let Some(quiet) = quiet_pending {
+        if !visible.is_empty() {
+            writeln!(out)?;
+        }
+        write_quiet_block(out, entry, quiet, now, prose)?;
+    }
+    Ok(visible.len() + usize::from(quiet.is_some()))
+}
+
+fn fire_cause(record: &LoopRunRecord) -> String {
+    if record.mode == Some(LoopRunMode::Manual) {
+        "manual".to_owned()
+    } else if let Some(signal) = &record.signal {
+        format!("signal {}", signal.name)
+    } else {
+        "scheduled".to_owned()
+    }
+}
+
+/// The one block a task's quiet fires take: their count and streak, and the stored output of the
+/// last one.
+fn write_quiet_block(
+    out: &mut impl Write,
+    entry: Option<&TaskEntry>,
+    quiet: &run_log::QuietFires,
+    now: Timestamp,
+    prose: ui::prose::Prose,
+) -> std::io::Result<()> {
+    let mut last = quiet.last.clone();
+    last.run_id = None;
+    let status = run_status(&last);
+    let plural = if quiet.count == 1 { "" } else { "s" };
+    write!(
+        out,
+        "{} · {} · {} quiet fire{plural} · {} in a row · {}",
+        ui::paint(status.style, &format!("{} {}", status.glyph, status.label)),
+        ui::rel_age(last.at, now),
+        quiet.count,
+        quiet.streak,
+        fire_cause(&last)
+    )?;
+    if let Some(exit) = run_report::detail_exit_segment(&last) {
+        write!(out, " · {exit}")?;
+    }
+    writeln!(out)?;
+    run_report::write_record_forensics(
+        out,
+        entry,
+        &last,
+        None,
+        prose,
+        run_report::Forensics::Full,
+    )?;
+    writeln!(
+        out,
+        "  {}",
+        ui::paint(ui::palette::muted(), "completed without starting an agent")
+    )
 }
 
 /// The in-flight lookup as `show` and `logs` use it: the active run is
@@ -3112,26 +3287,25 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
 fn write_agent_runs(
     out: &mut impl Write,
     records: &[LoopRunRecord],
+    quiet_fires: u64,
     rows: &[CollapsedRunRow<'_>],
+    engaged: &std::collections::BTreeSet<String>,
     now: Timestamp,
 ) -> std::io::Result<()> {
     let agent_runs = records
         .iter()
-        .filter(|record| is_agent_run(record))
+        .filter(|record| is_agent_run(record, engaged))
         .collect::<Vec<_>>();
+    let fired = records.len() + usize::try_from(quiet_fires).unwrap_or(usize::MAX);
     writeln!(out)?;
     let heading = if agent_runs.is_empty() {
-        format!("AGENT RUNS — none in {}", fires(records.len()))
+        format!("AGENT RUNS — none in {}", fires(fired))
     } else {
         let costs = agent_runs
             .iter()
             .filter_map(|record| valid_cost(record))
             .collect::<Vec<_>>();
-        let mut heading = format!(
-            "AGENT RUNS — {} of {}",
-            agent_runs.len(),
-            fires(records.len())
-        );
+        let mut heading = format!("AGENT RUNS — {} of {}", agent_runs.len(), fires(fired));
         if !costs.is_empty() {
             let total = costs.iter().sum::<f64>();
             let average = total / costs.len() as f64;
@@ -3148,7 +3322,7 @@ fn write_agent_runs(
     for row in rows
         .iter()
         .rev()
-        .filter(|row| row.kind == RunRowKind::Recorded && is_agent_run(row.latest))
+        .filter(|row| row.kind == RunRowKind::Recorded && is_agent_run(row.latest, engaged))
     {
         if let Some(newer) = folded.last_mut().filter(|newer| newer.key == row.key) {
             newer.merge(row.clone());
@@ -3650,10 +3824,11 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
 
 fn verdict_line(
     records: &[LoopRunRecord],
+    quiet: Option<&run_log::QuietFires>,
     is_running: bool,
     now: Timestamp,
 ) -> Option<(String, anstyle::Style)> {
-    let acting = run_log::acting_run(records)?;
+    let acting = run_log::with_quiet(run_log::acting_run(records), quiet)?;
     let healthy = acting.polarity == run_log::RunPolarity::Good;
     let newest = &acting.record;
     let status = run_status(newest);
@@ -3879,7 +4054,15 @@ pub(super) fn record_is_failure(record: &LoopRunRecord) -> bool {
     record.polarity() == Some(run_log::RunPolarity::Failure)
 }
 
-fn is_agent_run(record: &LoopRunRecord) -> bool {
+/// Whether a row is a fire that reached an agent. A run still in flight counts only once its
+/// record says it engaged, in `engaged`, since until then it may end quiet.
+fn is_agent_run(record: &LoopRunRecord, engaged: &std::collections::BTreeSet<String>) -> bool {
+    if record.result == LoopRunResult::Launched {
+        return record
+            .run_id
+            .as_ref()
+            .is_some_and(|run| engaged.contains(run));
+    }
     record.acted != Some(false) && record.run_id.is_some()
         || matches!(
             record.result,
@@ -3887,8 +4070,9 @@ fn is_agent_run(record: &LoopRunRecord) -> bool {
         )
 }
 
-fn detail_index(records: &[LoopRunRecord]) -> Option<usize> {
-    let acting = run_log::acting_run(records)?;
+/// The row LAST RUN details: none when the newest conclusive run is a quiet fire, which has no row.
+fn detail_index(records: &[LoopRunRecord], quiet: Option<&run_log::QuietFires>) -> Option<usize> {
+    let acting = run_log::with_quiet(run_log::acting_run(records), quiet)?;
     if acting.record.result == LoopRunResult::Launched {
         return None;
     }

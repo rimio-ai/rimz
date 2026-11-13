@@ -1639,7 +1639,10 @@ fn successful_eviction_admits_only_the_immediate_launch() {
 /// stops the occupant again, and a second failure is the counted `died` attempt.
 #[test]
 fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
-    let (_dir, state, record) = setup(&format!("{STEP}admission.occupancy='takeover'\n"));
+    let (_dir, state, mut record) = setup(&format!("{STEP}admission.occupancy='takeover'\n"));
+    // A task run, created unengaged: the withdrawn agent attempt still engages it.
+    record.engaged = Some(false);
+    update(&state, &record);
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
     host.evict_error.set(true);
@@ -1654,6 +1657,7 @@ fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
     assert!(!waiting.visits.contains_key("build"), "{waiting:#?}");
     assert!(waiting.launch_retry);
     assert_eq!(host.evictions.get(), 1);
+    assert_eq!(waiting.engaged, Some(true), "{waiting:#?}");
 
     let ended = advance_ok(&state, &record.id, &host);
     assert_eq!(ended.prev_attempt.unwrap().outcome, AttemptOutcome::Died);

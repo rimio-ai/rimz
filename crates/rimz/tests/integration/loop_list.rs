@@ -456,6 +456,12 @@ fn show_reads_a_consumed_one_shots_live_workflow_run_after_its_runner_exits() {
         .to_string_lossy();
     let mut fire = record("once", &env.project_root, LoopRunResult::Launched, 1);
     fire.kind = Some(TaskKind::OneOff);
+    // The launcher seals its fire's facts into the run; the consumed row's kind lives there.
+    let mut run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&home).unwrap()).unwrap();
+    run["fire_facts"] = serde_json::to_value(&fire).unwrap();
+    std::fs::write(&home, run.to_string()).unwrap();
+    // An older binary's own launch row names the run, and is not a second fire.
     fire.run_id = Some(id.clone().into_owned());
     write_loop_run_records(&env, &[fire]);
     let shown = loop_ok(&env, &["loop", "show", "once"]);
@@ -2167,7 +2173,7 @@ fn seed_room_run_at(
     (state, created_at): (&str, Timestamp),
     park: Option<Timestamp>,
     wait: Option<serde_json::Value>,
-) {
+) -> PathBuf {
     let paths = env.state_path_for(root);
     let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
@@ -2181,6 +2187,7 @@ fn seed_room_run_at(
     }))
     .unwrap();
     rimz::store::workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+    paths.workflow(&record.id).record
 }
 
 /// Every cause the D9 test leaves out, each in a room of its own, read by `loop list` and
@@ -2604,6 +2611,11 @@ fn show_logs_and_watch_read_a_lock_free_run_as_list_does() {
     consumed.kind = Some(TaskKind::OneOff);
     let mut ended = launched("consumed-ended", 6);
     ended.kind = Some(TaskKind::OneOff);
+    // The launcher seals its fire's facts into the run; a consumed row's kind lives there.
+    let sealed = BTreeMap::from([
+        ("consumed", consumed.clone()),
+        ("consumed-ended", ended.clone()),
+    ]);
     write_loop_run_records(
         &env,
         &[
@@ -2633,7 +2645,13 @@ fn show_logs_and_watch_read_a_lock_free_run_as_list_does() {
         let created = minutes_ago(minutes);
         created_at.insert(name, created);
         let park = (state == "parked").then_some(created);
-        seed_room_run_at(&env, &root, name, (state, created), park, wait);
+        let home = seed_room_run_at(&env, &root, name, (state, created), park, wait);
+        if let Some(fire) = sealed.get(name) {
+            let mut run: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&home).unwrap()).unwrap();
+            run["fire_facts"] = serde_json::to_value(fire).unwrap();
+            std::fs::write(&home, run.to_string()).unwrap();
+        }
     }
 
     let list: serde_json::Value =

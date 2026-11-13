@@ -370,6 +370,9 @@ pub(super) struct TaskRow {
     last: Option<LastRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     heard: Option<Heard>,
+    /// The task's quiet fires, which leave no history row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quiet: Option<run_log::QuietFires>,
     /// The newest fire, read when no fire acted (a canceled run): it still fired.
     #[serde(skip)]
     newest: Option<LoopRunRecord>,
@@ -865,6 +868,7 @@ impl TaskRow {
             worktree_here: false,
             watcher_pid,
             launched_count: 0,
+            quiet: None,
             launch: launch.filter(|_| entry.stay).cloned(),
             exit: None,
         };
@@ -990,6 +994,7 @@ impl TaskRow {
             worktree_here: false,
             watcher_pid: None,
             launched_count: 0,
+            quiet: None,
             launch: None,
             exit: None,
         };
@@ -1002,6 +1007,7 @@ impl TaskRow {
             return;
         };
         self.spend_today_usd = stats.spend_today_usd;
+        self.quiet = stats.quiet.clone();
         self.last = stats
             .acting
             .as_ref()

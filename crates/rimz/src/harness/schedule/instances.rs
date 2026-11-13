@@ -199,7 +199,7 @@ pub(super) fn insert_delivery(
         &entry.resolved_root(),
     );
     super::arming::remove(&key)?;
-    super::strikes::clear(&key)?;
+    super::strikes::remove(&key)?;
     tasks.insert(name.clone(), entry.clone());
     write_temp_then_rename(&path(&paths.root), &tasks)?;
     Ok((name, false))

@@ -392,6 +392,7 @@ fn fire_in(state: &StatePaths, home: &std::path::Path, row: &str) -> RunRecord {
             surplus: task.entry().surplus.clone(),
             surplus_after: task.entry().surplus_after.clone(),
             fire: None,
+            fire_facts: None,
         },
         ScopeRoots {
             checkout: home.into(),
@@ -543,7 +544,16 @@ fn a_watchdog_reports_each_outcome_to_its_task_once() {
     let host = FakeHost::new();
     step(&state, &passing, &host);
     turn_end(&host, 1);
-    assert_eq!(step(&state, &passing, &host).state, RunState::Done);
+    let passed = step(&state, &passing, &host);
+    assert_eq!(passed.state, RunState::Done);
+    // An agent attempt engages the run, so its success is kept and reported.
+    assert_eq!(passed.engaged, Some(true));
+    assert!(
+        passed
+            .outcome
+            .as_ref()
+            .is_some_and(|outcome| !outcome.quiet)
+    );
     assert_eq!(strikes(), None, "a watchdog whose verify passes resets");
     assert_eq!(
         reports().last().map(|row| row.result),
@@ -967,6 +977,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -989,6 +1000,14 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     }
     assert_eq!(current.state, RunState::Done, "{current:?}");
     assert!(current.visits.contains_key("build"), "{current:?}");
+    // Quiet, but kept: no catalog row names `nightly` to hold its summary.
+    assert_eq!(current.engaged, Some(false));
+    assert!(
+        current
+            .outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.quiet)
+    );
     let rows = crate::harness::schedule::run_log::task_records(
         &crate::disk::paths::logs_dir(),
         "nightly",
@@ -1021,7 +1040,8 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     );
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(file, ledger.to_string()).unwrap();
-    crate::harness::schedule::run_log::forget_collected_launch(&state, &record.id).unwrap();
+    crate::harness::schedule::run_log::forget_collected_launch(&state, "nightly", &record.id)
+        .unwrap();
     let remembered =
         crate::harness::schedule::launch_ledger::load_workflows(&ledger_state).unwrap();
     assert!(
@@ -1599,6 +1619,7 @@ fn inline_and_ejected(
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         },
         ScopeRoots {
             checkout: inline_home.path().into(),
@@ -1627,6 +1648,7 @@ fn inline_and_ejected(
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         },
         ScopeRoots {
             checkout: ejected_home.path().into(),
@@ -1796,6 +1818,7 @@ fn a_keep_fire_keeps_a_turn_agent_and_a_resident_session() {
                 surplus: None,
                 surplus_after: None,
                 fire: None,
+                fire_facts: None,
             },
             ScopeRoots {
                 checkout: home.path().into(),

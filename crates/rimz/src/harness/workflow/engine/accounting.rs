@@ -4,7 +4,20 @@ use crate::diag::record::DiagEvent;
 use crate::harness::assist_log::{self, Assist, AssistRecord};
 use crate::store::workflow::{EvaluationOrigin, TurnEndAction};
 
-pub(super) fn transition(t: &Transition<'_>) {
+/// Record the transition's assists. A task run that has started nothing but scripts and
+/// commands records none: it announces itself with `workflow_start` when it first starts an agent,
+/// a judge or a message, or when it ends other than done, and its assists follow from there.
+pub(super) fn transition(t: &Transition<'_>, latched: bool) {
+    let ending = t
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.event, JournalEvent::Terminal { .. }));
+    if quiet(&t.record) && !(ending && t.record.state != RunState::Done) {
+        return;
+    }
+    if t.record.task.is_some() && (latched || quiet(&t.record)) {
+        start(&t.record);
+    }
     let turn_end = t
         .entries
         .iter()
@@ -180,11 +193,32 @@ fn diagnostic(record: &RunRecord, event: DiagEvent) {
     }
 }
 
+/// Whether the record is a task run that has started nothing but scripts and commands.
+fn quiet(record: &RunRecord) -> bool {
+    record.task.is_some() && record.engaged == Some(false)
+}
+
+fn start(record: &RunRecord) {
+    assist_log::append(&AssistRecord {
+        at: Timestamp::now(),
+        assist: Assist::WorkflowStart {
+            run: record.id.clone(),
+            workflow: record.workflow.clone(),
+            task: record.task.clone(),
+            checkout: record.scope.path.clone(),
+            prompt: record.prompt.is_some(),
+        },
+    });
+}
+
 /// One assist per step attempt; a message step names the agent it handed work to.
 pub(super) fn step(record: &RunRecord, handle: Option<String>) {
     let Some(attempt) = &record.attempt else {
         return;
     };
+    if quiet(record) {
+        return;
+    }
     let visit = record.visits_to(&record.node);
     assist_log::append(&AssistRecord {
         at: Timestamp::now(),

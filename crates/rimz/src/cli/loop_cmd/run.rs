@@ -623,6 +623,14 @@ fn print_run_summary(
 ) -> Result<()> {
     let mut out = ui::out();
     write_run_summary(&mut out, name, entry, action, mode, summary)?;
+    // A launch logs no row, so a launch-memory write that failed is said here or nowhere.
+    if let (LoopRunResult::Launched, Some(error)) = (summary.record.result, &summary.record.error) {
+        writeln!(
+            ui::err(),
+            "{} {error}",
+            ui::paint(ui::palette::warn().bold(), "warning:")
+        )?;
+    }
     Ok(())
 }
 

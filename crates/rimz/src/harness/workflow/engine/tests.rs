@@ -83,14 +83,14 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
         )
         .unwrap(),
     );
-    accounting::transition(&t);
+    accounting::transition(&t, false);
     assert!(
         assist_log::recent(&crate::disk::paths::logs_dir(), None).is_empty(),
         "an open check wait is not an assist"
     );
     t.entries.clear();
     t.close_wait();
-    accounting::transition(&t);
+    accounting::transition(&t, false);
     let records = assist_log::recent(&crate::disk::paths::logs_dir(), None);
     assert_eq!(records.len(), 1, "{records:?}");
     let value = serde_json::to_value(&records[0]).unwrap();
@@ -100,7 +100,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
     canceled["origin"] = json!("engine");
     canceled["outcome"] = json!("canceled");
     t.entries = vec![serde_json::from_value(canceled).unwrap()];
-    accounting::transition(&t);
+    accounting::transition(&t, false);
     let mut invalid = evaluation;
     invalid["origin"] = json!("engine");
     invalid["outcome"] = json!("invalid");
@@ -114,7 +114,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
         )
         .unwrap(),
     );
-    accounting::transition(&t);
+    accounting::transition(&t, false);
     assert_eq!(
         assist_log::recent(&crate::disk::paths::logs_dir(), None).len(),
         1
@@ -171,7 +171,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
                 )
             });
         }
-        accounting::transition(&t);
+        accounting::transition(&t, false);
         let routes: Vec<_> = assist_log::recent(&crate::disk::paths::logs_dir(), None)
             .into_iter()
             .map(|record| serde_json::to_value(record).unwrap())
@@ -238,7 +238,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
                 },
             );
         }
-        accounting::transition(&t);
+        accounting::transition(&t, false);
         actual.push((
             origin,
             route,
@@ -385,6 +385,7 @@ fn create_validates_the_spec_it_reads_before_publication() {
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         },
         ScopeRoots {
             checkout: home.path().into(),
@@ -480,6 +481,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
                 surplus: None,
                 surplus_after: None,
                 fire: None,
+                fire_facts: None,
             },
             ScopeRoots {
                 checkout: home.path().into(),
@@ -536,6 +538,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
                 surplus: None,
                 surplus_after: None,
                 fire: None,
+                fire_facts: None,
             },
             ScopeRoots {
                 checkout,
@@ -1253,6 +1256,7 @@ fn inline(task: &str, text: &str, assets: &[(&str, &str)]) -> DefinitionSource<'
         surplus: None,
         surplus_after: None,
         fire: None,
+        fire_facts: None,
     }
 }
 
@@ -1319,6 +1323,7 @@ fn deployed(dir: &Path) -> DefinitionSource<'_> {
         surplus: None,
         surplus_after: None,
         fire: None,
+        fire_facts: None,
     }
 }
 
@@ -1451,6 +1456,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         },
     )
     .unwrap();
@@ -1468,6 +1474,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         }),
         task.id,
         "a task that now names another workflow still overlaps its inline run"
@@ -1479,6 +1486,7 @@ fn a_live_run_refuses_a_start_with_its_origin_and_name_or_its_task() {
             surplus: None,
             surplus_after: None,
             fire: None,
+            fire_facts: None,
         }),
         deployed.id
     );
@@ -1517,6 +1525,7 @@ fn a_task_started_run_needs_a_room_even_with_only_checks() {
         surplus: None,
         surplus_after: None,
         fire: None,
+        fire_facts: None,
     };
     assert!(
         start_at(&state, home.path(), deployed)

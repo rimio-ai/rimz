@@ -765,7 +765,11 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let records = read_loop_run_records(&env);
+    assert!(
+        read_loop_run_records(&env).is_empty(),
+        "a held run logs no row"
+    );
+    let records = shown_runs(&env, "guard");
     assert_eq!(
         records.len(),
         1,
@@ -1591,10 +1595,11 @@ fn condition_tick_observes_board_and_records_evidence() {
         wait_for_loop_report(&env, "ready").result,
         LoopRunResult::Completed
     );
-    // The fire's own row carries the evidence its run started on.
-    let record = read_loop_run_records(&env).remove(0);
-    assert_eq!(record.result, LoopRunResult::Launched);
-    let condition = record.condition.unwrap();
+    // The spent one-shot's one row is its run's report, which carries the evidence the fire
+    // sealed into the run.
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let condition = records[0].condition.clone().unwrap();
     assert_eq!(condition.when, "team.stage=Done");
     assert_eq!(condition.readings["team.stage"].as_deref(), Some("Done"));
     assert!(!read_loop_instances(&env).0.contains_key("ready"));
@@ -2288,8 +2293,11 @@ done
             | NamedResident::OtherTeamClosed
             | NamedResident::TakeoverOtherTeam
     );
-    let fired = last_loop_record(&env);
-    assert_eq!(fired.result, LoopRunResult::Launched);
+    let fired = fired_record(&env, "resident");
+    assert!(
+        refused || fired.result == LoopRunResult::Launched,
+        "{fired:?}"
+    );
     assert_eq!(fired.checkout.as_deref(), Some(env.project_root.as_path()));
     // The fire returns once its run exists; the launch, or its refusal, lands in the run.
     let leader = |store: &rimz::Store| {
@@ -2306,9 +2314,10 @@ done
     } else {
         let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
         while leader(&store).is_none() {
+            // A run in flight logs no row; its report would be the first.
             let rows = read_loop_run_records(&env);
             assert!(
-                rows.len() == 1 && Instant::now() < deadline,
+                rows.is_empty() && Instant::now() < deadline,
                 "resident never launched: {rows:?}\n{}\n{:?}",
                 loop_run_journal(&env, &env.project_root, &fired),
                 store
@@ -2454,7 +2463,7 @@ done
             .status
             .success()
     );
-    assert_eq!(read_loop_run_records(&env).len(), 1);
+    assert_eq!(shown_runs(&env, "resident").len(), 1);
 }
 
 #[test]
@@ -3272,7 +3281,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         canonical(&checkout).to_str()
     );
     assert_eq!(agents[0].channel.as_deref(), Some("lane"));
-    let records = read_loop_run_records(&env);
+    let records = shown_runs(&env, "resident");
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0].result, LoopRunResult::Launched);
     let run = rimz::store::workflow::load(
@@ -3857,8 +3866,15 @@ fn resident_takeover_case(case: Takeover) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let fired = last_loop_record(&env);
-    assert_eq!(fired.result, LoopRunResult::Launched, "{fired:?}");
+    let fired = fired_record(&env, "resident");
+    // The run is read from itself while in flight, and this one can fail before the read.
+    assert!(
+        matches!(
+            fired.result,
+            LoopRunResult::Launched | LoopRunResult::Failed
+        ),
+        "{fired:?}"
+    );
     let id: rimz::ids::WorkflowRunId = fired.run_id.as_deref().unwrap().parse().unwrap();
     let run_paths = store.paths().workflow(&id);
     let wait_for_run = |what: &str, done: &dyn Fn(&rimz::store::workflow::RunRecord) -> bool| {
@@ -4336,15 +4352,9 @@ fn trunk_signal_fires_only_through_git_source() {
         "trunk",
     );
     loop_ok(&env, &["events", "emit", "trunk.moved", "--source", "git"]);
-    wait_for_loop_run_records(&env, "trunk Completed", |records| {
-        records
-            .iter()
-            .any(|r| r.task == "trunk" && r.result == LoopRunResult::Completed)
-    });
-    assert!(
-        read_loop_run_records(&env)
-            .iter()
-            .any(|r| r.task == "trunk" && r.result == LoopRunResult::Completed)
+    assert_eq!(
+        wait_for_loop_report(&env, "trunk").result,
+        LoopRunResult::Completed
     );
 }
 
@@ -4394,15 +4404,9 @@ fn worktree_created_fires_a_loop_subscriber() {
         "created",
     );
     loop_ok(&env, &["worktree", "new", "signal-test"]);
-    wait_for_loop_run_records(&env, "created Completed", |records| {
-        records
-            .iter()
-            .any(|r| r.task == "created" && r.result == LoopRunResult::Completed)
-    });
-    assert!(
-        read_loop_run_records(&env)
-            .iter()
-            .any(|r| r.task == "created" && r.result == LoopRunResult::Completed)
+    assert_eq!(
+        wait_for_loop_report(&env, "created").result,
+        LoopRunResult::Completed
     );
 }
 
@@ -4446,28 +4450,18 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
             ],
         );
     }
-    wait_for_loop_run_records(
-        &env,
-        "behind Completed and merged SignalSkipped",
-        |records| {
-            records.len() == 3
-                && records.iter().any(|record| {
-                    record.task == "behind" && record.result == LoopRunResult::Completed
-                })
-                && records.iter().any(|record| {
-                    record.task == "merged" && record.result == LoopRunResult::SignalSkipped
-                })
-        },
+    // The behind fire's passing check is a quiet fire; the merged sibling's skip is the one row.
+    assert_eq!(
+        wait_for_loop_report(&env, "behind").result,
+        LoopRunResult::Completed
     );
-    let records = read_loop_run_records(&env);
-    // The behind fire's launch row, its run's report, and the merged sibling's skip.
-    assert_eq!(records.len(), 3, "{records:?}");
-    assert!(
+    wait_for_loop_run_records(&env, "merged SignalSkipped", |records| {
         records
             .iter()
-            .any(|record| record.task == "behind" && record.result == LoopRunResult::Completed),
-        "{records:?}"
-    );
+            .any(|record| record.task == "merged" && record.result == LoopRunResult::SignalSkipped)
+    });
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
     assert!(
         records
             .iter()
@@ -6409,12 +6403,11 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
             .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
             .bounded_output_within(LOOP_RUNNER_DEADLINE)
             .unwrap();
-        let records = read_loop_run_records(&env);
-        assert_eq!(
-            !records.is_empty(),
-            verb != "print",
-            "{kind}/{prior}/{verb}: {output:?}"
-        );
+        // A fire shows as its run in flight, its report, or a quiet fire's summary.
+        let fired = !shown_runs(&env, "lookup").is_empty()
+            || quiet_fires(&env, "lookup").is_some()
+            || !read_loop_run_records(&env).is_empty();
+        assert_eq!(fired, verb != "print", "{kind}/{prior}/{verb}: {output:?}");
         // A check runs in the fire's detached run; its own agent launch births the room there.
         if kind.starts_with("check") {
             wait_for_loop_report(&env, "lookup");
@@ -7819,12 +7812,12 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
         list.contains("repo-check") && list.contains("off · repo task, enable here to run"),
         "{list}"
     );
-    let runs_before = read_loop_run_records(&env).len();
+    let mark = run_mark(&env, "shared");
     loop_ok(&env, &["loop", "run", "shared"]);
-    assert_eq!(read_loop_run_records(&env).len(), runs_before);
+    assert_eq!(read_loop_run_records(&env).len(), mark.rows);
     loop_ok(&env, &["loop", "enable", "shared"]);
     loop_ok(&env, &["loop", "run", "shared"]);
-    let report = wait_for_loop_report_after(&env, "shared", runs_before);
+    let report = wait_for_loop_report_after(&env, "shared", mark);
     let journal = loop_run_journal(&env, &env.project_root, &report);
     assert!(journal.contains("project"), "{journal}");
 }
@@ -8473,7 +8466,14 @@ fn loop_enable_disable_pause_workflow() {
     assert!(loop_ok(&env, &["loop", "show", "probe"]).contains("· paused"));
     let fired = loop_ok(&env, &["loop", "fire", "probe"]);
     assert!(fired.contains("task is paused; firing anyway") && fired.contains("launched"));
-    wait_for_loop_report_after(&env, "probe", 2);
+    wait_for_loop_report_after(
+        &env,
+        "probe",
+        RunMark {
+            rows: 2,
+            quiet: None,
+        },
+    );
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("enabled"));
     assert!(!loop_ok(&env, &["loop", "list"]).contains("paused, resumes"));
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
@@ -8553,7 +8553,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
 
     // Each run's report strikes; the third strikes the task out.
     for _ in 0..3 {
-        let before = read_loop_run_records(&env).len();
+        let before = run_mark(&env, "watchdog");
         loop_ok(&env, &["loop", "run", "watchdog"]);
         let report = wait_for_loop_report_after(&env, "watchdog", before);
         assert_eq!(report.result, LoopRunResult::Failed);
@@ -8566,7 +8566,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
         Some(3)
     );
 
-    let before = read_loop_run_records(&env).len();
+    let before = run_mark(&env, "watchdog");
     let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
     assert!(fire.contains("task is disabled; firing anyway"), "{fire}");
     wait_for_loop_report_after(&env, "watchdog", before);
@@ -9113,12 +9113,14 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     let report = wait_for_loop_report(&env, "where");
     assert_eq!(report.result, LoopRunResult::Completed);
     assert_eq!(report.checkout.as_deref(), Some(root.as_path()));
-    assert_eq!(
-        read_loop_run_records(&env)[0].root.as_deref(),
-        Some(root.as_path())
+    assert!(
+        read_loop_run_records(&env).is_empty(),
+        "a quiet fire logs no row"
     );
+    assert_eq!(report.root.as_deref(), Some(root.as_path()));
     let workspace_id = WorkspaceId::from_project_root(&root);
     let journal = loop_run_journal(&env, &env.project_root, &report);
+    // A quiet fire stores its output tail as the check printed it, final newline included.
     let output = format!("{0}\n{0}\n{0}\n{workspace_id}\n", root.display());
     assert!(journal.contains(&output), "{output}: {journal}");
 
@@ -9134,7 +9136,7 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     assert_eq!(report.root.as_deref(), Some(root.as_path()));
     let journal = loop_run_journal(&env, &env.project_root, &report);
     let output = format!(
-        "{0}\n{0}\n{1}\n{workspace_id}\n",
+        "{0}\n{0}\n{1}\n{workspace_id}",
         linked.display(),
         root.display()
     );
@@ -9193,7 +9195,7 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
     let report = wait_for_loop_report(&env, "project-where");
     assert_eq!(report.root.as_deref(), Some(root.as_path()));
     let journal = loop_run_journal(&env, &env.project_root, &report);
-    let output = format!("{0}\n{0}\n", root.display());
+    let output = format!("{0}\n{0}", root.display());
     assert!(journal.contains(&output), "{output}: {journal}");
 }
 
@@ -9331,7 +9333,7 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
     );
     let mut reports = Vec::new();
     for _ in 0..2 {
-        let before = read_loop_run_records(&env).len();
+        let before = run_mark(&env, "nightly");
         loop_ok(&env, &["loop", "fire", "nightly"]);
         reports.push(wait_for_loop_report_after(&env, "nightly", before));
         #[cfg(target_os = "linux")]
@@ -9344,20 +9346,20 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
         .map(str::to_owned)
         .collect();
     assert_eq!(lines.len(), 6, "{lines:?}");
-    let records: Vec<_> = read_loop_run_records(&env)
-        .into_iter()
-        .filter(|record| record.result == LoopRunResult::Launched)
-        .collect();
-    assert_eq!(records.len(), 2);
+    // Both passing checks are quiet fires: each report is the summary's row, carrying its tree.
+    assert!(read_loop_run_records(&env).is_empty());
+    assert_eq!(
+        quiet_fires(&env, "nightly").map(|(count, _)| count),
+        Some(2)
+    );
     let worktrees = canonical(&env.home_root.join("project-worktrees"));
     let root = canonical(&env.project_root);
-    for ((fire, record), report) in lines.chunks(3).zip(&records).zip(&reports) {
+    for (fire, report) in lines.chunks(3).zip(&reports) {
         assert_eq!(report.result, LoopRunResult::Completed);
-        assert_eq!(report.run_id, record.run_id);
         // The task's history keys on the project root it fired from, not the fire's tree.
         assert_eq!(report.checkout.as_deref(), Some(root.as_path()));
         let tree = rimz::utils::path::normalize_path_lexical(
-            &record.worktree.as_ref().expect("fire worktree").path,
+            &report.worktree.as_ref().expect("fire worktree").path,
         );
         assert_eq!(fire[0], tree.display().to_string());
         assert_eq!(tree.parent(), Some(worktrees.as_path()));
@@ -9368,7 +9370,7 @@ fn check_task_with_worktree_runs_each_fire_in_a_fresh_trunk_tree_and_removes_it(
     }
     assert_eq!(night_leftovers(&env), Vec::<String>::new());
     let logs = loop_ok(&env, &["loop", "logs", "nightly"]);
-    let name = records[1]
+    let name = reports[1]
         .worktree
         .as_ref()
         .unwrap()
@@ -9425,12 +9427,8 @@ fn a_declined_guard_in_a_fresh_tree_leaves_no_tree_behind() {
         (report.result, report.acted),
         (LoopRunResult::Completed, Some(false))
     );
-    let record = read_loop_run_records(&env)
-        .into_iter()
-        .find(|record| record.result == LoopRunResult::Launched)
-        .expect("the fire's row");
     let tree =
-        rimz::utils::path::normalize_path_lexical(&record.worktree.expect("fire worktree").path);
+        rimz::utils::path::normalize_path_lexical(&report.worktree.expect("fire worktree").path);
     assert_eq!(
         std::fs::read_to_string(&pwd_file).unwrap().trim_end(),
         tree.display().to_string()
@@ -9492,10 +9490,10 @@ fn a_fresh_task_fired_while_its_run_lives_overlaps_without_cutting_a_tree() {
     loop_ok(&env, &["loop", "fire", "nightly"]);
     loop_ok(&env, &["loop", "fire", "nightly"]);
     let records = read_loop_run_records(&env);
-    let launched = records
-        .iter()
+    let launched = shown_runs(&env, "nightly")
+        .into_iter()
         .find(|record| record.result == LoopRunResult::Launched)
-        .expect("the first fire's row");
+        .expect("the first fire's run in flight");
     let overlapped = records.last().unwrap();
     assert_eq!(
         (
@@ -9659,7 +9657,7 @@ impl LaunchedTurn {
         } else {
             let _ = std::fs::remove_file(&self.commit);
         }
-        let before = read_loop_run_records(env).len();
+        let before = run_mark(env, task);
         let output = env
             .rimz()
             .args(["--mux", "tmux", "loop", "fire", task])
@@ -9691,16 +9689,6 @@ impl LaunchedTurn {
             std::thread::sleep(Duration::from_millis(50));
         }
         wait_for_fire_tree_helpers(env);
-    }
-
-    /// The row the fire wrote when its run started, which names the fire's tree.
-    fn launched(env: &Env, report: &LoopRunRecord) -> LoopRunRecord {
-        read_loop_run_records(env)
-            .into_iter()
-            .find(|record| {
-                record.result == LoopRunResult::Launched && record.run_id == report.run_id
-            })
-            .expect("the fire's row")
     }
 
     fn turn_dirs(&self) -> Vec<String> {
@@ -9773,9 +9761,9 @@ fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
             ),
             "{report:?}"
         );
-        let record = LaunchedTurn::launched(&env, &report);
+        // The report carries the tree its fire sealed into the run.
         let tree = rimz::utils::path::normalize_path_lexical(
-            &record.worktree.expect("fire worktree").path,
+            &report.worktree.clone().expect("fire worktree").path,
         );
         let shown = tree.display().to_string();
         assert_eq!(turn.turn_dirs().last(), Some(&shown), "{output:?}");
@@ -9869,7 +9857,6 @@ fn a_launched_turn_in_a_fresh_tree_keeps_the_tree_only_with_work() {
             .is_some_and(|error| error.contains("fleet budget")),
         "{refused:?}"
     );
-    let refused = LaunchedTurn::launched(&env, &refused);
     let tree =
         rimz::utils::path::normalize_path_lexical(&refused.worktree.expect("fire worktree").path);
     let guarded = std::fs::read_to_string(&guards).unwrap();
@@ -9970,6 +9957,641 @@ fn agent_task_added_from_a_worktree_stores_no_dir_and_guards_at_the_root() {
     assert_eq!(turn.turn_dirs(), [root.display().to_string()]);
 }
 
+/// The stored quiet streak of `task`, read from the machine fire record.
+fn quiet_streak(env: &Env, task: &str) -> u64 {
+    let text = std::fs::read_to_string(env.rimz_home().join("loops/loop-fires.json")).unwrap();
+    let fires: BTreeMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
+    fires
+        .into_values()
+        .filter_map(|fires| fires.get("quiet").cloned())
+        .find(|quiet| quiet["last"]["task"] == task)
+        .and_then(|quiet| quiet["streak"].as_u64())
+        .unwrap_or_else(|| panic!("{task} has no quiet summary: {text}"))
+}
+
+fn workflow_assists(env: &Env) -> Vec<serde_json::Value> {
+    rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+        .iter()
+        .map(|record| serde_json::to_value(record).unwrap())
+        .filter(|assist| assist["assist"].as_str().unwrap().starts_with("workflow_"))
+        .collect()
+}
+
+/// Whether the run a row names still has a home, live or finished.
+fn has_home(env: &Env, record: &LoopRunRecord) -> bool {
+    let state = env.state_path_for(&env.project_root);
+    let id = record.run_id.as_deref().expect("run id").parse().unwrap();
+    state.workflow(&id).home.exists() || state.finished_workflow(&id).home.exists()
+}
+
+/// Wait until the quiet run a row names has no home: its collection writes the task's quiet
+/// summary, which the report wait sees, before it deletes the home.
+fn wait_until_forgotten(env: &Env, record: &LoopRunRecord) {
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while has_home(env, record) {
+        assert!(
+            Instant::now() < deadline,
+            "the quiet run kept its home: {record:?} {}",
+            String::from_utf8_lossy(
+                &env.rimz()
+                    .args([
+                        "workflow",
+                        "show",
+                        record.run_id.as_deref().unwrap(),
+                        "--history"
+                    ])
+                    .output()
+                    .unwrap()
+                    .stdout
+            )
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
+fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let counter = env.home_root.join("quiet-counter");
+    let fail = env.home_root.join("quiet-fail");
+    let check = format!(
+        "n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {c}; printf pass-$n; \
+         test ! -e {f}",
+        c = counter.display(),
+        f = fail.display()
+    );
+    loop_ok(
+        &env,
+        &["loop", "add", "steady", "--check", &check, "--every", "15m"],
+    );
+    let fire = |env: &Env, task: &str| {
+        let before = run_mark(env, task);
+        loop_ok(env, &["loop", "fire", task]);
+        wait_for_loop_report_after(env, task, before)
+    };
+    let first = fire(&env, "steady");
+    let second = fire(&env, "steady");
+    assert_ne!(first.run_id, second.run_id);
+    // Both passing checks are forgotten: no row, no home, no assist; the summary keeps the
+    // newest output and counts both.
+    assert!(read_loop_run_records(&env).is_empty());
+    wait_until_forgotten(&env, &first);
+    wait_until_forgotten(&env, &second);
+    assert_eq!(workflow_assists(&env), Vec::<serde_json::Value>::new());
+    let (count, last) = quiet_fires(&env, "steady").unwrap();
+    assert_eq!((count, quiet_streak(&env, "steady")), (2, 2));
+    assert_eq!(last.run_id, second.run_id);
+    let output = last.check.as_ref().expect("quiet check");
+    assert_eq!((output.output.as_str(), output.code), ("pass-2", Some(0)));
+    let list: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    let row = list["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|room| room["tasks"].as_array().unwrap())
+        .find(|row| row["name"] == "steady")
+        .unwrap();
+    assert_eq!(row["quiet"]["count"], 2, "{row}");
+    let shown = |env: &Env| -> serde_json::Value {
+        serde_json::from_str(&loop_ok(env, &["loop", "show", "steady", "--json"])).unwrap()
+    };
+    let quiet_only = shown(&env);
+    assert_eq!(
+        (
+            &quiet_only["quiet"]["count"],
+            &quiet_only["quiet"]["streak"]
+        ),
+        (&json!(2), &json!(2)),
+        "{quiet_only}"
+    );
+    assert_eq!(quiet_only["runs"], json!([]), "{quiet_only}");
+    let logs = loop_ok(&env, &["loop", "logs", "steady"]);
+    assert_eq!(
+        logs.matches("2 quiet fires · 2 in a row").count(),
+        1,
+        "{logs}"
+    );
+
+    // A failure resets the streak and keeps the count and the last quiet output.
+    std::fs::write(&fail, "").unwrap();
+    let failed = fire(&env, "steady");
+    assert_eq!(failed.result, LoopRunResult::Failed);
+    assert!(has_home(&env, &failed));
+    // The report appends its row first and resets the stored streak after it.
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while quiet_streak(&env, "steady") != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the failure never reset the streak"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let (count, last) = quiet_fires(&env, "steady").unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(last.run_id, second.run_id);
+    let show = loop_ok(&env, &["loop", "show", "steady"]);
+    assert!(
+        show.contains("LAST RUN — ✗ failed") && show.contains("LAST QUIET FIRE"),
+        "{show}"
+    );
+    let quiet_then_failure = shown(&env);
+    assert_eq!(
+        (
+            &quiet_then_failure["quiet"]["count"],
+            &quiet_then_failure["quiet"]["streak"],
+            &quiet_then_failure["runs"][0]["result"],
+        ),
+        (&json!(2), &json!(0), &json!("failed")),
+        "{quiet_then_failure}"
+    );
+    // The next quiet fire reads healthy again.
+    std::fs::remove_file(&fail).unwrap();
+    fire(&env, "steady");
+    let show = loop_ok(&env, &["loop", "show", "steady"]);
+    assert!(
+        show.contains("completed without starting an agent")
+            && show.contains("3 quiet fires · 1 in a row")
+            && show.contains("pass-4"),
+        "{show}"
+    );
+    let failure_then_quiet = shown(&env);
+    assert_eq!(
+        (
+            &failure_then_quiet["quiet"]["count"],
+            &failure_then_quiet["quiet"]["streak"],
+            failure_then_quiet["runs"].as_array().map(Vec::len),
+        ),
+        (&json!(3), &json!(1), Some(1)),
+        "{failure_then_quiet}"
+    );
+    assert_eq!(read_loop_run_records(&env).len(), 1);
+
+    // A named command workflow of several steps that ends done is forgotten the same way.
+    let dir = env.rimz_home().join("workflows/tidy");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'ready'\n\
+         [test.ready]\nshell = 'true'\non.pass = 'sweep'\non.fail = '@failed'\n\
+         [command.sweep]\nshell = 'printf swept'\ntimeout = '1m'\nthen = 'swept'\n\
+         [test.swept]\nshell = 'true'\non.pass = 'tidy'\non.fail = '@failed'\n\
+         [command.tidy]\nshell = 'printf tidied'\ntimeout = '1m'\nthen = 'tidied'\n\
+         [test.tidied]\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.tidy]\nworkflow = 'tidy'\nroot = {:?}\nevery = '1h'\n",
+            env.project_root
+        ),
+    );
+    let tidy = fire(&env, "tidy");
+    wait_until_forgotten(&env, &tidy);
+    let (count, last) = quiet_fires(&env, "tidy").unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(last.check.as_ref().unwrap().output, "tidied");
+    let tidy_run = tidy.run_id.as_deref().unwrap();
+    assert!(
+        workflow_assists(&env)
+            .iter()
+            .all(|assist| assist["run"] != tidy_run),
+        "{:?}",
+        workflow_assists(&env)
+    );
+
+    // A hand-started run of the same workflow is kept and writes no `workflow_start`.
+    let output = env
+        .rimz()
+        .args(["workflow", "run", "tidy"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let id: rimz::ids::WorkflowRunId = String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .find(|word| word.starts_with("wf_"))
+        .expect("run receipt names its id")
+        .parse()
+        .unwrap();
+    let state = env.state_path_for(&env.project_root);
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while !state.finished_workflow(&id).record.exists() {
+        assert!(Instant::now() < deadline, "hand-started run never finished");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        workflow_assists(&env)
+            .iter()
+            .all(|assist| assist["assist"] != "workflow_start" || assist["run"] != id.as_str())
+            && workflow_assists(&env)
+                .iter()
+                .any(|assist| assist["assist"] == "workflow_end" && assist["run"] == id.as_str()),
+        "{:?}",
+        workflow_assists(&env)
+    );
+
+    // A one-shot's quiet success has no task row left to summarize it: it keeps its row and home.
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "solo",
+            "--check",
+            "printf once",
+            "--at",
+            "07:00",
+        ],
+    );
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "solo",
+    );
+    loop_ok(&env, &["loop", "run", "solo"]);
+    let solo = wait_for_loop_report(&env, "solo");
+    assert_eq!(solo.result, LoopRunResult::Completed);
+    assert!(quiet_fires(&env, "solo").is_none());
+    let rows: Vec<_> = read_loop_run_records(&env)
+        .into_iter()
+        .filter(|row| row.task == "solo")
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    // The run moves to the finished directory after its report.
+    let solo_id = solo.run_id.as_deref().unwrap().parse().unwrap();
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while !state.finished_workflow(&solo_id).home.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the one-shot's run never finished"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// The task row `loop list --json` prints for `task`.
+fn listed_task(env: &Env, task: &str) -> serde_json::Value {
+    let list: serde_json::Value =
+        serde_json::from_str(&loop_ok(env, &["loop", "list", "--json"])).unwrap();
+    list["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|room| room["tasks"].as_array().unwrap())
+        .find(|row| row["name"] == task)
+        .cloned()
+        .unwrap_or_else(|| panic!("{task} not listed: {list}"))
+}
+
+#[test]
+fn judged_runs_are_kept_with_their_spend_beside_quiet_fires_that_cost_nothing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let flag = env.home_root.join("needs-review");
+    let refuse = env.home_root.join("judge-refuses");
+    let dir = env.rimz_home().join("workflows/spend");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("prompt.md"), "Review the work.").unwrap();
+    std::fs::write(
+        dir.join("workflow.toml"),
+        format!(
+            "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'gate'\n\
+             [test.gate]\nshell = 'test ! -e {}'\non.pass = '@done'\non.fail = 'review'\n\
+             [judge.review]\nsummary = 'Review the work'\nagent = 'claude'\n\
+             prompt-file = 'prompt.md'\non.done = '@done'\non.invalid = '@done'\n",
+            flag.display()
+        ),
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.spend]\nworkflow = 'spend'\nroot = {:?}\nevery = '1h'\nbudget-per-day = '$1'\n",
+            env.project_root
+        ),
+    );
+    let shell = crate::common::write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    crate::common::write_path_shim(
+        &bin,
+        "claude",
+        &format!(
+            "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
+             if [ -e {} ]; then exit 7; fi\n\
+             printf '%s\\n' '{{\"structured_output\":{{\"outcome\":\"done\",\"reason\":\"looks fine\"}},\"total_cost_usd\":0.6}}'\n",
+            refuse.display()
+        ),
+    );
+    let fire = |env: &Env| {
+        let before = run_mark(env, "spend");
+        let fired = env
+            .rimz()
+            .args(["loop", "fire", "spend"])
+            .env("SHELL", &shell)
+            .env("PATH", crate::common::path_with_front(&bin))
+            .output()
+            .unwrap();
+        assert!(fired.status.success(), "{fired:?}");
+        before
+    };
+    let kept = |env: &Env, report: &LoopRunRecord| {
+        wait_until_finished(env, report);
+        let rows: Vec<_> = read_loop_run_records(env)
+            .into_iter()
+            .filter(|row| row.run_id == report.run_id)
+            .collect();
+        assert_eq!(rows.len(), 1, "{report:?}: {rows:?}");
+        rows.into_iter().next().unwrap()
+    };
+
+    // A judge that answers is an agent: its run is kept, and its spend is its row's.
+    std::fs::write(&flag, "").unwrap();
+    let before = fire(&env);
+    let judged = kept(&env, &wait_for_loop_report_after(&env, "spend", before));
+    assert_eq!(
+        (judged.result, judged.cost_usd),
+        (LoopRunResult::Completed, Some(0.6))
+    );
+    assert!(quiet_fires(&env, "spend").is_none());
+    let spent = listed_task(&env, "spend")["spend_today_usd"].clone();
+    assert_eq!(spent, 0.6);
+
+    // A quiet fire in between costs nothing and leaves the day's admission as it was.
+    std::fs::remove_file(&flag).unwrap();
+    let before = fire(&env);
+    let quiet = wait_for_loop_report_after(&env, "spend", before);
+    wait_until_forgotten(&env, &quiet);
+    assert_eq!(quiet_fires(&env, "spend").map(|(count, _)| count), Some(1));
+    assert_eq!(listed_task(&env, "spend")["spend_today_usd"], spent);
+    let show = loop_ok(&env, &["loop", "show", "spend"]);
+    assert!(
+        show.contains("completed without starting an agent") && show.contains("1 quiet fire"),
+        "{show}"
+    );
+
+    // A judge refused twice routes to done and is still kept: the judge was started.
+    std::fs::write(&flag, "").unwrap();
+    std::fs::write(&refuse, "").unwrap();
+    let before = fire(&env);
+    let refused = kept(&env, &wait_for_loop_report_after(&env, "spend", before));
+    assert_eq!(
+        (refused.result, refused.cost_usd),
+        (LoopRunResult::Completed, None)
+    );
+    assert_eq!(quiet_fires(&env, "spend").map(|(count, _)| count), Some(1));
+
+    // A kept ending after a quiet fire: LAST RUN is the kept run, the quiet fire stands beside
+    // it, and a completed ending leaves the streak, which only a failure ends.
+    let refused_id = refused.run_id.clone().unwrap();
+    let show = loop_ok(&env, &["loop", "show", "spend"]);
+    assert!(
+        show.contains(&format!("run: {refused_id} · done at review"))
+            && show.contains("LAST QUIET FIRE")
+            && show.contains("1 quiet fire · 1 in a row"),
+        "{show}"
+    );
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "spend", "--json"])).unwrap();
+    assert_eq!(shown["quiet"]["count"], 1, "{shown}");
+    assert_eq!(
+        shown["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|run| run["run_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [judged.run_id.as_deref().unwrap(), refused_id.as_str()],
+        "{shown}"
+    );
+    let logs = loop_ok(&env, &["loop", "logs", "spend"]);
+    assert_eq!(logs.matches("1 quiet fire").count(), 1, "{logs}");
+    assert!(logs.contains("judge claude: done — looks fine"), "{logs}");
+    assert_eq!(listed_task(&env, "spend")["quiet"]["count"], 1);
+
+    // Two answered judges spend $1.20 of the $1 day; the quiet fire added nothing to it.
+    std::fs::remove_file(&refuse).unwrap();
+    let before = fire(&env);
+    kept(&env, &wait_for_loop_report_after(&env, "spend", before));
+    std::fs::remove_file(&flag).unwrap();
+    fire(&env);
+    let skipped = last_loop_record(&env);
+    assert_eq!(skipped.result, LoopRunResult::BudgetSkipped, "{skipped:?}");
+    let reason = skipped.error.as_deref().unwrap_or_default();
+    assert!(reason.contains("$1.20"), "{reason}");
+    assert_eq!(quiet_fires(&env, "spend").map(|(count, _)| count), Some(1));
+}
+
+#[test]
+fn a_structured_script_check_ending_done_is_forgotten_with_its_exit_and_output() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let dir = env.rimz_home().join("workflows/scan");
+    std::fs::create_dir_all(dir.join("checks")).unwrap();
+    std::fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'scan'\n\
+         [script.scan]\nrun = 'sh checks/scan.sh'\non.clean = '@done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("checks/scan.sh"),
+        "echo 'scanned 3 files' >&2\nprintf '%s' '{\"outcome\":\"clean\"}'\n",
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.scan]\nworkflow = 'scan'\nroot = {:?}\nevery = '1h'\n",
+            env.project_root
+        ),
+    );
+    let before = run_mark(&env, "scan");
+    loop_ok(&env, &["loop", "fire", "scan"]);
+    let scanned = wait_for_loop_report_after(&env, "scan", before);
+    wait_until_forgotten(&env, &scanned);
+    assert!(read_loop_run_records(&env).is_empty());
+    let (count, last) = quiet_fires(&env, "scan").unwrap();
+    assert_eq!((count, last.run_id), (1, scanned.run_id));
+    let check = last.check.expect("quiet check");
+    assert_eq!(
+        (check.code, check.output.as_str()),
+        (Some(0), "scanned 3 files\n")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quiet_run_collected_before_its_launch_memory_does_not_hold_the_next_fire() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "quick",
+    );
+    let dir = env.rimz_home().join("workflows/quick");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'ready'\n\
+         [test.ready]\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.quick]\nworkflow = 'quick'\nroot = {:?}\nwhen = [\"pr=open\"]\n",
+            env.project_root
+        ),
+    );
+    let evidence =
+        json!({"when":"pr=open", "hold":null, "held_ms":0, "readings":{"pr":"open"}}).to_string();
+    let fire = || {
+        let mut fire = env.rimz();
+        fire.args(["loop", "run", "quick", "--condition-json", &evidence]);
+        fire
+    };
+    let quiet_count = || quiet_fires(&env, "quick").map_or(0, |(count, _)| count);
+    let remembered = || {
+        rimz::harness::schedule::launch_ledger::load_workflows(env.store().paths())
+            .unwrap()
+            .tasks
+            .get("quick")
+            .is_some_and(|checkouts| !checkouts.is_empty())
+    };
+
+    // Hold the launcher before it writes launch memory until the run's collection forgets it.
+    let hold = crate::common::DeliveryRendezvous::new(&env, "launch-memory");
+    let launcher = fire()
+        .env("RIMZ_TEST_LOOP_BEFORE_LAUNCH_MEMORY", &hold.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = hold.arrive();
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while quiet_count() != 1 {
+        assert!(
+            Instant::now() < deadline,
+            "the held run was never collected"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    release.write_all(&[1]).unwrap();
+    let output = launcher.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!remembered(), "a forgotten run left its launch memory");
+
+    // The same condition stretch fires again: a second run starts and is forgotten.
+    let output = fire().output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while quiet_count() != 2 {
+        assert!(Instant::now() < deadline, "the next fire started no run");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(read_loop_run_records(&env).is_empty());
+}
+
+#[test]
+fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let state = env.state_path_for(&env.project_root);
+    let mut config = String::new();
+    // `old` stands for a record an older RimZ created: no `engaged`, no sealed fire facts.
+    // `rewritten` for one an older RimZ rewrote mid-run, dropping the `engaged` it did not know.
+    for (task, start, stripped) in [
+        ("old", "hold", &["engaged", "fire_facts"][..]),
+        ("rewritten", "first", &["engaged"][..]),
+    ] {
+        let gate = env.home_root.join(format!("{task}-gate"));
+        let dir = env.rimz_home().join(format!("workflows/{task}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("workflow.toml"),
+            format!(
+                "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = '{start}'\n\
+                 [test.first]\nshell = 'true'\non.pass = 'hold'\non.fail = '@failed'\n\
+                 [test.hold]\nshell = 'while [ ! -e {} ]; do sleep 0.05; done; printf released'\n\
+                 on.pass = '@done'\non.fail = '@failed'\n",
+                gate.display()
+            ),
+        )
+        .unwrap();
+        config.push_str(&format!(
+            "[tasks.{task}]\nworkflow = '{task}'\nroot = {:?}\nevery = '1h'\n",
+            env.project_root
+        ));
+        write_loop_config(&env, &config);
+        loop_ok(&env, &["loop", "fire", task]);
+        let id: rimz::ids::WorkflowRunId = fired_record(&env, task)
+            .run_id
+            .expect("in-flight run id")
+            .parse()
+            .unwrap();
+        let paths = state.workflow(&id);
+        // Strip the fields while the hold check runs, as the older binary's write would.
+        let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+        let mut record = loop {
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
+            if record["node"] == "hold" && record["attempt"].is_object() {
+                break record;
+            }
+            assert!(Instant::now() < deadline, "{task} never held: {record}");
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(record["engaged"], false, "{record}");
+        // A run in flight is its launched row, in `loop show --json` as in the text.
+        let in_flight: serde_json::Value =
+            serde_json::from_str(&loop_ok(&env, &["loop", "show", task, "--json"])).unwrap();
+        assert_eq!(
+            (
+                &in_flight["runs"][0]["result"],
+                &in_flight["runs"][0]["run_id"]
+            ),
+            (&json!("launched"), &json!(id.as_str())),
+            "{in_flight}"
+        );
+        assert!(
+            loop_ok(&env, &["loop", "show", task]).contains("launched"),
+            "{task}"
+        );
+        for field in stripped {
+            record.as_object_mut().unwrap().remove(*field);
+        }
+        let staged = paths.home.join("record.json.test");
+        std::fs::write(&staged, serde_json::to_vec(&record).unwrap()).unwrap();
+        std::fs::rename(&staged, &paths.record).unwrap();
+        std::fs::write(&gate, "").unwrap();
+
+        let report = wait_for_loop_report(&env, task);
+        assert_eq!(
+            report.result,
+            LoopRunResult::Completed,
+            "{task}: {report:?}"
+        );
+        wait_until_finished(&env, &report);
+        assert!(quiet_fires(&env, task).is_none(), "{task}");
+        let rows = read_loop_run_records(&env)
+            .into_iter()
+            .filter(|row| row.task == task)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1, "{task}: {rows:?}");
+        let finished: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(state.finished_workflow(&id).record).unwrap())
+                .unwrap();
+        assert_eq!(finished["state"], "done", "{task}: {finished}");
+        assert!(finished.get("engaged").is_none(), "{task}: {finished}");
+    }
+}
+
 #[test]
 fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     let env = Env::new();
@@ -9991,6 +10613,13 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     assert_eq!(healthy.result, LoopRunResult::Completed);
     let journal = loop_run_journal(&env, &env.project_root, &healthy);
     assert!(journal.contains("healthy"), "{journal}");
+    // The passing check is a quiet fire: no row, and one block from its task's quiet summary.
+    assert!(read_loop_run_records(&env).is_empty());
+    let logs = loop_ok(&env, &["loop", "logs", "history"]);
+    assert!(
+        logs.contains("1 quiet fire · 1 in a row") && logs.contains("healthy"),
+        "{logs}"
+    );
     loop_ok(
         &env,
         &[
@@ -10003,13 +10632,13 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
             "15m",
         ],
     );
-    let before = read_loop_run_records(&env).len();
+    let before = run_mark(&env, "history");
     loop_ok(&env, &["loop", "fire", "history"]);
     let broken = wait_for_loop_report_after(&env, "history", before);
     assert_eq!(broken.result, LoopRunResult::Failed);
     let journal = loop_run_journal(&env, &env.project_root, &broken);
     assert!(journal.contains("broken"), "{journal}");
-    assert_eq!(read_loop_run_records(&env).len(), 4);
+    assert_eq!(read_loop_run_records(&env).len(), 1);
 
     // The views read each fire's check output from its run's journal.
     let show = loop_ok(&env, &["loop", "show", "history"]);
@@ -10021,8 +10650,7 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
     );
     let logs = loop_ok(&env, &["loop", "logs", "history"]);
     assert!(
-        logs.find("healthy").unwrap() < logs.find("broken").unwrap()
-            && logs.contains(broken.run_id.as_deref().unwrap()),
+        logs.contains("broken") && logs.contains(broken.run_id.as_deref().unwrap()),
         "{logs}"
     );
     let failed = loop_ok(&env, &["loop", "logs", "history", "--failed"]);
@@ -10065,6 +10693,7 @@ fn loop_judge_decline_renders_its_verdict_from_the_run() {
     assert!(fired.status.success(), "{fired:?}");
     let report = wait_for_loop_report(&env, "judged");
     assert_eq!(report.result, LoopRunResult::Completed);
+    wait_until_finished(&env, &report);
 
     let logs = loop_ok(&env, &["loop", "logs", "judged"]);
     assert!(logs.contains("judge claude: pass — all green"), "{logs}");
@@ -10112,6 +10741,13 @@ fn loop_guard_skips_or_delivers_with_evidence() {
             .is_empty()
     );
 
+    // The passing guard is a quiet fire, forgotten.
+    wait_until_forgotten(&env, &skipped);
+    assert_eq!(
+        quiet_fires(&env, "healthy").map(|(count, _)| count),
+        Some(1)
+    );
+
     loop_ok(&env, &["loop", "run", "broken"]);
     let delivered = wait_for_loop_report(&env, "broken");
     assert_eq!(
@@ -10119,6 +10755,16 @@ fn loop_guard_skips_or_delivers_with_evidence() {
         (LoopRunResult::Completed, Some(true))
     );
     assert_pending_message(&env, "sess-loop-check", "fix it");
+    // A run that ends done through its message step is kept: one row and a finished home.
+    wait_until_finished(&env, &delivered);
+    assert!(quiet_fires(&env, "broken").is_none());
+    assert_eq!(
+        read_loop_run_records(&env)
+            .iter()
+            .filter(|row| row.task == "broken" && row.run_id == delivered.run_id)
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -10235,12 +10881,18 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
             .0
             .contains_key("dispatch-fails")
     );
-    let launched = last_loop_record(&dispatch);
-    assert_eq!(
-        (launched.task.as_str(), launched.result),
-        ("dispatch-fails", LoopRunResult::Launched)
+    // The spent one-shot's row is gone; the run it started holds the fire until it reports.
+    let state = dispatch.state_path_for(&dispatch.project_root);
+    let runs = rimz::store::workflow::live(&state).unwrap();
+    assert!(
+        runs.iter().any(|run| matches!(
+            rimz::store::workflow::load(&run.paths),
+            Ok(record) if record.started_by("dispatch-fails")
+        )) || read_loop_run_records(&dispatch)
+            .iter()
+            .any(|row| row.task == "dispatch-fails" && row.run_id.is_some()),
+        "no run for the spent one-shot: {runs:?}"
     );
-    assert!(launched.run_id.is_some(), "{launched:?}");
 
     let preflight = Env::new();
     write_loop_instances(
@@ -10449,7 +11101,7 @@ fn loop_guarded_wait_to_a_dead_target_fails_its_run() {
     // A guarded wait runs its guard and message step in a run; an undelivered message fails it.
     // A scheduled run spends the one-shot; a manual fire keeps it.
     for (verb, kept) in [("fire", true), ("run", false)] {
-        let before = read_loop_run_records(&env).len();
+        let before = run_mark(&env, "dead");
         let text = loop_ok(&env, &["loop", verb, "dead"]);
         assert!(text.contains("launched"), "{text}");
         let report = wait_for_loop_report_after(&env, "dead", before);
@@ -10932,6 +11584,29 @@ fn loop_watch_keeps_acting_results_after_skipped_signals() {
     assert!(output.contains("✗ 1 needs you"), "{output}");
     assert!(output.contains("heard ci.passed 5m ago"), "{output}");
     assert!(!output.contains("skipped"), "{output}");
+}
+
+#[test]
+fn loop_watch_picks_up_a_quiet_fire_that_appends_nothing_to_the_log() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    seed_loop_watch_room(&env);
+    loop_ok(
+        &env,
+        &["loop", "add", "hushed", "--check", "true", "--every", "1h"],
+    );
+    let frame = loop_watch_across(
+        &env,
+        &["hushed", "never fired"],
+        || {
+            let before = run_mark(&env, "hushed");
+            loop_ok(&env, &["loop", "fire", "hushed"]);
+            wait_for_loop_report_after(&env, "hushed", before);
+        },
+        &["hushed", "✓ 0s ago"],
+    );
+    assert!(!frame.contains("never fired"), "{frame}");
+    assert!(read_loop_run_records(&env).is_empty());
 }
 
 #[test]
@@ -11707,11 +12382,12 @@ fn loop_commands_reject_an_unknown_name_with_a_free_lock() {
 fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
     let env = Env::new();
     env.record(&env.project_root);
+    // A failing check keeps its run's row, which `loop logs` still reads once the task is gone.
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--check", "true", "--every", "1h"],
+        &["loop", "add", "probe", "--check", "false", "--every", "1h"],
     );
-    let before = read_loop_run_records(&env).len();
+    let before = run_mark(&env, "probe");
     loop_ok(&env, &["loop", "fire", "probe"]);
     // The fire returns once its run starts; the views below read the run's report.
     wait_for_loop_report_after(&env, "probe", before);
@@ -13016,22 +13692,91 @@ fn loop_fail(env: &Env, args: &[&str]) -> (String, String) {
 
 /// Wait for the terminal report of `task`'s latest started run, and return it.
 fn wait_for_loop_report(env: &Env, task: &str) -> LoopRunRecord {
-    wait_for_loop_report_after(env, task, 0)
+    wait_for_loop_report_after(env, task, RunMark::default())
 }
 
-/// Wait for a terminal run report of `task` among the history rows past the first `before`.
-fn wait_for_loop_report_after(env: &Env, task: &str, before: usize) -> LoopRunRecord {
+/// How much of a task's history a test has seen: its log rows and its last quiet fire's run.
+#[derive(Clone, Debug, Default)]
+struct RunMark {
+    rows: usize,
+    quiet: Option<String>,
+}
+
+fn run_mark(env: &Env, task: &str) -> RunMark {
+    RunMark {
+        rows: read_loop_run_records(env).len(),
+        quiet: quiet_fires(env, task).and_then(|(_, last)| last.run_id),
+    }
+}
+
+/// The quiet summary of `task` in the fixture's machine fire record: how many of its runs ended
+/// done without starting an agent, and the newest one's row.
+fn quiet_fires(env: &Env, task: &str) -> Option<(u64, LoopRunRecord)> {
+    let text = std::fs::read_to_string(env.rimz_home().join("loops/loop-fires.json")).ok()?;
+    let fires: BTreeMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
+    fires
+        .into_values()
+        .filter_map(|fires| {
+            let quiet = fires.get("quiet")?;
+            let last: LoopRunRecord = serde_json::from_value(quiet["last"].clone()).unwrap();
+            (last.task == task).then(|| (quiet["count"].as_u64().unwrap(), last))
+        })
+        .max_by_key(|(_, last)| last.at)
+}
+
+/// Wait for a terminal run report of `task` past `mark`: a history row, or a quiet fire, whose
+/// summary row stands in for the report it no longer logs.
+fn wait_for_loop_report_after(env: &Env, task: &str, mark: RunMark) -> LoopRunRecord {
     let report = |record: &LoopRunRecord| {
         record.task == task && record.run_id.is_some() && record.result != LoopRunResult::Launched
     };
-    wait_for_loop_run_records(env, &format!("{task}'s run report"), |records| {
-        records.iter().skip(before).any(report)
-    });
-    read_loop_run_records(env)
+    let found = || {
+        let rows = read_loop_run_records(env);
+        rows.iter()
+            .skip(mark.rows)
+            .rfind(|row| report(row))
+            .cloned()
+            .or_else(|| {
+                quiet_fires(env, task)
+                    .map(|(_, last)| last)
+                    .filter(|last| last.run_id != mark.quiet)
+            })
+    };
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    loop {
+        if let Some(found) = found() {
+            return found;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {task}'s run report: {:?} quiet {:?}",
+            read_loop_run_records(env),
+            quiet_fires(env, task)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// The fires of `task` as `loop show --json` lists them: its history rows, and a `launched` row
+/// for each of its runs still in flight, which the log no longer holds.
+fn shown_runs(env: &Env, task: &str) -> Vec<LoopRunRecord> {
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(env, &["loop", "show", task, "--json"])).unwrap();
+    serde_json::from_value(shown["runs"].clone()).unwrap()
+}
+
+/// The newest fire of `task` that names a run, as `loop show --json` lists it (the run's report,
+/// or the `launched` row it shows for a run still in flight), or the task's last quiet fire.
+fn fired_record(env: &Env, task: &str) -> LoopRunRecord {
+    let shown: serde_json::Value =
+        serde_json::from_str(&loop_ok(env, &["loop", "show", task, "--json"])).unwrap();
+    serde_json::from_value::<Vec<LoopRunRecord>>(shown["runs"].clone())
+        .unwrap()
         .into_iter()
-        .skip(before)
-        .rfind(report)
-        .expect("run report")
+        .filter(|row| row.run_id.is_some())
+        .chain(quiet_fires(env, task).map(|(_, last)| last))
+        .max_by_key(|row| row.at)
+        .unwrap_or_else(|| panic!("{task} fired no run: {shown}"))
 }
 
 /// Wait until `task`'s workflow runs number `runs` and every report has landed: a reporter marks
@@ -13108,10 +13853,45 @@ fn run_paths(
         .map_or_else(|| state.workflow(id), |found| found.paths)
 }
 
+/// Wait until the run a report names has moved to the finished directory: a view that reads its
+/// home mid-move finds neither copy.
+fn wait_until_finished(env: &Env, record: &LoopRunRecord) {
+    let state = env.state_path_for(&env.project_root);
+    let id = record.run_id.as_deref().expect("run id").parse().unwrap();
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while !state.finished_workflow(&id).record.exists() {
+        assert!(Instant::now() < deadline, "run {id} never finished");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// A run's state, journal and check logs; for a quiet run, which left no home, the output its
+/// task's quiet summary stored. A home caught between the live and the finished directory is
+/// read again.
 fn loop_run_journal(env: &Env, root: &Path, record: &LoopRunRecord) -> String {
     let id = record.run_id.as_deref().expect("run id").parse().unwrap();
-    let paths = run_paths(env, root, &id);
-    let journal = rimz::store::workflow::journal(&paths).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let quiet =
+            quiet_fires(env, &record.task).is_some_and(|(_, last)| last.run_id == record.run_id);
+        if quiet {
+            let output = record
+                .check
+                .as_ref()
+                .map_or("", |check| check.output.as_str());
+            return format!("quiet {:?}\n{output}", record.result);
+        }
+        match read_run_home(&run_paths(env, root, &id)) {
+            Ok(read) => return read,
+            Err(error) => assert!(Instant::now() < deadline, "{error:#}"),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A run home's state, journal and check logs, read whole or not at all.
+fn read_run_home(paths: &rimz::disk::paths::WorkflowPaths) -> anyhow::Result<String> {
+    let journal = rimz::store::workflow::journal(paths)?;
     // A check's output lives in the log its evaluation names.
     let logs = journal
         .iter()
@@ -13122,17 +13902,13 @@ fn loop_run_journal(env: &Env, root: &Path, record: &LoopRunRecord) -> String {
                 .map(|log| paths.relocate(Path::new(log))),
             _ => None,
         })
-        .map(|log| std::fs::read_to_string(log).unwrap_or_default())
-        .collect::<String>();
-    let run = rimz::store::workflow::load(&paths)
-        .map(|run| {
-            format!(
-                "{:?} node={} input={:?} wait={:?} attempt={:?}",
-                run.state, run.node, run.input, run.wait, run.attempt
-            )
-        })
-        .unwrap_or_else(|error| format!("{error:#}"));
-    format!("{run}\n{journal:?}\n{logs}")
+        .map(std::fs::read_to_string)
+        .collect::<std::io::Result<String>>()?;
+    let run = rimz::store::workflow::load(paths)?;
+    Ok(format!(
+        "{:?} node={} input={:?} wait={:?} attempt={:?}\n{journal:?}\n{logs}",
+        run.state, run.node, run.input, run.wait, run.attempt
+    ))
 }
 
 fn last_loop_record(env: &Env) -> LoopRunRecord {
@@ -13528,6 +14304,72 @@ fn loop_watch_pty(
     let output = reader_thread.join().expect("join pty reader");
     let output = String::from_utf8_lossy(&output).into_owned();
     (output, status)
+}
+
+/// Run `loop watch --hold` in a pty until `before` paints, run `act` while it keeps refreshing,
+/// and return the visible frame once `after` paints.
+fn loop_watch_across(
+    env: &Env,
+    before: &'static [&'static str],
+    act: impl FnOnce(),
+    after: &'static [&'static str],
+) -> String {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open loop watch pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.env_remove("RIMZ_WORKSPACE_ID");
+    cmd.env_remove("RIMZ_PROJECT_ROOT");
+    cmd.args(["loop", "watch", "--hold"]);
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("TERM", "xterm-256color");
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let (stage_tx, stage_rx) = std::sync::mpsc::channel();
+    let reader_thread = std::thread::spawn(move || {
+        let mut buffer = [0; 4096];
+        let mut terminal = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 0);
+        let mut stages = [before, after].into_iter().peekable();
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            terminal.process(&buffer[..count]);
+            let frame = terminal.screen().contents();
+            if stages
+                .next_if(|stage| stage.iter().all(|text| frame.contains(*text)))
+                .is_some()
+            {
+                let _ = stage_tx.send(());
+                if stages.peek().is_none() {
+                    break;
+                }
+            }
+        }
+        terminal.screen().contents()
+    });
+    let before_painted = stage_rx.recv_timeout(Duration::from_secs(15));
+    if before_painted.is_ok() {
+        act();
+    }
+    let after_painted =
+        before_painted.and_then(|()| stage_rx.recv_timeout(Duration::from_secs(15)));
+    child.kill().expect("terminate loop watch");
+    child.wait().expect("reap loop watch");
+    drop(pair.master);
+    let frame = reader_thread.join().expect("join pty reader");
+    assert!(
+        after_painted.is_ok(),
+        "loop watch never painted its stages:\n{frame}"
+    );
+    frame
 }
 
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {

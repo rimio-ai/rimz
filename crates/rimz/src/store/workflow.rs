@@ -537,6 +537,10 @@ pub struct RunOutcome {
     /// recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The run ended done without starting an agent, a judge or a message: its record said
+    /// `engaged = false` at the terminal write. Its loop collection forgets it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quiet: bool,
 }
 
 /// The decision that ended a run; a failure the run's last decision explains names it.
@@ -674,6 +678,16 @@ pub struct RunRecord {
     /// started anything; cleared wherever the run enters a step afresh.
     #[serde(default)]
     pub launch_retry: bool,
+    /// Whether the run has started anything but a script or command: set `false` at creation
+    /// and latched `true` by the record write that publishes its first agent, judge, team or
+    /// message attempt, never cleared. Absent means a RimZ without the field wrote or rewrote
+    /// the record, which is not known to be quiet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engaged: Option<bool>,
+    /// What the loop fire that started the run would have logged at launch, sealed at creation
+    /// for its one report row; opaque to the store and the engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_facts: Option<Value>,
 }
 
 impl RunRecord {

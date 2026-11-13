@@ -2394,7 +2394,8 @@ path = "crates/rimz/src/harness"
 # team_prompt::SHIPPED_REFLECT and team_prompt::reflect_copy_path let team loads and explain resolve and label the shipped `reflect` consensus piece (+2).
 # workflow::{StartArgs, Advance, parse_give_up}, TaskFire::advance and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI and loop fires to admission (+5).
 # run::release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow pass and cancel (+1).
-surface-budget = 1218
+# run_log::{QuietFires, with_quiet}, QuietFires::streak_beside and TaskHistory::acting carry a task's quiet-fire summary to the loop CLI and merge it into the streak (+4).
+surface-budget = 1222
 
 [[verdict]]
 kind = "item"
@@ -6331,6 +6332,16 @@ reason = "The loop CLI holds per-root incremental run summaries across watch rep
 kind = "item"
 key = "harness::schedule::run_log::TaskHistory"
 reason = "Shared fire/heard partition returned to the loop CLI."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::QuietFires"
+reason = "A task's quiet-fire summary (count, streak, last row), read from loop-fires.json and rendered by loop list, show and logs."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::with_quiet"
+reason = "Merges the quiet streak into the acting run for loop list and loop show, so both read one verdict."
 
 [[verdict]]
 kind = "item"
@@ -11950,12 +11961,12 @@ reason = "A run record says whether a deployed workflow or a loop task's inline 
 [[verdict]]
 kind = "item"
 key = "store::workflow::LoopReport"
-reason = "A run record carries whether it still owes its loop task the outcome report; the run is created owing it, the scheduler's collector marks it sent, and the workflow tick and GC read it."
+reason = "A run record carries whether it still owes its loop task the outcome report; the run is created owing it, the scheduler's collector marks it sent (or removes a quiet run's home instead), and the workflow tick and GC read it."
 
 [[verdict]]
 kind = "item"
 key = "store::workflow::RunOutcome"
-reason = "The engine writes how a run ended in its terminal record write, so the scheduler's collector reports it from the record alone, without the journal or the sealed graph."
+reason = "The engine writes how a run ended, and whether it was quiet, in its terminal record write, so the scheduler's collector reports or forgets it from the record alone, without the journal or the sealed graph."
 
 [[verdict]]
 kind = "item"

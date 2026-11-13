@@ -282,6 +282,10 @@ The runtime root is private. `ensure_private_runtime_dir` refuses a symlink, a f
 
 Freshness here gates behaviour, so these files are scoped to one mux session incarnation. When a birth proves the previous session absent, it purges sidebar heartbeats before creating the replacement. A fresh-looking heartbeat from a dead renderer therefore cannot steer launch or reconcile decisions in the reborn room.
 
+### Machine-local loop overlays
+
+Loop task state that is not a task definition lives outside every room, under `~/.rimz/loops/`: `loop-arming.json`, `loop-strikes.json`, `loop-strike-runs.json` and `loop-fires.json`, each an `OverlayStore` file keyed by task scope behind its own advisory lock. `loop-fires.json` holds each task's scheduled-launch stamps and its quiet summary, the only trace a forgotten quiet run leaves, since its run home is removed at collection. Loop run history is `~/.rimz/logs/loop-runs.log.jsonl`. What each file holds, and when it is cleared, renamed and pruned, is [loops.md → History, strikes, and arming](./harness/loops.md#history-strikes-and-arming); GC prunes their orphaned keys ([Garbage collection](#garbage-collection)).
+
 ### Account-global caches
 
 Account-global provider caches live under `~/.rimz/cache/providers/`: `accounts.json`, `rate_limits.v<N>.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing.v1.sqlite`, and `pricing-refresh.v1.json`. They persist so the provider dashboard opens warm after a reboot, with refresh and rebuild rules specific to each file. Their election locks and the spending service socket live under `$XDG_RUNTIME_DIR/rimz/shared/`, because a lock means nothing once its holder is gone. Other rate-limit versions' files stay until the cache directory is deleted. GC cannot know whether a build still uses them. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
