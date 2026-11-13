@@ -204,7 +204,7 @@ While any founder hosts a live agent, the birth base stays. Once all founders le
 3. Spell the base the way the view reads it back: tmux maps `:` and `.` to `-` and commas to `_`, and trims edge whitespace; Zellij keeps the raw label.
 4. With no surviving agent, release to the shell name, or only clear a glyph when the base already equals it.
 
-Floating agent panes count as survivors; sidebar chrome and daemon-host panes do not. `Rebuild` preserves the original founders. Scoped `#` and `team:` bases, including tmux's sanitized `team-`, receive status changes only, never a rebuild or release. A restart that replaces the founder pane enters follow mode and normally keeps the same profile label.
+Floating agent panes count as survivors; sidebar chrome and daemon-host panes do not. `Rebuild` preserves the original founders. Scoped `#` and `team:` bases, including tmux's sanitized `team-`, and the numbered terminal names `term-1` through `term-9` receive status changes only, never a rebuild or release. A restart that replaces the founder pane enters follow mode and normally keeps the same profile label.
 
 #### Where the record lives
 
