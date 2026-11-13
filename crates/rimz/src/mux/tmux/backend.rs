@@ -308,7 +308,8 @@ impl TmuxBackend {
             spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
         }
         if let Some(cwd) = opts.cwd {
-            spec = spec.args(["-c".to_owned(), cwd]);
+            // tmux expands formats in `-c`, so `##` keeps a `#` in the path literal.
+            spec = spec.args(["-c".to_owned(), cwd.replace('#', "##")]);
         }
         if let Some(command) = opts.command {
             spec = spec.args(command);

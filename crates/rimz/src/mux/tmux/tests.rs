@@ -882,6 +882,41 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn split_escapes_format_characters_in_the_start_directory() {
+    use crate::mux::MuxBackend as _;
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+case "$4" in
+  display-message) printf '%%7|\n' ;;
+  split-window) printf '%%8\n' ;;
+esac
+"#,
+    );
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim);
+    let pane = backend
+        .split_pane(crate::mux::SplitPaneOptions {
+            target: crate::mux::SplitTarget::Pane(crate::PaneId::from_parts(MuxName::Tmux, "%7")),
+            cwd: Some("/work/a#{pane_id}b#c".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(pane, Some(crate::PaneId::from_parts(MuxName::Tmux, "%8")));
+    let log = crate::mux::zellij::tests::support::shim_log(&temp);
+    let split = log
+        .lines()
+        .find(|line| line.contains("split-window"))
+        .unwrap_or_else(|| panic!("no split-window in {log}"));
+    assert!(
+        split.contains(" -c /work/a##{pane_id}b##c"),
+        "tmux expands formats in `-c`, so each `#` must be doubled: {split}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn companion_append_geometry_timeout_is_before_spawn() {
     let (temp, result) =
         companion_append_with_shim(r#"if [ "$4" = list-panes ]; then exec sleep 3; fi"#);
