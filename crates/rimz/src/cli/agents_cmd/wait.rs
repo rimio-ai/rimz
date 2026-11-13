@@ -3,7 +3,7 @@ use super::*;
 use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
 use rimz::agents::TurnCompletion;
-use rimz::message::reply::{TurnWaitReason, TurnWaitView};
+use rimz::message::turn_wait::{TurnWaitReason, TurnWaitView};
 
 pub(super) fn report_wait_reason(
     err: &mut impl Write,

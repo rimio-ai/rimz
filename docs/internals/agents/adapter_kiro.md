@@ -166,7 +166,7 @@ Kiro meters credits ([reference](../../externals/agent-adapter/kiro-reference.md
 
 `rimz coverage --wiring` prints the current wired, partial, and unsupported grid. These gaps have a reason worth recording:
 
-- Errored and cancelled turns fire no hook. The context refresh settles a cancellation as `Interrupted` and records a failed turn as a `Failed` turn error. Both release `message --wait` and `agents wait` once a sidebar tick or a hook runs the refresh. Supervised runs read only durable run records, so both outcomes wait out the run's deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
+- Errored and cancelled turns fire no hook. The context refresh settles a cancellation as `Interrupted` and records a failed turn as a `Failed` turn error. Both release `agents wait` once a sidebar tick or a hook runs the refresh. Supervised runs read only durable run records, so both outcomes wait out the run's deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
 - Kiro CLI older than 2.31.0 gets no hooks: install refuses and the detected-agents install skips Kiro. A managed file written before a downgrade still counts as installed, though, and the hook preflight does not check the version.
 - Pending approvals and questions have no hook. The waiting card comes from the store, stays out of `rimz asks`, and is answered in Kiro's pane.
 - Credits are not dollars. Until Kiro publishes token counts or a dollar figure, no spend parser can be honest.

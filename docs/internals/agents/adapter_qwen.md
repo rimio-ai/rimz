@@ -140,7 +140,7 @@ The statusline carries the live context reading. Install wraps a command-mode `u
 
 Other user subtypes, system records, unknown records, and sidechain records stay out, though system and unknown records still link the ancestry. A record carries the Google `Content` shape, so its text is the join of its non-thought `text` parts. Thought, `functionCall`, and `functionResponse` parts carry no prose and drop out.
 
-Incremental reads for `rimz message --wait` and `-p --stream` use `parse_physical_assistant_messages` instead. An appended assistant can point at a parent before the byte cursor, so the stream parser takes each new root `assistant` record in physical order and needs no ancestry on the page.
+Incremental reads for `rimz agents wait --stream` and `-p --stream` use `parse_physical_assistant_messages` instead. An appended assistant can point at a parent before the byte cursor, so the stream parser takes each new root `assistant` record in physical order and needs no ancestry on the page.
 
 ## Account and balance
 

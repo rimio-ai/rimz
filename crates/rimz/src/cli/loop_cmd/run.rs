@@ -527,7 +527,6 @@ fn execute_prepared_delivery(
             sender,
             automated: true,
             allow_fanout: false,
-            reply: None,
             mux: globals.mux,
             enter: true,
             force: false,

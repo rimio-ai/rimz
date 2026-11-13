@@ -32,7 +32,6 @@ use rimz::store::{writer::EditOutcome, writer::MessageEdit};
 const LONG_ABOUT: &str = r#"Send text to an agent, and manage what you have sent.
 
   rimz message @coder "rebase first"             now if free, else at turn end
-  rimz message @coder --wait "status? one line"  send, then print the reply
   rimz message --steer @coder "use the cache"    type into its running turn
   rimz message --interrupt @coder "stop"         type, then stop its turn
   rimz message                                   what you sent in this lane
@@ -70,14 +69,10 @@ pub struct MessageArgs {
     #[arg(long, value_name = "DUR|HH:MM", conflicts_with = "steer")]
     schedule: Option<String>,
     /// Hold delivery until this agent finishes its queued work (repeatable; all must finish).
-    #[arg(long, value_name = "ADDR", conflicts_with_all = ["steer", "wait", "timeout"])]
+    #[arg(long, value_name = "ADDR", conflicts_with = "steer")]
     after: Vec<String>,
     /// Hold delivery until an agent stays in a status for a duration (repeatable; all must match).
-    #[arg(
-        long,
-        value_name = "'ADDR STATUS DUR'",
-        conflicts_with_all = ["steer", "wait", "timeout"]
-    )]
+    #[arg(long, value_name = "'ADDR STATUS DUR'", conflicts_with = "steer")]
     #[arg(value_parser = parse_when_request)]
     when: Vec<WhenRequest>,
     #[command(flatten)]
@@ -363,10 +358,6 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
                 file,
                 stdin,
                 no_from,
-                wait,
-                timeout,
-                json,
-                any,
             },
     } = args;
     let send_only = [
@@ -384,9 +375,6 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
         (file.is_some(), "--file <PATH>"),
         (*stdin, "--stdin"),
         (*no_from, "--no-from"),
-        (wait.is_some(), "--wait"),
-        (timeout.is_some(), "--timeout <DURATION>"),
-        (*any, "--any"),
     ];
     if let Some((_, flag)) = send_only.into_iter().find(|(given, _)| *given) {
         return Err(UsageError::new(format!(
@@ -400,15 +388,10 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
     if *all {
         list.push("--all");
     }
-    if *json {
-        list.push("--json");
-    }
     let explanation = if channel.is_some() {
         "--channel here restricts recipients. for one lane's messages"
     } else if *all {
         "--all here fans a send out. for every lane's messages"
-    } else if *json {
-        "--json here formats --wait replies. for the inbox as JSON"
     } else {
         return Ok(());
     };
@@ -418,7 +401,6 @@ fn targetless_send(args: &MessageArgs) -> Result<()> {
 mod dispatch;
 mod edit;
 mod list;
-mod reply;
 mod show;
 
 use dispatch::*;
@@ -510,7 +492,7 @@ mod tests {
             .filter_map(|line| line.strip_prefix("  rimz message"))
             .map(|rest| format!("rimz message{}", rest.split("  ").next().unwrap()))
             .collect::<Vec<_>>();
-        assert_eq!(examples.len(), 6, "{help}");
+        assert_eq!(examples.len(), 5, "{help}");
         for example in examples {
             let words = shlex::split(&example).unwrap();
             Cli::try_parse_from(words).unwrap_or_else(|err| panic!("`{example}`: {err}"));
@@ -573,10 +555,9 @@ mod tests {
     #[test]
     fn targetless_list_hints_parse_and_keep_all_shared_flags() {
         for flags in [
-            vec!["--json"],
             vec!["--all"],
             vec!["--channel", "auth space"],
-            vec!["--json", "--all", "--channel", "auth space"],
+            vec!["--all", "--channel", "auth space"],
         ] {
             let args =
                 Harness::try_parse_from(std::iter::once("rimz").chain(flags.iter().copied()))
@@ -589,11 +570,11 @@ mod tests {
             let Some(MessageSubcmd::List(list)) = parsed.command else {
                 panic!("list")
             };
-            assert_eq!(list.json, args.send.json);
+            assert!(!list.json);
             assert_eq!(list.all, args.send.all);
             assert_eq!(list.channel, args.send.channel);
         }
-        let args = Harness::try_parse_from(["rimz", "--json", "--file", "missing"])
+        let args = Harness::try_parse_from(["rimz", "--all", "--file", "missing"])
             .unwrap()
             .args;
         assert!(
@@ -602,103 +583,8 @@ mod tests {
                 .to_string()
                 .starts_with("--file <PATH> needs a target and text:")
         );
-    }
-
-    fn parse_send(argv: &[&str]) -> std::result::Result<MessageArgs, clap::Error> {
-        Harness::try_parse_from(std::iter::once("rimz").chain(argv.iter().copied()))
-            .map(|harness| harness.args)
-    }
-
-    fn reply_wait_of(
-        argv: &[&str],
-        agent_caller: bool,
-    ) -> std::result::Result<send::ReplyWait, String> {
-        let args = parse_send(argv).map_err(|err| err.to_string())?;
-        let wait =
-            send::wait_request(args.send.wait, args.send.timeout).map_err(|err| err.to_string())?;
-        Ok(send::reply_wait(wait, agent_caller))
-    }
-
-    #[test]
-    fn timeout_sets_the_reply_wait_deadline() {
-        use send::ReplyWait;
-        use std::time::Duration;
-
-        for argv in [
-            &["@coder", "--timeout", "10m", "q"][..],
-            &["@coder", "q", "--timeout", "10m"],
-            &["@coder", "--timeout=10m", "q"],
-            &["@coder", "--wait", "--timeout", "10m", "q"],
-        ] {
-            for agent_caller in [false, true] {
-                assert_eq!(
-                    reply_wait_of(argv, agent_caller),
-                    Ok(ReplyWait::Deadline(Duration::from_secs(600))),
-                    "{argv:?} agent_caller={agent_caller}"
-                );
-            }
-        }
-        assert_eq!(
-            reply_wait_of(&["@coder", "--wait", "q"], false),
-            Ok(ReplyWait::Indefinite)
-        );
-        assert_eq!(
-            reply_wait_of(&["@coder", "--wait", "q"], true),
-            Ok(ReplyWait::DefaultDeadline(Duration::from_secs(3600)))
-        );
-        assert_eq!(
-            reply_wait_of(&["@coder", "--wait=5m", "q"], true),
-            Ok(ReplyWait::Deadline(Duration::from_secs(300)))
-        );
-        assert_eq!(reply_wait_of(&["@coder", "q"], true), Ok(ReplyWait::Off));
-    }
-
-    #[test]
-    fn timeout_refuses_a_second_deadline_and_held_delivery() {
-        assert_eq!(
-            reply_wait_of(&["@coder", "--wait=5m", "--timeout", "5m", "q"], false),
-            Err(
-                "--wait=<DURATION> and --timeout <DURATION> both set the reply deadline; pass one"
-                    .to_owned()
-            )
-        );
-        let invalid = parse_send(&["@coder", "--timeout", "10x", "q"]).unwrap_err();
-        assert_eq!(invalid.kind(), clap::error::ErrorKind::ValueValidation);
-        for wait in ["--wait", "--timeout=5m"] {
-            for hold in [["--after", "@reviewer"], ["--when", "@reviewer idle 5m"]] {
-                let argv = ["@coder", hold[0], hold[1], wait, "q"];
-                let err = parse_send(&argv).unwrap_err();
-                assert_eq!(
-                    err.kind(),
-                    clap::error::ErrorKind::ArgumentConflict,
-                    "{argv:?}"
-                );
-            }
-        }
-        let args = parse_send(&["--timeout", "5m"]).unwrap();
-        assert!(
-            targetless_send(&args)
-                .unwrap_err()
-                .to_string()
-                .starts_with("--timeout <DURATION> needs a target and text:")
-        );
-    }
-
-    #[test]
-    fn timeout_alone_enables_reply_output_modes() {
-        for flag in ["--json", "--any"] {
-            let args = parse_send(&["@coder", "--timeout", "5m", flag, "q"]).unwrap();
-            let wait = send::WaitSpec {
-                mode: send::reply_wait(
-                    send::wait_request(args.send.wait, args.send.timeout).unwrap(),
-                    false,
-                ),
-                any: args.send.any,
-                json: args.send.json,
-            };
-            send::validate_reply_wait(wait, true, false, false)
-                .unwrap_or_else(|err| panic!("{flag}: {err}"));
-        }
+        let json = Harness::try_parse_from(["rimz", "--json"]).unwrap_err();
+        assert_eq!(json.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

@@ -57,7 +57,7 @@ else
 fi
 ```
 
-**Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle. Kiro needs one: it fires no hook for a cancelled or errored turn, so a `rimz agents kiro -p` run waits out its deadline on either outcome instead of failing at `1`. While a sidebar runs, cancelled and errored turns release `message --wait` and `agents wait`.
+**Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle. Kiro needs one: it fires no hook for a cancelled or errored turn, so a `rimz agents kiro -p` run waits out its deadline on either outcome instead of failing at `1`. While a sidebar runs, cancelled and errored turns release `agents wait`.
 
 ```sh
 rimz agents codex -p --timeout 30m "Update dependencies and run the test suite."
@@ -197,7 +197,7 @@ A wrapper sometimes has to read or nudge a pane itself, and the commands that do
 
 Because these are public CLI, a wrapper composes them freely: read a prompt with `pane capture`, decide with a bounded matcher, answer with `pane send`, and escalate anything it does not recognize by leaving the row `? waiting` for you.
 
-A few of these commands, `rimz message --wait` and `rimz accounts` among them, animate a status line while they work. It only ever reaches an interactive stderr terminal, so a redirected or piped stderr never sees it; `RIMZ_NO_PROGRESS=1` turns it off everywhere.
+A few of these commands, `rimz accounts` and `rimz doctor` among them, animate a status line while they work. It only ever reaches an interactive stderr terminal, so a redirected or piped stderr never sees it; `RIMZ_NO_PROGRESS=1` turns it off everywhere.
 
 ## Agents scripting agents
 

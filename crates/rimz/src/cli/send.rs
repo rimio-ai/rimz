@@ -1,7 +1,6 @@
 //! Shared send flags, prompt sources, sender attribution, and outcome presentation.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -11,11 +10,6 @@ use rimz::message::{DeliveryKind, InterruptConfirmation};
 use rimz::store::message::AutoCompact;
 #[cfg(test)]
 use rimz::store::message::MessageSender;
-use rimz::utils::time::{DurationUnit, parse_duration_units};
-
-use super::usage::UsageError;
-
-const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
 
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
@@ -60,71 +54,6 @@ pub(crate) struct SendFlags {
     /// Deliver the text verbatim with no message header.
     #[arg(long)]
     pub(crate) no_from: bool,
-    /// Wait for the target agents' replies and print or gather their final messages.
-    /// Bare `--wait` has no deadline for humans and a 1h deadline for agent callers;
-    /// use `--timeout 5m` (or the attached `--wait=5m`) to set the whole wait explicitly.
-    #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true, value_parser = parse_wait_duration)]
-    pub(crate) wait: Option<Option<Duration>>,
-    /// Wait for the target agents' replies for at most this long (`30s`, `10m`, `1h`).
-    /// Implies `--wait`.
-    #[arg(long, value_name = "DURATION", value_parser = parse_wait_duration)]
-    pub(crate) timeout: Option<Duration>,
-    /// Emit replies as one JSON map keyed by agent handle. Requires `--wait` or `--timeout`.
-    #[arg(long)]
-    pub(crate) json: bool,
-    /// Return when the first reply leg finishes instead of gathering all replies.
-    /// Requires `--wait` or `--timeout`.
-    #[arg(long)]
-    pub(crate) any: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplyWait {
-    Off,
-    Indefinite,
-    Deadline(Duration),
-    DefaultDeadline(Duration),
-}
-
-impl ReplyWait {
-    pub(crate) fn is_on(self) -> bool {
-        !matches!(self, Self::Off)
-    }
-
-    pub(crate) fn deadline_from(self, started: Instant) -> Option<Instant> {
-        match self {
-            Self::Off | Self::Indefinite => None,
-            Self::Deadline(duration) | Self::DefaultDeadline(duration) => Some(started + duration),
-        }
-    }
-
-    pub(crate) fn uses_agent_default(self) -> bool {
-        matches!(self, Self::DefaultDeadline(_))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WaitSpec {
-    pub(crate) mode: ReplyWait,
-    pub(crate) any: bool,
-    pub(crate) json: bool,
-}
-
-impl WaitSpec {
-    #[cfg(test)]
-    const OFF: Self = Self {
-        mode: ReplyWait::Off,
-        any: false,
-        json: false,
-    };
-
-    pub(crate) fn is_on(self) -> bool {
-        self.mode.is_on()
-    }
-
-    pub(crate) fn deadline_from(self, started: Instant) -> Option<Instant> {
-        self.mode.deadline_from(started)
-    }
 }
 
 /// Resolve the prompt a send-style invocation carries from inline argv,
@@ -210,57 +139,6 @@ pub(crate) fn warn_ignored_stdin() {
 #[cfg(test)]
 use rimz::launcher::context::resolve_caller_from;
 pub(crate) use rimz::launcher::context::{resolve_caller, sender_for};
-
-/// Fold `--wait[=DURATION]` and `--timeout DURATION` into the one requested wait.
-pub(crate) fn wait_request(
-    wait: Option<Option<Duration>>,
-    timeout: Option<Duration>,
-) -> std::result::Result<Option<Option<Duration>>, UsageError> {
-    match (wait, timeout) {
-        (Some(Some(_)), Some(_)) => Err(UsageError::new(
-            "--wait=<DURATION> and --timeout <DURATION> both set the reply deadline; pass one"
-                .to_owned(),
-        )),
-        (_, Some(timeout)) => Ok(Some(Some(timeout))),
-        (wait, None) => Ok(wait),
-    }
-}
-
-pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
-    match wait {
-        None => ReplyWait::Off,
-        Some(None) if agent_caller => ReplyWait::DefaultDeadline(AGENT_WAIT_DEADLINE),
-        Some(None) => ReplyWait::Indefinite,
-        Some(Some(duration)) => ReplyWait::Deadline(duration),
-    }
-}
-
-pub(crate) fn validate_reply_wait(
-    wait: WaitSpec,
-    enter: bool,
-    create: bool,
-    scheduled: bool,
-) -> Result<()> {
-    if !wait.is_on() {
-        if wait.json {
-            bail!("--json requires --wait or --timeout");
-        }
-        if wait.any {
-            bail!("--any requires --wait or --timeout");
-        }
-        return Ok(());
-    }
-    if !enter {
-        bail!("--wait/--timeout requires submitting the message; remove --no-enter");
-    }
-    if create {
-        bail!("--wait/--timeout requires an existing agent; remove --create");
-    }
-    if scheduled {
-        bail!("--wait/--timeout sends now or parks for a turn boundary; remove --schedule");
-    }
-    Ok(())
-}
 
 pub(crate) fn render_dispatch_outcome(
     kind: DeliveryKind,
@@ -527,18 +405,6 @@ fn print_compacted_if_needed(label: &str, compacted: &[String]) {
     }
 }
 
-fn parse_wait_duration(raw: &str) -> std::result::Result<Duration, String> {
-    parse_duration_units(
-        raw,
-        &[
-            DurationUnit::Second,
-            DurationUnit::Minute,
-            DurationUnit::Hour,
-        ],
-    )
-    .map_err(|err| err.to_string())
-}
-
 /// Read a prompt file as-is, trimming only the trailing newline an editor adds so
 /// it never lands as a blank composer line before the submit.
 pub(crate) fn read_prompt_file(path: &Path) -> Result<String> {
@@ -685,57 +551,6 @@ mod tests {
         assert_eq!(buffered_stdin_bytes(read_end.as_fd()), Some(0));
         nix::unistd::write(&write_end, b"x").unwrap();
         assert_eq!(buffered_stdin_bytes(read_end.as_fd()), Some(1));
-    }
-
-    #[test]
-    fn resolves_reply_wait_modes() {
-        assert_eq!(reply_wait(None, false), ReplyWait::Off);
-        assert_eq!(reply_wait(Some(None), false), ReplyWait::Indefinite);
-        assert_eq!(
-            reply_wait(Some(None), true),
-            ReplyWait::DefaultDeadline(Duration::from_secs(3600))
-        );
-        assert_eq!(
-            reply_wait(Some(Some(Duration::from_secs(5))), true),
-            ReplyWait::Deadline(Duration::from_secs(5))
-        );
-    }
-
-    #[test]
-    fn reply_output_modes_require_wait() {
-        for (wait, expected) in [
-            (
-                WaitSpec {
-                    json: true,
-                    ..WaitSpec::OFF
-                },
-                "--json requires --wait or --timeout",
-            ),
-            (
-                WaitSpec {
-                    any: true,
-                    ..WaitSpec::OFF
-                },
-                "--any requires --wait or --timeout",
-            ),
-        ] {
-            assert_eq!(
-                validate_reply_wait(wait, true, false, false)
-                    .unwrap_err()
-                    .to_string(),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn reply_wait_accepts_fanout_output_modes() {
-        let wait = WaitSpec {
-            mode: ReplyWait::Indefinite,
-            any: true,
-            json: true,
-        };
-        validate_reply_wait(wait, true, false, false).unwrap();
     }
 
     #[test]

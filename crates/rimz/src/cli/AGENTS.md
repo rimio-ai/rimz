@@ -24,7 +24,7 @@ A handler parses, calls the domain, and presents; the knowledge lives in its own
 
 - `launcher` — layout and supervised preparation and shared execution, placement and child zones, trust verdicts, LSP admission, checkout settlement and cohort reconciliation.
 - `harness` — launch compilation and validation vocabulary, resume/rebirth planning, schedule policy, run waits.
-- `message` — dispatch conditions, delivery causality, reply-wait state.
+- `message` — dispatch conditions, delivery causality, turn-completion reading.
 - `room` — room identity (session→mux resolution, lock-based room admission, session→workspace-record lookup), private room context, the one birth path.
 - `config` — format-preserving config editing and bootstrap.
 - `store` — event construction, rotation policy, pane/session binding eligibility.

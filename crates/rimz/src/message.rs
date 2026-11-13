@@ -11,12 +11,12 @@ pub mod compact;
 pub mod deliver;
 pub mod dispatch;
 pub(crate) mod fire;
-pub mod reply;
 pub mod send;
 pub mod soft_compact;
 pub mod synthetic;
+pub mod turn_wait;
 
-/// Delivery timing shared by dispatch, pane writes, and reply waits.
+/// Delivery timing shared by dispatch and pane writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryKind {
     Boundary,

@@ -179,7 +179,7 @@ upward-dependencies = ["address"]
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the snapshot's budget reading.
-# Turn completion is shared by reply waits and `agents wait`, apart from the delivery gate.
+# Turn completion is shared by the turn wait view behind `agents wait`, apart from the delivery gate.
 # Store's fold and follower pass the prior record's turn ids to `lifecycle::step`
 # and advance them through the one shared `lifecycle::turn_ids_after`.
 # Background shells and their report are folded by store and listed by the renderer.
@@ -1576,7 +1576,6 @@ allowed-dependencies = [
 # RuntimePaths::typing_path and typing_lock_path class the pane-input record and lock (+2).
 # RuntimePaths::sidebar_closed_cards_path owns the CLI's runtime undo stack (+1).
 # RuntimePaths::zellij_client_mode_paths owns stamped per-client mode lanes (+1).
-# RuntimePaths::reply_wait_lease_path classes each reply wait leg's liveness lease (+1).
 # RuntimePaths::unread_lock_path classes the unread-episode lock (+1).
 # RuntimePaths::palette_last_launch_path owns the palette's last-launch record (+1).
 # notes_dir roots the home-wide note store, and write_bytes_new_mode publishes a note without taking a taken name (+2).
@@ -2151,7 +2150,6 @@ path = "crates/rimz/src/harness"
 # Posture-owned exec request construction shared by relaunch doorways (pass 28f).
 # Launch finalization shares the tier table and profile-preference context with CLI doorways.
 # Caller-aware launch focus crosses the harness/CLI boundary.
-# `message --wait` claims the answer its printed reply came from through the run report ledger.
 # Exec resolves model postures and reports checked assist appends (+2).
 # Worktree producers share best-effort in-process signal append and fire.
 # Signal matching, scope presentation and definition validation share the wildcard predicate.
@@ -3306,7 +3304,7 @@ upward-dependencies = [
     "harness::schedule::pending",
     "sidebar::produce",
 ]
-# The turn-completion wait view is shared by reply waits and `agents wait`.
+# The turn-completion wait view is shared by `agents wait` and owed-report wakes.
 # Its wake-in-flight predicate is shared with the supervised run's owed-wake read.
 # The no-pane blocker sentence is one formatter for the durable record and `message show`.
 # Typed delivery timing and its dispatch accessor are shared with CLI reporting.
@@ -3326,7 +3324,7 @@ surface-budget = 91
 [[verdict]]
 kind = "item"
 key = "message::InputWait"
-reason = "Pane writes, dispatch, reply waits and CLI receipts share human-input and automatic-review refusals."
+reason = "Pane writes, dispatch and CLI receipts share human-input and automatic-review refusals."
 
 [[verdict]]
 kind = "item"
@@ -4271,7 +4269,7 @@ path = "crates/rimz/src/store"
 # Delivery selection provenance crosses the locked acknowledgment callback seam.
 # `TeamRun` marks the leader's team-long run record.
 # Subagent context percent shares the parent gauge's arithmetic with the renderer.
-# Fleet digest matching is shared by delivery cancellation and reply waits.
+# Fleet digest matching is shared by delivery cancellation and the turn wait view.
 # Durable FollowUpTurn/EarlierAnswer metadata and RunRecord::owes_report share per-answer claims with CLI consumers.
 # RunRecord::answer_claims is the shared ordered claim view for report selection and settlement.
 # AnswerClaim names that borrowed view and carries the earlier answer without another lookup.
@@ -4398,7 +4396,6 @@ path = "crates/rimz/src/store"
 # raised::observe and raised::audit share lifecycle settlement and operator audit writes (+2).
 # raised::CloseCause and its as_str share typed hook-close vocabulary (+2).
 # raised::prepare_raise owns the CLI's basis, rest and captured-reply decisions (+1).
-# MessageRecord::with_reply_wait_lease stamps a reply wait leg's lease token for cycle detection (+1).
 # Pass 33d: SidebarProviderPanel::budget returns ProviderBudget, ProviderBar, WindowReading and CreditDisplay, the quota reading the renderer draws (+4).
 # SkippedSettings carries the skipped-settings count and list digest to the renderer (+1).
 # workflow::RunOrigin and workflow::seal_definition record and seal an inline run's definition (+2).
@@ -5550,8 +5547,7 @@ reason = "The agents dispatcher owns the agent-only molt verb."
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
-# `message --wait` claims the answer its printed reply came from, for the launcher resolved through ancestry.
-# may_claim reads the snapshot's agent rows (`agents::AgentState`) to find the caller and the run's launched row.
+# may_claim resolves the caller through ancestry and reads the snapshot's agent rows (`agents::AgentState`) to find the caller and the run's launched row.
 allowed-dependencies = [
     "agents",
     "disk::lock",
@@ -5561,7 +5557,7 @@ allowed-dependencies = [
     "ids",
     "store",
 ]
-# may_claim shares the person-or-launcher read-mark rule between `claim_reply` and `agents wait` (+1).
+# may_claim holds the person-or-launcher read-mark rule `agents wait` applies.
 surface-budget = 5
 
 [[module]]
@@ -7028,23 +7024,13 @@ reason = "Pass 13: dispatch's return type; callers destructure it, so narrow-to 
 
 [[verdict]]
 kind = "item"
-key = "message::reply::ReplyJoinResult"
-reason = "Pass 13: ReplyUpdate.join's type; the winner travels with the settled batch so non-winners are never printed first."
-
-[[verdict]]
-kind = "item"
 key = "message::send::SendErr"
 reason = "Pass 13: DeliverErr::Send payload."
 
 [[verdict]]
 kind = "item"
-key = "message::reply::ReplyErr"
-reason = "Pass 13: DispatchErr::Reply payload and ReplyWait's error."
-
-[[verdict]]
-kind = "item"
 key = "message::dispatch::DispatchRequest"
-reason = "Pass 13, 27c: per-send facts (enter, force, auto_compact, allow_fanout, mux, automated, reply join) live on the request; DispatchMode holds timing only (9000c0f24, 3128b2029)."
+reason = "Pass 13, 27c: per-send facts (enter, force, auto_compact, allow_fanout, mux, automated) live on the request; DispatchMode holds timing only (9000c0f24, 3128b2029)."
 
 [[verdict]]
 kind = "item"
@@ -7098,11 +7084,6 @@ reason = "Pass 13: pane-write pacing cli::answer borrows; from_env is its one pr
 
 [[verdict]]
 kind = "item"
-key = "message::reply::ReplyWait"
-reason = "Pass 13, 27c: progress/poll/timeout stay the CLI-driven protocol; a run owning cadence was refuted in 27c (net +7 SLOC, same surface, one driver; timing pinned by 27077a848, cfe1240a3)."
-
-[[verdict]]
-kind = "item"
 key = "message::fire::wake_due_messages"
 reason = "Pass 13: renderer tick; hides stamp decode, due compare and the detached sweep spawn."
 
@@ -7114,11 +7095,6 @@ reason = "Pass 13: translates one typed failure stage into flag grammar or remed
 [[verdict]]
 kind = "item"
 key = "cli::message::dispatch::map_condition_err"
-reason = "Pass 13: translates one typed failure stage into flag grammar or remediation; merging them erases the stages or pulls exit wording into the domain."
-
-[[verdict]]
-kind = "item"
-key = "cli::message::dispatch::map_reply_prepare_err"
 reason = "Pass 13: translates one typed failure stage into flag grammar or remediation; merging them erases the stages or pulls exit wording into the domain."
 
 [[verdict]]
@@ -7594,7 +7570,7 @@ reason = "The CLI exec wrapper is a separate binary crate and records launch war
 [[verdict]]
 kind = "item"
 key = "store::event::MessageEventMethod"
-reason = "Named by message/reply tests and the integration crate; parse keeps the legacy message.removed spelling (20f455f0b) so mixed-binary workspaces read old events (pass 21b)."
+reason = "Named by the integration crate; parse keeps the legacy message.removed spelling (20f455f0b) so mixed-binary workspaces read old events (pass 21b)."
 
 [[verdict]]
 kind = "item"
@@ -7663,11 +7639,6 @@ reason = "Reached by the integration crate, which sees only pub, and called in p
 
 [[verdict]]
 kind = "item"
-key = "store::message::with_reply_wait"
-reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
-
-[[verdict]]
-kind = "item"
 key = "store::message::new_for_card"
 reason = "Its enter is live (--no-enter, requeue); the integration crate and production both call it (pass 21b)."
 
@@ -7698,11 +7669,6 @@ reason = "The benches and the performance integration tier append through this e
 
 [[verdict]]
 kind = "item"
-key = "store::event_log::read_from_offset"
-reason = "Narrowed to pub(crate), not the store: the message reply poll reads the log tail from its own fold base (message/reply.rs) (pass 23a)."
-
-[[verdict]]
-kind = "item"
 key = "store::event_log::visit_from_offset"
 reason = "The thin launch tail visits raw frames without retaining a fleet's log tail."
 
@@ -7719,7 +7685,7 @@ reason = "Followers and the parked watchdog read the durable generation without 
 [[verdict]]
 kind = "item"
 key = "store::event_log::testkit::bytes_read"
-reason = "Always-on byte counter the performance tier and the message reply tests read from outside the library crate (ac096bc) (pass 23a)."
+reason = "Always-on byte counter the performance tier and the CLI work log read from outside the library crate (ac096bc) (pass 23a)."
 
 [[verdict]]
 kind = "item"
@@ -7814,7 +7780,7 @@ reason = "Spent-child CLI parity assembles durable demotion inputs once for side
 [[verdict]]
 kind = "item"
 key = "harness::auto_continue::CardStatus"
-reason = "Message gates, reply waits and takeover share a read-only status reader with lazy spent-pause evidence."
+reason = "Message gates, the turn wait view and takeover share a read-only status reader with lazy spent-pause evidence."
 
 [[verdict]]
 kind = "item"
@@ -8059,7 +8025,7 @@ reason = "The agents-side kind lookup for a reset credit, carrying the one unsup
 [[verdict]]
 kind = "item"
 key = "agents::preflight_hooks"
-reason = "The lifecycle flag has three live policies: login and dispatch use None, reply and scheduled sends use NotUnsupported, supervised launch uses Wired (pass 31b)."
+reason = "The lifecycle flag has three live policies: login and dispatch use None, loop add and scheduled sends use NotUnsupported, supervised launch uses Wired (pass 31b)."
 
 [[verdict]]
 kind = "item"
@@ -9189,7 +9155,7 @@ reason = "One-caller observer flag: presentation passes None, streaming passes S
 [[verdict]]
 kind = "item"
 key = "harness::run::report::may_claim"
-reason = "`agents wait` and `claim_reply` mark a printed answer read only for a person at a shell or the run's launcher during its open turn."
+reason = "`agents wait` marks a printed answer read only for a person at a shell or the run's launcher during its open turn."
 
 [[verdict]]
 kind = "item"
@@ -11374,7 +11340,7 @@ reason = "The two share only a missing root read as empty and a per-entry I/O er
 [[verdict]]
 kind = "guard"
 key = "$0.status!=RunStatus::Completed"
-reason = "Four decisions on one terminal status: reply prints a turn-failure line, supervised output prints run forensics, supervised run skips the verify loop, harness::run returns RunStoreErr::InvalidStatus. A shared predicate would rename equality and hide none of them (pass 28a)."
+reason = "Three decisions on one terminal status: supervised output prints run forensics, supervised run skips the verify loop, harness::run returns RunStoreErr::InvalidStatus. A shared predicate would rename equality and hide none of them (pass 28a)."
 
 [[verdict]]
 kind = "guard"

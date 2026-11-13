@@ -133,7 +133,7 @@ pub fn read_all(path: &Path) -> Result<Vec<EventEnvelope>> {
 /// row is judged by what follows it: no bytes means a torn tail, logged and
 /// skipped; more bytes means corruption and stays a hard error. The returned
 /// offset never claims bytes the fold skipped.
-pub(crate) fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
+pub(super) fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
     let mut events = Vec::new();
     let end = visit_from_offset(path, start, |event| events.push(event))?;
     Ok((events, end))

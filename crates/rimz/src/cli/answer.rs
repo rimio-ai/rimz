@@ -245,7 +245,6 @@ fn answer_raised(
             sender,
             automated: false,
             allow_fanout: false,
-            reply: None,
             mux: globals.mux,
             enter: true,
             force: false,

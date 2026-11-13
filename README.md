@@ -186,10 +186,6 @@ rimz message @claude "add coverage for the expiry edge cases"
 rimz message @planner "draft the implementation plan"
 rimz message @coder --after @planner "planner's done: read .rimz/team/plan-notes.md and start"
 
-# Ask and print the reply from the agent's own context
-rimz message @coder --wait "did the migration land? one line"
-rimz message @all --wait --json "status? one line"     # a labeled reply map for the whole channel
-
 # Write into the live turn now, or schedule for later
 rimz message --steer @claude "stop: the parser test comes first"
 rimz message --interrupt @claude "stop: the user changed direction" # stop the turn, then deliver fresh

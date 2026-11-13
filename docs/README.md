@@ -21,7 +21,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 ## Harness Engineering
 
 - [Worktrees](./guide/worktrees.md): isolate a layout or team on its own Git branch so several run in parallel without clobbering each other.
-- [Messaging](./guide/messaging.md): reach agents by handle, park text for the turn boundary or steer the live turn, ask an agent a question and print its reply, and group the fleet into channels.
+- [Messaging](./guide/messaging.md): reach agents by handle, park text for the turn boundary or steer the live turn, and group the fleet into channels.
 - [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, follow and hand over the stages on its shared board, and reopen or retire the team as a single unit.
 - [Scripting](./guide/scripting.md): drop an agent into a shell script, a cron line, or CI with `rimz agents -p`: one prompt, one exit code, JSON or streaming output, background runs to join later, and agents launching agents.
 - [Subagents](./guide/subagents.md): let your agents hand bounded tasks to children that run in their own panes under a deadline, decide which children each agent may launch, and watch, answer, and stop them.

@@ -125,10 +125,6 @@ fn targetless_send_flags_refuse_with_usage_error() {
         vec!["--file", "missing.txt"],
         vec!["--stdin"],
         vec!["--no-from"],
-        vec!["--wait"],
-        vec!["--json"],
-        vec!["--any"],
-        vec!["--json", "list"],
         vec!["--steer", "list"],
     ] {
         let output = env.rimz().arg("message").args(&flags).output().unwrap();
@@ -457,31 +453,6 @@ fn interrupt_codex_without_signal_warns_after_window() {
 #[test]
 fn interrupt_queued_without_signal_warns_after_window() {
     interrupt_without_signal(true);
-}
-
-#[test]
-fn interrupt_wait_reports_unconfirmed_before_reply_timeout() {
-    let (env, panes) = interrupt_fixture("codex");
-    let output = traced_rimz(&env, "interrupt-wait-unconfirmed.log")
-        .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
-        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "0")
-        .args([
-            "message",
-            "--interrupt",
-            "@codex",
-            "--wait=0s",
-            "--json",
-            "new direction",
-        ])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(124));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("interrupt not confirmed"), "{stderr}");
-    assert_sent_receipts(&output.stderr, 1);
-    let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(reply["@codex#main"]["status"], "timed_out");
 }
 
 fn interrupt_without_signal(queued: bool) {
@@ -2596,9 +2567,6 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
         let scheduled = MessageRecord::requeue_from(&conditional)
             .with_when(Vec::new())
             .with_not_before(Some(jiff::Timestamp::now() + Duration::from_secs(3600)));
-        let waiting = MessageRecord::requeue_from(&conditional)
-            .with_when(Vec::new())
-            .with_reply_wait(true);
         let human = MessageRecord::requeue_from(&conditional)
             .with_when(Vec::new())
             .with_sender(MessageSender::Human);
@@ -2607,7 +2575,7 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
             .with_sender(MessageSender::Harness {
                 notice: HarnessNotice::Wait,
             });
-        for mut record in [after, scheduled, waiting, human, harness] {
+        for mut record in [after, scheduled, human, harness] {
             record.enqueued_at = conditional.enqueued_at;
             store.queue_message(&record, "rimz-test").unwrap();
         }
@@ -5531,8 +5499,6 @@ enum ResumeFollowUpCase {
     RegistrationWindow,
     EndedDuringRetry,
     SplitFailed,
-    WaitReply,
-    WaitExpired,
     AfterSelf,
     LimitRefused,
 }
@@ -5560,16 +5526,6 @@ fn parent_message_retry_opens_a_pane_when_the_child_ends_while_it_waits() {
 #[test]
 fn parent_message_split_failure_errors_the_queued_follow_up() {
     assert_parent_follow_up_case(None, None, ResumeFollowUpCase::SplitFailed);
-}
-
-#[test]
-fn parent_message_waits_for_reply_through_late_registration() {
-    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::WaitReply);
-}
-
-#[test]
-fn parent_message_wait_reports_registration_expiry() {
-    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::WaitExpired);
 }
 
 #[test]
@@ -5833,16 +5789,6 @@ fn assert_parent_follow_up_case(
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let waiting = matches!(
-        case,
-        ResumeFollowUpCase::WaitReply | ResumeFollowUpCase::WaitExpired
-    );
-    if waiting {
-        send_command.arg("--wait=60s");
-    }
-    if case == ResumeFollowUpCase::WaitExpired {
-        send_command.env("RIMZ_MESSAGE_REGISTER_TIMEOUT_MS", "4000");
-    }
     let register_limit = Duration::from_secs(60);
     if case == ResumeFollowUpCase::RegistrationWindow {
         send_command.env(
@@ -6062,56 +6008,6 @@ fn assert_parent_follow_up_case(
     } else {
         None
     };
-    if waiting {
-        let sink = rimz::diag::DiagSink::under(
-            store.paths().root.clone(),
-            env.workspace_id.clone(),
-            &workspace.session_name,
-            None,
-        );
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            if std::fs::read_to_string(sink.log_path().unwrap())
-                .unwrap_or_default()
-                .contains("subagent_pane_bind_timeout")
-            {
-                break;
-            }
-            assert!(
-                sender.as_mut().unwrap().try_wait().unwrap().is_none(),
-                "--wait must survive the bind timeout: {:?}",
-                sender.take().unwrap().wait_with_output().unwrap()
-            );
-            assert!(
-                Instant::now() < deadline,
-                "bind waiter never reached its timeout"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(
-            store.list_pending_messages().unwrap().len(),
-            1,
-            "--wait must retain the follow-up through the bind timeout"
-        );
-        if case == ResumeFollowUpCase::WaitExpired {
-            let records = store.list_pending_messages().unwrap();
-            let deadline = records[0]
-                .register_by
-                .expect("a resume follow-up carries its registration deadline");
-            assert_eq!(deadline, records[0].enqueued_at + Duration::from_secs(4));
-            store
-                .reconcile_stale_messages(&workspace.session_name, deadline, 3)
-                .unwrap();
-            let output = sender.take().unwrap().wait_with_output().unwrap();
-            assert_eq!(output.status.code(), Some(1), "{output:?}");
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains(&format!("did not register by {deadline}")),
-                "{output:?}"
-            );
-            return;
-        }
-    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let log = std::fs::read_to_string(&trace).unwrap_or_default();
@@ -6269,8 +6165,7 @@ fn assert_parent_follow_up_case(
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let output = early_output
-        .or_else(|| (!waiting).then(|| sender.take().unwrap().wait_with_output().unwrap()));
+    let output = early_output.or_else(|| Some(sender.take().unwrap().wait_with_output().unwrap()));
     if let Some(output) = &output {
         assert!(
             output.status.success(),
@@ -6371,17 +6266,6 @@ fn assert_parent_follow_up_case(
         std::fs::read_to_string(previous_answer).unwrap(),
         "previous answer\n"
     );
-    if waiting {
-        append_claude_assistant(&transcript, "follow-up answer");
-        let stopped = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"Stop", "session_id":"child", "transcript_path":transcript, "cwd":cwd}).to_string(), &hook_env);
-        assert!(stopped.status.success());
-        let output = sender.take().unwrap().wait_with_output().unwrap();
-        assert!(output.status.success(), "{output:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "follow-up answer\n"
-        );
-    }
     wrapper.kill().unwrap();
     wrapper.wait().unwrap();
 }
@@ -6694,538 +6578,34 @@ fn steer_enter_modes_respect_discrete_submit_key() {
 }
 
 #[test]
-fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
-    let env = Env::new();
-    register_wait_pair(&env);
-    let snapshot = env.store().snapshot().expect("snapshot");
-    let coder = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.role.as_deref() == Some("coder"))
-        .expect("coder card");
-    let existing = MessageRecord::new(
-        snapshot.workspace_id.clone(),
-        coder,
-        "answer the review".to_owned(),
-        DeliveryGate::Done,
-    )
-    .with_address(Some("@coder".to_owned()))
-    .with_sender(MessageSender::Agent {
-        agent_id: None,
-        kind: AgentKind::new_unchecked("claude"),
-        name: Some("reviewer-agent".to_owned()),
-        profile: None,
-        role: Some("reviewer".to_owned()),
-        channel: None,
-    })
-    .with_reply_wait(true);
-    let existing_id = existing.message_id.clone();
-    env.store()
-        .queue_message(&existing, "rimz-test")
-        .expect("seed reviewer wait");
-
-    let out = env
-        .rimz()
-        .env("RIMZ_AGENT_KIND", "claude")
-        .env("RIMZ_AGENT_NAME", "coder-agent")
-        .args([
-            "message",
-            "@reviewer",
-            "--no-from",
-            "--wait=1s",
-            "counter-question",
-        ])
-        .output()
-        .expect("cycle guard");
-
-    assert_eq!(out.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("--wait/--timeout would deadlock")
-            && stderr.contains("@reviewer")
-            && stderr.contains(existing_id.as_str()),
-        "stderr names the blocking wait: {stderr}"
-    );
-    let messages = env.store().list_messages().expect("messages");
-    assert_eq!(messages.len(), 1, "the counter-wait was not enqueued");
-    assert_eq!(messages[0].message_id, existing_id);
-}
-
-/// Registers a running coder and reviewer, as the cycle-guard tests' two sides.
-fn register_wait_pair(env: &Env) {
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_role_agent(env, "claude", "sess-coder", "coder", true, None);
-    register_role_agent(env, "claude", "sess-reviewer", "reviewer", true, None);
-}
-
-/// The coder's `--wait` back toward the reviewer, which must not be refused as a deadlock.
-fn assert_counter_wait_accepted(env: &Env, live_before: usize) {
-    let out = env
-        .rimz()
-        .env("RIMZ_AGENT_KIND", "claude")
-        .env("RIMZ_AGENT_NAME", "coder-agent")
-        .args([
-            "message",
-            "@reviewer",
-            "--no-from",
-            "--wait=1s",
-            "counter-question",
-        ])
-        .output()
-        .expect("counter-wait");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("would deadlock"),
-        "a settled wait no longer blocks the counter-wait: {stderr}"
-    );
-    let messages = env.store().list_messages().expect("messages");
-    assert_eq!(
-        messages.len(),
-        live_before + 1,
-        "the counter-wait was enqueued: {messages:?}"
-    );
-}
-
-#[test]
-fn agent_wait_accepts_a_counter_wait_once_the_other_leg_settled() {
-    let env = Env::new();
-    register_wait_pair(&env);
-    let snapshot = env.store().snapshot().expect("snapshot");
-    let coder = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.role.as_deref() == Some("coder"))
-        .expect("coder card");
-    // A settled leg removes its lease file, so the token names no lease.
-    let settled = MessageRecord::new(
-        snapshot.workspace_id.clone(),
-        coder,
-        "answer the review".to_owned(),
-        DeliveryGate::Done,
-    )
-    .with_address(Some("@coder".to_owned()))
-    .with_sender(MessageSender::Agent {
-        agent_id: None,
-        kind: AgentKind::new_unchecked("claude"),
-        name: Some("reviewer-agent".to_owned()),
-        profile: None,
-        role: Some("reviewer".to_owned()),
-        channel: None,
-    })
-    .with_reply_wait(true)
-    .with_reply_wait_lease(Some("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f".to_owned()));
-    env.store()
-        .queue_message(&settled, "rimz-test")
-        .expect("seed reviewer's settled wait");
-
-    assert_counter_wait_accepted(&env, 1);
-}
-
-#[test]
-fn agent_wait_accepts_a_counter_wait_after_the_other_wait_is_killed() {
-    let env = Env::new();
-    register_wait_pair(&env);
-    let mut reviewer = env
-        .rimz()
-        .env("RIMZ_AGENT_KIND", "claude")
-        .env("RIMZ_AGENT_NAME", "reviewer-agent")
-        .args(["message", "@coder", "--wait", "review question"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("reviewer wait");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let wait = loop {
-        let messages = env.store().list_messages().expect("messages");
-        if let Some(record) = messages.into_iter().find(|record| record.reply_wait) {
-            break record;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the reviewer's wait never enqueued"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    assert!(
-        matches!(&wait.sender, MessageSender::Agent { name: Some(name), .. } if name == "reviewer-agent"),
-        "the reviewer authored its wait: {wait:?}"
-    );
-    reviewer.kill().expect("SIGKILL the reviewer's wait");
-    reviewer.wait().expect("reap the reviewer's wait");
-
-    assert_counter_wait_accepted(&env, 1);
-}
-
-#[test]
-fn steer_wait_times_out_without_turn_started_ack() {
+fn agent_broadcast_sends_to_peers_without_itself() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    register_running_agent(
-        &env,
-        "sess-wait-timeout",
-        "feature-wait-timeout",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-
-    let out = traced_rimz(&env, "zellij-wait-timeout-trace.log")
-        .args(["message", "--steer", "@claude", "--wait=0s", "--", "y"])
-        .output()
-        .expect("steer --wait");
-
-    assert!(
-        !out.status.success(),
-        "--wait should exit nonzero on timeout"
-    );
-    assert_eq!(out.status.code(), Some(124));
-    assert!(
-        out.stdout.is_empty(),
-        "timeout keeps stdout reserved for a final reply: {}",
-        String::from_utf8_lossy(&out.stdout),
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("wait timed out"),
-        "stderr reports timeout: {}",
-        String::from_utf8_lossy(&out.stderr),
-    );
-    assert!(env.store().list_messages().unwrap().is_empty());
-    assert!(
-        env.read_events()
-            .iter()
-            .any(|event| event.method == "message.timed_out"),
-        "wait timeout records a terminal event"
-    );
-}
-
-fn assert_sent_receipts(stderr: &[u8], expected: usize) {
-    let text = String::from_utf8_lossy(stderr);
-    assert_eq!(
-        text.lines()
-            .filter(|line| line.starts_with("sent to ") && line.contains(" (msg_"))
-            .count(),
-        expected,
-        "{text}"
-    );
-}
-
-#[test]
-fn message_wait_prints_the_reply_after_the_turn_ends() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let agent = ReplyAgentFixture::single(&env, "reply");
-    std::fs::write(
-        &agent.transcript_path,
-        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"old answer\"}]}}\n",
-    )
-    .expect("seed transcript");
-
-    let mut child = traced_rimz(&env, "zellij-wait-reply-trace.log")
-        .args(["message", "@claude", "--wait", "did it land?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn message --wait");
-
-    let stderr = child.stderr.take().unwrap();
-    let (receipt_tx, receipt_rx) = std::sync::mpsc::channel();
-    let stderr_reader = std::thread::spawn(move || {
-        use std::io::{BufRead, Read};
-        let mut reader = std::io::BufReader::new(stderr);
-        let mut first = String::new();
-        reader.read_line(&mut first).unwrap();
-        let _ = receipt_tx.send(first);
-        let mut rest = String::new();
-        reader.read_to_string(&mut rest).unwrap();
-        rest
-    });
-
-    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
-    let receipt = receipt_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("receipt arrives before the receiver starts its reply turn");
-    assert!(receipt.starts_with("sent to @claude"), "{receipt}");
-    agent.start(&env, "did it land?");
-    let store = env.store();
-    let message = store
-        .list_message_history()
-        .unwrap()
-        .into_iter()
-        .find(|message| message.text == "did it land?")
-        .unwrap();
-    let mut run = rimz::store::run::RunRecord::new(
-        message.workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        rimz::agents::PermissionMode::Auto,
-        "did it land?".into(),
-        env.project_root.clone(),
-    );
-    run.subagent = true;
-    run.agent_id = Some(agent.session_id.as_str().into());
-    run.opened_by.push(message.message_id);
-    run.status = rimz::store::run::RunStatus::Completed;
-    rimz::harness::run::create(store.paths(), &run).unwrap();
-    agent.finish(&env, "migration landed", false);
-
-    let out = child.wait_with_output().expect("wait message --wait");
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
-    assert!(receipt.contains(&run.opened_by[0].to_string()));
-    assert!(stderr_reader.join().unwrap().is_empty());
-    assert!(env.store().list_messages().unwrap().is_empty());
-    let joined = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
-    assert!(joined.joined_at.is_some());
-    assert!(!joined.owes_report());
-}
-
-#[test]
-fn message_wait_prints_the_wake_turns_reply() {
-    message_wait_wake_reply_case(false);
-}
-
-#[test]
-fn message_wait_prints_the_fast_wake_turns_reply() {
-    message_wait_wake_reply_case(true);
-}
-
-fn message_wait_wake_reply_case(fast_wake: bool) {
-    const POLL_WINDOW: Duration = Duration::from_millis(1500);
-
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let agent = ReplyAgentFixture::single(&env, "wake-reply");
-    let mut child = traced_rimz(&env, "zellij-wait-wake-reply-trace.log")
-        .args(["message", "@claude", "--wait", "did it land?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn message --wait");
-
-    let stderr = child.stderr.take().unwrap();
-    let (receipt_tx, receipt_rx) = std::sync::mpsc::channel();
-    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
-    let stderr_reader = std::thread::spawn(move || {
-        use std::io::{BufRead, Read};
-        let mut reader = std::io::BufReader::new(stderr);
-        let mut first = String::new();
-        reader.read_line(&mut first).unwrap();
-        let _ = receipt_tx.send(first);
-        let mut rest = String::new();
-        reader.read_to_string(&mut rest).unwrap();
-        let _ = finished_tx.send(());
-        rest
-    });
-
-    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
-    let receipt = receipt_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("receipt arrives before the receiver starts its reply turn");
-    assert!(receipt.starts_with("sent to @claude"), "{receipt}");
-    agent.start(&env, "did it land?");
-    let wake = agent.send_wake(&env);
-    if fast_wake {
-        // Anchor the first turn before skipping the sleeping poll.
-        let _ = finished_rx.recv_timeout(POLL_WINDOW);
-    }
-    agent.finish(&env, "pausing until the wake", false);
-
-    if !fast_wake {
-        std::thread::sleep(POLL_WINDOW);
-        assert!(
-            child.try_wait().expect("poll message --wait").is_none(),
-            "reply wait ended at the sleeping turn boundary"
-        );
-    }
-
-    agent.start_reported(&env, "Type: WAIT\nFrom: @rimz\nContent:\nwake now");
-    assert!(
-        !env.store()
-            .list_messages()
-            .unwrap()
-            .iter()
-            .any(|pending| pending.message_id == wake.message_id),
-        "wake turn did not acknowledge its wake"
-    );
-    // Keep the wake turn open across polls; an early exit is checked below.
-    let _ = finished_rx.recv_timeout(POLL_WINDOW);
-    agent.finish(&env, "migration landed", false);
-
-    let out = wait_with_output_bounded(child, Duration::from_secs(10));
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
-    assert!(stderr_reader.join().unwrap().is_empty());
-    assert!(env.store().list_messages().unwrap().is_empty());
-}
-
-#[test]
-fn message_wait_gathers_fanout_replies_in_completion_order() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let [first, second] = ReplyAgentFixture::pair(&env, "gather");
-
-    let child = traced_rimz(&env, "zellij-wait-gather-trace.log")
-        .args(["message", "@all", "--wait=60s", "status?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
-    first.start(&env, "@all, status?");
-    second.start(&env, "@all, status?");
-    second.finish(&env, "second finished", false);
-    std::thread::sleep(Duration::from_millis(600));
-    first.finish(&env, "first finished", false);
-
-    let out = child.wait_with_output().expect("wait fanout gather");
-    assert!(
-        out.status.success(),
-        "fanout wait failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "@claude#feature-gather-second:\nsecond finished\n\n@claude#feature-gather-first:\nfirst finished\n"
-    );
-    assert_sent_receipts(&out.stderr, 2);
-}
-
-#[test]
-fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let [caller, peer] = ReplyAgentFixture::pair_in_channel(&env, "agent-gather");
+    let [caller, peer] = LiveAgentFixture::pair_in_channel(&env, "agent-gather");
     caller.stamp_launch_identity(&env, "launch-agent-gather", "planner");
 
-    let child = traced_rimz(&env, "zellij-agent-wait-gather-trace.log")
+    let out = traced_rimz(&env, "zellij-agent-broadcast-trace.log")
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_ID, "launch-agent-gather")
         .env(rimz::harness::launch::ENV_AGENT_NAME, "planner")
-        .args(["message", "@all", "--wait=60s", "status?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agent fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(60));
-    peer.start_reported(
-        &env,
-        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n@all, status?",
-    );
-    peer.finish(&env, "peer finished", false);
-
-    let out = child.wait_with_output().expect("wait for peer reply");
-    assert!(
-        out.status.success(),
-        "agent fanout wait failed: {}\nstdout={}\nstderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "peer finished\n");
-    assert_sent_receipts(&out.stderr, 1);
-    assert!(
-        env.read_events()
-            .iter()
-            .filter(|event| event.method == "message.sent")
-            .all(|event| event.params_value()["agent_id"] == peer.session_id),
+        .args(["message", "@all", "status?"])
+        .output()
+        .expect("run agent fanout send");
+    assert!(out.status.success(), "agent fanout send failed: {out:?}");
+    let store = env.store();
+    let records = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .chain(store.list_message_history().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "one record per peer: {records:?}");
+    assert_eq!(
+        records[0].agent_id.as_str(),
+        peer.session_id,
         "the caller never receives a message leg"
     );
-}
-
-#[test]
-fn message_wait_json_emits_one_fanout_map() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let [first, second] = ReplyAgentFixture::pair(&env, "json");
-
-    let child = traced_rimz(&env, "zellij-wait-json-trace.log")
-        .args(["message", "@all", "--wait=60s", "--json", "status?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn JSON fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
-    first.start(&env, "@all, status?");
-    second.start(&env, "@all, status?");
-    first.finish(&env, "first JSON reply", false);
-    second.finish(&env, "second JSON reply", false);
-
-    let out = child.wait_with_output().expect("wait JSON fanout gather");
-    assert!(
-        out.status.success(),
-        "JSON fanout wait failed: {}\nstdout={}\nstderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
-    assert_eq!(replies.as_object().unwrap().len(), 2);
-    for (label, reply) in [
-        ("@claude#feature-json-first", "first JSON reply"),
-        ("@claude#feature-json-second", "second JSON reply"),
-    ] {
-        assert_eq!(replies[label]["status"], "completed");
-        assert_eq!(replies[label]["reply"], reply);
-        assert!(
-            replies[label]["message_id"]
-                .as_str()
-                .is_some_and(|id| id.starts_with("msg_"))
-        );
-        assert!(replies[label].get("error").is_none());
-    }
-    assert_sent_receipts(&out.stderr, 2);
-}
-
-#[test]
-fn message_wait_ends_on_non_pausing_provider_error() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let agent = ReplyAgentFixture::single(&env, "provider-error");
-
-    let started = Instant::now();
-    let child = traced_rimz(&env, "zellij-wait-provider-error-trace.log")
-        .args([
-            "message",
-            "@claude#feature-wait-provider-error",
-            "--wait=60s",
-            "try it",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn provider-error reply wait");
-    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(60));
-    run_hook_for_owner(
-        &env,
-        "claude",
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": agent.session_id,
-            "prompt": user_message("try it"),
-            "worktree_branch": agent.branch,
-            "transcript_path": agent.transcript_path,
-        }),
-        &[("ZELLIJ_PANE_ID", agent.pane_id)],
-        env.agent_owner_pid(),
-    );
-    seed_turn_error(&env, &agent.session_id, TurnErrorClass::Failed, false);
-
-    let out = child.wait_with_output().expect("wait for provider error");
-    let elapsed = started.elapsed();
-    assert_eq!(out.status.code(), Some(1), "elapsed: {elapsed:?}");
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .lines()
-            .any(|line| line == "rimz: turn failed (exit 1)"),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(elapsed < Duration::from_secs(20), "elapsed: {elapsed:?}");
 }
 
 #[test]
@@ -7233,7 +6613,7 @@ fn sweep_delivers_any_but_not_done_on_a_spent_provider_pause() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let agent = ReplyAgentFixture::single(&env, "sweep-spent-pause");
+    let agent = LiveAgentFixture::single(&env, "sweep-spent-pause");
     agent.start(&env, "work");
     seed_turn_error(
         &env,
@@ -7298,320 +6678,6 @@ fn sweep_delivers_any_but_not_done_on_a_spent_provider_pause() {
             MessageStatus::Sent,
             MessageStatus::Queued
         ]
-    );
-}
-
-#[test]
-fn message_wait_ends_on_spent_provider_pause() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let agent = ReplyAgentFixture::single(&env, "spent-pause");
-    let login = rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude"));
-    env.publish_rate_limits(&rimz::agents::RateLimitsCache {
-        entries: [(
-            login.into(),
-            rimz::agents::RateLimitCacheEntry {
-                limits: AgentRateLimits {
-                    windows: vec![RateLimitWindow {
-                        used_percentage: Some(100),
-                        resets_at: Some(jiff::Timestamp::now() - Duration::from_secs(1)),
-                        ..Default::default()
-                    }],
-                },
-                ..Default::default()
-            },
-        )]
-        .into(),
-        ..Default::default()
-    });
-
-    let child = traced_rimz(&env, "zellij-wait-spent-pause-trace.log")
-        .args([
-            "message",
-            "@claude#feature-wait-spent-pause",
-            "--wait=30s",
-            "try it",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn spent-pause reply wait");
-    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(60));
-    run_hook_for_owner(
-        &env,
-        "claude",
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": agent.session_id,
-            "prompt": user_message("try it"),
-            "worktree_branch": agent.branch,
-            "transcript_path": agent.transcript_path,
-        }),
-        &[("ZELLIJ_PANE_ID", agent.pane_id)],
-        env.agent_owner_pid(),
-    );
-    let started = Instant::now();
-    seed_turn_error(
-        &env,
-        &agent.session_id,
-        TurnErrorClass::PausedRateLimit,
-        false,
-    );
-
-    let out = child.wait_with_output().expect("wait for spent pause");
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr
-            .lines()
-            .any(|line| line == "rimz: turn failed (exit 1)"),
-        "{stderr}"
-    );
-    assert!(
-        !stderr.lines().any(|line| line.ends_with(": paused")),
-        "{stderr}"
-    );
-    assert!(started.elapsed() < Duration::from_secs(20));
-}
-
-#[test]
-fn message_wait_gathers_other_replies_after_one_leg_fails() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let [failed, completed] =
-        ReplyAgentFixture::pair_named(&env, "partial", ["failed", "completed"]);
-
-    let child = traced_rimz(&env, "zellij-wait-partial-trace.log")
-        .args(["message", "@all", "--wait=60s", "try it"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn partial fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
-    failed.start(&env, "@all, try it");
-    completed.start(&env, "@all, try it");
-    failed.finish(&env, "partial answer", true);
-    std::thread::sleep(Duration::from_millis(600));
-    completed.finish(&env, "surviving reply", false);
-
-    let out = child
-        .wait_with_output()
-        .expect("wait partial fanout gather");
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "@claude#feature-partial-completed:\nsurviving reply\n"
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("rimz: @claude#feature-partial-failed turn failed (exit 1)"),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn message_wait_any_returns_only_the_first_terminal_leg() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let [first, second] = ReplyAgentFixture::pair(&env, "any");
-
-    let child = traced_rimz(&env, "zellij-wait-any-trace.log")
-        .args(["message", "@all", "--wait=60s", "--any", "first?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn any fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
-    first.start(&env, "@all, first?");
-    second.start(&env, "@all, first?");
-    second.finish(&env, "winner", false);
-
-    let out = child.wait_with_output().expect("wait any fanout");
-    assert!(
-        out.status.success(),
-        "any wait failed: {}\nstdout={}\nstderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "@claude#feature-any-second:\nwinner\n"
-    );
-    assert_sent_receipts(&out.stderr, 2);
-}
-
-#[test]
-fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let _agents = ReplyAgentFixture::pair(&env, "timeout");
-
-    let out = traced_rimz(&env, "zellij-wait-timeout-fanout.log")
-        .args(["message", "@all", "--wait=0s", "--json", "status?"])
-        .output()
-        .expect("fanout wait deadline");
-
-    assert_eq!(out.status.code(), Some(124));
-    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
-    assert_eq!(replies.as_object().unwrap().len(), 2);
-    for label in [
-        "@claude#feature-timeout-first",
-        "@claude#feature-timeout-second",
-    ] {
-        assert_eq!(replies[label]["status"], "timed_out");
-        assert!(replies[label]["reply"].is_null());
-    }
-    assert_sent_receipts(&out.stderr, 2);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("rimz: wait timed out for "));
-    assert_eq!(
-        env.read_events()
-            .iter()
-            .filter(|event| event.method == "message.timed_out")
-            .count(),
-        2
-    );
-}
-
-#[test]
-fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    let [_sent, queued] = ReplyAgentFixture::pair_named(&env, "mixed", ["sent", "queued"]);
-    push_pending_agent_ask(&env, &queued.session_id);
-
-    let out = traced_rimz(&env, "zellij-wait-mixed-timeout.log")
-        .args(["message", "@all", "--wait=0s", "--json", "status?"])
-        .output()
-        .expect("mixed-state fanout wait deadline");
-
-    assert_eq!(out.status.code(), Some(124));
-    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
-    let sent_label = "@claude#feature-mixed-sent";
-    let queued_label = "@claude#feature-mixed-queued";
-    assert_eq!(replies[sent_label]["status"], "timed_out");
-    assert_eq!(replies[queued_label]["status"], "timed_out");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let sent_id = replies[sent_label]["message_id"].as_str().unwrap();
-    let queued_id = replies[queued_label]["message_id"].as_str().unwrap();
-    assert!(
-        stderr.contains(&format!("sent to {sent_label} ({sent_id})")),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!("queued for {queued_label} ({queued_id})")),
-        "{stderr}"
-    );
-    assert!(stderr.contains("rimz: wait timed out for "), "{stderr}");
-    assert!(stderr.contains(&format!("  {queued_label}: {queued_id} is still queued and will deliver. withdraw it: rimz message cancel {queued_id}   read the reply later: rimz agents logs {queued_label}")), "{stderr}");
-    assert!(stderr.contains(&format!("  {sent_label}: {sent_id} was typed into the pane and not acknowledged; do not resend. check: rimz agents logs {sent_label}")), "{stderr}");
-
-    let timed_out = env
-        .read_events()
-        .into_iter()
-        .filter(|event| event.method == "message.timed_out")
-        .collect::<Vec<_>>();
-    assert_eq!(timed_out.len(), 1, "only sent durable record times out");
-    assert_eq!(
-        timed_out[0].params_value()["message_id"],
-        replies[sent_label]["message_id"]
-    );
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1, "queued reply leg remains deliverable");
-    assert_eq!(pending[0].status, MessageStatus::Queued);
-    assert_eq!(
-        pending[0].message_id.as_str(),
-        replies[queued_label]["message_id"]
-    );
-}
-
-#[test]
-fn message_wait_requires_live_hooked_agent_target() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "bash")]);
-    let pane = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "zellij:terminal_3", "--wait=1s", "x"])
-        .output()
-        .expect("pane wait");
-    assert!(!pane.status.success());
-    assert!(
-        String::from_utf8_lossy(&pane.stderr).contains("not bound to a known agent"),
-        "stderr: {}",
-        String::from_utf8_lossy(&pane.stderr)
-    );
-
-    register_running_agent(
-        &env,
-        "sess-wait-no-hooks",
-        "feature-wait-no-hooks",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    let missing = env
-        .rimz()
-        .args(["message", "@claude", "--wait=1s", "x"])
-        .output()
-        .expect("hooks missing wait");
-    assert!(!missing.status.success());
-    assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("rimz hooks install claude"),
-        "stderr: {}",
-        String::from_utf8_lossy(&missing.stderr)
-    );
-
-    let missing = env
-        .rimz()
-        .args(["message", "@claude", "--timeout", "1s", "x"])
-        .output()
-        .expect("hooks missing timeout");
-    let stderr = String::from_utf8_lossy(&missing.stderr);
-    assert_eq!(missing.status.code(), Some(1), "stderr: {stderr}");
-    assert!(
-        stderr.contains(
-            "--wait/--timeout requires claude hooks so the reply turn can report its boundaries; run `rimz hooks install claude`"
-        ),
-        "a --timeout caller reads a refusal that names the flag it typed: {stderr}"
-    );
-}
-
-#[test]
-fn message_timeout_takes_a_spaced_deadline_before_the_text() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "bash")]);
-    let pane = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "zellij:terminal_3", "--timeout", "1s", "x"])
-        .output()
-        .expect("pane timeout");
-    let stderr = String::from_utf8_lossy(&pane.stderr);
-    assert_eq!(pane.status.code(), Some(1), "stderr: {stderr}");
-    assert!(
-        stderr.contains("not bound to a known agent"),
-        "the spaced deadline parses and reaches the reply-wait target check: {stderr}"
-    );
-
-    let both = env
-        .rimz()
-        .args(["message", "@claude", "--wait=1s", "--timeout", "1s", "x"])
-        .output()
-        .expect("two deadlines");
-    let stderr = String::from_utf8_lossy(&both.stderr);
-    assert_eq!(both.status.code(), Some(2), "stderr: {stderr}");
-    assert!(
-        stderr.contains(
-            "--wait=<DURATION> and --timeout <DURATION> both set the reply deadline; pass one"
-        ),
-        "stderr: {stderr}"
     );
 }
 
@@ -7755,7 +6821,7 @@ fn message_me_resolves_launch_and_process_ancestry() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let [caller, peer] = ReplyAgentFixture::pair(&env, "me");
+    let [caller, peer] = LiveAgentFixture::pair(&env, "me");
     caller.stamp_launch_identity(&env, "launch-me", "planner");
     peer.stamp_launch_identity(&env, "launch-me-peer", "reviewer");
     caller.start(&env, "work");
@@ -7835,7 +6901,7 @@ fn message_me_rejects_unidentified_shell_and_snapshot_only_owner() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let caller = ReplyAgentFixture::single(&env, "me-shell");
+    let caller = LiveAgentFixture::single(&env, "me-shell");
     caller.stamp_launch_identity(&env, "launch-me-shell", "planner");
     caller.start(&env, "work");
     let store = env.store();
@@ -7908,7 +6974,7 @@ fn message_me_rejects_stale_identity_and_unregistered_session() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let caller = ReplyAgentFixture::single(&env, "me-stale");
+    let caller = LiveAgentFixture::single(&env, "me-stale");
     caller.stamp_launch_identity(&env, "launch-me-stale", "planner");
     caller.start(&env, "work");
     for (kind, launch_id) in [("claude", "missing-launch"), ("codex", "launch-me-stale")] {
@@ -8147,7 +7213,7 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
 fn agent_broadcast_steer_with_no_from_writes_only_to_the_peer() {
     let env = Env::new();
     env.record(&env.project_root);
-    let [caller, _peer] = ReplyAgentFixture::pair_in_channel(&env, "agent-steer");
+    let [caller, _peer] = LiveAgentFixture::pair_in_channel(&env, "agent-steer");
     caller.stamp_launch_identity(&env, "launch-agent-steer", "planner");
     let trace_log = env.project_root.join("zellij-agent-steer-trace.log");
 
@@ -8182,7 +7248,7 @@ fn solo_agent_broadcast_errors_but_an_exact_self_handle_still_delivers() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
-    let caller = ReplyAgentFixture::single(&env, "agent-solo");
+    let caller = LiveAgentFixture::single(&env, "agent-solo");
     caller.stamp_launch_identity(&env, "launch-agent-solo", "planner");
 
     let broadcast = traced_rimz(&env, "zellij-agent-solo-broadcast-trace.log")
@@ -15129,18 +14195,18 @@ fn register_old_idle_role_agent(
     at
 }
 
-/// A reply-wait agent whose simulated owner process exits after 30 seconds.
+/// A registered agent whose simulated owner process exits after 30 seconds.
 ///
 /// Tests that can outlast that window must drive hooks with `run_hook_for_owner`
 /// and `Env::agent_owner_pid` instead of the fixture's default hook helpers.
-struct ReplyAgentFixture {
+struct LiveAgentFixture {
     session_id: String,
     branch: String,
     transcript_path: PathBuf,
     pane_id: &'static str,
 }
 
-impl ReplyAgentFixture {
+impl LiveAgentFixture {
     fn single(env: &Env, scenario: &str) -> Self {
         Self::register(
             env,
@@ -15236,35 +14302,6 @@ impl ReplyAgentFixture {
         );
     }
 
-    fn send_wake(&self, env: &Env) -> MessageRecord {
-        let store = env.store();
-        let agent = store
-            .snapshot()
-            .expect("snapshot")
-            .agents
-            .iter()
-            .find(|agent| agent.agent_id.as_str() == self.session_id)
-            .cloned()
-            .expect("reply card");
-        let workspace = env.resolve_workspace(&env.project_root);
-        let message = MessageRecord::new(
-            workspace.workspace_id,
-            &agent,
-            "wake now".to_owned(),
-            DeliveryGate::Done,
-        )
-        .with_sender(MessageSender::Harness {
-            notice: HarnessNotice::Wait,
-        });
-        store
-            .queue_message(&message, "rimz-test")
-            .expect("publish wake");
-        store
-            .record_sent_batch(std::slice::from_ref(&message), "rimz-test")
-            .expect("send wake");
-        message
-    }
-
     fn stamp_launch_identity(&self, env: &Env, launch_id: &str, name: &str) {
         let workspace = env.resolve_workspace(&env.project_root);
         env.store()
@@ -15291,35 +14328,6 @@ impl ReplyAgentFixture {
             ))
             .expect("stamp launch identity");
     }
-
-    fn finish(&self, env: &Env, reply: &str, failed: bool) {
-        append_claude_assistant(&self.transcript_path, reply);
-        let mut payload = json!({
-            "hook_event_name": "Stop",
-            "session_id": self.session_id,
-            "last_assistant_message": reply,
-            "worktree_branch": self.branch,
-            "transcript_path": self.transcript_path,
-        });
-        if failed {
-            payload["is_error"] = json!(true);
-        }
-        run_hook(env, payload, &[("ZELLIJ_PANE_ID", self.pane_id)]);
-    }
-}
-
-fn append_claude_assistant(transcript: &Path, text: &str) {
-    let line = json!({
-        "type": "assistant",
-        "message": {
-            "content": [{ "type": "text", "text": text }]
-        }
-    });
-    let mut transcript = std::fs::OpenOptions::new()
-        .append(true)
-        .open(transcript)
-        .expect("open transcript");
-    writeln!(transcript, "{line}").expect("append assistant message");
 }
 
 fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {

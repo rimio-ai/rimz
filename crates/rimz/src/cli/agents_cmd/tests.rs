@@ -2744,7 +2744,7 @@ fn wait_style_labels_only_plural_or_any_results() {
 
 #[test]
 fn wait_reason_reports_only_changes_and_resets_after_running() {
-    use rimz::message::reply::TurnWaitReason;
+    use rimz::message::turn_wait::TurnWaitReason;
 
     let mut err = Vec::new();
     let mut previous = None;
