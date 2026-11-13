@@ -153,6 +153,7 @@ fn absent_session_as_empty(
 }
 
 /// A row the runtime still counts: not ended, and its owner not known dead.
+/// The same rule as `store::runtime::agent_is_runtime_visible`: a change to one is made in both.
 fn runtime_visible(agent: &AgentState) -> bool {
     agent.ended_at.is_none() && agent_liveness(agent) != AgentLiveness::Dead
 }
