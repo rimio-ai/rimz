@@ -1,5 +1,7 @@
 //! One provider-evidence spend ladder for launch and redemption decisions.
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -62,6 +64,16 @@ impl SpendFacts {
     }
 
     pub fn step(&self, config: &ResumeConfig, model: Option<&str>, now: Timestamp) -> SpendStep {
+        self.step_on(self.verdict(config, now), config, model, now)
+    }
+
+    fn step_on(
+        &self,
+        verdict: Option<RedeemReason>,
+        config: &ResumeConfig,
+        model: Option<&str>,
+        now: Timestamp,
+    ) -> SpendStep {
         let Some(capacity) = &self.capacity else {
             return SpendStep::Subscription;
         };
@@ -78,7 +90,7 @@ impl SpendFacts {
         if paid && config.spend_order == SpendOrder::CreditsFirst {
             return SpendStep::PaidCredit;
         }
-        if self.verdict(config, now).is_some()
+        if verdict.is_some()
             && !auto_redeem::failed_attempt_cooling_down(self.last_attempt.as_ref(), now)
         {
             return SpendStep::ResetCredit;
@@ -91,10 +103,47 @@ impl SpendFacts {
     }
 
     pub(super) fn redemption(&self, config: &ResumeConfig, now: Timestamp) -> Option<RedeemReason> {
-        let reason = self.verdict(config, now)?;
+        self.redemption_on(self.verdict(config, now), config, now)
+    }
+
+    fn redemption_on(
+        &self,
+        verdict: Option<RedeemReason>,
+        config: &ResumeConfig,
+        now: Timestamp,
+    ) -> Option<RedeemReason> {
+        let reason = verdict?;
         (reason == RedeemReason::ExpiryRescue
-            || self.step(config, None, now) == SpendStep::ResetCredit)
+            || self.step_on(Some(reason), config, None, now) == SpendStep::ResetCredit)
             .then_some(reason)
+    }
+
+    /// The redemption this ladder would make were auto-redeem on and the
+    /// provider served by it, with a credit rescued `expiry_lead` before it
+    /// expires: the advice for a login whose credits are the user's to redeem.
+    /// Nothing that routes a launch or redeems reads it, so `step` and
+    /// `redemption` answer as before.
+    pub(super) fn advice(
+        &self,
+        config: &ResumeConfig,
+        expiry_lead: Duration,
+        now: Timestamp,
+    ) -> Option<RedeemReason> {
+        let verdict = auto_redeem::redeem_verdict(
+            self.capacity.as_ref(),
+            self.reset_credits.as_ref()?,
+            self.rate_pct_per_day,
+            config.auto_redeem_min_gain(),
+            true,
+            expiry_lead,
+            now,
+        );
+        self.redemption_on(verdict, config, now)
+    }
+
+    /// Whether this provider is served by automatic redemption.
+    pub(super) fn supports_reset(&self) -> bool {
+        self.supports_reset
     }
 
     fn verdict(&self, config: &ResumeConfig, now: Timestamp) -> Option<RedeemReason> {
@@ -107,6 +156,7 @@ impl SpendFacts {
             self.rate_pct_per_day,
             config.auto_redeem_min_gain(),
             config.auto_redeem,
+            auto_redeem::EXPIRY_RESCUE_LEAD,
             now,
         )
     }

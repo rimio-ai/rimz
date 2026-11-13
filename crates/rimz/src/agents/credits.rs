@@ -589,7 +589,7 @@ pub struct ResetGrant {
 }
 
 /// Why the provider would refuse a redemption, in the order its own checks
-/// run. The one rule the manual redemption's hold and the cached credits read.
+/// run. The one rule the manual redemption's hold and the sidebar marker read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RedeemRefusal {
     Cooldown(Timestamp),

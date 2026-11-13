@@ -207,3 +207,29 @@ fn cache_evidence_excludes_display_only_limits_stale_scoped_and_lapsed_entries()
         );
     }
 }
+
+#[test]
+fn a_claude_login_on_a_dry_window_steps_as_spent_and_only_its_advice_redeems() {
+    let mut facts = facts(100, None);
+    facts.supports_reset = false;
+    facts.reset_credits = facts.reset_credits.map(|credits| ResetCredits {
+        effect: RedeemEffect::KeepsSchedule,
+        ..credits
+    });
+    let config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+    assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
+    assert_eq!(facts.redemption(&config, now()), None);
+    let lead = std::time::Duration::from_secs(86_400);
+    for config in [config.clone(), ResumeConfig::default()] {
+        assert_eq!(
+            facts.advice(&config, lead, now()),
+            Some(RedeemReason::BlockedGain),
+            "advice as if auto-redeem were on (switch: {})",
+            config.auto_redeem
+        );
+        assert_eq!(facts.step(&config, None, now()), SpendStep::Spent);
+    }
+}

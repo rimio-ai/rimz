@@ -388,10 +388,14 @@ impl ProviderCapacity {
 
     /// Latest reset among subscription windows spent now with a future reset.
     pub fn latest_spent_window_reset(&self, now: Timestamp) -> Option<Timestamp> {
+        self.latest_spent_window(now)?.resets_at
+    }
+
+    /// The subscription window spent now whose future reset is latest.
+    pub(crate) fn latest_spent_window(&self, now: Timestamp) -> Option<RateLimitWindow> {
         self.projected_duration_windows(now)
             .filter(|window| window.spent_with_future_reset(now))
-            .filter_map(|window| window.resets_at)
-            .max()
+            .max_by_key(|window| window.resets_at)
     }
 
     /// Whether every subscription window is lifted, reads 0%, or has not

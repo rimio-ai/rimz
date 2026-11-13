@@ -402,8 +402,9 @@ upward-dependencies = ["address"]
 # CreditsCache::current and paid_usage_carries share the current-entry filter with the spend ladder (+2).
 # emblems::shipped_logo gives the theme core each built-in's embedded SVG logo (+1).
 # RedeemRefusal, RedeemRefusal::of, ResetCredits::refusal and ResetGrant::clears_window are the one
-# claim rule the Claude redemption hold and the cached credits read (+4).
-surface-budget = 1269
+# claim rule the Claude redemption hold and the harness's redeem marker read (+4).
+# ProviderCapacity::latest_spent_window names the dry window the redeem marker checks a grant clears (+1).
+surface-budget = 1270
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -9617,7 +9618,7 @@ reason = "One provider grant inside ResetCredits, stored in credits.json and pri
 [[verdict]]
 kind = "item"
 key = "agents::credits::RedeemRefusal"
-reason = "The provider's claim refusal over a reset grant: the Claude adapter's redemption hold and the cached credits read the one rule."
+reason = "The provider's claim refusal over a reset grant: the Claude adapter's redemption hold and the harness's redeem marker read the one rule."
 
 [[verdict]]
 kind = "item"

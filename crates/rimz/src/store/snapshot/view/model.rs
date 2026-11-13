@@ -118,19 +118,30 @@ pub struct DailyBudgetView {
     pub parked: bool,
 }
 
-/// What auto-redeem would do if the longest Codex window ran dry right now.
-/// A hypothetical, so it reads no live agent.
+/// The reset-credit marker's answer: who redeems the banked credits, and
+/// whether now is a good time. RimZ redeems where the provider supports
+/// automatic redemption and auto-redeem is on; the credits are the user's
+/// everywhere else, judged by the same rule as if auto-redeem were on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemForecast {
-    /// Auto-redeem is off: only the last-30-minute expiry rescue would fire.
+    /// The user's to redeem, and nothing to do now.
     Manual,
-    /// A credit would be spent, or no natural reset is known to wait for.
+    /// RimZ redeems: a credit would be spent if the longest window ran dry
+    /// now, or no natural reset is known to wait for.
     Armed,
-    /// Nothing would fire: paid credit comes first or the natural reset is near. Firm
-    /// until that reset only when it is nearer than `auto_redeem_min_gain` and
-    /// the nearest credit outlives it by a day.
+    /// RimZ redeems, and nothing would fire: paid credit comes first or the
+    /// natural reset is near. Firm until that reset only when it is nearer than
+    /// `auto_redeem_min_gain` and the nearest credit outlives it by a day.
     Holding,
+    /// The user's: the longest window has under a tenth left, and a credit
+    /// would be worth redeeming once it runs dry.
+    Soon,
+    /// The user's: a window is dry and redeeming a credit now is worth it, or
+    /// the credit a redemption would spend expires within a day.
+    Now,
+    /// `Now`, while an agent on this login is stopped on a provider limit.
+    NowWaiting,
 }
 
 /// Remote-control badge for this provider: hidden, shown green/red by
@@ -227,9 +238,8 @@ pub struct SidebarProviderPanel {
     /// Banked rate-limit reset credits, shown as a compact header marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<ResetCredits>,
-    /// Auto-redeem forecast for the reset-credit marker: manual (auto-redeem
-    /// off), armed (a dry window would spend a credit), or holding (paid credit
-    /// comes first or the fleet waits for the natural reset). `None` without reset credits.
+    /// The reset-credit marker's answer (see [`RedeemForecast`]). `None`
+    /// without reset credits, and on alternates and scoped credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redeem_forecast: Option<RedeemForecast>,
     /// Descriptor-declared budget-window labels, painted as placeholder tracks
