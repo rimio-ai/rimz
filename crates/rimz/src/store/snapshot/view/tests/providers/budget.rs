@@ -442,3 +442,21 @@ fn an_alternate_credential_reads_its_own_windows() {
     assert_eq!(draining(reading(shown, WEEK)).0, 0);
     assert_eq!(durations(&top), [FIVE_HOURS]);
 }
+
+#[test]
+fn a_spent_window_hides_only_the_shorter_windows_it_gates() {
+    let durationless = |used| RateLimitWindow {
+        duration_mins: None,
+        ..window(0, Some(used))
+    };
+    let mut panel = panel(true);
+    panel.windows = vec![window(FIVE_HOURS, Some(30)), durationless(100)];
+    assert_eq!(durations(&panel), [FIVE_HOURS, 0]);
+    assert!(matches!(
+        reading(&panel, FIVE_HOURS),
+        WindowReading::Draining { remaining: 70, .. }
+    ));
+
+    panel.windows = vec![durationless(30), window(WEEK, Some(100))];
+    assert_eq!(durations(&panel), [0, WEEK]);
+}
