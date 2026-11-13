@@ -14,17 +14,15 @@ fn task_env(name: &str) -> Env {
 }
 
 #[test]
-fn show_renders_a_tasks_compiled_graph_and_labels_the_judge_default() {
+fn show_renders_a_tasks_compiled_graph_with_the_judge_run_anyway_routes() {
     let env = task_env("nightly");
     let shown = success(command(&env, &["workflow", "show", "nightly"]));
     assert!(shown.contains("loop task nightly"), "{shown}");
-    let defaults = shown
-        .lines()
-        .filter(|line| line.contains("judge-1") && line.contains("default"))
-        .count();
     assert!(
-        defaults >= 1,
-        "the watchdog's run-anyway route reads as a default: {shown}"
+        shown.contains("judge-1  check  claude, headless · waits ≤300s, then → agent")
+            && shown.contains("fail → agent · pass @done · invalid → agent")
+            && !shown.contains("(default)"),
+        "the watchdog's run-anyway routes read as plain routes: {shown}"
     );
     let node = success(command(
         &env,

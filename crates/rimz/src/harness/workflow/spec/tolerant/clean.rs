@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use super::super::{
-    CheckKind, Issue, RESERVED_OUTCOMES, Route, Step, StepKind, Wake, WorkflowSpec, parse_deadline,
+    CheckKind, Issue, RESERVED_OUTCOMES, Step, StepKind, Wake, WorkflowSpec, parse_deadline,
     parse_window,
 };
 use super::ignored_issue;
@@ -186,7 +186,7 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
             if check
                 .on
                 .get(&case.outcome)
-                .is_some_and(|route| route.target() == "@wait")
+                .is_some_and(|route| route == "@wait")
             {
                 ignore(
                     &mut case.hold,
@@ -399,40 +399,6 @@ pub(super) fn apply(spec: &mut WorkflowSpec, indices: &BTreeMap<String, Vec<usiz
                 ignored,
                 "a staying step never ends on a question; remove on.asked or use lifecycle = \"turn\"",
             );
-        }
-    }
-    for (node, check) in &mut spec.checks {
-        let held_steps = spec
-            .steps
-            .iter()
-            .filter(|(_, step)| {
-                step.lifecycle() == crate::store::workflow::StepLifecycle::Until
-                    && step.then.contains(node)
-            })
-            .collect::<Vec<_>>();
-        for (outcome, route) in &mut check.on {
-            let Route::Delayed { to, delay, .. } = route else {
-                continue;
-            };
-            let path = format!("checks.{node}.on.{outcome}.delay");
-            sanitize(delay, &path, ignored, |raw| match duration(raw) {
-                Ok(duration) if duration.is_zero() => Err("delay must be nonzero".into()),
-                Ok(_) => Ok(()),
-                Err(error) => Err(error.to_string()),
-            });
-            if held_steps.is_empty()
-                || to == "@wait"
-                || held_steps
-                    .iter()
-                    .any(|(name, step)| *name == to || step.then.contains(to))
-            {
-                ignore(
-                    delay,
-                    &path,
-                    ignored,
-                    "delay requires an until check route that closes the held session",
-                );
-            }
         }
     }
 }

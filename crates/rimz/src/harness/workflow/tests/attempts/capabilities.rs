@@ -246,34 +246,24 @@ fn an_until_timeout_ends_the_session_from_its_launch() {
 }
 
 #[test]
-fn a_default_route_classifies_as_default() {
-    let text = VALID.replace(
-        "ready = \"build\"",
-        "ready = { to = 'build', default = true }",
-    );
-    let (errors, ignored) = report(&text);
-    assert_eq!((errors, ignored), (vec![], vec![]));
+fn only_written_routes_classify_as_explicit() {
     let (_home, dir) = super::super::fixture();
-    fs::write(dir.join("workflow.toml"), &text).unwrap();
+    fs::write(dir.join("workflow.toml"), VALID).unwrap();
     let spec = load(&dir).unwrap();
-    let edges = serde_json::to_value(spec.edges("pick")).unwrap();
-    let ready = edges
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|edge| edge["outcome"] == "ready")
-        .unwrap();
-    assert_eq!(
-        (&ready["target"], &ready["source"]),
-        (&json!("build"), &json!("default"))
+    let written = &spec.authored().checks["pick"].on;
+    let edges = spec.edges("pick");
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge.source != crate::harness::workflow::EdgeSource::Explicit)
     );
-    let done = edges
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|edge| edge["outcome"] == "done")
-        .unwrap();
-    assert_eq!(done["source"], "explicit");
+    for edge in &edges {
+        assert_eq!(
+            edge.source == crate::harness::workflow::EdgeSource::Explicit,
+            written.contains_key(&edge.outcome),
+            "{edge:?}"
+        );
+    }
 }
 
 #[test]

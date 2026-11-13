@@ -514,14 +514,10 @@ fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> R
                     row.edges
                         .iter()
                         .map(|edge| {
-                            let delay = rail::after(edge);
                             let mark = edge
                                 .mark()
                                 .map_or(String::new(), |mark| format!(", {mark}"));
-                            format!(
-                                "{} → {}{delay} ({}{mark})",
-                                edge.outcome, edge.target, edge.source
-                            )
+                            format!("{} → {} ({}{mark})", edge.outcome, edge.target, edge.source)
                         })
                         .collect::<Vec<_>>()
                         .join(", "),

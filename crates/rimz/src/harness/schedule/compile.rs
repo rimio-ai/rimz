@@ -415,12 +415,9 @@ impl<'a> Graph<'a> {
 
     fn judge(&mut self, tier: usize, judge: &Judge, polarity: CheckOn, next: &str, decline: &str) {
         let mut on = verdicts(polarity, next, decline);
-        // A tier with no answer after its retry runs the agent anyway, as a labelled default.
+        // A tier with no answer after its retry runs the agent anyway.
         for outcome in ["invalid", "timeout"] {
-            on.insert(
-                outcome.into(),
-                table([("to", next.into()), ("default", true.into())]).into(),
-            );
+            on.insert(outcome.into(), next.into());
         }
         let check = table([
             ("summary", format!("the task's judge {tier}").into()),

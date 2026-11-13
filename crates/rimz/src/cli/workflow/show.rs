@@ -860,60 +860,37 @@ mod tests {
     }
 
     #[test]
-    fn a_delayed_terminal_case_draws_as_a_route_to_a_node() {
-        let mut actual = Vec::new();
-        for route in ["'@done'", "{to='@done',delay='30m'}"] {
-            let definition = GATE
-                .replace(
-                    "outcome='pending'}]",
-                    "outcome='pending'},{when=['ci=passed'],outcome='ready'}]",
-                )
-                .replace("pending='@wait'", &format!("pending={route},ready={route}"));
-            let (_, rail) = output_of(&definition, false);
-            let line = |outcome: &str| {
-                rail.lines()
-                    .find(|line| line.contains(&format!(" {outcome} @")))
-                    .unwrap_or_default()
-                    .to_owned()
-            };
-            actual.push((line("pending"), line("ready")));
-        }
+    fn a_terminal_case_draws_in_its_ending_tone() {
+        let definition = GATE
+            .replace(
+                "outcome='pending'}]",
+                "outcome='pending'},{when=['ci=passed'],outcome='ready'}]",
+            )
+            .replace("pending='@wait'", "pending='@done',ready='@done'");
+        let (_, rail) = output_of(&definition, false);
+        let line = |outcome: &str| {
+            rail.lines()
+                .find(|line| line.contains(&format!(" {outcome} @")))
+                .unwrap_or_default()
+                .to_owned()
+        };
         let painted = |style: anstyle::Style, text: &str| render::paint(style, text);
         assert_eq!(
-            actual,
-            vec![
-                (
-                    format!(
-                        "│ {} {}",
-                        painted(render::palette::good().bold(), "▸"),
-                        painted(
-                            render::palette::good().bold(),
-                            "1  ci=pending  pending @done"
-                        )
-                    ),
-                    format!(
-                        "│   {}",
-                        painted(render::palette::good(), "2  ci=passed  ready @done")
-                    ),
+            (line("pending"), line("ready")),
+            (
+                format!(
+                    "│ {} {}",
+                    painted(render::palette::good().bold(), "▸"),
+                    painted(
+                        render::palette::good().bold(),
+                        "1  ci=pending  pending @done"
+                    )
                 ),
-                (
-                    format!(
-                        "│ {} {}",
-                        painted(render::palette::cool().bold(), "▸"),
-                        painted(
-                            render::palette::cool().bold(),
-                            "1  ci=pending  pending @done after 30m"
-                        )
-                    ),
-                    format!(
-                        "│   {}",
-                        painted(
-                            render::palette::muted(),
-                            "2  ci=passed  ready @done after 30m"
-                        )
-                    ),
+                format!(
+                    "│   {}",
+                    painted(render::palette::good(), "2  ci=passed  ready @done")
                 ),
-            ],
+            ),
         );
     }
 }

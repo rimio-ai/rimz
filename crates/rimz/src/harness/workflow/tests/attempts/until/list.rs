@@ -6,7 +6,7 @@ fn definition() -> String {
         .replace("then='pr'", "then=['pr','review']")
         .replace("max-visits=2", "max-visits=3")
         .replace("on.done='@done'", "on.done='review'")
-        + "[checks.review]\nrun='cat review.json'\nwake=['review.ready']\ntimeout='1h'\non={pending='build',waiting='@wait',done={to='@done',delay='30m'}}\n"
+        + "[checks.review]\nrun='cat review.json'\nwake=['review.ready']\ntimeout='1h'\non={pending='build',waiting='@wait',done='@done'}\n"
 }
 
 fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
@@ -91,7 +91,7 @@ fn listed_checks_keep_the_session_and_input_then_push_and_restart_at_the_first()
 }
 
 #[test]
-fn listed_second_check_waits_resamples_and_uses_its_own_close_delay() {
+fn listed_second_check_waits_resamples_and_routes_its_own_verdict() {
     for signal in [false, true] {
         let (dir, state, live, host) = launched();
         fs::write(dir.path().join("review.json"), r#"{"outcome":"waiting"}"#).unwrap();
@@ -126,13 +126,6 @@ fn listed_second_check_waits_resamples_and_uses_its_own_close_delay() {
             update(&state, &waiting);
         }
         fs::write(dir.path().join("review.json"), r#"{"outcome":"done"}"#).unwrap();
-        let mut delayed = advance_ok(&state, &live.id, &host);
-        let spec = load(&state.workflow(&live.id).home).unwrap();
-        assert_eq!(close_after(&spec, &delayed).unwrap().1, "@done");
-        assert_eq!(host.stops.get(), 0);
-        delayed.held.as_mut().unwrap().verdict.as_mut().unwrap().at =
-            Timestamp::now() - Duration::from_secs(1801);
-        update(&state, &delayed);
         assert_eq!(advance_ok(&state, &live.id, &host).state, RunState::Done);
         assert_eq!(decisions(&state, &live).last().unwrap()["check"], "review");
     }

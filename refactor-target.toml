@@ -2339,7 +2339,6 @@ path = "crates/rimz/src/harness"
 # workflow::parse shares the sealed-spec parser with cached sidebar projection.
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
 # workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
-# workflow::close_after shares a delayed route's close instant.
 # Node::lifecycle shares the agent definition's until default with CLI readers.
 # workflow::load serves sealed-spec readers, which carry no frozen default.
 # workflow::{Stopped, StopKind} carry current non-clean turn evidence across the host seam (+2).
@@ -11924,11 +11923,6 @@ reason = "Workflow park views and launch briefs share the newest parked or on-br
 kind = "item"
 key = "harness::workflow::timeout_at"
 reason = "Inspection and transitions share check entry and paused turn-step timeout clocks."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::close_after"
-reason = "The held-verdict gate and workflow views share one sealed-spec delayed-close instant and target."
 
 [[verdict]]
 kind = "item"

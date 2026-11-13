@@ -309,7 +309,7 @@ pub(super) struct CaseRow {
     pub(super) when: String,
     pub(super) outcome: String,
     pub(super) target: String,
-    /// The terminal an undelayed route ends the run at; `None` for a node or a delayed route.
+    /// The terminal a route ends the run at; `None` for a node.
     pub(super) ends: Option<Target>,
     pub(super) readings: Vec<String>,
 }
@@ -410,10 +410,9 @@ impl Row {
                 && let Some(edge) = live.iter().find(|edge| edge.outcome == "timeout")
             {
                 row.heading.push_str(&format!(
-                    " · waits ≤{}, then {}{}",
+                    " · waits ≤{}, then {}",
                     timeout.text(),
-                    edge_target(name, edge, order),
-                    declared_mark(spec, name, "timeout")
+                    edge_target(name, edge, order)
                 ));
             }
             if let Some(window) = check.window() {
@@ -467,9 +466,7 @@ impl Row {
                 }
                 if edge.outcome == "timeout"
                     || edge.outcome == "deadline"
-                    || (edge.outcome == "invalid"
-                        && edge.source == EdgeSource::Default
-                        && !spec.declared_default(name, "invalid"))
+                    || (edge.outcome == "invalid" && edge.source == EdgeSource::Default)
                     || (!cases.is_empty()
                         && (edge.outcome == "unknown"
                             || cases.iter().any(|case| case.outcome == edge.outcome)
@@ -477,11 +474,7 @@ impl Row {
                 {
                     continue;
                 }
-                routes.push(format!(
-                    "{}{}",
-                    edge_text(name, edge, order),
-                    declared_mark(spec, name, &edge.outcome)
-                ));
+                routes.push(edge_text(name, edge, order));
             }
             if !routes.is_empty() {
                 row.details.push(routes.join(" · "));
@@ -617,14 +610,8 @@ fn edge_text(node: &str, edge: &Edge, order: &[&str]) -> String {
     format!("{} {}{mark}", edge.outcome, edge_target(node, edge, order))
 }
 
-pub(super) fn after(edge: &Edge) -> String {
-    edge.delay
-        .as_ref()
-        .map_or_else(String::new, |delay| format!(" after {}", delay.text()))
-}
-
 fn edge_target(node: &str, edge: &Edge, order: &[&str]) -> String {
-    format!("{}{}", target(node, &edge.target, order), after(edge))
+    target(node, &edge.target, order)
 }
 
 fn target(node: &str, target: &Target, order: &[&str]) -> String {
@@ -637,8 +624,7 @@ fn target(node: &str, target: &Target, order: &[&str]) -> String {
 }
 
 fn ends(edge: &Edge) -> Option<Target> {
-    (matches!(edge.target, Target::Done | Target::Failed) && edge.delay.is_none())
-        .then(|| edge.target.clone())
+    matches!(edge.target, Target::Done | Target::Failed).then(|| edge.target.clone())
 }
 
 fn target_style(target: &Target) -> anstyle::Style {
@@ -700,24 +686,12 @@ fn write_wrapped(
     Ok(())
 }
 
-fn declared_mark(spec: &Definition, node: &str, outcome: &str) -> &'static str {
-    if spec.declared_default(node, outcome) {
-        " (default)"
-    } else {
-        ""
-    }
-}
-
 pub(super) fn defaults(spec: &Definition) -> Vec<&'static str> {
     let mut sentences = Vec::new();
     let edges = spec
         .checks()
         .chain(spec.steps())
-        .flat_map(|(name, _)| {
-            spec.edges(name)
-                .into_iter()
-                .filter(move |edge| !spec.declared_default(name, &edge.outcome))
-        })
+        .flat_map(|(name, _)| spec.edges(name))
         .collect::<Vec<_>>();
     if spec
         .steps()

@@ -8,7 +8,6 @@ pub(super) const UNTIL: &str = "[workflow]\nscope='worktree'\nstart='build'\n[st
 
 mod answers;
 mod checks;
-mod delay;
 mod list;
 
 #[test]
