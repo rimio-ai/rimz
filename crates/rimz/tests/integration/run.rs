@@ -6707,7 +6707,7 @@ fn agents_list_filter_selects_children_closed_sessions_and_addresses() {
         .expect("launch parent");
     // Each registration is stamped a second after the one before it: the list
     // orders newest first, and two that share a millisecond fall back to
-    // launch order.
+    // pane order.
     let first_registered = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(10);
     for (order, (id, name, pane, parent)) in [
         ("parent", "seat-parent", "%1", None),
