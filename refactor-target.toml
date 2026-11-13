@@ -1591,7 +1591,8 @@ allowed-dependencies = [
 # RuntimePaths::palette_last_launch_path owns the palette's last-launch record (+1).
 # notes_dir roots the home-wide note store, and write_bytes_new_mode publishes a note without taking a taken name (+2).
 # lock::probe opens a lock file for write without locking it, for the workflow start probe (+1).
-surface-budget = 335
+# StatePaths::wait_watch_log gives every wait watcher one room log for its own stderr (+1).
+surface-budget = 336
 
 [[verdict]]
 kind = "item"

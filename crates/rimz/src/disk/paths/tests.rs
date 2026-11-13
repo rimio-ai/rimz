@@ -120,6 +120,7 @@ impl StatePaths {
             self.hook_ingress_lock.clone(),
             self.hook_drain_cursor.clone(),
             self.hook_drainer_log(),
+            self.wait_watch_log(),
             self.events_archive_dir.clone(),
             self.agents_carryover.clone(),
             self.log_generation.clone(),

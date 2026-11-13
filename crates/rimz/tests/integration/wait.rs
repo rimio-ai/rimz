@@ -1039,6 +1039,37 @@ fn wait_run_preserves_shell_string_and_runs_both_commands() {
     wait_for_no_wait_instances(&env);
 }
 
+/// The watcher's own warnings go to the room's watcher log, so the output
+/// file holds the watched command's bytes from its first.
+#[test]
+fn wait_run_output_file_holds_only_the_command_output() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    // A run record another RimZ version wrote makes the watcher's fire warn.
+    let refused = env
+        .store()
+        .paths()
+        .workflow(&rimz::ids::WorkflowRunId::new());
+    std::fs::create_dir_all(&refused.home).unwrap();
+    std::fs::write(&refused.record, r#"{"version":0}"#).unwrap();
+    let output = agent_wait(&env)
+        .args(["wait", "--run", "printf 'first line\\nsecond line\\n'"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let records = wait_for_wait_records(&env, 1);
+    let output_path = records[0].check.as_ref().unwrap().output_path.clone();
+    wait_for_no_wait_instances(&env);
+    assert_eq!(
+        std::fs::read_to_string(output_path.unwrap()).unwrap(),
+        "first line\nsecond line\n"
+    );
+    let log = std::fs::read_to_string(env.store().paths().wait_watch_log()).unwrap();
+    assert!(log.contains("another RimZ version wrote"), "{log}");
+}
+
 /// A watched command is the agent's own work, so it keeps the agent's temp
 /// unit, where the agent was told its files live.
 #[test]
