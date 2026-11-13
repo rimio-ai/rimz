@@ -1090,14 +1090,14 @@ fn reset_header_spans(
     }
     let (glyph, glyph_style) = match panel.redeem_forecast {
         Some(RedeemForecast::Armed) => (GlyphRole::MeterRedeemArmed, theme.good(Modifier::empty())),
-        Some(RedeemForecast::Holding) => (GlyphRole::MeterRedeemHold, theme.muted()),
+        Some(RedeemForecast::Holding) => (GlyphRole::MeterRedeemArmed, theme.muted()),
         Some(
             RedeemForecast::Manual
             | RedeemForecast::Soon
             | RedeemForecast::Now
             | RedeemForecast::NowWaiting,
         )
-        | None => (GlyphRole::MeterReset, theme.body()),
+        | None => (GlyphRole::MeterRedeemManual, theme.body()),
     };
     let mut spans = vec![
         Span::styled(theme.glyph(glyph).to_owned(), glyph_style),
