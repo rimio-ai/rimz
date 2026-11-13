@@ -1008,7 +1008,8 @@ const RAIL_STUB: usize = 2;
 /// version demoted to trailing trivia. A raised emblem row shares the header
 /// when it reserves the art column; wide stacked blocks use their spacer.
 /// Plan drops out when unknown; version renders as `v?` until an out-of-band
-/// probe or live context fills it.
+/// probe or live context fills it. Where the line cannot hold everything, a
+/// credit expiry a week or more out drops first, then the version.
 fn provider_header_line(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -1018,38 +1019,58 @@ fn provider_header_line(
     crest: Option<usize>,
     now: Timestamp,
 ) -> Line<'static> {
-    let mut right = reset_header_spans(theme, panel, now);
-    let remote_control = match panel.remote_control {
-        RemoteControlBadge::Hidden => None,
-        RemoteControlBadge::Healthy => Some(Component::RemoteControl),
-        RemoteControlBadge::Down => Some(Component::RemoteControlDown),
-        RemoteControlBadge::OffForRun => Some(Component::RemoteControlOff),
-    };
-    if let Some(component) = remote_control {
-        if !right.is_empty() {
-            right.push(Span::raw("  "));
+    let ResetMarker { marker, far_expiry } = reset_header_spans(theme, panel, now);
+    let right = |expiry: &[Span<'static>]| {
+        let mut right = marker.clone();
+        right.extend_from_slice(expiry);
+        if let Some(flag) = remote_control_spans(theme, panel) {
+            if !right.is_empty() {
+                right.push(Span::raw("  "));
+            }
+            right.push(flag);
         }
-        let off = if panel.remote_control == RemoteControlBadge::OffForRun {
-            " off"
-        } else {
-            ""
-        };
-        right.push(Span::styled(
-            format!("{} rc{off}", theme.glyph(GlyphRole::ChromeRemoteControl)),
-            theme.styled(component, Modifier::BOLD),
-        ));
-    }
-    let full = provider_header_left(theme, panel, width, tabbed, inline_art, crest, true);
-    let left = if spans_width(&full) + spans_width(&right) <= width {
-        full
-    } else {
-        provider_header_left(theme, panel, width, tabbed, inline_art, crest, false)
+        right
     };
-    pin_right(left, right, width)
+    let fits = |left: &[Span<'static>], right: &[Span<'static>]| {
+        let gap = usize::from(!right.is_empty());
+        spans_width(left) + gap + spans_width(right) <= width
+    };
+    let full = provider_header_left(theme, panel, width, tabbed, inline_art, crest, true);
+    let whole = right(&far_expiry);
+    if fits(&full, &whole) {
+        return pin_right(full, whole, width);
+    }
+    let near = right(&[]);
+    if !far_expiry.is_empty() && fits(&full, &near) {
+        return pin_right(full, near, width);
+    }
+    let short = provider_header_left(theme, panel, width, tabbed, inline_art, crest, false);
+    if !far_expiry.is_empty() && fits(&short, &whole) {
+        return pin_right(short, whole, width);
+    }
+    pin_right(short, near, width)
+}
+
+fn remote_control_spans(theme: &Theme, panel: &SidebarProviderPanel) -> Option<Span<'static>> {
+    let component = match panel.remote_control {
+        RemoteControlBadge::Hidden => return None,
+        RemoteControlBadge::Healthy => Component::RemoteControl,
+        RemoteControlBadge::Down => Component::RemoteControlDown,
+        RemoteControlBadge::OffForRun => Component::RemoteControlOff,
+    };
+    let off = if panel.remote_control == RemoteControlBadge::OffForRun {
+        " off"
+    } else {
+        ""
+    };
+    Some(Span::styled(
+        format!("{} rc{off}", theme.glyph(GlyphRole::ChromeRemoteControl)),
+        theme.styled(component, Modifier::BOLD),
+    ))
 }
 
 /// Heat amount (0.0 green … 1.0 red) for the reset marker at `hours` until the
-/// soonest credit expires, or `None` at/after 7d, where the expiry text is hidden.
+/// soonest credit expires, or `None` at/after 7d, where the expiry turns muted.
 pub(in crate::sidebar_pane::render) fn reset_expiry_heat_amount(hours: f64) -> Option<f32> {
     let lerp = |h: f64, a: f64, b: f64, amt_a: f32, amt_b: f32| -> f32 {
         let t = ((a - h) / (a - b)).clamp(0.0, 1.0) as f32;
@@ -1074,43 +1095,64 @@ pub(in crate::sidebar_pane::render) fn reset_expiry_heat_amount(hours: f64) -> O
     }
 }
 
-/// The banked reset-credit marker: only Codex adds an auto-redeem forecast,
-/// and the soonest expiry rides along within a week, heating only while the
-/// user has to act.
-fn reset_header_spans(
-    theme: &Theme,
-    panel: &SidebarProviderPanel,
-    now: Timestamp,
-) -> Vec<Span<'static>> {
+/// The banked reset-credit marker, split where the header may shorten it: a
+/// credit expiry a week or more out rides in `far_expiry`, which yields width
+/// before the version does; a nearer one stays in `marker`.
+struct ResetMarker {
+    marker: Vec<Span<'static>>,
+    far_expiry: Vec<Span<'static>>,
+}
+
+/// The banked reset-credit marker: the glyph says who redeems (`⟳` RimZ, the
+/// ticket the user) and its tone and weight say whether now is a good time.
+/// The soonest expiry rides along at any distance, muted from a week out, then
+/// heating while the user has to act and calm while auto-redeem handles it.
+fn reset_header_spans(theme: &Theme, panel: &SidebarProviderPanel, now: Timestamp) -> ResetMarker {
+    let mut marker = ResetMarker {
+        marker: Vec::new(),
+        far_expiry: Vec::new(),
+    };
     let Some(reset_credits) = panel.reset_credits.as_ref() else {
-        return Vec::new();
+        return marker;
     };
     if reset_credits.count == 0 {
-        return Vec::new();
+        return marker;
     }
-    let (glyph, glyph_style) = match panel.redeem_forecast {
-        Some(RedeemForecast::Armed) => (GlyphRole::MeterRedeemArmed, theme.good(Modifier::empty())),
-        Some(RedeemForecast::Holding) => (GlyphRole::MeterRedeemArmed, theme.muted()),
-        Some(
-            RedeemForecast::Manual
-            | RedeemForecast::Soon
-            | RedeemForecast::Now
-            | RedeemForecast::NowWaiting,
-        )
-        | None => (GlyphRole::MeterRedeemManual, theme.body()),
+    let lit = theme.good(Modifier::BOLD);
+    let (glyph, glyph_style, count_style) = match panel.redeem_forecast {
+        Some(RedeemForecast::Armed) => (
+            GlyphRole::MeterRedeemArmed,
+            theme.good(Modifier::empty()),
+            theme.body(),
+        ),
+        Some(RedeemForecast::Holding) => (GlyphRole::MeterRedeemArmed, theme.muted(), theme.body()),
+        Some(RedeemForecast::Soon) => (
+            GlyphRole::MeterRedeemManual,
+            theme.good(Modifier::empty()),
+            theme.body(),
+        ),
+        Some(RedeemForecast::Now | RedeemForecast::NowWaiting) => {
+            (GlyphRole::MeterRedeemManual, lit, lit)
+        }
+        Some(RedeemForecast::Manual) | None => {
+            (GlyphRole::MeterRedeemManual, theme.body(), theme.body())
+        }
     };
-    let mut spans = vec![
+    marker.marker = vec![
         Span::styled(theme.glyph(glyph).to_owned(), glyph_style),
-        Span::styled(format!(" {}", reset_credits.count), theme.body()),
+        Span::styled(format!(" {}", reset_credits.count), count_style),
     ];
     let Some(remaining) = reset_credits
         .soonest_expiry
         .map(|at| at.duration_since(now))
     else {
-        return spans;
+        return marker;
     };
+    let seam = Span::styled(value_seam(theme), theme.faint());
+    let label = expiry_label(remaining);
     let Some(amount) = reset_expiry_heat_amount(remaining.as_secs() as f64 / 3600.0) else {
-        return spans;
+        marker.far_expiry = vec![seam, Span::styled(label, theme.muted())];
+        return marker;
     };
     let tone = match panel.redeem_forecast {
         Some(RedeemForecast::Armed | RedeemForecast::Holding) => theme.calm_tone(amount),
@@ -1122,12 +1164,11 @@ fn reset_header_spans(
         )
         | None => theme.heat_tone(amount),
     };
-    spans.push(Span::styled(value_seam(theme), theme.faint()));
-    spans.push(Span::styled(
-        expiry_label(remaining),
-        theme.style(tone, Modifier::empty()),
-    ));
-    spans
+    marker.marker.push(seam);
+    marker
+        .marker
+        .push(Span::styled(label, theme.style(tone, Modifier::empty())));
+    marker
 }
 
 fn provider_header_left(

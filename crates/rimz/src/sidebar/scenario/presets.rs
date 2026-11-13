@@ -85,6 +85,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         Preset::Workflow => add_workflow_fixture(&mut snapshot, now),
         Preset::NotTracked => add_not_tracked_fixture(&mut snapshot, now),
         Preset::Reach => add_reach_fixture(&mut snapshot, now),
+        Preset::Redeem => add_redeem_fixture(&mut snapshot, now),
         Preset::Clocks | Preset::ClocksDone => {
             add_clock_fixture(&mut snapshot, now, state);
         }
@@ -1784,6 +1785,48 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.value_tally = Some(spend_tally(1_780.0, 118_000_000, 108).into());
     snapshot.workspace_value_tally = Some(spend_tally(1_416.0, 88_400_000, 83).into());
     snapshot.today_spend_live_usd = Some(486.0);
+}
+
+fn add_redeem_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
+    // One stacked block per reset-credit marker state, so a frame shows each.
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
+    let block = |kind, forecast, count, expiry_hours: u64| {
+        let mut panel = provider_panel(
+            kind,
+            Some(if kind == "codex" {
+                "0.135.0"
+            } else {
+                "2.1.158"
+            }),
+            Some(if kind == "codex" { "pro" } else { "max" }),
+            true,
+            false,
+            Vec::new(),
+            spend_tally(12.0, 640_000, 2),
+            now,
+        );
+        panel.reset_credits = Some(crate::ResetCredits {
+            count,
+            soonest_expiry: Some(now + std::time::Duration::from_secs(expiry_hours * 3_600)),
+            expiries: Vec::new(),
+            effect: if kind == "codex" {
+                crate::agents::RedeemEffect::RestartsWindow
+            } else {
+                crate::agents::RedeemEffect::KeepsSchedule
+            },
+            grants: Vec::new(),
+        });
+        panel.redeem_forecast = Some(forecast);
+        panel
+    };
+    snapshot.providers = vec![
+        block("codex", RedeemForecast::Armed, 2, 23 * 24),
+        block("codex", RedeemForecast::Holding, 2, 2 * 24),
+        block("claude", RedeemForecast::Manual, 2, 23 * 24),
+        block("claude", RedeemForecast::Soon, 2, 3 * 24),
+        block("claude", RedeemForecast::Now, 3, 20),
+        block("claude", RedeemForecast::NowWaiting, 1, 5),
+    ];
 }
 
 fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
