@@ -20,6 +20,7 @@ mod keep;
 mod message;
 mod restart;
 mod subscribe;
+mod takeover;
 mod until;
 
 fn dummy_agent_process() -> std::process::Child {
