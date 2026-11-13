@@ -39,6 +39,7 @@ include = [
     "/build.rs",
     "/themes",
     "/logos",
+    "/keymaps",
     "/pricing/litellm-pricing.json",
     "/presence/rimz-presence-zellij.wasm",
     "/presence/rimz-presence-zellij.wasm.provenance.json",
