@@ -651,6 +651,83 @@ fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
 }
 
 #[test]
+fn a_continued_restart_that_gives_up_on_capacity_leaves_no_session_to_the_routed_step() {
+    let (_home, state, mut record, spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\n\
+         agent='claude'\nprompt-file='prompt.md'\nthen='@done'\non.capacity='fix'\n\
+         [agent.fix]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+    );
+    record.give_up = Some(Timestamp::now() - std::time::Duration::from_secs(60));
+    record.restart = Some(workflow::Restart {
+        resume: Some("conversation".into()),
+        settled: None,
+    });
+    fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+    let paths = state.workflow(&record.id);
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    workflow::write(&paths, &record, &guard).unwrap();
+    drop(guard);
+    let host = super::super::tests::FakeHost::new();
+    let mut admission = Admission::default();
+    let mut restarted_at_fix = false;
+    for _ in 0..10 {
+        let decision = prepare(
+            &state,
+            &paths,
+            &spec,
+            &mut BTreeSet::new(),
+            &host,
+            &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+            &mut admission,
+        )
+        .unwrap();
+        match decision {
+            Decision::Admit(request) if request.1 == "pr" => {
+                admission.capacity = Some((
+                    request.0,
+                    request.1,
+                    Ok(throttle::Attempt::Held(
+                        serde_json::from_value(
+                            json!({"kind":"capacity", "text":"no capacity", "kinds":["claude"]}),
+                        )
+                        .unwrap(),
+                    )),
+                ));
+            }
+            Decision::Admit(request) => {
+                if !restarted_at_fix {
+                    let routed = workflow::load(&paths).unwrap();
+                    assert_eq!(routed.node, "fix");
+                    assert_eq!(routed.restart, None, "{routed:#?}");
+                    restart(&state, &record.id, None, &host)
+                        .expect("a restart of the routed step is accepted");
+                    restarted_at_fix = true;
+                }
+                admission.capacity = Some((request.0, request.1, Ok(throttle::Attempt::Open)));
+            }
+            Decision::Launch(launch) => {
+                agent::launch(&state, &paths, &spec, *launch, &host).unwrap();
+                break;
+            }
+            Decision::Again => {}
+            _ => panic!("unexpected decision"),
+        }
+    }
+    let launched = host.launched.borrow();
+    assert_eq!(launched.len(), 1, "only the routed step launches");
+    assert_eq!(
+        (launched[0].automation.clone(), launched[0].resume.clone()),
+        (
+            crate::agents::Automation::Workflow {
+                workflow: record.workflow.clone(),
+                step: "fix".into(),
+            },
+            None
+        )
+    );
+}
+
+#[test]
 fn every_origin_waits_at_a_hold_and_only_the_stored_skip_launches_past_admission() {
     let mut actual = Vec::new();
     for origin in ["hand", "loop fire", "scheduled", "restart"] {

@@ -381,7 +381,7 @@ Optional `attempt.held_since` opens the shared pause at the earliest ask, limit,
 
 Only blocking native asks pause an attempt. Async questions and explicitly raised questions remain actionable in `rimz asks` but do not create `asking` or pause the timeout.
 
-Optional `record.restart` is `{resume: "session-id" | null, settled?: N}` while a manual replacement is pending. Null means a fresh start. `settled` names a previous attempt being stopped again whose end and cost are already journaled. The field disappears when the launch is published or the run parks or terminates.
+Optional `record.restart` is `{resume: "session-id" | null, settled?: N}` while a manual replacement is pending. Null means a fresh start. `settled` names a previous attempt being stopped again whose end and cost are already journaled. The field disappears when the launch is published, when a route leaves the step for another node (a capacity give-up, a deadline), or when the run parks or terminates.
 
 `record.visits.<step>` is the step's visit count, since its last manual restart or cap resume. Attempt journal rows and `record.prev_attempt` carry `routed_by` (the outcome that admitted the attempt) beside `key`, null when absent.
 
