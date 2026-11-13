@@ -285,6 +285,16 @@ impl DataPlane {
         plane
     }
 
+    /// This plane with its jumps waiting `paint_wait` from the click for the owners' paint.
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn with_paint_wait(
+        mut self,
+        paint_wait: std::time::Duration,
+    ) -> Self {
+        self.jumps = Arc::new(super::focus_push::JumpHost::with_paint_wait(paint_wait));
+        self
+    }
+
     /// The essential lane that has ended, if any. Lanes not yet started count as alive.
     pub(in crate::sidebar_pane) fn ended_lane(&self) -> Option<&'static str> {
         let essential = lock(&self.essential);

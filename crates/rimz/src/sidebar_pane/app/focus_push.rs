@@ -369,7 +369,7 @@ impl FocusPeers {
         let ack = PushAck::new(tx);
         let mut traces = Vec::with_capacity(owners.len());
         let sent = now();
-        let until = clicked + PAINT_WAIT;
+        let until = self.jumps.paint_until(clicked);
         self.jumps.register_wait(&lease.stamp, &ack, anchor.nonce);
         if let Some(first) = owners.first() {
             self.jumps.name_landing(&lease.stamp, &first.own_pane, sent);

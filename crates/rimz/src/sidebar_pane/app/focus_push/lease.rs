@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{DiagSink, FocusPush, FocusTraceEvent, PAINT_WAIT, PushPeer, PushVerdict};
 use crate::ids::{PaneId, SidebarInstanceId};
@@ -12,11 +12,23 @@ use crate::sidebar_pane::app::fetch::Subscribers;
 use crate::sidebar_pane::app::input::Wakeup;
 use crate::sidebar_pane::app::timing::FOCUS_RESUME_WATCH_WINDOW;
 
-#[derive(Default)]
 pub(in crate::sidebar_pane::app) struct JumpHost {
     current: Arc<AtomicU64>,
     requests: Mutex<()>,
     state: Mutex<JumpState>,
+    /// How long a jump waits from its click for the owners' paint: `PAINT_WAIT` outside tests.
+    paint_wait: Duration,
+}
+
+impl Default for JumpHost {
+    fn default() -> Self {
+        Self {
+            current: Arc::default(),
+            requests: Mutex::default(),
+            state: Mutex::default(),
+            paint_wait: PAINT_WAIT,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -98,6 +110,21 @@ impl JumpState {
 }
 
 impl JumpHost {
+    /// A host whose jumps wait `paint_wait` from the click, for a test that must outlast the
+    /// production bound.
+    #[cfg(test)]
+    pub(in crate::sidebar_pane::app) fn with_paint_wait(paint_wait: Duration) -> Self {
+        Self {
+            paint_wait,
+            ..Self::default()
+        }
+    }
+
+    /// The instant a jump clicked at `clicked` stops waiting for its owners' paint.
+    pub(super) fn paint_until(&self, clicked: Instant) -> Instant {
+        clicked + self.paint_wait
+    }
+
     fn lock(&self) -> MutexGuard<'_, JumpState> {
         // State changes replace whole leases and slots, including during unwinding.
         self.state
@@ -133,7 +160,7 @@ impl JumpHost {
         state.active = Some(ActiveJump {
             stamp: stamp.clone(),
             target: target.clone(),
-            until: clicked + PAINT_WAIT,
+            until: self.paint_until(clicked),
             cancel: None,
             source,
             nonce: None,
@@ -171,7 +198,7 @@ impl JumpHost {
             sequence: active.stamp.sequence,
             target: active.target.clone(),
             stage: "input_superseded".to_owned(),
-            elapsed_ms: super::duration_millis((active.until - PAINT_WAIT).elapsed()),
+            elapsed_ms: super::duration_millis((active.until - self.paint_wait).elapsed()),
         };
         state.revoke_landing(active.stamp.sequence);
         Self::cancel(active);
