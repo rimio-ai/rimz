@@ -139,6 +139,19 @@ pub(super) fn validate_spec(
                 }
             }
         }
+        if matches!(
+            check.kind(),
+            Some(CheckKind::Script(_) | CheckKind::Judge(_))
+        ) && check.on.is_empty()
+        {
+            report.error(
+                &format!("{path}.on"),
+                format!(
+                    "a {} check requires an on table that routes its answers",
+                    check.table.word()
+                ),
+            );
+        }
         if matches!(check.kind(), Some(CheckKind::Judge(_))) && check.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),

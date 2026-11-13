@@ -1152,6 +1152,51 @@ fn bounded_command_cycles_validate_without_a_never_waits_warning() {
 }
 
 #[test]
+fn validation_refuses_script_and_judge_checks_without_an_on_table() {
+    let head = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n";
+    let cases = [
+        ("script", "[script.pick]\nrun='true'\n"),
+        (
+            "judge",
+            "[judge.pick]\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Review the work'\n",
+        ),
+    ];
+    let results: Vec<_> = cases
+        .into_iter()
+        .map(|(kind, node)| {
+            let (_home, dir) = fixture();
+            fs::write(dir.join("workflow.toml"), format!("{head}{node}")).unwrap();
+            let report = validate(&dir, &LoadedDefinitions::default(), None);
+            let errors: Vec<_> = report
+                .errors
+                .iter()
+                .map(|issue| issue.message.clone())
+                .collect();
+            (kind, errors)
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (
+                "script",
+                vec![
+                    "example: script.pick.on: a script check requires an on table that routes its answers"
+                        .to_owned()
+                ]
+            ),
+            (
+                "judge",
+                vec![
+                    "example: judge.pick.on: a judge check requires an on table that routes its answers"
+                        .to_owned()
+                ]
+            ),
+        ]
+    );
+}
+
+#[test]
 fn validation_accepts_command_steps_without_agent_warnings() {
     let results: Vec<_> = ["run", "shell"]
         .into_iter()
