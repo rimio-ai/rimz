@@ -111,9 +111,9 @@ impl CreditDisplay {
 impl SidebarProviderPanel {
     /// The budget bars this panel shows at `now`, the snapshot clock. A metered
     /// account drains bars for the two shortest windows, or every named quota;
-    /// a spent longer cap replaces the second row, or leads available extra
-    /// credit. Model-scoped sub-caps partition their parent's bar without a
-    /// row, and lifted windows yield while an enforced candidate remains.
+    /// a spent longer cap stands alone, or leads available extra credit.
+    /// Model-scoped sub-caps partition their parent's bar without a row, and
+    /// lifted windows yield while an enforced candidate remains.
     pub(crate) fn budget(&self, now: Timestamp) -> ProviderBudget<'_> {
         if self.undecided {
             return ProviderBudget::Undecided;
@@ -151,8 +151,9 @@ impl SidebarProviderPanel {
 }
 
 /// The rows in draw order. Named quotas each keep a row; otherwise the two
-/// shortest windows, with the longest spent window taking the second row, or
-/// leading the `ex` row when credit is available.
+/// shortest windows, unless a window longer than the first is spent: the
+/// longest spent one then shows alone, or leads the `ex` row when credit is
+/// available.
 fn select_provider_bars<'a>(
     credits: CreditDisplay,
     windows: &[&'a RateLimitWindow],
@@ -180,7 +181,9 @@ fn select_provider_bars<'a>(
             return vec![bar(longest_spent), ProviderBar::Extra(credits)];
         }
         if !std::ptr::eq(first, longest_spent) {
-            return provider_window_pair(first, longest_spent, bar);
+            // A spent longer window forces every shorter one spent with no
+            // countdown, so their rows would only repeat it.
+            return vec![bar(longest_spent)];
         }
     }
     provider_window_pair(first, second, bar)

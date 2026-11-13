@@ -138,16 +138,9 @@ fn amount_windows_use_the_two_shortest_rows_until_the_month_is_spent() {
     );
     panel.windows[2] = amount_window(43_200, 300, 300);
     let spent = metered_bar_rows(&theme, &panel);
-    assert_eq!(spent[1].spans[0].content.trim(), "mo");
-    assert_eq!(
-        bar_row_facts(&spent[0]),
-        (
-            mana_style(&theme, 0, &Default::default()).fg,
-            mana_style(&theme, 0, &Default::default()).fg,
-            false
-        )
-    );
-    assert!(bar_row_facts(&spent[1]).2);
+    assert_eq!(spent.len(), 1, "the spent month hides the 5h and 7d");
+    assert_eq!(spent[0].spans[0].content.trim(), "mo");
+    assert!(bar_row_facts(&spent[0]).2);
     assert!(
         spent
             .iter()
@@ -762,8 +755,8 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
-        vec!["5h", "7d"],
-        "unknown extra credits use the disabled fallback"
+        vec!["7d"],
+        "unknown extra credits leave the spent 7d alone"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         Some(7.0),
@@ -782,8 +775,8 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     ));
     assert_eq!(
         labels(&panel),
-        vec!["5h", "7d"],
-        "exhausted extra credits fall back to the included-window pair"
+        vec!["7d"],
+        "exhausted extra credits leave the spent 7d alone"
     );
 
     panel.windows = vec![
@@ -809,8 +802,8 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
-        vec!["5h", "7d"],
-        "unknown extra credits keep the binding middle window visible"
+        vec!["7d"],
+        "unknown extra credits leave the binding middle window alone"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         Some(7.0),
@@ -825,8 +818,8 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     assert_eq!(
         labels(&panel),
-        vec!["5h", "7d"],
-        "disabled extra usage pairs the short window with the binding spent one"
+        vec!["7d"],
+        "disabled extra usage leaves the binding spent window alone"
     );
 
     panel.windows = vec![
@@ -999,18 +992,32 @@ fn model_sub_cap_marks_its_own_axis_only_on_its_parent_without_changing_rows() {
     panel.windows[1].used_percentage = Some(100);
     panel.windows[2].used_percentage = Some(100);
     let rows = metered_bar_rows(&theme, &panel);
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| !text(row).contains('▰')));
-    assert!(!text(&rows[1]).contains('╱'));
+    assert_eq!(rows.len(), 1);
+    assert!(!text(&rows[0]).contains('▰'));
+    assert!(!text(&rows[0]).contains('╱'));
 
     panel.windows[2].duration_mins = panel.windows[0].duration_mins;
     panel.windows[2].used_percentage = Some(0);
     let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
     assert!(
-        !text(&rows[0]).contains('╱'),
-        "a gated parent hides its tick"
+        text(&rows[0]).starts_with("7d") && !text(&rows[0]).contains('╱'),
+        "a gated parent gets no row to tick"
     );
-    assert!(!text(&rows[0]).contains('▰'));
+    panel.windows.push(RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: "build_minutes".to_owned(),
+            label: "bld".to_owned(),
+        }),
+        used_percentage: Some(20),
+        ..Default::default()
+    });
+    let rows = metered_bar_rows(&theme, &panel);
+    assert!(
+        text(&rows[0]).starts_with("5h") && !text(&rows[0]).contains('╱'),
+        "beside a named quota a gated parent keeps its row and hides its tick"
+    );
+    panel.windows.pop();
     panel.windows[2].duration_mins = panel.windows[1].duration_mins;
 
     panel.windows[1].used_percentage = None;
@@ -1329,17 +1336,10 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
     let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((0, 100)));
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     let rows = metered_bar_rows(&theme, &panel);
-    assert_eq!(rows.len(), 2);
-    let (five_label, _, five_has_reset) = bar_row_facts(&rows[0]);
-    let (seven_label, _, _) = bar_row_facts(&rows[1]);
-    assert!(!five_has_reset, "the cascaded 5h row drops its countdown");
+    assert_eq!(rows.len(), 1, "the exhausted 7d hides the cascaded 5h");
     assert!(
         !rows[0].spans.iter().any(|span| span.content.contains('▰')),
-        "the cascaded 5h bar is a full empty track, no fill"
-    );
-    assert_eq!(
-        five_label, seven_label,
-        "the cascaded 5h label reddens to match the exhausted 7d"
+        "the exhausted 7d bar is a full empty track, no fill"
     );
 
     let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
@@ -1599,7 +1599,7 @@ fn provider_stats_read_todays_jsonl_spend_and_tokens() {
 }
 
 #[test]
-fn a_spent_longer_window_paints_a_shorter_unknown_window_spent() {
+fn a_spent_longer_window_hides_a_shorter_unknown_window() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((0, 40)));
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
@@ -1613,16 +1613,13 @@ fn a_spent_longer_window_paints_a_shorter_unknown_window_spent() {
 
     panel.windows[1].used_percentage = Some(100);
     let rows = metered_bar_rows(&theme, &panel);
-    assert_eq!(rows.len(), 2);
-    let (label, glyph, has_reset) = bar_row_facts(&rows[0]);
-    assert_eq!(
-        label,
-        mana_style(&theme, 0, &Default::default()).fg,
-        "the spent 7d forces the unknown 5h spent"
-    );
+    assert_eq!(rows.len(), 1, "the spent 7d hides the 5h it forces spent");
+    let row = rows[0].to_string();
+    assert!(row.contains("7d") && !row.contains("5h"), "{row}");
+    let (label, glyph, _) = bar_row_facts(&rows[0]);
+    assert_eq!(label, mana_style(&theme, 0, &Default::default()).fg);
     assert_eq!(glyph, label);
-    assert!(!has_reset);
-    assert!(!rows[0].to_string().contains('▰'));
+    assert!(!row.contains('▰'));
 }
 
 #[test]

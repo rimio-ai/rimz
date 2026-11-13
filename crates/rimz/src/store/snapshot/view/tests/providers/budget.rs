@@ -210,10 +210,26 @@ fn the_longest_spent_window_binds_and_leads_only_available_credit() {
         window(WEEK, Some(100)),
         window(MONTH, Some(10)),
     ];
-    for credits in [None, Some(ExtraCredits::Disabled)] {
-        panel.extra_credits = credits;
-        assert_eq!(durations(&panel), [FIVE_HOURS, WEEK]);
+    let unavailable = [
+        None,
+        Some(ExtraCredits::Disabled),
+        Some(ExtraCredits::known(None, None, Some(50.0))),
+        Some(ExtraCredits::known(Some(50.0), Some(0.0), Some(50.0))),
+    ];
+    for credits in &unavailable {
+        panel.extra_credits = credits.clone();
+        assert_eq!(
+            durations(&panel),
+            [WEEK],
+            "the spent week hides the 5h it forces spent: {credits:?}"
+        );
     }
+    panel.windows[2].used_percentage = Some(100);
+    for credits in &unavailable {
+        panel.extra_credits = credits.clone();
+        assert_eq!(durations(&panel), [MONTH], "the spent month: {credits:?}");
+    }
+    panel.windows[2].used_percentage = Some(10);
     panel.extra_credits = available();
     let bars = bars(&panel);
     assert!(matches!(
@@ -279,6 +295,13 @@ fn a_spent_longer_window_forces_a_shorter_one_spent() {
         window(WEEK, Some(100)),
         amount(MONTH, 150, 200),
     ];
+    assert_eq!(
+        durations(&panel),
+        [WEEK],
+        "time windows alone hide the forced 5h"
+    );
+    // A named quota keeps every window a row, so the forced reading shows.
+    panel.windows.push(scoped("premium", None, Some(10)));
     let forced = reading(&panel, FIVE_HOURS);
     assert!(matches!(forced, WindowReading::Draining { pace: None, .. }));
     assert_eq!(draining(forced), (0, None, Vec::new(), None));
