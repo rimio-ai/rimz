@@ -100,6 +100,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `hook_drainer_reconnected` | `cli::agents_cmd::exec::supervisor` | One wrapper lease gap closed under 10 seconds: `agent_kind`, optional `agent_name`, `since_ms`, `gap_ms`, and the last failed reconnect's optional `error`. Info, doctor Contained |
 | `hook_drainer_unreachable` | `cli::agents_cmd::exec::supervisor` | A wrapper lease gap reaching 10 seconds, then its recovery: the same agent, start and error fields, with `recovered_after_ms` absent at crossing and set at recovery. Warn and doctor Investigate in both phases |
 | `workflow_retry`, `workflow_rerun` | `harness::workflow::engine::accounting::transition` | A failed check evaluation (`died`, `asked`, or `invalid`) that earned its one retry, with `run`, `node`, `seq`, `outcome`, and `reason`, and an evaluation re-run free because its hosting `advance` died, with `run`, `node`, and `seq` ([workflow engine](./harness/workflow.md#accounting)) |
+| `workflow_runs_ended` | `cli::workflow::reconcile::report` | The runs whose homes one workflow pass, or one `workflow advance` or `workflow cancel` on a stranded id, moved after they were ended as failed or set aside because this RimZ cannot continue them: `runs`, their `causes` grouped with counts, the `released` agents by name, and `unreported`, how many of their loop reports did not land yet. Written only when the call moved such a run's home; identity by kind and first run. Info, doctor Contained |
 | `tool_loop_escalated` | `cli::hooks::lifecycle` | A named tool's consecutive identical argument signature reaching the configured attention threshold |
 
 ### Carry kinds
@@ -154,7 +155,7 @@ Severity follows the event, and for a few kinds the event's own fields. `DiagEve
 | `warn` | contained | `hook_ingress_truncated`, `hook_ingress_dropped`, `frame_rejected`, `pane_carry_forward`, `gate_hold`, `topology_write_rejected`, `live_roster_held` |
 | `warn` | expected | `tool_loop_escalated`. Also a `pane_count_drop` that removed one view completely, with no managed panes and no mass shrink, and a `frame_anomaly` for `clicked_row_displaced` with cause `no_room_clamp` |
 | `info` | investigate | `resolution_fallback`, `mixed_build_writers`, `supervisor_convergence` |
-| `info` | contained | `workflow_retry`, `workflow_rerun`, `newborn_quarantined`, `local_session_bind_rejected`, `subagent_digest_backstopped`, `hook_drainer_reconnected` |
+| `info` | contained | `workflow_retry`, `workflow_rerun`, `workflow_runs_ended`, `newborn_quarantined`, `local_session_bind_rejected`, `subagent_digest_backstopped`, `hook_drainer_reconnected` |
 | `info` | recovered | `frame_shrink_verified`, `pane_carry_refuted`, `gate_release`, `topology_writer_changed`, `recovery_seat_refilled`, `recovery_child_ended`, `pane_winsize_repaired`, `sidebar_view_repaired`, `scoped_bind_restored` |
 | `info` | expected | `group_migration`, `work_pane_boundary_moved`, `hidden_views_fitted`, `fetch_cycle_stats`, retained `fetch_reduction_stats`, `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` |
 | `warn` while active, `info` with `recovered_after_ms` | investigate, then recovered | `health_alert`, `link_alert`, `tick_budget_breach` |

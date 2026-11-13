@@ -1282,6 +1282,36 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
         "{fires:?}"
     );
     assert_eq!(logged().len(), before, "a quiet run appends no row");
+
+    // A run this RimZ ended as stranded, which decodes once ended, reports one row and moves
+    // neither a strike nor the quiet streak, even with an outcome that says quiet.
+    let quiet_before = super::super::fires::load().get(&key).cloned();
+    assert!(
+        quiet_before
+            .as_ref()
+            .and_then(|fires| fires.quiet.as_ref())
+            .is_some_and(|q| q.streak > 0)
+    );
+    for outcome in [ended(RunEnding::Failed, None, false), outcome] {
+        let mut stranded = run("failed", serde_json::json!({}));
+        stranded.stranded = true;
+        assert!(matches!(
+            report_run(&stranded, &outcome),
+            Ok(Collected::Reported(RunTransition::Recorded))
+        ));
+        let rows = logged();
+        assert_eq!(
+            rows.last().and_then(|row| row.run_id.as_deref()),
+            Some(stranded.id.as_str())
+        );
+    }
+    assert_eq!(logged().len(), before + 2);
+    assert_eq!(
+        super::super::strikes::load().get(&key),
+        None,
+        "a stranded run strikes no task"
+    );
+    assert_eq!(super::super::fires::load().get(&key).cloned(), quiet_before);
 }
 
 #[test]

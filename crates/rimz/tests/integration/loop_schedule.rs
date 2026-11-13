@@ -10498,6 +10498,196 @@ fn a_quiet_run_collected_before_its_launch_memory_does_not_hold_the_next_fire() 
     assert!(read_loop_run_records(&env).is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_lost_report_and_release()
+ {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "strand",
+    );
+    let state = env.state_path_for(&env.project_root);
+    let notices = env.project_root.join("notices.log");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[notifications]\ncommand = '''printf '%s|%s\\n' \"$RIMZ_NOTIFY_KIND\" \
+             \"$RIMZ_NOTIFY_BODY\" >> '{}' '''\n",
+            notices.display()
+        ),
+    )
+    .unwrap();
+    let gate = env.home_root.join("strand-gate");
+    let dir = env.rimz_home().join("workflows/strand");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("workflow.toml"),
+        format!(
+            "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'hold'\n\
+             [test.hold]\nshell = 'while [ ! -e {} ]; do sleep 0.05; done'\n\
+             on.pass = '@done'\non.fail = '@failed'\n",
+            gate.display()
+        ),
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.strand]\nworkflow = 'strand'\nroot = {:?}\nwhen = [\"pr=open\"]\n",
+            env.project_root
+        ),
+    );
+    let evidence =
+        json!({"when":"pr=open", "hold":null, "held_ms":0, "readings":{"pr":"open"}}).to_string();
+    let output = env
+        .rimz()
+        .args(["loop", "run", "strand", "--condition-json", &evidence])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let remembered = || {
+        rimz::harness::schedule::launch_ledger::load_workflows(env.store().paths())
+            .unwrap()
+            .tasks
+            .get("strand")
+            .is_some_and(|checkouts| !checkouts.is_empty())
+    };
+    let id: rimz::ids::WorkflowRunId = fired_record(&env, "strand")
+        .run_id
+        .expect("in-flight run id")
+        .parse()
+        .unwrap();
+    let paths = state.workflow(&id);
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    let mut record = loop {
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
+        // The host's last write before the check runs publishes its child.
+        if record["node"] == "hold" && record["attempt"]["child"]["pid"].is_u64() && remembered() {
+            break record;
+        }
+        assert!(Instant::now() < deadline, "the run never held: {record}");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    // An older RimZ rewrote the run while its check ran.
+    let older = rimz::store::workflow::VERSION - 1;
+    record["version"] = json!(older);
+    let staged = paths.home.join("record.json.test");
+    std::fs::write(&staged, serde_json::to_vec(&record).unwrap()).unwrap();
+    std::fs::rename(&staged, &paths.record).unwrap();
+    let rows_before = read_loop_run_records(&env).len();
+    // An unrelated supervised-run record that does not decode fails every release.
+    let corrupt = state.runs_dir.join("corrupt.json");
+    std::fs::create_dir_all(&state.runs_dir).unwrap();
+    std::fs::write(&corrupt, "{").unwrap();
+
+    // The loop history cannot be appended: the report stays owed and the run stays live.
+    let log = loop_runs_path(&env);
+    let kept = log.with_extension("kept");
+    let had_log = std::fs::rename(&log, &kept).is_ok();
+    std::fs::create_dir_all(&log).unwrap();
+    loop_ok(&env, &["workflow", "reconcile"]);
+    let live: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths.record).unwrap()).unwrap();
+    assert_eq!(
+        (&live["state"], &live["stranded"], &live["loop_report"]),
+        (&json!("failed"), &json!(true), &json!("owed")),
+        "{live}"
+    );
+    // The run stays live, so the pass that moves it tells the user.
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !notices.exists(),
+        "a run still live is announced by no pass"
+    );
+
+    // Once the history can be appended, the next pass lands one row and frees the task's launch
+    // memory, but the failed release keeps the run live and unannounced.
+    std::fs::remove_dir(&log).unwrap();
+    if had_log {
+        std::fs::rename(&kept, &log).unwrap();
+    }
+    let (_, stderr) = loop_ok_with_stderr(&env, &["workflow", "reconcile"]);
+    assert!(
+        stderr.contains(&format!(
+            "warning: could not release the agents of workflow run `{id}`, so it stays live for \
+             the next pass: "
+        )),
+        "{stderr}"
+    );
+    let rows = read_loop_run_records(&env);
+    let added = &rows[rows_before..];
+    assert_eq!(added.len(), 1, "{added:?}");
+    assert_eq!(added[0].result, LoopRunResult::Failed, "{:?}", added[0]);
+    assert_eq!(added[0].run_id.as_deref(), Some(id.as_str()));
+    assert!(
+        format!("{:?}", added[0]).contains("this RimZ cannot continue the run"),
+        "{:?}",
+        added[0]
+    );
+    assert!(
+        !read_loop_strikes(&env).contains_key(&machine_task_key("strand")),
+        "a stranded run strikes no task"
+    );
+    assert!(!remembered(), "a stranded run keeps no launch memory");
+    assert!(paths.home.exists(), "a run whose release failed stays live");
+    // The run still live reads as the failed run it is, not as gone.
+    let show = loop_ok(&env, &["loop", "show", "strand"]);
+    assert!(
+        show.contains(&format!("{id} · failed")) && !show.contains("· gone"),
+        "{show}"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !notices.exists(),
+        "a run still live is announced by no pass"
+    );
+
+    // Once its agents can be released, the next pass moves the run and tells the user once.
+    std::fs::remove_file(&corrupt).unwrap();
+    let (_, stderr) = loop_ok_with_stderr(&env, &["workflow", "reconcile"]);
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let notice = loop {
+        let text = std::fs::read_to_string(&notices).unwrap_or_default();
+        if !text.is_empty() {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "no workflow_ended notice");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(
+        notice.starts_with(&format!(
+            "workflow_ended|1 workflow run this RimZ cannot continue was ended as failed: 1 \
+             written by an older RimZ (record version {older}). Inspect with `"
+        )) && notice.trim_end().ends_with(" loop list`."),
+        "{notice}"
+    );
+    // A check run holds no agent, and its report landed.
+    assert!(
+        !notice.contains("agents") && !notice.contains("loop report"),
+        "{notice}"
+    );
+    assert!(!paths.home.exists(), "the released run moved");
+    let finished: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(state.finished_workflow(&id).record).unwrap())
+            .unwrap();
+    assert_eq!(finished["loop_report"], "sent", "{finished}");
+    loop_ok(&env, &["workflow", "reconcile"]);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        std::fs::read_to_string(&notices).unwrap().lines().count(),
+        1,
+        "one notice in all"
+    );
+    assert_eq!(read_loop_run_records(&env).len(), rows_before + 1);
+    std::fs::write(&gate, "").unwrap();
+}
+
 #[test]
 fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
     let env = Env::new();

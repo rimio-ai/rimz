@@ -66,6 +66,16 @@ impl Other {
         command("show", &[self.id.as_str()], root.as_deref(), None, &[], &[])
     }
 
+    /// A live home this RimZ cannot continue: a stranded run, or a record holding no JSON
+    /// object. `workflow advance` and `workflow cancel` end it; other changes refuse it.
+    pub(in crate::cli) fn is_stranded(&self) -> bool {
+        !self.found.finished
+            && matches!(
+                self.found.class,
+                records::RunClass::Stranded { .. } | records::RunClass::NotObject
+            )
+    }
+
     /// Why a command that changes a run refuses this one, or none for a run that is over: a
     /// finished home, or a live record that ends its run.
     pub(in crate::cli) fn refusal(&self) -> Option<String> {

@@ -178,17 +178,23 @@ pub fn fire_due_tasks(
 }
 
 fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, host: LoopRunHost) {
-    let records = match StatePaths::for_project_root(project_root)
+    let homes = match StatePaths::for_project_root(project_root)
         .map_err(|error| error.to_string())
-        .and_then(|state| {
-            crate::store::workflow::live_runs(&state).map_err(|error| error.to_string())
-        }) {
-        Ok(records) => records,
+        .and_then(|state| crate::store::workflow::live(&state).map_err(|error| error.to_string()))
+    {
+        Ok(homes) => homes,
         Err(error) => {
             tracing::warn!(%error, "workflow tick could not read runs");
             return;
         }
     };
+    if homes.iter().any(|home| home.class.awaits_pass()) {
+        spawn_reconcile(runtime, project_root, now, host);
+    }
+    let records = homes.into_iter().filter_map(|home| match home.class {
+        crate::store::workflow::RunClass::Current(record) => Some(*record),
+        _ => None,
+    });
     // A finished run that still owes its loop task a report is due like an active one: its
     // advance only reports, and `tick_pace` spaces out the retries of a report that failed.
     let active: BTreeMap<_, _> = records
@@ -240,6 +246,37 @@ fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, h
             continue;
         }
         spawn_workflow_advance(runtime, project_root, &id, host);
+    }
+}
+
+/// Spawn the room's workflow pass, at most once per tick interval: the pace stamp is published
+/// before the spawn, so a pass that cannot start waits a tick like one that ran.
+fn spawn_reconcile(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, host: LoopRunHost) {
+    let path = runtime.lane_path("workflow-reconcile.json");
+    let last: Option<Timestamp> = crate::disk::atomic::read_json_cache(&path);
+    if last.is_some_and(|last| now.duration_since(last).as_secs() < WORKFLOW_TICK_SECS) {
+        return;
+    }
+    if let Err(error) = write_temp_then_rename_cache(&path, &Some(now)) {
+        tracing::warn!(%error, "workflow tick could not publish the pass pace");
+        return;
+    }
+    if cfg!(test) {
+        return;
+    }
+    let args = crate::harness::workflow::reconcile_args(project_root);
+    let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, "workflow pass");
+    let spawned = if host == LoopRunHost::Detached {
+        crate::child_process::spawn_detached_rimz(runtime, &args, "workflow-tick").map(|()| None)
+    } else {
+        crate::child_process::spawn_detached_program(&program, &args, runtime, "workflow-tick")
+    };
+    match spawned {
+        Ok(Some(pid)) if host == LoopRunHost::TransientScope => {
+            wait_for_scope(pid, "workflow pass");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "workflow tick could not spawn the workflow pass"),
     }
 }
 

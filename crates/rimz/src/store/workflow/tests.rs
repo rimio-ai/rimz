@@ -89,6 +89,21 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
 }
 
 #[test]
+fn the_pass_awaits_a_finished_run_only_once_it_owes_no_report() {
+    let pass = |state: RunState, report: LoopReport| {
+        let mut record = record();
+        record.task = Some("sweep".into());
+        record.state = state;
+        record.loop_report = report;
+        RunClass::Current(Box::new(record)).awaits_pass()
+    };
+    assert!(!pass(RunState::Active, LoopReport::Owed));
+    // The paced advance retries an owed report.
+    assert!(!pass(RunState::Failed, LoopReport::Owed));
+    assert!(pass(RunState::Failed, LoopReport::Sent));
+}
+
+#[test]
 fn classification_reads_newer_versions_no_further_and_strands_unfinished_old_runs() {
     let home = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();

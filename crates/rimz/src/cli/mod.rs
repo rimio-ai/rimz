@@ -43,6 +43,7 @@ mod remote;
 mod render;
 mod reset;
 mod room;
+mod room_notice;
 mod select;
 mod send;
 mod sessions;

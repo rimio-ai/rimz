@@ -2395,7 +2395,8 @@ path = "crates/rimz/src/harness"
 # workflow::{StartArgs, Advance, parse_give_up}, TaskFire::advance and AttemptHost::machine_gated carry a start's capacity choice and give-up from the CLI and loop fires to admission (+5).
 # run::release_workflow lets a stranded workflow run's agents go on as kept session runs, for the workflow pass and cancel (+1).
 # run_log::{QuietFires, with_quiet}, QuietFires::streak_beside and TaskHistory::acting carry a task's quiet-fire summary to the loop CLI and merge it into the streak (+4).
-surface-budget = 1222
+# run_log::try_collect_run and workflow::reconcile_args let the workflow pass report a run and the tick spawn the pass (+2).
+surface-budget = 1224
 
 [[verdict]]
 kind = "item"
@@ -2955,6 +2956,11 @@ reason = "The loop runner creates each fresh-worktree fire's tree under one stam
 kind = "item"
 key = "harness::schedule::run_log::FireWorktree"
 reason = "A fire's per-fire tree and its trunk fallback travel from the runner's record to loop logs."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::try_collect_run"
+reason = "The workflow pass reports a finished run through the same collector and keeps the run owed and live when the report does not land."
 
 [[verdict]]
 kind = "item"
@@ -4502,7 +4508,8 @@ path = "crates/rimz/src/store"
 # workflow::{LiveRun, live, live_runs} walk the live directory alone, in place of workflow::list (+2).
 # workflow::{FoundRun, find, find_under} look a run up by id in either directory (+3).
 # workflow::{Finished, finish} move an ended run's home into the finished directory under the caller's workspace lock (+2).
-surface-budget = 625
+# workflow::{end_stranded, mark_header_report_sent} and RunClass::awaits_pass let the workflow pass end a stranded run in place, mark its header report sent, and tell the tick it has work (+3).
+surface-budget = 628
 
 [[verdict]]
 kind = "item"
@@ -12702,6 +12709,21 @@ reason = "Only workflow dispatch constructs the CLI-private attempt host."
 kind = "item"
 key = "agents::account::ProviderCapacity::latest_spent_window_reset_for_model"
 reason = "Workflow observations reuse the model-aware reset policy already used by auto-continue."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::reconcile_args"
+reason = "The scheduler tick spawns the room's workflow pass with argv the workflow module owns, as it does advances."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::end_stranded"
+reason = "The workflow pass ends a run this RimZ cannot decode in place, under the caller's workspace lock, keeping every other member of its record."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::mark_header_report_sent"
+reason = "The collector marks the loop report of a run read only by its header sent without decoding the record."
 
 [[verdict]]
 kind = "item"
