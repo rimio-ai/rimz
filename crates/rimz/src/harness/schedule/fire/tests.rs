@@ -1396,7 +1396,6 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
         ..TaskEntry::default()
     };
     let scope = entry.run_dir().to_string_lossy().into_owned();
-    let fingerprint = Some(("!ci=failed".into(), None, entry.run_dir()));
     let tasks = one(loaded(entry));
     // The CI verdict describes another commit than the PR head, so the fence holds `ci`.
     write_temp_then_rename_cache(
@@ -1413,10 +1412,14 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
     )
     .unwrap();
     let source = CiSource::read(&runtime);
-    let spawns = |fired: bool| {
+    let spawns = |tasks: &BTreeMap<String, LoadedTask>, stamp: Timestamp, fired: bool| {
         let state = WhenState {
-            fingerprint: fingerprint.clone(),
-            since: seconds_before(now.timestamp(), 120),
+            fingerprint: Some((
+                tasks[NAME].entry().when.as_ref().unwrap()[0].clone(),
+                None,
+                tasks[NAME].entry().run_dir(),
+            )),
+            since: seconds_before(stamp, 60),
             fired,
         };
         write_temp_then_rename_cache(&state_path(&runtime), &one(stamp)).unwrap();
@@ -1435,10 +1438,32 @@ fn a_task_fired_on_a_true_reading_skips_the_commit_fence_git_reads() {
         assert_eq!(last_when_states(&runtime), one(state), "fired={fired}");
         spawned
     };
-    assert_eq!(spawns(true), 0, "a fired task runs no fence git read");
+    assert_eq!(
+        spawns(&tasks, stamp, true),
+        0,
+        "a fired task runs no fence git read"
+    );
     assert!(
-        spawns(false) > 0,
+        spawns(&tasks, stamp, false) > 0,
         "before its first fire the fence still reads git"
+    );
+
+    // A fired one-shot whose runner is lost retries as a fire, so the fence holds it.
+    let once = loaded(TaskEntry {
+        root: root.path().to_owned(),
+        check: Some("true".into()),
+        when: Some(vec!["ci=passed".to_owned()]),
+        once: Some(true),
+        ..TaskEntry::default()
+    });
+    let lost = seconds_before(now.timestamp(), FIRE_AT_RETRY_SECS);
+    let _ = run_log::record_transition(
+        &once,
+        &LoopRunRecord::new(NAME, LoopRunResult::StartFailed, LoopRunMode::Scheduled, 0),
+    );
+    assert!(
+        spawns(&one(once), lost, true) > 0,
+        "a lost runner's retry reads the fence and holds on its unread `ci`"
     );
 }
 
