@@ -113,6 +113,7 @@ fn kept_turn_leader_and_companion_survive_settlement_without_workflow_pins() {
 }
 
 fn register_companion(room: &Room) {
+    room.list_pane(62, "claude");
     let store = room.env.store();
     let snapshot = store.snapshot().unwrap();
     let companion = snapshot
@@ -129,8 +130,8 @@ fn register_companion(room: &Room) {
     observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
         rimz::pane::RuntimeOwnerKind::Agent,
         "companion",
-        room.env.agent_owner_pid(),
-        rimz::proc::process_start_token(room.env.agent_owner_pid()),
+        room.owner("companion"),
+        rimz::proc::process_start_token(room.owner("companion")),
     ));
     let workspace = room.env.resolve_workspace(&room.env.project_root);
     store
@@ -142,7 +143,15 @@ fn register_companion(room: &Room) {
             &observation,
         ))
         .unwrap();
-    fs::write(room.env.project_root.join("panes.json"), r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"},{"id":62,"is_plugin":false,"tab_id":1,"title":"claude"}]"#).unwrap();
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        serde_json::to_vec(&json!([
+            {"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"},
+            {"id":62,"is_plugin":false,"tab_id":1,"title":"claude"},
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]

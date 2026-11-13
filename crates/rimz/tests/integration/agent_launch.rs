@@ -2461,7 +2461,12 @@ fn stopping_a_molt_launch_without_a_pane_frees_its_predecessor() {
         .unwrap();
     let output = env
         .rimz()
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
         .args([
+            "--mux",
+            "zellij",
             "agents",
             "stop",
             &format!("@{}", batch.single_identity().unwrap().name),

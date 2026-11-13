@@ -10,7 +10,7 @@ use rimz::mux::{PaneListOptions, PaneReadConsistency};
 use rimz::store::run::RunRecord;
 use rimz::store::snapshot::find_agent;
 
-pub(super) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
+pub(in crate::cli) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
 pub(super) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,

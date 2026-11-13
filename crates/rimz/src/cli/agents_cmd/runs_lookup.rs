@@ -27,7 +27,10 @@ pub(super) fn newest_run_by_ref(
         if let Some(agent) = agent {
             return record.kind == agent.kind
                 && (record.agent_id.as_ref() == Some(&agent.agent_id)
-                    || record.agent_name.as_deref() == agent.name.as_deref());
+                    || agent
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| record.agent_name.as_deref() == Some(name)));
         }
         false
     });
@@ -105,6 +108,34 @@ mod tests {
             newest_run_by_ref(&store, "old-name", Some(&agent))
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn an_unnamed_agent_matches_a_run_only_by_its_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = rimz::ids::WorkspaceId::from_project_root(dir.path());
+        let paths = rimz::disk::paths::StatePaths::under(id.clone(), dir.path()).unwrap();
+        let runtime = rimz::disk::paths::RuntimePaths::under(id.clone(), dir.path()).unwrap();
+        let store = rimz::Store::open(paths, runtime).unwrap();
+        let agent = AgentState::stub("claude", "session", AgentStatus::Idle);
+        let mut record = RunRecord::new(
+            id,
+            agent.kind.clone(),
+            PermissionMode::Auto,
+            "task".into(),
+            dir.path().into(),
+        );
+        record.agent_id = Some("other-session".into());
+        rimz::harness::run::create(store.paths(), &record).unwrap();
+        assert!(newest_run_for_agent(&store, &agent).unwrap().is_none());
+        record.agent_id = Some(agent.agent_id.clone());
+        rimz::harness::run::create(store.paths(), &record).unwrap();
+        assert_eq!(
+            newest_run_for_agent(&store, &agent)
+                .unwrap()
+                .map(|run| run.run_id),
+            Some(record.run_id)
         );
     }
 }

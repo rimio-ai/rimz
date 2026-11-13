@@ -3814,6 +3814,9 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
         let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
+        let process = dummy_agent_process();
+        let owner = agent_owner("provider-session", &process);
+        reap_later(process);
         for (event, signal) in [
             ("SessionStart", LifecycleSignal::Registered),
             (
@@ -3837,6 +3840,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 signal,
                 |observation| {
                     observation.pane_id = Some(pane_id.clone());
+                    observation.runtime_owner = Some(owner.clone());
                 },
             );
         }
@@ -4016,7 +4020,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             assert_eq!(assists[0]["stopped"], false, "{assists:?}");
             let error = assists[0]["error"].as_str().unwrap();
             assert!(
-                error.contains(TRACE_PANE) && error.contains("rerun the stop"),
+                error.contains(&format!("a pane still hosts it: zellij:{TRACE_PANE}")),
                 "{error}"
             );
         }
@@ -4134,11 +4138,148 @@ fn stop_when_idle_reference_reparse_and_usage_errors() {
     }
 }
 
+/// Lists these Zellij terminal ids for the traced shim; its `close-pane` removes the closed
+/// one, as the multiplexer drops a closed pane.
+fn list_stop_panes(env: &Env, ids: &[u64]) -> PathBuf {
+    let path = env.project_root.join("stop-panes.json");
+    let rows = ids
+        .iter()
+        .map(|id| json!({"id": id, "is_plugin": false, "tab_id": 1, "title": "sh"}))
+        .collect::<Vec<_>>();
+    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    path
+}
+
+/// A traced `rimz --mux zellij` whose pane listing is `panes`, waiting `bound_ms` for the
+/// processes of the agents it stops.
+fn stop_command(env: &Env, panes: &Path, bound_ms: u64) -> std::process::Command {
+    let mut command = traced_rimz(env, "stop-trace.log");
+    command
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", panes)
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", bound_ms.to_string())
+        .args(["--mux", "zellij"]);
+    command
+}
+
+/// The Zellij pane ids the traced stops closed, in order.
+fn closed_stop_panes(env: &Env) -> Vec<String> {
+    std::fs::read_to_string(env.project_root.join("stop-trace.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\tclose-pane\t"))
+        .filter_map(|line| {
+            line.split('\t')
+                .skip_while(|arg| *arg != "--pane-id")
+                .nth(1)
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+fn wait_for_stop_close(env: &Env) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while closed_stop_panes(env).is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the stop never tried to close a pane"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn agent_owner(id: &str, process: &std::process::Child) -> rimz::pane::RuntimeOwner {
+    rimz::store::runtime::process_owner(rimz::pane::RuntimeOwnerKind::Agent, id, process.id())
+}
+
+/// An agent process that ignores SIGTERM (an ignored signal stays ignored across `exec`).
+fn term_ignoring_process(env: &Env) -> std::process::Child {
+    let ready = env.project_root.join("term-ignoring.ready");
+    let mut cmd = std::process::Command::new("sh");
+    scrub_launch_identity(&mut cmd);
+    let child = cmd
+        .args(["-c", r#"trap "" TERM; : > "$0"; exec sleep 347"#])
+        .arg(&ready)
+        .spawn()
+        .expect("spawn a SIGTERM-ignoring process");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline, "the process never got ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    child
+}
+
+fn register_stop_agent(env: &Env, id: &str, pane: &str, owner: Option<rimz::pane::RuntimeOwner>) {
+    append_lifecycle(
+        env,
+        "claude",
+        "SessionStart",
+        id,
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some(id.to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
+            observation.runtime_owner = owner;
+        },
+    );
+}
+
+/// The reported incident: the agent's newest supervised run is over and records a pane that
+/// is gone, while the agent is alive in its own listed pane. The stop closes the pane the
+/// multiplexer says hosts the agent, and succeeds once its process is gone.
+#[test]
+fn stop_closes_the_agents_listed_pane_when_its_ended_run_names_a_gone_one() {
+    use rimz::store::run::{RunRecord, RunStatus};
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut process = dummy_agent_process();
+    register_stop_agent(
+        &env,
+        "repro",
+        TRACE_PANE,
+        Some(agent_owner("repro", &process)),
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut run = RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("repro".into());
+    run.agent_name = Some("repro".to_owned());
+    run.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+    run.status = RunStatus::Completed;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let panes = list_stop_panes(&env, &[3]);
+
+    let stop = stop_command(&env, &panes, 2000)
+        .args(["agents", "stop", "@repro"])
+        .output()
+        .unwrap();
+    assert_eq!(closed_stop_panes(&env), [TRACE_PANE], "{stop:?}");
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout).trim(),
+        "stopped @claude (claude); resume: rimz agents resume @repro"
+    );
+    assert!(process.try_wait().unwrap().is_some(), "its process is gone");
+}
+
 #[test]
 fn stop_and_focus_print_paste_ready_receipts() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
+    let mut processes = Vec::new();
+    let mut owner = |id: &str| {
+        let process = dummy_agent_process();
+        let owner = agent_owner(id, &process);
+        processes.push(process);
+        Some(owner)
+    };
     append_lifecycle(
         &env,
         "claude",
@@ -4149,6 +4290,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
             observation.agent_name = Some("receipt-pet".to_owned());
             observation.launch.role = Some("receipt-pet".to_owned());
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = owner("receipt-session");
         },
     );
     let focus = traced_rimz(&env, "receipt.log")
@@ -4160,13 +4302,17 @@ fn stop_and_focus_print_paste_ready_receipts() {
         String::from_utf8_lossy(&focus.stdout).trim(),
         "focused @receipt-pet"
     );
-    let stop = traced_rimz(&env, "receipt.log")
-        .args(["agents", "stop", "@receipt-pet"])
-        .output()
-        .unwrap();
-    assert!(stop.status.success(), "{stop:?}");
+    let stop = |target: &str| {
+        let panes = list_stop_panes(&env, &[3]);
+        stop_command(&env, &panes, 2000)
+            .args(["agents", "stop", target])
+            .output()
+            .unwrap()
+    };
+    let output = stop("@receipt-pet");
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(
-        String::from_utf8_lossy(&stop.stdout).trim(),
+        String::from_utf8_lossy(&output.stdout).trim(),
         "stopped @receipt-pet (claude); resume: rimz agents resume @receipt-pet"
     );
     let show = env
@@ -4189,15 +4335,13 @@ fn stop_and_focus_print_paste_ready_receipts() {
             observation.launch.role = Some("coder".to_owned());
             observation.launch.lane = Some(stamped_lane(&env, &env.project_root, "feat-a"));
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = owner("team-receipt-session");
         },
     );
-    let stop = traced_rimz(&env, "receipt.log")
-        .args(["agents", "stop", "@coder#feat-a"])
-        .output()
-        .unwrap();
-    assert!(stop.status.success(), "{stop:?}");
+    let output = stop("@coder#feat-a");
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(
-        String::from_utf8_lossy(&stop.stdout).trim(),
+        String::from_utf8_lossy(&output.stdout).trim(),
         "stopped @coder (claude); resume: rimz agents forge.coder --continue"
     );
     // A seat in a RimZ worktree resumes by the name `-w` maps back to its path.
@@ -4222,61 +4366,416 @@ fn stop_and_focus_print_paste_ready_receipts() {
             observation.launch.lane = Some(stamped_lane(&env, &worktree, "lane-b"));
             observation.worktree_path = Some(worktree.display().to_string());
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = owner("worktree-receipt-session");
         },
     );
-    let stop = traced_rimz(&env, "receipt.log")
-        .args(["agents", "stop", "@reviewer#lane-b"])
+    let output = stop("@reviewer#lane-b");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "stopped @reviewer (claude); resume: rimz agents forge.reviewer --continue -w feat-b"
+    );
+}
+
+/// A process that outlives the wait after its pane closed gets one SIGTERM: one that dies
+/// on it is stopped and offered a resume; one that ignores it fails the stop, naming its
+/// pid, and is left running.
+#[test]
+fn stop_terms_a_process_that_outlives_its_closed_pane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut dies = dummy_agent_process();
+    register_stop_agent(&env, "dies", TRACE_PANE, Some(agent_owner("dies", &dies)));
+    let panes = list_stop_panes(&env, &[3]);
+    let stop = stop_command(&env, &panes, 1000)
+        .args(["agents", "stop", "@dies"])
         .output()
         .unwrap();
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @reviewer (claude); resume: rimz agents forge.reviewer --continue -w feat-b"
+        "stopped @claude (claude); resume: rimz agents resume @dies"
     );
+    assert!(dies.try_wait().unwrap().is_some(), "SIGTERM ended it");
+
+    let mut ignores = term_ignoring_process(&env);
+    let pid = ignores.id();
+    register_stop_agent(
+        &env,
+        "ignores",
+        "terminal_4",
+        Some(agent_owner("ignores", &ignores)),
+    );
+    let panes = list_stop_panes(&env, &[4]);
+    let stop = stop_command(&env, &panes, 300)
+        .args(["agents", "stop", "@ignores"])
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    let text = String::from_utf8_lossy(&stop.stderr);
+    assert!(
+        text.contains(&format!(
+            "@claude#main was not stopped: @claude#main: its process {pid} is still running \
+             after RimZ sent it SIGTERM"
+        )),
+        "{text}"
+    );
+    assert!(!String::from_utf8_lossy(&stop.stdout).contains("resume"));
+    assert!(ignores.try_wait().unwrap().is_none(), "it is still running");
+    ignores.kill().unwrap();
+    ignores.wait().unwrap();
+}
+
+/// An agent no listed pane hosts while its process lives is not stopped, and nothing is
+/// signalled: RimZ cannot tell that process belongs to an agent it ended.
+#[test]
+fn stop_of_an_agent_in_no_pane_with_a_live_process_fails_naming_the_pid() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut process = dummy_agent_process();
+    let pid = process.id();
+    register_stop_agent(
+        &env,
+        "elsewhere",
+        TRACE_PANE,
+        Some(agent_owner("elsewhere", &process)),
+    );
+    let panes = list_stop_panes(&env, &[]);
+    let stop = stop_command(&env, &panes, 100)
+        .args(["agents", "stop", "@elsewhere"])
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    let text = String::from_utf8_lossy(&stop.stderr);
+    assert!(
+        text.contains(&format!(
+            "RimZ found no pane for it in this room and did not signal its process {pid}, \
+             which is still running"
+        )),
+        "{text}"
+    );
+    assert!(closed_stop_panes(&env).is_empty());
+    assert!(process.try_wait().unwrap().is_none(), "it is still running");
+    process.kill().unwrap();
+    process.wait().unwrap();
+}
+
+/// An agent whose process RimZ does not know is stopped only once its end is recorded:
+/// without one the stop fails in the user's words; an end recorded while the stop waits
+/// makes it a stop.
+#[test]
+fn stop_recloses_a_pane_that_reappears_after_its_first_close() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut owner = dummy_agent_process();
+    register_stop_agent(
+        &env,
+        "returns",
+        TRACE_PANE,
+        Some(agent_owner("returns", &owner)),
+    );
+    let panes = list_stop_panes(&env, &[3]);
+    let shim = crate::common::write_path_shim(
+        &env.home_root.join("reappearing-pane"),
+        "zellij",
+        r#""$RIMZ_TEST_TRACE" "$@" || exit "$?"
+for arg do
+    if [ "$arg" = close-pane ]; then
+        returns=0
+        if [ -e "$RIMZ_TEST_RETURNED" ]; then read -r returns < "$RIMZ_TEST_RETURNED"; fi
+        if [ "$returns" -lt 2 ]; then
+            printf '%s\n' "$((returns + 1))" > "$RIMZ_TEST_RETURNED"
+            printf '%s' '[{"id":3,"is_plugin":false,"tab_id":1}]' > "$RIMZ_TEST_ZELLIJ_LIST_PANES_FILE"
+        fi
+    fi
+done
+"#,
+    );
+    let stop = stop_command(&env, &panes, 2000)
+        .env("RIMZ_ZELLIJ_BIN", shim)
+        .env("RIMZ_TEST_TRACE", zellij_trace_shim())
+        .env("RIMZ_TEST_RETURNED", env.home_root.join("returned"))
+        .args(["agents", "stop", "@returns"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        closed_stop_panes(&env),
+        [TRACE_PANE, TRACE_PANE, TRACE_PANE]
+    );
+    assert!(owner.try_wait().unwrap().is_some(), "its process is gone");
 }
 
 #[test]
-fn stop_names_a_still_running_owner_without_offering_resume() {
+fn stop_bounds_repeated_closes_of_a_reappearing_pane_without_signalling_its_owner() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut owner = dummy_agent_process();
+    register_stop_agent(
+        &env,
+        "returns",
+        TRACE_PANE,
+        Some(agent_owner("returns", &owner)),
+    );
+    let started = Instant::now();
+    let stop = traced_rimz(&env, "stop-trace.log")
+        .args(["--mux", "zellij", "agents", "stop", "@returns"])
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "1500")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":3,"is_plugin":false,"tab_id":1}]"#,
+        )
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    assert!(started.elapsed() >= Duration::from_millis(1500));
+    assert!(
+        String::from_utf8_lossy(&stop.stderr).contains("a pane still hosts it: zellij:terminal_3")
+    );
+    assert!(
+        closed_stop_panes(&env).len() >= 2,
+        "a listed pane is closed again"
+    );
+    assert!(
+        owner.try_wait().unwrap().is_none(),
+        "a hosted owner must not be signalled"
+    );
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+}
+
+#[test]
+fn stop_cancels_a_never_bound_launch_without_recording_a_session_end() {
+    use rimz::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+    for already_failed in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let store = env.store();
+        let workspace = env.resolve_workspace(&env.project_root);
+        let batch = store
+            .begin_agent_launch_batch(
+                &[AgentLaunchRequest {
+                    kind: AgentKind::new_unchecked("claude"),
+                    login: rimz::store::writer::LaunchLogin::RoomDefault,
+                    agent_id: "launch_never_bound".into(),
+                    name: AgentLaunchName::Explicit("unbound".into()),
+                    launch: Default::default(),
+                    run_id: None,
+                    prompt: None,
+                }],
+                AgentLaunchScope {
+                    session_name: workspace.session_name,
+                    cwd: env.project_root.clone(),
+                    branch: None,
+                    description: None,
+                },
+            )
+            .unwrap();
+        if already_failed {
+            store.fail_agent_launch_batch(&batch).unwrap();
+        }
+        let before = store.read_events().unwrap().len();
+        let panes = list_stop_panes(&env, &[]);
+        for _ in 0..2 {
+            let stop = stop_command(&env, &panes, 100)
+                .args(["agents", "stop", "@unbound"])
+                .output()
+                .unwrap();
+            assert!(stop.status.success(), "{stop:?}");
+            assert!(String::from_utf8_lossy(&stop.stdout).starts_with("stopped "));
+            let row = store.snapshot().unwrap().agents[0].clone();
+            assert_eq!(row.status, rimz::agents::AgentStatus::Failed);
+            assert!(row.ended_at.is_none());
+            assert_eq!(
+                store.read_events().unwrap().len(),
+                before + usize::from(!already_failed)
+            );
+        }
+        assert!(closed_stop_panes(&env).is_empty());
+    }
+}
+
+#[test]
+fn stop_of_an_unknown_process_succeeds_only_once_its_end_is_recorded() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_stop_agent(&env, "silent", TRACE_PANE, None);
+    let panes = list_stop_panes(&env, &[3]);
+    let stop = stop_command(&env, &panes, 100)
+        .args(["agents", "stop", "@silent"])
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    let text = String::from_utf8_lossy(&stop.stderr);
+    assert!(
+        text.contains(
+            "@claude#main was not stopped: @claude#main: RimZ could not confirm its process is \
+             gone; the stop succeeds once the agent's end is recorded"
+        ),
+        "{text}"
+    );
+    assert_eq!(closed_stop_panes(&env), [TRACE_PANE]);
+
+    register_stop_agent(&env, "ending", "terminal_4", None);
+    let panes = list_stop_panes(&env, &[4]);
+    let child = stop_command(&env, &panes, 30_000)
+        .args(["agents", "stop", "@ending"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while closed_stop_panes(&env).len() < 2 {
+        assert!(Instant::now() < deadline, "the stop never closed the pane");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionEnd",
+        "ending",
+        LifecycleSignal::Ended,
+        |_| {},
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "stopped @ending (claude); resume: rimz agents resume @ending"
+    );
+}
+
+/// A stop whose first read of the multiplexer fails changes nothing, even with a pushed
+/// topology on disk that lists the agent's pane: no run cancelled, no pane closed, the
+/// idle stop still armed; the reason names the failure.
+#[test]
+fn stop_whose_mux_read_fails_changes_nothing() {
+    use rimz::store::run::{RunRecord, RunStatus};
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let pid = env.agent_owner_pid();
-    append_lifecycle(
+    register_stop_agent(
         &env,
-        "claude",
-        "SessionStart",
-        "receipt-session",
-        LifecycleSignal::Registered,
-        |observation| {
-            observation.agent_name = Some("receipt-pet".to_owned());
-            observation.launch.role = Some("receipt-pet".to_owned());
-            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
-            observation.runtime_owner = Some(rimz::store::runtime::process_owner(
-                rimz::pane::RuntimeOwnerKind::Agent,
-                "receipt-session",
-                pid,
-            ));
-        },
+        "unread",
+        TRACE_PANE,
+        Some(rimz::store::runtime::process_owner(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            "unread",
+            pid,
+        )),
     );
-    let stop = traced_rimz(&env, "receipt.log")
-        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "100")
-        .args(["agents", "stop", "@receipt-pet"])
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        vec![rimz::mux::zellij::pane_topology::PaneTopologyPane {
+            id: 3,
+            is_plugin: false,
+            is_fullscreen: false,
+            is_held: false,
+            exited: false,
+            is_suppressed: false,
+            is_floating: false,
+            tab_position: 0,
+            tab_viewed: true,
+            stable_tab_id: None,
+            tab_name: Some("main".to_owned()),
+            pane_columns: Some(100),
+            pane_x: Some(0),
+            title: Some("claude".to_owned()),
+            pane_command: Some("claude".to_owned()),
+            pane_cwd: None,
+            pane_pid: None,
+            terminal_command: Some("claude".to_owned()),
+        }],
+    );
+    let mut run = RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("unread".into());
+    run.status = RunStatus::Running;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let armed = || rimz::store::idle_stop::read(env.store().paths()).len();
+    let request = traced_rimz(&env, "stop-trace.log")
+        .args(["agents", "stop", "@unread", "--when-idle"])
         .output()
         .unwrap();
-    assert!(stop.status.success(), "{stop:?}");
-    let receipt = String::from_utf8_lossy(&stop.stdout);
-    assert!(
-        receipt.contains("stopped @receipt-pet (claude)"),
-        "{receipt}"
+    assert!(request.status.success(), "{request:?}");
+    assert_eq!(armed(), 1);
+    let subscribed = || crate::common::wait::wait_instances(&env).0.len();
+    run_success(
+        env.rimz()
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "unread")
+            .args(["wait", "--in", "30m"]),
+        "arm the agent's wait",
     );
-    assert!(
-        receipt.contains(&format!(
-            "@receipt-pet#main: pane closed, but its process {pid} is still running; \
-             a resume refuses until it exits"
-        )),
-        "{receipt}"
+    assert_eq!(subscribed(), 1);
+
+    let failed_query = crate::common::write_path_shim(
+        &env.home_root.join("query-fails"),
+        "zellij",
+        r#"case "$*" in
+    *list-panes*) printf '%s' 'simulated authoritative query failure' >&2; exit 1;;
+esac
+exec "$RIMZ_TEST_TRACE" "$@"
+"#,
     );
-    assert!(!receipt.contains("; resume:"), "{receipt}");
+    for failure in 0..3 {
+        let mut command = traced_rimz(&env, "stop-trace.log");
+        if failure == 2 {
+            command
+                .env("PATH", env.home_root.join("no-binaries"))
+                .env("RIMZ_ZELLIJ_BIN", env.home_root.join("no-zellij"))
+                .env_remove("TMUX")
+                .env_remove("ZELLIJ");
+        } else {
+            command.args(["--mux", "zellij"]);
+            if failure == 1 {
+                command
+                    .env("RIMZ_ZELLIJ_BIN", &failed_query)
+                    .env("RIMZ_TEST_TRACE", zellij_trace_shim());
+            } else {
+                command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", "not json");
+            }
+        }
+        let stop = command
+            .args(["agents", "stop", "@unread"])
+            .output()
+            .unwrap();
+        assert!(!stop.status.success(), "{stop:?}");
+        let text = String::from_utf8_lossy(&stop.stderr);
+        assert!(
+            text.contains(
+                "@claude#main was not stopped: @claude#main: the multiplexer could not be read: "
+            ),
+            "{text}"
+        );
+        if failure == 1 {
+            assert!(
+                text.contains("simulated authoritative query failure"),
+                "{text}"
+            );
+        }
+        assert!(text.contains("; nothing was stopped"), "{text}");
+        assert!(closed_stop_panes(&env).is_empty(), "{text}");
+        assert_eq!(
+            rimz::harness::run::load(env.store().paths(), &run.run_id)
+                .unwrap()
+                .status,
+            RunStatus::Running
+        );
+        assert_eq!(armed(), 1);
+        assert_eq!(subscribed(), 1);
+    }
 }
 
 #[test]
@@ -4287,17 +4786,23 @@ fn stop_waits_only_for_the_closed_pane_of_a_shared_launch() {
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("claude");
     let pid = env.agent_owner_pid();
+    let mut receipt_process = dummy_agent_process();
     for (id, name, pane, owner) in [
-        ("receipt-session", "receipt-pet", TRACE_PANE, None),
+        (
+            "receipt-session",
+            "receipt-pet",
+            TRACE_PANE,
+            agent_owner("receipt-session", &receipt_process),
+        ),
         (
             "other-session",
             "other-pet",
             "terminal_4",
-            Some(rimz::store::runtime::process_owner(
+            rimz::store::runtime::process_owner(
                 rimz::pane::RuntimeOwnerKind::Agent,
                 "other-session",
                 pid,
-            )),
+            ),
         ),
     ] {
         append_lifecycle(
@@ -4309,7 +4814,7 @@ fn stop_waits_only_for_the_closed_pane_of_a_shared_launch() {
             |observation| {
                 observation.agent_name = Some(name.to_owned());
                 observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
-                observation.runtime_owner = owner.clone();
+                observation.runtime_owner = Some(owner.clone());
             },
         );
         env.store()
@@ -4327,7 +4832,7 @@ fn stop_waits_only_for_the_closed_pane_of_a_shared_launch() {
                     state: AgentLaunchState::Bound,
                     run_id: None,
                     pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane)),
-                    runtime_owner: owner,
+                    runtime_owner: Some(owner),
                     worktree_path: Some(env.project_root.display().to_string()),
                     worktree_branch: None,
                     prompt: None,
@@ -4362,15 +4867,19 @@ fn stop_waits_only_for_the_closed_pane_of_a_shared_launch() {
         "other-session"
     );
 
-    let mut command = traced_rimz(&env, "receipt.log");
-    command.env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "10000").args([
-        "agents",
-        "stop",
-        "@receipt-session",
-    ]);
-    let started = Instant::now();
-    let stop = command.output().unwrap();
-    let elapsed = started.elapsed();
+    let panes = list_stop_panes(&env, &[3, 4]);
+    let child = stop_command(&env, &panes, 10_000)
+        .args(["agents", "stop", "@receipt-session"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_stop_close(&env);
+    receipt_process.kill().unwrap();
+    receipt_process.wait().unwrap();
+    let ended = Instant::now();
+    let stop = child.wait_with_output().unwrap();
+    let elapsed = ended.elapsed();
     assert!(stop.status.success(), "{stop:?}");
     let receipt = String::from_utf8_lossy(&stop.stdout);
     assert_eq!(
@@ -4378,6 +4887,11 @@ fn stop_waits_only_for_the_closed_pane_of_a_shared_launch() {
         "stopped @receipt-pet (claude); resume: rimz agents resume @receipt-pet"
     );
     assert!(elapsed < Duration::from_secs(5), "stop took {elapsed:?}");
+    assert_eq!(closed_stop_panes(&env), [TRACE_PANE]);
+    assert!(
+        rimz::proc::process_is_live(pid, None),
+        "the other row's process is untouched"
+    );
 }
 
 #[test]
@@ -4385,6 +4899,8 @@ fn stop_non_resumable_agent_omits_resume_clause() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
+    let process = dummy_agent_process();
+    let owner = agent_owner("launch_receipt-session", &process);
     append_lifecycle(
         &env,
         "claude",
@@ -4394,9 +4910,11 @@ fn stop_non_resumable_agent_omits_resume_clause() {
         |observation| {
             observation.agent_name = Some("receipt-pet".to_owned());
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = Some(owner);
         },
     );
-    let stop = traced_rimz(&env, "receipt.log")
+    let panes = list_stop_panes(&env, &[3]);
+    let stop = stop_command(&env, &panes, 2000)
         .args(["agents", "stop", "@receipt-pet"])
         .output()
         .unwrap();
@@ -4405,16 +4923,19 @@ fn stop_non_resumable_agent_omits_resume_clause() {
         String::from_utf8_lossy(&stop.stdout).trim(),
         "stopped @claude (claude)"
     );
+    reap_later(process);
 }
 
-/// A stop says which pane closed: a root whose close fails was not stopped and
-/// keeps its idle-stop request; a root that closed while its child failed was
-/// stopped and retired, and the command still fails naming the child.
+/// A stop says which pane stays open: a root whose close fails was not stopped, is not
+/// signalled, and keeps its idle-stop request; a root that closed while its child failed
+/// was stopped and retired, and the command still fails naming the child.
 #[test]
 fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
+    let mut process = dummy_agent_process();
+    let owner = agent_owner("parent", &process);
     let register = |id: &'static str, parent: Option<&'static str>| {
         append_lifecycle(
             &env,
@@ -4426,6 +4947,7 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
                 observation.agent_name = Some(id.to_owned());
                 let Some(parent) = parent else {
                     observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+                    observation.runtime_owner = Some(owner.clone());
                     return;
                 };
                 observation.launch.parent_agent_id = Some(parent.into());
@@ -4436,16 +4958,14 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
     };
     register("parent", None);
     register("child", Some("parent"));
+    let panes = list_stop_panes(&env, &[3]);
     let stop = |args: &[&str], fail_close: bool| {
-        let mut command = traced_rimz(&env, "stop-trace.log");
+        let mut command = stop_command(&env, &panes, 300);
         if fail_close {
-            command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
-                "RIMZ_TEST_ZELLIJ_LIST_PANES",
-                r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-            );
+            command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1");
         }
         let output = command
-            .args(["--mux", "zellij", "agents", "stop"])
+            .args(["agents", "stop"])
             .args(args)
             .output()
             .expect("agents stop");
@@ -4456,33 +4976,60 @@ fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
         )
     };
     let armed = || rimz::store::idle_stop::read(env.store().paths()).len();
+    let subscribed = || crate::common::wait::wait_instances(&env).0.len();
     assert!(stop(&["@parent", "--when-idle"], false).0);
+    run_success(
+        env.rimz()
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "parent")
+            .args(["wait", "--in", "30m"]),
+        "arm the parent's wait",
+    );
+    assert_eq!(subscribed(), 1);
 
     let (ok, text) = stop(&["@parent"], true);
     assert!(!ok, "{text}");
     assert!(text.contains("@parent#main was not stopped: "), "{text}");
-    assert!(text.contains("close-pane"), "{text}");
+    assert!(
+        text.contains(
+            "@parent#main: a pane still hosts it: zellij:terminal_3; closing it failed: "
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("simulated zellij close-pane failure"),
+        "{text}"
+    );
+    assert!(process.try_wait().unwrap().is_none(), "no SIGTERM: {text}");
     assert_eq!(armed(), 1, "a root left open keeps its request");
+    assert_eq!(subscribed(), 1, "a root left open keeps its subscriptions");
 
     let (ok, text) = stop(&["@parent", "--all"], true);
     assert!(!ok, "{text}");
     assert!(text.contains("error @parent: "), "{text}");
     assert!(!text.contains("stopped @parent"), "{text}");
     assert_eq!(armed(), 1);
+    assert_eq!(subscribed(), 1);
 
     let (ok, text) = stop(&["@parent"], false);
     assert!(!ok, "{text}");
     assert!(text.contains("@parent#main stopped, but: "), "{text}");
     assert!(
-        text.contains("@child") && text.contains("has no bound pane"),
+        text.contains("@child") && text.contains("RimZ could not confirm its process is gone"),
         "{text}"
     );
     assert_eq!(armed(), 0, "a root that closed is retired");
+    assert_eq!(
+        subscribed(),
+        0,
+        "a root that closed retires its subscriptions"
+    );
+    assert!(process.try_wait().unwrap().is_some(), "SIGTERM ended it");
 }
 
-/// A failed close counts as a stop once a fresh read finds the agent's end
-/// recorded and its owner dead, the session ending while the stop waits for
-/// the owner; an agent whose owner outlives the bound keeps the failure.
+/// A failed close counts as a stop once a fresh read finds the agent's process dead, the
+/// session ending while the stop waits; an agent whose pane stays listed keeps the
+/// failure, naming the pane, and its process is not signalled.
 #[test]
 fn stop_counts_a_failed_close_of_an_agent_that_ends_with_its_owner_as_stopped() {
     let env = Env::new();
@@ -4508,34 +5055,27 @@ fn stop_counts_a_failed_close_of_an_agent_that_ends_with_its_owner_as_stopped() 
         owner.id(),
         LifecycleSignal::Registered,
     );
+    let lingering = env.agent_owner_pid();
     lifecycle(
         "lingering",
         "terminal_4",
-        env.agent_owner_pid(),
+        lingering,
         LifecycleSignal::Registered,
     );
     let armed = || rimz::store::idle_stop::read(env.store().paths()).len();
-    let stop = |target: &str, bound_ms: &str| {
-        traced_rimz(&env, "stop-trace.log")
+    let panes = list_stop_panes(&env, &[3, 4]);
+    let stop = |target: &str, bound_ms: u64| {
+        stop_command(&env, &panes, bound_ms)
             .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
-            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", bound_ms)
-            .args(["--mux", "zellij", "agents", "stop", target])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .args(["agents", "stop", target])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("agents stop")
     };
 
-    let child = stop("@ending", "30000");
-    let log = env.project_root.join("stop-trace.log");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !std::fs::read_to_string(&log).is_ok_and(|trace| trace.contains("close-pane")) {
-        assert!(
-            Instant::now() < deadline,
-            "the stop never tried to close the pane"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let child = stop("@ending", 30_000);
+    wait_for_stop_close(&env);
     lifecycle("ending", TRACE_PANE, owner.id(), LifecycleSignal::Ended);
     owner.kill().unwrap();
     owner.wait().unwrap();
@@ -4547,11 +5087,354 @@ fn stop_counts_a_failed_close_of_an_agent_that_ends_with_its_owner_as_stopped() 
         "{output:?}"
     );
 
-    let output = stop("@lingering", "100").wait_with_output().unwrap();
+    let output = stop("@lingering", 300).wait_with_output().unwrap();
     assert!(!output.status.success(), "{output:?}");
     let text = String::from_utf8_lossy(&output.stderr);
-    assert!(text.contains("was not stopped: "), "{text}");
+    assert!(
+        text.contains("was not stopped: @claude#main: a pane still hosts it: zellij:terminal_4"),
+        "{text}"
+    );
+    assert!(rimz::proc::process_is_live(lingering, None), "no SIGTERM");
     assert_eq!(armed(), 0);
+}
+
+/// A close whose call fails after the multiplexer dropped the pane is still this stop's
+/// close: the owner that outlives the hangup gets the one SIGTERM, and the stop succeeds.
+#[test]
+fn stop_terms_the_owner_of_a_pane_whose_close_errored_after_it_left() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut owner = dummy_agent_process();
+    register_stop_agent(
+        &env,
+        "erred",
+        TRACE_PANE,
+        Some(agent_owner("erred", &owner)),
+    );
+    let panes = list_stop_panes(&env, &[3]);
+    let shim = crate::common::write_path_shim(
+        &env.home_root.join("close-errs-after"),
+        "zellij",
+        r#""$RIMZ_TEST_TRACE" "$@" || exit "$?"
+for arg do
+    if [ "$arg" = close-pane ]; then
+        printf '%s' 'simulated client timeout after the close' >&2
+        exit 1
+    fi
+done
+"#,
+    );
+    let stop = stop_command(&env, &panes, 1000)
+        .env("RIMZ_ZELLIJ_BIN", shim)
+        .env("RIMZ_TEST_TRACE", zellij_trace_shim())
+        .args(["agents", "stop", "@erred"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stop.stdout).trim(),
+        "stopped @claude (claude); resume: rimz agents resume @erred"
+    );
+    assert_eq!(closed_stop_panes(&env), [TRACE_PANE]);
+    assert!(owner.try_wait().unwrap().is_some(), "SIGTERM ended it");
+}
+
+/// A subagent whose process outlives its stop keeps an unended row, so the next stop of
+/// its parent still reaches it and fails naming it.
+#[test]
+fn a_subagent_that_survives_its_stop_stays_unended_for_its_parents_stop() {
+    use rimz::store::run::{RunRecord, RunStatus};
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let parent = dummy_agent_process();
+    let parent_owner = agent_owner("parent", &parent);
+    reap_later(parent);
+    let mut child = term_ignoring_process(&env);
+    let child_pid = child.id();
+    let child_owner = agent_owner("child", &child);
+    for (id, pane, owner, of) in [
+        ("parent", TRACE_PANE, parent_owner, None),
+        ("child", "terminal_4", child_owner, Some("parent")),
+    ] {
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            id,
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some(id.to_owned());
+                observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
+                observation.runtime_owner = Some(owner.clone());
+                if let Some(parent) = of {
+                    observation.launch.parent_agent_id = Some(parent.into());
+                    observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+                    observation.launch.launch_depth = Some(1);
+                }
+            },
+        );
+    }
+    let workspace = env.resolve_workspace(&env.project_root);
+    let mut run = RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("child".into());
+    run.agent_name = Some("child".to_owned());
+    run.subagent = true;
+    run.status = RunStatus::Completed;
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let panes = list_stop_panes(&env, &[3, 4]);
+    let child_ended = || {
+        env.store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == "child")
+            .unwrap()
+            .ended_at
+    };
+
+    let stop = stop_command(&env, &panes, 300)
+        .args(["agents", "stop", "@child"])
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    let text = String::from_utf8_lossy(&stop.stderr);
+    assert!(
+        text.contains(&format!(
+            "its process {child_pid} is still running after RimZ sent it SIGTERM"
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        child_ended(),
+        None,
+        "a surviving child's end is not recorded"
+    );
+
+    let stop = stop_command(&env, &panes, 300)
+        .args(["agents", "stop", "@parent"])
+        .output()
+        .unwrap();
+    assert!(!stop.status.success(), "{stop:?}");
+    let text = String::from_utf8_lossy(&stop.stderr);
+    assert!(text.contains("@parent#main stopped, but: @child"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "RimZ found no pane for it in this room and did not signal its process {child_pid}"
+        )),
+        "{text}"
+    );
+    assert_eq!(child_ended(), None);
+    assert!(child.try_wait().unwrap().is_none(), "the child still runs");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// On tmux, a room session the server no longer has, or no server at all, hosts nothing:
+/// the stop judges the agent instead of failing on the read. A denied socket stays a read
+/// that failed.
+#[test]
+fn stop_reads_a_gone_tmux_session_as_hosting_nothing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let mut process = dummy_agent_process();
+    let pid = process.id();
+    register_stop_agent(
+        &env,
+        "orphaned",
+        TRACE_PANE,
+        Some(agent_owner("orphaned", &process)),
+    );
+    let bin = env.home_root.join("gone-tmux");
+    crate::common::write_path_shim(
+        &bin,
+        "tmux",
+        r#"case "$*" in
+    *list-panes*) printf '%s\n' "$RIMZ_TEST_TMUX_STDERR" >&2; exit 1;;
+    *-V*) echo 'tmux 3.5';;
+esac
+"#,
+    );
+    for (stderr, gone) in [
+        ("can't find session: rimz-room", true),
+        ("can't find window: rimz-room", true),
+        ("no server running on /tmp/rimz-gone/default", true),
+        (
+            "error connecting to /tmp/rimz-gone/default (No such file or directory)",
+            true,
+        ),
+        (
+            "error connecting to /tmp/rimz-gone/default (Permission denied)",
+            false,
+        ),
+    ] {
+        let stop = env
+            .rimz()
+            .env("PATH", crate::common::path_with_front(&bin))
+            .env("RIMZ_TEST_TMUX_STDERR", stderr)
+            .args(["--mux", "tmux", "agents", "stop", "@orphaned"])
+            .output()
+            .unwrap();
+        assert!(!stop.status.success(), "{stop:?}");
+        let text = String::from_utf8_lossy(&stop.stderr);
+        let expected = if gone {
+            format!(
+                "@claude#main was not stopped: @claude#main: RimZ found no pane for it in this \
+                 room and did not signal its process {pid}, which is still running"
+            )
+        } else {
+            "@claude#main was not stopped: @claude#main: the multiplexer could not be read: "
+                .to_owned()
+        };
+        assert!(text.contains(&expected), "{stderr}: {text}");
+        assert_eq!(
+            text.contains("the multiplexer could not be read"),
+            !gone,
+            "{stderr}: {text}"
+        );
+    }
+    assert!(process.try_wait().unwrap().is_none(), "it is still running");
+    process.kill().unwrap();
+    process.wait().unwrap();
+}
+
+/// An idle stop re-reads its request once the stop's first hosting read is in: a request
+/// withdrawn while that read ran closes nothing and records no assist.
+#[test]
+fn idle_stop_withdrawn_during_the_hosting_read_closes_nothing() {
+    use rimz::harness::idle_stop::IdleStopHelperRequest;
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
+    let mut process = dummy_agent_process();
+    let owner = agent_owner("provider-session", &process);
+    for (event, signal) in [
+        ("SessionStart", LifecycleSignal::Registered),
+        (
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+        (
+            "Stop",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        ),
+    ] {
+        append_lifecycle(
+            &env,
+            "claude",
+            event,
+            "provider-session",
+            signal,
+            |observation| {
+                observation.pane_id = Some(pane_id.clone());
+                observation.runtime_owner = Some(owner.clone());
+            },
+        );
+    }
+    let store = env.store();
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let mut pane = agent_pane(&env, "claude");
+    pane.session_name = session.clone();
+    let fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
+    let frame = rimz::sidebar::frame::assemble_frame(
+        vec![pane],
+        rimz::utils::time::unix_now_ms(),
+        session.clone(),
+    );
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().pane_frame_path(),
+        &frame,
+    )
+    .unwrap();
+    run_success(
+        traced_rimz(&env, "withdraw-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &fixture)
+            .args(["agents", "stop", "@claude", "--when-idle", "0s"]),
+        "arm the idle stop",
+    );
+    assert_eq!(rimz::store::idle_stop::read(store.paths()).len(), 1);
+    // The room's authoritative listing withdraws the request while the stop reads it.
+    let shim = crate::common::write_path_shim(
+        &env.home_root.join("withdraw-on-read"),
+        "zellij",
+        r#"case "$*" in
+    *list-panes*)
+        if [ ! -e "$RIMZ_TEST_WITHDRAWN" ]; then
+            : > "$RIMZ_TEST_WITHDRAWN"
+            "$RIMZ_TEST_RIMZ" agents stop @claude --when-idle off >/dev/null || exit "$?"
+        fi;;
+esac
+exec "$RIMZ_TEST_TRACE" "$@"
+"#,
+    );
+    let helper = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", shim)
+        .env("RIMZ_TEST_TRACE", zellij_trace_shim())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LOG",
+            env.project_root.join("withdraw-trace.log"),
+        )
+        .env("RIMZ_TEST_RIMZ", env.rimz().get_program())
+        .env("RIMZ_TEST_WITHDRAWN", env.home_root.join("withdrawn"))
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session} [Created 1s ago]\n"),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        )
+        .args(rimz::child_process::agent_helper_argv(
+            "idle-stop",
+            &IdleStopHelperRequest {
+                workspace_id: env.workspace_id.clone(),
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "provider-session".into(),
+                pane_id: pane_id.clone(),
+                label: "@claude".into(),
+            },
+        ))
+        .output()
+        .unwrap();
+    assert!(helper.status.success(), "{helper:?}");
+    assert!(
+        env.home_root.join("withdrawn").exists(),
+        "the stop read the room"
+    );
+    assert!(rimz::store::idle_stop::read(store.paths()).is_empty());
+    let trace = std::fs::read_to_string(env.project_root.join("withdraw-trace.log")).unwrap();
+    assert!(!trace.contains("close-pane"), "{trace}");
+    let stats = run_success(
+        env.rimz().args(["stats", "--assists", "--all", "--json"]),
+        "assist stats",
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert!(
+        stats["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["assist"] != "idle_stop"),
+        "{stats}"
+    );
+    assert!(process.try_wait().unwrap().is_none(), "it is still running");
+    process.kill().unwrap();
+    process.wait().unwrap();
 }
 
 /// An orphan whose run pane stays open is not stamped ended: the repair
@@ -5147,6 +6030,11 @@ fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
             observation.agent_name = Some("parent".to_owned());
         },
     );
+    // The child's wrapper owns its row, as `attach_own_launch_pane` records it; the stop
+    // cancels the run and its one SIGTERM ends the owner.
+    let child_process = dummy_agent_process();
+    let child_owner = agent_owner("child", &child_process);
+    reap_later(child_process);
     append_lifecycle(
         &env,
         "claude",
@@ -5162,6 +6050,7 @@ fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
             observation.launch.isolation = Some(rimz::config::Isolation::Host);
             observation.transcript_path =
                 Some(env.project_root.join("missing.jsonl").display().to_string());
+            observation.runtime_owner = Some(child_owner.clone());
         },
     );
     let store = env.store();
@@ -5279,6 +6168,11 @@ fn a_stopped_subagent_waits_with_the_spend_its_transcript_priced() {
         LifecycleSignal::Registered,
         |observation| observation.agent_name = Some("parent".to_owned()),
     );
+    // The child's wrapper owns its row, as `attach_own_launch_pane` records it; the stop
+    // cancels the run and its one SIGTERM ends the owner.
+    let child_process = dummy_agent_process();
+    let child_owner = agent_owner("child", &child_process);
+    reap_later(child_process);
     append_lifecycle(
         &env,
         "claude",
@@ -5293,6 +6187,7 @@ fn a_stopped_subagent_waits_with_the_spend_its_transcript_priced() {
             observation.launch.launch_depth = Some(1);
             observation.launch.isolation = Some(rimz::config::Isolation::Host);
             observation.transcript_path = Some(transcript.clone());
+            observation.runtime_owner = Some(child_owner.clone());
         },
     );
     let store = env.store();

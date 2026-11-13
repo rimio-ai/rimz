@@ -31,7 +31,7 @@ fn agents_restart_clears_a_former_steps_pin_and_stays_outside_the_run() {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let state = room.env.state_path_for(&room.env.project_root);
@@ -78,7 +78,7 @@ fn cancel_during_restart_keeps_the_terminal_history_copy() {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     #[cfg(target_os = "linux")]
@@ -155,7 +155,7 @@ fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let store = room.env.store();
@@ -249,7 +249,7 @@ fn agents_restart_warns_and_keeps_the_pin_when_its_run_is_unreadable() {
         );
         fs::write(
             room.env.project_root.join("panes.json"),
-            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
         )
         .unwrap();
         let store = room.env.store();
@@ -420,7 +420,7 @@ fn fresh_restart_from_a_cap_break_leaves_the_kept_previous_card_live_and_detache
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     room.hook(
@@ -485,7 +485,7 @@ fn continued_restart(routed: bool) {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let reference = format!("@{}", run.agent_name.as_deref().unwrap());
@@ -590,7 +590,7 @@ fn continue_rechecks_the_history_pool_after_stopping() {
     );
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let mut child = room

@@ -3,58 +3,35 @@ use super::*;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
+use super::runs_lookup::{newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
 use rimz::ids::PaneId;
-use rimz::store::runtime::{AgentLiveness, OWNER_EXIT_BOUND, agent_liveness, await_owner_exits};
+use rimz::sidebar::produce::hosting::{Hosting, HostingRead, read_hosting};
+use rimz::store::runtime::{AgentLiveness, OWNER_EXIT_BOUND, agent_liveness};
 use rimz::store::snapshot::find_agent;
 
 type AgentKey = (AgentKind, AgentSessionId);
 
-#[derive(Default)]
-struct StopTracker {
-    stopped: HashSet<AgentKey>,
-}
-
 /// What a tree stop did. The default is the skip: the tracker already took
-/// this agent, so nothing closed and nothing failed.
+/// this agent, so nothing was stopped and nothing failed.
 #[must_use]
 #[derive(Debug, Default)]
 pub(in crate::cli) struct TreeStop {
-    root: Option<AgentKey>,
-    /// Each row this tree closed, with the handle its failure lines use.
-    closed: Vec<(AgentKey, Option<PaneId>, String)>,
+    root_stopped: bool,
     child_receipts: Vec<String>,
-    still_running: Vec<(AgentKey, String, u32)>,
     failures: Vec<String>,
 }
 
 impl TreeStop {
-    /// Whether the agent's own pane closed.
-    pub(in crate::cli) fn root_closed(&self) -> bool {
-        self.root.is_some()
-    }
-
-    pub(in crate::cli) fn root_still_running(&self) -> bool {
-        self.still_running
-            .iter()
-            .any(|(key, _, _)| Some(key) == self.root.as_ref())
+    /// Whether the agent itself was stopped: no pane hosts it and its process is gone,
+    /// its unknown process has a recorded end, or its never-bound launch is cancelled.
+    pub(in crate::cli) fn root_stopped(&self) -> bool {
+        self.root_stopped
     }
 
     fn report_children(&self, out: &mut impl Write) -> Result<()> {
         for receipt in &self.child_receipts {
             writeln!(out, "{receipt}")?;
-        }
-        Ok(())
-    }
-
-    fn report_running(&self, out: &mut impl Write) -> Result<()> {
-        for (_, label, pid) in &self.still_running {
-            writeln!(
-                out,
-                "{label}: pane closed, but its process {pid} is still running; \
-                 a resume refuses until it exits"
-            )?;
         }
         Ok(())
     }
@@ -69,10 +46,9 @@ impl TreeStop {
     /// agent had a failure.
     pub(in crate::cli) fn report(&self, out: &mut impl Write, label: &str) -> Result<bool> {
         self.report_children(out)?;
-        if self.root_closed() {
+        if self.root_stopped() {
             writeln!(out, "stopped {label}")?;
         }
-        self.report_running(out)?;
         let Some(error) = self.error() else {
             return Ok(false);
         };
@@ -84,7 +60,7 @@ impl TreeStop {
     pub(in crate::cli) fn into_result(self, label: &str) -> Result<()> {
         match self.error() {
             None => Ok(()),
-            Some(error) if self.root_closed() => bail!("{label} stopped, but: {error}"),
+            Some(error) if self.root_stopped() => bail!("{label} stopped, but: {error}"),
             Some(error) => bail!("{label} was not stopped: {error}"),
         }
     }
@@ -160,10 +136,8 @@ pub(in crate::cli) fn resume_worktree_name<'a>(
 pub(in crate::cli) fn offers_resume(
     workspace: &rimz::ResolvedWorkspace,
     agent: &AgentState,
-    stop: &TreeStop,
 ) -> bool {
-    !stop.root_still_running()
-        && !agent.is_provider_subagent()
+    !agent.is_provider_subagent()
         && agent.parent_agent_id.is_none()
         && !agent.launch_depth.is_some_and(|depth| depth > 0)
         && agent_session_resumable(
@@ -244,11 +218,10 @@ pub(super) fn stop_agent(
         let mut out = render::out();
         stop.report_children(&mut out)?;
         if stop.error().is_some() {
-            stop.report_running(&mut out)?;
             return stop.into_result(&rimz::address::agent_handle(live_agent, &peers, true));
         }
         let mut receipt = format!("stopped {label} ({})", live_agent.kind);
-        if offers_resume(workspace, live_agent, &stop) {
+        if offers_resume(workspace, live_agent) {
             let name = live_agent
                 .name
                 .as_deref()
@@ -263,7 +236,6 @@ pub(super) fn stop_agent(
             receipt.push_str(&format!("; resume: {command}"));
         }
         writeln!(out, "{receipt}")?;
-        stop.report_running(&mut out)?;
         return Ok(());
     }
     if let Some(run) =
@@ -362,88 +334,114 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
     Ok(())
 }
 
-fn stop_live_agent(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &rimz::Store,
-    globals: &GlobalFlags,
-    agent: &AgentState,
-) -> Result<(AgentKey, Option<PaneId>)> {
-    if let Some(run) = stop_run(store, agent)? {
-        supervised::stop_supervised_run(workspace, store, globals, &run)?;
-        Ok((
-            (agent.kind.clone(), agent.agent_id.clone()),
-            agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
-        ))
-    } else {
-        close_agent_pane(workspace, store, agent)
-    }
-}
-
 /// The supervised run a stop of `agent` settles, when it has one.
 pub(super) fn stop_run(store: &rimz::Store, agent: &AgentState) -> Result<Option<RunRecord>> {
     Ok(newest_run_for_agent(store, agent)?.filter(|run| run.peer.is_none()))
 }
 
-/// Stop every tree in `agents`, then wait once, up to the shared owner-exit
-/// bound, for the processes of the rows it closed; it never signals them.
-/// Returns one `TreeStop` per root, in order, each naming its rows still
-/// running after a read taken past the wait.
+/// Stop every tree in `agents`, children before parents, through the point-of-use lookup:
+/// the only pane a stop closes is one a read this stop took says hosts the agent, and each
+/// close is followed by a new read. After the last close it waits once, up to the shared
+/// owner-exit bound, then sends one start-token-checked SIGTERM to each agent whose pane it
+/// closed, or whose run it cancelled, and whose process outlived the wait with no pane
+/// hosting it, and waits once more; it never sends SIGKILL.
+/// Returns one `TreeStop` per root, in order, judged by a read taken after the waits: an
+/// agent is stopped when no pane hosts it and its process is gone, its unknown process
+/// has a recorded end, or its never-bound launch is cancelled. A first read that fails
+/// stops nothing.
 pub(in crate::cli) fn stop_resolved(
     ctx: &Ctx,
     globals: &GlobalFlags,
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     agents: &[&AgentState],
 ) -> Result<Vec<TreeStop>> {
-    let peers = rimz::address::addressable_agents(snapshot);
-    let mut tracker = StopTracker::default();
-    let mut stops = agents
-        .iter()
-        .map(|agent| {
-            let current =
-                find_agent(&snapshot.agents, &agent.kind, &agent.agent_id).unwrap_or(agent);
-            stop_live_agent_tree(
-                &ctx.workspace,
-                &ctx.store,
-                globals,
-                snapshot,
-                &peers,
-                current,
-                &mut tracker,
-            )
-        })
-        .collect::<Vec<_>>();
-    if tracker.stopped.is_empty() {
-        return Ok(stops);
-    }
-
-    let deadline = Instant::now() + stop_owner_exit_bound();
-    let projection = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let closed = stops
-        .iter()
-        .flat_map(|stop| &stop.closed)
-        .filter_map(|(key, pane, _)| closed_row(&projection.agents, key, pane.as_ref()))
-        .collect::<Vec<_>>();
-    // An owner may change or record its end during the wait, so a wait that
-    // slept decides from a fresh read.
-    let refreshed = if await_owner_exits(&closed, deadline) {
-        Some(ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?)
-    } else {
-        None
-    };
-    let settled = refreshed.as_ref().unwrap_or(&projection);
-    for stop in &mut stops {
-        for (key, pane, label) in &stop.closed {
-            let Some(agent) = closed_row(&settled.agents, key, pane.as_ref()) else {
-                continue;
-            };
-            if let AgentLiveness::Live { pid } = agent_liveness(agent) {
-                stop.still_running.push((key.clone(), label.clone(), pid));
-            }
-        }
-    }
-    Ok(stops)
+    let stops = stop_resolved_with(ctx, globals, snapshot, agents, StopTerms::default())?;
+    // Without `still_due` every stop goes ahead.
+    Ok(stops.unwrap_or_default())
 }
 
+/// What a caller adds to [`stop_resolved`].
+#[derive(Default)]
+pub(in crate::cli) struct StopTerms<'a> {
+    /// The run this stop settles: cancelled once the first read succeeds, and the agent it
+    /// names then gets the backstop grace to leave before any close.
+    pub(in crate::cli) run: Option<&'a RunRecord>,
+    /// Re-checked after the first read: `false` stops nothing and returns `None`.
+    pub(in crate::cli) still_due: Option<&'a dyn Fn() -> bool>,
+}
+
+/// [`stop_resolved`] under `terms`; `None` when `still_due` withdrew the stop.
+pub(in crate::cli) fn stop_resolved_with(
+    ctx: &Ctx,
+    globals: &GlobalFlags,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    agents: &[&AgentState],
+    terms: StopTerms<'_>,
+) -> Result<Option<Vec<TreeStop>>> {
+    let peers = rimz::address::addressable_agents(snapshot);
+    let read = match read_hosting(&ctx.workspace, &ctx.store, globals.mux) {
+        Ok(mut read) => {
+            render::room::print_notices(read.take_notices())?;
+            read
+        }
+        Err(mut err) => {
+            render::room::print_notices(std::mem::take(&mut err.notices))?;
+            return Ok(Some(
+                agents
+                    .iter()
+                    .map(|agent| TreeStop {
+                        failures: vec![format!(
+                            "{}: {err}; nothing was stopped",
+                            rimz::address::agent_handle(agent, &peers, true)
+                        )],
+                        ..TreeStop::default()
+                    })
+                    .collect(),
+            ));
+        }
+    };
+    if terms.still_due.is_some_and(|still_due| !still_due()) {
+        return Ok(None);
+    }
+    let run_cancelled = match terms.run.filter(|run| !run.status.is_terminal()) {
+        Some(run) => {
+            supervised::cancel_supervised_run(&ctx.store, run)?;
+            true
+        }
+        None => false,
+    };
+    let mut stopper = Stopper {
+        ctx,
+        peers: &peers,
+        read,
+        run: terms.run,
+        run_cancelled,
+        tracker: HashSet::new(),
+    };
+    let mut trees = agents
+        .iter()
+        .map(|agent| {
+            let current = stopper
+                .read
+                .agent(&agent.kind, &agent.agent_id)
+                .unwrap_or(agent)
+                .clone();
+            let mut endings = Vec::new();
+            stopper.end_tree(current, None, &mut endings);
+            endings
+        })
+        .collect::<Vec<_>>();
+    stopper.judge(trees.iter_mut().flatten().collect())?;
+    Ok(Some(
+        trees
+            .into_iter()
+            .map(|endings| stopper.receipt(endings))
+            .collect(),
+    ))
+}
+
+/// How long a stop waits for an agent's process to leave, and for a closed pane to leave
+/// the listing: an exec wrapper holds both through two signal graces after the hangup.
 fn stop_owner_exit_bound() -> Duration {
     #[cfg(any(test, feature = "testkit"))]
     if let Some(ms) = std::env::var("RIMZ_TEST_STOP_OWNER_EXIT_MS")
@@ -455,230 +453,557 @@ fn stop_owner_exit_bound() -> Duration {
     OWNER_EXIT_BOUND
 }
 
-/// Stop `agent` after its live launched children, collecting close and retirement failures.
-fn stop_live_agent_tree(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &rimz::Store,
-    globals: &GlobalFlags,
-    snapshot: &rimz::store::snapshot::SidebarSnapshot,
-    peers: &[&AgentState],
-    agent: &AgentState,
-    tracker: &mut StopTracker,
-) -> TreeStop {
-    let key = (agent.kind.clone(), agent.agent_id.clone());
-    if tracker.stopped.contains(&key) {
-        return TreeStop::default();
+/// The pause between reads while a stop waits for a closed pane to leave the listing.
+const CLOSE_POLL: Duration = Duration::from_millis(100);
+/// How long a stop leaves a pane it closed before closing it again while it stays listed.
+const RECLOSE_AFTER: Duration = Duration::from_millis(500);
+/// The pause between store reads while a stop waits for processes and recorded ends.
+const ENDING_POLL: Duration = Duration::from_millis(50);
+
+/// One agent of a stop: what this stop did to it, and its outcome once judged.
+struct Ending {
+    /// The key the stop was asked for; schedules retire under it.
+    asked: AgentKey,
+    /// The row the agent is now, after a re-key this stop followed.
+    key: AgentKey,
+    label: String,
+    /// The handle of the agent whose stop reached this one as a launched child.
+    parent: Option<String>,
+    /// This stop issued a close of its pane, whatever the close returned.
+    closed: bool,
+    /// This stop cancelled the agent's run; a pane that then left counts as closed for the
+    /// owner wait and the SIGTERM.
+    cancelled: bool,
+    /// The final read still found a pane hosting it.
+    still_hosted: bool,
+    /// A reservation no wrapper had bound and no pane hosted at this stop's first read.
+    unbound_unhosted: bool,
+    close_error: Option<String>,
+    run: Option<RunRecord>,
+    signaled: bool,
+    outcome: Option<std::result::Result<(), String>>,
+}
+
+impl Ending {
+    fn decide(&mut self, outcome: std::result::Result<(), String>) {
+        self.outcome = Some(outcome);
     }
 
-    let parent_label = rimz::address::agent_handle(agent, peers, true);
-    let mut stop = TreeStop::default();
-    for child in rimz::address::launched_children(&snapshot.agents, agent)
-        .into_iter()
-        .filter(|child| child.ended_at.is_none())
-    {
-        let child_stop =
-            stop_live_agent_tree(workspace, store, globals, snapshot, peers, child, tracker);
-        stop.child_receipts.extend(child_stop.child_receipts);
-        if child_stop.root.is_some() {
-            let child_label = rimz::address::agent_handle(child, peers, true);
-            stop.child_receipts.push(format!(
-                "stopped {child_label} (subagent of {parent_label})"
-            ));
+    /// Whether this stop is waiting on the agent's live process to leave.
+    fn awaits_owner(&self) -> bool {
+        self.closed || self.cancelled
+    }
+}
+
+struct Stopper<'a> {
+    ctx: &'a Ctx,
+    peers: &'a [&'a AgentState],
+    /// Every read after the first lists this read's backend.
+    read: HostingRead,
+    run: Option<&'a RunRecord>,
+    run_cancelled: bool,
+    tracker: HashSet<AgentKey>,
+}
+
+impl Stopper<'_> {
+    /// Stop `agent` after its live launched children, pushing each ending in that order.
+    fn end_tree(&mut self, agent: AgentState, parent: Option<String>, endings: &mut Vec<Ending>) {
+        let key = (agent.kind.clone(), agent.agent_id.clone());
+        if self.tracker.contains(&key) {
+            return;
         }
-        stop.closed.extend(child_stop.closed);
-        stop.failures.extend(child_stop.failures);
-    }
-
-    let (closed, pane) = match stop_live_agent(workspace, store, globals, agent) {
-        Ok(closed) => closed,
-        Err(err) => match ended_after_failed_stop(store, agent) {
-            Ok(true) => (
-                key.clone(),
-                agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
-            ),
-            Ok(false) => {
-                stop.failures.push(format!("{parent_label}: {err:#}"));
-                return stop;
-            }
-            Err(read) => {
-                stop.failures
-                    .push(format!("{parent_label}: {err:#}; rereading it: {read:#}"));
-                return stop;
-            }
-        },
-    };
-    stop.root = Some(closed.clone());
-    stop.closed
-        .push((closed.clone(), pane, parent_label.clone()));
-    tracker.stopped.insert(closed);
-    tracker.stopped.insert(key);
-    if let Err(err) = rimz::harness::schedule::arm::retire_session(
-        &workspace.project_root,
-        &agent.kind,
-        &agent.agent_id,
-        rimz::harness::schedule::arm::RetireScope::Session,
-    ) {
-        stop.failures.push(format!("{parent_label}: {err}"));
-    }
-    stop
-}
-
-/// Whether an agent whose stop failed is gone anyway: once a still-live owner has had the
-/// owner-exit bound to leave, a read taken after the failure finds its end recorded and its
-/// owner dead. An unknown owner, or no recorded end, keeps the failure.
-fn ended_after_failed_stop(store: &rimz::Store, agent: &AgentState) -> Result<bool> {
-    let key = (agent.kind.clone(), agent.agent_id.clone());
-    let pane = agent.pane.as_ref().map(|pane| pane.pane_id.clone());
-    let deadline = Instant::now() + stop_owner_exit_bound();
-    let reread = || -> Result<Option<AgentState>> {
-        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        Ok(closed_row(&projection.agents, &key, pane.as_ref()).cloned())
-    };
-    let mut row = reread()?;
-    if let Some(live) = &row
-        && await_owner_exits(&[live], deadline)
-    {
-        row = reread()?;
-    }
-    Ok(
-        row.is_some_and(|row| {
-            row.ended_at.is_some() && agent_liveness(&row) == AgentLiveness::Dead
-        }),
-    )
-}
-
-fn close_agent_pane(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &rimz::Store,
-    agent: &AgentState,
-) -> Result<(AgentKey, Option<PaneId>)> {
-    let refreshed;
-    let agent = if agent.molted_from.is_some() && agent.agent_id.is_provisional() {
-        let cwd = agent
-            .worktree_path
-            .as_deref()
-            .map_or(workspace.worktree_root.as_path(), Path::new);
-        if store.cancel_unbound_molt_launch(
-            &agent.kind,
-            &agent.agent_id,
-            &workspace.session_name,
-            cwd,
-        )? {
-            return Ok(((agent.kind.clone(), agent.agent_id.clone()), None));
+        let label = rimz::address::agent_handle(&agent, self.peers, true);
+        let children = rimz::address::launched_children(self.read.agents(), &agent)
+            .into_iter()
+            .filter(|child| child.ended_at.is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        for child in children {
+            self.end_tree(child, Some(label.clone()), endings);
         }
-        refreshed = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        rimz::address::launch_row(&refreshed.agents, &agent.kind, &agent.agent_id)
-            .context("molt successor disappeared while stopping it")?
-    } else {
-        agent
-    };
-    let pane = agent
-        .pane
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
-    rimz::harness::hibernate::wake_pane(store, &pane.pane_id)?;
-    let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    backend.close_pane(&workspace.session_name, &pane.pane_id)?;
-    Ok((
-        (agent.kind.clone(), agent.agent_id.clone()),
-        Some(pane.pane_id.clone()),
-    ))
-}
+        let ending = self.end(&agent, key.clone(), label, parent);
+        self.tracker.insert(key);
+        self.tracker.insert(ending.key.clone());
+        endings.push(ending);
+    }
 
-/// The row a stop closed: the exact key, else (once a hook re-keyed it) the
-/// launch's row on the closed pane. Never `launch_row` across panes, which can
-/// pick a live peer of the same launch in another pane.
-fn closed_row<'a>(
-    agents: &'a [AgentState],
-    (kind, id): &AgentKey,
-    pane: Option<&PaneId>,
-) -> Option<&'a AgentState> {
-    find_agent(agents, kind, id).or_else(|| {
-        let pane = pane?;
-        rimz::address::launch_row(
-            agents.iter().filter(|agent| {
-                agent
-                    .pane
-                    .as_ref()
-                    .is_some_and(|bound| &bound.pane_id == pane)
-            }),
-            kind,
-            id,
+    fn end(
+        &mut self,
+        agent: &AgentState,
+        key: AgentKey,
+        label: String,
+        parent: Option<String>,
+    ) -> Ending {
+        let mut ending = Ending {
+            asked: key.clone(),
+            key,
+            label,
+            parent,
+            closed: false,
+            cancelled: false,
+            still_hosted: false,
+            unbound_unhosted: agent.agent_id.is_provisional()
+                && agent.runtime_owner.is_none()
+                && self.read.hosting(&agent.kind, &agent.agent_id) == Hosting::Nowhere,
+            close_error: None,
+            run: None,
+            signaled: false,
+            outcome: None,
+        };
+        if let Err(reason) = self.act(agent, &mut ending) {
+            ending.decide(Err(reason));
+        }
+        ending
+    }
+
+    fn act(&mut self, agent: &AgentState, ending: &mut Ending) -> std::result::Result<(), String> {
+        let store = &self.ctx.store;
+        let workspace = &self.ctx.workspace;
+        if agent.molted_from.is_some() && agent.agent_id.is_provisional() {
+            let cwd = agent
+                .worktree_path
+                .as_deref()
+                .map_or(workspace.worktree_root.as_path(), Path::new);
+            if store
+                .cancel_unbound_molt_launch(
+                    &agent.kind,
+                    &agent.agent_id,
+                    &workspace.session_name,
+                    cwd,
+                )
+                .map_err(|err| format!("{err:#}"))?
+            {
+                ending.decide(Ok(()));
+                return Ok(());
+            }
+        }
+        // A run the caller passed is the one this stop settles for the agent it names;
+        // `stop_run` matches by name as well, so it could pick another.
+        let passed = self.run.filter(|run| run.matches_agent(agent));
+        ending.cancelled = match passed {
+            Some(_) => self.run_cancelled,
+            None => {
+                ending.run =
+                    stop_run(store, agent).map_err(|err| format!("reading its runs: {err:#}"))?;
+                match ending.run.as_ref().filter(|run| !run.status.is_terminal()) {
+                    Some(run) => {
+                        supervised::cancel_supervised_run(store, run)
+                            .map_err(|err| format!("{err:#}"))?;
+                        true
+                    }
+                    None => false,
+                }
+            }
+        };
+        if let Some(run) = passed {
+            ending.run = Some(run.clone());
+        }
+        if ending.cancelled {
+            self.await_departure(&mut ending.key)?;
+        }
+        self.close(ending)
+    }
+
+    /// Record a stopped subagent run's end, once its ending is judged stopped.
+    fn stamp_end(&self, ending: &Ending) -> std::result::Result<(), String> {
+        let Some(run) = &ending.run else {
+            return Ok(());
+        };
+        supervised::stamp_stopped_subagent_end(
+            &self.ctx.store,
+            &self.ctx.workspace.session_name,
+            run,
         )
-    })
+        .map_err(|err| format!("recording its end failed: {err:#}"))
+    }
+
+    /// Where the agent is hosted in the current read, following a re-key first.
+    fn hosting(&self, key: &mut AgentKey) -> Hosting {
+        if let Some(followed) = follow(self.read.agents(), key) {
+            *key = followed;
+        }
+        self.read.hosting(&key.0, &key.1)
+    }
+
+    fn refresh(&mut self) -> std::result::Result<(), String> {
+        match read_hosting(&self.ctx.workspace, &self.ctx.store, Some(self.read.mux())) {
+            Ok(mut read) => {
+                let _ = render::room::print_notices(read.take_notices());
+                self.read = read;
+                Ok(())
+            }
+            Err(mut err) => {
+                let _ = render::room::print_notices(std::mem::take(&mut err.notices));
+                Err(err.to_string())
+            }
+        }
+    }
+
+    /// A pane whose run this stop cancelled gets the backstop grace to leave on its own.
+    fn await_departure(&mut self, key: &mut AgentKey) -> std::result::Result<(), String> {
+        let deadline = Instant::now() + supervised::pane::STOP_BACKSTOP_GRACE;
+        while self.hosting(key) != Hosting::Nowhere && Instant::now() < deadline {
+            std::thread::sleep(CLOSE_POLL);
+            self.refresh()?;
+        }
+        Ok(())
+    }
+
+    /// Close whatever pane each new read says hosts the agent, until none does or the
+    /// owner-exit bound passes after the first close. A pane still listed is closed again
+    /// once `RECLOSE_AFTER` has passed since its last close.
+    fn close(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
+        let mut deadline = Instant::now() + stop_owner_exit_bound();
+        let mut last: Option<(PaneId, Instant)> = None;
+        loop {
+            let Hosting::Pane {
+                pane_id,
+                session_name,
+            } = self.hosting(&mut ending.key)
+            else {
+                return Ok(());
+            };
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(());
+            }
+            if last
+                .as_ref()
+                .is_none_or(|(closed, at)| closed != &pane_id || now >= *at + RECLOSE_AFTER)
+            {
+                rimz::harness::hibernate::wake_pane(&self.ctx.store, &pane_id)
+                    .map_err(|err| format!("{err:#}"))?;
+                self.refresh()?;
+                if self.hosting(&mut ending.key)
+                    != (Hosting::Pane {
+                        pane_id: pane_id.clone(),
+                        session_name: session_name.clone(),
+                    })
+                {
+                    continue;
+                }
+                let closed_at = Instant::now();
+                if last.is_none() {
+                    deadline = closed_at + stop_owner_exit_bound();
+                }
+                let result =
+                    rimz::mux::backend_for(self.read.mux()).close_pane(&session_name, &pane_id);
+                ending.closed = true;
+                ending.close_error = result.err().map(|err| format!("{err:#}"));
+                last = Some((pane_id, closed_at));
+            }
+            std::thread::sleep(CLOSE_POLL);
+            self.refresh()?;
+        }
+    }
+
+    /// Wait once for the batch, signal each closed agent whose process outlived it, wait
+    /// once more for those, and judge every ending not yet decided from the final reads.
+    fn judge(&mut self, mut endings: Vec<&mut Ending>) -> Result<()> {
+        endings.retain(|ending| ending.outcome.is_none());
+        if endings.is_empty() {
+            return Ok(());
+        }
+        let bound = stop_owner_exit_bound();
+        let mut projection = self.await_endings(&mut endings, Instant::now() + bound)?;
+        let mut read = self.refresh();
+        let mut signaled = false;
+        if read.is_ok() {
+            for ending in endings.iter_mut().filter(|ending| ending.awaits_owner()) {
+                if self.hosting(&mut ending.key) != Hosting::Nowhere {
+                    continue;
+                }
+                let Some(owner) = row(self.read.agents(), &mut ending.key)
+                    .filter(|row| matches!(agent_liveness(row), AgentLiveness::Live { .. }))
+                    .and_then(|row| row.runtime_owner.as_ref())
+                    .filter(|owner| owner.process_start.is_some())
+                else {
+                    continue;
+                };
+                ending.signaled = rimz::child_process::signal_process_term(
+                    owner.pid,
+                    owner.process_start.as_deref(),
+                );
+                signaled |= ending.signaled;
+            }
+        }
+        if signaled {
+            let mut termed = endings
+                .iter_mut()
+                .filter(|ending| ending.signaled)
+                .map(|ending| &mut **ending)
+                .collect::<Vec<_>>();
+            projection = self.await_endings(&mut termed, Instant::now() + bound)?;
+            read = self.refresh();
+        }
+        if read.is_ok() {
+            for ending in endings.iter_mut().filter(|ending| ending.unbound_unhosted) {
+                if self.hosting(&mut ending.key) != Hosting::Nowhere {
+                    continue;
+                }
+                let Some(agent) = row(&projection.agents, &mut ending.key) else {
+                    continue;
+                };
+                let cwd = agent
+                    .worktree_path
+                    .as_deref()
+                    .map_or(self.ctx.workspace.worktree_root.as_path(), Path::new);
+                if let Err(err) = self.ctx.store.cancel_unbound_agent_launch(
+                    &ending.key.0,
+                    &ending.key.1,
+                    &self.ctx.workspace.session_name,
+                    cwd,
+                ) {
+                    ending.decide(Err(format!("cancelling its launch failed: {err:#}")));
+                }
+            }
+            read = self.refresh();
+            projection = self
+                .ctx
+                .store
+                .runtime_projection(rimz::RuntimeScope::Audit)?;
+        }
+        for ending in endings {
+            if ending.outcome.is_some() {
+                continue;
+            }
+            let outcome = match &read {
+                Ok(()) => self
+                    .verdict(ending, &projection.agents)
+                    .and_then(|()| self.stamp_end(ending)),
+                Err(err) => Err(err.clone()),
+            };
+            ending.decide(outcome);
+        }
+        Ok(())
+    }
+
+    /// Wait until no ending has a process this stop is waiting on (a live one whose pane it
+    /// closed, or an unknown one whose end is not recorded), or `deadline` passes.
+    fn await_endings(
+        &self,
+        endings: &mut [&mut Ending],
+        deadline: Instant,
+    ) -> Result<rimz::store::runtime::RuntimeProjection> {
+        loop {
+            let projection = self
+                .ctx
+                .store
+                .runtime_projection(rimz::RuntimeScope::Audit)?;
+            let waiting = endings.iter_mut().any(|ending| {
+                let closed = ending.awaits_owner();
+                row(&projection.agents, &mut ending.key).is_some_and(|row| {
+                    match agent_liveness(row) {
+                        AgentLiveness::Live { .. } => closed,
+                        AgentLiveness::Unknown => {
+                            !failed_unbound_launch(row)
+                                && (row.ended_at.is_none()
+                                    || (ending.unbound_unhosted
+                                        && row.agent_id.is_provisional()
+                                        && row.runtime_owner.is_none()))
+                        }
+                        AgentLiveness::Dead => false,
+                    }
+                })
+            });
+            if !waiting || Instant::now() >= deadline {
+                return Ok(projection);
+            }
+            std::thread::sleep(ENDING_POLL);
+        }
+    }
+
+    fn verdict(
+        &self,
+        ending: &mut Ending,
+        agents: &[AgentState],
+    ) -> std::result::Result<(), String> {
+        if let Hosting::Pane { pane_id, .. } = self.hosting(&mut ending.key) {
+            ending.still_hosted = true;
+            let close = ending
+                .close_error
+                .as_ref()
+                .map(|err| format!("; closing it failed: {err}"))
+                .unwrap_or_default();
+            return Err(format!("a pane still hosts it: {pane_id}{close}"));
+        }
+        unhosted_verdict(
+            row(agents, &mut ending.key),
+            ending.awaits_owner(),
+            ending.signaled,
+        )
+    }
+
+    /// One root's receipt; schedules retire for each agent this stop stopped, or whose
+    /// pane it closed and no longer finds.
+    fn receipt(&self, endings: Vec<Ending>) -> TreeStop {
+        let mut stop = TreeStop::default();
+        for ending in endings {
+            // `judge` decides every ending before a receipt is built, so an undecided one
+            // is impossible; it still never reads as stopped.
+            let outcome = ending
+                .outcome
+                .unwrap_or_else(|| Err("its stop was never judged".to_owned()));
+            match (&ending.parent, &outcome) {
+                (Some(parent), Ok(())) => stop
+                    .child_receipts
+                    .push(format!("stopped {} (subagent of {parent})", ending.label)),
+                (None, Ok(())) => stop.root_stopped = true,
+                (_, Err(reason)) => stop.failures.push(format!("{}: {reason}", ending.label)),
+            }
+            if outcome.is_err() && !(ending.closed && !ending.still_hosted) {
+                continue;
+            }
+            let (kind, session) = &ending.asked;
+            if let Err(err) = rimz::harness::schedule::arm::retire_session(
+                &self.ctx.workspace.project_root,
+                kind,
+                session,
+                rimz::harness::schedule::arm::RetireScope::Session,
+            ) {
+                stop.failures.push(format!("{}: {err}", ending.label));
+            }
+        }
+        stop
+    }
+}
+
+/// With no hosting pane, only a known-dead owner, a recorded end, or a cancelled
+/// reservation proves the stop. A missing row (including an ambiguous re-key) proves none.
+fn unhosted_verdict(
+    agent: Option<&AgentState>,
+    closed: bool,
+    signaled: bool,
+) -> std::result::Result<(), String> {
+    let unconfirmed = || {
+        Err(
+            "RimZ could not confirm its process is gone; the stop succeeds once the agent's \
+             end is recorded"
+                .to_owned(),
+        )
+    };
+    let Some(agent) = agent else {
+        return unconfirmed();
+    };
+    match agent_liveness(agent) {
+        AgentLiveness::Dead => Ok(()),
+        AgentLiveness::Live { pid } if signaled => Err(format!(
+            "its process {pid} is still running after RimZ sent it SIGTERM"
+        )),
+        AgentLiveness::Live { pid } if closed => Err(format!(
+            "its process {pid} is still running after its pane closed"
+        )),
+        AgentLiveness::Live { pid } => Err(format!(
+            "RimZ found no pane for it in this room and did not signal its process {pid}, \
+             which is still running"
+        )),
+        AgentLiveness::Unknown if agent.ended_at.is_some() => Ok(()),
+        AgentLiveness::Unknown if failed_unbound_launch(agent) => Ok(()),
+        AgentLiveness::Unknown => unconfirmed(),
+    }
+}
+
+fn failed_unbound_launch(agent: &AgentState) -> bool {
+    agent.agent_id.is_provisional()
+        && agent.runtime_owner.is_none()
+        && agent.status == rimz::agents::AgentStatus::Failed
+}
+
+/// The row `key` names, after following a re-key.
+fn row<'a>(agents: &'a [AgentState], key: &mut AgentKey) -> Option<&'a AgentState> {
+    if let Some(followed) = follow(agents, key) {
+        *key = followed;
+    }
+    find_agent(agents, &key.0, &key.1)
+}
+
+/// The row a provisional key moved to when a hook re-keyed it: the one unended row of its
+/// kind holding that launch id. `None` while the key still names a row, and whenever no
+/// row or more than one could be it.
+fn follow(agents: &[AgentState], (kind, id): &AgentKey) -> Option<AgentKey> {
+    if !id.is_provisional() || find_agent(agents, kind, id).is_some() {
+        return None;
+    }
+    let mut adopters = agents.iter().filter(|agent| {
+        &agent.kind == kind && agent.ended_at.is_none() && agent.launch_id.as_ref() == Some(id)
+    });
+    let adopter = adopters.next()?;
+    adopters
+        .next()
+        .is_none()
+        .then(|| (adopter.kind.clone(), adopter.agent_id.clone()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn provisional_key() -> AgentKey {
+        (AgentKind::new_unchecked("claude"), "launch_closed".into())
+    }
+
     #[test]
-    fn closed_row_prefers_the_exact_ended_row_to_a_live_launch_peer() {
-        let mut exact = AgentState::stub("claude", "closed", rimz::agents::AgentStatus::Success);
-        exact.launch_id = Some("launch_shared".into());
+    fn a_missing_final_row_is_not_evidence_that_the_agent_stopped() {
+        assert_eq!(
+            unhosted_verdict(None, true, false),
+            Err(
+                "RimZ could not confirm its process is gone; the stop succeeds once the agent's \
+                 end is recorded"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn follow_keeps_a_key_that_still_names_a_row() {
+        let mut exact = AgentState::stub(
+            "claude",
+            "launch_closed",
+            rimz::agents::AgentStatus::Success,
+        );
         exact.ended_at = Some(jiff::Timestamp::now());
-        let mut peer = exact.clone();
-        peer.agent_id = "other".into();
-        peer.ended_at = None;
-        let key = (exact.kind.clone(), exact.agent_id.clone());
-        let agents = [exact, peer];
+        let mut adopter = AgentState::stub("claude", "adopter", rimz::agents::AgentStatus::Idle);
+        adopter.launch_id = Some("launch_closed".into());
+        assert_eq!(follow(&[exact, adopter], &provisional_key()), None);
+    }
+
+    #[test]
+    fn follow_moves_a_provisional_key_only_to_its_one_unended_adopter() {
+        let mut adopter = AgentState::stub("claude", "adopter", rimz::agents::AgentStatus::Idle);
+        adopter.launch_id = Some("launch_closed".into());
+        let followed = follow(std::slice::from_ref(&adopter), &provisional_key());
+        assert_eq!(followed.map(|(_, id)| id), Some("adopter".into()));
+
+        let mut peer = adopter.clone();
+        peer.agent_id = "peer".into();
         assert_eq!(
-            closed_row(&agents, &key, None).map(|agent| agent.agent_id.as_str()),
-            Some("closed")
+            follow(&[adopter.clone(), peer.clone()], &provisional_key()),
+            None
+        );
+
+        peer.ended_at = Some(jiff::Timestamp::now());
+        let followed = follow(&[adopter.clone(), peer], &provisional_key());
+        assert_eq!(followed.map(|(_, id)| id), Some("adopter".into()));
+
+        let real = (AgentKind::new_unchecked("claude"), "real-session".into());
+        let mut namesake = adopter;
+        namesake.launch_id = Some("real-session".into());
+        assert_eq!(
+            follow(&[namesake], &real),
+            None,
+            "only a provisional key moves"
         );
     }
 
     #[test]
-    fn closed_row_follows_a_rekey_only_on_the_closed_pane() {
-        let pane = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_3");
-        let mut successor =
-            AgentState::stub("claude", "successor", rimz::agents::AgentStatus::Idle);
-        successor.launch_id = Some("launch_closed".into());
-        successor.pane = Some(rimz::pane::PaneRef::from_id(pane.clone()));
-        let mut peer = successor.clone();
-        peer.agent_id = "other".into();
-        peer.pane = Some(rimz::pane::PaneRef::from_id(rimz::ids::PaneId::from_parts(
-            rimz::ids::MuxName::Zellij,
-            "terminal_4",
-        )));
-        let key = (successor.kind.clone(), "launch_closed".into());
-        let agents = [successor, peer];
-        assert_eq!(
-            closed_row(&agents, &key, Some(&pane)).map(|agent| agent.agent_id.as_str()),
-            Some("successor")
-        );
-        assert!(closed_row(&agents, &key, None).is_none());
-        assert!(closed_row(&agents[1..], &key, Some(&pane)).is_none());
-        let unrelated = (key.0.clone(), "unrelated".into());
-        assert!(closed_row(&agents, &unrelated, Some(&pane)).is_none());
-    }
-
-    #[test]
-    fn stopping_peer_uses_interactive_pane_path_without_canceling_turn() {
+    fn a_stop_never_settles_a_peer_run() {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
-        let workspace = rimz::ResolvedWorkspace {
-            workspace_id: workspace_id.clone(),
-            project_root: dir.path().into(),
-            cwd_project_root: None,
-            root_class: rimz::workspace::RootClass::Directory,
-            worktree_root: dir.path().into(),
-            worktree_branch: None,
-            session_name: "stop-test".into(),
-            mux_hint: None,
-        };
         let store = rimz::Store::open(
             rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap(),
             rimz::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap(),
         )
         .unwrap();
-        let globals = GlobalFlags {
-            mux: None,
-            zellij: false,
-            tmux: false,
-            root: None,
-            color: crate::cli::ColorWhen::Never,
-        };
         let mut peer = AgentState::stub("codex", "peer", rimz::agents::AgentStatus::Idle);
         peer.name = Some("peer".into());
         peer.launch_id = Some("peer-launch".into());
@@ -699,8 +1024,7 @@ mod tests {
             });
             record.status = status;
             rimz::harness::run::create(store.paths(), &record).unwrap();
-            let error = stop_live_agent(&workspace, &store, &globals, &peer).unwrap_err();
-            assert!(error.to_string().contains("has no bound pane"), "{error:#}");
+            assert!(stop_run(&store, &peer).unwrap().is_none());
             assert_eq!(
                 rimz::harness::run::load(store.paths(), &record.run_id).unwrap(),
                 record

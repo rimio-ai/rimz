@@ -102,7 +102,9 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
     Ok(())
 }
 
-fn stamp_stopped_subagent_end(
+/// Append the `Ended` lifecycle event for a stopped subagent run's un-ended card; a
+/// run that is not a subagent's records nothing.
+pub(super) fn stamp_stopped_subagent_end(
     store: &rimz::Store,
     session_name: &str,
     run: &RunRecord,

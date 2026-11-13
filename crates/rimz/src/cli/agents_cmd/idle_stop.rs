@@ -9,7 +9,7 @@ use rimz::harness::idle_stop::{IdleStopHelperRequest, Verdict, closing_with, dec
 use rimz::store::snapshot::find_agent;
 
 use super::stop::stop_run;
-use super::{Ctx, GlobalFlags, stop_resolved};
+use super::{Ctx, GlobalFlags, StopTerms, stop_resolved_with};
 
 pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
@@ -56,8 +56,17 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
     }
     // A stop that closes the agent's pane retires the session, and with it the
     // request; one that leaves the pane open leaves the request armed for the
-    // producer's next ask.
-    let outcome = stop_resolved(&ctx, globals, &snapshot, &[agent])?.remove(0);
+    // producer's next ask. The stop's own hosting read is a mux call, so the
+    // request is read again after it, before anything closes.
+    let still_due = || pending().as_ref() == Some(&stop);
+    let terms = StopTerms {
+        run: None,
+        still_due: Some(&still_due),
+    };
+    let Some(mut stops) = stop_resolved_with(&ctx, globals, &snapshot, &[agent], terms)? else {
+        return Ok(());
+    };
+    let outcome = stops.remove(0);
     rimz::harness::assist_log::append(&AssistRecord {
         at: Timestamp::now(),
         assist: Assist::IdleStop {
@@ -66,7 +75,7 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
             idle_secs,
             idle_after_secs: stop.after_secs,
             requested_by: stop.requested_by,
-            stopped: outcome.root_closed(),
+            stopped: outcome.root_stopped(),
             error: outcome.error(),
             label: request.label.clone(),
         },

@@ -161,7 +161,7 @@ fn a_push_waits_for_receipt_then_judges_the_next_stop_without_the_tick() {
     .unwrap();
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let (id, run) = room.launch();
@@ -323,7 +323,7 @@ fn restart_after_pending_push(continued: bool) {
     let room = room();
     fs::write(
         room.env.project_root.join("panes.json"),
-        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex","pane_command":"codex"}]"#,
     )
     .unwrap();
     let (id, run) = room.launch();
