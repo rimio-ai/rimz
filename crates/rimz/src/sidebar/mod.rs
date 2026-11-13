@@ -475,6 +475,29 @@ pub(crate) fn reconcile_session_sidebars(
     })
 }
 
+/// Bare reload's pass: add a sidebar to each occupied view of one session that
+/// has none, converging no sidebar it did not add and touching no other view,
+/// under exclusion. `None` means another pass held the session's lock past
+/// `wait`. A deferred add (a detached Zellij room) stays deferred: this never
+/// opens or rebirths a session.
+pub(crate) fn mount_missing_sidebars(
+    backend: &dyn MuxBackend,
+    opts: &SidebarPaneOptions,
+    wait: Duration,
+) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
+    mount_missing(backend, opts, wait)
+}
+
+fn mount_missing<B: SidebarMux + ?Sized>(
+    backend: &B,
+    opts: &SidebarPaneOptions,
+    wait: Duration,
+) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
+    reconcile_session(backend, opts, ReconcileScope::MountMissing, wait, || {
+        crate::diag::DiagSink::for_workspace(opts.workspace_id.clone(), &opts.session_name, None)
+    })
+}
+
 struct SessionLiveness<'a> {
     runtime: &'a RuntimePaths,
     build: &'a str,

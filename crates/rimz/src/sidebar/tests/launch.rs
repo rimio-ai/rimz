@@ -514,3 +514,40 @@ fn sidebar_launch_error_is_non_fatal() {
     assert_eq!(backend.open_calls(), 1);
     assert_eq!(backend.reconcile_calls(), 0);
 }
+
+#[test]
+fn mount_pass_adds_only_and_never_opens_a_session() {
+    let deferred = crate::mux::SidebarRecovery {
+        deferred: 1,
+        deferred_adds: 1,
+        ..Default::default()
+    };
+    let h = Harness::new();
+    h.ensure_runtime();
+    let backend = FakeSidebarMux {
+        recovery: deferred.clone(),
+        ..Default::default()
+    };
+
+    let report = mount_missing(&backend, &sidebar_opts(&h), Duration::ZERO).expect("mount pass");
+
+    assert_eq!(
+        report,
+        Some(deferred),
+        "a deferred add is reported, not opened"
+    );
+    assert_eq!(backend.open_calls(), 0);
+    assert_eq!(backend.reconcile_scopes(), [ReconcileScope::MountMissing]);
+
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(
+        &h.runtime.sidebar_reconcile_lock(backend.name(), "session"),
+    )
+    .unwrap();
+    assert_eq!(
+        mount_missing(&backend, &sidebar_opts(&h), Duration::ZERO).expect("busy pass"),
+        None,
+        "a held lock is busy",
+    );
+    assert_eq!(backend.reconcile_calls(), 1, "the holder excludes the pass");
+    assert_eq!(backend.open_calls(), 0);
+}

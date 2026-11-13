@@ -1350,9 +1350,11 @@ pub trait MuxBackend: Send + Sync {
     /// working pane, no daemon host) close every sidebar pane so a wedged
     /// renderer that never self-closed collapses with its view.
     /// [`ReconcileScope::AddMissing`] only adds to an occupied view with no
-    /// sidebar pane; [`ReconcileScope::CloseDuplicates`] only closes the
-    /// duplicates beside a claimed sidebar. Views with daemon hosts are occupied
-    /// too. All in place, without disturbing working panes. In-place adds and
+    /// sidebar pane; [`ReconcileScope::MountMissing`] adds the same and repairs
+    /// no geometry of a sidebar it did not add;
+    /// [`ReconcileScope::CloseDuplicates`] only closes the duplicates beside a
+    /// claimed sidebar. Views with daemon hosts are occupied too. All in place,
+    /// without disturbing working panes. In-place adds and
     /// repairs size to each view's live target: the room override verbatim,
     /// otherwise the configured percentage capped at `max_cols`. One best-effort
     /// pass: the first failed verdict stops execution and counts it and every

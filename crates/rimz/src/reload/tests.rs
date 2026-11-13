@@ -353,7 +353,8 @@ fn reload_outcome_merge_sums_every_field() {
         deferred: 15,
         redocked: 16,
         misdocked: 17,
-        sidebar_missing: 36,
+        sidebar_silent: 36,
+        sidebar_foreign_protocol: 1,
         daemon_reopened: 2,
         daemon_reopen_deferred: 1,
         daemon_reopen_failed: 3,
@@ -378,7 +379,8 @@ fn reload_outcome_merge_sums_every_field() {
         deferred: 32,
         redocked: 33,
         misdocked: 34,
-        sidebar_missing: 37,
+        sidebar_silent: 37,
+        sidebar_foreign_protocol: 2,
         daemon_reopened: 4,
         daemon_reopen_deferred: 3,
         daemon_reopen_failed: 5,
@@ -406,7 +408,8 @@ fn reload_outcome_merge_sums_every_field() {
             deferred: 47,
             redocked: 49,
             misdocked: 51,
-            sidebar_missing: 73,
+            sidebar_silent: 73,
+            sidebar_foreign_protocol: 3,
             daemon_reopened: 6,
             daemon_reopen_deferred: 4,
             daemon_reopen_failed: 8,
@@ -457,6 +460,48 @@ fn repair_counts_lock_contention_separately_from_failure() {
     });
     assert_eq!(failed.busy, 0);
     assert_eq!(failed.failed, 1);
+}
+
+#[test]
+fn mount_pass_counts_adds_and_reads_deferred_adds_not_geometry() {
+    let mut outcome = ReloadOutcome::default();
+    record_mount(
+        &mut outcome,
+        "room",
+        Ok(Some(crate::mux::SidebarRecovery {
+            recovered: 2,
+            failed: 1,
+            deferred: 3,
+            deferred_adds: 1,
+            misdocked: 1,
+            redocked: 4,
+            ..Default::default()
+        })),
+    );
+    assert_eq!(
+        (
+            outcome.recovered,
+            outcome.failed,
+            outcome.deferred,
+            outcome.misdocked,
+            outcome.redocked,
+            outcome.busy
+        ),
+        (2, 1, 1, 1, 0, 0)
+    );
+    let mut busy = ReloadOutcome::default();
+    record_mount(&mut busy, "room", Ok(None));
+    assert_eq!((busy.busy, busy.failed), (1, 0));
+    let mut failed = ReloadOutcome::default();
+    record_mount(
+        &mut failed,
+        "room",
+        Err(crate::mux::MuxErr::SessionNotFound {
+            session: "room".to_owned(),
+        }
+        .into()),
+    );
+    assert_eq!((failed.busy, failed.failed), (0, 1));
 }
 
 fn heartbeat(raw: &str, build: Option<&str>) -> SidebarHeartbeat {

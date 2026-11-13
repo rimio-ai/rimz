@@ -95,6 +95,56 @@ fn settling_rooms_are_unconfirmed_and_retry_without_needing_you() {
     }
 }
 
+#[test]
+fn a_silent_room_settles_without_a_count_and_never_needs_you() {
+    let mut silent = room("silent-room", "/work/silent");
+    silent.sidebars = 0;
+    silent.current_sidebars = 0;
+    silent.outcome.sidebar_silent = 1;
+    let (text, exit) = rendered(&result(vec![room("healthy", "/work/healthy"), silent]), 160);
+    assert!(text.starts_with("… 1 of 2 rooms on rimz "), "{text}");
+    assert!(text.contains("· 1 settling"), "{text}");
+    let line = text
+        .lines()
+        .find(|line| line.contains("/work/silent"))
+        .unwrap();
+    assert!(line.starts_with("  … "), "{text}");
+    assert!(
+        line.ends_with("0 sidebars · settling, retries on its own"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("fix:") && !text.contains("needs you"),
+        "{text}"
+    );
+    assert_eq!(exit, 0);
+}
+
+#[test]
+fn mounted_sidebars_are_counted_on_a_healthy_row() {
+    for (n, phrase) in [(1, "1 sidebar mounted"), (2, "2 sidebars mounted")] {
+        let mut mounted = room("mounted-room", "/work/mounted");
+        mounted.outcome.recovered = n;
+        let (text, exit) = rendered(&result(vec![mounted.clone()]), 160);
+        assert!(text.starts_with("✓ 1 room on rimz "), "{text}");
+        let line = text
+            .lines()
+            .find(|line| line.contains("/work/mounted"))
+            .unwrap();
+        assert!(line.ends_with(&format!("2 sidebars · {phrase}")), "{text}");
+        assert_eq!(text.matches(phrase).count(), 1, "{text}");
+        assert_eq!(exit, 0);
+
+        mounted.outcome.misdocked = 1;
+        let (text, exit) = rendered(&result(vec![mounted]), 160);
+        assert!(
+            text.contains(&format!("sidebar working but not docked · {phrase}")),
+            "a misdocked mount keeps its count: {text}"
+        );
+        assert_eq!(exit, 1);
+    }
+}
+
 fn assert_room_problem(phrase: &str, fix: &str, change: fn(&mut RoomReload)) {
     for n in [1, 2] {
         let mut problem = room("problem-room", "/work/project");
@@ -124,10 +174,37 @@ macro_rules! room_case {
 }
 
 room_case!(
-    missing_sidebar_names_repair,
-    "no sidebar reporting in",
+    unsignalable_sidebar_names_repair,
+    "sidebar on a protocol this build cannot signal",
     "rimz reload --repair",
-    |r| r.outcome.sidebar_missing = 1
+    |r| r.outcome.sidebar_foreign_protocol = 1
+);
+room_case!(
+    failed_mount_names_repair,
+    "sidebar could not be mounted",
+    "rimz reload --repair",
+    |r| r.outcome.failed = 1
+);
+room_case!(
+    deferred_mount_names_attach,
+    "sidebar mount waits for an attached client",
+    "rimz attach --root /work/project",
+    |r| r.outcome.deferred = 1
+);
+room_case!(
+    busy_mount_waits_for_the_other_pass,
+    "another sidebar pass holds the room",
+    "rimz reload once it finishes",
+    |r| r.outcome.busy = 1
+);
+room_case!(
+    misdocked_mount_names_repair,
+    "sidebar working but not docked",
+    "rimz reload --repair",
+    |r| {
+        r.outcome.recovered = 1;
+        r.outcome.misdocked = 1;
+    }
 );
 room_case!(
     old_drainer_waits_for_idle,
@@ -231,7 +308,7 @@ macro_rules! machine_case {
                 let mut report = result(vec![room("healthy", "/work/healthy"); n]);
                 $change(&mut report.machine);
                 if n == 2 {
-                    report.rooms[0].outcome.sidebar_missing = 1;
+                    report.rooms[0].outcome.failed = 1;
                 }
                 let (text, exit) = rendered(&report, 160);
                 assert!(
@@ -285,7 +362,7 @@ fn machine_problems_join_the_same_closing_block_even_without_rooms() {
 #[test]
 fn rooms_sort_by_state_then_byte_ordered_paths() {
     let mut problem = room("problem", "/work/problem");
-    problem.outcome.sidebar_missing = 1;
+    problem.outcome.failed = 1;
     let mut settling = room("settling", "/work/settling");
     settling.outcome.unconverged = 1;
     let (text, _) = rendered(
@@ -577,11 +654,12 @@ fn pending_and_remote_restart_lines_are_informational_and_shell_quote_targets() 
 }
 
 #[test]
-fn repair_completed_before_the_report_replaces_the_missing_sidebar_problem() {
+fn repair_completed_before_the_report_replaces_bare_reload_findings() {
     let mut repaired = room("repaired", "/work/repaired");
     repaired.sidebars = 1;
     repaired.current_sidebars = 1;
-    repaired.outcome.sidebar_missing = 1;
+    repaired.outcome.sidebar_silent = 1;
+    repaired.outcome.sidebar_foreign_protocol = 1;
     repaired.repair = Some(ReloadOutcome {
         recovered: 1,
         ..Default::default()
@@ -590,7 +668,10 @@ fn repair_completed_before_the_report_replaces_the_missing_sidebar_problem() {
     let (text, exit) = rendered(&report, 160);
     assert!(text.starts_with("✓ 1 room on rimz "), "{text}");
     assert!(text.contains("1 sidebar"), "{text}");
-    assert!(!text.contains("no sidebar reporting in"), "{text}");
+    assert!(
+        !text.contains("settling") && !text.contains("protocol"),
+        "{text}"
+    );
     assert_eq!(exit, 0);
     report.rooms[0].repair = Some(ReloadOutcome {
         failed: 1,

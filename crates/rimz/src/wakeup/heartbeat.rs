@@ -273,6 +273,34 @@ pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbea
         .collect()
 }
 
+/// The room a fresh heartbeat on another protocol claims, read leniently: a
+/// renderer this build cannot signal may lack `mux` or `session_name` and
+/// reshape every other field. One that changes the type of `protocol_version`,
+/// `mux` or `session_name` fails this read, and its room reads as settling.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ForeignProtocolClaim {
+    protocol_version: String,
+    pub(crate) mux: Option<String>,
+    pub(crate) session_name: Option<String>,
+}
+
+/// Every fresh heartbeat in the workspace runtime dir whose protocol is not
+/// [`SIDEBAR_PROTOCOL_VERSION`], the files [`fresh_sidebar_heartbeats`] drops.
+pub(crate) fn fresh_foreign_protocol_claims(rt: &RuntimePaths) -> Vec<ForeignProtocolClaim> {
+    let Ok(entries) = fs::read_dir(&rt.heartbeat_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| SidebarHeartbeat::is_heartbeat_file(path) && mtime_within_ttl(path))
+        .filter_map(|path| {
+            serde_json::from_slice::<ForeignProtocolClaim>(&fs::read(path).ok()?).ok()
+        })
+        .filter(|claim| claim.protocol_version != SIDEBAR_PROTOCOL_VERSION)
+        .collect()
+}
+
 pub(crate) fn mtime_within_ttl(path: &Path) -> bool {
     mtime_within_ttl_at(path, SystemTime::now)
 }
@@ -513,5 +541,59 @@ mod tests {
             + SIDEBAR_HEARTBEAT_TTL
             + Duration::from_nanos(1)));
         assert!(mtime_within_ttl_at(&path, || modified - Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn foreign_protocol_claims_need_a_fresh_file_on_another_protocol() {
+        let (_dir, runtime, _) = lease_fixture();
+        let write = |name: &str, protocol: &str, session: &str, age: Duration| {
+            let path = runtime.heartbeat_dir.join(name);
+            let claim = serde_json::json!({
+                "protocol_version": protocol,
+                "mux": "tmux",
+                "session_name": session,
+            });
+            fs::write(&path, claim.to_string()).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(SystemTime::now() - age)
+                .unwrap();
+        };
+        let sessions = || {
+            let mut sessions: Vec<_> = fresh_foreign_protocol_claims(&runtime)
+                .into_iter()
+                .map(|claim| (claim.mux, claim.session_name))
+                .collect();
+            sessions.sort();
+            sessions
+        };
+        let claim = |session: &str| (Some("tmux".to_owned()), Some(session.to_owned()));
+        write(
+            "sidebar.current.json",
+            SIDEBAR_PROTOCOL_VERSION,
+            "room",
+            Duration::ZERO,
+        );
+        write(
+            "sidebar.other.json",
+            "rimz.plugin.v1",
+            "elsewhere",
+            Duration::ZERO,
+        );
+        write(
+            "sidebar.stale.json",
+            "rimz.plugin.v1",
+            "room",
+            Duration::from_secs(60),
+        );
+        assert_eq!(
+            sessions(),
+            [claim("elsewhere")],
+            "current and stale files are no foreign claim"
+        );
+        write("sidebar.old.json", "rimz.plugin.v1", "room", Duration::ZERO);
+        assert_eq!(sessions(), [claim("elsewhere"), claim("room")]);
     }
 }

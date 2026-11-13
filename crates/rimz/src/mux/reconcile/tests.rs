@@ -428,23 +428,26 @@ fn executor_retains_verified_add_and_partial_closes_on_failure() {
 }
 
 #[test]
-fn add_missing_scope_adds_only_to_sidebar_less_occupied_views() {
-    let plan = plan_reconcile(
-        &[
-            view("missing", &[], true),
-            view("wedged", &["terminal_1"], true),
-            view("duplicate", &["terminal_2", "terminal_3"], true),
-            view("orphan", &["terminal_4", "terminal_5"], false),
-        ],
-        &SidebarLiveness::default(),
-        ReconcileScope::AddMissing,
-    );
-    assert_eq!(
-        plan.verdicts,
-        [ViewVerdict::Add {
-            view: "missing".to_owned(),
-        }]
-    );
+fn add_scopes_add_only_to_sidebar_less_occupied_views() {
+    for scope in [ReconcileScope::AddMissing, ReconcileScope::MountMissing] {
+        let plan = plan_reconcile(
+            &[
+                view("missing", &[], true),
+                view("wedged", &["terminal_1"], true),
+                view("duplicate", &["terminal_2", "terminal_3"], true),
+                view("orphan", &["terminal_4", "terminal_5"], false),
+            ],
+            &SidebarLiveness::default(),
+            scope,
+        );
+        assert_eq!(
+            plan.verdicts,
+            [ViewVerdict::Add {
+                view: "missing".to_owned(),
+            }],
+            "{scope:?}"
+        );
+    }
 }
 
 #[test]

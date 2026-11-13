@@ -250,7 +250,7 @@ Expect `Recovered 1 sidebar in place.` and `Closed 1 duplicate or unresponsive s
 
 ## Add a sidebar in place
 
-`rimz sidebar repair` also adds a sidebar to a tab that has none ([in-place repair](../internals/multiplexers.md#in-place-repair)). RimZ adds a missing sidebar only in its reconcile pass, which runs when a command enters the room (`rimz start`, or a supervised run such as `rimz agents -p` or a loop fire) and on `rimz sidebar repair` or `rimz reload --repair`; opening a tab runs none. A plain `new-tab` already carries a sidebar, since the room's `new_tab_template` holds one, so open the test tab from a one-pane layout instead. Where Zellij places the split depends on the view's size, so set the attached client's view first: `stty` on the client's terminal resizes it. The client is the `zellij attach` line in `ps` that has a `pts/` terminal:
+`rimz sidebar repair` also adds a sidebar to a tab that has none ([in-place repair](../internals/multiplexers.md#in-place-repair)). RimZ adds a missing sidebar only in its reconcile pass, which runs when a command enters the room (`rimz start`, or a supervised run such as `rimz agents -p` or a loop fire), on bare `rimz reload`, and on `rimz sidebar repair` or `rimz reload --repair`; opening a tab runs none. A plain `new-tab` already carries a sidebar, since the room's `new_tab_template` holds one, so open the test tab from a one-pane layout instead. Where Zellij places the split depends on the view's size, so set the attached client's view first: `stty` on the client's terminal resizes it. The client is the `zellij attach` line in `ps` that has a `pts/` terminal:
 
 ```sh
 ps -C zellij -o pid,tty,args | rg -F '<session>'

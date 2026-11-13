@@ -1666,8 +1666,12 @@ impl MuxBackend for ZellijBackend {
         let restoration = client_restoration_target(&panes, &client_view);
         let plan = super::super::plan_reconcile(&views, &live, scope);
         let planned_closes = plan.close_panes();
-        let off_spec =
-            off_spec_sidebars(&panes, &planned_closes, Some(opts.target), opts.max_percent);
+        // Bare reload's pass repairs no geometry of a sidebar it did not add.
+        let off_spec = if scope == ReconcileScope::MountMissing {
+            Vec::new()
+        } else {
+            off_spec_sidebars(&panes, &planned_closes, Some(opts.target), opts.max_percent)
+        };
         if plan.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }

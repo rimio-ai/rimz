@@ -97,6 +97,76 @@ fn missing_presence_artifact_is_a_reload_problem_with_or_without_repair() {
     }
 }
 
+/// A room whose sidebar pane exists but has no fresh heartbeat, as while a
+/// restarted host re-attaches, settles: exit 0, and the mount pass, which lists
+/// the room, adds, closes and resizes nothing.
+#[test]
+fn reload_reports_a_silent_room_as_settling_and_mounts_nothing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
+        &runtime,
+        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: workspace.session_name.clone(),
+            produced_at_ms: rimz::utils::time::unix_now_ms(),
+            writer: None,
+            focused_pane: None,
+            clients_withheld: false,
+            clients: None,
+            panes: serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
+        },
+    )
+    .unwrap();
+    let trace = env.project_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .arg("reload")
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        )
+        .env("RIMZ_TEST_SKIP_STATS_RELOAD", "1")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{text}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("0 sidebars · settling, retries on its own"),
+        "{text}"
+    );
+    assert!(!text.contains("fix:"), "{text}");
+    let log = std::fs::read_to_string(&trace).unwrap();
+    // The trace joins argv words with tabs; the plugin configuration carries
+    // `opt_stacked_resize`, so match whole words.
+    assert!(
+        log.contains("\tlist-panes\t"),
+        "the pass lists the room: {log}"
+    );
+    for mutation in [
+        "\tnew-pane",
+        "\tclose-pane",
+        "\tresize\t",
+        "\tdelete-session",
+        "\tattach\t",
+    ] {
+        assert!(
+            !log.contains(mutation),
+            "reload issued `{mutation}`:\n{log}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {

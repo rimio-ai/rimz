@@ -1092,12 +1092,16 @@ impl MuxBackend for TmuxBackend {
         live: &dyn SidebarLivenessSource,
         scope: ReconcileScope,
     ) -> Result<SidebarRecovery> {
+        // Bare reload's pass converges no sidebar it did not add, so it
+        // neither normalizes a detached session nor converges surviving widths.
+        let converges_existing = scope != ReconcileScope::MountMissing;
         let view_cols = match self.widest_client_size(&opts.session_name) {
             Some((cols, _)) => Some(cols),
-            None => opts.detected_view_size.map(|(cols, rows)| {
+            None if converges_existing => opts.detected_view_size.map(|(cols, rows)| {
                 self.normalize_detached_geometry(&opts.session_name, cols, rows);
                 u64::from(cols)
             }),
+            None => None,
         };
         let mut hook_commands = Vec::new();
         if let Some(view_cols) = view_cols {
@@ -1166,6 +1170,7 @@ impl MuxBackend for TmuxBackend {
         }
         let survivors: HashSet<String> = views
             .iter()
+            .filter(|_| converges_existing)
             .filter(|view| view.sidebar_panes.len() == 1)
             .filter(|view| !mutated_views.contains(&view.view))
             .filter_map(|view| {

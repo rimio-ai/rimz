@@ -20,7 +20,8 @@ use rimz::reload::{
 
 #[derive(Debug, Args)]
 pub struct ReloadArgs {
-    /// Repair sidebar panes and reopen closed rimzd tabs before reporting.
+    /// Also replace, close and re-dock sidebar panes and reopen closed rimzd
+    /// tabs before reporting.
     #[arg(long)]
     repair: bool,
 }
@@ -260,8 +261,17 @@ fn room_line(
         .iter()
         .map(|problem| room_problem(problem, room).map(|(phrase, _)| phrase))
         .collect::<Result<_>>()?;
+    if room.repair.is_none() && room.outcome.recovered > 0 {
+        phrases.push(format!(
+            "{} mounted",
+            count(room.outcome.recovered, "sidebar")
+        ));
+    }
     if room.state() == RoomState::Settling {
-        phrases.push(format!("{} settling, retries on its own", room.settling()));
+        phrases.push(match room.settling() {
+            0 => "settling, retries on its own".into(),
+            n => format!("{n} settling, retries on its own"),
+        });
     }
     let suffix = phrases.join(" · ");
     if suffix.is_empty() {
@@ -283,7 +293,7 @@ fn room_line(
 
 fn sidebar_label(room: &RoomReload) -> String {
     let (current, total) = room.sidebar_counts();
-    if room.state() == RoomState::Settling {
+    if room.settling() > 0 && room.state() == RoomState::Settling {
         format!("{current} of {}", count(total, "sidebar"))
     } else {
         count(total, "sidebar")
@@ -495,9 +505,21 @@ fn pending_value(setting: &PendingSetting) -> String {
 
 fn room_problem(problem: &RoomProblem, room: &RoomReload) -> Result<(String, String)> {
     let (phrase, fix) = match problem {
-        RoomProblem::MissingSidebar => (
-            "no sidebar reporting in".into(),
+        RoomProblem::SidebarProtocol => (
+            "sidebar on a protocol this build cannot signal".into(),
             "rimz reload --repair".into(),
+        ),
+        RoomProblem::MountFailed => (
+            "sidebar could not be mounted".into(),
+            "rimz reload --repair".into(),
+        ),
+        RoomProblem::MountDeferred => (
+            "sidebar mount waits for an attached client".into(),
+            root_command("attach", room)?,
+        ),
+        RoomProblem::MountBusy => (
+            "another sidebar pass holds the room".into(),
+            "rimz reload once it finishes".into(),
         ),
         RoomProblem::Drainer => (
             "hook drainer still on the old build".into(),

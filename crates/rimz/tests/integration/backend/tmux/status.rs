@@ -330,6 +330,12 @@ fn reload_reapplies_room_options_without_starting_stopped_sessions() {
     server.output(&["set-option", "-g", "status", "on"]);
     server.output(&["set-option", "-g", "base-index", "0"]);
     server.output(&["move-window", "-r", "-t", session]);
+    // A born room docks a sidebar in its window; without one, reload's mount
+    // pass adds a serve that this fixture's home cannot bring to a heartbeat.
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let serve = format!("{} sidebar serve", stub.display());
+    server.tmux(&["split-window", "-d", "-hb", "-t", session, &serve]);
+    wait_for_sidebar_pane(&server, session, None);
     let sessions = server.stdout(&["list-sessions", "-F", "#{session_name}"]);
     let heartbeat_path = crate::common::room::seed_sidebar_heartbeat(
         &env.runtime_paths(),

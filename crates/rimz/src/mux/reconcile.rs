@@ -32,13 +32,19 @@ pub struct SidebarRecovery {
 }
 
 /// Which verdicts a pass may plan. Launch into a live session only adds where
-/// a view has none; the host's heal only closes duplicates beside a claimed one.
+/// a view has none; bare reload adds the same and moves no existing pane; the
+/// host's heal only closes duplicates beside a claimed one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconcileScope {
     /// Every verdict: add, add-before-close replace, and duplicate or orphan closes.
     Full,
     /// One add per occupied view without a sidebar pane, and nothing else.
     AddMissing,
+    /// The adds [`Self::AddMissing`] plans, with no geometry effect on any
+    /// existing sidebar or on a pane of another view: bare reload's pass.
+    /// Docking an added sidebar may still narrow, swap or stack the work panes
+    /// of its own view.
+    MountMissing,
     /// In each view with two or more sidebars and one claimed, close all but
     /// the first claimed one; never a view's last sidebar.
     CloseDuplicates,
@@ -472,7 +478,7 @@ pub(super) fn plan_reconcile(
 ) -> ReconcilePlan {
     let verdicts = views.iter().filter_map(|view| match scope {
         ReconcileScope::Full => full_verdict(view, live),
-        ReconcileScope::AddMissing => {
+        ReconcileScope::AddMissing | ReconcileScope::MountMissing => {
             (view.occupied() && view.sidebar_panes.is_empty()).then(|| ViewVerdict::Add {
                 view: view.view.clone(),
             })
