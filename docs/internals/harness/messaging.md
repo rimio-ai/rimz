@@ -593,7 +593,7 @@ Content:
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message stays queued past its receiver-class delay, sent once to its live sender | `@rimz` |
 | `DEADLINE` | The deadline ladder's stop rung, typed into a supervised child's pane: a steer for a kind without hook context, an interrupt for Claude and Codex once their hook has left it unclaimed past the delay. A stop left queued is withdrawn if its run ends, or ends and reopens, before delivery | `@rimz` |
-| `WAIT` | A timer, command, watch, or clock wait delivery, or a workflow message step's message ([workflow.md](./workflow.md)) | `@rimz` |
+| `WAIT` | A timer, command, watch, clock, or condition wait delivery, or a workflow message step's message ([workflow.md](./workflow.md)) | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping ([policy](#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row, and a signal forwarded to a staying workflow step's leader ([workflow.md](./workflow.md#the-signal-helper)) | `@rimz` |
 | `STAGE` | A prose-only stage-open delivery from a flip or a resume or registration re-wake | `@rimz` |

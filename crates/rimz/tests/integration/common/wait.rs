@@ -190,6 +190,33 @@ pub fn seed_launch_lane_as(
         .expect("seed launched lane");
 }
 
+pub fn publish_claude_5h(env: &Env, used: u8) {
+    publish_claude_5h_resetting(env, used, jiff::SignedDuration::from_hours(2));
+}
+
+/// Publishes a 5h claude window on the room's default account, `used` percent
+/// spent and resetting `resets_in` from now.
+pub fn publish_claude_5h_resetting(env: &Env, used: u8, resets_in: jiff::SignedDuration) {
+    use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
+    env.publish_rate_limits(&RateLimitsCache {
+        entries: std::collections::BTreeMap::from([(
+            "claude@default".parse().unwrap(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(used),
+                        resets_at: Some(jiff::Timestamp::now() + resets_in),
+                        duration_mins: Some(rimz::agents::WindowSpan::FiveHour.minutes()),
+                        ..RateLimitWindow::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    });
+}
+
 pub fn agent_wait(env: &Env) -> std::process::Command {
     agent_wait_at(env, &env.rimz_bin())
 }

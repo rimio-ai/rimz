@@ -136,7 +136,9 @@ pub(super) fn insert_delivery(
                 super::catalog::TaskSource::Instance,
                 &current.resolved_root(),
             );
+            // A self wait and a `loop add --wait` subscription never stand in for each other.
             !taken.contains(*name)
+                && current.wait_meta.is_some() == entry.wait_meta.is_some()
                 && super::arming::ArmState::resolve(
                     arming.get(&key),
                     super::catalog::TaskSource::Instance,

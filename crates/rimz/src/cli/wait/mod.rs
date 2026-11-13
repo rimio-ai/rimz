@@ -57,6 +57,16 @@ struct WaitArgs {
     /// Wait out this duration once.
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
+    /// Wake once at this time: `HH:MM` (today, else tomorrow), `<weekday> HH:MM`, or
+    /// `YYYY-MM-DD HH:MM`.
+    #[arg(long, value_name = "TIME")]
+    at: Option<String>,
+    /// Wake once at the next reset of your provider's 5h or 7d window, as the room's account reads it.
+    #[arg(long = "after-reset", value_name = "5h|7d")]
+    after_reset: Option<rimz::agents::WindowSpan>,
+    /// Wake once a state expression such as `pr=merged` reads true; repeated clauses are ANDed.
+    #[arg(long, value_name = "EXPR")]
+    when: Vec<String>,
     /// Wait for this existing process to disappear; its exit status is not available.
     #[arg(long, value_name = "PID", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
     pid: Option<u32>,
@@ -100,6 +110,9 @@ pub fn run(args: WaitCommand, globals: &GlobalFlags) -> Result<()> {
 impl WaitArgs {
     fn is_empty(&self) -> bool {
         self.in_after.is_none()
+            && self.at.is_none()
+            && self.after_reset.is_none()
+            && self.when.is_empty()
             && self.pid.is_none()
             && self.check.is_none()
             && self.run.is_none()

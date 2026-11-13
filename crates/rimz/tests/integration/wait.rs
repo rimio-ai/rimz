@@ -1,8 +1,9 @@
 //! Integration coverage for the agent-facing `rimz wait` doorway.
 
 use crate::common::wait::{
-    agent_wait, agent_wait_at, loop_instances_path, register_agent, register_agent_with_owner,
-    register_calling_agent, register_calling_agent_with_launch, wait_instances, wait_ok,
+    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, publish_claude_5h_resetting,
+    register_agent, register_agent_with_owner, register_calling_agent,
+    register_calling_agent_with_launch, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
@@ -926,6 +927,42 @@ fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
             .get("label")
             .is_none()
     );
+}
+
+#[test]
+fn clock_and_condition_wait_lines_keep_their_trigger_and_add_the_label_once() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let mut lines = Vec::new();
+    for (args, trigger) in [
+        (&["--at", "23:59"][..], "once at "),
+        (&["--in", "5m"][..], "once at "),
+        (&["--when", "pr=merged"][..], "when pr=merged"),
+    ] {
+        let label = format!("label-{}", lines.len());
+        let mut argv = vec!["wait"];
+        argv.extend_from_slice(args);
+        argv.extend_from_slice(&["--label", &label, "--json"]);
+        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &argv)).unwrap();
+        lines.push((receipt["name"].as_str().unwrap().to_owned(), trigger, label));
+    }
+    let shell = env.rimz().args(["wait", "list"]).output().unwrap();
+    assert!(shell.status.success());
+    for view in [
+        wait_ok(&env, &["wait", "list"]),
+        String::from_utf8(shell.stdout).unwrap(),
+    ] {
+        for (name, trigger, label) in &lines {
+            let line = view
+                .lines()
+                .find(|line| line.contains(name.as_str()))
+                .unwrap_or_else(|| panic!("{name} missing: {view}"));
+            assert!(line.contains(trigger), "{line}");
+            assert!(line.ends_with(&format!(" · {label}")), "{line}");
+            assert_eq!(view.matches(label.as_str()).count(), 1, "{view}");
+        }
+    }
 }
 
 #[test]
@@ -1890,7 +1927,8 @@ fn wait_check_rejects_shapes_without_a_meaning() {
         ),
         (
             vec!["wait", "--check", "true", "--pid", "123"],
-            "choose exactly one wait trigger: --in, --pid, --check, --file, or --run",
+            "choose exactly one wait trigger: --in, --at, --after-reset, --when, --pid, --check, \
+             --file, or --run",
         ),
         (vec!["wait", "--check", " "], "--check needs a command"),
         (
@@ -2047,17 +2085,16 @@ fn wait_file_grep_fires_only_on_a_line_after_the_arm_point() {
     wait_for_no_wait_instances(&env);
 }
 
-#[test]
-fn watched_wait_runs_in_the_arming_worktree() {
-    let env = Env::new();
-    env.record(&env.project_root);
+/// A linked worktree of the fixture project, canonical; `None` (skipped) when
+/// git is unavailable.
+fn linked_worktree(env: &Env) -> Option<std::path::PathBuf> {
     let initialized = std::process::Command::new("git")
         .args(["init", "-q"])
         .current_dir(&env.project_root)
         .status();
     if !initialized.is_ok_and(|status| status.success()) {
         crate::common::skip("git unavailable");
-        return;
+        return None;
     }
     let commit = std::process::Command::new("git")
         .args([
@@ -2082,7 +2119,16 @@ fn watched_wait_runs_in_the_arming_worktree() {
         .status()
         .expect("run git worktree add");
     assert!(add.success(), "git worktree add failed");
-    let linked = canonical(&linked);
+    Some(canonical(&linked))
+}
+
+#[test]
+fn watched_wait_runs_in_the_arming_worktree() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let Some(linked) = linked_worktree(&env) else {
+        return;
+    };
     let release = env.home_root.join("release-watch");
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
@@ -3369,6 +3415,572 @@ fn wait_rejects_removed_target_prompt_and_signal_flags() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(refusal), "{args:?}: {stderr}");
     }
+}
+
+/// Ends one turn of the calling agent, so only a pending wait can keep it sleeping.
+fn rest_calling_agent(env: &Env) {
+    for signal in [
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    ] {
+        let observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from("provider-session")), signal);
+        env.store()
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("record a finished turn");
+    }
+}
+
+fn wait_refusal(env: &Env, args: &[&str]) -> String {
+    let output = agent_wait(env).arg("wait").args(args).output().unwrap();
+    assert!(!output.status.success(), "accepted {args:?}");
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn wait_at_after_reset_and_when_arm_one_shot_self_waits_in_the_arming_checkout() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let Some(linked) = linked_worktree(&env) else {
+        return;
+    };
+    register_calling_agent(&env);
+    rest_calling_agent(&env);
+    publish_claude_5h(&env, 30);
+    let mut names = Vec::new();
+    for (args, kind, label) in [
+        (&["--at", "23:59"][..], "schedule", "clock"),
+        (&["--after-reset", "5h"][..], "schedule", "reset"),
+        (
+            &["--when", "pr=merged", "--when", "ci=passed"][..],
+            "condition",
+            "state",
+        ),
+    ] {
+        let output = agent_wait(&env)
+            .current_dir(&linked)
+            .arg("wait")
+            .args(args)
+            .args(["--label", label, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let name = receipt["name"].as_str().unwrap().to_owned();
+        assert!(name.starts_with("wait-"), "{receipt}");
+        assert!(receipt.get("existing").is_none(), "{receipt}");
+        assert_eq!(receipt["target"], "@planner#main");
+        let row = receipt["pending"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name.as_str())
+            .unwrap()
+            .clone();
+        assert_eq!(row["type"], kind, "{row}");
+        assert_eq!(row["state"], "waiting", "{row}");
+        assert_eq!(row["owner"], "self", "{row}");
+        assert_eq!(row["label"], label, "{row}");
+        assert_eq!(row["dir"], "~/linked", "{row}");
+        assert_eq!(receipt["trigger"], row["trigger"], "{receipt}");
+        let tasks = wait_instances(&env);
+        let entry = &tasks.0[&name];
+        assert_eq!(
+            entry.wait.as_ref().unwrap().session.as_str(),
+            "provider-session"
+        );
+        assert!(
+            entry
+                .wait_meta
+                .as_ref()
+                .is_some_and(|meta| meta.delay.is_none()),
+            "{entry:?}"
+        );
+        assert_eq!(entry.root, canonical(&env.project_root));
+        assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
+        assert!(entry.every.is_none() && entry.cron.is_none() && entry.at.is_none());
+        assert!(entry.signal.is_none() && entry.hold.is_none() && entry.prompt.is_none());
+        if kind == "schedule" {
+            assert!(entry.when.is_none(), "{entry:?}");
+            let fire_at = entry.fire_at.expect("a clock wait stores its instant");
+            assert!(fire_at > jiff::Timestamp::now(), "{fire_at}");
+        } else {
+            assert!(entry.fire_at.is_none(), "{entry:?}");
+            assert_eq!(entry.once, Some(true));
+            assert_eq!(
+                entry.when.as_deref(),
+                Some(&["pr=merged && ci=passed".to_owned()][..])
+            );
+            assert_eq!(row["trigger"], "when pr=merged && ci=passed");
+        }
+        names.push(name);
+    }
+    let reset = wait_instances(&env).0[&names[1]].fire_at.unwrap();
+    assert!(
+        reset > jiff::Timestamp::now() + jiff::SignedDuration::from_mins(90),
+        "--after-reset fires at the window's reset, about 2h ahead: {reset}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"])).unwrap();
+    assert_eq!(report["agent"]["status"], "sleeping", "{report}");
+    let pending = report["agent"]["pending_waits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|wait| wait["name"].as_str().unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(pending, names.iter().cloned().collect());
+    let listed = wait_ok(&env, &["wait", "list"]);
+    for name in &names {
+        assert!(listed.contains(name.as_str()), "{listed}");
+    }
+    wait_ok(&env, &["wait", "cancel", "--all"]);
+    assert!(wait_instances(&env).0.is_empty());
+}
+
+#[test]
+fn wait_receipts_name_the_clock_time_the_window_and_the_condition_reading() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let first_lines = |args: &[&str]| -> Vec<String> {
+        let mut argv = vec!["wait"];
+        argv.extend_from_slice(args);
+        wait_ok(&env, &argv)
+            .lines()
+            .take(2)
+            .map(ToOwned::to_owned)
+            .collect()
+    };
+    let at = first_lines(&["--at", "23:59"]);
+    assert!(
+        at[0].starts_with("armed wait-") && at[0].contains(": once at "),
+        "{at:?}"
+    );
+    assert!(at[0].ends_with(" 23:59 → @planner#main"), "{at:?}");
+    publish_claude_5h(&env, 30);
+    let reset = first_lines(&["--after-reset", "5h"]);
+    assert!(
+        reset[0].starts_with("armed wait-") && reset[0].contains(": once at "),
+        "{reset:?}"
+    );
+    assert!(
+        reset[1].starts_with("  window: claude 5h · 70% left · resets ")
+            && reset[1].ends_with(" · read from the room's current claude account"),
+        "{reset:?}"
+    );
+    publish_claude_5h_resetting(&env, 0, jiff::SignedDuration::from_hours(5));
+    let fresh = first_lines(&["--after-reset", "5h"]);
+    assert_eq!(
+        fresh[1],
+        "  window: claude 5h · not started · 100% left · fires on the next scheduler tick · read \
+         from the room's current claude account"
+    );
+    let forge = first_lines(&["--when", "pr=merged"]);
+    assert!(
+        forge[0].starts_with("armed wait-")
+            && forge[0].ends_with(": when pr=merged → @planner#main"),
+        "{forge:?}"
+    );
+    assert_eq!(
+        forge[1],
+        "  now: unknown · pr: unknown · pr and ci are read by the room's sidebar, which is not \
+         running"
+    );
+    publish_claude_5h(&env, 92);
+    let window = first_lines(&["--when", "window.5h.left >= 40"]);
+    assert!(
+        window[0].ends_with(": when window.5h.left>=40 → @planner#main"),
+        "{window:?}"
+    );
+    assert_eq!(window[1], "  now: waiting · window.5h.left: 8");
+}
+
+#[test]
+fn wait_when_twice_names_the_existing_wait_while_other_triggers_arm_again() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let arm = |args: &[&str]| -> serde_json::Value {
+        let mut argv = vec!["wait", "--json"];
+        argv.extend_from_slice(args);
+        serde_json::from_str(&wait_ok(&env, &argv)).unwrap()
+    };
+    let first = arm(&["--when", "pr=merged"]);
+    let again = arm(&["--when", "pr=merged"]);
+    assert_eq!(again["name"], first["name"], "{again}");
+    assert_eq!(again["existing"], true, "{again}");
+    assert_eq!(again["trigger"], "when pr=merged");
+    assert_eq!(again["pending"].as_array().unwrap().len(), 1, "{again}");
+    let human = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    assert_eq!(
+        human.lines().next().unwrap(),
+        format!(
+            "already waiting {}: when pr=merged → @planner#main",
+            first["name"].as_str().unwrap()
+        )
+    );
+    assert_eq!(wait_instances(&env).0.len(), 1);
+    let other = arm(&["--when", "ci=passed"]);
+    assert_ne!(other["name"], first["name"]);
+    assert!(other.get("existing").is_none(), "{other}");
+    let at = arm(&["--at", "23:59"]);
+    let at_again = arm(&["--at", "23:59"]);
+    assert_ne!(at["name"], at_again["name"]);
+    assert_eq!(wait_instances(&env).0.len(), 4);
+}
+
+const LOOP_ADD_REBASE: [&str; 7] = [
+    "loop",
+    "add",
+    "rebase",
+    "--wait",
+    "@me",
+    "--when",
+    "pr=merged",
+];
+
+#[test]
+fn loop_subscription_after_a_self_wait_on_its_condition_is_added() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    let added = wait_ok(&env, &LOOP_ADD_REBASE);
+    assert!(added.contains("added loop task `rebase`"), "{added}");
+    assert_eq!(wait_instances(&env).0.len(), 2);
+    let again = wait_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "rebase-2",
+            "--wait",
+            "@me",
+            "--when",
+            "pr=merged",
+        ],
+    );
+    assert!(again.contains("already subscribed as "), "{again}");
+    assert!(!again.contains("already subscribed as wait-"), "{again}");
+    assert_eq!(wait_instances(&env).0.len(), 2);
+}
+
+#[test]
+fn self_wait_after_a_loop_subscription_on_its_condition_is_armed() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    wait_ok(&env, &LOOP_ADD_REBASE);
+    let armed = wait_ok(&env, &["wait", "--when", "pr=merged"]);
+    assert!(armed.starts_with("armed wait-"), "{armed}");
+    assert_eq!(wait_instances(&env).0.len(), 2);
+}
+
+/// Arms `--<trigger>` with a label through `command`, publishing the window it reads, then
+/// fires it the way the scheduler would.
+fn arm_and_fire(env: &Env, trigger: &str, command: impl Fn() -> std::process::Command) -> String {
+    let args: &[&str] = match trigger {
+        "at" => &["--at", "23:59"],
+        "after-reset" => {
+            publish_claude_5h_resetting(env, 0, jiff::SignedDuration::from_hours(5));
+            &["--after-reset", "5h"]
+        }
+        _ => {
+            publish_claude_5h(env, 10);
+            &["--when", "window.5h.left >= 40"]
+        }
+    };
+    let output = command()
+        .arg("wait")
+        .args(args)
+        .args(["--label", &format!("wake {trigger}"), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{trigger}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let name = receipt["name"].as_str().unwrap().to_owned();
+    let passes: &[&[&str]] = match trigger {
+        "at" => &[&["loop", "run", &name]],
+        "after-reset" => &[&["loop", "tick"]],
+        _ => &[&["loop", "tick"], &["loop", "tick"]],
+    };
+    for (index, pass) in passes.iter().enumerate() {
+        let output = command().args(*pass).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{pass:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if trigger == "when" && index == 0 {
+            // First sight arms the condition; only a later tick fires it.
+            let messages = env.store().list_pending_messages().unwrap();
+            assert!(messages.is_empty(), "{messages:?}");
+            let rows = wait_instances(env).0;
+            assert_eq!(rows.keys().collect::<Vec<_>>(), [&name], "{rows:?}");
+        }
+    }
+    name
+}
+
+#[test]
+fn new_self_waits_steer_a_wait_carrying_label_clock_and_readings() {
+    for trigger in ["at", "after-reset", "when"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        rest_calling_agent(&env);
+        let name = arm_and_fire(&env, trigger, || agent_wait(&env));
+        let messages = wait_for_wait_messages(&env, 1);
+        assert_eq!(messages.len(), 1, "{trigger}");
+        let wake = &messages[0];
+        assert_eq!(wake.agent_id.as_str(), "provider-session");
+        assert_eq!(wake.gate, DeliveryGate::Any, "{trigger}");
+        assert_eq!(
+            wake.sender,
+            MessageSender::Harness {
+                notice: HarnessNotice::Wait
+            }
+        );
+        let lines = wake.text.lines().collect::<Vec<_>>();
+        if trigger == "when" {
+            assert_eq!(
+                lines[0], "waited on window.5h.left>=40 · wake when",
+                "{}",
+                wake.text
+            );
+            assert!(
+                lines[1].starts_with("fired after ") && lines[1].ends_with(&format!(" [{name}]")),
+                "{}",
+                wake.text
+            );
+            assert!(lines.contains(&"window.5h.left: 90"), "{}", wake.text);
+        } else {
+            assert!(
+                lines[0].starts_with("waited until ")
+                    && lines[0].ends_with(&format!(" · wake {trigger} [{name}]")),
+                "{}",
+                wake.text
+            );
+        }
+        wait_for_no_wait_instances(&env);
+    }
+}
+
+/// The external tick reads forge keys as unread, so only the sidebar host fires a `pr=` wait:
+/// it spawns `loop run <name> --condition-json` with its readings, as this test does.
+#[test]
+fn forge_wait_fires_with_its_label_and_pr_reading() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    rest_calling_agent(&env);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "forge",
+    );
+    let root = env.project_root.to_string_lossy().to_string();
+    std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+    std::fs::write(
+        runtime.lane_path("pr-state.json"),
+        serde_json::json!({
+            "branch_ci": {},
+            "path_repos": {root.clone(): "repo"},
+            "repos": {"repo": {
+                "ok": true,
+                "refreshed_at_ms": jiff::Timestamp::now().as_millisecond() + 3_600_000,
+            }},
+            "states": {root: {"state": "merged"}},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let receipt = wait_ok(&env, &["wait", "--when", "pr=merged", "--label", "landed"]);
+    let name = receipt
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .trim_end_matches(':')
+        .to_owned();
+    assert_eq!(receipt.lines().nth(1), Some("  now: due"), "{receipt}");
+    let fire = agent_wait(&env)
+        .args(["loop", "run", &name, "--condition-json"])
+        .arg(
+            serde_json::json!({
+                "when": "pr=merged", "hold": null, "held_ms": 0,
+                "readings": {"pr": "merged"}
+            })
+            .to_string(),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        fire.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fire.stderr)
+    );
+    let messages = wait_for_wait_messages(&env, 1);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let wake = &messages[0];
+    assert_eq!(
+        wake.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Wait
+        }
+    );
+    assert_eq!(wake.gate, DeliveryGate::Any);
+    let lines = wake.text.lines().collect::<Vec<_>>();
+    assert_eq!(lines[0], "waited on pr=merged · landed", "{}", wake.text);
+    assert!(
+        lines[1].starts_with("fired after ") && lines[1].ends_with(&format!(" [{name}]")),
+        "{}",
+        wake.text
+    );
+    assert!(lines.contains(&"pr: merged"), "{}", wake.text);
+    wait_for_no_wait_instances(&env);
+}
+
+#[test]
+fn new_self_waits_park_with_any_gate_at_an_open_prompt() {
+    for trigger in ["at", "after-reset", "when"] {
+        let env = Env::new();
+        let pane_fixture = register_waiting_caller(&env);
+        arm_and_fire(&env, trigger, || traced_wait(&env, &pane_fixture));
+        wait_for_wait_records(&env, 1);
+        let messages = wait_for_wait_messages(&env, 1);
+        assert_eq!(messages.len(), 1, "{trigger}");
+        let wake = &messages[0];
+        assert_eq!(wake.status, MessageStatus::Queued, "{trigger}");
+        assert_eq!(wake.gate, DeliveryGate::Any, "{trigger}");
+        assert_eq!(
+            wake.sender,
+            MessageSender::Harness {
+                notice: HarnessNotice::Wait
+            }
+        );
+        assert_eq!(
+            wake.last_error.as_deref(),
+            Some("agent is waiting on input in its pane"),
+            "{trigger}"
+        );
+        assert_no_wait_paste(&env);
+        wait_for_no_wait_instances(&env);
+    }
+}
+
+#[test]
+fn new_wait_triggers_refuse_in_words_true_of_a_wait() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    for (args, expected) in [
+        (
+            &["--at", "nope"][..],
+            "--at `nope` is not a time; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`",
+        ),
+        (
+            &["--at", "2020-01-01 09:00"][..],
+            "--at `2020-01-01 09:00` is in the past; choose a later time",
+        ),
+        (
+            &["--after-reset", "3h"][..],
+            "unknown window span `3h`; use 5h or 7d",
+        ),
+        (
+            &["--after-reset", "5h"][..],
+            "no current claude 5h window reading; open the room's sidebar or run `rimz accounts \
+             --refresh`",
+        ),
+        (
+            &["--when", "window.5h.left >= 40"][..],
+            "no current claude 5h window reading; open the room's sidebar or run `rimz accounts \
+             --refresh`",
+        ),
+        (&["--when", "pr=="][..], "--when: clause 1, position "),
+        (
+            &["--when", "team.stage=Bogus"][..],
+            "no team defines stage Bogus; stages: Done",
+        ),
+    ] {
+        let stderr = wait_refusal(&env, args);
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+        for wrong in ["schedule `", "task", "--check-only", "--agent", "--surplus"] {
+            assert!(!stderr.contains(wrong), "{args:?} names {wrong}: {stderr}");
+        }
+    }
+    let stage = wait_refusal(&env, &["--when", "team.stage=Bogus"]);
+    assert!(stage.contains("--when: clause 1, position "), "{stage}");
+    assert!(!loop_instances_path(&env).exists());
+}
+
+#[test]
+fn new_wait_triggers_take_exactly_one_trigger_and_no_watch_flags() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let new: [&[&str]; 3] = [
+        &["--at", "09:00"],
+        &["--after-reset", "5h"],
+        &["--when", "pr=merged"],
+    ];
+    let old: [&[&str]; 5] = [
+        &["--in", "5m"],
+        &["--pid", "123"],
+        &["--check", "true"],
+        &["--file", "app.log"],
+        &["--run", "true"],
+    ];
+    for (index, trigger) in new.iter().enumerate() {
+        for other in old.iter().chain(new.iter().skip(index + 1)) {
+            let args = [*trigger, *other].concat();
+            let stderr = wait_refusal(&env, &args);
+            assert!(
+                stderr.contains(
+                    "choose exactly one wait trigger: --in, --at, --after-reset, --when, --pid, \
+                     --check, --file, or --run"
+                ),
+                "{args:?}: {stderr}"
+            );
+        }
+        for (flag, expected) in [
+            (
+                &["--check-in", "1m"][..],
+                "--check-in requires --pid, --check, --file, or --run",
+            ),
+            (&["--on", "success"][..], "--on requires --check or --run"),
+            (&["--every", "5s"][..], "--every requires --check"),
+            (&["--grep", "ready"][..], "--grep requires --file"),
+        ] {
+            let args = [*trigger, flag].concat();
+            let stderr = wait_refusal(&env, &args);
+            assert!(stderr.contains(expected), "{args:?}: {stderr}");
+        }
+    }
+    assert!(!loop_instances_path(&env).exists());
+    assert_eq!(wait_ok(&env, &["wait"]), wait_ok(&env, &["wait", "list"]));
 }
 
 /// Liveness bound for every poll in this file. A watched wait delivers

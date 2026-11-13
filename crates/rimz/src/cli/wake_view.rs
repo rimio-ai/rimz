@@ -1,4 +1,4 @@
-//! Shared self-wait lines, room cards, and subscription summaries.
+//! Shared self-wait lines, room cards, subscription summaries, and condition readings.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,15 +9,89 @@ use anyhow::Result;
 use jiff::Timestamp;
 use rimz::agents::AgentState;
 use rimz::config::TaskEntry;
+use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::schedule::arm::duration_label;
 use rimz::harness::schedule::arming::ArmState;
 use rimz::harness::schedule::runner::parse_task_timeout;
 use rimz::harness::schedule::{self, DeliveryOwner, TaskActionKind, Trigger, delivery_owner};
+use rimz::harness::when::{self, CiSource, Verdict, WhenExpr, WindowReadings};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::snapshot::SidebarSnapshot;
 use serde::Serialize;
 
 use super::render as ui;
+
+pub(super) fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
+    let state = StatePaths::for_project_root(root).ok()?;
+    RuntimePaths::for_state(&state).ok()
+}
+
+/// Whether a room for `root` runs a sidebar fresh enough to read forge state.
+pub(super) fn room_open(root: &Path) -> bool {
+    runtime_for_root(root)
+        .as_ref()
+        .is_some_and(rimz::sidebar::fresh_sidebar_present)
+}
+
+pub(super) struct ConditionReading {
+    pub(super) verdict: Verdict,
+    pub(super) room_open: bool,
+    pub(super) source: Option<CiSource>,
+}
+
+/// Read `expr` for `entry` under the freshness rule firing applies, against the task's fire
+/// stamp when it has one.
+pub(super) fn read_condition(
+    entry: &TaskEntry,
+    expr: &WhenExpr,
+    fired_at: Option<Timestamp>,
+) -> ConditionReading {
+    let root = entry.resolved_root();
+    let runtime = runtime_for_root(&root);
+    let room_open = room_open(&root);
+    let source = runtime.as_ref().filter(|_| room_open).map(CiSource::read);
+    let now = Timestamp::now();
+    let windows = WindowReadings::new(runtime.as_ref(), now);
+    let verdict = when::evaluate(
+        expr,
+        &entry.run_dir(),
+        source.as_ref(),
+        entry.provider.as_ref(),
+        entry.account.as_ref(),
+        &windows,
+    )
+    .freshen(
+        expr,
+        &entry.run_dir(),
+        source.as_ref(),
+        fired_at,
+        Some(now),
+        true,
+    );
+    ConditionReading {
+        verdict,
+        room_open,
+        source,
+    }
+}
+
+/// The `now:` state of a condition just armed: its readings while unmet, else `due`, or the
+/// start of its hold.
+pub(super) fn condition_now(
+    entry: &TaskEntry,
+    expr: &WhenExpr,
+    hold: Option<std::time::Duration>,
+) -> String {
+    let verdict = read_condition(entry, expr, None).verdict;
+    let state = schedule::TaskTimingState::unmet(expr, &verdict).unwrap_or_else(|| match hold {
+        Some(hold) => schedule::TaskTimingState::Holding {
+            elapsed: std::time::Duration::ZERO,
+            hold,
+        },
+        None => schedule::TaskTimingState::Due(Timestamp::now()),
+    });
+    state.condition_label().unwrap_or_default()
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -243,16 +317,20 @@ impl WakeRow {
         }
     }
 
+    /// A watch's label replaces its command preview; a clock or condition row keeps the
+    /// time or expression and adds its label after them.
     fn subject(&self, current_root: &Path) -> String {
-        let subject = self
-            .entry
-            .watch
-            .as_ref()
-            .map(|spec| self.label.clone().unwrap_or_else(|| spec.subject()))
-            .unwrap_or_else(|| {
-                schedule::parse_trigger(&self.name, &self.entry)
-                    .map_or_else(|error| error.to_string(), |parsed| parsed.describe())
-            });
+        let subject = match &self.entry.watch {
+            Some(spec) => self.label.clone().unwrap_or_else(|| spec.subject()),
+            None => {
+                let trigger = schedule::parse_trigger(&self.name, &self.entry)
+                    .map_or_else(|error| error.to_string(), |parsed| parsed.describe());
+                match &self.label {
+                    Some(label) => format!("{trigger} · {label}"),
+                    None => trigger,
+                }
+            }
+        };
         format!("{subject}{}", self.worktree_suffix(current_root))
     }
 

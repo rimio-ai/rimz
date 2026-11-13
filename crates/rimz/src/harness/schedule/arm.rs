@@ -580,17 +580,24 @@ fn build_entry(
     now: Timestamp,
 ) -> Result<(DeliveryName, LoadedTask), ArmFailure> {
     let self_wait = matches!(spec.provenance, DeliveryProvenance::SelfWait { .. });
+    let one_shot = match &spec.trigger {
+        DeliveryTrigger::Delay(_) | DeliveryTrigger::Watch { .. } => true,
+        DeliveryTrigger::Clock(parsed) => matches!(parsed.schedule, Schedule::Instant(_)),
+        DeliveryTrigger::Condition { hold, lifetime, .. } => {
+            hold.is_none() && matches!(lifetime, SubscriptionLifetime::Once)
+        }
+        DeliveryTrigger::Signal { .. } => false,
+    };
     if self_wait
-        && (!matches!(
-            spec.trigger,
-            DeliveryTrigger::Delay(_) | DeliveryTrigger::Watch { .. }
-        ) || !matches!(spec.prompt, DeliveryPrompt::None)
+        && (!one_shot
+            || !matches!(spec.prompt, DeliveryPrompt::None)
             || spec.check.is_some()
             || spec.surplus.is_some()
             || spec.deadline.is_some())
     {
         return Err(ArmFailure::InvalidProvenance(
-            "self waits require a timer or watched command without a prompt or guard",
+            "self waits require a delay, a one-shot time, a once condition without a hold, or a \
+             watched command, without a prompt or guard",
         ));
     }
     if matches!(spec.provenance, DeliveryProvenance::Team(_))
@@ -751,6 +758,135 @@ mod tests {
                 validate_self_signal(&"agent.ended".parse().unwrap(), &matches, &target),
                 Err(DeliveryScopeFailure::SelfSignal)
             ));
+        }
+    }
+
+    #[test]
+    fn self_wait_provenance_admits_only_one_shot_triggers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = crate::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+        let clock =
+            |entry: TaskEntry| match super::super::parse_trigger("t", &entry).unwrap().trigger {
+                super::super::Trigger::Schedule(parsed) => DeliveryTrigger::Clock(parsed),
+                _ => unreachable!("the entry holds only clock fields"),
+            };
+        let condition = |hold: Option<Duration>, lifetime| DeliveryTrigger::Condition {
+            expr: crate::harness::when::WhenExpr::parse(&["pr=merged".to_owned()]).unwrap(),
+            hold,
+            lifetime,
+        };
+        let now = Timestamp::now();
+        let cases = [
+            (
+                "delay",
+                DeliveryTrigger::Delay(Duration::from_secs(60)),
+                true,
+            ),
+            (
+                "watch",
+                DeliveryTrigger::Watch {
+                    spec: WatchSpec::Command("true".to_owned()),
+                    on: CheckOn::Any,
+                    timeout: None,
+                },
+                true,
+            ),
+            (
+                "instant",
+                clock(TaskEntry {
+                    fire_at: Some(now + jiff::SignedDuration::from_hours(1)),
+                    ..TaskEntry::default()
+                }),
+                true,
+            ),
+            (
+                "once condition",
+                condition(None, SubscriptionLifetime::Once),
+                true,
+            ),
+            (
+                "interval",
+                clock(TaskEntry {
+                    every: Some("30m".to_owned()),
+                    ..TaskEntry::default()
+                }),
+                false,
+            ),
+            (
+                "calendar",
+                clock(TaskEntry {
+                    at: Some("09:00".to_owned()),
+                    every: Some("day".to_owned()),
+                    ..TaskEntry::default()
+                }),
+                false,
+            ),
+            (
+                "cron",
+                clock(TaskEntry {
+                    cron: Some("0 * * * *".to_owned()),
+                    ..TaskEntry::default()
+                }),
+                false,
+            ),
+            (
+                "standing condition",
+                condition(None, SubscriptionLifetime::Standing),
+                false,
+            ),
+            (
+                "held condition",
+                condition(Some(Duration::from_secs(60)), SubscriptionLifetime::Once),
+                false,
+            ),
+            (
+                "signal",
+                DeliveryTrigger::Signal {
+                    selector: "deploy.done".parse().unwrap(),
+                    matches: BTreeMap::new(),
+                    lifetime: SubscriptionLifetime::Once,
+                },
+                false,
+            ),
+        ];
+        for (case, trigger, admitted) in cases {
+            let spec = DeliverySpec {
+                name: DeliveryName::MintWait,
+                label: None,
+                target: TaskTarget {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    session: "self".into(),
+                    handle: "@self".to_owned(),
+                },
+                trigger,
+                prompt: DeliveryPrompt::None,
+                provenance: DeliveryProvenance::SelfWait { reader: None },
+                check: None,
+                deadline: None,
+                max_strikes: None,
+                surplus: None,
+            };
+            match build_entry(&workspace, spec, now) {
+                Ok((_, task)) => {
+                    assert!(admitted, "{case} was admitted");
+                    let meta = task
+                        .entry()
+                        .wait_meta
+                        .as_ref()
+                        .expect("self waits keep wait_meta");
+                    assert_eq!(meta.armed_at, now, "{case}");
+                }
+                Err(ArmFailure::InvalidProvenance(reason)) => {
+                    assert!(!admitted, "{case} was refused: {reason}");
+                    assert_eq!(
+                        reason,
+                        "self waits require a delay, a one-shot time, a once condition without a \
+                         hold, or a watched command, without a prompt or guard",
+                        "{case}"
+                    );
+                }
+                Err(error) => panic!("{case}: {error}"),
+            }
         }
     }
 
