@@ -993,6 +993,59 @@ fn dismissing_every_row_of_a_queued_digest_cancels_it() {
 }
 
 #[test]
+fn a_digest_joined_before_its_queue_write_is_withdrawn_as_joined_inline() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    append_agent(&store, "a", Some("parent"));
+    let a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    run::create(store.paths(), &a).unwrap();
+    let projection = store.runtime_projection(RuntimeScope::Audit).unwrap();
+    let parent = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "parent")
+        .unwrap();
+    let message = rimz::store::message::MessageRecord::new(
+        workspace.workspace_id.clone(),
+        parent,
+        "@a completed".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::SubagentReport,
+    });
+    let answers = [(a.run_id.clone(), 1)];
+    assert!(
+        run::report::record_report_messages(store.paths(), &answers, Some(&message.message_id))
+            .unwrap()
+    );
+    // The parent joins the answer before the digest is queued, so its join finds no record.
+    run::report::join_and_settle_digest(
+        &store,
+        &workspace.session_name,
+        &a.run_id,
+        Some(1),
+        "joined inline",
+    )
+    .unwrap();
+
+    assert!(!queue_unless_joined(&workspace, &store, &message, &answers).unwrap());
+    let history = store.list_message_history().unwrap();
+    let withdrawn = history
+        .iter()
+        .find(|record| record.message_id == message.message_id)
+        .unwrap_or_else(|| panic!("digest in history: {history:?}"));
+    assert_eq!(
+        (
+            withdrawn.status,
+            withdrawn.withdrawn,
+            withdrawn.last_error.as_deref()
+        ),
+        (MessageStatus::Canceled, true, Some("joined inline"))
+    );
+}
+
+#[test]
 fn a_running_detached_sibling_neither_holds_nor_joins_the_digest() {
     let (_dir, workspace, store) = fixture();
     append_agent(&store, "parent", None);

@@ -15,10 +15,10 @@ use rimz::agents::AgentState;
 use rimz::disk::summary::FileSummary;
 use rimz::harness::fleet::FleetRuns;
 use rimz::harness::run;
-use rimz::ids::{AgentKind, AgentSessionId, MessageId};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, RunId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::message::synthetic::SyntheticMessage;
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use rimz::store::run::{
     EarlierAnswer, LimitFailure, LimitFailureCause, RunRecord, RunStatus, RunStoreErr,
 };
@@ -227,12 +227,7 @@ pub(super) fn report_fleet_with_kind(
     if !run::report::record_report_messages(store.paths(), &answers, Some(&message_id))? {
         return Ok(ReportOutcome::NothingToReport);
     }
-    if let Err(err) = store.queue_message(&message, &workspace.session_name) {
-        let _ = run::report::record_report_messages(store.paths(), &answers, None);
-        return Err(err.into());
-    }
-    if run::report::digest_fully_joined(store.paths(), &message_id)? {
-        store.cancel_message(&message_id, &workspace.session_name, "joined inline")?;
+    if !queue_unless_joined(workspace, store, &message, &answers)? {
         return Ok(ReportOutcome::Queued {
             message_id,
             delivered: false,
@@ -260,6 +255,28 @@ pub(super) fn report_fleet_with_kind(
             .clone()
             .unwrap_or_else(|| parent.agent_id.to_string()),
     })
+}
+
+/// Queue `message`, the digest `answers` were just claimed for, and say whether it stays queued:
+/// a join landing between the claim and the queue write found no record to withdraw, so the
+/// digest is withdrawn here once every answer it reports is joined.
+fn queue_unless_joined(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message: &MessageRecord,
+    answers: &[(RunId, u32)],
+) -> Result<bool, ReportErr> {
+    if let Err(err) = store.queue_message(message, &workspace.session_name) {
+        let _ = run::report::record_report_messages(store.paths(), answers, None);
+        return Err(err.into());
+    }
+    if !run::report::digest_fully_joined(store.paths(), &message.message_id)? {
+        return Ok(true);
+    }
+    store.withdraw_messages(&workspace.session_name, |record| {
+        (record.message_id == message.message_id).then(|| "joined inline".to_owned())
+    })?;
+    Ok(false)
 }
 
 pub(super) fn report_settled_child(
