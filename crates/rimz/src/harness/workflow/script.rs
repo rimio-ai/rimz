@@ -34,6 +34,8 @@ pub(super) struct Evaluation {
     pub object: Result<Value, String>,
     pub stderr_tail: Option<String>,
     pub failure: &'static str,
+    /// The failure's detail: a dead script's exit code, when it had one, and its log.
+    pub detail: Value,
     pub limited: Option<workflow::Limited>,
     pub cost_usd: Option<f64>,
 }
@@ -44,6 +46,7 @@ impl Evaluation {
             object: Err(reason.into()),
             stderr_tail: None,
             failure,
+            detail: json!({}),
             limited: None,
             cost_usd: None,
         }
@@ -104,16 +107,17 @@ pub(super) fn evaluate(
             return Evaluation::failed("invalid", "check needs exactly one runner");
         }
     };
-    let mut result = Evaluation::failed("invalid", "evaluation interrupted");
+    let mut result = Evaluation::failed("died", "evaluation interrupted");
     // Evaluation follows a recorded live attempt.
     let attempt = record.attempt.as_ref().expect("prepared hosted evaluation");
     let log = paths.check_log(attempt.seq);
     let mut stderr = match std::fs::File::create(&log) {
         Ok(file) => file,
         Err(error) => {
-            return Evaluation::failed("invalid", &format!("{}: {error}", log.display()));
+            return Evaluation::failed("died", &format!("{}: {error}", log.display()));
         }
     };
+    result.detail = json!({"log": log});
     let mut digests = BTreeMap::new();
     let (argv, label) = match run {
         Invocation::Run(run) => match command_words(record, run, &mut digests) {
@@ -164,6 +168,9 @@ pub(super) fn evaluate(
                 String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(4096)..])
                     .into_owned(),
             );
+            if let Some(code) = output.status.code() {
+                result.detail["code"] = json!(code);
+            }
             result.object = if let Err(error) = stderr.write_all(&output.stderr) {
                 Err(format!("{}: {error}", log.display()))
             } else if output.timed_out {
@@ -171,6 +178,7 @@ pub(super) fn evaluate(
             } else if !output.status.success() {
                 Err(exit_failure(label, output.status))
             } else {
+                result.failure = "invalid";
                 serde_json::from_slice(&output.stdout)
                     .map_err(|e| format!("invalid check stdout: {e}"))
             };
@@ -238,6 +246,7 @@ fn evaluate_test(
     invocation: &Invocation,
 ) -> Evaluation {
     let mut result = Evaluation::failed("invalid", "test evaluation interrupted");
+    let mut logged = None;
     result.object = (|| {
         let mut digests = BTreeMap::new();
         let (command, argv) = invoked(record, invocation, &mut digests)?;
@@ -248,6 +257,7 @@ fn evaluate_test(
             .expect("prepared hosted shell check");
         let log = paths.check_log(attempt.seq);
         let file = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
+        logged = Some(log.clone());
         let env = child_env(state, paths, record);
         let output = with_child(
             state,
@@ -276,19 +286,29 @@ fn evaluate_test(
         if output.interrupted() {
             return Err("test evaluation interrupted".into());
         }
+        // A test that never exited (a signal killed it) answered nothing: it died.
+        let code = output.code().ok_or("killed by signal")?;
         let mut object = json!({
             "outcome": if output.passed() { "pass" } else { "fail" },
-            "code": output.code(),
+            "code": code,
             "log": log,
         });
         if !output.passed() {
-            object["reason"] = json!(output.code().map_or_else(
-                || "killed by signal".into(),
-                |code| format!("exited {code}"),
-            ));
+            object["reason"] = json!(format!("exited {code}"));
         }
         Ok(object)
     })();
+    if let Some(log) = logged {
+        result.detail = json!({"log": log});
+        if let Some(code) = result
+            .object
+            .as_ref()
+            .ok()
+            .and_then(|object| object.get("code"))
+        {
+            result.detail["code"] = code.clone();
+        }
+    }
     result
 }
 

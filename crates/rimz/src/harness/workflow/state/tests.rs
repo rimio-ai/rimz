@@ -70,7 +70,7 @@ fn inspection_timeout_uses_the_node_entry_time() {
 
 #[test]
 fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
-    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.deadline='@user'\n\
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\non.failed='@done'\n\
         [condition.pr]\nelse='pending'\ntimeout='5m'\non={ready='@done',pending='@wait',unknown='@wait',timeout='@failed'}\n\
         [[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='ready'\nfor='10m'\n").unwrap();
     let mut record = record();
@@ -91,8 +91,8 @@ fn inspection_forecast_uses_the_first_bound_with_engine_ties() {
     assert_eq!(
         actual,
         [
-            Some((60, "@user".into())),
-            Some((300, "@user".into())),
+            Some((60, "@done".into())),
+            Some((300, "@done".into())),
             Some((300, "@failed".into())),
             Some((300, "@failed".into())),
         ]
@@ -166,6 +166,7 @@ fn wait_backoff_cannot_hide_an_unfired_deadline() {
     t.finish_check(
         1,
         Ok(json!({"outcome":"pending","recheck_at":"2099-01-01T00:00:00Z"})),
+        json!({}),
         None,
     )
     .unwrap();
@@ -199,12 +200,12 @@ fn result_cas_routes_current_sequence_and_stale_results_write_nothing() {
     };
     let original = transition.record.clone();
     transition
-        .finish_check(2, Ok(json!({"outcome":"ok"})), None)
+        .finish_check(2, Ok(json!({"outcome":"ok"})), json!({}), None)
         .unwrap();
     assert_eq!(transition.record, original);
     assert!(transition.entries.is_empty());
     transition
-        .finish_check(1, Ok(json!({"outcome":"ok"})), None)
+        .finish_check(1, Ok(json!({"outcome":"ok"})), json!({}), None)
         .unwrap();
     assert_eq!(
         transition.record.state,
@@ -214,7 +215,7 @@ fn result_cas_routes_current_sequence_and_stale_results_write_nothing() {
     let terminal = transition.record.clone();
     let entries = transition.entries.clone();
     transition
-        .finish_check(1, Ok(json!({"outcome":"ok"})), None)
+        .finish_check(1, Ok(json!({"outcome":"ok"})), json!({}), None)
         .unwrap();
     assert_eq!(transition.record, terminal);
     assert_eq!(transition.entries, entries);

@@ -2,12 +2,12 @@ use super::*;
 use crate::disk::paths::StatePaths;
 use crate::store::workflow::{RunRecord, RunState};
 
-const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
+const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={ ready='@done', pending='@wait', unknown='@wait' }\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\n";
 
 #[test]
 fn inline_cases_match_table_blocks_in_order() {
     let (_home, dir) = fixture();
-    let header = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait',unknown='@wait'}\n";
+    let header = "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={merged='@done',red='@failed',pending='@wait',unknown='@wait'}\n";
     let actual: Vec<_> = [
         r#"cases = [
     { when = ["pr=merged"], outcome = "merged" },
@@ -55,7 +55,7 @@ for = "2m"
 #[test]
 fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
     let (_home, dir) = fixture();
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report
@@ -111,9 +111,9 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
             );
         } else {
             assert_eq!(report.rows[0].runner, "condition");
-            assert!(report.rows[0].edges.iter().any(|e| e.outcome == "invalid"
+            assert!(report.rows[0].edges.iter().any(|e| e.outcome == "deadline"
                 && e.target == "@failed"
-                && e.source == EdgeSource::OnBreak));
+                && e.source == EdgeSource::Default));
         }
     }
     fs::write(
@@ -287,7 +287,7 @@ fn publish_pr(dir: &Path, state: &StatePaths, record: &RunRecord, fresh: bool, p
 
 fn held_condition(unknown: &str) -> String {
     format!(
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait', unknown='{unknown}' }}\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n"
+        "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nelse='pending'\ntimeout='1h'\non={{ ready='@done', pending='@wait', unknown='{unknown}' }}\n[[condition.pr.cases]]\nwhen=['pr=merged']\noutcome='ready'\nfor='2m'\n"
     )
 }
 
@@ -399,7 +399,7 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
         "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         let text = format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pr'\n[{}.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n",
+            "[workflow]\nscope='worktree'\nstart='pr'\n[{}.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n",
             table(runner)
         );
         fs::write(dir.join("workflow.toml"), &text).unwrap();
@@ -470,7 +470,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             ("", false),
         ] {
             let text = format!(
-                "[workflow]\non-break='@failed'\nscope='worktree'\nstart='now'\n[script.now]\nrun='true'\non.ok='@done'\n[{}.later]\n{runner}\n{wake}\n",
+                "[workflow]\nscope='worktree'\nstart='now'\n[script.now]\nrun='true'\non.ok='@done'\n[{}.later]\n{runner}\n{wake}\n",
                 table(runner)
             );
             let spec: Definition = toml::from_str(&text).unwrap();
@@ -497,7 +497,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
         ("subscribe=['review.ready']", false),
     ] {
         let text = format!(
-            "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompts/build.md'\nthen='done'\n{subscribe}\n[script.done]\nrun='true'\non.ok='@done'\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompts/build.md'\nthen='done'\n{subscribe}\n[script.done]\nrun='true'\non.ok='@done'\n"
         );
         let spec: Definition = toml::from_str(&text).unwrap();
         let expected = demanded.then(std::collections::BTreeSet::new);

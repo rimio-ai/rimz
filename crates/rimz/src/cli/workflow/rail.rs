@@ -366,12 +366,6 @@ impl Row {
         let live = edges
             .iter()
             .filter(|edge| edge.fires != Fireability::Never)
-            // A capacity edge is drawn only when the step routes it or bounds the wait itself.
-            .filter(|edge| {
-                !(edge.outcome == "capacity"
-                    && edge.fires == Fireability::WithGiveUp
-                    && edge.source == EdgeSource::Default)
-            })
             .collect::<Vec<_>>();
         let mut row = Self {
             name: name.into(),
@@ -472,7 +466,7 @@ impl Row {
                 }
                 if edge.outcome == "timeout"
                     || edge.outcome == "deadline"
-                    || (edge.outcome == "invalid" && edge.source == EdgeSource::Default)
+                    || !shown_failure(edge, &mut routes, name, order)
                     || (!cases.is_empty()
                         && (edge.outcome == "unknown"
                             || cases.iter().any(|case| case.outcome == edge.outcome)
@@ -526,7 +520,7 @@ impl Row {
             for edge in live {
                 match edge.outcome.as_str() {
                     "deadline" => continue,
-                    "cap" => {
+                    "visits" => {
                         if let Some(max) = step.max_visits() {
                             row.details.push(format!(
                                 "{max} visits, then {}",
@@ -535,7 +529,10 @@ impl Row {
                         }
                     }
                     "then" => row.details.push(target(name, &edge.target, order)),
-                    _ => row.details.push(edge_text(name, edge, order)),
+                    _ if shown_failure(edge, &mut row.details, name, order) => {
+                        row.details.push(edge_text(name, edge, order));
+                    }
+                    _ => {}
                 }
             }
             row.heading
@@ -614,6 +611,24 @@ pub(super) fn case_note(node: &str, edges: &[Edge], order: &[&str]) -> Option<St
     Some(format!(
         "the first true case wins; an unread term above it {action}"
     ))
+}
+
+/// Whether the edge prints as its own route. A failure the node's `on.failed` takes prints once
+/// as that route; one the workflow's `on.failed` or the run's failure takes prints nothing here.
+fn shown_failure(edge: &Edge, routes: &mut Vec<String>, node: &str, order: &[&str]) -> bool {
+    match edge.source {
+        EdgeSource::Explicit => true,
+        EdgeSource::NodeFailed => {
+            let text = format!("failed {}", edge_target(node, edge, order));
+            if !routes.contains(&text) {
+                routes.push(text);
+            }
+            false
+        }
+        EdgeSource::WorkflowFailed | EdgeSource::Default => {
+            edge.source == EdgeSource::Default && !matches!(edge.target, Target::Failed)
+        }
+    }
 }
 
 fn edge_text(node: &str, edge: &Edge, order: &[&str]) -> String {
@@ -711,11 +726,12 @@ pub(super) fn defaults(spec: &Definition) -> Vec<&'static str> {
         .steps()
         .any(|(_, step)| matches!(step.kind(), Some(Kind::Agent(_))) && step.lifecycle().is_turn())
     {
-        sentences.push("A turn step goes on to its next check when its turn ends cleanly or its provider exits.");
+        sentences.push("A turn step goes on to its next check when its turn ends cleanly; one whose provider exits first died.");
     }
     if edges.iter().any(|edge| {
-        edge.outcome == "invalid"
+        edge.outcome != "deadline"
             && edge.source == EdgeSource::Default
+            && edge.target == Target::Failed
             && edge.fires != Fireability::Never
     }) {
         sentences.push("An unrouted failure ends the run as failed.");

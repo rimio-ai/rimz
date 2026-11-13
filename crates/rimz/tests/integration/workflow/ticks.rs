@@ -46,7 +46,7 @@ fn tick_routes_check_timeout_and_workflow_deadline_before_far_backoff() {
         let id = start(&env);
         let value = tick_until(&env, &id, "failed");
         assert_eq!(
-            value["record"]["input"]["outcome"],
+            value["record"]["input"]["cause"],
             if deadline { "deadline" } else { "timeout" }
         );
     }
@@ -69,7 +69,7 @@ fn tick_fires_a_deadline_granted_after_the_recheck_was_published() {
         ],
     ));
     let value = tick_until(&env, &id, "failed");
-    assert_eq!(value["record"]["input"]["outcome"], "deadline");
+    assert_eq!(value["record"]["input"]["cause"], "deadline");
 }
 
 #[test]

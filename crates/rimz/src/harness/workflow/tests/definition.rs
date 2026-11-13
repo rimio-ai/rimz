@@ -114,7 +114,7 @@ fn a_lifecycle_on_a_command_refuses() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nlifecycle='session'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n",
+        "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nlifecycle='session'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n",
     )
     .unwrap();
     assert!(

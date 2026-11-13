@@ -2,7 +2,6 @@ use super::*;
 
 const GRAPH: &str = r#"
 [workflow]
-on-break = '@failed'
 summary = 'carry the change to green'
 scope = 'worktree'
 start = 'begin'
@@ -64,7 +63,8 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
         "takes over",
         "give-up 6h",
         "asked ↑ watch",
-        "A turn step goes on to its next check when its turn ends cleanly or its provider exits.",
+        "A turn step goes on to its next check when its turn ends cleanly; one whose provider exits first died.",
+        "An unrouted failure ends the run as failed.",
         "one node in full: rimz workflow show review begin",
         "source ~/",
         "unreachable from begin",
@@ -79,13 +79,14 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("never:"), "{text}");
     assert!(!text.contains("give-up instant"), "{text}");
-    assert!(text.contains("invalid @failed"), "{text}");
+    assert!(!text.contains("died @failed"), "{text}");
     assert!(!text.contains("waits ≤1h"), "{text}");
     assert!(!text.contains("max-visits-per-outcome"), "{text}");
 }
 
+/// A start that can never fit raises `capacity` whatever the node's give-up, so the edge fires.
 #[test]
-fn capacity_edges_print_their_three_states_in_text_and_json() {
+fn capacity_edges_fire_whatever_the_give_up_in_text_and_json() {
     let agent =
         "lifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\non.capacity='@failed'\n";
     let spec = format!(
@@ -105,11 +106,9 @@ fn capacity_edges_print_their_three_states_in_text_and_json() {
     assert_eq!(
         lines,
         [
-            Some(
-                "capacity → @failed (explicit, only when the run carries a give-up instant)".into()
-            ),
             Some("capacity → @failed (explicit)".into()),
-            Some("capacity → @failed (explicit, never: give-up is forever)".into()),
+            Some("capacity → @failed (explicit)".into()),
+            Some("capacity → @failed (explicit)".into())
         ]
     );
     let report: Value =
@@ -132,9 +131,9 @@ fn capacity_edges_print_their_three_states_in_text_and_json() {
     assert_eq!(
         fires,
         [
-            (json!("with-give-up"), Value::Null),
             (json!("yes"), Value::Null),
-            (json!("never"), json!("give-up-forever")),
+            (json!("yes"), Value::Null),
+            (json!("yes"), Value::Null)
         ],
         "{report:#}"
     );
@@ -188,7 +187,7 @@ fn definition_hints_parse_hyphen_leading_workflow_and_node_names() {
 #[test]
 fn the_by_hand_hint_starts_in_the_selected_room() {
     let (env, _) = super::super::fixture(
-        "[workflow]\non-break='@failed'\nscope='project'\nstart='gate'\n\
+        "[workflow]\nscope='project'\nstart='gate'\n\
          [test.gate]\nshell='true'\non={pass='@done',fail='@failed'}\n",
         "",
     );
@@ -239,7 +238,7 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
     .unwrap();
     fs::write(
         dir.join("workflow.toml"),
-        GRAPH.replace("start = 'begin'", "start = 'begin'\non.deadline = 'unused'"),
+        GRAPH.replace("start = 'begin'", "start = 'begin'\non.failed = 'unused'"),
     )
     .unwrap();
     let text = success(command(&env, &["workflow", "show", "review"]));
@@ -247,12 +246,7 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
         text.contains("started by loop task carry: every 1h"),
         "{text}"
     );
-    assert!(
-        text.contains(
-            "when a deadline granted to a run passes → unused (a live attempt is canceled)"
-        ),
-        "{text}"
-    );
+    assert!(text.contains("\non.failed → unused\n"), "{text}");
     assert!(!text.contains("unreachable"), "{text}");
     fs::write(
         dir.join("workflow.toml"),
@@ -264,7 +258,9 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
     .unwrap();
     let text = success(command(&env, &["workflow", "show", "review"]));
     assert!(
-        text.contains("deadline 2099-01-01T00:00:00Z → @failed (a live attempt is canceled)"),
+        text.contains(
+            "deadline 2099-01-01T00:00:00Z fails the node the run is at (a live attempt is canceled)"
+        ),
         "{text}"
     );
     assert!(!text.contains("No deadline is set"), "{text}");
@@ -297,7 +293,6 @@ fn missing_or_broken_definition_keeps_the_runs_visible_and_json_unchanged() {
 
 const NODE_GRAPH: &str = r#"
 [workflow]
-on-break = '@failed'
 scope = 'project'
 start = 'judge'
 [judge.judge]
@@ -338,7 +333,7 @@ then = 'judge'
 max-visits = 4
 timeout = '2h'
 on.asked = 'watch'
-on.cap = '@failed'
+on.visits = '@failed'
 on.capacity = '@failed'
 "#;
 
@@ -368,7 +363,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "8h",
                 "ok → fix (explicit)",
                 "invalid → @failed (explicit)",
-                "deadline → @failed (on-break, only with a deadline)",
+                "deadline → @failed (default, only with a deadline)",
             ],
         ),
         (
@@ -397,7 +392,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "2h",
                 "then → judge (explicit)",
                 "asked → watch (explicit)",
-                "cap → @failed (explicit)",
+                "visits → @failed (explicit)",
                 "capacity → @failed (explicit)",
             ],
         ),
@@ -421,7 +416,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "green → @done",
                 "none true",
                 "waiting → @wait",
-                "timeout → @failed (on-break, never: no timeout)",
+                "timeout → @failed (default, never: no timeout)",
                 "unknown → @wait (explicit)",
             ],
         ),

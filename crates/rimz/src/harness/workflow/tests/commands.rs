@@ -68,7 +68,7 @@ on={pass='@done',fail='@failed'}
 }
 
 #[test]
-fn a_run_that_does_not_split_ends_invalid_with_the_command_error() {
+fn a_run_that_does_not_split_dies_with_the_command_error() {
     let (_dir, state, record) = super::attempts::setup(
         "[workflow]\nscope='worktree'\nstart='run'\n[script.run]\nrun=\"echo 'open\"\non.ok='@done'\n",
     );
@@ -77,7 +77,7 @@ fn a_run_that_does_not_split_ends_invalid_with_the_command_error() {
     assert!(
         journal.iter().any(|row| matches!(&row.event,
         records::JournalEvent::Evaluation { outcome, object, .. }
-        if outcome == "invalid"
+        if outcome == "died"
             && object["reason"] == "invalid run command: use a nonempty, correctly quoted argv")),
         "{journal:#?}"
     );
@@ -141,7 +141,7 @@ fn command_step_cycles_stop_at_the_cap_without_consuming_a_sequence() {
             && ended
                 .input
                 .as_ref()
-                .is_some_and(|input| input["bound"] == "max-visits");
+                .is_some_and(|input| input["cause"] == "visits");
         results.push((max, valid, format!("{result:?}; {ended:?}")));
     }
     assert!(results.iter().all(|(_, valid, _)| *valid), "{results:#?}");

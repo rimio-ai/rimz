@@ -14,7 +14,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The workflow language version, which is also the run record's: a sealed definition means
 /// what the binary of this version reads it to mean, so a change to what one means raises it,
 /// and `load` refuses a record of any other version before decoding it.
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -218,7 +218,11 @@ pub enum EndCause {
     Timeout,
     Deadline,
     Cancel,
-    Restart { continued: bool },
+    Restart {
+        continued: bool,
+    },
+    /// `workflow resume --at` moved the run off the attempt's node.
+    Resume,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -599,8 +603,6 @@ impl RunFire {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub version: u32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub break_agents: Vec<String>,
     pub id: WorkflowRunId,
     #[serde(default)]
     pub origin: RunOrigin,
@@ -728,11 +730,11 @@ impl RunRecord {
             .min_by_key(|agent| leader.is_none_or(|name| agent.name.as_deref() != Some(name)))
     }
 
-    /// The outcome that routed the run into its node, kept across a cap at that node.
+    /// The outcome that routed the run into its node: a failure route's cause, else the answer.
     pub fn routed_by(&self) -> Option<&str> {
         self.input.as_ref().and_then(|input| {
-            let field = if input["outcome"] == "cap" && input["step"] == self.node {
-                "routed_by"
+            let field = if input["outcome"] == "failed" {
+                "cause"
             } else {
                 "outcome"
             };

@@ -42,110 +42,95 @@ fn edge(spec: &Definition, node: &str, outcome: &str) -> (Value, Option<&'static
 }
 
 #[test]
-fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
-    for (kind, check) in [
-        ("script", "run='true'\non.ok='@done'\ntimeout='1m'"),
+fn failure_edges_name_the_chain_level_that_routes_them_in_every_kind() {
+    for (kind, check, cause) in [
+        (
+            "script",
+            "run='true'\non.ok='@done'\ntimeout='1m'",
+            "invalid",
+        ),
         (
             "test",
             "shell='false'\non.pass='@done'\non.fail='@failed'\ntimeout='1m'",
+            "died",
         ),
         (
             "judge",
             "agent='claude'\nprompt-file='judge.md'\non.ok='@done'\ntimeout='1m'",
+            "limited",
         ),
         (
             "condition",
             "cases=[{when=['pr=merged'],outcome='ok'}]\non.ok='@done'\ntimeout='1m'",
+            "timeout",
         ),
-        ("sleep", "sleep='1m'\nthen='@done'"),
+        ("sleep", "sleep='1m'\nthen='@done'", "deadline"),
     ] {
-        for (on_break, target, source) in [
+        for (workflow, target, source) in [
             ("", "@failed", "default"),
-            ("on-break='@done'", "@done", "on-break"),
-            ("on-break={agent='claude'}", "@break", "on-break"),
+            ("on.failed='@done'", "@done", "workflow.on.failed"),
         ] {
             let text = format!(
-                "[workflow]\nscope='worktree'\nstart='gate'\n{on_break}\n[{kind}.gate]\n{check}\n[agent.work]\nlifecycle='turn'\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
+                "[workflow]\nscope='worktree'\nstart='gate'\n{workflow}\n[{kind}.gate]\n{check}\n[agent.work]\nlifecycle='turn'\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
             );
             let spec = super::super::spec::parse(&text).unwrap();
             for (node, outcome) in [
-                ("gate", "invalid"),
+                ("gate", cause),
                 ("gate", "deadline"),
-                ("work", "invalid"),
-                ("work", "cap"),
+                ("work", "died"),
+                ("work", "visits"),
                 ("work", "deadline"),
             ] {
                 let (edge, _) = edge(&spec, node, outcome);
                 assert_eq!(edge["target"], target, "{text}: {node}.{outcome}");
                 assert_eq!(edge["source"], source);
-                assert_ne!(
-                    spec.target(node, outcome)
-                        .as_ref()
-                        .map(|target| target.as_str()),
-                    Some("@user")
-                );
-            }
-            if !check.starts_with("sleep") {
                 assert_eq!(
-                    spec.target("gate", "timeout")
+                    spec.target(node, outcome)
                         .as_ref()
                         .map(|target| target.as_str()),
                     Some(target)
                 );
             }
             assert_eq!(spec.target("work", "asked"), None);
-            if target == "@break" {
+            let explicit =
+                super::super::spec::parse(&(text + "on.failed='@failed'\non.visits='@done'\n"))
+                    .unwrap();
+            for (outcome, target, source) in [
+                ("died", "@failed", "on.failed"),
+                ("visits", "@done", "explicit"),
+            ] {
                 assert_eq!(
-                    spec.authored().steps["@break"].lifecycle(),
-                    crate::store::workflow::StepLifecycle::Session
-                );
-                assert_eq!(
-                    spec.target("@break", "invalid")
+                    explicit
+                        .target("work", outcome)
                         .as_ref()
                         .map(|target| target.as_str()),
-                    Some("@failed")
+                    Some(target)
                 );
-                assert!(
-                    spec.edges("@break")
-                        .iter()
-                        .all(|edge| edge.outcome != "deadline")
-                );
+                assert_eq!(edge(&explicit, "work", outcome).0["source"], source);
             }
-            let explicit =
-                super::super::spec::parse(&(text + "on.invalid='@failed'\non.cap='@done'\n"))
-                    .unwrap();
-            assert_eq!(
-                explicit
-                    .target("work", "invalid")
-                    .as_ref()
-                    .map(|target| target.as_str()),
-                Some("@failed")
-            );
-            assert_eq!(edge(&explicit, "work", "invalid").0["source"], "explicit");
-            assert_eq!(
-                explicit
-                    .target("work", "cap")
-                    .as_ref()
-                    .map(|target| target.as_str()),
-                Some("@done")
-            );
         }
     }
 }
 
 #[test]
-fn sleep_on_invalid_is_live_and_other_routes_refuse() {
-    let spec = super::super::spec::parse("[workflow]\nscope='worktree'\nstart='nap'\n[sleep.nap]\nsleep='1m'\nthen='@done'\non.invalid='@failed'\n").unwrap();
+fn a_sleep_routes_only_its_deadline_and_other_causes_refuse() {
+    let spec = super::super::spec::parse("[workflow]\nscope='worktree'\nstart='nap'\n[sleep.nap]\nsleep='1m'\nthen='@done'\non.failed='@done'\n").unwrap();
     assert_eq!(
-        spec.target("nap", "invalid")
+        spec.target("nap", "deadline")
             .as_ref()
             .map(|target| target.as_str()),
-        Some("@failed")
+        Some("@done")
     );
-    let timeout = "[workflow]\nscope='worktree'\nstart='nap'\n[sleep.nap]\nsleep='1m'\nthen='@done'\non.timeout='@done'\n";
-    match super::super::spec::parse(timeout) {
-        Err(super::super::SpecErr::Toml { path, .. }) => assert_eq!(path, "sleep.nap.on.timeout"),
-        other => panic!("a sleep's on.timeout refuses: {other:?}"),
+    for cause in ["timeout", "invalid"] {
+        let text = format!(
+            "[workflow]\nscope='worktree'\nstart='nap'\n[sleep.nap]\nsleep='1m'\nthen='@done'\non.{cause}='@done'\n"
+        );
+        match super::super::spec::parse(&text) {
+            Err(super::super::SpecErr::Toml { path, .. }) => {
+                assert_eq!(path, format!("sleep.nap.on.{cause}"));
+            }
+            other => panic!("a sleep's on.{cause} refuses: {other:?}"),
+        }
     }
 }
 
@@ -171,7 +156,7 @@ fn timeout_edges_name_the_missing_clock() {
 }
 
 #[test]
-fn cap_edges_need_a_visit_bound() {
+fn visits_edges_need_a_visit_bound() {
     for (bounds, fires, because) in [
         ("", "never", Some("no-max-visits")),
         ("max-visits=4", "yes", None),
@@ -180,7 +165,7 @@ fn cap_edges_need_a_visit_bound() {
             "run='true'\non.ready='work'",
             &format!("shell='true'\nthen='gate'\n{bounds}"),
         );
-        let (edge, mark) = edge(&spec, "work", "cap");
+        let (edge, mark) = edge(&spec, "work", "visits");
         assert_eq!(edge["fires"], fires);
         assert_eq!(
             edge.get("because"),
@@ -191,14 +176,28 @@ fn cap_edges_need_a_visit_bound() {
 }
 
 #[test]
-fn limited_off_capacity_edges_keep_the_give_up_routes() {
-    let mut actual = Vec::new();
-    for workflow_limit in [false, true] {
-        for wait in ["forever", "5m"] {
-            let step = format!(
-                "agent='claude'\nthen='gate'\nadmission.throttle='off'\nadmission.give-up='{wait}'"
-            );
-            let mut spec = spec("run='true'\non.ready='work'", &step);
+fn capacity_edges_fire_on_every_agent_step() {
+    // A start wider than a machine cap fails with capacity on any admitted run, so no
+    // setting of the definition makes the edge unreachable.
+    for (settings, limit) in [
+        ("", None),
+        ("admission.give-up='forever'", None),
+        ("admission.give-up='5m'", None),
+        ("admission.throttle='off'", None),
+        (
+            "admission.throttle='off'\nadmission.give-up='5m'",
+            Some(false),
+        ),
+        (
+            "admission.throttle='off'\nadmission.give-up='forever'",
+            Some(true),
+        ),
+    ] {
+        let mut spec = spec(
+            "run='true'\non.ready='work'",
+            &format!("agent='claude'\nthen='gate'\n{settings}"),
+        );
+        if let Some(workflow_limit) = limit {
             let limit = Some(toml::from_str("max-parallel=1").unwrap());
             spec.edit(|spec| {
                 if workflow_limit {
@@ -207,61 +206,11 @@ fn limited_off_capacity_edges_keep_the_give_up_routes() {
                     spec.steps.get_mut("work").unwrap().limit = limit;
                 }
             });
-            let (edge, _) = edge(&spec, "work", "capacity");
-            actual.push((edge["fires"].clone(), edge["because"].clone()));
         }
-    }
-    assert_eq!(
-        actual,
-        [
-            (json!("never"), json!("give-up-forever")),
-            (json!("yes"), serde_json::Value::Null),
-            (json!("never"), json!("give-up-forever")),
-            (json!("yes"), serde_json::Value::Null),
-        ]
-    );
-}
-
-#[test]
-fn capacity_edges_name_the_give_up_preconditions() {
-    for (settings, fires, because, mark) in [
-        (
-            "",
-            "with-give-up",
-            None,
-            Some("only when the run carries a give-up instant"),
-        ),
-        (
-            "admission.give-up='forever'",
-            "never",
-            Some("give-up-forever"),
-            Some("never: give-up is forever"),
-        ),
-        ("admission.give-up='5m'", "yes", None, None),
-        (
-            "admission.throttle='off'",
-            "with-give-up",
-            None,
-            Some("only when the run carries a give-up instant"),
-        ),
-        (
-            "admission.throttle='off'\nadmission.give-up='5m'",
-            "yes",
-            None,
-            None,
-        ),
-    ] {
-        let spec = spec(
-            "run='true'\non.ready='work'",
-            &format!("agent='claude'\nthen='gate'\n{settings}"),
-        );
-        let (edge, actual_mark) = edge(&spec, "work", "capacity");
-        assert_eq!(edge["fires"], fires);
-        assert_eq!(
-            edge.get("because"),
-            because.map(|text| json!(text)).as_ref()
-        );
-        assert_eq!(actual_mark, mark);
+        let (edge, mark) = edge(&spec, "work", "capacity");
+        assert_eq!(edge["fires"], "yes", "{settings}");
+        assert_eq!(edge.get("because"), None, "{settings}");
+        assert_eq!(mark, None, "{settings}");
         assert_eq!(edge["target"], "@failed");
     }
     let spec = spec("run='true'", "shell='true'\nthen='gate'");
@@ -274,7 +223,7 @@ fn capacity_edges_name_the_give_up_preconditions() {
 }
 
 #[test]
-fn judge_invalid_fires_after_retry_and_defaults_to_the_on_break_target() {
+fn judge_invalid_fires_after_retry_and_defaults_to_the_run_end() {
     for (settings, target) in [("", "@failed"), ("on.invalid='work'", "work")] {
         let spec = spec(
             &format!("agent='claude'\non.ready='work'\n{settings}"),
@@ -298,7 +247,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
         let mut spec = spec("run='true'\non.ready='work'", "agent='claude'\nthen='gate'");
         spec.edit(|spec| {
             spec.workflow.deadline = deadline.map(str::to_owned);
-            spec.workflow.on.deadline = target.map(str::to_owned);
+            spec.workflow.on.failed = target.map(str::to_owned);
         });
         for node in ["gate", "work"] {
             let (edge, mark) = edge(&spec, node, "deadline");
@@ -307,7 +256,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
             assert_eq!(
                 edge["source"],
                 if target.is_some() {
-                    "explicit"
+                    "workflow.on.failed"
                 } else {
                     "default"
                 }
@@ -322,7 +271,7 @@ fn deadlines_require_a_sealed_or_granted_deadline_not_just_a_route() {
 fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     let spec = spec(
         "cases=[{when=['pr=merged'],outcome='zeta'},{when=['ci=passed'],outcome='alpha'},{when=['ci=failed'],outcome='zeta'}]\nelse='pending'\non={alpha='@done',zeta='work',pending='@wait',unknown='@wait'}\ntimeout='1d'",
-        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',cap='@failed',capacity='@failed'}",
+        "agent='claude'\nlifecycle='turn'\nthen='gate'\non={asked='gate',visits='@failed',capacity='@failed'}",
     );
     let outcomes = |node| {
         spec.edges(node)
@@ -332,13 +281,13 @@ fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
     };
     assert_eq!(
         outcomes("gate"),
-        [
-            "zeta", "alpha", "pending", "unknown", "timeout", "invalid", "deadline"
-        ]
+        ["zeta", "alpha", "pending", "unknown", "timeout", "deadline"]
     );
     assert_eq!(
         outcomes("work"),
-        ["then", "asked", "invalid", "cap", "capacity", "deadline"]
+        [
+            "then", "asked", "died", "timeout", "limited", "visits", "capacity", "deadline"
+        ]
     );
     let spec = self::spec(
         "run='true'\non={zeta='work',alpha='@done'}",
@@ -349,7 +298,7 @@ fn edge_order_follows_cases_then_else_then_explicit_then_engine_triggers() {
             .into_iter()
             .map(|edge| edge.outcome)
             .collect::<Vec<_>>(),
-        ["alpha", "zeta", "timeout", "invalid", "deadline"]
+        ["alpha", "zeta", "died", "invalid", "timeout", "deadline"]
     );
 }
 
@@ -391,7 +340,7 @@ pub(super) const RALPH: &str = r#"
 [workflow]
 scope='project'
 start='evidence'
-on.deadline='report'
+on.failed='report'
 [script.evidence]
 run='true'
 on={plan='plan',build='build',review='judge',report='report',wait='@wait',broken='@failed'}
@@ -407,13 +356,13 @@ lifecycle='turn'
 agent='claude'
 then='evidence'
 max-visits=20
-on.cap='report'
+on.visits='report'
 [agent.build]
 lifecycle='turn'
 agent='claude'
 then='evidence'
 max-visits=80
-on.cap='report'
+on.visits='report'
 [agent.report]
 lifecycle='turn'
 agent='claude'
@@ -472,7 +421,7 @@ fn walk_reaches_header_deadline_but_not_impossible_edges_and_sorts_unreachable()
 [workflow]
 scope='worktree'
 start='start'
-on.deadline='rescue'
+on.failed='rescue'
 [script.start]
 run='true'
 on={ready='work',timeout='sleeping'}
@@ -489,7 +438,7 @@ run='true'
 lifecycle='turn'
 agent='claude'
 then='start'
-on.cap='capped'
+on.visits='capped'
 "#,
     )
     .unwrap();
@@ -509,7 +458,7 @@ fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='c'\n\
          [test.c]\nshell='true'\non.pass='a'\n\
-         [command.a]\nshell='true'\nthen='c'\nmax-visits=1\non.cap='b'\n\
+         [command.a]\nshell='true'\nthen='c'\nmax-visits=1\non.visits='b'\n\
          [command.b]\nshell='true'\nthen='a'\n",
     )
     .unwrap();
@@ -544,8 +493,8 @@ fn walk_keeps_a_step_whose_then_names_another_step_and_validation_reports_it() {
 #[test]
 fn a_deadline_only_step_does_not_hang_under_its_return_check() {
     let spec: Definition = toml::from_str(
-        "[workflow]\nscope='worktree'\nstart='gate'\non.deadline='rescue'\n\
-         [test.gate]\nshell='true'\non.pass='@done'\n\
+        "[workflow]\nscope='worktree'\nstart='gate'\non.failed='rescue'\n\
+         [sleep.gate]\nsleep='1m'\nthen='@done'\n\
          [command.rescue]\nshell='true'\nthen='gate'\n",
     )
     .unwrap();
@@ -614,7 +563,7 @@ fn walk_positions_distinguish_downward_routes_from_returns_and_cross_routes() {
 
 #[test]
 fn validation_rows_follow_the_walk_then_alphabetical_unreachable_nodes() {
-    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[test.z]\nshell='true'\non={pass='work',fail='@done',invalid='@failed'}\n[test.a]\nshell='true'\non={pass='@done',fail='@failed',invalid='@failed'}\n[command.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={cap='@failed'}").unwrap();
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='z'\n[test.z]\nshell='true'\non={pass='work',fail='@done',died='@failed'}\n[test.a]\nshell='true'\non={pass='@done',fail='@failed',died='@failed'}\n[command.work]\nshell='true'\ntimeout='1m'\nthen='z'\nmax-visits=3\non={visits='@failed'}").unwrap();
     let report = super::super::validate::validate_spec(
         std::path::Path::new("."),
         "example",

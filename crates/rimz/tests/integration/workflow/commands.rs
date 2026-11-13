@@ -9,7 +9,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 fn command_fixture(runner: &str, command: &str) -> (Env, PathBuf) {
     fixture(
         &format!(
-            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.go='build'\n[command.build]\n{runner}={}\ntimeout='1h'\nthen='report'\nmax-visits=2\n[test.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n",
+            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.go='build'\n[command.build]\n{runner}={}\ntimeout='1h'\nthen='report'\non.died='report'\non.timeout='report'\nmax-visits=2\n[test.report]\nshell='true'\non={{pass='@done',fail='@failed'}}\n",
             toml::Value::String(command.into())
         ),
         "printf '%s\\n' '{\"outcome\":\"go\",\"key\":7,\"payload\":\"keep me\"}'",
@@ -218,10 +218,21 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
     assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(value["record"]["next_seq"], 4);
     let ctx = context(&value);
-    assert_eq!(
-        ctx["input"],
-        json!({"outcome":"go", "key":7, "payload":"keep me"})
-    );
+    // A clean end follows `then` with the check's input; a death takes `on.died` with the
+    // failure input, which carries the exit code when there is one.
+    let input = match (outcome, code.as_u64()) {
+        ("ended", _) => json!({"outcome":"go", "key":7, "payload":"keep me"}),
+        (_, Some(code)) => json!({
+            "outcome":"failed", "cause":"died", "node":"build", "key":7,
+            "reason":format!("exited {code}"),
+            "detail":{"code":code, "log":attempt["log"]},
+        }),
+        _ => json!({
+            "outcome":"failed", "cause":"died", "node":"build", "key":7,
+            "reason":"killed by signal", "detail":{"log":attempt["log"]},
+        }),
+    };
+    assert_eq!(ctx["input"], input);
     assert_eq!(ctx["prev_attempt"], *previous);
     let log_path = Path::new(attempt["log"].as_str().unwrap());
     assert_eq!(log_path.file_name().unwrap(), "2.step.log");
@@ -335,7 +346,7 @@ fn command_cancel_settles_once_and_stops_the_group() {
 }
 
 #[test]
-fn a_dead_command_host_is_canceled_without_repeating_the_action() {
+fn a_dead_command_host_dies_without_repeating_the_action() {
     command_bound("dead-host");
 }
 
@@ -396,6 +407,8 @@ fn command_bound(mode: &str) {
     assert_eq!(attempts.len(), 1, "{mode}: {value:#}");
     let outcome = if mode.contains("timeout") {
         "timeout"
+    } else if mode == "dead-host" {
+        "died"
     } else {
         "canceled"
     };
@@ -416,7 +429,7 @@ fn command_bound(mode: &str) {
         Path::new(value["dir"].as_str().unwrap()).join("2.step.log")
     );
     if mode.contains("deadline") {
-        assert_eq!(value["record"]["input"]["outcome"], "deadline");
+        assert_eq!(value["record"]["input"]["cause"], "deadline");
         assert_eq!(value["record"]["deadline_fired"], true);
     }
     if mode == "dead-host" {

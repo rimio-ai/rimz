@@ -95,6 +95,7 @@ pub(in crate::harness) fn finish_judge(
                 stderr_tail: None,
                 limited: None,
                 cost_usd: None,
+                detail: serde_json::json!({}),
             },
         )
         .unwrap();
@@ -169,35 +170,19 @@ impl FakeHost {
         }
     }
 
-    /// The checkout's occupancy without counting a read, `excluded` left out.
-    fn current_occupancy(&self, excluded: &[String]) -> Occupancy {
+    /// The checkout's occupancy without counting a read.
+    fn current_occupancy(&self) -> Occupancy {
         if self.stale_after_evict.get() && self.evictions.get() > 0 {
             return Occupancy::Blocked(vec![(
                 "stale occupant".into(),
                 crate::harness::takeover::OpenTurn::Working,
             )]);
         }
-        let mut occupancy = match &*self.occupancy.borrow() {
+        match &*self.occupancy.borrow() {
             Occupancy::Free => Occupancy::Free,
             Occupancy::Occupied(handles) => Occupancy::Occupied(handles.clone()),
             Occupancy::Blocked(blockers) => Occupancy::Blocked(blockers.clone()),
-        };
-        match &mut occupancy {
-            Occupancy::Occupied(handles) if !handles.is_empty() => {
-                handles.retain(|handle| !excluded.contains(handle));
-                if handles.is_empty() {
-                    return Occupancy::Free;
-                }
-            }
-            Occupancy::Blocked(blockers) if !blockers.is_empty() => {
-                blockers.retain(|(handle, _)| !excluded.contains(handle));
-                if blockers.is_empty() {
-                    return Occupancy::Free;
-                }
-            }
-            _ => {}
         }
-        occupancy
     }
 }
 
@@ -206,13 +191,12 @@ impl AttemptHost for FakeHost {
         &self,
         _: &std::path::Path,
         _: &std::path::Path,
-        excluded: &[String],
     ) -> Result<Occupancy, WorkflowErr> {
         self.occupancies.set(self.occupancies.get() + 1);
         if let Some(check) = &*self.on_occupancy.borrow() {
             check();
         }
-        Ok(self.current_occupancy(excluded))
+        Ok(self.current_occupancy())
     }
 
     fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, NotLaunched>, WorkflowErr> {
@@ -220,8 +204,8 @@ impl AttemptHost for FakeHost {
             *self.occupancy.borrow_mut() = arrived;
         }
         // As the CLI host does: read the checkout again once the launch is prepared.
-        if let Some(evict) = &step.evict {
-            match self.current_occupancy(&evict.excluded) {
+        if step.evict.is_some() {
+            match self.current_occupancy() {
                 Occupancy::Free => {}
                 Occupancy::Occupied(_) if step.takeover => {
                     self.evictions.set(self.evictions.get() + 1);
@@ -386,6 +370,7 @@ mod attempts;
 mod commands;
 mod conditions;
 mod definition;
+mod failures;
 mod graph;
 mod inspection;
 mod judges;
@@ -438,7 +423,6 @@ fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
 
 const VALID: &str = r#"
 [workflow]
-on-break = "@failed"
 scope = "worktree"
 start = "pick"
 [script.pick]
@@ -750,36 +734,6 @@ fn a_rest_checked_session_warns_about_unreported_background_work_and_auto_contin
 }
 
 #[test]
-fn deadline_wait_does_not_require_a_check_timeout_or_allow_a_check_only_cycle() {
-    let results = ["@done", "pick"].map(|target| {
-        let spec: Definition = toml::from_str(&format!(
-            "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\non.deadline='@wait'\n\
-             [script.pick]\nrun='true'\non.ready='{target}'\n"
-        ))
-        .unwrap();
-        let report = super::validate::validate_spec(
-            std::path::Path::new("."),
-            "review",
-            &spec,
-            &LoadedDefinitions::default(),
-            None,
-        );
-        report
-            .errors
-            .into_iter()
-            .map(|issue| issue.message)
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(
-        results,
-        [
-            vec![],
-            vec!["review: script.pick: check-only cycle has no @wait".to_owned()]
-        ]
-    );
-}
-
-#[test]
 fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
     let results = [
         "pick", "build", "missing", "@done", "@user", "@wait", "@failed",
@@ -809,7 +763,7 @@ fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
             } else if start == "@user" {
                 vec![(
                     "workflow.start".into(),
-                    "workflow.start: example: workflow.start: @user is not a route target; route to a node, @done, or @failed, or set [workflow] on-break".into(),
+                    "workflow.start: example: workflow.start: @user is not a route target; route to a node, @done, or @failed".into(),
                 )]
             } else {
                 vec![(
@@ -823,7 +777,7 @@ fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
 
 #[test]
 fn validation_rejects_each_invalid_spec() {
-    let shell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+    let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
     let cases = [
         (
             "shell requires pass",
@@ -974,9 +928,9 @@ fn validation_rejects_each_invalid_spec() {
             "agent.build.then",
         ),
         (
-            "cap cannot wait",
-            format!("{VALID}\non.cap = '@wait'\n"),
-            "agent.build.on.cap",
+            "visits cannot wait",
+            format!("{VALID}\non.visits = '@wait'\n"),
+            "agent.build.on.visits",
         ),
         (
             "asked cannot wait",
@@ -984,9 +938,9 @@ fn validation_rejects_each_invalid_spec() {
             "agent.build.on.asked",
         ),
         (
-            "cap cannot target itself",
-            format!("{VALID}\non.cap = 'build'\n"),
-            "agent.build.on.cap",
+            "visits cannot target itself",
+            format!("{VALID}\non.visits = 'build'\n"),
+            "agent.build.on.visits",
         ),
         (
             "bad duration",
@@ -1093,7 +1047,7 @@ fn validation_rejects_each_invalid_spec() {
 #[test]
 fn bounded_command_cycles_validate_without_a_never_waits_warning() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\non.fail='build'\n";
+    let base = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\non.fail='build'\n";
     let two = base.replace("on.fail='build'", "on.fail='pack'")
         + "[command.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[script.back]\nrun='true'\non.fail='build'\n";
     let route = "[script.pick]\nrun='true'\non.fail='build'";
@@ -1109,7 +1063,6 @@ fn bounded_command_cycles_validate_without_a_never_waits_warning() {
         base.to_owned(),
         base.replace("[command.build]\nrun=", "[command.build]\nshell="),
         two,
-        base.replace("start='build'", "start='build'\non.deadline='@wait'"),
         base.to_owned() + "on.pending='@wait'\ntimeout='1m'\n",
         base.replace(route, "[sleep.pick]\nsleep='1m'\nthen='build'"),
         base.replace(route, condition),
@@ -1133,7 +1086,7 @@ fn bounded_command_cycles_validate_without_a_never_waits_warning() {
 
 #[test]
 fn validation_refuses_script_and_judge_checks_without_an_on_table() {
-    let head = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n";
+    let head = "[workflow]\nscope='worktree'\nstart='pick'\n";
     let cases = [
         ("script", "[script.pick]\nrun='true'\n"),
         (
@@ -1216,7 +1169,7 @@ fn validation_accepts_shell_checks_without_confining_the_command() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',invalid='@done',timeout='@failed'}\n",
+        "[workflow]\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',died='@done',timeout='@failed'}\n",
     ).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
@@ -1278,9 +1231,9 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     );
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
-    assert!(row.edges.iter().any(|edge| edge.outcome == "invalid"
+    assert!(row.edges.iter().any(|edge| edge.outcome == "died"
         && edge.target == "@failed"
-        && edge.source == EdgeSource::OnBreak));
+        && edge.source == EdgeSource::Default));
     assert!(row.edges.iter().any(|edge| edge.outcome == "ready"
         && edge.target == "build"
         && edge.source == EdgeSource::Explicit));
@@ -1292,9 +1245,7 @@ fn validation_resolves_edges_and_warns_about_auto_continue() {
     let codex = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         codex.warnings.iter().any(|issue| issue.path == "judge.pick"
-            && issue
-                .message
-                .contains("retries once, then follows on.invalid")
+            && issue.message.contains("retries once, then fails invalid")
             && !issue.message.contains("ends the attempt as limited")),
         "{codex:?}"
     );
@@ -1385,7 +1336,8 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
     let mut actual = Vec::new();
     for (extra, field) in [
         (
-            "admission.give-up='2h'\nadmission.throttle='off'\non.capacity='pick'",
+            // R10: pick leads back to build, so the capacity route ends the run.
+            "admission.give-up='2h'\nadmission.throttle='off'\non.capacity='@done'",
             None,
         ),
         ("admission.give-up='forever'", None),
@@ -1412,7 +1364,7 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
                                 edge.outcome == "capacity"
                                     && edge.target
                                         == if extra.contains("on.capacity") {
-                                            "pick"
+                                            "@done"
                                         } else {
                                             "@failed"
                                         }
@@ -1441,7 +1393,7 @@ fn capacity_step_fields_validate_and_resolve_only_agent_edges() {
         );
     }
     assert_eq!(actual, vec![true; 9]);
-    assert!(super::spec::RESERVED_OUTCOMES.contains(&"capacity"));
+    assert!(super::spec::reserved("capacity"));
 }
 
 /// `text` with its `build` agent rewritten as a command step.

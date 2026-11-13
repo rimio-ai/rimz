@@ -1,5 +1,4 @@
 [workflow]
-on-break = "@failed"
 scope = "worktree"
 start = "pr"
 
@@ -29,6 +28,9 @@ admission.occupancy = "takeover"
 then = "pr"
 max-visits = 5
 timeout = "6h"
+on.died = "pr"
+on.timeout = "pr"
+on.limited = "pr"
 
 [agent.triage]
 agent = "yagni"
@@ -38,4 +40,6 @@ admission.window = "5h.left>=42"
 admission.occupancy = "takeover"
 then = "notes"
 on.asked = "judge"
+on.died = "notes"
+on.limited = "notes"
 max-visits = 3

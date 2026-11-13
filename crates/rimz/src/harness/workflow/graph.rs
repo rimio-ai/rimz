@@ -2,40 +2,33 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::definition::{BREAK, Definition, Kind, Target};
-use super::spec::{Check, OnBreak, Step};
-use crate::config::CapacityWait;
+use super::definition::{Definition, Kind, Target};
+use super::spec::Cause;
 
-const CHECK_TRIGGERS: [&str; 4] = ["unknown", "timeout", "invalid", "deadline"];
-const STEP_TRIGGERS: [&str; 8] = [
-    "then",
-    "failed",
-    "undelivered",
-    "asked",
-    "invalid",
-    "cap",
-    "capacity",
-    "deadline",
-];
-const FAILURE_EDGES: [&str; 5] = ["timeout", "invalid", "undelivered", "cap", "deadline"];
 /// The outcome naming each edge from a session to one of its rest checks.
 const REST_CHECK: &str = "rest-check";
 
+/// Where an edge's target came from: the node's own route, the fallback chain's next level,
+/// or the run's end when nothing routes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
 pub enum EdgeSource {
+    #[serde(rename = "explicit")]
     Explicit,
+    #[serde(rename = "on.failed")]
+    NodeFailed,
+    #[serde(rename = "workflow.on.failed")]
+    WorkflowFailed,
+    #[serde(rename = "default")]
     Default,
-    #[serde(rename = "on-break")]
-    OnBreak,
 }
 
 impl std::fmt::Display for EdgeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Explicit => "explicit",
+            Self::NodeFailed => "on.failed",
+            Self::WorkflowFailed => "workflow.on.failed",
             Self::Default => "default",
-            Self::OnBreak => "on-break",
         })
     }
 }
@@ -46,7 +39,6 @@ pub enum Fireability {
     Yes,
     Never,
     WithDeadline,
-    WithGiveUp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -54,7 +46,6 @@ pub enum Fireability {
 pub enum NeverReason {
     NoTimeout,
     NoMaxVisits,
-    GiveUpForever,
 }
 
 impl NeverReason {
@@ -62,7 +53,6 @@ impl NeverReason {
         match self {
             Self::NoTimeout => "never: no timeout",
             Self::NoMaxVisits => "never: no max-visits",
-            Self::GiveUpForever => "never: give-up is forever",
         }
     }
 }
@@ -84,7 +74,6 @@ impl Edge {
             Fireability::Yes => None,
             Fireability::Never => self.because.map(NeverReason::mark),
             Fireability::WithDeadline => Some("only with a deadline"),
-            Fireability::WithGiveUp => Some("only when the run carries a give-up instant"),
         }
     }
 }
@@ -128,14 +117,7 @@ impl Definition {
     /// Reverse postorder, with returning steps below their earlier sending check.
     pub fn walk(&self) -> Walk {
         let mut seen = BTreeSet::new();
-        let mut order = self.walk_component(self.start(), &mut seen);
-        if self.deadline().is_some()
-            && let Some(target) = self.target(self.start(), "deadline")
-        {
-            order.extend(self.walk_component(target.as_str(), &mut seen));
-        } else if let Some(target) = self.on_deadline() {
-            order.extend(self.walk_component(target.as_str(), &mut seen));
-        }
+        let order = self.walk_component(self.start(), &mut seen);
         let parents = self.hanging_steps(&order);
         let mut nodes = Vec::new();
         let mut placed = BTreeSet::new();
@@ -184,8 +166,7 @@ impl Definition {
             }
             pending.push((node.clone(), true));
             for edge in self.edges(&node) {
-                if edge.outcome != "deadline"
-                    && edge.fires != Fireability::Never
+                if edge.fires != Fireability::Never
                     && let Some(target) = edge.target.node()
                 {
                     pending.push((target.to_owned(), false));
@@ -230,54 +211,63 @@ impl Definition {
 
     /// Node edges in display order, including conditional and never-firing routes.
     pub fn edges(&self, node: &str) -> Vec<Edge> {
-        let step = self.step(node);
-        self.resolved_edges(node)
-            .unwrap_or_default()
-            .iter()
-            .filter(|edge| {
-                step.is_none_or(|step| match edge.outcome.as_str() {
-                    "asked" | "capacity" => matches!(step.kind(), Some(Kind::Agent(_))),
-                    _ => true,
-                })
-            })
-            .cloned()
-            .collect()
+        self.resolved_edges(node).unwrap_or_default().to_vec()
     }
 
-    /// Resolve a routing decision against this definition, including engine-owned outcomes.
+    /// Resolve a routing decision against this definition, including engine-owned outcomes:
+    /// a cause, or a step attempt's ending, takes the failure chain.
     pub fn target(&self, node: &str, outcome: &str) -> Option<Target> {
         let edges = self.resolved_edges(node)?;
-        if self.check(node).is_some() {
-            return if outcome == "hold" {
-                Some(Target::Wait)
-            } else if outcome == "budget" {
-                Some(Target::Failed)
-            } else {
-                edges
-                    .iter()
-                    .find(|edge| edge.outcome == outcome)
-                    .map(|edge| edge.target.clone())
-            };
+        if let Some(cause) = self.ending_cause(node, outcome) {
+            return Some(self.failure_target(node, cause));
         }
-        let message = matches!(self.step_kind(node), Some(Kind::Message(_)));
+        let step = self.check(node).is_none();
         let outcome = match outcome {
-            "died" if message => "undelivered",
-            _ if self.routes_on_failed(node, outcome) => "failed",
-            "ended" | "died" | "canceled" | "limited" | "timeout" => "then",
+            "hold" if !step => return Some(Target::Wait),
+            "ended" if step => "then",
             other => other,
         };
         edges
             .iter()
             .find(|edge| edge.outcome == outcome)
             .map(|edge| edge.target.clone())
-            .or_else(|| (outcome == "then").then_some(Target::Failed))
+            .or_else(|| (step && outcome == "then").then_some(Target::Failed))
     }
 
-    /// Whether a step's attempt ending leaves through its `on.failed`, for settlement and
-    /// inspection alike.
-    pub(super) fn routes_on_failed(&self, node: &str, ending: &str) -> bool {
-        matches!(ending, "died" | "timeout" | "limited")
-            && self.step(node).is_some_and(|step| step.routes("failed"))
+    /// The cause an outcome at `node` raises: a cause word as written, or a step attempt's
+    /// ending that is not clean (a message's undelivered, any other step's died).
+    pub(super) fn ending_cause(&self, node: &str, outcome: &str) -> Option<Cause> {
+        if self.check(node).is_none() && matches!(outcome, "died" | "canceled") {
+            return Some(match self.step_kind(node) {
+                Some(Kind::Message(_)) => Cause::Undelivered,
+                _ => Cause::Died,
+            });
+        }
+        Cause::parse(outcome)
+    }
+
+    /// The fallback chain: the node's `on.<cause>`, else its `on.failed`, else the workflow's
+    /// `on.failed`, else the run fails.
+    pub(super) fn failure_route(&self, node: &str, cause: Cause) -> (Target, EdgeSource) {
+        let authored = self.authored();
+        let (own, failed) = match (authored.checks.get(node), authored.steps.get(node)) {
+            (Some(check), _) => (check.on.get(cause.word()), check.on.get("failed")),
+            (None, Some(step)) => (step.on.causes.get(cause.word()), step.on.failed.as_ref()),
+            (None, None) => (None, None),
+        };
+        if let Some(route) = own {
+            (Target::parse(route), EdgeSource::Explicit)
+        } else if let Some(route) = failed {
+            (Target::parse(route), EdgeSource::NodeFailed)
+        } else if let Some(route) = &authored.workflow.on.failed {
+            (Target::parse(route), EdgeSource::WorkflowFailed)
+        } else {
+            (Target::Failed, EdgeSource::Default)
+        }
+    }
+
+    pub(super) fn failure_target(&self, node: &str, cause: Cause) -> Target {
+        self.failure_route(node, cause).0
     }
 
     pub(super) fn engine_target(&self, node: &str, outcome: &str) -> Target {
@@ -290,224 +280,98 @@ impl Definition {
         self.node(node).map(super::definition::Node::resolved_edges)
     }
 
+    /// The node's answer routes in display order, then one edge per cause its kind raises.
     pub(super) fn compile_edges(&self, node: &str) -> Option<Vec<Edge>> {
-        let mut edges = self.node_edges(node)?;
         let authored = self.authored();
-        let outcomes = if let Some(check) = authored.checks.get(node) {
-            if self.check(node).is_some_and(|check| check.is_sleep()) {
-                ["then", "sleeping", "unknown", "invalid", "deadline"]
-                    .map(str::to_owned)
-                    .to_vec()
+        let mut edges = Vec::new();
+        let mut answer = |outcome: &str, target: Target, source: EdgeSource| {
+            edges.push(Edge {
+                outcome: outcome.into(),
+                target,
+                source,
+                fires: Fireability::Yes,
+                because: None,
+            });
+        };
+        let table = if let Some(check) = authored.checks.get(node) {
+            if check.is_sleep() {
+                if let Some(then) = &check.then {
+                    answer("then", Target::parse(then), EdgeSource::Explicit);
+                }
+                answer("sleeping", Target::Wait, EdgeSource::Default);
+                if check.when.is_some() {
+                    answer("unknown", Target::Wait, EdgeSource::Default);
+                }
             } else {
-                check
+                let mut seen = BTreeSet::new();
+                let outcomes = check
                     .cases
                     .iter()
-                    .map(|case| case.outcome.clone())
-                    .chain(check.else_outcome.iter().cloned())
-                    .chain(
-                        check
-                            .on
-                            .keys()
-                            .filter(|outcome| !CHECK_TRIGGERS.contains(&outcome.as_str()))
-                            .cloned(),
-                    )
-                    .chain(CHECK_TRIGGERS.map(str::to_owned))
-                    .collect::<Vec<_>>()
+                    .map(|case| case.outcome.as_str())
+                    .chain(check.else_outcome.as_deref())
+                    .chain(check.on.keys().map(String::as_str))
+                    .filter(|outcome| *outcome != "failed" && Cause::parse(outcome).is_none());
+                for outcome in outcomes {
+                    if let Some(route) = check.on.get(outcome)
+                        && seen.insert(outcome)
+                    {
+                        answer(outcome, Target::parse(route), EdgeSource::Explicit);
+                    }
+                }
             }
+            check.table.word()
         } else {
-            STEP_TRIGGERS.map(str::to_owned).to_vec()
+            let step = authored.steps.get(node)?;
+            if let Some(then) = step.then.first() {
+                answer("then", Target::parse(then), EdgeSource::Explicit);
+            }
+            if let Some(asked) = &step.on.asked
+                && step.table == super::spec::StepTable::Agent
+            {
+                answer("asked", Target::parse(asked), EdgeSource::Explicit);
+            }
+            step.table.word()
         };
+        for cause in Cause::raised_by(table) {
+            let (target, source) = self.failure_route(node, *cause);
+            let (fires, because) = self.fireability(node, *cause);
+            edges.push(Edge {
+                outcome: cause.word().into(),
+                target,
+                source,
+                fires,
+                because,
+            });
+        }
+        // A session's rest checks run at its rests, so the walk and the cycle bound see each.
         let rest_checks = authored
             .steps
             .get(node)
             .and_then(|step| step.rest_check.as_ref());
-        let mut compiled = outcomes
-            .into_iter()
-            .filter_map(|outcome| {
-                let (target, explicit) = edges.remove(&outcome)?;
-                let (fires, because) = self.fireability(node, &outcome);
-                Some(Edge {
-                    target,
-                    source: if explicit {
-                        EdgeSource::Explicit
-                    } else if !self.is_break(node)
-                        && authored.workflow.on_break.is_some()
-                        && FAILURE_EDGES.contains(&outcome.as_str())
-                    {
-                        EdgeSource::OnBreak
-                    } else {
-                        EdgeSource::Default
-                    },
-                    outcome,
-                    fires,
-                    because,
-                })
-            })
-            .collect::<Vec<_>>();
-        // A session's rest checks run at its rests, so the walk and the cycle bound see each.
-        compiled.extend(rest_checks.into_iter().flatten().map(|check| Edge {
+        edges.extend(rest_checks.into_iter().flatten().map(|check| Edge {
             outcome: REST_CHECK.into(),
             target: Target::parse(check),
             source: EdgeSource::Explicit,
             fires: Fireability::Yes,
             because: None,
         }));
-        Some(compiled)
-    }
-
-    fn fireability(&self, node: &str, outcome: &str) -> (Fireability, Option<NeverReason>) {
-        let authored = self.authored();
-        if outcome == "deadline" {
-            return (
-                if authored.workflow.deadline.is_some() {
-                    Fireability::Yes
-                } else {
-                    Fireability::WithDeadline
-                },
-                None,
-            );
-        }
-        if let Some(check) = authored.checks.get(node) {
-            let because =
-                (outcome == "timeout" && check.timeout.is_none()).then_some(NeverReason::NoTimeout);
-            return (
-                if because.is_some() {
-                    Fireability::Never
-                } else {
-                    Fireability::Yes
-                },
-                because,
-            );
-        }
-        let Some(step) = authored.steps.get(node) else {
-            return (Fireability::Yes, None);
-        };
-        if outcome == "cap" && step.max_visits.is_none() {
-            return (Fireability::Never, Some(NeverReason::NoMaxVisits));
-        }
-        if outcome != "capacity" {
-            return (Fireability::Yes, None);
-        }
-        match step.capacity_wait {
-            Some(CapacityWait::Duration(_)) => (Fireability::Yes, None),
-            Some(CapacityWait::Forever) => (Fireability::Never, Some(NeverReason::GiveUpForever)),
-            None => (Fireability::WithGiveUp, None),
-        }
-    }
-
-    fn node_edges(&self, node: &str) -> Option<BTreeMap<String, (Target, bool)>> {
-        let authored = self.authored();
-        let mut edges = if let Some(check) = authored.checks.get(node) {
-            let sleep = self.check(node).is_some_and(|check| check.is_sleep());
-            check
-                .edges(self.check_kind(node))
-                .into_iter()
-                .map(|(outcome, target)| {
-                    let route = check
-                        .on
-                        .get(&outcome)
-                        .filter(|_| !sleep || outcome == "invalid");
-                    let explicit = route.is_some() || (outcome == "then" && sleep);
-                    let target = route.map_or(target, |route| Target::parse(route));
-                    (outcome, (target, explicit))
-                })
-                .collect()
-        } else {
-            authored
-                .steps
-                .get(node)?
-                .edges()
-                .into_iter()
-                .map(|(outcome, edge)| (outcome.to_owned(), edge))
-                .collect::<BTreeMap<_, _>>()
-        };
-        if let Some(step) = authored.steps.get(node) {
-            let failure = match self.step_kind(node) {
-                Some(Kind::Agent(_)) => Some(("invalid", &step.on.invalid)),
-                Some(Kind::Message(_)) => Some(("undelivered", &step.on.undelivered)),
-                _ => None,
-            };
-            if let Some((outcome, route)) = failure {
-                edges.insert(
-                    outcome.into(),
-                    (
-                        Target::parse(route.as_deref().unwrap_or_default()),
-                        route.is_some(),
-                    ),
-                );
-            }
-        }
-        if !self.is_break(node) {
-            edges.insert(
-                "deadline".into(),
-                (
-                    self.on_deadline().cloned().unwrap_or(Target::User),
-                    self.on_deadline().is_some(),
-                ),
-            );
-        }
-        let target = match &authored.workflow.on_break {
-            _ if self.is_break(node) => Target::Failed,
-            Some(OnBreak::Target(target)) => Target::parse(target),
-            Some(OnBreak::Agent { .. }) => Target::Node(BREAK.into()),
-            None => Target::Failed,
-        };
-        for (outcome, (route, explicit)) in &mut edges {
-            if !*explicit && FAILURE_EDGES.contains(&outcome.as_str()) {
-                *route = target.clone();
-            }
-        }
         Some(edges)
     }
-}
 
-impl Check {
-    fn edges(&self, kind: Option<&Kind>) -> BTreeMap<String, Target> {
-        if matches!(kind, Some(Kind::Sleep(_))) {
-            let mut edges = BTreeMap::from([
-                ("sleeping".into(), Target::Wait),
-                ("invalid".into(), Target::User),
-            ]);
-            if let Some(target) = &self.then {
-                edges.insert("then".into(), Target::parse(target));
+    fn fireability(&self, node: &str, cause: Cause) -> (Fireability, Option<NeverReason>) {
+        let authored = self.authored();
+        let (timeout, max_visits) = match (authored.checks.get(node), authored.steps.get(node)) {
+            (Some(check), _) => (check.timeout.is_some(), false),
+            (None, Some(step)) => (step.timeout.is_some(), step.max_visits.is_some()),
+            (None, None) => (true, true),
+        };
+        match cause {
+            Cause::Deadline if authored.workflow.deadline.is_none() => {
+                (Fireability::WithDeadline, None)
             }
-            if self.when.is_some() {
-                edges.insert("unknown".into(), Target::Wait);
-            }
-            return edges;
+            Cause::Timeout if !timeout => (Fireability::Never, Some(NeverReason::NoTimeout)),
+            Cause::Visits if !max_visits => (Fireability::Never, Some(NeverReason::NoMaxVisits)),
+            _ => (Fireability::Yes, None),
         }
-        let mut edges = self
-            .on
-            .iter()
-            .map(|(outcome, route)| (outcome.clone(), Target::parse(route)))
-            .collect::<BTreeMap<_, _>>();
-        for outcome in ["timeout", "invalid"] {
-            edges.entry(outcome.into()).or_insert(Target::User);
-        }
-        edges
-    }
-}
-
-impl Step {
-    fn edges(&self) -> BTreeMap<&'static str, (Target, bool)> {
-        [
-            ("then", self.then.first(), None),
-            ("failed", self.on.failed.as_ref(), None),
-            ("asked", self.on.asked.as_ref(), None),
-            ("cap", self.on.cap.as_ref(), Some(Target::User)),
-            ("capacity", self.on.capacity.as_ref(), Some(Target::Failed)),
-        ]
-        .into_iter()
-        .filter_map(|(outcome, target, default)| {
-            let explicit = target.is_some();
-            Some((
-                outcome,
-                (
-                    target.map(|target| Target::parse(target)).or(default)?,
-                    explicit,
-                ),
-            ))
-        })
-        .collect()
     }
 }

@@ -20,7 +20,7 @@ fn show_renders_a_tasks_compiled_graph_with_the_judge_run_anyway_routes() {
     assert!(shown.contains("loop task nightly"), "{shown}");
     assert!(
         shown.contains("judge-1  check  claude, headless · waits ≤300s, then → agent")
-            && shown.contains("fail → agent · pass @done · invalid → agent")
+            && shown.contains("fail → agent · pass @done · died → agent · invalid → agent")
             && !shown.contains("(default)"),
         "the watchdog's run-anyway routes read as plain routes: {shown}"
     );

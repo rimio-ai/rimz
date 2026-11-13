@@ -72,7 +72,8 @@ fn a_hold_preserves_routed_context_and_counts_until_the_case_fires() {
             entries: vec![],
         };
         let answer = json!({"outcome":"ready", "case":0});
-        t.finish_check(1, Ok(answer.clone()), None).unwrap();
+        t.finish_check(1, Ok(answer.clone()), json!({}), None)
+            .unwrap();
         assert_eq!(t.record.key, original.key);
         assert_eq!(
             t.record.input, original.input,
@@ -92,6 +93,7 @@ fn a_hold_preserves_routed_context_and_counts_until_the_case_fires() {
             } else {
                 json!({"outcome":"pending"})
             }),
+            json!({}),
             None,
         )
         .unwrap();
@@ -116,12 +118,12 @@ fn a_different_case_with_the_same_outcome_restarts_the_hold() {
         paths: &paths,
         entries: vec![],
     };
-    t.finish_check(1, Ok(json!({"outcome":"ready", "case":0})), None)
+    t.finish_check(1, Ok(json!({"outcome":"ready", "case":0})), json!({}), None)
         .unwrap();
     assert_eq!(t.record.wait.as_ref().map(|w| w.case), Some(Some(0)));
     t.now += jiff::SignedDuration::from_secs(10);
     t.record.attempt = attempt;
-    t.finish_check(1, Ok(json!({"outcome":"ready", "case":1})), None)
+    t.finish_check(1, Ok(json!({"outcome":"ready", "case":1})), json!({}), None)
         .unwrap();
     let wait = t.record.wait.as_ref().unwrap();
     assert_eq!(wait.case, Some(1));
@@ -147,7 +149,8 @@ fn condition_hold_settles_at_the_inclusive_boundary_and_clamps_to_bounds() {
             entries: vec![],
         };
         let object = json!({"outcome":"ready", "case":0, "readings":{"team.stage":"Done"}});
-        t.finish_check(1, Ok(object.clone()), None).unwrap();
+        t.finish_check(1, Ok(object.clone()), json!({}), None)
+            .unwrap();
         assert_eq!(
             t.record.state,
             RunState::Active,
@@ -167,17 +170,18 @@ fn condition_hold_settles_at_the_inclusive_boundary_and_clamps_to_bounds() {
         if let Some(seconds) = bound {
             t.now = first + jiff::SignedDuration::from_secs(seconds);
             assert!(t.bound().unwrap());
-            assert_eq!(t.record.input.as_ref().unwrap()["outcome"], "deadline");
+            assert_eq!(t.record.input.as_ref().unwrap()["cause"], "deadline");
             continue;
         }
         t.record.attempt = Some(attempt.clone());
         t.now = first + jiff::SignedDuration::from_secs(120) - jiff::SignedDuration::from_nanos(1);
-        t.finish_check(1, Ok(object.clone()), None).unwrap();
+        t.finish_check(1, Ok(object.clone()), json!({}), None)
+            .unwrap();
         assert_eq!(t.record.state, RunState::Active);
         assert_eq!(t.record.wait.as_ref().unwrap().first, first);
         t.record.attempt = Some(attempt);
         t.now = first + jiff::SignedDuration::from_secs(120);
-        t.finish_check(1, Ok(object), None).unwrap();
+        t.finish_check(1, Ok(object), json!({}), None).unwrap();
         assert_eq!(
             t.record.state,
             RunState::Done,
@@ -206,6 +210,7 @@ fn an_unknown_answer_ends_a_hold_whose_own_case_reads_false() {
         t.finish_check(
             1,
             Ok(json!({"outcome":"ready", "case":1, "readings":readings})),
+            json!({}),
             None,
         )
         .unwrap();
@@ -215,6 +220,7 @@ fn an_unknown_answer_ends_a_hold_whose_own_case_reads_false() {
         t.finish_check(
             1,
             Ok(json!({"outcome":"unknown", "readings":readings})),
+            json!({}),
             None,
         )
         .unwrap();

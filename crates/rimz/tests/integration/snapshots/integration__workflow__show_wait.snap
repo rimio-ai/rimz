@@ -9,7 +9,7 @@ started <clock> by hand · 0 attempts
 
 ☾ pr  check  sh checks/pr.sh · waits ≤<age>, then @failed · pending · since <clock>
 │   last checked <clock> · wakes on review.ready, the minute tick
-│   done @done · pending @wait · invalid @failed
+│   done @done · pending @wait
 │
 trail  <clock> pr pending → @wait · now
 work dir <work>

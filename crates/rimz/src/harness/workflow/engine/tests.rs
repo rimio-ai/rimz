@@ -1225,8 +1225,9 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
     assert_eq!(ctx["retry"], record.check_retry_context.unwrap());
 }
 
-const CHECK_ONLY: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
-const ONE_TURN: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompts/fix.md'\nlifecycle='turn'\nthen='@done'\non.failed='@failed'\n";
+const CHECK_ONLY: &str =
+    "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
+const ONE_TURN: &str = "[workflow]\nscope='worktree'\nstart='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompts/fix.md'\nlifecycle='turn'\nthen='@done'\non.failed='@failed'\n";
 
 fn bare_room() -> (tempfile::TempDir, StatePaths) {
     let home = tempfile::tempdir().unwrap();

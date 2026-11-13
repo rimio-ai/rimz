@@ -153,7 +153,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
         )
     );
     for (judge, next) in [("judge-1", "judge-2"), ("judge-2", "agent")] {
-        for outcome in ["invalid", "timeout"] {
+        for outcome in ["died", "invalid", "timeout"] {
             let edge = resolved_edges(&spec, judge)
                 .unwrap()
                 .into_iter()
@@ -197,7 +197,11 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
     let (_, spec) = report("agent='claude'\nprompt='go'\nevery='1h'\nverify='make test'\n");
     let agent = &authored(&spec).steps["agent"];
     assert_eq!(
-        (agent.lifecycle(), agent.max_visits, agent.on.cap.as_deref()),
+        (
+            agent.lifecycle(),
+            agent.max_visits,
+            agent.on.causes.get("visits").map(String::as_str)
+        ),
         (
             crate::store::workflow::StepLifecycle::Session,
             Some(3),
@@ -224,7 +228,7 @@ fn compiled_graphs_carry_each_shape_as_r1_describes() {
         (
             deliver.message.as_deref(),
             deliver.session.as_ref().map(|session| session.as_str()),
-            deliver.on.undelivered.as_deref(),
+            deliver.on.causes.get("undelivered").map(String::as_str),
         ),
         (Some("@coder"), Some("s-1"), Some("@failed"))
     );
@@ -474,7 +478,7 @@ fn verify_passes_reprompts_the_same_session_and_fails_at_the_third_attempt() {
     turn_end(&host, 3);
     let capped = step(&state, &record, &host);
     assert_eq!(capped.state, RunState::Failed, "{capped:?}");
-    assert!(routed(&state, &record).contains(&"cap".to_owned()));
+    assert!(routed(&state, &record).contains(&"visits".to_owned()));
 
     let (home2, state, record) =
         fire("agent='claude'\nprompt='fix it'\nevery='1h'\nverify='test -e passed'\n");
@@ -964,7 +968,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     open_room(&state, home.path());
     let text = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\n\
                 timeout='1h'\nthen='done'\n[test.done]\nshell='true'\n\
-                on={pass='@done',fail='@failed',invalid='@failed'}\n";
+                on={pass='@done',fail='@failed',died='@failed'}\n";
     let record = create(
         &state,
         DefinitionSource::Inline {
@@ -1094,6 +1098,12 @@ fn a_judge_chain_continues_on_fail_declines_on_pass_and_runs_on_after_a_timeout(
         "judge-2",
         "a tier with no answer continues to the next tier"
     );
+    let died = (Err("judge exited 1".to_owned()), "died");
+    assert_eq!(
+        judged(&spec, "judge-2", &[died.clone(), died]),
+        "agent",
+        "a tier that died again after its retry runs the agent anyway"
+    );
 }
 
 #[test]
@@ -1124,7 +1134,7 @@ fn a_budget_refused_judge_after_a_shell_stage_fails_the_run_as_budget_skipped() 
         (RunState::Failed, None),
         "a refused judge ends the run instead of waiting or routing to the act"
     );
-    assert_eq!(route(&spec, "judge-1", "budget"), "@failed");
+    assert_eq!(route(&spec, "judge-1", "limited"), "@failed");
     let outcome = record.outcome.clone().unwrap();
     crate::harness::schedule::run_log::report_run(&record, &outcome).unwrap();
     let last = crate::harness::schedule::run_log::task_records(

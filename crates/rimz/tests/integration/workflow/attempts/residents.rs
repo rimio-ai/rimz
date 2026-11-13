@@ -316,7 +316,7 @@ fn a_refused_preparation_is_not_retried_and_stops_no_occupant() {
 
 #[test]
 fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
-    let room = Room::new("timeout='1h'");
+    let room = Room::new("timeout='1h'\non.timeout='after'\n");
     let definition = room.env.rimz_home().join("workflows/review/workflow.toml");
     let spec = fs::read_to_string(&definition)
         .unwrap()

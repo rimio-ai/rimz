@@ -1,8 +1,8 @@
-//! The typed definition `spec::parse` compiles once the kind tables are lowered and the
-//! `@break` step is synthesized: each node's kind, its edges resolved once, its route targets,
-//! and every definition string the engine parses, kept as the authored text beside the result
-//! of the parser its consumer runs. Compiling never fails: a value admission would refuse loads
-//! with its failure, and each consumer keeps the arm it has for that failure.
+//! The typed definition `spec::parse` compiles once the kind tables are lowered: each node's
+//! kind, its edges resolved once, its route targets, and every definition string the engine
+//! parses, kept as the authored text beside the result of the parser its consumer runs.
+//! Compiling never fails: a value admission would refuse loads with its failure, and each
+//! consumer keeps the arm it has for that failure.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -20,9 +20,6 @@ use crate::utils::time::TimeInputErr;
 
 type Subscription = (SignalSelector, BTreeMap<String, String>);
 
-/// The name of the step `workflow.on-break` synthesizes.
-pub(super) const BREAK: &str = "@break";
-
 /// A sealed definition as the engine and its readers consume it. The authored tables it was
 /// compiled from stay inside the workflow module, for admission validation alone.
 #[derive(Debug)]
@@ -31,7 +28,6 @@ pub struct Definition {
     checks: BTreeMap<String, Node>,
     steps: BTreeMap<String, Node>,
     limit: Option<Limit>,
-    on_deadline: Option<Target>,
 }
 
 /// Where a route sends the run: an engine outcome, or a node by name. A name that is no node
@@ -67,7 +63,7 @@ impl Target {
         }
     }
 
-    /// The node the target names, the synthesized `@break` step included.
+    /// The node the target names.
     pub fn node(&self) -> Option<&str> {
         match self {
             Self::Node(node) => Some(node),
@@ -76,7 +72,7 @@ impl Target {
     }
 
     /// The authored node the target names: a name the definition's author may write, so never
-    /// the synthesized `@break` step.
+    /// an `@` name.
     pub fn authored_node(&self) -> Option<&str> {
         self.node().filter(|node| !node.starts_with('@'))
     }
@@ -365,12 +361,8 @@ impl Node {
         };
         match outcome {
             "asked" => step.on.asked.is_some(),
-            "cap" => step.on.cap.is_some(),
-            "capacity" => step.on.capacity.is_some(),
-            "invalid" => step.on.invalid.is_some(),
-            "undelivered" => step.on.undelivered.is_some(),
             "failed" => step.on.failed.is_some(),
-            _ => false,
+            cause => step.on.causes.contains_key(cause),
         }
     }
 
@@ -627,7 +619,7 @@ impl Node {
 }
 
 impl Definition {
-    /// Compile the lowered kind tables, `@break` step included.
+    /// Compile the lowered kind tables.
     pub(super) fn compile(authored: WorkflowSpec) -> Self {
         let checks = authored
             .checks
@@ -640,13 +632,11 @@ impl Definition {
             .map(|(name, step)| (name.clone(), step_node(step)))
             .collect();
         let limit = limit(authored.workflow.limit.as_ref());
-        let on_deadline = authored.workflow.on.deadline.as_deref().map(Target::parse);
         let mut definition = Self {
             authored,
             checks,
             steps,
             limit,
-            on_deadline,
         };
         let edges = definition
             .checks
@@ -686,10 +676,6 @@ impl Definition {
         &self.authored
     }
 
-    pub(super) fn is_break(&self, node: &str) -> bool {
-        node == BREAK
-    }
-
     pub fn summary(&self) -> Option<&str> {
         self.authored.workflow.summary.as_deref()
     }
@@ -707,14 +693,14 @@ impl Definition {
         self.authored.workflow.deadline.as_deref()
     }
 
+    /// The workflow's `on.failed`: where a failure goes that its node does not route.
+    pub fn on_failed(&self) -> Option<&str> {
+        self.authored.workflow.on.failed.as_deref()
+    }
+
     /// The workflow-wide start limit.
     pub fn limit(&self) -> Option<&Limit> {
         self.limit.as_ref()
-    }
-
-    /// The header's `on.deadline` target, when written.
-    pub fn on_deadline(&self) -> Option<&Target> {
-        self.on_deadline.as_ref()
     }
 
     pub fn check(&self, name: &str) -> Option<&Node> {

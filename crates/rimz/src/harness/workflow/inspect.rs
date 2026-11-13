@@ -4,6 +4,7 @@ use jiff::Timestamp;
 
 use super::Definition;
 use super::definition::Target;
+use super::spec::Cause;
 use crate::store::workflow::{
     AttemptOutcome, EvaluationOrigin, HeldSession, JournalEntry, JournalEvent, ParkReason,
     RunRecord, RunState, TurnEndAction,
@@ -89,8 +90,8 @@ pub fn hops(spec: &Definition, journal: &[JournalEntry], held: Option<&HeldSessi
     hops
 }
 
-/// The latest parked or on-break resume at a node or route into it,
-/// shared by arrival and park views.
+/// The latest resume at a node, a `resume --at` that moved the run there or replaced the
+/// attempt it held, or route into it, shared by arrival and park views.
 /// Active-run extensions do not replace the sender.
 pub fn routing_hop(
     spec: &Definition,
@@ -104,17 +105,19 @@ pub fn routing_hop(
         match hop.kind {
             HopKind::Restart if hop.node == node => return Some(hop),
             HopKind::Resume if hop.node == node => {
-                if hops[..index]
-                    .iter()
-                    .rev()
-                    .find(|prior| prior.kind != HopKind::VisitsReset)
-                    .is_some_and(|prior| {
-                        prior
-                            .target
-                            .as_ref()
-                            .and_then(Target::node)
-                            .is_some_and(|to| spec.is_break(to))
-                    })
+                if replaced_attempt(journal, &hop)
+                    || hops[..index]
+                        .iter()
+                        .rev()
+                        .find(|prior| prior.kind != HopKind::VisitsReset)
+                        .is_some_and(|prior| {
+                            prior
+                                .target
+                                .as_ref()
+                                .and_then(Target::node)
+                                .unwrap_or(&prior.node)
+                                != node
+                        })
                 {
                     return Some(hop);
                 }
@@ -130,6 +133,36 @@ pub fn routing_hop(
         }
     }
     None
+}
+
+/// Whether the resume `hop` projects ended a live attempt: a `resume --at` move journals its
+/// Resume straight after the attempt it canceled, so the relaunch is the resume's.
+fn replaced_attempt(journal: &[JournalEntry], hop: &Hop) -> bool {
+    let Some(index) = journal.iter().position(|entry| {
+        entry.at == hop.at
+            && entry.node == hop.node
+            && matches!(entry.event, JournalEvent::Resume { .. })
+    }) else {
+        return false;
+    };
+    journal[..index]
+        .iter()
+        .rev()
+        .find(|entry| {
+            !matches!(
+                entry.event,
+                JournalEvent::Wait { .. } | JournalEvent::Wake { .. } | JournalEvent::Signal { .. }
+            )
+        })
+        .is_some_and(|entry| {
+            matches!(
+                entry.event,
+                JournalEvent::Attempt {
+                    outcome: AttemptOutcome::Canceled,
+                    ..
+                }
+            )
+        })
 }
 
 /// Count node entries from routing history, retaining attempted and evaluated nodes.
@@ -355,26 +388,22 @@ fn attempt_superseded(
     }) else {
         return false;
     };
-    if outcome == AttemptOutcome::Canceled
-        && entry.node == "@break"
-        && matches!(next.event, JournalEvent::Resume { .. })
-    {
+    // `resume --at` journals its Resume at the node it moved the run to.
+    if outcome == AttemptOutcome::Canceled && matches!(next.event, JournalEvent::Resume { .. }) {
         return true;
     }
     if next.node != entry.node {
         return false;
     }
     match (&next.event, outcome) {
-        (JournalEvent::Resume { .. }, AttemptOutcome::Canceled) => true,
-        (JournalEvent::Route { outcome, .. }, AttemptOutcome::Died) => {
-            outcome == "invalid" || outcome == "undelivered" || outcome == "failed"
-        }
         (
             JournalEvent::Route { outcome, .. },
-            AttemptOutcome::Timeout | AttemptOutcome::Limited,
-        ) => outcome == "failed",
+            AttemptOutcome::Died
+            | AttemptOutcome::Timeout
+            | AttemptOutcome::Limited
+            | AttemptOutcome::Canceled,
+        ) => Cause::parse(outcome).is_some(),
         (JournalEvent::Route { outcome, .. }, AttemptOutcome::Asked) => outcome == "asked",
-        (JournalEvent::Route { outcome, .. }, AttemptOutcome::Canceled) => outcome == "deadline",
         (
             JournalEvent::TurnEnd {
                 action: TurnEndAction::Closed,
@@ -421,7 +450,7 @@ pub(super) fn first_bound(
 ) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
     let deadline = record
         .deadline
-        .filter(|_| !record.deadline_fired && !spec.is_break(&record.node))
+        .filter(|_| !record.deadline_fired)
         .map(|at| (at, "deadline".into()));
     let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout".into()));
     let hold = match hold {

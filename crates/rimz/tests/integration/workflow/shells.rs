@@ -60,7 +60,6 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
     for (ending, code, reason) in [
         ("exit 0", json!(0), None),
         ("exit 7", json!(7), Some("exited 7")),
-        ("kill -TERM $$", Value::Null, Some("killed by signal")),
     ] {
         let shell = format!(
             "pwd; printf '%s\\n' \"$RIMZ_WORKFLOW_DIR\" \"$RIMZ_WORKFLOW_RUN\"; printf stderr >&2; {ending}"
@@ -108,7 +107,39 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
 }
 
 #[test]
-fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
+fn a_test_killed_by_a_signal_dies_and_never_answers_fail() {
+    let spec = format!(
+        "{}[script.seed]\nrun='sh checks/pr.sh'\non.go='pr'\n[test.pr]\nshell='printf stderr >&2; kill -TERM $$'\non={{pass='@done',fail='@done'}}\n",
+        HEADER.replace("start = 'pr'", "start = 'seed'"),
+    );
+    let (env, _) = fixture(&spec, "printf '%s\\n' '{\"outcome\":\"go\",\"key\":7}'\n");
+    let id = start(&env);
+    let value = settled(&env, &id, "failed");
+    let log = Path::new(value["dir"].as_str().unwrap()).join("2.check.log");
+    let input = &value["record"]["input"];
+    assert_eq!(
+        (
+            &input["outcome"],
+            &input["cause"],
+            &input["node"],
+            &input["reason"]
+        ),
+        (
+            &json!("failed"),
+            &json!("died"),
+            &json!("pr"),
+            &json!("killed by signal")
+        )
+    );
+    let recorded = input["detail"]["log"].as_str().unwrap();
+    assert_eq!(moved(recorded), log, "{input:#}");
+    assert_eq!(input["detail"], json!({"log": recorded}));
+    assert_eq!(input["key"], 7);
+    assert!(fs::read_to_string(log).unwrap().contains("stderr"));
+}
+
+#[test]
+fn shell_fail_waits_without_journaling_a_tail_and_a_log_error_dies() {
     let (env, dir) = shell_fixture("seq 1 5000; printf stderr >&2; exit 3", "timeout='1h'\n");
     let file = dir.join("workflow.toml");
     fs::write(
@@ -133,10 +164,10 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
     assert!(!text.contains("said fail"), "{text}");
     fs::create_dir(Path::new(value["dir"].as_str().unwrap()).join("2.check.log")).unwrap();
     success(command(&env, &["workflow", "advance", &id]));
-    let invalid = settled(&env, &id, "failed");
-    assert_eq!(invalid["record"]["input"]["outcome"], "invalid");
+    let died = settled(&env, &id, "failed");
+    assert_eq!(died["record"]["input"]["cause"], "died");
     assert!(
-        invalid["record"]["input"]["reason"]
+        died["record"]["input"]["reason"]
             .as_str()
             .unwrap()
             .contains("2.check.log")
@@ -144,35 +175,54 @@ fn shell_fail_waits_without_journaling_a_tail_and_log_errors_are_invalid() {
 }
 
 #[test]
-fn shell_spawn_errors_are_invalid() {
-    let (env, dir) = shell_fixture("exit 3", "timeout='1h'\n");
-    let file = dir.join("workflow.toml");
-    fs::write(
-        &file,
-        fs::read_to_string(&file)
-            .unwrap()
-            .replace("on.fail='@failed'", "on.fail='@wait'"),
-    )
-    .unwrap();
-    let id = start(&env);
-    until(&env, &id, |v| {
-        v["record"]["wait"]["outcome"] == "fail" && v["record"]["attempt"].is_null()
-    });
-    let output = env
-        .rimz()
-        .args(["workflow", "advance", &id])
-        .env("PATH", "")
-        .output()
-        .unwrap();
-    success(output);
-    let value = settled(&env, &id, "failed");
-    assert_eq!(value["record"]["input"]["outcome"], "invalid");
-    assert!(
-        value["record"]["input"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("running")
-    );
+fn a_shell_spawn_error_dies() {
+    let pending = toml::Value::String(r#"printf '{"outcome":"pending"}'"#.into());
+    for (spec, waiting, spawn_error) in [
+        (
+            format!(
+                "{HEADER}[test.pr]\nshell='exit 3'\non.pass='@done'\non.fail='@wait'\ntimeout='1h'\n"
+            ),
+            "fail",
+            "cannot find binary path",
+        ),
+        (
+            format!("{HEADER}[script.pr]\nshell={pending}\non.pending='@wait'\ntimeout='1h'\n"),
+            "pending",
+            "No such file or directory",
+        ),
+    ] {
+        let (env, _) = fixture(&spec, "");
+        let id = start(&env);
+        until(&env, &id, |v| {
+            v["record"]["wait"]["outcome"] == waiting && v["record"]["attempt"].is_null()
+        });
+        let output = env
+            .rimz()
+            .args(["workflow", "advance", &id])
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        success(output);
+        let value = settled(&env, &id, "failed");
+        let input = &value["record"]["input"];
+        assert_eq!(input["cause"], "died", "{waiting}: {input:#}");
+        assert!(
+            input["reason"].as_str().unwrap().contains(spawn_error),
+            "{waiting}: {input:#}"
+        );
+        // The log file existed before the spawn failed, so it is named; no process exited.
+        assert!(
+            input["detail"]["log"]
+                .as_str()
+                .is_some_and(|log| moved(log).is_file()),
+            "{waiting}: {input:#}"
+        );
+        assert_eq!(
+            input["detail"].as_object().unwrap().len(),
+            1,
+            "{waiting}: {input:#}"
+        );
+    }
 }
 
 #[test]
@@ -199,7 +249,10 @@ fn shell_timeout_kills_the_group_and_routes_or_fails() {
         };
         assert_eq!(
             input,
-            json!({"outcome":"timeout", "node":"pr", "timeout":"1h"})
+            json!({
+                "outcome":"failed", "cause":"timeout", "node":"pr",
+                "reason":"pr ran past its timeout 1h", "detail":{}
+            })
         );
         assert_eq!(events(&value, "evaluation")[0]["outcome"], "timeout");
         assert_group_stopped(child, descendant);
@@ -223,7 +276,7 @@ fn shell_deadline_interrupts_the_group_and_uses_the_workflow_edge() {
         ],
     ));
     let value = settled(&env, &id, "failed");
-    assert_eq!(value["record"]["input"]["outcome"], "deadline");
+    assert_eq!(value["record"]["input"]["cause"], "deadline");
     assert_group_stopped(child, descendant);
 }
 

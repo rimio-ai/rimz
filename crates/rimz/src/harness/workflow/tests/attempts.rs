@@ -24,12 +24,6 @@ mod restart;
 mod stops;
 mod subscribe;
 
-/// The definition with an on-break agent, so a failure edge leaves the run resumable at
-/// `@break`.
-pub(super) fn on_break(text: &str) -> String {
-    text.replacen("[workflow]\n", "[workflow]\non-break={agent='claude'}\n", 1)
-}
-
 pub(super) fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root_under(dir.path(), dir.path()).unwrap();
@@ -60,602 +54,6 @@ fn advance_ok(state: &StatePaths, id: &WorkflowRunId, host: &FakeHost) -> RunRec
     records::load(&state.workflow(id)).unwrap()
 }
 
-#[test]
-fn on_break_launch_failure_opens_a_trace_and_cancel_detaches() {
-    let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, mut record) = setup(&text);
-    record.key = Some(Key::String("launch-key".into()));
-    update(&state, &record);
-    let host = FakeHost::new();
-    *host.failure.borrow_mut() = Some(LaunchFailure {
-        outcome: AttemptOutcome::Died,
-        reason: "launch failed: missing account".into(),
-    });
-    let live = advance_ok(&state, &record.id, &host);
-    assert_eq!(live.node, "@break");
-    assert_eq!(live.state, RunState::Active);
-    assert_eq!(live.input.as_ref().unwrap()["from"], "build");
-    assert_eq!(live.input.as_ref().unwrap()["edge"], "invalid");
-    assert_eq!(
-        live.key, record.key,
-        "a launch failure must preserve the key"
-    );
-    assert_eq!(live.input.as_ref().unwrap()["key"], "launch-key");
-    assert_eq!(live.visits["build"], 1);
-    let launches = host.launched.borrow();
-    let prompt = &launches.last().unwrap().prompt;
-    for text in [
-        "launch failure",
-        "missing account",
-        "build",
-        "invalid",
-        "test",
-        "workflow resume",
-        "workflow cancel",
-        "context.json",
-        "journal",
-        "visit",
-        "native question",
-        "end your turn",
-        "@failed",
-    ] {
-        assert!(prompt.contains(text), "missing {text}: {prompt}");
-    }
-    assert!(prompt.contains(&record.spec_dir.display().to_string()));
-    drop(launches);
-    cancel(&state, &record.id, &host, None).unwrap();
-    assert_eq!(host.stops.get(), 0);
-    assert_eq!(host.detaches.get(), 1);
-    assert_eq!(
-        records::load(&state.workflow(&record.id)).unwrap().state,
-        RunState::Canceled
-    );
-}
-
-#[test]
-fn on_break_launch_disables_the_leader_wrappers_cleanup() {
-    let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[sleep.nap]\nsleep='invalid'\nthen='@done'\n";
-    let (_dir, state, record) = setup(text);
-    let host = FakeHost::new();
-    assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
-    assert!(
-        host.launched.borrow().last().unwrap().keep,
-        "the production host maps keep=false to wrapper cleanup, even when finish detaches"
-    );
-}
-
-#[test]
-fn on_break_sleep_keeps_failure_input_and_survives_deadline_until_session_exit() {
-    let text = "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[sleep.nap]\nsleep='invalid'\nthen='@done'\n";
-    let (_dir, state, mut record) = setup(text);
-    record.input = Some(json!({"outcome":"previous"}));
-    update(&state, &record);
-    let host = FakeHost::new();
-    let mut live = advance_ok(&state, &record.id, &host);
-    assert_eq!(live.node, "@break");
-    assert_eq!(live.input.as_ref().unwrap()["from"], "nap");
-    assert_eq!(live.input.as_ref().unwrap()["edge"], "invalid");
-    live.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-    update(&state, &live);
-    let waiting = advance_ok(&state, &record.id, &host);
-    assert_eq!(waiting.node, "@break");
-    assert!(waiting.attempt.is_some());
-    host.observed.borrow_mut().status = RunStatus::Completed;
-    let ended = advance_ok(&state, &record.id, &host);
-    assert_eq!(ended.state, RunState::Failed);
-    assert_eq!(host.stops.get(), 0);
-    assert_eq!(host.detaches.get(), 1);
-}
-
-#[test]
-fn on_break_resume_detaches_and_reenters_the_source_or_selected_node() {
-    for at in [None, Some("other")] {
-        let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
-            + "[script.other]\nrun='cat answer.json'\non.ok='@done'\n";
-        let (_dir, state, record) = setup(&text);
-        let host = FakeHost::new();
-        *host.failure.borrow_mut() = Some(LaunchFailure {
-            outcome: AttemptOutcome::Died,
-            reason: "broken launch".into(),
-        });
-        assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
-        fs::write(record.spec_dir.join("answer.json"), r#"{"outcome":"ok"}"#).unwrap();
-        let result = resume(&state, &record.id, at, &[]);
-        assert!(result.is_ok(), "an active break must resume: {result:?}");
-        let resumed = advance_ok(&state, &record.id, &host);
-        assert_eq!(host.detaches.get(), 1);
-        assert_eq!(host.stops.get(), 0);
-        if at.is_some() {
-            assert_eq!(resumed.state, RunState::Done);
-        } else {
-            assert_eq!(resumed.node, "build");
-            assert!(resumed.attempt.is_some());
-        }
-        let journal = records::journal(&state.workflow(&record.id)).unwrap();
-        let entry = journal
-            .iter()
-            .find(|entry| matches!(entry.event, JournalEvent::Resume { .. }))
-            .unwrap();
-        let target = at.unwrap_or("build");
-        assert_eq!(entry.node, target);
-        let spec = spec::load(&state.workflow(&record.id).home).unwrap();
-        let hops = hops(&spec, &journal, None);
-        let resume = hops.iter().find(|hop| hop.kind == HopKind::Resume).unwrap();
-        assert_eq!(resume.node, target);
-        assert!(resume.target.is_none());
-        assert!(
-            !hops.iter().any(|hop| hop.node == "@break"
-                && hop.target.as_ref().map(|target| target.as_str()) == Some("@failed")),
-            "resuming must not invent a failed debugger hop: {hops:?}"
-        );
-        assert_eq!(
-            routing_hop(&spec, &journal, target, None).unwrap().kind,
-            HopKind::Resume,
-            "the resume must be the new arrival's sender"
-        );
-    }
-}
-
-#[test]
-fn on_break_resume_before_launch_is_the_arrival_sender() {
-    let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    *host.failure.borrow_mut() = Some(LaunchFailure {
-        outcome: AttemptOutcome::Died,
-        reason: "broken launch".into(),
-    });
-    let occupancy = host.occupancy.clone();
-    *host.on_launch.borrow_mut() = Some(Box::new(move || {
-        *occupancy.borrow_mut() = Occupancy::Occupied(vec!["@other".into()]);
-    }));
-    let broken = advance_ok(&state, &record.id, &host);
-    assert_eq!(broken.node, "@break");
-    assert!(broken.attempt.is_none());
-    let resumed = resume(&state, &record.id, None, &[]).unwrap();
-    let spec = spec::load(&state.workflow(&record.id).home).unwrap();
-    let journal = records::journal(&state.workflow(&record.id)).unwrap();
-    assert_eq!(
-        routing_hop(&spec, &journal, "build", None).map(|hop| hop.kind),
-        Some(HopKind::Resume),
-        "a break resume is an arrival even before a debugger launches"
-    );
-    resume(&state, &record.id, None, &["visits=+1".into()]).unwrap();
-    let journal = records::journal(&state.workflow(&record.id)).unwrap();
-    assert_eq!(
-        routing_hop(&spec, &journal, "build", None).unwrap().at,
-        resumed.entered_at,
-        "an active extension must not replace the break resume sender"
-    );
-}
-
-#[test]
-fn on_break_cap_resume_resets_the_source_visits_without_another_debugger() {
-    let text = STEP
-        .replace("start='build'", "start='build'\non-break={agent='claude'}")
-        .replace("max-visits=2", "max-visits=1")
-        .replace("then='@done'", "then='gate'")
-        + "[script.gate]\nrun='cat answer.json'\non.again='build'\n";
-    let (_dir, state, record) = setup(&text);
-    fs::write(
-        record.spec_dir.join("answer.json"),
-        r#"{"outcome":"again"}"#,
-    )
-    .unwrap();
-    let host = FakeHost::new();
-    advance_ok(&state, &record.id, &host);
-    host.observed.borrow_mut().status = RunStatus::Completed;
-    let observed = host.observed.clone();
-    *host.on_launch.borrow_mut() = Some(Box::new(move || {
-        observed.borrow_mut().status = RunStatus::Running;
-    }));
-    let broken = advance_ok(&state, &record.id, &host);
-    assert_eq!(broken.node, "@break");
-    assert_eq!(broken.input.as_ref().unwrap()["edge"], "cap");
-    resume(&state, &record.id, None, &[]).unwrap();
-    let resumed = advance_ok(&state, &record.id, &host);
-    assert_eq!(resumed.node, "build", "a plain resume must clear the cap");
-    assert_eq!(resumed.visits["build"], 1);
-    let debugger_launches = host
-        .launched
-        .borrow()
-        .iter()
-        .filter(|launch| {
-            matches!(
-                &launch.automation,
-                crate::agents::Automation::Workflow { step, .. } if step == "@break"
-            )
-        })
-        .count();
-    assert_eq!(debugger_launches, 1);
-    assert_eq!(host.launched.borrow().len(), 3);
-}
-
-#[test]
-fn on_break_detached_debuggers_neither_block_nor_get_evicted_on_resume() {
-    for takeover in [false, true] {
-        for working in [false, true] {
-            let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}")
-                + &format!(
-                    "admission.occupancy='{}'\n",
-                    if takeover { "takeover" } else { "wait" }
-                );
-            let (_dir, state, record) = setup(&text);
-            let host = FakeHost::new();
-            *host.failure.borrow_mut() = Some(LaunchFailure {
-                outcome: AttemptOutcome::Died,
-                reason: "broken launch".into(),
-            });
-            assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
-            let occupancy = host.occupancy.clone();
-            *host.on_detach.borrow_mut() = Some(Box::new(move || {
-                *occupancy.borrow_mut() = if working {
-                    Occupancy::Blocked(vec![(
-                        "@builder".into(),
-                        crate::harness::takeover::OpenTurn::Working,
-                    )])
-                } else {
-                    Occupancy::Occupied(vec!["@builder".into()])
-                };
-            }));
-            resume(&state, &record.id, None, &[]).unwrap();
-            let resumed = advance_ok(&state, &record.id, &host);
-            assert!(
-                resumed.wait.is_none(),
-                "the debugger is not an occupant: {resumed:?}"
-            );
-            assert!(resumed.attempt.is_some());
-            assert_eq!(host.evictions.get(), 0, "the debugger must not be evicted");
-            assert_eq!(host.stops.get(), 0);
-        }
-    }
-}
-
-#[test]
-fn on_break_resume_refuses_a_live_settler() {
-    let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    *host.failure.borrow_mut() = Some(LaunchFailure {
-        outcome: AttemptOutcome::Died,
-        reason: "broken launch".into(),
-    });
-    let mut broken = advance_ok(&state, &record.id, &host);
-    for cause in [records::EndCause::Cancel, records::EndCause::Lifecycle] {
-        let attempt = broken.attempt.as_mut().unwrap();
-        attempt.host = Host {
-            pid: std::process::id(),
-            start: None,
-        };
-        attempt.ending = Some(records::Ending {
-            outcome: AttemptOutcome::Canceled,
-            cause,
-            route: None,
-            reason: None,
-        });
-        update(&state, &broken);
-        assert!(
-            resume(&state, &record.id, None, &[]).is_err(),
-            "a live settler owns the ending"
-        );
-        assert_eq!(records::load(&state.workflow(&record.id)).unwrap(), broken);
-    }
-}
-
-#[test]
-fn on_break_resume_refuses_the_reserved_target() {
-    let text = STEP.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    *host.failure.borrow_mut() = Some(LaunchFailure {
-        outcome: AttemptOutcome::Died,
-        reason: "broken launch".into(),
-    });
-    advance_ok(&state, &record.id, &host);
-    assert!(
-        resume(&state, &record.id, Some("@break"), &[]).is_err(),
-        "@break is not a resume destination"
-    );
-}
-
-#[test]
-fn on_break_pending_held_failure_is_not_a_taken_hop() {
-    let text = rest::SESSION.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    let live = advance_ok(&state, &record.id, &host);
-    let paths = state.workflow(&record.id);
-    let spec = spec::load(&paths.home).unwrap();
-    let mut checking = rest::held(&live, false);
-    checking.attempt = Some(
-        serde_json::from_value(json!({
-            "kind":"script", "seq":2, "node":"pr", "started_at":checking.entered_at,
-            "host":{"pid":0,"start":null}
-        }))
-        .unwrap(),
-    );
-    let mut t = super::super::state::Transition {
-        now: checking.entered_at,
-        record: checking,
-        spec: &spec,
-        paths: &paths,
-        entries: Vec::new(),
-    };
-    t.finish_check(2, Err("bad answer".into()), None).unwrap();
-    assert_eq!(
-        t.record
-            .held
-            .as_ref()
-            .unwrap()
-            .verdict
-            .as_ref()
-            .unwrap()
-            .target,
-        "@break"
-    );
-    assert!(
-        hops(&spec, &t.entries, t.record.held.as_ref()).is_empty(),
-        "a pending verdict is not a hop"
-    );
-}
-
-#[test]
-fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
-    let text = rest::SESSION
-        .replace("start='build'", "start='build'\non-break={agent='claude'}")
-        .replace(
-            "[script.pr]\nrun='sh check.sh'",
-            "[judge.pr]\nagent='claude'\nprompt-file='prompt.md'",
-        );
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    let live = advance_ok(&state, &record.id, &host);
-    let paths = state.workflow(&record.id);
-    let spec = spec::load(&paths.home).unwrap();
-    let mut t = super::super::state::Transition {
-        now: live.entered_at,
-        record: rest::held(&live, false),
-        spec: &spec,
-        paths: &paths,
-        entries: Vec::new(),
-    };
-    for seq in 2..=3 {
-        t.record.attempt = Some(
-            serde_json::from_value(json!({
-                "kind":"judge", "seq":seq, "node":"pr", "started_at":t.now,
-                "host":{"pid":0,"start":null}
-            }))
-            .unwrap(),
-        );
-        t.record.next_seq = seq + 1;
-        t.finish_judge(seq, evaluation(Err("judge exited 7".into()), "died"))
-            .unwrap();
-    }
-    let verdict = t.record.held.as_ref().unwrap().verdict.as_ref().unwrap();
-    assert_eq!(
-        verdict.object["outcome"], "invalid",
-        "route lookup must use the invalid edge"
-    );
-    assert_eq!(verdict.object["failure"], "died");
-    assert!(
-        hops(&spec, &t.entries, t.record.held.as_ref()).is_empty(),
-        "pending verdicts must not depart"
-    );
-    t.record.held.as_mut().unwrap().verdict.as_mut().unwrap().at = Timestamp::UNIX_EPOCH;
-    {
-        let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-        for entry in &t.entries {
-            records::append(&paths, entry, &guard).unwrap();
-        }
-        records::write(&paths, &t.record, &guard).unwrap();
-    }
-    host.observed.borrow_mut().turn = Some(rest::turn());
-    let applied = advance_ok(&state, &record.id, &host);
-    let journal = records::journal(&paths).unwrap();
-    let hops = hops(&spec, &journal, applied.held.as_ref());
-    assert_eq!(
-        hops.iter()
-            .filter(|hop| hop.node == "pr"
-                && hop.target.as_ref().map(|target| target.as_str()) == Some("@break"))
-            .count(),
-        1,
-        "{hops:?}"
-    );
-    let launches = host.launched.borrow();
-    let prompt = &launches.last().unwrap().prompt;
-    assert!(prompt.contains("judge failure"), "{prompt}");
-    assert!(
-        prompt.contains("3.check.json"),
-        "judges write check.json: {prompt}"
-    );
-    assert!(!prompt.contains("3.check.log"), "{prompt}");
-}
-
-#[test]
-fn on_break_cap_trace_does_not_misname_an_earlier_command_exit() {
-    let text = STEP
-        .replace("start='build'", "start='build'\non-break={agent='claude'}")
-        .replace(
-            "[agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'",
-            "[command.build]\nrun='exit 7'",
-        )
-        .replace("max-visits=2", "max-visits=1")
-        .replace("then='@done'", "then='gate'")
-        + "[script.gate]\nrun='cat answer.json'\non.again='build'\n";
-    let (_dir, state, record) = setup(&text);
-    fs::write(
-        record.spec_dir.join("answer.json"),
-        r#"{"outcome":"again"}"#,
-    )
-    .unwrap();
-    let host = FakeHost::new();
-    assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
-    let launches = host.launched.borrow();
-    let prompt = &launches.last().unwrap().prompt;
-    assert!(
-        prompt.starts_with("Investigate this run's workflow failure."),
-        "a cap is not a launch failure: {prompt}"
-    );
-}
-
-#[test]
-fn on_break_trace_bounds_a_long_poll_history_below_the_prompt_guard() {
-    let text = "[workflow]\nscope='worktree'\nstart='poll'\non-break={agent='claude'}\n[script.poll]\nrun='true'\non.pending='@wait'\ntimeout='1h'\n";
-    let (_dir, state, record) = setup(text);
-    let paths = state.workflow(&record.id);
-    let spec = spec::load(&paths.home).unwrap();
-    let mut t = super::super::state::Transition {
-        now: record.entered_at,
-        record,
-        spec: &spec,
-        paths: &paths,
-        entries: Vec::new(),
-    };
-    for seq in 1..=500 {
-        t.record.attempt = Some(
-            serde_json::from_value(json!({
-                "kind":"script", "seq":seq, "node":"poll", "started_at":t.now,
-                "host":{"pid":0,"start":null}
-            }))
-            .unwrap(),
-        );
-        t.record.next_seq = seq + 1;
-        t.finish_check(
-            seq,
-            Ok(json!({
-                "outcome":"pending",
-                "reason":format!("last-reading {seq} {}", "x".repeat(512))
-            })),
-            None,
-        )
-        .unwrap();
-        t.now += std::time::Duration::from_secs(1);
-    }
-    let mut journal = String::new();
-    for entry in &t.entries {
-        journal.push_str(&serde_json::to_string(entry).unwrap());
-        journal.push('\n');
-    }
-    fs::write(&paths.journal, journal).unwrap();
-    t.record.deadline = Some(Timestamp::UNIX_EPOCH);
-    update(&state, &t.record);
-    let host = FakeHost::new();
-    assert_eq!(advance_ok(&state, &t.record.id, &host).node, "@break");
-    let launches = host.launched.borrow();
-    let prompt = &launches.last().unwrap().prompt;
-    assert!(
-        prompt.len() < crate::harness::prompt_compose::TEXT_PROMPT_LIMIT,
-        "a long history must not prevent the debugger launch: {} bytes",
-        prompt.len()
-    );
-    assert!(prompt.contains("last-reading 500"));
-    assert!(prompt.contains(&paths.journal.display().to_string()));
-}
-
-#[test]
-fn on_break_held_invalid_answer_preserves_the_failure_context() {
-    let text = rest::SESSION.replace("start='build'", "start='build'\non-break={agent='claude'}");
-    let (dir, state, record) = setup(&text);
-    rest::check(
-        dir.path(),
-        json!({"outcome":"not-routed", "reason":"bad answer"}),
-    );
-    let host = FakeHost::new();
-    advance_ok(&state, &record.id, &host);
-    host.observed.borrow_mut().turn = Some(rest::turn());
-    let live = advance_ok(&state, &record.id, &host);
-    assert_eq!(live.node, "@break");
-    assert_eq!(live.input.as_ref().unwrap()["from"], "pr");
-    assert_eq!(live.input.as_ref().unwrap()["edge"], "invalid");
-    assert!(live.input.as_ref().unwrap()["reason"].is_string());
-    let context: Value =
-        serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
-    assert_eq!(context["input"], *live.input.as_ref().unwrap());
-    let launches = host.launched.borrow();
-    let prompt = &launches.last().unwrap().prompt;
-    assert!(prompt.contains("check.log"), "{prompt}");
-    assert!(prompt.contains("not-routed"), "{prompt}");
-}
-
-#[test]
-fn on_break_uses_author_prompt_and_its_own_failed_launch_ends_failed() {
-    for custom in [false, true] {
-        let handler = if custom {
-            "{agent='claude',prompt-file='prompt.md'}"
-        } else {
-            "{agent='claude'}"
-        };
-        let text = STEP.replace(
-            "start='build'",
-            &format!("start='build'\non-break={handler}"),
-        );
-        let (_dir, state, mut record) = setup(&text);
-        record.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-        update(&state, &record);
-        let host = FakeHost::new();
-        if !custom {
-            *host.failure.borrow_mut() = Some(LaunchFailure {
-                outcome: AttemptOutcome::Died,
-                reason: "debugger unavailable".into(),
-            });
-        }
-        let result = advance_ok(&state, &record.id, &host);
-        if custom {
-            assert_eq!(result.node, "@break");
-            assert!(host.launched.borrow()[0].prompt.starts_with("Build it"));
-        } else {
-            assert_eq!(result.state, RunState::Failed);
-            assert_eq!(host.launched.borrow().len(), 1);
-        }
-    }
-}
-
-#[test]
-fn on_break_judge_second_failure_routes_invalid_and_history_records_the_hop() {
-    for failure in ["died", "invalid"] {
-        for explicit in [false, true] {
-            let (_, paths, record) = judge_fixture();
-            let text = format!(
-                "[workflow]\nscope='worktree'\nstart='judge'\non-break={{agent='claude'}}\n[judge.judge]\nagent='claude'\nprompt-file='judge.md'\non.ok='@done'\n{}",
-                if explicit { "on.invalid='@failed'" } else { "" }
-            );
-            let spec = super::super::spec::parse(&text).unwrap();
-            let mut t = super::super::state::Transition {
-                now: record.entered_at,
-                record,
-                spec: &spec,
-                paths: &paths,
-                entries: Vec::new(),
-            };
-            let attempt = t.record.attempt.clone();
-            assert!(
-                t.finish_judge(1, evaluation(Err("judge failed".into()), failure))
-                    .unwrap()
-            );
-            assert_eq!(t.record.node, "judge");
-            assert!(hops(&spec, &t.entries, None).is_empty());
-            t.record.attempt = attempt;
-            t.finish_judge(1, evaluation(Err("judge failed".into()), failure))
-                .unwrap();
-            let expected = if explicit { "@failed" } else { "@break" };
-            let routes = hops(&spec, &t.entries, None);
-            assert_eq!(
-                routes
-                    .iter()
-                    .filter(|hop| hop.kind == HopKind::Route)
-                    .count(),
-                1,
-                "{routes:?}"
-            );
-            assert_eq!(
-                routes[0].target.as_ref().map(|target| target.as_str()),
-                Some(expected)
-            );
-            assert_ne!(t.record.state, RunState::Parked);
-        }
-    }
-}
-
 fn answer(state: &StatePaths, record: &RunRecord, host: &FakeHost, object: Value) -> RunRecord {
     fs::write(
         record.spec_dir.join("answer.json"),
@@ -674,53 +72,9 @@ fn answer(state: &StatePaths, record: &RunRecord, host: &FakeHost, object: Value
 }
 
 #[test]
-fn resuming_a_cap_resets_the_capped_steps_count() {
-    let mut actual = Vec::new();
-    for at in [None, Some("build")] {
-        let (_dir, state, record) = setup(&on_break(
-            &OUTCOME_STEP.replace("max-visits=6", "max-visits=2"),
-        ));
-        let host = FakeHost::new();
-        for _ in 0..3 {
-            answer(
-                &state,
-                &record,
-                &host,
-                json!({"outcome":"red", "key":"lint"}),
-            );
-        }
-        let paths = state.workflow(&record.id);
-        assert_eq!(records::load(&paths).unwrap().node, "@break");
-        resume(&state, &record.id, at, &[]).unwrap();
-        advance_ok(&state, &record.id, &host);
-        let context: Value = serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
-        let next = answer(
-            &state,
-            &record,
-            &host,
-            json!({"outcome":"red", "key":"lint"}),
-        );
-        actual.push((
-            context["visit"].as_u64(),
-            next.state,
-            next.visits["build"],
-            host.launched.borrow().len(),
-        ));
-    }
-    assert_eq!(
-        actual,
-        [
-            (Some(1), RunState::Active, 2, 5),
-            (Some(1), RunState::Active, 2, 5)
-        ],
-        "both resume forms reset all counts before counting the first new visit"
-    );
-}
-
-#[test]
-fn cap_routed_into_a_different_step_counts_under_cap() {
+fn a_visits_route_into_a_different_step_counts_no_visit_at_the_capped_one() {
     let text = format!(
-        "{}on.cap='recover'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n",
+        "{}on.visits='recover'\n[agent.recover]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='@done'\n",
         OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
@@ -735,40 +89,42 @@ fn cap_routed_into_a_different_step_counts_under_cap() {
     }
     let live = records::load(&state.workflow(&record.id)).unwrap();
     assert_eq!(live.node, "recover");
-    assert_eq!(live.visits["recover"], 1);
+    assert_eq!((live.visits["build"], live.visits["recover"]), (2, 1));
     assert_eq!(
         live.prev_attempt.as_ref().unwrap().routed_by.as_deref(),
         Some("red")
     );
     let ctx: Value =
         serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
-    assert_eq!(ctx["input"]["routed_by"], "red");
+    assert_eq!(
+        ctx["input"],
+        json!({
+            "outcome":"failed", "cause":"visits", "node":"build",
+            "reason":"build has used 2 of 2 visits", "detail":{"visits":2, "max":2}, "key":"lint",
+        })
+    );
 }
 
 #[test]
-fn cap_resume_resets_all_counts_and_keeps_grants() {
-    let text = on_break(&OUTCOME_STEP.replace("max-visits=6", "max-visits=3"));
-    let (_dir, state, record) = setup(&text);
+fn a_visit_grant_on_a_live_run_raises_the_bound_its_visits_failure_names() {
+    let (_dir, state, record) = setup(&OUTCOME_STEP.replace("max-visits=6", "max-visits=3"));
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));
     answer(&state, &record, &host, json!({"outcome":"queued"}));
     answer(&state, &record, &host, json!({"outcome":"red"}));
     answer(&state, &record, &host, json!({"outcome":"red"}));
-    let capped = answer(&state, &record, &host, json!({"outcome":"red"}));
-    assert_eq!(capped.input.as_ref().unwrap()["bound"], "max-visits");
-    assert_eq!(capped.input.as_ref().unwrap()["visits"], 3);
-    let extended = resume(&state, &record.id, Some("watch"), &["visits=+2".into()]).unwrap();
+    let extended = resume(&state, &record.id, None, &["visits=+2".into()]).unwrap();
     assert_eq!(extended.visit_grant, 2);
-    for count in 1..=5 {
+    for _ in 0..2 {
         let live = answer(&state, &record, &host, json!({"outcome":"red"}));
-        let ctx: Value =
-            serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
-        assert_eq!(ctx["visit"], count);
         assert_eq!(live.state, RunState::Active);
     }
-    let capped = answer(&state, &record, &host, json!({"outcome":"red"}));
-    assert_eq!(capped.input.as_ref().unwrap()["bound"], "max-visits");
-    assert_eq!(capped.input.as_ref().unwrap()["max"], 5);
+    let failed = answer(&state, &record, &host, json!({"outcome":"red"}));
+    assert_eq!(failed.state, RunState::Failed);
+    assert_eq!(
+        failed.input.as_ref().unwrap()["detail"],
+        json!({"visits":5, "max":5})
+    );
 }
 
 #[test]
@@ -798,28 +154,15 @@ fn cancel_row(state: &StatePaths, id: &WorkflowRunId) -> Value {
 }
 
 #[test]
-fn cancel_reason_is_recorded_for_waiting_and_broken_runs() {
-    let mut rows = Vec::new();
-    for broken in [false, true] {
-        let text = if broken {
-            "[workflow]\nscope='worktree'\nstart='nap'\non-break={agent='claude'}\n[sleep.nap]\nsleep='invalid'\nthen='@done'\n"
-        } else {
-            STEP
-        };
-        let (_dir, state, record) = setup(text);
-        let host = FakeHost::new();
-        if broken {
-            assert_eq!(advance_ok(&state, &record.id, &host).node, "@break");
-        } else {
-            *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["builder".into()]);
-            assert!(advance_ok(&state, &record.id, &host).wait.is_some());
-        }
-        cancel(&state, &record.id, &host, Some("worktree removed")).unwrap();
-        rows.push(cancel_row(&state, &record.id));
-    }
+fn cancel_reason_is_recorded_for_a_waiting_run() {
+    let (_dir, state, record) = setup(STEP);
+    let host = FakeHost::new();
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["builder".into()]);
+    assert!(advance_ok(&state, &record.id, &host).wait.is_some());
+    cancel(&state, &record.id, &host, Some("worktree removed")).unwrap();
     assert_eq!(
-        rows,
-        vec![json!({"event":"cancel","reason":"worktree removed"}); 2]
+        cancel_row(&state, &record.id),
+        json!({"event":"cancel","reason":"worktree removed"})
     );
 }
 
@@ -1047,8 +390,8 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     assert_eq!(
         capped.input,
         Some(json!({
-            "outcome":"cap", "step":"build", "bound":"max-visits",
-            "visits":2, "max":2, "key":8, "routed_by":"work"
+            "outcome":"failed", "cause":"visits", "node":"build",
+            "reason":"build has used 2 of 2 visits", "detail":{"visits":2, "max":2}, "key":8
         }))
     );
     assert_eq!(host.launched.borrow().len(), 2);
@@ -1073,8 +416,8 @@ fn cap_preserves_counts_sequence_and_route_evidence() {
     assert_eq!(capped.state, RunState::Failed);
     assert!(capped.park.is_none());
     let input = json!({
-        "outcome":"cap", "step":"build", "bound":"max-visits",
-        "visits":2, "max":2, "key":7, "routed_by":null
+        "outcome":"failed", "cause":"visits", "node":"build",
+        "reason":"build has used 2 of 2 visits", "detail":{"visits":2, "max":2}, "key":7
     });
     assert_eq!(capped.input.as_ref(), Some(&input));
     assert_eq!(capped.visits, record.visits);
@@ -1087,7 +430,7 @@ fn cap_preserves_counts_sequence_and_route_evidence() {
             .any(|row| matches!(
                 &row.event,
                 JournalEvent::Route { outcome, input: routed }
-                    if outcome == "cap" && routed == &input
+                    if outcome == "visits" && routed == &input
             ))
     );
 }
@@ -1121,8 +464,8 @@ fn visit_grant_admits_exactly_that_many_more_visits() {
     assert_eq!(
         capped.input,
         Some(json!({
-            "outcome":"cap", "step":"build", "bound":"max-visits",
-            "visits":4, "max":4, "key":"lint", "routed_by":null
+            "outcome":"failed", "cause":"visits", "node":"build",
+            "reason":"build has used 4 of 4 visits", "detail":{"visits":4, "max":4}, "key":"lint"
         }))
     );
 }
@@ -1381,7 +724,7 @@ fn step_timeout_pauses_from_ask_open_and_rejudges_after_the_answer() {
             RunState::Active,
             Some(clamped),
             if overdue {
-                RunState::Done
+                RunState::Failed
             } else {
                 RunState::Active
             },
@@ -1489,7 +832,15 @@ fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
         assert_eq!(prev.head_start.as_deref(), Some("recorded-head"));
         assert_eq!(prev.children.as_ref().unwrap().stopped[0].handle, "child");
         assert_eq!(prev.children.as_ref().unwrap().live[0].handle, "peer");
-        assert_eq!(ended.state, RunState::Done);
+        let failed = expected != AttemptOutcome::Ended;
+        assert_eq!(
+            ended.state,
+            if failed {
+                RunState::Failed
+            } else {
+                RunState::Done
+            }
+        );
         assert!(prev.asked.is_none());
         if status == RunStatus::Pending {
             assert_eq!(prev.limited.as_ref().unwrap().reset_at, Some(reset));
@@ -1548,14 +899,7 @@ fn asked_edge_routes_and_launch_failures_count_as_attempts() {
             );
         }
         assert_eq!(ended.visits["build"], 1);
-        assert_eq!(
-            ended.state,
-            if outcome == AttemptOutcome::Limited {
-                RunState::Done
-            } else {
-                RunState::Failed
-            }
-        );
+        assert_eq!(ended.state, RunState::Failed);
         if outcome != AttemptOutcome::Asked {
             assert!(records::journal(&state.workflow(&record.id)).unwrap().iter().any(|row| matches!(&row.event, JournalEvent::Attempt { reason:Some(reason), .. } if reason == "cannot launch")));
         }
@@ -1968,8 +1312,7 @@ fn timeout_deadline_and_cancel_stop_before_settlement() {
         assert_eq!(
             ended.state,
             match cause {
-                "timeout" => RunState::Done,
-                "deadline" => RunState::Failed,
+                "timeout" | "deadline" => RunState::Failed,
                 _ => RunState::Canceled,
             }
         );
@@ -2166,6 +1509,7 @@ fn evaluation(
         stderr_tail: None,
         limited: None,
         cost_usd: Some(0.1),
+        detail: serde_json::json!({}),
     }
 }
 
@@ -2302,7 +1646,8 @@ fn invalid_checks_record_engine_origin() {
         paths: &paths,
         entries: Vec::new(),
     };
-    t.finish_check(1, Err("bad JSON".into()), None).unwrap();
+    t.finish_check(1, Err("bad JSON".into()), json!({}), None)
+        .unwrap();
     let entry = serde_json::to_value(&t.entries[0]).unwrap();
     assert_eq!(entry["event"], "evaluation");
     assert_eq!(entry["origin"], "engine");

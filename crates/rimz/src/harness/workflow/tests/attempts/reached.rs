@@ -48,18 +48,12 @@ fn reached_tracks_engine_entries_and_keeps_them_after_looping_back() {
 
 #[test]
 fn reached_credits_resume_target_but_not_the_nodes_it_skipped() {
-    let (_dir, state, record) =
-        setup_rail(&RAIL.replace("on-break = '@failed'", "on-break = {agent='claude'}"));
+    let (_dir, state, record) = setup_rail(RAIL);
     let host = FakeHost::new();
-    advance_ok(&state, &record.id, &host);
-    let broken = answer(&state, &record, &host, json!({"outcome":"again"}));
-    assert_eq!(broken.node, "@break");
-    assert_eq!(reached_nodes(&state, &broken), ["build", "gate"]);
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(live.node, "build");
     resume(&state, &record.id, Some("finish"), &[]).unwrap();
     let resumed = advance_ok(&state, &record.id, &host);
     assert_eq!(resumed.node, "finish");
-    assert_eq!(
-        reached_nodes(&state, &resumed),
-        ["@break", "build", "finish", "gate"]
-    );
+    assert_eq!(reached_nodes(&state, &resumed), ["build", "finish"]);
 }

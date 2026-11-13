@@ -94,7 +94,12 @@ fn either_lifecycle_may_end_the_run_at_then_and_then_names_one_target() {
 
 #[test]
 fn on_failed_names_a_live_target_on_agent_steps() {
-    let errors = report(&VALID.replace("max-visits = 3", "max-visits = 3\non.failed = 'pick'"));
+    // R10: pick routes back to build, so the visits and capacity failures need routes of
+    // their own.
+    let errors = report(&VALID.replace(
+        "max-visits = 3",
+        "max-visits = 3\non.failed = 'pick'\non.visits = '@failed'\non.capacity = '@failed'",
+    ));
     assert_eq!(errors, vec![]);
     let errors = report(&VALID.replace("max-visits = 3", "max-visits = 3\non.failed = 'nowhere'"));
     assert_eq!(paths(&errors), ["agent.build.on.failed"], "{errors:?}");
@@ -102,17 +107,17 @@ fn on_failed_names_a_live_target_on_agent_steps() {
 
 #[test]
 fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_then() {
-    let rescued = STEP.replace("then='@done'", "then='@done'\non.failed='@failed'");
+    let rescued = STEP.replace("then='@done'", "then='@done'\non.failed='@done'");
     for (definition, ending, expected) in [
-        (&rescued, "died", RunState::Failed),
-        (&rescued, "timeout", RunState::Failed),
-        (&rescued, "limited", RunState::Failed),
-        (&rescued, "refused", RunState::Failed),
+        (&rescued, "died", RunState::Done),
+        (&rescued, "timeout", RunState::Done),
+        (&rescued, "limited", RunState::Done),
+        (&rescued, "refused", RunState::Done),
         (&rescued, "ended", RunState::Done),
-        (&STEP.to_owned(), "died", RunState::Done),
-        (&STEP.to_owned(), "timeout", RunState::Done),
-        (&STEP.to_owned(), "limited", RunState::Done),
-        (&STEP.to_owned(), "refused", RunState::Done),
+        (&STEP.to_owned(), "died", RunState::Failed),
+        (&STEP.to_owned(), "timeout", RunState::Failed),
+        (&STEP.to_owned(), "limited", RunState::Failed),
+        (&STEP.to_owned(), "refused", RunState::Failed),
     ] {
         let text = if ending == "timeout" {
             format!("{definition}timeout='1h'\n")
@@ -149,7 +154,7 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let failed = definition.contains("on.failed") && ending != "ended";
+        let failed = ending != "ended";
         assert_eq!(ended.state, expected, "{ending}: {ended:?}");
         let spec = super::super::super::spec::parse(&text).unwrap();
         let word = if ending == "refused" {
@@ -157,7 +162,11 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
         } else {
             ending
         };
-        let shown = if failed { "@failed" } else { "@done" };
+        let shown = if failed && !definition.contains("on.failed") {
+            "@failed"
+        } else {
+            "@done"
+        };
         assert_eq!(
             spec.target("build", word)
                 .as_ref()
@@ -182,7 +191,7 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
             "{ending}: {trail:?}"
         );
         assert_eq!(
-            routed.iter().any(|outcome| outcome == "failed"),
+            routed.iter().any(|outcome| outcome == word),
             failed,
             "{ending}: {routed:?}"
         );
@@ -216,7 +225,7 @@ fn a_session_timeout_ends_it_from_its_launch_with_or_without_a_rest_check() {
                 ended.node.as_str(),
                 host.stops.get(),
             ),
-            (Some(AttemptOutcome::Timeout), "judge", 1),
+            (Some(AttemptOutcome::Timeout), "build", 1),
             "{rest}: {ended:?}"
         );
     }
@@ -245,7 +254,7 @@ fn only_written_routes_classify_as_explicit() {
 
 #[test]
 fn a_message_step_hands_its_pinned_session_to_the_host() {
-    let tell = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+    let tell = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
     for (definition, expected) in [
         (format!("{tell}session='ses-1'\n"), Some("ses-1")),
         (tell.to_owned(), None),

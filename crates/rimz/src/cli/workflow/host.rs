@@ -49,7 +49,7 @@ impl<'a> Host<'a> {
         let ctx = self.ctx()?;
         let mut rounds = 0;
         loop {
-            let snapshot = workflow::without_excluded(ctx.alive_snapshot()?, &eviction.excluded);
+            let snapshot = ctx.alive_snapshot()?;
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
             let takeover = takeover::read(
                 &snapshot,
@@ -181,15 +181,10 @@ fn queue_notice(
 }
 
 impl workflow::AttemptHost for Host<'_> {
-    fn occupancy(
-        &self,
-        scope: &Path,
-        root: &Path,
-        excluded: &[String],
-    ) -> Result<workflow::Occupancy, WorkflowErr> {
+    fn occupancy(&self, scope: &Path, root: &Path) -> Result<workflow::Occupancy, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
-            let snapshot = workflow::without_excluded(ctx.alive_snapshot()?, excluded);
+            let snapshot = ctx.alive_snapshot()?;
             let card_status = rimz::harness::CardStatus::new(&ctx.store);
             let takeover = takeover::read(&snapshot, &card_status, scope, root)?;
             let peers = rimz::address::addressable_agents(&snapshot);

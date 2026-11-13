@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 const LAND: &str = r#"
 [workflow]
-on-break = '@failed'
 scope = 'worktree'
 start = 'begin'
 [test.begin]
@@ -65,7 +64,7 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
         ))
         .unwrap();
         assert_eq!(
-            defaults(&spec).contains(&"A turn step goes on to its next check when its turn ends cleanly or its provider exits."),
+            defaults(&spec).contains(&"A turn step goes on to its next check when its turn ends cleanly; one whose provider exits first died."),
             turn_end,
             "{runner}"
         );
@@ -73,18 +72,18 @@ fn turn_end_footer_only_describes_turn_agent_steps() {
 }
 
 #[test]
-fn rail_rows_draw_a_capacity_edge_only_when_it_is_routed_or_bounded_by_the_step() {
+fn rail_rows_draw_a_capacity_edge_only_when_the_step_routes_it() {
     let cases = [
         ("", false),
         ("on.capacity = '@done'\n", true),
-        ("admission = { give-up = '6h' }\n", true),
+        ("admission = { give-up = '6h' }\n", false),
         ("admission = { give-up = 'forever' }\n", false),
     ];
     let drawn: Vec<_> = cases
         .iter()
         .map(|(fields, _)| {
             let spec: Definition = toml::from_str(&format!(
-                "[workflow]\nscope='worktree'\nstart='work'\non-break='@failed'\n\
+                "[workflow]\nscope='worktree'\nstart='work'\n\
                  [agent.work]\nagent='claude'\nlifecycle='turn'\nthen='@done'\n{fields}"
             ))
             .unwrap();
@@ -1073,7 +1072,7 @@ fn limit_routes_use_the_same_direction_marks_as_other_edges() {
     let spec: Definition = toml::from_str(
         &LAND
             .replace("timeout = '3d'", "timeout = '3d'\non.timeout = 'fix'")
-            .replace("max-visits = 4", "max-visits = 4\non.cap = 'notes'"),
+            .replace("max-visits = 4", "max-visits = 4\non.visits = 'notes'"),
     )
     .unwrap();
     let rail = Rail::definition(&spec);
@@ -1187,13 +1186,17 @@ fn land_rail_agrees(text: &str) {
         }
         for edge in &row.edges {
             match edge.outcome.as_str() {
-                "deadline" => assert_eq!(edge.source, EdgeSource::OnBreak),
-                "invalid" => assert!(text.contains("invalid @failed"), "{text}"),
+                "deadline" => {}
+                // A failure the run's end or the workflow's on.failed takes draws no route.
+                _ if matches!(
+                    edge.source,
+                    EdgeSource::WorkflowFailed | EdgeSource::Default
+                ) && edge.target == "@failed" => {}
                 "unknown" => assert!(text.contains("an unread term above it waits")),
                 "timeout" if edge.fires != Fireability::Never => {
                     assert!(text.contains(&format!("waits ≤3d, then {}", edge.target)));
                 }
-                "cap" if edge.fires != Fireability::Never => {
+                "visits" if edge.fires != Fireability::Never => {
                     assert!(text.contains(&format!("visits, then {}", edge.target)));
                 }
                 _ if edge.fires == Fireability::Never => {
@@ -1266,7 +1269,7 @@ mod horizontal_sweep {
                 "deadline",
                 LAND.replace(
                     "start = 'begin'",
-                    "start = 'begin'\ndeadline = '1d'\non.deadline = 'cleanup'",
+                    "start = 'begin'\ndeadline = '1d'\non.failed = 'cleanup'",
                 ) + "\n[command.cleanup]\nshell='true'\nthen='@done'\n",
             ),
             (
@@ -1275,7 +1278,7 @@ mod horizontal_sweep {
                  [agent.plan]\nagent='claude'\nlifecycle='turn'\nthen='planned'\n\
                  [test.planned]\nshell='true'\non.pass='work'\n\
                  [agent.work]\nagent='claude'\nlifecycle='session'\nrest-check=['gate']\nthen='gate'\n\
-                 max-visits=3\non.cap='escalate_to_release_manager'\n\
+                 max-visits=3\non.visits='escalate_to_release_manager'\n\
                  [command.escalate_to_release_manager]\nshell='true'\nthen='gate'\n\
                  [test.gate]\nshell='true'\non.pass='@done'\non.fail='work'\n"
                     .into(),

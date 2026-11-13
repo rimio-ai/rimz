@@ -63,26 +63,43 @@ expression: value
             "null"
           ]
         },
-        "cap": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "capacity": {
           "type": [
             "string",
             "null"
           ]
         },
-        "failed": {
-          "description": "An ending that died, timed out, or was limited; without it, `then` takes it.",
+        "deadline": {
           "type": [
             "string",
             "null"
           ]
         },
-        "invalid": {
+        "died": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limited": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visits": {
           "type": [
             "string",
             "null"
@@ -215,18 +232,6 @@ expression: value
       ],
       "type": "object"
     },
-    "CapEdges": {
-      "additionalProperties": false,
-      "properties": {
-        "cap": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "Case": {
       "additionalProperties": false,
       "properties": {
@@ -252,6 +257,42 @@ expression: value
       ],
       "type": "object"
     },
+    "CommandEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "died": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visits": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "CommandNode": {
       "additionalProperties": false,
       "properties": {
@@ -264,7 +305,7 @@ expression: value
           ]
         },
         "on": {
-          "$ref": "#/$defs/CapEdges"
+          "$ref": "#/$defs/CommandEdges"
         },
         "run": {
           "type": [
@@ -374,16 +415,6 @@ expression: value
         "on": {
           "$ref": "#/$defs/HeaderEdges"
         },
-        "on-break": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OnBreak"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "scope": {
           "$ref": "#/$defs/ScopeKind"
         },
@@ -406,7 +437,8 @@ expression: value
     "HeaderEdges": {
       "additionalProperties": false,
       "properties": {
-        "deadline": {
+        "failed": {
+          "description": "Where a failure goes that its node routes neither by cause nor by `on.failed`.",
           "type": [
             "string",
             "null"
@@ -499,13 +531,25 @@ expression: value
     "MessageEdges": {
       "additionalProperties": false,
       "properties": {
-        "cap": {
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
           "type": [
             "string",
             "null"
           ]
         },
         "undelivered": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visits": {
           "type": [
             "string",
             "null"
@@ -570,31 +614,6 @@ expression: value
       ],
       "type": "string"
     },
-    "OnBreak": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "agent": {
-              "type": "string"
-            },
-            "prompt-file": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "agent"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "ScopeKind": {
       "enum": [
         "worktree",
@@ -651,7 +670,13 @@ expression: value
     "SleepEdges": {
       "additionalProperties": false,
       "properties": {
-        "invalid": {
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
           "type": [
             "string",
             "null"
@@ -724,13 +749,25 @@ expression: value
     "TestEdges": {
       "additionalProperties": false,
       "properties": {
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "died": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "fail": {
           "type": [
             "string",
             "null"
           ]
         },
-        "invalid": {
+        "failed": {
           "type": [
             "string",
             "null"

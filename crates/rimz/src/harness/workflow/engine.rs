@@ -17,7 +17,7 @@ use crate::harness::when::{WhenExpr, WindowReadings};
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, EndCause, Ending, Host, JournalEntry, JournalEvent,
-    LiveAttempt, ParkReason, RunFire, RunOrigin, RunRecord, RunState, Scope, ScopeKind, Verdict,
+    LiveAttempt, ParkReason, RunFire, RunOrigin, RunRecord, RunState, Scope, ScopeKind,
 };
 
 mod accounting;
@@ -407,7 +407,6 @@ fn publish(
     let now = Timestamp::now();
     let mut record = RunRecord {
         version: workflow::VERSION,
-        break_agents: Vec::new(),
         id,
         origin: start.origin,
         workflow: start.name,
@@ -642,9 +641,10 @@ pub(super) fn outcome(
     .then(|| {
         journal.iter().rev().find_map(|entry| match &entry.event {
             JournalEvent::Attempt { reason, .. } => reason.clone(),
-            JournalEvent::Route { outcome, input } if outcome == "budget" => {
-                input["reason"].as_str().map(str::to_owned)
-            }
+            JournalEvent::Route { input, .. } => input["reason"].as_str().map(str::to_owned),
+            JournalEvent::Evaluation {
+                outcome, object, ..
+            } if outcome == "fault" => object["reason"].as_str().map(str::to_owned),
             _ => None,
         })
     })
@@ -658,25 +658,33 @@ pub(super) fn outcome(
     }
 }
 
-/// Why a failed run failed: its last decision was the `capacity` route out of an agent step, its
-/// last attempt ended at its budget, or neither.
+/// Why a failed run failed: its last route was an agent step's expired capacity wait, the
+/// failure that ended it is an attempt that ended at its budget or a judge's `limited`
+/// refusal, or neither. A start that can never fit (`never_fits`) is a configuration refusal,
+/// so it fails like any other failure. A newer route of another cause, or a newer evaluation,
+/// ends the run for its own reason, so the scan stops there.
 fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
     let capacity = journal.iter().rev().find_map(|entry| match &entry.event {
         JournalEvent::Route { outcome, input } => Some((outcome == "capacity").then_some(input)),
         JournalEvent::Attempt { .. } => Some(None),
         _ => None,
     });
-    if let Some(Some(input)) = capacity {
+    if let Some(Some(input)) = capacity
+        && input["detail"]["never_fits"] != true
+    {
         return workflow::RunEnding::CapacityGaveUp {
-            waited_ms: input["waited_ms"].as_u64().unwrap_or(0),
+            waited_ms: input["detail"]["waited_ms"].as_u64().unwrap_or(0),
             reason: input["reason"].as_str().map(str::to_owned),
         };
     }
     let budget = journal.iter().rev().find_map(|entry| match &entry.event {
+        JournalEvent::Route { outcome, .. } => (outcome != "limited").then_some(None),
         JournalEvent::Attempt {
             outcome, handle, ..
         } => Some((*outcome == AttemptOutcome::Limited).then_some(handle.is_some())),
-        JournalEvent::Route { outcome, .. } if outcome == "budget" => Some(Some(false)),
+        JournalEvent::Evaluation { object, .. } => {
+            Some((object["outcome"] == "failed" && object["cause"] == "limited").then_some(false))
+        }
         _ => None,
     });
     match budget {
@@ -971,8 +979,15 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
                 .is_some_and(|a| a.kind == AttemptKind::Judge)
             {
                 t.finish_judge(seq, result)?
+            } else if let (Err(reason), Some(Kind::Script(_))) =
+                (&result.object, spec.check_kind(&record.node))
+            {
+                let cause = spec::Cause::parse(result.failure).unwrap_or(spec::Cause::Invalid);
+                let reason = reason.clone();
+                t.check_failure(seq, Some(cause), reason, result.detail, result.stderr_tail)?;
+                false
             } else {
-                t.finish_check(seq, result.object, result.stderr_tail)?;
+                t.finish_check(seq, result.object, result.detail, result.stderr_tail)?;
                 false
             };
             if retry {
@@ -1285,9 +1300,13 @@ fn prepare(
             );
         }
         let reason = format!("lost command-step host {}", attempt.host.pid);
+        // A lost step host leaves its child group running; a check's is abandoned below.
+        if spec.step(&t.record.node).is_some() {
+            t.kill_child();
+        }
         t.finish_script(
             Ending {
-                outcome: AttemptOutcome::Canceled,
+                outcome: AttemptOutcome::Died,
                 cause: EndCause::Lifecycle,
                 route: None,
                 reason: None,
@@ -1315,14 +1334,14 @@ fn prepare(
     let mut evict = None;
     // The one capacity decision: a waiting start fails on an admission it cannot take and
     // waits at a hold; a skipped start launches past either and records it on the attempt. A
-    // start too wide for a machine cap fails either way.
+    // start too wide for a machine cap fails either way, as a `capacity` that never fits.
     let waits = t.record.capacity == workflow::StartCapacity::Wait;
     if let Some(step) = spec.step(&t.record.node) {
         if let Some((visits, max)) = step.tripped_visit_bound(&t.record) {
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
             }
-            let route = t.cap_route(visits, max);
+            let route = t.visits_failure(visits, max);
             t.route(&Target::parse(&route.target), route.object, route.reason)?;
             admission.capacity = None;
             persist(&mut t, &guard)?;
@@ -1330,8 +1349,9 @@ fn prepare(
         }
         if let Some(Kind::Agent(agent)) = spec.step_kind(&t.record.node) {
             if let Some((_, _, Err(reason))) = &admission.capacity
-                && ((waits && !queue_lock_timed_out(reason))
-                    || matches!(reason, throttle::ThrottleError::Oversized { .. }))
+                && waits
+                && !queue_lock_timed_out(reason)
+                && !matches!(reason, throttle::ThrottleError::Oversized { .. })
             {
                 launch_error = Some(reason.to_string());
             }
@@ -1353,8 +1373,7 @@ fn prepare(
             if launch_error.is_none() && step.occupancy() != Some(OccupancyPolicy::Share) {
                 // A step launched into a named worktree occupies that checkout, not the run's.
                 let destination = destination(&t.record, step)?;
-                let occupancy =
-                    host.occupancy(&destination, &t.record.project_root, &t.record.break_agents)?;
+                let occupancy = host.occupancy(&destination, &t.record.project_root)?;
                 if let Some(wait) = occupancy_wait(&occupancy, step) {
                     t.step_wait(wait, None);
                     persist(&mut t, &guard)?;
@@ -1364,7 +1383,6 @@ fn prepare(
                 evict = Some(super::Eviction {
                     checkout: destination,
                     project_root: t.record.project_root.clone(),
-                    excluded: t.record.break_agents.clone(),
                 });
             }
             t.now = Timestamp::now();
@@ -1485,26 +1503,6 @@ fn prepare(
         ending: None,
         retry: t.record.check_retry_context.clone(),
     });
-    if let Some((_, _, Err(error @ throttle::ThrottleError::Oversized { .. }))) =
-        &admission.capacity
-    {
-        t.stage_agent_end(
-            Ending {
-                outcome: AttemptOutcome::Died,
-                cause: EndCause::Lifecycle,
-                route: Some(Verdict {
-                    node: t.record.node.clone(),
-                    entered_at: t.record.entered_at,
-                    at: t.now,
-                    target: Target::Failed.to_string(),
-                    object: json!({"outcome":"died", "reason":error.to_string()}),
-                    reason: ParkReason::User,
-                }),
-                reason: Some(error.to_string()),
-            },
-            &agent::empty_observation(),
-        );
-    }
     persist(&mut t, &guard)?;
     write_context(&t.record, paths, spec)?;
     if let Some(text) = notice {
@@ -1525,6 +1523,24 @@ fn prepare(
         return Ok(Decision::Launch(Box::new((t.record, prompt, turn, evict))));
     }
     Ok(Decision::Evaluate(Box::new(t.record)))
+}
+
+/// The `capacity` failure of the current agent step, which waited from `first`. A start that
+/// can never fit records `never_fits`, so the run's outcome reads a configuration refusal
+/// rather than a wait that gave up.
+fn capacity_failure(
+    t: &mut Transition<'_>,
+    reason: String,
+    first: Timestamp,
+    never_fits: bool,
+) -> std::result::Result<(), crate::utils::time::TimeInputErr> {
+    let node = t.record.node.clone();
+    let waited_ms = t.now.duration_since(first).as_millis().max(0);
+    let mut detail = json!({"waited_ms":waited_ms, "first":first});
+    if never_fits {
+        detail["never_fits"] = json!(true);
+    }
+    t.fail(None, &node, spec::Cause::Capacity, reason, detail)
 }
 
 fn prepare_capacity(
@@ -1558,16 +1574,27 @@ fn prepare_capacity(
         .filter(|wait| wait.outcome == "capacity")
         && wait.gives_up_at.is_some_and(|at| t.now >= at)
     {
-        let object = json!({
-            "outcome":"capacity", "step":t.record.node, "reason":wait.detail,
-            "kinds":wait.kinds, "waited_ms":t.now.duration_since(wait.first).as_millis().max(0)
-        });
-        t.engine_route(
-            "capacity",
-            object,
-            &t.spec.engine_target(&t.record.node, "capacity"),
-            ParkReason::User,
-        )?;
+        let reason = wait
+            .detail
+            .clone()
+            .unwrap_or_else(|| "the capacity wait gave up".into());
+        let first = wait.first;
+        capacity_failure(t, reason, first, false)?;
+        admission.capacity = None;
+        persist(t, guard)?;
+        return Ok(Some(Decision::Again));
+    }
+    if let Some((_, _, Err(error @ throttle::ThrottleError::Oversized { .. }))) =
+        &admission.capacity
+    {
+        // A start that can never fit fails before it counts a visit.
+        let first = t
+            .record
+            .wait
+            .as_ref()
+            .filter(|wait| wait.outcome == "capacity")
+            .map_or(t.now, |wait| wait.first);
+        capacity_failure(t, error.to_string(), first, true)?;
         admission.capacity = None;
         persist(t, guard)?;
         return Ok(Some(Decision::Again));
@@ -2061,33 +2088,29 @@ pub fn resume(
                 "terminal workflow runs cannot resume".into(),
             ));
         }
-        if let Some(node) = at {
-            if spec.is_break(node) {
-                return Err(WorkflowErr::Refused(
-                    "@break is reserved; resume at the source or another sealed node".into(),
-                ));
-            }
-            if spec.node(node).is_none() {
-                return Err(WorkflowErr::Refused(format!(
-                    "unknown sealed workflow node {node}"
-                )));
-            }
+        if let Some(node) = at
+            && spec.node(node).is_none()
+        {
+            return Err(WorkflowErr::Refused(format!(
+                "unknown sealed workflow node {node}"
+            )));
         }
-        let at_break = spec.is_break(&record.node);
-        if at_break
+        if record.state == RunState::Active && at.is_none() && extend.is_empty() {
+            return Err(WorkflowErr::Refused(
+                "an active run needs --at <node> or --extend to resume".into(),
+            ));
+        }
+        if at.is_some()
             && record.attempt.as_ref().is_some_and(|attempt| {
-                (attempt.ending.is_some() || attempt.run.is_none())
+                attempt.kind == AttemptKind::Agent
+                    && (attempt.ending.is_some() || attempt.run.is_none())
                     && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
             })
         {
-            return Err(WorkflowErr::Refused(
-                "the on-break attempt is settling; retry resume after it finishes".into(),
-            ));
-        }
-        if record.state == RunState::Active && !at_break && (at.is_some() || extend.is_empty()) {
-            return Err(WorkflowErr::Refused(
-                "an active run accepts only --extend; park it before repositioning".into(),
-            ));
+            return Err(WorkflowErr::Refused(format!(
+                "the attempt at {} is settling; retry resume after it finishes",
+                record.node
+            )));
         }
         let mut t = Transition {
             record,
@@ -2118,77 +2141,36 @@ pub fn resume(
                 )));
             }
         }
-        if at_break {
+        // A pending restart's session resumes at the step it was taken for, and nowhere else.
+        if let Some(target) = at
+            && t.record
+                .session_attempt()
+                .map_or(&t.record.node, |attempt| &attempt.node)
+                != target
+        {
+            t.record.restart = None;
+        }
+        if let Some(target) = at
+            && t.record.state == RunState::Active
+        {
+            if t.record.held.is_some() {
+                rest::interrupt(&mut t, "resume");
+            }
             t.close_wait();
-            if let Some(input) = &t.record.input
-                && input["edge"] == "cap"
-                && let Some(step) = input["from"].as_str().map(str::to_owned)
-            {
-                t.reset_visits(&step, "cap");
+            if move_live_attempt(&mut t, target)? {
+                persist(&mut t, &guard)?;
+                let record = t.record;
+                drop(guard);
+                spawn(&record)?;
+                return Ok(record);
             }
-            let target = at
-                .map(str::to_owned)
-                .or_else(|| {
-                    t.record
-                        .input
-                        .as_ref()?
-                        .get("from")?
-                        .as_str()
-                        .map(str::to_owned)
-                })
-                .ok_or_else(|| {
-                    WorkflowErr::Refused("break context has no source node; use --at <node>".into())
-                })?;
-            if let Some(attempt) = &mut t.record.attempt {
-                attempt.ending = Some(Ending {
-                    outcome: AttemptOutcome::Canceled,
-                    cause: EndCause::Lifecycle,
-                    route: Some(workflow::Verdict {
-                        node: t.record.node.clone(),
-                        entered_at: t.record.entered_at,
-                        at: t.now,
-                        target,
-                        object: t.record.input.clone().unwrap_or_else(|| json!({})),
-                        reason: ParkReason::User,
-                    }),
-                    reason: None,
-                });
-                if attempt.run.is_some() {
-                    // No off-lock owner is launching this published session.
-                    attempt.host = workflow::Host {
-                        pid: 0,
-                        start: None,
-                    };
-                }
-            } else {
-                t.record.node = target;
-                t.record.entered_at = t.now;
-                t.record.check_retry = 0;
-                t.record.check_retry_context = None;
-                t.record.launch_retry = false;
-                t.push(
-                    None,
-                    JournalEvent::Resume {
-                        visit_grant: t.record.visit_grant,
-                        deadline: t.record.deadline,
-                    },
-                );
-            }
-            persist(&mut t, &guard)?;
-            let record = t.record;
-            drop(guard);
-            spawn(&record)?;
-            return Ok(record);
+            t.record.node = target.into();
+            t.record.entered_at = t.now;
+            t.record.check_retry = 0;
+            t.record.check_retry_context = None;
+            t.record.launch_retry = false;
         }
         if t.record.state == RunState::Parked {
-            if t.record
-                .park
-                .as_ref()
-                .is_some_and(|park| park.reason == ParkReason::Cap)
-            {
-                let step = t.record.node.clone();
-                t.reset_visits(&step, "cap");
-            }
             t.close_wait();
             if let Some(node) = at {
                 t.record.node = node.into();
@@ -2212,6 +2194,45 @@ pub fn resume(
     };
     spawn(&record)?;
     Ok(record)
+}
+
+/// End the live attempt `resume --at` moves the run away from, its route going to `target`:
+/// an agent attempt is staged canceled for the next advance to stop, a step's child is
+/// killed and its attempt settled, and a check's evaluation is abandoned. Whether the
+/// settlement already moved the run.
+fn move_live_attempt(
+    t: &mut Transition<'_>,
+    target: &str,
+) -> std::result::Result<bool, crate::utils::time::TimeInputErr> {
+    let Some(attempt) = &mut t.record.attempt else {
+        return Ok(false);
+    };
+    let ending = Ending {
+        outcome: AttemptOutcome::Canceled,
+        cause: EndCause::Resume,
+        route: Some(workflow::Verdict {
+            node: attempt.node.clone(),
+            entered_at: t.record.entered_at,
+            at: t.now,
+            target: target.into(),
+            object: t.record.input.clone().unwrap_or_else(|| json!({})),
+            reason: ParkReason::User,
+        }),
+        reason: None,
+    };
+    if attempt.kind == AttemptKind::Agent {
+        attempt.ending = Some(ending);
+        if attempt.run.is_some() {
+            // No off-lock owner is launching this published session.
+            attempt.host = workflow::Host {
+                pid: 0,
+                start: None,
+            };
+        }
+        return Ok(true);
+    }
+    let reason = Some(format!("resumed at {target}"));
+    t.finish_script(ending, None, None, reason)
 }
 
 /// The task's live runs that have not entered an agent or message step: the runs a removal or

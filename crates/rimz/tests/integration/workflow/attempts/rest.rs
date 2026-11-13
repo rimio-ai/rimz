@@ -144,7 +144,7 @@ fn a_turn_end_hook_pushes_a_harness_prompt_without_relaunching() {
     // A finished run shows its saved history.
     let text = success(room.command(&["workflow", "show", &id]).output().unwrap());
     assert!(
-        text.contains("after said pending → build") && text.contains("build cap → @failed"),
+        text.contains("after said pending → build") && text.contains("build visits → @failed"),
         "{text}"
     );
 }

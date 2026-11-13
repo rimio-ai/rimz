@@ -59,7 +59,7 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
 #[test]
 fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
     let mut actual = Vec::new();
-    for machine_cap in [false, true] {
+    for (machine_cap, skip) in [(false, false), (true, false), (true, true)] {
         let room = Room::new(
             "on.capacity='after'\n[agent.build.admission]\nthrottle='off'\nmax-parallel=1\n",
         );
@@ -77,22 +77,32 @@ fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
             config.push_str("\n[throttle]\nmax-parallel-automation=1\n");
             fs::write(core, config).unwrap();
         }
-        let record = pending(&room, Some("nightly"));
+        let mut record = pending(&room, Some("nightly"));
+        if skip {
+            record.capacity = records::StartCapacity::Skip;
+            save(&room, &serde_json::to_value(&record).unwrap());
+        }
         let value = advance(&room, &record);
         assert!(value["record"]["wait"].is_null(), "{value:#}");
         assert!(
-            !events(&value, "route")
+            !events(&value, "attempt")
                 .iter()
-                .any(|row| row["outcome"] == "capacity"),
+                .any(|row| row["outcome"] == "died"),
             "{value:#}"
         );
         actual.push((
             value["record"]["state"].as_str().unwrap().to_owned(),
             value["record"]["visits"]["build"].clone(),
-            events(&value, "attempt")
+            events(&value, "route")
                 .iter()
-                .find(|row| row["outcome"] == "died")
-                .map(|row| row["reason"].clone()),
+                .find(|row| row["outcome"] == "capacity")
+                .map(|row| {
+                    (
+                        row["input"]["node"].clone(),
+                        row["input"]["detail"]["waited_ms"].clone(),
+                        row["input"]["detail"]["never_fits"].clone(),
+                    )
+                }),
         ));
     }
     assert_eq!(
@@ -100,11 +110,14 @@ fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
         [
             ("active".into(), json!(1), None),
             (
-                "failed".into(),
-                json!(1),
-                Some(json!(
-                    "this start opens 2 agents, more than max-parallel-automation = 1 allows; raise it in ~/.rimz/config.toml"
-                ))
+                "done".into(),
+                json!(null),
+                Some((json!("build"), json!(0), json!(true)))
+            ),
+            (
+                "done".into(),
+                json!(null),
+                Some((json!("build"), json!(0), json!(true)))
             ),
         ]
     );
@@ -157,20 +170,22 @@ fn restart_waits_for_window_and_capacity_and_refuses_layouts_over_a_machine_cap(
             value["record"]["wait"]["outcome"]
                 .as_str()
                 .map(str::to_owned),
-            events(&value, "attempt").iter().any(|event| {
-                event["reason"]
-                    .as_str()
-                    .is_some_and(|reason| reason.contains("more than max-parallel"))
+            value["record"]["visits"]["build"].clone(),
+            events(&value, "route").iter().any(|event| {
+                event["outcome"] == "capacity"
+                    && event["input"]["reason"]
+                        .as_str()
+                        .is_some_and(|reason| reason.contains("more than max-parallel"))
             }),
         ));
     }
     assert_eq!(
         actual,
         [
-            ("active".into(), Some("window".into()), false),
-            ("active".into(), Some("capacity".into()), false),
-            ("active".into(), Some("capacity".into()), false),
-            ("failed".into(), None, true)
+            ("active".into(), Some("window".into()), json!(null), false),
+            ("active".into(), Some("capacity".into()), json!(null), false),
+            ("active".into(), Some("capacity".into()), json!(null), false),
+            ("failed".into(), None, json!(null), true)
         ]
     );
 }

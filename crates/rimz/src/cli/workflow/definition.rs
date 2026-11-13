@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::compile::{CompiledAction, TaskWorkflow};
-use rimz::harness::workflow::{EdgeSource, ScopeKind};
+use rimz::harness::workflow::ScopeKind;
 
 use super::*;
 
@@ -211,24 +211,14 @@ fn header(
     if let Some(limit) = spec.limit() {
         writeln!(out, "limit {}", limit_text(limit))?;
     }
-    let edge = spec
-        .edges(spec.start())
-        .into_iter()
-        .find(|edge| edge.outcome == "deadline");
-    if let Some(edge) = edge {
-        if let Some(deadline) = spec.deadline() {
-            writeln!(
-                out,
-                "deadline {deadline} → {} (a live attempt is canceled)",
-                edge.target
-            )?;
-        } else if edge.source == EdgeSource::Explicit {
-            writeln!(
-                out,
-                "when a deadline granted to a run passes → {} (a live attempt is canceled)",
-                edge.target
-            )?;
-        }
+    if let Some(deadline) = spec.deadline() {
+        writeln!(
+            out,
+            "deadline {deadline} fails the node the run is at (a live attempt is canceled)"
+        )?;
+    }
+    if let Some(target) = spec.on_failed() {
+        writeln!(out, "on.failed → {target}")?;
     }
     Ok(())
 }

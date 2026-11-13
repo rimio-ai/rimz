@@ -101,6 +101,41 @@ fn listed_checks_keep_the_session_and_input_then_push_and_restart_at_the_first()
 }
 
 #[test]
+fn a_failure_between_listed_checks_hands_the_next_check_its_input() {
+    let text = definition()
+        .replace(
+            "on.pending='build'",
+            "on.pending='build'\non.invalid='review'",
+        )
+        .replace("run='cat review.json'", "run='sh review.sh'");
+    let (dir, state, record) = setup(&text.replace("then=['pr','review']", "then='pr'"));
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    fs::write(&state.workflow(&record.id).spec, text).unwrap();
+    check(dir.path(), json!([]));
+    fs::write(
+        dir.path().join("review.sh"),
+        "cp \"$RIMZ_WORKFLOW_DIR/context.json\" \"$RIMZ_WORKFLOW_DIR/review-view.json\"\n\
+         printf '%s' '{\"outcome\":\"waiting\"}'\n",
+    )
+    .unwrap();
+    host.observed.borrow_mut().turn = Some(turn());
+    let waiting = advance_ok(&state, &live.id, &host);
+    assert_eq!(waiting.node, "review");
+    assert!(waiting.held.is_some());
+    let context: Value = serde_json::from_slice(
+        &fs::read(state.workflow(&live.id).work.join("review-view.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (&context["input"]["cause"], &context["input"]["node"]),
+        (&json!("invalid"), &json!("pr")),
+        "{context:#}"
+    );
+    assert_eq!(waiting.input.as_ref().unwrap()["cause"], "invalid");
+}
+
+#[test]
 fn listed_second_check_waits_resamples_and_routes_its_own_verdict() {
     for signal in [false, true] {
         let (dir, state, live, host) = launched();

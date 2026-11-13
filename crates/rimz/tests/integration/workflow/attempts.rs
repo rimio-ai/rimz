@@ -30,182 +30,6 @@ fn dummy_agent_process() -> std::process::Child {
 }
 
 #[test]
-fn detached_break_agent_does_not_block_or_get_evicted_by_the_printed_resume() {
-    for takeover in [true, false] {
-        let room = Room::new(&format!(
-            "admission.occupancy='{}'\n",
-            if takeover { "takeover" } else { "wait" }
-        ));
-        let dir = room.env.rimz_home().join("workflows/review");
-        let path = dir.join("workflow.toml");
-        fs::write(
-            &path,
-            fs::read_to_string(&path)
-                .unwrap()
-                .replace("on-break='@failed'", "on-break={agent='codex'}")
-                + "\n[script.continue]\nrun='sh checks/continue.sh'\non.pending='@wait'\non.ready='build'\ntimeout='1h'\nwake=['ci.passed']\n",
-        )
-        .unwrap();
-        fs::write(dir.join("checks/continue.sh"), PENDING).unwrap();
-        fs::write(
-            dir.join("checks/pr.sh"),
-            "printf '%s' '{\"outcome\":\"not-routed\"}'\n",
-        )
-        .unwrap();
-        let (id, debugger) = room.launch();
-        assert_eq!(show(&room.env, &id)["record"]["node"], "@break");
-        room.hook(&id, &debugger, json!({"hook_event_name":"SessionStart"}));
-        room.hook(
-            &id,
-            &debugger,
-            json!({"hook_event_name":"UserPromptSubmit", "prompt":"investigate"}),
-        );
-        let printed = |verb: &str| {
-            let text = debugger
-                .prompt
-                .split('`')
-                .find(|text| {
-                    text.starts_with("rimz --root ") && text.contains(&format!("workflow {verb} "))
-                })
-                .unwrap();
-            shlex::split(text.split(" [--at").next().unwrap()).unwrap()
-        };
-        let mut args = printed("resume");
-        args.extend(["--at".into(), "continue".into()]);
-        success(
-            room.command(&args[1..].iter().map(String::as_str).collect::<Vec<_>>())
-                .env("RIMZ_BIN", "/bin/true")
-                .output()
-                .unwrap(),
-        );
-        success(
-            room.command(&["workflow", "advance", &id])
-                .output()
-                .unwrap(),
-        );
-        let detached = until(&room.env, &id, |value| {
-            value["record"]["node"] == "continue" && value["record"]["wait"]["outcome"] == "pending"
-        });
-        assert_eq!(detached["record"]["node"], "continue");
-        assert_eq!(detached["record"]["wait"]["outcome"], "pending");
-        assert_eq!(
-            detached["record"]["break_agents"].as_array().unwrap().len(),
-            1
-        );
-        let bound = rimz::harness::run::load(
-            &room.env.state_path_for(&room.env.project_root),
-            &debugger.run_id,
-        )
-        .unwrap();
-        let snapshot = room.env.store().snapshot().unwrap();
-        let agent = snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.agent_id == *bound.agent_id.as_ref().unwrap())
-            .unwrap();
-        let mut parent = agent.launch_id.as_ref().unwrap_or(&agent.agent_id).clone();
-        for (depth, name, pane) in [(1, "debug-child", 62), (2, "debug-grandchild", 63)] {
-            let mut observation = rimz::agents::AgentLifecycleObservation::new(
-                Some(name.into()),
-                rimz::agents::LifecycleSignal::Registered,
-            );
-            observation.agent_name = Some(name.into());
-            observation.launch = rimz::agents::LaunchParams {
-                parent_agent_id: Some(parent),
-                parent_agent_kind: Some(agent.kind.clone()),
-                launch_depth: Some(depth),
-                ..Default::default()
-            };
-            observation.pane_id =
-                Some(rimz::PaneId::parse(&format!("zellij:terminal_{pane}")).unwrap());
-            observation.worktree_path = Some(room.env.project_root.display().to_string());
-            observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
-                rimz::pane::RuntimeOwnerKind::Agent,
-                name,
-                room.owner(name),
-                rimz::proc::process_start_token(room.owner(name)),
-            ));
-            let workspace = room.env.resolve_workspace(&room.env.project_root);
-            room.env
-                .store()
-                .append_event(&rimz::EventEnvelope::agent_lifecycle(
-                    workspace.workspace_id,
-                    workspace.session_name,
-                    agent.kind.as_str(),
-                    "test",
-                    &observation,
-                ))
-                .unwrap();
-            parent = name.into();
-        }
-        fs::write(
-            room.env.project_root.join("panes.json"),
-            serde_json::to_vec(&[61, 62, 63].map(|pane| {
-                json!({"id":pane,"is_plugin":false,"tab_id":1,
-                            "title":"codex","pane_command":"codex"})
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            super::sealed(&room.env, &id).join("checks/continue.sh"),
-            "printf '%s' '{\"outcome\":\"ready\"}'\n",
-        )
-        .unwrap();
-        let signal = json!({
-            "name":"ci.passed", "payload":{"path":room.env.project_root}, "source":"forge"
-        });
-        success(
-            room.command(&["workflow", "advance", "--wake-signal", &signal.to_string()])
-                .output()
-                .unwrap(),
-        );
-        let resumed = until(&room.env, &id, |value| {
-            value["record"]["node"] == "build"
-                && (value["record"]["wait"].is_object()
-                    || value["record"]["attempt"]["run"].is_object())
-        });
-        let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
-        assert!(
-            !trace.contains("close-pane"),
-            "the debugger and its later descendants must survive takeover: {trace}"
-        );
-        assert!(
-            resumed["record"]["wait"].is_null(),
-            "a detached debugger and its later descendants must not block admission: {resumed:#}"
-        );
-        assert_eq!(resumed["record"]["attempt"]["node"], "build");
-        assert_ne!(
-            resumed["record"]["attempt"]["run"]["run_id"],
-            debugger.run_id.as_str()
-        );
-        let snapshot = room.env.store().snapshot().unwrap();
-        for agent_id in [
-            bound.agent_id.as_ref().unwrap().as_str(),
-            "debug-child",
-            "debug-grandchild",
-        ] {
-            let agent = snapshot
-                .agents
-                .iter()
-                .find(|agent| agent.agent_id.as_str() == agent_id)
-                .unwrap();
-            assert!(
-                agent.ended_at.is_none(),
-                "the debugger and its later descendants must survive takeover: {agent:#?}"
-            );
-        }
-        let args = printed("cancel");
-        success(
-            room.command(&args[1..].iter().map(String::as_str).collect::<Vec<_>>())
-                .output()
-                .unwrap(),
-        );
-        assert_eq!(show(&room.env, &id)["record"]["state"], "canceled");
-    }
-}
-
-#[test]
 fn agent_step_start_launches_with_null_context_and_counts_its_visit() {
     let room = Room::new("");
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
@@ -834,7 +658,7 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
         );
     }
     let dir = room.env.rimz_home().join("workflows/review");
-    fs::write(dir.join("workflow.toml"), "[workflow]\non-break='@failed'\nscope='project'\nstart='pick'\n[script.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[agent.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='project'\nstart='pick'\n[script.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[agent.build]\nagent='codex'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='pick'\nmax-visits=2\n").unwrap();
     fs::write(dir.join("checks/pr.sh"), "test -d \"$RIMZ_WORKFLOW_DIR/notes\" && test -d \"$RIMZ_WORKFLOW_DIR/signs\" || exit 1\nwhile read -r item; do\n if ! grep -qxF \"$item\" \"$RIMZ_WORKFLOW_DIR\"/notes/*.done 2>/dev/null; then printf '{\"outcome\":\"ready\",\"key\":\"%s\"}' \"$item\"; exit; fi\ndone < items.txt\nprintf '{\"outcome\":\"none\"}'\n").unwrap();
     let id = room.start();
     for item in ["one", "two"] {
@@ -942,7 +766,7 @@ fn loop_project_scope_skips_before_reading_an_edited_definition() {
     let dir = room.env.rimz_home().join("workflows/review");
     fs::write(
         dir.join("workflow.toml"),
-        format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
+        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
@@ -987,7 +811,7 @@ fn condition_workflow(room: &Room, scope: &str, each: bool) {
     let dir = room.env.rimz_home().join("workflows/review");
     fs::write(
         dir.join("workflow.toml"),
-        format!("[workflow]\non-break='@failed'\nscope='{scope}'\nstart='pr'\n{WAIT}"),
+        format!("[workflow]\nscope='{scope}'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
@@ -1712,7 +1536,7 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
     fs::write(&config, format!("{base}each-worktree=true\n")).unwrap();
     fs::write(
         room.env.rimz_home().join("workflows/review/workflow.toml"),
-        format!("[workflow]\non-break='@failed'\nscope='project'\nstart='pr'\n{WAIT}"),
+        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     for checkout in &owned {
@@ -2035,7 +1859,7 @@ fn terminal_write_without_a_hook_wakes_the_workflow() {
         .unwrap();
         return;
     }
-    let room = Room::new("");
+    let room = Room::new("on.died = 'after'\n");
     let (id, run) = room.launch();
     let mut failure = room.env.rimz_at(&std::env::current_exe().unwrap());
     for (key, value) in room.command(&[]).get_envs() {
@@ -2427,7 +2251,11 @@ fn cancel_pending_attempt_is_durable_and_idempotent() {
 #[test]
 fn timeout_still_settles_but_a_failed_turn_waits_for_a_clean_end() {
     for timeout in [true, false] {
-        let room = Room::new(if timeout { "timeout='1h'" } else { "" });
+        let room = Room::new(if timeout {
+            "timeout='1h'\non.timeout='after'\n"
+        } else {
+            ""
+        });
         let (id, run) = room.launch();
         let state = room.env.state_path_for(&room.env.project_root);
         if timeout {
@@ -2555,9 +2383,9 @@ fn closed_window_merges_without_visits_then_reopens() {
 }
 
 #[test]
-fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
+fn room_rebirth_cancels_root_attempt_and_wakes_its_died_route() {
     use crate::common::CommandTimeoutExt;
-    let room = Room::new("");
+    let room = Room::new("on.died = 'after'\n");
     let (id, run) = room.launch();
     let mut owner = dummy_agent_process();
     room.hook_with_owner(

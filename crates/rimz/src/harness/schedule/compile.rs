@@ -272,7 +272,7 @@ impl<'a> Graph<'a> {
                 verdicts(polarity, next, &decline)
             };
             on.insert("timeout".into(), "@failed".into());
-            on.insert("invalid".into(), "@failed".into());
+            on.insert("died".into(), "@failed".into());
             check.insert("on".into(), on.into());
             self.insert("test", "check", check);
         }
@@ -343,7 +343,7 @@ impl<'a> Graph<'a> {
                         ("summary", format!("wait out the {guard} decline").into()),
                         ("sleep", wait.into()),
                         ("then", first.into()),
-                        ("on", routes([("invalid", "@failed")]).into()),
+                        ("on", routes([("failed", "@failed")]).into()),
                     ]),
                 ),
                 None => (
@@ -352,7 +352,7 @@ impl<'a> Graph<'a> {
                         ("summary", format!("hold the {guard} decline").into()),
                         ("sleep", FOREVER.into()),
                         ("then", "@done".into()),
-                        ("on", routes([("invalid", "@failed")]).into()),
+                        ("on", routes([("failed", "@failed")]).into()),
                     ]),
                 ),
             };
@@ -387,7 +387,6 @@ impl<'a> Graph<'a> {
                 ("holds", "@wait"),
                 ("unknown", "@wait"),
                 ("ended", "rearm"),
-                ("invalid", "@failed"),
                 ("timeout", if wait.is_some() { first } else { "@done" }),
             ])
             .into(),
@@ -413,7 +412,6 @@ impl<'a> Graph<'a> {
                         ("holds", first),
                         ("ended", "@wait"),
                         ("unknown", "@wait"),
-                        ("invalid", "@failed"),
                         ("timeout", "@done"),
                     ])
                     .into(),
@@ -430,7 +428,7 @@ impl<'a> Graph<'a> {
     fn judge(&mut self, tier: usize, judge: &Judge, polarity: CheckOn, next: &str, decline: &str) {
         let mut on = verdicts(polarity, next, decline);
         // A tier with no answer after its retry runs the agent anyway.
-        for outcome in ["invalid", "timeout"] {
+        for outcome in ["died", "invalid", "timeout"] {
             on.insert(outcome.into(), next.into());
         }
         let check = table([
@@ -494,7 +492,7 @@ impl<'a> Graph<'a> {
             step.insert("system-prompt-file".into(), SYSTEM_PROMPT.into());
             self.assets.push(Asset::SystemPrompt);
         }
-        let mut on = routes([("failed", "@failed"), ("invalid", "@failed")]);
+        let mut on = routes([("failed", "@failed")]);
         let timed = if entry.stay {
             step.insert("lifecycle".into(), "session".into());
             // A resident session launches beside its checkout's occupants unless it takes them over.
@@ -533,7 +531,7 @@ impl<'a> Graph<'a> {
                 .max_attempts
                 .unwrap_or(crate::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT);
             step.insert("max-visits".into(), i64::from(attempts).into());
-            on.insert("cap".into(), "@failed".into());
+            on.insert("visits".into(), "@failed".into());
             let check = table([
                 ("summary", "the task's verify command".into()),
                 ("shell", verify.as_str().into()),
@@ -550,7 +548,7 @@ impl<'a> Graph<'a> {
                         ("pass", "@done"),
                         ("fail", AGENT),
                         ("timeout", "@failed"),
-                        ("invalid", "@failed"),
+                        ("died", "@failed"),
                     ])
                     .into(),
                 ),

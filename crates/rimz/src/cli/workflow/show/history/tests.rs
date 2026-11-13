@@ -479,7 +479,7 @@ const UNDELIVERED: &str = r#"{"seq":1,"at":"2026-11-08T22:46:30.841509403Z","nod
 
 #[test]
 fn a_message_attempt_names_its_target_or_why_none_took_it() {
-    let spec = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='tell'\n\
+    let spec = "[workflow]\nscope='worktree'\nstart='tell'\n\
          [message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
     for (journal, detail) in [
         (DELIVERED, "    to @planner · ended"),

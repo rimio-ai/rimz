@@ -6368,7 +6368,7 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(
                     dir.join("workflow.toml"),
-                    "[workflow]\non-break='@failed'\nscope = 'worktree'\nstart = 'ready'\n\
+                    "[workflow]\nscope = 'worktree'\nstart = 'ready'\n\
                      [script.ready]\nrun = 'true'\non.ok = '@done'\n",
                 )
                 .unwrap();
@@ -10133,7 +10133,7 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'ready'\n\
+        "[workflow]\nscope = 'project'\nstart = 'ready'\n\
          [test.ready]\nshell = 'true'\non.pass = 'sweep'\non.fail = '@failed'\n\
          [command.sweep]\nshell = 'printf swept'\ntimeout = '1m'\nthen = 'swept'\n\
          [test.swept]\nshell = 'true'\non.pass = 'tidy'\non.fail = '@failed'\n\
@@ -10259,10 +10259,10 @@ fn judged_runs_are_kept_with_their_spend_beside_quiet_fires_that_cost_nothing() 
     std::fs::write(
         dir.join("workflow.toml"),
         format!(
-            "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'gate'\n\
+            "[workflow]\nscope = 'project'\nstart = 'gate'\n\
              [test.gate]\nshell = 'test ! -e {}'\non.pass = '@done'\non.fail = 'review'\n\
              [judge.review]\nsummary = 'Review the work'\nagent = 'claude'\n\
-             prompt-file = 'prompt.md'\non.done = '@done'\non.invalid = '@done'\n",
+             prompt-file = 'prompt.md'\non.done = '@done'\non.invalid = '@done'\non.died = '@done'\n",
             flag.display()
         ),
     )
@@ -10333,7 +10333,7 @@ fn judged_runs_are_kept_with_their_spend_beside_quiet_fires_that_cost_nothing() 
         "{show}"
     );
 
-    // A judge refused twice routes to done and is still kept: the judge was started.
+    // A judge whose process fails dies, routes to done, and is still kept: it was started.
     std::fs::write(&flag, "").unwrap();
     std::fs::write(&refuse, "").unwrap();
     let before = fire(&env);
@@ -10393,7 +10393,7 @@ fn a_structured_script_check_ending_done_is_forgotten_with_its_exit_and_output()
     std::fs::create_dir_all(dir.join("checks")).unwrap();
     std::fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'scan'\n\
+        "[workflow]\nscope = 'project'\nstart = 'scan'\n\
          [script.scan]\nrun = 'sh checks/scan.sh'\non.clean = '@done'\n",
     )
     .unwrap();
@@ -10438,7 +10438,7 @@ fn a_quiet_run_collected_before_its_launch_memory_does_not_hold_the_next_fire() 
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'ready'\n\
+        "[workflow]\nscope = 'project'\nstart = 'ready'\n\
          [test.ready]\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
     )
     .unwrap();
@@ -10527,7 +10527,7 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
     std::fs::write(
         dir.join("workflow.toml"),
         format!(
-            "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = 'hold'\n\
+            "[workflow]\nscope = 'project'\nstart = 'hold'\n\
              [test.hold]\nshell = 'while [ ! -e {} ]; do sleep 0.05; done'\n\
              on.pass = '@done'\non.fail = '@failed'\n",
             gate.display()
@@ -10739,7 +10739,7 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
         std::fs::write(
             dir.join("workflow.toml"),
             format!(
-                "[workflow]\non-break = '@failed'\nscope = 'project'\nstart = '{start}'\n\
+                "[workflow]\nscope = 'project'\nstart = '{start}'\n\
                  [test.first]\nshell = 'true'\non.pass = 'hold'\non.fail = '@failed'\n\
                  [test.hold]\nshell = 'while [ ! -e {} ]; do sleep 0.05; done; printf released'\n\
                  on.pass = '@done'\non.fail = '@failed'\n",
