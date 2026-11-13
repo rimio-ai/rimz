@@ -6461,7 +6461,8 @@ fn bare_word_naming_a_live_agent_launches_without_reading_the_room() {
             "{args:?} in {channel:?} prints its receipt:\n{stdout}"
         );
         assert!(
-            !stderr.contains("skipping workflow with unreadable record"),
+            !stderr.contains("skipping workflow with unreadable record")
+                && !stderr.contains("another RimZ version wrote"),
             "{args:?} in {channel:?} reads no workflow record: {stderr}"
         );
         stdout.into_owned()
