@@ -889,6 +889,31 @@ fn logical_card_matches_exact_sessions_or_shared_stable_names() {
 }
 
 #[test]
+fn launch_aware_card_follows_its_agent_across_kinds_and_refuses_a_reused_handle() {
+    let claude = AgentKind::new_unchecked("claude");
+    let codex = AgentKind::new_unchecked("codex");
+    let agent = AgentSessionId::from("launch_agent");
+    let unrelated = AgentSessionId::from("launch_unrelated");
+    let old = AgentSessionId::from("session-old");
+    let new = AgentSessionId::from("session-new");
+
+    let record = AgentCardRef::new(&claude, &old, Some("coder")).with_launch(Some(&agent));
+    let molted = AgentCardRef::new(&codex, &new, Some("coder")).with_launch(Some(&agent));
+    let reused = AgentCardRef::new(&claude, &new, Some("coder")).with_launch(Some(&unrelated));
+    assert!(record.matches(molted));
+    assert!(molted.matches(record));
+    assert!(!record.matches(reused));
+
+    let legacy = AgentCardRef::new(&claude, &old, Some("coder"));
+    let swapped = AgentCardRef::new(&claude, &new, Some("coder")).with_launch(Some(&agent));
+    assert!(
+        legacy.matches(swapped),
+        "a pre-change record follows a same-kind swap"
+    );
+    assert!(!legacy.matches(molted), "and not a cross-kind molt");
+}
+
+#[test]
 fn compacting_marker_expires_after_delivery_window() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut agent = AgentState::stub("claude", "sess-compact", AgentStatus::Idle);

@@ -2659,6 +2659,7 @@ fn terminal_resume_outcomes_exhaust_park_through_store_projection() {
                 agent.card_ref(),
                 crate::store::writer::DeliveryAck::TurnStarted { prompt: None },
                 None,
+                0,
                 "session",
                 |_, _| {},
             )

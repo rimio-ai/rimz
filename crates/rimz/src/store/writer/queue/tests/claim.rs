@@ -28,9 +28,7 @@ fn batch_hold_check_is_read_only_and_rejects_any_lost_claim() {
     q.record_sent_batch(&held[1..], "session").unwrap();
     assert!(!q.message_claims_held(&held).unwrap());
     q.clear_messages_for(
-        &first.kind,
-        &first.agent_id,
-        first.agent_name.as_deref(),
+        AgentCardRef::new(&first.kind, &first.agent_id, first.agent_name.as_deref()),
         "session",
     )
     .unwrap();
@@ -953,9 +951,7 @@ fn enqueue_and_claim_excludes_other_deliverers_until_sent() {
     assert!(
         message::queue_head(
             q.live().iter(),
-            &held.kind,
-            &held.agent_id,
-            held.agent_name.as_deref(),
+            AgentCardRef::new(&held.kind, &held.agent_id, held.agent_name.as_deref()),
             now
         )
         .is_none()
@@ -1150,4 +1146,68 @@ fn soft_compact_continue_gets_a_tail_id_without_claiming_the_boundary() {
     assert_eq!(queued.status, MessageStatus::Queued);
     assert_eq!(q.live(), vec![earlier, queued.clone()]);
     assert_eq!(q.count("message.queued"), 2);
+}
+
+/// After a molt to another kind the agent's queue still spans its old-kind records: a fresh
+/// boundary send parks behind them, and its holder's card clears and archives them.
+#[test]
+fn a_molted_agents_holder_card_reaches_its_old_kind_records() {
+    let q = Queue::new();
+    let launched = |record: &mut MessageRecord| {
+        record.launch_id = Some("launch_coder".into());
+        record.agent_name = Some("coder".to_owned());
+    };
+    let older = q.queue_with(1, launched);
+    let mut holder = crate::testkit::agent_state("codex", "sess-new", Timestamp::now());
+    holder.launch_id = Some("launch_coder".into());
+    holder.name = Some("molted".to_owned());
+    let mut fresh = MessageRecord::new(
+        q.workspace_id.clone(),
+        &holder,
+        "fresh".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    fresh.message_id = message_id(2);
+    let BoundaryClaim::Parked { blocker, .. } = q
+        .queue_boundary_message(&fresh, "session", Timestamp::now())
+        .unwrap()
+    else {
+        panic!("a fresh send to the holder must park behind the agent's older record");
+    };
+    assert_eq!(blocker, older.message_id);
+
+    let watched = q.queue_with(3, |record| {
+        record.when.push(WhenCondition {
+            kind: older.kind.clone(),
+            agent_id: older.agent_id.clone(),
+            agent_name: Some("coder".to_owned()),
+            launch_id: Some("launch_coder".into()),
+            address: "@coder".to_owned(),
+            status: AgentStatus::Idle,
+            dwell_secs: 0,
+            met_at: None,
+        });
+    });
+    assert_eq!(
+        q.archive_messages_watching_card(holder.card_ref(), None, "session")
+            .unwrap(),
+        1
+    );
+    let gone = |id: &MessageId| q.live().iter().all(|record| &record.message_id != id);
+    assert!(gone(&watched.message_id));
+    let cleared = q.clear_messages_for(holder.card_ref(), "session").unwrap();
+    assert!(
+        cleared
+            .iter()
+            .any(|record| record.message_id == older.message_id),
+        "{cleared:?}"
+    );
+    let archived = q.queue_with(4, launched);
+    assert_eq!(
+        q.archive_messages_for_card(holder.card_ref(), None, "ended", "session")
+            .unwrap(),
+        1
+    );
+    assert!(gone(&archived.message_id));
 }

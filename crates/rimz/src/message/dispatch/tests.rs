@@ -265,6 +265,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
             kind: receiver.kind.clone(),
             agent_id: "planner".into(),
             agent_name: None,
+            launch_id: None,
             address: "@planner".to_owned(),
             met_at: None,
         },
@@ -272,6 +273,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
             kind: receiver.kind.clone(),
             agent_id: "reviewer".into(),
             agent_name: None,
+            launch_id: None,
             address: "@reviewer".to_owned(),
             met_at: None,
         },
@@ -280,6 +282,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
         kind: receiver.kind.clone(),
         agent_id: "coder".into(),
         agent_name: None,
+        launch_id: None,
         address: "@coder".to_owned(),
         status: AgentStatus::Idle,
         dwell_secs: 3480,
@@ -940,4 +943,34 @@ fn pane_only(pane: &str, role: &str) -> PaneAgent {
 
 fn now() -> Timestamp {
     Timestamp::UNIX_EPOCH
+}
+
+#[test]
+fn conditions_record_the_watched_agents_launch() {
+    let mut watched = agent("sess-planner", AgentStatus::Running);
+    watched.name = Some("planner".to_owned());
+    watched.launch_id = Some(AgentSessionId::from("launch_planner"));
+    let snapshot = snapshot_with_panes(vec![watched.clone()], Vec::new());
+    let channel = context(None);
+    let view = resolution(&snapshot, std::slice::from_ref(&watched), &channel, false);
+    let when = resolve_when(
+        &view,
+        &[WhenRequest {
+            address: "@planner".to_owned(),
+            status: AgentStatus::Idle,
+            dwell_secs: 60,
+            expression: "@planner idle 1m".to_owned(),
+        }],
+    )
+    .unwrap();
+    let after = resolve_after(
+        &view,
+        &[],
+        &["@planner".to_owned()],
+        DeliveryGate::Done,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(when[0].launch_id, watched.launch_id);
+    assert_eq!(after[0].launch_id, watched.launch_id);
 }

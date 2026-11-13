@@ -36,6 +36,8 @@ pub(super) struct ReactorCtx<'a> {
     pub(super) run_completion: Option<&'a rimz::store::run::RunRecord>,
     /// The events' row is a replaced session of its agent.
     pub(super) replaced: bool,
+    /// The observation's launch, which the events do not carry.
+    pub(super) launch: Option<&'a rimz::ids::AgentSessionId>,
 }
 
 pub(super) fn dispatch(ctx: &ReactorCtx<'_>, events: &[rimz::agents::LifecycleEvent]) {
@@ -52,7 +54,7 @@ fn queued_delivery(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
     if ctx.replaced {
         return;
     }
-    spawn_queue_delivery_if_checkpoint(ctx.workspace, ctx.store, event);
+    spawn_queue_delivery_if_checkpoint(ctx.workspace, ctx.store, event, ctx.launch);
 }
 
 fn run_wake(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {

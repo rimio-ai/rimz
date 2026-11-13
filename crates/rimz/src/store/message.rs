@@ -426,6 +426,10 @@ pub struct AfterCondition {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// The watched agent's launch, so the condition follows it through a restart or molt
+    /// onto another provider; absent on conditions an older binary wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     pub address: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub met_at: Option<Timestamp>,
@@ -437,6 +441,10 @@ pub struct WhenCondition {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// The watched agent's launch, so the condition follows it through a restart or molt
+    /// onto another provider; absent on conditions an older binary wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     pub address: String,
     pub status: AgentStatus,
     pub dwell_secs: u64,
@@ -447,6 +455,7 @@ pub struct WhenCondition {
 impl AfterCondition {
     pub fn card_ref(&self) -> AgentCardRef<'_> {
         AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+            .with_launch(self.launch_id.as_ref())
     }
 
     pub fn expiry_reason(&self) -> String {
@@ -460,6 +469,7 @@ impl AfterCondition {
 impl WhenCondition {
     pub fn card_ref(&self) -> AgentCardRef<'_> {
         AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+            .with_launch(self.launch_id.as_ref())
     }
 
     pub fn expiry_reason(&self) -> String {
@@ -550,6 +560,18 @@ pub struct MessageRecord {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// The receiver agent's launch, set at enqueue from the row it resolved to and never
+    /// changed after. With it the record follows its agent across a restart or molt, of any
+    /// kind; a record without one (an older binary's, or a bare pane's) matches by kind and
+    /// session or name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
+    /// The epoch of the receiver row the last pane write for this record was checked
+    /// against, stamped with the write that marks it `Sent`. An uncorrelated delivery ack
+    /// from a row at a higher epoch (a session a swap put in place) does not confirm it;
+    /// absent on records an older binary wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_epoch: Option<u32>,
     /// Receiver handle as resolved at enqueue, e.g. `@coder#auth`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
@@ -746,6 +768,7 @@ impl MessageRecord {
             true,
             gate,
         )
+        .with_launch_id(agent.launch_id.clone())
     }
 
     pub fn new_for_card(
@@ -766,6 +789,8 @@ impl MessageRecord {
             kind,
             agent_id,
             agent_name,
+            launch_id: None,
+            sent_epoch: None,
             address: None,
             channel: None,
             sender: MessageSender::Human,
@@ -816,6 +841,7 @@ impl MessageRecord {
             record.enter,
             record.gate,
         )
+        .with_launch_id(record.launch_id.clone())
         .with_address(record.address.clone())
         .with_channel(record.channel.clone())
         .with_sender(record.sender.clone())
@@ -852,6 +878,12 @@ impl MessageRecord {
         message.soft_compact = record.soft_compact;
         message.reply_wanted = record.reply_wanted;
         message
+    }
+
+    #[must_use]
+    pub fn with_launch_id(mut self, launch_id: Option<AgentSessionId>) -> Self {
+        self.launch_id = launch_id;
+        self
     }
 
     #[must_use]
@@ -950,6 +982,7 @@ impl MessageRecord {
     /// registration — one card, one FIFO queue.
     pub fn card_ref(&self) -> AgentCardRef<'_> {
         AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+            .with_launch(self.launch_id.as_ref())
     }
 
     pub fn same_card(&self, card: AgentCardRef<'_>) -> bool {
@@ -1238,12 +1271,11 @@ pub fn format_dwell(secs: u64) -> String {
 /// deliver at a turn boundary. FIFO spans a card's provisional `launch_*` id
 /// and the session id it registers as, so pass the stable `agent_name` when
 /// known: a message queued before registration still sorts ahead of one queued
-/// after. Hidden resume nudges live in a separate control lane.
+/// after. FIFO also spans every session of the agent, of any kind, when the card
+/// carries the agent's launch. Hidden resume nudges live in a separate control lane.
 pub fn queue_head<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    agent_name: Option<&str>,
+    card: AgentCardRef<'_>,
     now: Timestamp,
 ) -> Option<&'a MessageRecord> {
     pending
@@ -1251,7 +1283,7 @@ pub fn queue_head<'a>(
         .filter(|message| {
             message.status == MessageStatus::Queued
                 && message.gate != DeliveryGate::Resume
-                && message.same_card(AgentCardRef::new(kind, agent_id, agent_name))
+                && message.same_card(card)
                 && message.is_deliverable(now)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
@@ -1265,14 +1297,8 @@ pub(super) fn queue_wake_deadline(pending: &[MessageRecord], now: Timestamp) -> 
             let follower = message.status == MessageStatus::Queued
                 && message.gate != DeliveryGate::Resume
                 && message.is_deliverable(now)
-                && queue_head(
-                    pending.iter(),
-                    &message.kind,
-                    &message.agent_id,
-                    message.agent_name.as_deref(),
-                    now,
-                )
-                .is_some_and(|head| head.message_id != message.message_id);
+                && queue_head(pending.iter(), message.card_ref(), now)
+                    .is_some_and(|head| head.message_id != message.message_id);
             let deadline = if follower {
                 message
                     .expires_at()
@@ -1315,27 +1341,22 @@ fn holds_boundary(message: &MessageRecord, now: Timestamp) -> bool {
 
 pub(crate) fn fresh_boundary_blocker<'a>(
     pending: impl Iterator<Item = &'a MessageRecord> + Clone,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    agent_name: Option<&str>,
+    card: AgentCardRef<'_>,
     now: Timestamp,
 ) -> Option<&'a MessageRecord> {
-    queue_head(pending.clone(), kind, agent_id, agent_name, now)
-        .or_else(|| in_flight_claim(pending, kind, agent_id, agent_name, now))
+    queue_head(pending.clone(), card, now).or_else(|| in_flight_claim(pending, card, now))
 }
 
 /// A non-`Resume` unexpired claim or `Sent` prompt a fresh boundary send parks behind.
 pub(crate) fn in_flight_claim<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    agent_name: Option<&str>,
+    card: AgentCardRef<'_>,
     now: Timestamp,
 ) -> Option<&'a MessageRecord> {
     pending.into_iter().find(|message| {
         holds_boundary(message, now)
             && message.gate != DeliveryGate::Resume
-            && message.same_card(AgentCardRef::new(kind, agent_id, agent_name))
+            && message.same_card(card)
             && (message.status == MessageStatus::Sent
                 || (message.status == MessageStatus::Claimed
                     && !claim_expired(message.last_attempt_at, now)))

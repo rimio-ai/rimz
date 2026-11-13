@@ -255,6 +255,7 @@ fn records_that_open_no_conversation_turn_never_stop_a_wait() {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("other-session"),
         agent_name: Some("other".to_owned()),
+        launch_id: None,
         address: "@other".to_owned(),
         met_at: None,
     };
@@ -294,6 +295,7 @@ fn records_that_open_no_conversation_turn_never_stop_a_wait() {
                 kind: AgentKind::new_unchecked("claude"),
                 agent_id: AgentSessionId::from("other-session"),
                 agent_name: Some("other".to_owned()),
+                launch_id: None,
                 address: "@other".to_owned(),
                 status: AgentStatus::Idle,
                 dwell_secs: 0,

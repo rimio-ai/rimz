@@ -409,7 +409,8 @@ upward-dependencies = ["address"]
 # LaunchHolders (new, replaced) are the one definition of an agent's members, holder and end
 # that the store, address, fleet and the swap routine read (+8).
 # AgentState::{stands, session_over, launch_key} feed those predicates (+3).
-surface-budget = 1281
+# AgentCardRef::with_launch lets a parked record's card match the agent that holds its launch (+1).
+surface-budget = 1282
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4509,7 +4510,9 @@ path = "crates/rimz/src/store"
 # reserve, abort and name a swap's reservation for the restart and molt routine (+4).
 # SWAP_BIND_WAIT bounds the coordinator's bind wait and AgentLaunchBatch::scope hands the
 # reservation's scope to its abort (+2).
-surface-budget = 646
+# MessageRecord::with_launch_id stamps which agent a record is for, so it follows a restart
+# or molt (+1).
+surface-budget = 647
 
 [[verdict]]
 kind = "item"

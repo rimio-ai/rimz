@@ -320,6 +320,7 @@ fn typing_hold_deadline_survives_fifo_and_condition_sweep_deferrals() {
                 kind: agent.kind,
                 agent_id: "missing-upstream".into(),
                 agent_name: None,
+                launch_id: None,
                 address: "@upstream".into(),
                 met_at: None,
             });

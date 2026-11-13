@@ -25,9 +25,10 @@ pub(super) fn withdraw_before_candidacy(
         return Ok(false);
     }
     let rows = store.audit_rows()?;
-    let row = rows
-        .iter()
-        .find(|agent| message.same_agent_card(agent) && agent.ended_at.is_none());
+    let holders = crate::agents::state::LaunchHolders::new(rows.iter());
+    let row = rows.iter().find(|agent| {
+        message.same_agent_card(agent) && agent.ended_at.is_none() && !holders.replaced(agent)
+    });
     let Some(reason) = broken(store, message, row, Timestamp::now())? else {
         return Ok(false);
     };
@@ -94,10 +95,12 @@ fn ended_park(store: &Store, message: &MessageRecord, row: Option<&AgentState>) 
         Premise::ProviderPark { parked_since } => Some(*parked_since),
         _ => None,
     })?;
-    let agent_id = row.map_or(&message.agent_id, |row| &row.agent_id);
+    let (kind, agent_id) = row.map_or((&message.kind, &message.agent_id), |row| {
+        (&row.kind, &row.agent_id)
+    });
     let open = crate::harness::auto_continue::park_episode_open(
         store.runtime_paths(),
-        &message.kind,
+        kind,
         agent_id,
         parked_since,
     );
@@ -177,5 +180,146 @@ mod tests {
 
         assert!(!withdraw_before_candidacy(&workspace, &store, &plain).unwrap());
         assert!(withdraw_before_candidacy(&workspace, &store, &idle).is_err());
+    }
+
+    /// A continue parked on the agent's provider limit reads the park under its holder's own kind
+    /// and session, which a molt to another kind moved.
+    #[test]
+    fn a_continue_reads_the_park_of_its_holder_across_a_molt() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::parse("ws_000000000000000000000000").unwrap();
+        let store = Store::open(
+            crate::StatePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+            crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        let parked_since = Timestamp::now();
+        let old = AgentState::stub("claude", "sess-old", AgentStatus::Idle);
+        let holder = AgentState::stub("codex", "sess-new", AgentStatus::Idle);
+        crate::harness::auto_continue::arm_test_park(
+            store.runtime_paths(),
+            &holder.kind,
+            &holder.agent_id,
+            parked_since,
+        );
+        let mut resume = MessageRecord::new(
+            workspace_id,
+            &old,
+            "continue".to_owned(),
+            DeliveryGate::Done,
+        );
+        resume.premises.push(Premise::ProviderPark { parked_since });
+        assert_eq!(ended_park(&store, &resume, Some(&holder)), None);
+        assert!(ended_park(&store, &resume, None).is_some());
+    }
+
+    /// The head check judges a premised record on its agent's holder, never on the session a
+    /// swap replaced.
+    #[test]
+    fn head_check_judges_a_premise_on_the_holder_not_the_replaced_session() {
+        use crate::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::parse("ws_000000000000000000000000").unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id: workspace_id.clone(),
+            project_root: dir.path().into(),
+            cwd_project_root: None,
+            root_class: crate::workspace::RootClass::Directory,
+            worktree_root: dir.path().into(),
+            worktree_branch: None,
+            session_name: "room".into(),
+            mux_hint: None,
+        };
+        let store = Store::open(
+            crate::StatePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+            crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap(),
+        )
+        .unwrap();
+        let kind = crate::ids::AgentKind::new_unchecked("claude");
+        let request = |id: &str, name| AgentLaunchRequest {
+            login: crate::store::writer::LaunchLogin::RoomDefault,
+            kind: kind.clone(),
+            agent_id: crate::ids::AgentSessionId::from(id),
+            name,
+            launch: Default::default(),
+            run_id: None,
+            prompt: None,
+        };
+        let scope = AgentLaunchScope {
+            session_name: "room".into(),
+            cwd: dir.path().into(),
+            branch: None,
+            description: None,
+        };
+        let pane = |raw| crate::ids::PaneId::parse(raw).unwrap();
+        let row = |key: &str| {
+            store
+                .audit_rows()
+                .unwrap()
+                .iter()
+                .find(|agent| agent.agent_id == key)
+                .cloned()
+                .unwrap()
+        };
+        let first = store
+            .begin_agent_launch_batch(
+                &[request(
+                    "launch_a",
+                    AgentLaunchName::Explicit("coder".into()),
+                )],
+                scope.clone(),
+            )
+            .unwrap();
+        store
+            .bind_agent_launch(
+                first.single_identity().unwrap(),
+                "room",
+                dir.path(),
+                &pane("tmux:%1"),
+                None,
+            )
+            .unwrap();
+        let queued_at = Timestamp::now() - std::time::Duration::from_secs(60);
+        let mut premised = MessageRecord::new(
+            workspace_id,
+            &row("launch_a"),
+            "still relevant".to_owned(),
+            DeliveryGate::Done,
+        );
+        premised.premises.push(Premise::NotPromptedSince {
+            last_prompt_at: Some(queued_at),
+        });
+        store.queue_message(&premised, "room").unwrap();
+        store
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: "room",
+                agent_kind: kind.clone(),
+                event_name: "fixture",
+                observation: &crate::agents::AgentLifecycleObservation::new(
+                    Some("launch_a".into()),
+                    crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+                ),
+                spawned_subagents: &[],
+            })
+            .unwrap();
+        assert!(row("launch_a").last_prompt_at > Some(queued_at));
+        let swap = store
+            .begin_agent_swap(
+                &row("launch_a"),
+                &request("launch_b", AgentLaunchName::Mint),
+                scope,
+            )
+            .unwrap();
+        store
+            .bind_agent_launch(
+                swap.single_identity().unwrap(),
+                "room",
+                dir.path(),
+                &pane("tmux:%2"),
+                None,
+            )
+            .unwrap();
+
+        assert!(!withdraw_before_candidacy(&workspace, &store, &premised).unwrap());
     }
 }

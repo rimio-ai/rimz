@@ -24,7 +24,8 @@ pub(super) fn in_flight_messages_for_lifecycle(
         &kind,
         agent_id,
         recorded.observation.agent_name.as_deref(),
-    );
+    )
+    .with_launch(recorded.observation.launch_id.as_ref());
     match store.list_messages() {
         Ok(messages) => messages
             .into_iter()
@@ -65,9 +66,11 @@ pub(super) fn confirm_sent_message_for_lifecycle(
             &kind,
             agent_id,
             recorded.observation.agent_name.as_deref(),
-        ),
+        )
+        .with_launch(recorded.observation.launch_id.as_ref()),
         ack,
         peer.as_ref(),
+        recorded.observation.launch.epoch.unwrap_or(0),
         &workspace.session_name,
         |records, selection| {
             if let Some(peer) = peer.as_ref()
@@ -127,18 +130,21 @@ pub(super) fn record_user_input_for_lifecycle(
     }
 }
 
+/// `launch` is the observation's launch: it reaches the records of every session of the agent.
 pub(super) fn spawn_queue_delivery_if_checkpoint(
     workspace: &ResolvedWorkspace,
     store: &Store,
     event: &rimz::agents::LifecycleEvent,
+    launch: Option<&rimz::ids::AgentSessionId>,
 ) {
-    spawn_queue_delivery_with(workspace, store, event, spawn_refresh_detached);
+    spawn_queue_delivery_with(workspace, store, event, launch, spawn_refresh_detached);
 }
 
 fn spawn_queue_delivery_with(
     workspace: &ResolvedWorkspace,
     store: &Store,
     event: &rimz::agents::LifecycleEvent,
+    launch: Option<&rimz::ids::AgentSessionId>,
     mut spawn: impl FnMut(&rimz::agents::RefreshSpawn),
 ) {
     let delivery_checkpoint = rimz::agents::DELIVERY_CHECKPOINT.contains(&event.signal);
@@ -161,7 +167,7 @@ fn spawn_queue_delivery_with(
     };
     let kind = &event.kind;
     let agent_name = event.agent_name.as_deref();
-    let card = rimz::agents::AgentCardRef::new(kind, agent_id, agent_name);
+    let card = rimz::agents::AgentCardRef::new(kind, agent_id, agent_name).with_launch(launch);
     if pending.iter().any(|message| {
         message.status == rimz::store::message::MessageStatus::Queued
             && delivery_checkpoint

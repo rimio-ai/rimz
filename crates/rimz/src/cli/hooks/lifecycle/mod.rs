@@ -437,6 +437,9 @@ pub(super) fn handle_lifecycle_frame(
                 .and_then(|recorded| recorded.receipt.primary_event_id.as_ref()),
             run_completion: run_completion.as_ref(),
             replaced,
+            launch: recorded
+                .as_ref()
+                .and_then(|recorded| recorded.observation.launch_id.as_ref()),
         },
         &events,
     );

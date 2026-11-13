@@ -200,6 +200,7 @@ fn after_a_spent_pause_requires_any_and_an_empty_due_queue() {
         kind: receiver.kind.clone(),
         agent_id: receiver.agent_id.clone(),
         agent_name: receiver.name.clone(),
+        launch_id: None,
         address: "@spent".into(),
         met_at: None,
     };
@@ -616,6 +617,7 @@ fn explain_reports_actionable_delivery_blockers() {
         kind: upstream.kind.clone(),
         agent_id: upstream.agent_id.clone(),
         agent_name: upstream.name.clone(),
+        launch_id: None,
         address: "@planner".to_owned(),
         met_at: None,
     }]);
@@ -770,6 +772,7 @@ fn candidate_uses_shared_evaluation_but_requires_durable_condition_stamp() {
         kind: upstream.kind.clone(),
         agent_id: upstream.agent_id.clone(),
         agent_name: upstream.name.clone(),
+        launch_id: None,
         address: "@upstream".to_owned(),
         met_at: None,
     }]);
@@ -816,6 +819,7 @@ fn when_evaluation_handles_exact_boundary_clock_skew_and_expiry() {
         kind: watched.kind.clone(),
         agent_id: watched.agent_id.clone(),
         agent_name: watched.name.clone(),
+        launch_id: None,
         address: "@watched".to_owned(),
         status: AgentStatus::Running,
         dwell_secs: 60,
@@ -841,6 +845,55 @@ fn when_evaluation_handles_exact_boundary_clock_skew_and_expiry() {
     assert_eq!(gone.archive_reason, Some(condition.expiry_reason()));
 }
 
+/// A condition keeps watching its agent across a molt onto another provider: the holder
+/// answers by launch, where kind and name no longer match. The condition's own message stays
+/// queued rather than archived as watching an absent card.
+#[test]
+fn when_and_after_conditions_watch_the_holder_after_a_cross_kind_molt() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let launch = crate::ids::AgentSessionId::from("launch_watched");
+    let mut watched = agent("sess-watched", AgentStatus::Idle);
+    watched.launch_id = Some(launch.clone());
+    let when = WhenCondition {
+        kind: watched.kind.clone(),
+        agent_id: watched.agent_id.clone(),
+        agent_name: watched.name.clone(),
+        launch_id: watched.launch_id.clone(),
+        address: "@watched".to_owned(),
+        status: AgentStatus::Idle,
+        dwell_secs: 0,
+        met_at: None,
+    };
+    let after = AfterCondition {
+        kind: watched.kind.clone(),
+        agent_id: watched.agent_id.clone(),
+        agent_name: watched.name.clone(),
+        launch_id: watched.launch_id.clone(),
+        address: "@watched".to_owned(),
+        met_at: None,
+    };
+    let mut holder = crate::testkit::agent_state("codex", "sess-holder", now);
+    holder.launch_id = Some(launch);
+    holder.name = Some("molted".to_owned());
+    holder.epoch = 1;
+    holder.status = AgentStatus::Idle;
+    let live = snapshot(holder, false, now);
+
+    let evaluation = evaluate_when_condition(&when, &live, now, Duration::from_secs(30));
+    assert!(evaluation.check.agent_present);
+    assert_eq!(evaluation.archive_reason, None);
+    assert!(evaluation.check.met);
+    let evaluation = evaluate_after_condition(
+        &after,
+        DeliveryGate::Done,
+        &[],
+        &live,
+        now,
+        &CardStatus::from_demotion(crate::agents::ParkDemotion::default()),
+    );
+    assert!(evaluation.check.agent_present);
+}
+
 #[test]
 fn waiting_dwell_starts_when_permission_review_becomes_visible() {
     let at = Timestamp::from_second(1_000).unwrap();
@@ -860,6 +913,7 @@ fn waiting_dwell_starts_when_permission_review_becomes_visible() {
         kind: watched.kind.clone(),
         agent_id: watched.agent_id.clone(),
         agent_name: None,
+        launch_id: None,
         address: "@codex".to_owned(),
         status: AgentStatus::Waiting,
         dwell_secs: 10,
@@ -1119,4 +1173,23 @@ fn a_replacement_failing_after_bind_archives_the_agents_messages_in_either_order
         }
         assert!(!open(&store), "old_ends_first={old_ends_first}");
     }
+}
+
+#[test]
+fn a_record_parked_before_a_swap_binds_the_holders_pane() {
+    let now = Timestamp::now();
+    let launch = crate::ids::AgentSessionId::from("launch_agent");
+    let mut old = agent("sess-old", AgentStatus::Idle);
+    old.launch_id = Some(launch.clone());
+    old.name = Some("coder".to_owned());
+    let mut holder = old.clone();
+    holder.agent_id = crate::ids::AgentSessionId::from("sess-new");
+    holder.epoch = 1;
+    let live = snapshot(holder, true, now);
+    let old_pane = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let holder_pane = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+
+    let parked = message(&old, 1, "parked before the swap").with_pane_id(old_pane);
+    let check = explain(&parked, std::slice::from_ref(&parked), &live, now);
+    assert_eq!(check.pane.pane_id.as_ref(), Some(&holder_pane));
 }

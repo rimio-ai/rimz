@@ -9,6 +9,7 @@ fn delivery_sweep_applies_mixed_effects_in_one_transaction() {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("sess-planner"),
         agent_name: Some("planner".to_owned()),
+        launch_id: None,
         address: "@planner".to_owned(),
         met_at: None,
     };
@@ -16,6 +17,7 @@ fn delivery_sweep_applies_mixed_effects_in_one_transaction() {
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from("sess-coder"),
         agent_name: Some("coder".to_owned()),
+        launch_id: None,
         address: "@coder".to_owned(),
         status: AgentStatus::Running,
         dwell_secs: 60,
@@ -260,9 +262,7 @@ fn archive_selects_only_matching_open_messages() {
             |q, records| {
                 let target = &records[0];
                 q.archive_messages_for_card(
-                    &target.kind,
-                    &target.agent_id,
-                    target.agent_name.as_deref(),
+                    AgentCardRef::new(&target.kind, &target.agent_id, target.agent_name.as_deref()),
                     None,
                     "receiver ended",
                     "session",
@@ -331,12 +331,10 @@ fn archive_messages_for_card_preserves_records_newer_than_the_observed_end() {
 
     assert_eq!(
         q.archive_messages_for_card(
-            &before.kind,
-            &before.agent_id,
-            before.agent_name.as_deref(),
+            AgentCardRef::new(&before.kind, &before.agent_id, before.agent_name.as_deref()),
             Some(ended_at),
             "receiver ended",
-            "session",
+            "session"
         )
         .unwrap(),
         2
@@ -354,6 +352,7 @@ fn archive_messages_watching_card_expires_only_unmet_conditions() {
         kind: watched.kind.clone(),
         agent_id: watched.agent_id.clone(),
         agent_name: Some("planner".to_owned()),
+        launch_id: None,
         address: "@planner".to_owned(),
         status: AgentStatus::Running,
         dwell_secs: 7_200,
@@ -372,9 +371,7 @@ fn archive_messages_watching_card_expires_only_unmet_conditions() {
 
     let archived = q
         .archive_messages_watching_card(
-            &watched.kind,
-            &watched.agent_id,
-            Some("planner"),
+            AgentCardRef::new(&watched.kind, &watched.agent_id, Some("planner")),
             Some(ended_at),
             "session",
         )
@@ -396,11 +393,9 @@ fn archive_messages_watching_card_expires_only_unmet_conditions() {
     );
     assert_eq!(
         q.archive_messages_watching_card(
-            &watched.kind,
-            &watched.agent_id,
-            Some("planner"),
+            AgentCardRef::new(&watched.kind, &watched.agent_id, Some("planner")),
             None,
-            "session",
+            "session"
         )
         .unwrap(),
         1

@@ -429,8 +429,18 @@ fn every_printed_address_resolves_back_to_its_row() {
     closed_otter.ended_at = Some(now());
     let mut closed_wren = agent("wren", "%8");
     closed_wren.ended_at = Some(now());
+    // Sessions a swap replaced, as the Audit projection marks them: the old
+    // session whose process has not ended yet, and one that has. Neither is a
+    // closed agent; the agent is the live holder.
+    let mut replaced_live = agent("owl-prior", "%5");
+    replaced_live.name = Some("owl".into());
+    replaced_live.replaced = true;
+    let mut replaced_ended = agent("wren-prior", "%6");
+    replaced_ended.name = Some("wren".into());
+    replaced_ended.ended_at = Some(now());
+    replaced_ended.replaced = true;
     let mut audit_agents = live.agents.to_vec();
-    audit_agents.extend([closed_otter, closed_wren]);
+    audit_agents.extend([closed_otter, closed_wren, replaced_live, replaced_ended]);
     let audit = snapshot(audit_agents, &[]);
     let demotion = ParkDemotion::default();
     let listed = live_rows(&live, &demotion, &reader(), now());

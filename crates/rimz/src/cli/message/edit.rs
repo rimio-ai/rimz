@@ -267,12 +267,7 @@ pub(super) fn clear_messages(
             worktree.as_deref().or(channel_flag.as_deref()),
             &ctx.address_context(),
         )?;
-        let canceled = store.clear_messages_for(
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-            &workspace.session_name,
-        )?;
+        let canceled = store.clear_messages_for(agent.card_ref(), &workspace.session_name)?;
         print_canceled_summary(&format!("for {target}"), &canceled);
         return Ok(());
     }

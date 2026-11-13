@@ -551,14 +551,7 @@ fn agent_needs_live_resolution(
             .is_some_and(|definition| definition.capabilities.registers_lazily)
         || (deliver::receiver_readiness(agent, gate, force, now, snapshot, card_status)
             .accepts_prompt()
-            && queue_head(
-                pending.iter(),
-                &agent.kind,
-                &agent.agent_id,
-                agent.name.as_deref(),
-                now,
-            )
-            .is_none())
+            && queue_head(pending.iter(), agent.card_ref(), now).is_none())
 }
 
 struct PreparedMode {
@@ -844,6 +837,7 @@ fn resolve_after(
                 kind: agent.kind.clone(),
                 agent_id: agent.agent_id.clone(),
                 agent_name: agent.name.clone(),
+                launch_id: agent.launch_id.clone(),
                 address: target.label(resolution.snapshot),
                 met_at: None,
             };
@@ -885,6 +879,7 @@ fn resolve_when(
                 kind: agent.kind.clone(),
                 agent_id: agent.agent_id.clone(),
                 agent_name: agent.name.clone(),
+                launch_id: agent.launch_id.clone(),
                 address: target.label(resolution.snapshot),
                 status: request.status,
                 dwell_secs: request.dwell_secs,
@@ -1186,13 +1181,7 @@ fn dispatch_decision(
         };
     }
     if let Some(agent) = target.agent.as_ref()
-        && let Some(blocker) = fresh_boundary_blocker(
-            pending.iter(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-            now,
-        )
+        && let Some(blocker) = fresh_boundary_blocker(pending.iter(), agent.card_ref(), now)
     {
         return DispatchDecision::Parked {
             reason: Some(ParkReason::Behind(blocker.message_id.clone())),

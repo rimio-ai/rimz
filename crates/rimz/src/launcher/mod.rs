@@ -1215,8 +1215,13 @@ fn queue_resume_prompt(
 ) -> Result<()> {
     use crate::harness::plan::CohortSeed;
     use crate::store::message::{DeliveryGate, MessageRecord, MessageSender};
-    let (kind, agent_id, name) = match &seeds[leader] {
-        CohortSeed::Resume(agent) => (&agent.kind, &agent.agent_id, agent.name.clone()),
+    let (kind, agent_id, name, launch) = match &seeds[leader] {
+        CohortSeed::Resume(agent) => (
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.clone(),
+            agent.launch_id.clone(),
+        ),
         CohortSeed::Fresh => {
             let index = seeds[..leader]
                 .iter()
@@ -1227,6 +1232,7 @@ fn queue_resume_prompt(
                 &identity.kind,
                 &identity.agent_id,
                 Some(identity.name.clone()),
+                Some(identity.agent_id.clone()),
             )
         }
     };
@@ -1239,6 +1245,7 @@ fn queue_resume_prompt(
         true,
         DeliveryGate::Done,
     )
+    .with_launch_id(launch)
     .with_sender(MessageSender::Human);
     store.queue_message(&message, session_name)?;
     Ok(())

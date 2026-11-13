@@ -113,6 +113,26 @@ fn ends(agents: &[rimz::agents::AgentState], request: &ExecRequest) -> Option<St
     exit_end_target(agents, Some(&own), request).map(|ended| ended.agent_id.to_string())
 }
 
+#[test]
+fn a_resumed_wrapper_wakes_a_record_queued_for_its_agent_before_a_cross_kind_molt() {
+    let launch = AgentSessionId::from("launch_a");
+    let mut before = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
+    before.name = Some("coder".into());
+    before.launch_id = Some(launch.clone());
+    let record = rimz::store::message::MessageRecord::new(
+        rimz::WorkspaceId::from_project_root(Path::new("/project")),
+        &before,
+        "rebase first".into(),
+        rimz::store::message::DeliveryGate::Done,
+    );
+    let target = (
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("new"),
+    );
+    let card = resume_queue_card(&target, Some("coder"), Some(&launch));
+    assert!(rimz::store::message::queue_head([&record], card, jiff::Timestamp::now()).is_some());
+}
+
 /// The incident: the reaper ends an earlier occupant just after the resume
 /// stamped its row, so the earlier occupant is the pane's most recently
 /// touched row. The wrapper still ends the session it resumed.
