@@ -19,10 +19,10 @@ mod brief;
 mod capabilities;
 mod keep;
 mod reached;
+mod rest;
 mod restart;
 mod stops;
 mod subscribe;
-mod until;
 
 /// The definition with an on-break agent, so a failure edge leaves the run resumable at
 /// `@break`.
@@ -360,13 +360,13 @@ fn on_break_resume_refuses_the_reserved_target() {
 
 #[test]
 fn on_break_pending_held_failure_is_not_a_taken_hop() {
-    let text = until::UNTIL.replace("start='build'", "start='build'\non-break={agent='claude'}");
+    let text = rest::SESSION.replace("start='build'", "start='build'\non-break={agent='claude'}");
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     let paths = state.workflow(&record.id);
     let spec = spec::load(&paths.home).unwrap();
-    let mut checking = until::held(&live, false);
+    let mut checking = rest::held(&live, false);
     checking.attempt = Some(
         serde_json::from_value(json!({
             "kind":"script", "seq":2, "node":"pr", "started_at":checking.entered_at,
@@ -401,7 +401,7 @@ fn on_break_pending_held_failure_is_not_a_taken_hop() {
 
 #[test]
 fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
-    let text = until::UNTIL
+    let text = rest::SESSION
         .replace("start='build'", "start='build'\non-break={agent='claude'}")
         .replace(
             "[script.pr]\nrun='sh check.sh'",
@@ -414,7 +414,7 @@ fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
     let spec = spec::load(&paths.home).unwrap();
     let mut t = super::super::state::Transition {
         now: live.entered_at,
-        record: until::held(&live, false),
+        record: rest::held(&live, false),
         spec: &spec,
         paths: &paths,
         entries: Vec::new(),
@@ -449,7 +449,7 @@ fn on_break_held_judge_failure_uses_invalid_and_one_departure() {
         }
         records::write(&paths, &t.record, &guard).unwrap();
     }
-    host.observed.borrow_mut().turn = Some(until::turn());
+    host.observed.borrow_mut().turn = Some(rest::turn());
     let applied = advance_ok(&state, &record.id, &host);
     let journal = records::journal(&paths).unwrap();
     let hops = hops(&spec, &journal, applied.held.as_ref());
@@ -554,15 +554,15 @@ fn on_break_trace_bounds_a_long_poll_history_below_the_prompt_guard() {
 
 #[test]
 fn on_break_held_invalid_answer_preserves_the_failure_context() {
-    let text = until::UNTIL.replace("start='build'", "start='build'\non-break={agent='claude'}");
+    let text = rest::SESSION.replace("start='build'", "start='build'\non-break={agent='claude'}");
     let (dir, state, record) = setup(&text);
-    until::check(
+    rest::check(
         dir.path(),
         json!({"outcome":"not-routed", "reason":"bad answer"}),
     );
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
-    host.observed.borrow_mut().turn = Some(until::turn());
+    host.observed.borrow_mut().turn = Some(rest::turn());
     let live = advance_ok(&state, &record.id, &host);
     assert_eq!(live.node, "@break");
     assert_eq!(live.input.as_ref().unwrap()["from"], "pr");
@@ -1146,9 +1146,9 @@ fn signs_cannot_read_outside_the_node_writable_work_directory() {
 }
 
 #[test]
-fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
+fn a_session_survives_live_asks_and_limits_and_records_only_session_end() {
     use crate::store::workflow::{Asked, Asking, Limited};
-    let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='stay'"));
+    let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='session'"));
     let host = FakeHost::new();
     let mut live = advance_ok(&state, &record.id, &host);
     let now = jiff::Timestamp::now();
@@ -1173,7 +1173,7 @@ fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
         assert_eq!(
             live.state,
             RunState::Active,
-            "stay must not park on {status:?}"
+            "a session must not park on {status:?}"
         );
         assert_eq!(live.attempt.as_ref().unwrap().seq, seq);
         assert_eq!(
@@ -1200,16 +1200,24 @@ fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
 }
 
 #[test]
-fn stay_lifecycle_is_persisted_and_a_turn_omits_it() {
-    for lifecycle in ["turn", "stay", "until"] {
-        let (_dir, state, record) =
-            setup(&STEP.replace("lifecycle='turn'", &format!("lifecycle='{lifecycle}'")));
+fn a_session_lifecycle_is_persisted_and_a_turn_omits_it() {
+    let pick = "[test.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+    for (lifecycle, rest) in [
+        ("turn", ""),
+        ("session", ""),
+        ("session", "\nrest-check=['pick']"),
+    ] {
+        let text = STEP.replace(
+            "lifecycle='turn'",
+            &format!("lifecycle='{lifecycle}'{rest}"),
+        );
+        let (_dir, state, record) = setup(&(text + pick));
         let host = FakeHost::new();
         let live = advance_ok(&state, &record.id, &host);
         assert_eq!(
             host.turn_observations.get(),
-            usize::from(lifecycle == "until"),
-            "only until observations request the leader turn"
+            usize::from(!rest.is_empty()),
+            "only a rest-checked session requests the leader turn"
         );
         let value = serde_json::to_value(live.attempt.as_ref().unwrap()).unwrap();
         assert_eq!(
@@ -1386,9 +1394,9 @@ fn step_timeout_pauses_from_ask_open_and_rejudges_after_the_answer() {
 }
 
 #[test]
-fn stay_deadline_beats_completed_observation_and_cancel_stops() {
+fn a_session_deadline_beats_completed_observation_and_cancel_stops() {
     for cause in ["deadline", "cancel"] {
-        let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='stay'"));
+        let (_dir, state, record) = setup(&STEP.replace("lifecycle='turn'", "lifecycle='session'"));
         let host = FakeHost::new();
         let mut live = advance_ok(&state, &record.id, &host);
         host.observed.borrow_mut().status = RunStatus::Completed;

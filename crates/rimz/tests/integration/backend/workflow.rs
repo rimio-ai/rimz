@@ -90,20 +90,20 @@ pub(super) fn check_layout(
             })
             .unwrap()
     };
-    for lifecycle in ["turn", "stay", "until"] {
+    for lifecycle in ["turn", "session", "rest-check"] {
         let _ = fs::remove_file(&ready);
         let _ = fs::remove_file(&provider_ready);
-        let bound = if lifecycle == "until" {
-            "max-visits=2\n"
+        let lines = if lifecycle == "rest-check" {
+            "lifecycle='session'\nrest-check=['after']\nmax-visits=2\n".to_owned()
         } else {
-            ""
+            format!("lifecycle='{lifecycle}'\n")
         };
-        let after = if lifecycle == "until" {
+        let after = if lifecycle == "rest-check" {
             "shell='test -f \"$RIMZ_WORKFLOW_DIR/close\"'\non={pass='@done',fail='work'}\n"
         } else {
             "shell='true'\non={pass='@done',fail='@failed'}\n"
         };
-        fs::write(dir.join("workflow.toml"), format!("[workflow]\non-break='@failed'\nscope='worktree'\nstart='before'\n[test.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[agent.work]\nagent='claude,editor'\nlifecycle='{lifecycle}'\nprompt-file='prompt.md'\nthen='after'\n{bound}[test.after]\n{after}")).unwrap();
+        fs::write(dir.join("workflow.toml"), format!("[workflow]\non-break='@failed'\nscope='worktree'\nstart='before'\n[test.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[agent.work]\nagent='claude,editor'\nprompt-file='prompt.md'\nthen='after'\n{lines}[test.after]\n{after}")).unwrap();
         let output = command()
             .env("PATH", path_with_front(&bin))
             .env("SHELL", &shell)
@@ -207,7 +207,7 @@ pub(super) fn check_layout(
             rimz::harness::run::settle_lifecycle(&store, &run.run_id, adapter, &observation, None)
                 .unwrap();
         }
-        if lifecycle == "stay" {
+        if lifecycle == "session" {
             assert_eq!(
                 rimz::harness::run::load(&state, &run.run_id)
                     .unwrap()
@@ -234,11 +234,11 @@ pub(super) fn check_layout(
                 }
                 assert!(
                     Instant::now() < deadline,
-                    "provider-exit wake must finish the stay attempt without a tick: {record:#?}"
+                    "provider-exit wake must finish the session attempt without a tick: {record:#?}"
                 );
                 std::thread::sleep(Duration::from_millis(50));
             }
-        } else if lifecycle == "until" {
+        } else if lifecycle == "rest-check" {
             for closing in [false, true] {
                 if closing {
                     fs::write(state.workflow(&id).work.join("close"), "").unwrap();

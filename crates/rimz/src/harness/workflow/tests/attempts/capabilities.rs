@@ -72,39 +72,22 @@ fn a_bare_step_launches_with_no_overrides() {
 }
 
 #[test]
-fn turn_and_stay_steps_may_end_the_run_at_then_and_until_steps_may_not() {
-    for lifecycle in ["turn", "stay", "until"] {
+fn either_lifecycle_may_end_the_run_at_then_and_then_names_one_target() {
+    for lifecycle in ["'turn'", "'session'", "'session'\nrest-check = ['pick']"] {
         for terminal in ["@done", "@failed"] {
             let errors = report(&VALID.replace(
                 "lifecycle = \"turn\"\nthen = \"pick\"",
-                &format!("lifecycle = '{lifecycle}'\nthen = '{terminal}'"),
+                &format!("lifecycle = {lifecycle}\nthen = '{terminal}'"),
             ));
-            let expected: &[&str] = if lifecycle == "until" {
-                &["agent.build.then"]
-            } else {
-                &[]
-            };
             assert_eq!(
                 paths(&errors),
-                expected,
+                Vec::<&str>::new(),
                 "{lifecycle} {terminal}: {errors:?}"
             );
         }
     }
     let errors = report(&VALID.replace("then = \"pick\"", "then = ['@done', 'pick']"));
-    assert_eq!(
-        errors,
-        [
-            (
-                "agent.build.then".to_owned(),
-                "example: agent.build.then: then lists only checks; @done or @failed stands alone as then".to_owned()
-            ),
-            (
-                "agent.build.then".to_owned(),
-                "example: agent.build.then: @done requires a direct route to the next listed check pick".to_owned()
-            ),
-        ]
-    );
+    assert_eq!(paths(&errors), ["agent.build.then"], "{errors:?}");
 }
 
 #[test]
@@ -205,31 +188,36 @@ fn on_failed_takes_a_died_timed_out_or_limited_ending_and_a_clean_end_follows_th
 }
 
 #[test]
-fn an_until_timeout_ends_the_session_from_its_launch() {
-    let text = STEP
-        .replace("lifecycle='turn'", "lifecycle='until'\ntimeout='1h'")
-        .replace("then='@done'", "then='judge'")
-        + JUDGED;
-    let (_dir, state, record) = setup(&text);
-    let host = FakeHost::new();
-    let mut live = advance_ok(&state, &record.id, &host);
-    assert_eq!(
-        live.attempt.as_ref().unwrap().lifecycle,
-        StepLifecycle::Until
-    );
-    live.attempt.as_mut().unwrap().started_at =
-        Timestamp::now() - std::time::Duration::from_secs(7200);
-    update(&state, &live);
-    let ended = advance_ok(&state, &record.id, &host);
-    assert_eq!(
-        (
-            ended.prev_attempt.as_ref().map(|attempt| attempt.outcome),
-            ended.node.as_str(),
-            host.stops.get(),
-        ),
-        (Some(AttemptOutcome::Timeout), "judge", 1),
-        "{ended:?}"
-    );
+fn a_session_timeout_ends_it_from_its_launch_with_or_without_a_rest_check() {
+    for rest in ["", "\nrest-check=['judge']"] {
+        let text = STEP
+            .replace(
+                "lifecycle='turn'",
+                &format!("lifecycle='session'\ntimeout='1h'{rest}"),
+            )
+            .replace("then='@done'", "then='judge'")
+            + JUDGED;
+        let (_dir, state, record) = setup(&text);
+        let host = FakeHost::new();
+        let mut live = advance_ok(&state, &record.id, &host);
+        assert_eq!(
+            live.attempt.as_ref().unwrap().lifecycle,
+            StepLifecycle::Session
+        );
+        live.attempt.as_mut().unwrap().started_at =
+            Timestamp::now() - std::time::Duration::from_secs(7200);
+        update(&state, &live);
+        let ended = advance_ok(&state, &record.id, &host);
+        assert_eq!(
+            (
+                ended.prev_attempt.as_ref().map(|attempt| attempt.outcome),
+                ended.node.as_str(),
+                host.stops.get(),
+            ),
+            (Some(AttemptOutcome::Timeout), "judge", 1),
+            "{rest}: {ended:?}"
+        );
+    }
 }
 
 #[test]

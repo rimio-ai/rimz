@@ -2,8 +2,8 @@ use super::*;
 use std::time::Duration;
 
 fn definition() -> String {
-    UNTIL
-        .replace("then='pr'", "then=['pr','review']")
+    SESSION
+        .replace("rest-check=['pr']", "rest-check=['pr','review']")
         .replace("max-visits=2", "max-visits=3")
         .replace("on.done='@done'", "on.done='review'")
         + "[script.review]\nrun='cat review.json'\nwake=['review.ready']\ntimeout='1h'\non={pending='build',waiting='@wait',done='@done'}\n"
@@ -11,7 +11,8 @@ fn definition() -> String {
 
 fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
     let text = definition();
-    let (dir, state, record) = setup(&text.replace("then=['pr','review']", "then='pr'"));
+    let (dir, state, record) =
+        setup(&text.replace("rest-check=['pr','review']", "rest-check=['pr']"));
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     fs::write(&state.workflow(&record.id).spec, text).unwrap();
@@ -24,14 +25,23 @@ fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
 }
 
 #[test]
-fn sealed_then_accepts_a_name_or_a_list_with_the_same_entry() {
-    let (_dir, state, record) = setup(UNTIL);
+fn a_sealed_rest_check_keeps_its_order_beside_one_then_target() {
+    let (_dir, state, record) = setup(&definition());
     let paths = state.workflow(&record.id);
-    let scalar = crate::harness::workflow::load(&paths.home).unwrap();
-    assert_eq!(scalar.engine_target("build", "then"), "pr");
-    fs::write(&paths.spec, definition()).unwrap();
     let listed = crate::harness::workflow::load(&paths.home).unwrap();
-    assert_eq!(listed.engine_target("build", "then"), "pr");
+    assert_eq!(
+        (
+            listed
+                .step("build")
+                .unwrap()
+                .rest_check()
+                .iter()
+                .map(Target::as_str)
+                .collect::<Vec<_>>(),
+            listed.engine_target("build", "then"),
+        ),
+        (vec!["pr", "review"], Target::parse("pr"))
+    );
 }
 
 #[test]
@@ -204,7 +214,8 @@ fn listed_second_check_interruptions_and_moved_turns_name_that_check() {
 fn a_listed_check_reached_without_a_held_session_routes_normally() {
     let text = definition().replace("start='build'", "start='command'")
         + "[command.command]\nshell='true'\ntimeout='1m'\nthen='review'\n";
-    let (dir, state, record) = setup(&text.replace("then=['pr','review']", "then='pr'"));
+    let (dir, state, record) =
+        setup(&text.replace("rest-check=['pr','review']", "rest-check=['pr']"));
     fs::write(&state.workflow(&record.id).spec, text).unwrap();
     fs::write(dir.path().join("review.json"), r#"{"outcome":"done"}"#).unwrap();
     let host = FakeHost::new();

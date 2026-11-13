@@ -333,7 +333,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
     };
 
     let text = "[workflow]\nscope='worktree'\nstart='build'\n\
-        [agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen='pr'\n\
+        [agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['pr']\nthen='pr'\n\
         max-visits=6\n\
         [script.pr]\nrun='true'\non.pending='build'\non.done='@done'\n";
     let (_dir, state, record) = super::attempts::setup(text);

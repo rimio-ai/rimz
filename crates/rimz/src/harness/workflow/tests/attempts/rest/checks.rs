@@ -3,7 +3,7 @@ use crate::harness::workflow::state::Transition;
 
 #[test]
 fn kept_waits_merge_the_saved_answers_instant_instead_of_the_later_advance() {
-    let (_dir, state, record) = setup(UNTIL);
+    let (_dir, state, record) = setup(SESSION);
     let host = FakeHost::new();
     let mut live = advance_ok(&state, &record.id, &host);
     host.observed.borrow_mut().turn = Some(turn());
@@ -74,7 +74,7 @@ fn forge_check(
     seconds_after_start: i64,
     link: Value,
 ) -> (tempfile::TempDir, StatePaths, FakeHost, RunRecord) {
-    let text = UNTIL.split("[script.pr]").next().unwrap().to_owned()
+    let text = SESSION.split("[script.pr]").next().unwrap().to_owned()
         + &format!(
             "[condition.pr]\nelse='pending'\ntimeout='1h'\non={{done='@done',pending='@wait',unknown='@wait'}}\n[[condition.pr.cases]]\nwhen=['{when}']\noutcome='done'\n"
         );
@@ -105,7 +105,7 @@ fn forge_check(
 
 #[test]
 fn condition_hold_matures_while_the_leader_rests_on_the_judged_turn() {
-    let text = UNTIL.split("[script.pr]").next().unwrap().to_owned()
+    let text = SESSION.split("[script.pr]").next().unwrap().to_owned()
         + "[condition.pr]\nelse='pending'\ntimeout='1h'\non={done='@done',pending='build',unknown='build'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='done'\nfor='1h'\n";
     let (dir, state, record) = setup(&text);
     fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
@@ -135,7 +135,7 @@ fn condition_hold_matures_while_the_leader_rests_on_the_judged_turn() {
 
 #[test]
 fn a_held_checks_timeout_closes_through_the_same_verdict_gate() {
-    let (_dir, state, record) = setup(UNTIL);
+    let (_dir, state, record) = setup(SESSION);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     let mut pending = held(&live, false);
@@ -162,7 +162,7 @@ fn held_judges_keep_the_session_during_limit_backoff() {
 }
 
 fn judge(limited: bool) {
-    let text = UNTIL.replace(
+    let text = SESSION.replace(
         "[script.pr]\nrun='sh check.sh'",
         "[judge.pr]\nagent='claude'\nsummary='Review the work'\nprompt-file='prompt.md'",
     );

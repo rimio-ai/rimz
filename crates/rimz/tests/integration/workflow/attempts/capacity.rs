@@ -384,7 +384,7 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
     fs::write(
         &spec,
         format!(
-            "{}\n[agent.fallback]\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\n",
+            "{}\n[agent.fallback]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\n",
             fs::read_to_string(&spec)
                 .unwrap()
                 .replace("start = 'pr'", "start = 'pr'\non.deadline='fallback'")

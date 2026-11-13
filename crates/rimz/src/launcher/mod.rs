@@ -668,7 +668,7 @@ pub fn prepare_layout(
     })))
 }
 
-/// A workflow `stay` step a loop task started, or one naming a team (validation admits no
+/// A workflow session step a loop task started, or one naming a team (validation admits no
 /// other run-bearing team), launches through the layout path, keeping its leader's run.
 fn resident_leader(request: &LayoutRequest, leader: &LeaderRun) -> bool {
     if leader.lifecycle != crate::store::run::RunLifecycle::Session || request.workflow.is_none() {

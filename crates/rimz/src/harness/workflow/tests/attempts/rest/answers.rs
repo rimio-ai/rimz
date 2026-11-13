@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn run_pushbacks_point_at_complete_stderr_or_say_no_output() {
     for stderr in [String::new(), "private stderr evidence\n".repeat(500)] {
-        let (dir, state, record) = setup(UNTIL);
+        let (dir, state, record) = setup(SESSION);
         let host = FakeHost::new();
         advance_ok(&state, &record.id, &host);
         fs::write(dir.path().join("check.sh"), format!(
@@ -44,8 +44,8 @@ fn run_pushbacks_point_at_complete_stderr_or_say_no_output() {
 
 #[test]
 fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
-    let text = UNTIL
-        .replace("then='pr'", "then=['pr','review']")
+    let text = SESSION
+        .replace("rest-check=['pr']", "rest-check=['pr','review']")
         .replace("on.done='@done'", "on.done='review'")
         + "[test.review]\nshell='echo private-shell-evidence; exit 1'\non={pass='@done',fail='build'}\n";
     let (dir, state, record) = setup(&text);
@@ -102,7 +102,7 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
 
 #[test]
 fn condition_pushback_explains_false_or_leaves_and_unread_terms() {
-    let definition = UNTIL.split("[script.pr]").next().unwrap().to_owned()
+    let definition = SESSION.split("[script.pr]").next().unwrap().to_owned()
         + "[condition.pr]\nelse='pending'\non={done='@done',pending='build',unknown='build'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done || team.stage=Review']\noutcome='done'\n[[condition.pr.cases]]\nwhen=['team.stage=Done && pr=merged']\noutcome='done'\n";
     let (dir, state, record) = setup(&definition);
     fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
@@ -133,7 +133,7 @@ fn condition_pushback_explains_false_or_leaves_and_unread_terms() {
 
 #[test]
 fn a_push_interrupted_before_enqueue_reuses_its_id_without_recounting() {
-    let (dir, state, record) = setup(UNTIL);
+    let (dir, state, record) = setup(SESSION);
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
     check(dir.path(), json!({"outcome":"pending"}));
@@ -158,7 +158,7 @@ fn a_push_interrupted_before_enqueue_reuses_its_id_without_recounting() {
 
 #[test]
 fn another_advance_between_persist_and_push_enqueues_once() {
-    let (dir, state, record) = setup(UNTIL);
+    let (dir, state, record) = setup(SESSION);
     let host = Rc::new(FakeHost::new());
     advance_ok(&state, &record.id, &host);
     check(dir.path(), json!({"outcome":"pending"}));
@@ -179,7 +179,7 @@ fn another_advance_between_persist_and_push_enqueues_once() {
 
 #[test]
 fn a_push_over_the_visit_cap_closes_through_the_cap_route() {
-    let (dir, state, mut record) = setup(&UNTIL.replace("max-visits=2", "max-visits=1"));
+    let (dir, state, mut record) = setup(&SESSION.replace("max-visits=2", "max-visits=1"));
     record.input = Some(json!({"outcome":"pending"}));
     update(&state, &record);
     let host = FakeHost::new();
@@ -202,7 +202,7 @@ fn a_push_over_the_visit_cap_closes_through_the_cap_route() {
 #[test]
 fn a_held_wait_rechecks_on_a_signal_or_due_tick_and_can_push() {
     for signal in [false, true] {
-        let definition = UNTIL.replace(
+        let definition = SESSION.replace(
             "on.pending='build'",
             "wake=['review.ready']\non.pending='@wait'\non.fix='build'",
         );
@@ -246,7 +246,7 @@ fn a_held_wait_rechecks_on_a_signal_or_due_tick_and_can_push() {
 
 #[test]
 fn a_signal_after_a_held_answer_does_not_get_lost_in_its_wait() {
-    let definition = UNTIL.replace(
+    let definition = SESSION.replace(
         "on.pending='build'",
         "wake=['review.ready']\non.pending='@wait'",
     );

@@ -146,8 +146,8 @@ impl InlineTask {
     }
 }
 
-/// Keep the agent step's session when its run ends, as a `--keep` fire asks. A stay agent
-/// already keeps its pane and takes no `keep`, so it is left as compiled.
+/// Keep the agent step's session when its run ends, as a `--keep` fire asks, on either
+/// lifecycle.
 pub(super) fn keep_agent(text: &str) -> Result<String> {
     let mut table: Table = toml::from_str(text)?;
     let Some(Value::Table(step)) = table
@@ -156,9 +156,6 @@ pub(super) fn keep_agent(text: &str) -> Result<String> {
     else {
         return Ok(text.to_owned());
     };
-    if step.get("lifecycle").and_then(Value::as_str) == Some("stay") {
-        return Ok(text.to_owned());
-    }
     step.insert("keep".into(), true.into());
     Ok(toml::to_string(&table)?)
 }
@@ -499,8 +496,8 @@ impl<'a> Graph<'a> {
         }
         let mut on = routes([("failed", "@failed"), ("invalid", "@failed")]);
         let timed = if entry.stay {
-            step.insert("lifecycle".into(), "stay".into());
-            // A staying step launches beside its checkout's occupants unless it takes them over.
+            step.insert("lifecycle".into(), "session".into());
+            // A resident session launches beside its checkout's occupants unless it takes them over.
             admission.insert(
                 "occupancy".into(),
                 if entry.takeover { "takeover" } else { "share" }.into(),
@@ -529,7 +526,8 @@ impl<'a> Graph<'a> {
             step.insert("then".into(), "@done".into());
             false
         } else if let Some(verify) = &entry.verify {
-            step.insert("lifecycle".into(), "until".into());
+            step.insert("lifecycle".into(), "session".into());
+            step.insert("rest-check".into(), vec![Value::from("verify")].into());
             step.insert("then".into(), "verify".into());
             let attempts = entry
                 .max_attempts

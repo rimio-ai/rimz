@@ -27,7 +27,7 @@ fn values_admission_refuses_load_with_their_text_and_failure() {
 
     let spec: Definition = toml::from_str(
         "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n\
-         [agent.build]\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
+         [agent.build]\nlifecycle='turn'\nagent='claude'\nprompt-file='p.md'\ntimeout='soon'\n\
          admission.window='window.5h.bogus>=x'\nbudget='lots'\nsubscribe=['agent.stop']\nthen='pick'\n\
          [script.pick]\nrun='true'\nwake=['agent.stop']\non.ok='@done'\n",
     )
@@ -95,7 +95,7 @@ fn a_route_to_a_name_that_is_no_node_compiles_as_a_node_target() {
 fn the_bare_window_shorthand_compiles_like_the_dotted_term() {
     let window = |text: &str| {
         let spec = loaded(&format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\n\
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nlifecycle='turn'\nagent='claude'\n\
              prompt-file='prompts/build.md'\nadmission.window='{text}'\nthen='@done'\n"
         ));
         spec.step("build")
@@ -114,7 +114,7 @@ fn a_lifecycle_on_a_command_refuses() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n",
+        "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nlifecycle='session'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n",
     )
     .unwrap();
     assert!(

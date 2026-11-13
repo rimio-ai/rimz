@@ -210,7 +210,7 @@ fn accounting_uses_closed_waits_and_evaluation_origin() {
     t.record.held = Some(
         serde_json::from_value(json!({
             "attempt":{
-                "kind":"agent", "lifecycle":"until", "seq":1, "node":"work",
+                "kind":"agent", "lifecycle":"session", "seq":1, "node":"work",
                 "started_at":t.now, "host":{"pid":1, "start":null},
                 "run":{"run_id":crate::ids::RunId::new(), "handle":"@leader"},
                 "judged":{"agent_id":"leader", "started_at":t.now, "ended_at":t.now}
@@ -319,7 +319,7 @@ fn a_task_cancels_only_its_live_runs_that_have_not_reached_an_agent() {
         ("other", RunState::Active, &["pick"][..]),
     ] {
         let (_home, state, mut record, _) = fixture(
-            "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='fix'\n[agent.fix]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
+            "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='fix'\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
         );
         record.task = Some(task.into());
         record.state = run_state;
@@ -557,7 +557,7 @@ fn held_scope_kind_controls_early_admission_after_definition_edits() {
 #[test]
 fn capacity_admission_precedes_takeover_without_publishing_an_attempt() {
     let (_home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude'\nprompt-file='prompt.md'\nadmission.occupancy='takeover'\nthen='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nadmission.occupancy='takeover'\nthen='@done'\n",
     );
     record.task = Some("nightly".into());
     // A fire's cutoff stands, however late in the run the first hold comes.
@@ -653,7 +653,7 @@ fn min_disk_is_read_where_a_steps_worktree_will_be_made() {
     for worktree in [Some("feat"), None] {
         let line = worktree.map_or_else(String::new, |name| format!("worktree='{name}'\n"));
         let (home, state, mut record, spec) = fixture(&format!(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude'\n\
+            "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude'\n\
              prompt-file='prompt.md'\n{line}then='@done'\n"
         ));
         record.task = Some("nightly".into());
@@ -703,7 +703,7 @@ fn admission_after_occupancy(expires: bool) {
     use std::rc::Rc;
 
     let (home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='pr'\n[agent.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\n[script.after]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.go='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\n[script.after]\nrun='true'\non.ok='@done'\n",
     );
     fs::write(home.path().join("prompt.md"), "Build").unwrap();
     let deadline = Timestamp::now() + jiff::SignedDuration::from_secs(1);
@@ -780,7 +780,7 @@ fn step_window_waits_for_a_closed_companion_provider() {
     use crate::ids::{AgentKind, LoginKey};
     let now = Timestamp::now();
     let (_home, state, record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude,codex,term'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left>=20'\n[script.after]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude,codex,term'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left>=20'\n[script.after]\nrun='true'\non.ok='@done'\n",
     );
     fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
     let windows = WindowReadings::fixed(
@@ -827,7 +827,7 @@ fn step_window_waits_for_a_closed_companion_provider() {
 fn a_window_or_stagger_that_does_not_parse_reaches_its_consumer_as_an_error() {
     use crate::harness::when::WindowReadings;
     let spec: Definition = toml::from_str(
-        "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n[agent.build]\n\
+        "[workflow]\nscope='worktree'\nstart='build'\nlimit={stagger='soon'}\n[agent.build]\nlifecycle='turn'\n\
          agent='claude'\nprompt-file='p.md'\nadmission.window='window.5h.bogus>=x'\nthen='@done'\n",
     )
     .unwrap();
@@ -856,7 +856,7 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
     let now = "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap();
     let kind = crate::ids::AgentKind::new_unchecked("claude");
     let (_home, state, mut record, spec) = fixture(
-        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left >= 20'\n[script.after]\nrun='true'\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left >= 20'\n[script.after]\nrun='true'\non.ok='@done'\n",
     );
     fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
     record.key = Some(workflow::Key::Integer(7));

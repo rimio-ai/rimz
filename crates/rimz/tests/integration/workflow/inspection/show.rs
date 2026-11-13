@@ -2,7 +2,7 @@ use super::*;
 
 const AT: &str = "2000-01-01T12:00:00Z";
 
-const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='until'\nthen=['gate','later']\n[condition.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\nshell='true'\non={pass='@done',fail='build'}\n";
+const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['gate','later']\nthen='gate'\n[condition.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
 fn active_break_resume_receipt_counts_the_destination_step_visits() {
@@ -12,7 +12,7 @@ fn active_break_resume_receipt_counts_the_destination_step_visits() {
     record.visits.insert("build".into(), 1);
     record.attempt = Some(
         serde_json::from_value(json!({
-            "kind":"agent", "lifecycle":"stay", "seq":1, "node":"@break", "visit":1,
+            "kind":"agent", "lifecycle":"session", "seq":1, "node":"@break", "visit":1,
             "started_at":record.entered_at, "host":{"pid":0,"start":null}
         }))
         .unwrap(),
@@ -46,7 +46,7 @@ fn active_break_resume_receipts_its_source_instead_of_an_extension() {
             if live {
                 record.attempt = Some(
                     serde_json::from_value(json!({
-                        "kind":"agent", "lifecycle":"stay", "seq":1, "node":"@break",
+                        "kind":"agent", "lifecycle":"session", "seq":1, "node":"@break",
                         "visit":1, "started_at":record.entered_at,
                         "host":{"pid":0,"start":null},
                     }))
@@ -192,7 +192,7 @@ fn show_now_skips_child_checks_and_plain_sleeps_but_reads_conditional_sleeps() {
         "sleep='365d'\nthen='@done'\nwhen=['team.stage=Done']",
     ] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='gate'\n[{}.gate]\n{runner}\n",
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='gate'\n[{}.gate]\n{runner}\n",
             match runner.split('=').next() {
                 Some("agent") => "judge",
                 Some("sleep") => "sleep",
@@ -892,7 +892,7 @@ fn with_you_header_names_the_room_pr_and_check_without_repeating_status() {
     let actual = [false, true].map(|held| {
         record.node = if held { "gate" } else { "build" }.into();
         let attempt: rimz::store::workflow::LiveAttempt = serde_json::from_value(json!({
-            "kind":"agent", "lifecycle":"until", "seq":7, "node":"build",
+            "kind":"agent", "lifecycle":"session", "seq":7, "node":"build",
             "started_at":AT, "host":{"pid":1,"start":null},
             "run":{"run_id":rimz::ids::RunId::new(),"handle":"@pet"},
         }))
@@ -1078,7 +1078,7 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
         &record,
         &SPEC.replace(
             "[command.build]\nshell='true'",
-            "[agent.build]\nagent='codex'\nprompt-file='prompt.md'",
+            "[agent.build]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'",
         ),
     );
     let dir = env.rimz_home().join("workflows/review");

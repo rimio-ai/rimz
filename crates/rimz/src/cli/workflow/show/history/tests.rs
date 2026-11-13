@@ -69,7 +69,7 @@ fn history(journal: &[JournalEntry]) -> String {
     history_of(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
          [script.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.done='@done'\n\
-         [agent.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
+         [agent.build]\nlifecycle='session'\nrest-check=['pr']\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
         journal,
     )
 }

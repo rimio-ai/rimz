@@ -18,6 +18,8 @@ const STEP_TRIGGERS: [&str; 8] = [
     "deadline",
 ];
 const FAILURE_EDGES: [&str; 5] = ["timeout", "invalid", "undelivered", "cap", "deadline"];
+/// The outcome naming each edge from a session to one of its rest checks.
+const REST_CHECK: &str = "rest-check";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -202,20 +204,25 @@ impl Definition {
             .collect::<BTreeMap<_, _>>();
         self.steps()
             .filter_map(|(node, _)| {
-                let parent = self.step(node)?.then().iter().find_map(|parent| {
-                    let parent = parent.node()?;
-                    (self.check(parent).is_some()
-                        && positions
-                            .get(&parent.to_owned())
-                            .zip(positions.get(node))
-                            .is_some_and(|(parent, step)| parent < step)
-                        && self.edges(parent).iter().any(|edge| {
-                            edge.outcome != "deadline"
-                                && edge.target.node() == Some(node.as_str())
-                                && edge.fires != Fireability::Never
-                        }))
-                    .then_some(parent)
-                })?;
+                let step = self.step(node)?;
+                let parent = step
+                    .rest_check()
+                    .iter()
+                    .chain(step.then())
+                    .find_map(|parent| {
+                        let parent = parent.node()?;
+                        (self.check(parent).is_some()
+                            && positions
+                                .get(&parent.to_owned())
+                                .zip(positions.get(node))
+                                .is_some_and(|(parent, step)| parent < step)
+                            && self.edges(parent).iter().any(|edge| {
+                                edge.outcome != "deadline"
+                                    && edge.target.node() == Some(node.as_str())
+                                    && edge.fires != Fireability::Never
+                            }))
+                        .then_some(parent)
+                    })?;
                 Some((node.clone(), parent.to_owned()))
             })
             .collect()
@@ -229,10 +236,7 @@ impl Definition {
             .iter()
             .filter(|edge| {
                 step.is_none_or(|step| match edge.outcome.as_str() {
-                    "asked" => {
-                        matches!(step.kind(), Some(Kind::Agent(_))) && step.lifecycle().is_turn()
-                    }
-                    "capacity" => matches!(step.kind(), Some(Kind::Agent(_))),
+                    "asked" | "capacity" => matches!(step.kind(), Some(Kind::Agent(_))),
                     _ => true,
                 })
             })
@@ -313,31 +317,42 @@ impl Definition {
         } else {
             STEP_TRIGGERS.map(str::to_owned).to_vec()
         };
-        Some(
-            outcomes
-                .into_iter()
-                .filter_map(|outcome| {
-                    let (target, explicit) = edges.remove(&outcome)?;
-                    let (fires, because) = self.fireability(node, &outcome);
-                    Some(Edge {
-                        target,
-                        source: if explicit {
-                            EdgeSource::Explicit
-                        } else if !self.is_break(node)
-                            && authored.workflow.on_break.is_some()
-                            && FAILURE_EDGES.contains(&outcome.as_str())
-                        {
-                            EdgeSource::OnBreak
-                        } else {
-                            EdgeSource::Default
-                        },
-                        outcome,
-                        fires,
-                        because,
-                    })
+        let rest_checks = authored
+            .steps
+            .get(node)
+            .and_then(|step| step.rest_check.as_ref());
+        let mut compiled = outcomes
+            .into_iter()
+            .filter_map(|outcome| {
+                let (target, explicit) = edges.remove(&outcome)?;
+                let (fires, because) = self.fireability(node, &outcome);
+                Some(Edge {
+                    target,
+                    source: if explicit {
+                        EdgeSource::Explicit
+                    } else if !self.is_break(node)
+                        && authored.workflow.on_break.is_some()
+                        && FAILURE_EDGES.contains(&outcome.as_str())
+                    {
+                        EdgeSource::OnBreak
+                    } else {
+                        EdgeSource::Default
+                    },
+                    outcome,
+                    fires,
+                    because,
                 })
-                .collect(),
-        )
+            })
+            .collect::<Vec<_>>();
+        // A session's rest checks run at its rests, so the walk and the cycle bound see each.
+        compiled.extend(rest_checks.into_iter().flatten().map(|check| Edge {
+            outcome: REST_CHECK.into(),
+            target: Target::parse(check),
+            source: EdgeSource::Explicit,
+            fires: Fireability::Yes,
+            because: None,
+        }));
+        Some(compiled)
     }
 
     fn fireability(&self, node: &str, outcome: &str) -> (Fireability, Option<NeverReason>) {

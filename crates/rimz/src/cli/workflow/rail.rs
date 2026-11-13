@@ -486,8 +486,7 @@ impl Row {
                     "{agent} · {}",
                     match step.lifecycle() {
                         StepLifecycle::Turn => "1 turn",
-                        StepLifecycle::Stay => "lifecycle stay",
-                        StepLifecycle::Until => "lifecycle until",
+                        StepLifecycle::Session => "session",
                     }
                 ),
                 Some(Kind::Message(target)) => target.clone(),

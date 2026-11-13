@@ -429,7 +429,7 @@ mod tests {
         let mut record = record("lane", None, false, false);
         record.attempt = Some(
             serde_json::from_value(serde_json::json!({
-                "kind":"agent", "lifecycle":"stay", "seq":7, "node":"gate",
+                "kind":"agent", "lifecycle":"session", "seq":7, "node":"gate",
                 "started_at":Timestamp::UNIX_EPOCH, "host":{"pid":1, "start":null},
                 "run":{"run_id":rimz::ids::RunId::new(), "handle":"@pet"},
             }))
@@ -488,7 +488,7 @@ mod tests {
         let mut record = record("lane", None, false, false);
         record.attempt = Some(
             serde_json::from_value(serde_json::json!({
-                "kind":"agent", "lifecycle":"stay", "seq":7, "node":"gate",
+                "kind":"agent", "lifecycle":"session", "seq":7, "node":"gate",
                 "started_at":Timestamp::UNIX_EPOCH, "host":{"pid":1, "start":null},
                 "run":{"run_id":rimz::ids::RunId::new(), "handle":"@pet"},
             }))

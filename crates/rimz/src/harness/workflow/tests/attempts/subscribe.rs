@@ -1,8 +1,8 @@
-use super::until::{UNTIL, check, turn};
+use super::rest::{SESSION, check, turn};
 use super::*;
 use crate::harness::signal::Signal;
 
-const STAY: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='stay'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}, prompt='redeploy'}]\nthen='@done'\n";
+const SUBSCRIBED: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nsubscribe=['ci.failed', {signal='deploy.done', match={env='prod'}, prompt='redeploy'}]\nthen='@done'\n";
 
 fn signal(name: &str, payload: Value) -> Signal {
     Signal {
@@ -28,8 +28,8 @@ fn forwarded(
 }
 
 #[test]
-fn a_staying_step_forwards_only_delivering_signals_to_its_leader() {
-    let (dir, state, record) = setup(STAY);
+fn a_session_forwards_only_delivering_signals_to_its_leader() {
+    let (dir, state, record) = setup(SUBSCRIBED);
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     let paths = state.workflow(&record.id);
@@ -107,19 +107,20 @@ fn a_staying_step_forwards_only_delivering_signals_to_its_leader() {
 #[test]
 fn unsubscribed_turn_ended_and_unlaunched_steps_receive_nothing() {
     let here = |dir: &tempfile::TempDir| json!({"path": dir.path().to_string_lossy()});
-    let (dir, state, _record) = setup(STAY);
+    let (dir, state, _record) = setup(SUBSCRIBED);
     let host = FakeHost::new();
     wake(&state, &signal("ci.failed", here(&dir)), &host).unwrap();
 
-    let (dir, state, record) = setup(&STAY.replace("lifecycle='stay'", "lifecycle='turn'"));
+    let (dir, state, record) =
+        setup(&SUBSCRIBED.replace("lifecycle='session'", "lifecycle='turn'"));
     advance_ok(&state, &record.id, &host);
     wake(&state, &signal("ci.failed", here(&dir)), &host).unwrap();
 
-    let (dir, state, record) = setup(&STAY.replace("subscribe=", "notes=false\n#"));
+    let (dir, state, record) = setup(&SUBSCRIBED.replace("subscribe=", "notes=false\n#"));
     advance_ok(&state, &record.id, &host);
     wake(&state, &signal("ci.failed", here(&dir)), &host).unwrap();
 
-    let (dir, state, record) = setup(STAY);
+    let (dir, state, record) = setup(SUBSCRIBED);
     advance_ok(&state, &record.id, &host);
     cancel(&state, &record.id, &host, None).unwrap();
     wake(&state, &signal("ci.failed", here(&dir)), &host).unwrap();
@@ -127,11 +128,11 @@ fn unsubscribed_turn_ended_and_unlaunched_steps_receive_nothing() {
 }
 
 #[test]
-fn a_held_until_session_and_its_check_both_take_the_signal() {
-    let definition = UNTIL
+fn a_held_session_and_its_rest_check_both_take_the_signal() {
+    let definition = SESSION
         .replace(
-            "lifecycle='until'",
-            "lifecycle='until'\nsubscribe=['review.ready']",
+            "lifecycle='session'",
+            "lifecycle='session'\nsubscribe=['review.ready']",
         )
         .replace(
             "on.pending='build'",
@@ -173,7 +174,7 @@ fn a_held_until_session_and_its_check_both_take_the_signal() {
 
 #[test]
 fn a_subscribed_step_brief_lists_each_subscription_with_its_scope() {
-    let text = STAY.replace(
+    let text = SUBSCRIBED.replace(
         "subscribe=[",
         "subscribe=['team.stage', {signal='team.stage', match={board='/b'}}, 'team.*', 'review.ready', {signal='pr.opened', match={repo='o/r'}}, ",
     );
@@ -187,17 +188,17 @@ fn a_subscribed_step_brief_lists_each_subscription_with_its_scope() {
         ),
         "{note}"
     );
-    let (_dir, state, record) = setup(&STAY.replace("subscribe=", "notes=false\n#"));
+    let (_dir, state, record) = setup(&SUBSCRIBED.replace("subscribe=", "notes=false\n#"));
     advance_ok(&state, &record.id, &host);
     let note = host.launched.borrow().last().unwrap().workflow_note.clone();
     assert!(!note.contains("You subscribe"), "{note}");
 }
 
 #[test]
-fn a_staying_steps_defaults_follow_the_checkout_its_leader_launched_in() {
-    let (dir, state, record) = setup(&STAY.replace(
-        "lifecycle='stay'\nsubscribe=['ci.failed',",
-        "lifecycle='stay'\nworktree='review'\nsubscribe=['ci.failed', 'team.stage',",
+fn a_sessions_defaults_follow_the_checkout_its_leader_launched_in() {
+    let (dir, state, record) = setup(&SUBSCRIBED.replace(
+        "lifecycle='session'\nsubscribe=['ci.failed',",
+        "lifecycle='session'\nworktree='review'\nsubscribe=['ci.failed', 'team.stage',",
     ));
     let host = FakeHost::new();
     advance_ok(&state, &record.id, &host);
@@ -228,7 +229,7 @@ fn a_staying_steps_defaults_follow_the_checkout_its_leader_launched_in() {
 
 #[test]
 fn every_distinct_delivering_binding_forwards_its_own_prompt() {
-    let (dir, state, record) = setup(&STAY.replace(
+    let (dir, state, record) = setup(&SUBSCRIBED.replace(
         "subscribe=['ci.failed',",
         "subscribe=[{signal='ci.failed', match={branch='feat'}, prompt='one'}, {signal='ci.failed', prompt='two'}, {signal='ci.failed', match={branch='feat'}, prompt='dup'}, ",
     ));
@@ -258,8 +259,8 @@ fn every_distinct_delivering_binding_forwards_its_own_prompt() {
 }
 
 #[test]
-fn a_staying_step_never_hears_its_own_leaders_lifecycle_signals() {
-    let (_dir, state, record) = setup(&STAY.replace(
+fn a_session_never_hears_its_own_leaders_lifecycle_signals() {
+    let (_dir, state, record) = setup(&SUBSCRIBED.replace(
         "subscribe=['ci.failed',",
         concat!(
             "subscribe=[{signal='agent.idle', match={handle='@builder'}}, ",
@@ -289,8 +290,8 @@ fn a_staying_step_never_hears_its_own_leaders_lifecycle_signals() {
 }
 
 #[test]
-fn a_staying_step_never_hears_lifecycle_signals_from_its_leaders_session() {
-    let (_dir, state, record) = setup(&STAY.replace(
+fn a_session_never_hears_lifecycle_signals_from_its_leaders_session() {
+    let (_dir, state, record) = setup(&SUBSCRIBED.replace(
         "subscribe=['ci.failed',",
         "subscribe=[{signal='agent.idle', match={handle='@other'}}, ",
     ));
@@ -319,8 +320,8 @@ fn a_staying_step_never_hears_lifecycle_signals_from_its_leaders_session() {
 }
 
 #[test]
-fn a_staying_step_hears_its_cohorts_and_other_agents_lifecycle_signals() {
-    let (_dir, state, record) = setup(&STAY.replace(
+fn a_session_hears_its_cohorts_and_other_agents_lifecycle_signals() {
+    let (_dir, state, record) = setup(&SUBSCRIBED.replace(
         "subscribe=['ci.failed',",
         "subscribe=['team.idle', {signal='agent.done', match={handle='@other'}}, ",
     ));

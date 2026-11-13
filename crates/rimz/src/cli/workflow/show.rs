@@ -388,9 +388,11 @@ impl View<'_> {
             return Ok(());
         }
         let name = match self.spec.step(&self.record.node) {
-            Some(step) if matches!(step.kind(), Some(Kind::Agent(_))) => {
-                step.then().first().map(Target::as_str)
-            }
+            Some(step) if matches!(step.kind(), Some(Kind::Agent(_))) => step
+                .rest_check()
+                .first()
+                .or(step.then().first())
+                .map(Target::as_str),
             Some(_) => None,
             None => Some(self.record.node.as_str()),
         };
@@ -742,7 +744,7 @@ mod tests {
             "wait":{"node":"gate","outcome":"pending","first":Timestamp::UNIX_EPOCH,
                 "last":Timestamp::UNIX_EPOCH,"count":2},
             "held":with_you.then(|| serde_json::json!({"entered_at":Timestamp::UNIX_EPOCH,
-                "attempt":{"kind":"agent","lifecycle":"until","seq":2,"node":"build",
+                "attempt":{"kind":"agent","lifecycle":"session","seq":2,"node":"build",
                     "started_at":Timestamp::UNIX_EPOCH,"host":{"pid":1,"start":null},
                     "run":{"run_id":rimz::ids::RunId::new(),"handle":"@pet"}}})),
         }))

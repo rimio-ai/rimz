@@ -109,12 +109,12 @@ fn limits_count_one_start_per_live_run_attempt_across_rooms() {
     install(
         &fake,
         named(
-            attempt("/repo", "build", StepLifecycle::Stay),
+            attempt("/repo", "build", StepLifecycle::Session),
             Some("@first"),
         ),
     );
     let mut held_session = named(
-        attempt("/repo", "fix", StepLifecycle::Until),
+        attempt("/repo", "fix", StepLifecycle::Session),
         Some("@second"),
     );
     held_session.held = Some(workflow::HeldSession {
@@ -213,7 +213,7 @@ fn limits_count_one_start_per_live_run_attempt_across_rooms() {
 #[test]
 fn a_workflow_limit_cannot_loosen_the_machine_automation_cap() {
     let fake = FakeHost::new();
-    let record = attempt("/repo", "build", StepLifecycle::Stay);
+    let record = attempt("/repo", "build", StepLifecycle::Session);
     fake.set_agents(
         &WorkspaceId::from_project_root(&record.project_root),
         vec![stamped(&record, "build")],
@@ -260,7 +260,7 @@ fn limits_read_no_agent_snapshot() {
 fn limits_count_a_wide_start_as_one_at_both_scopes() {
     for workflow_limit in [true, false] {
         let fake = FakeHost::new();
-        install(&fake, attempt("/repo", "build", StepLifecycle::Stay));
+        install(&fake, attempt("/repo", "build", StepLifecycle::Session));
         let limit = |cap: &str| {
             let mut request = if workflow_limit {
                 limited(Some(cap), None)
@@ -774,12 +774,20 @@ fn system_census_skips_a_refused_run_home_but_not_an_unreadable_one() {
     let root = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(root.path());
     let state = crate::StatePaths::for_workspace(workspace.clone()).unwrap();
-    let mut live = attempt(root.path().to_str().unwrap(), "build", StepLifecycle::Stay);
+    let mut live = attempt(
+        root.path().to_str().unwrap(),
+        "build",
+        StepLifecycle::Session,
+    );
     live.project_root = root.path().to_owned();
     std::fs::create_dir_all(&state.root).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     workflow::initialize(&state, &live, b"[workflow]", &guard).unwrap();
-    let old = attempt(root.path().to_str().unwrap(), "build", StepLifecycle::Stay);
+    let old = attempt(
+        root.path().to_str().unwrap(),
+        "build",
+        StepLifecycle::Session,
+    );
     workflow::initialize(&state, &old, b"[workflow]", &guard).unwrap();
     let mut value = serde_json::to_value(&old).unwrap();
     value["version"] = json!(3);

@@ -63,7 +63,7 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
     assert_eq!(load(&paths).unwrap(), record);
     let id = record.id.as_str();
     let fix = format!("`rimz workflow cancel {id}`, then start the workflow again");
-    for version in [1, 2, 3, 4, 5, VERSION + 1] {
+    for version in [1, 2, 3, 4, 5, 6, VERSION + 1] {
         let mut value = serde_json::to_value(&record).unwrap();
         value["version"] = json!(version);
         // A version-2 body this binary no longer decodes still meets the refusal first.
@@ -360,7 +360,7 @@ fn capacity_wait_round_trips_and_other_waits_omit_its_fields() {
 }
 
 #[test]
-fn until_session_round_trips_with_its_verdict() {
+fn a_held_session_round_trips_with_its_verdict() {
     let turn = json!({
         "agent_id":"leader", "started_at":"2026-01-01T00:00:00Z",
         "ended_at":"2026-01-01T00:00:01Z"
@@ -394,7 +394,7 @@ fn until_session_round_trips_with_its_verdict() {
 }
 
 #[test]
-fn until_turn_end_journal_preserves_each_decision() {
+fn a_rest_check_turn_end_journal_preserves_each_decision() {
     let results: Vec<_> = ["kept", "closed", "discarded", "interrupted"]
         .into_iter()
         .map(|action| {
@@ -428,7 +428,7 @@ fn until_turn_end_journal_preserves_each_decision() {
 }
 
 #[test]
-fn records_without_a_held_session_omit_until_fields() {
+fn records_without_a_held_session_omit_rest_check_fields() {
     let value = serde_json::to_value(record()).unwrap();
     assert!(value.get("held").is_none());
     assert!(value["attempt"].get("judged").is_none());

@@ -4,10 +4,14 @@ use crate::store::workflow::{EndCause, Ending, ParkReason, Verdict};
 #[test]
 fn keep_launch_note_explains_that_the_pane_will_remain_outside_the_run() {
     let mut notes = Vec::new();
-    for lifecycle in ["turn", "until"] {
-        let definition = until::UNTIL.replace(
-            "lifecycle='until'",
-            &format!("lifecycle='{lifecycle}'\nkeep=true"),
+    for lifecycle in [
+        "lifecycle='turn'",
+        "lifecycle='session'",
+        "lifecycle='session'\nrest-check=['pr']",
+    ] {
+        let definition = rest::SESSION.replace(
+            "lifecycle='session'\nrest-check=['pr']",
+            &format!("{lifecycle}\nkeep=true"),
         );
         let (_dir, state, record) = setup(&definition);
         let host = FakeHost::new();
@@ -26,7 +30,12 @@ fn keep_launch_note_explains_that_the_pane_will_remain_outside_the_run() {
 #[test]
 fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
     let mut actual = Vec::new();
-    for keep in [false, true] {
+    for (lifecycle, keep) in [
+        ("turn", false),
+        ("turn", true),
+        ("session", false),
+        ("session", true),
+    ] {
         for (cause, capped) in [
             (EndCause::Lifecycle, false),
             (EndCause::Lifecycle, true),
@@ -34,7 +43,9 @@ fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
             (EndCause::Deadline, false),
             (EndCause::Cancel, false),
         ] {
-            let definition = STEP.replace("max-visits=2", &format!("max-visits=2\nkeep={keep}"));
+            let definition = STEP
+                .replace("lifecycle='turn'", &format!("lifecycle='{lifecycle}'"))
+                .replace("max-visits=2", &format!("max-visits=2\nkeep={keep}"));
             let (_dir, state, record) = setup(&definition);
             let host = FakeHost::new();
             let mut live = advance_ok(&state, &record.id, &host);
@@ -61,40 +72,34 @@ fn keep_launches_without_cleanup_and_detaches_only_non_forced_endings() {
             ));
         }
     }
-    assert_eq!(
-        actual,
-        [
-            (false, 1, 0),
-            (false, 1, 0),
-            (false, 1, 0),
-            (false, 1, 0),
-            (false, 1, 0),
-            (true, 0, 1),
-            (true, 0, 1),
-            (true, 1, 0),
-            (true, 1, 0),
-            (true, 1, 0),
-        ]
-    );
+    let unkept = [(false, 1, 0); 5];
+    let kept = [
+        (true, 0, 1),
+        (true, 0, 1),
+        (true, 1, 0),
+        (true, 1, 0),
+        (true, 1, 0),
+    ];
+    assert_eq!(actual, [unkept, kept, unkept, kept].concat());
 }
 
 #[test]
-fn kept_until_close_and_cap_endings_detach() {
+fn kept_rest_check_close_and_cap_endings_detach() {
     let mut actual = Vec::new();
     for (outcome, cap, edge) in [
         ("done", 2, ""),
         ("pending", 1, "on.cap='@done'\n"),
         ("pending", 1, ""),
     ] {
-        let definition = until::UNTIL.replace(
+        let definition = rest::SESSION.replace(
             "max-visits=2",
             &format!("max-visits={cap}\nkeep=true\n{edge}"),
         );
         let (dir, state, record) = setup(&definition);
         let host = FakeHost::new();
         advance_ok(&state, &record.id, &host);
-        until::check(dir.path(), json!({"outcome":outcome}));
-        host.observed.borrow_mut().turn = Some(until::turn());
+        rest::check(dir.path(), json!({"outcome":outcome}));
+        host.observed.borrow_mut().turn = Some(rest::turn());
         let ended = advance_ok(&state, &record.id, &host);
         actual.push((ended.state, host.stops.get(), host.detaches.get()));
     }
@@ -125,4 +130,83 @@ fn cancel_during_detach_still_stops_the_kept_agent() {
         (ended.state, host.stops.get(), host.detaches.get()),
         (RunState::Canceled, 1, 1)
     );
+}
+
+#[test]
+fn a_session_question_takes_on_asked_and_ends_the_node_as_a_turns_does() {
+    use crate::store::workflow::{Asked, Asking};
+    let mut actual = Vec::new();
+    for (lifecycle, keep) in [
+        ("lifecycle='turn'", false),
+        ("lifecycle='session'", false),
+        ("lifecycle='session'", true),
+        ("lifecycle='session'\nrest-check=['pr']", false),
+    ] {
+        let definition = rest::SESSION.replace(
+            "lifecycle='session'\nrest-check=['pr']",
+            &format!("{lifecycle}\nkeep={keep}\non.asked='@done'"),
+        );
+        let (_dir, state, record) = setup(&definition);
+        let host = FakeHost::new();
+        advance_ok(&state, &record.id, &host);
+        host.observed.borrow_mut().ask = Some(Asking {
+            since: jiff::Timestamp::now(),
+            ask: Asked {
+                text: "Which approach?".into(),
+                kind: "question".into(),
+                handle: "@builder".into(),
+            },
+        });
+        let ended = advance_ok(&state, &record.id, &host);
+        actual.push((
+            ended.state,
+            ended.prev_attempt.map(|attempt| attempt.outcome),
+            host.stops.get(),
+            host.detaches.get(),
+        ));
+    }
+    let asked = Some(AttemptOutcome::Asked);
+    assert_eq!(
+        actual,
+        [
+            (RunState::Done, asked, 1, 0),
+            (RunState::Done, asked, 1, 0),
+            (RunState::Done, asked, 0, 1),
+            (RunState::Done, asked, 1, 0),
+        ]
+    );
+}
+
+#[test]
+fn a_kept_agent_that_died_hit_a_limit_or_was_canceled_is_stopped() {
+    let mut actual = Vec::new();
+    for (lifecycle, held) in [
+        ("lifecycle='turn'", false),
+        ("lifecycle='session'", false),
+        ("lifecycle='session'\nrest-check=['pr']", false),
+        ("lifecycle='session'\nrest-check=['pr']", true),
+    ] {
+        for status in [
+            RunStatus::Failed,
+            RunStatus::BudgetExceeded,
+            RunStatus::Canceled,
+            RunStatus::Completed,
+        ] {
+            let definition = rest::SESSION.replace(
+                "lifecycle='session'\nrest-check=['pr']",
+                &format!("{lifecycle}\nkeep=true"),
+            );
+            let (_dir, state, record) = setup(&definition);
+            let host = FakeHost::new();
+            let live = advance_ok(&state, &record.id, &host);
+            if held {
+                update(&state, &rest::held(&live, false));
+            }
+            host.observed.borrow_mut().status = status;
+            advance_ok(&state, &record.id, &host);
+            actual.push((host.stops.get(), host.detaches.get()));
+        }
+    }
+    let per_shape = [(1, 0), (1, 0), (1, 0), (0, 1)];
+    assert_eq!(actual, [per_shape; 4].concat());
 }

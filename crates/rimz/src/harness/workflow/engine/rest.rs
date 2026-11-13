@@ -1,6 +1,6 @@
 use super::super::{LeaderTurn, Observed};
 use super::*;
-use crate::store::workflow::{HeldSession, PushBack, StepLifecycle, TurnEndAction, Verdict};
+use crate::store::workflow::{HeldSession, PushBack, TurnEndAction, Verdict};
 
 pub(super) fn has_pending_verdict(record: &RunRecord) -> bool {
     record
@@ -22,23 +22,25 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
     };
     // prepare_end calls only for a published agent attempt with no ending.
     let attempt = t.record.attempt.as_mut().expect("observed agent attempt");
-    if attempt.lifecycle != StepLifecycle::Until || attempt.judged.as_ref() == Some(&turn.end) {
+    if attempt.judged.as_ref() == Some(&turn.end) {
         return Ok(false);
     }
-    let check = t
+    // A session without a rest check, and a turn, are never judged at rest.
+    let Some(check) = t
         .spec
         .step(&attempt.node)
-        .and_then(|step| step.then().first())
+        .and_then(|step| step.rest_check().first())
         .map(|check| check.as_str().to_owned())
-        .ok_or_else(|| {
-            WorkflowErr::Refused(format!(
-                "agent.{}.then: an until step requires a then check",
-                attempt.node
-            ))
-        })?;
+    else {
+        return Ok(false);
+    };
     attempt.judged = Some(turn.end.clone());
     t.record.held = Some(HeldSession {
-        attempt: t.record.attempt.take().expect("observed until attempt"),
+        attempt: t
+            .record
+            .attempt
+            .take()
+            .expect("observed rest-checked attempt"),
         entered_at: t.record.entered_at,
         verdict: None,
     });
@@ -103,7 +105,7 @@ pub(super) fn prepare(
     let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
         Some((AttemptOutcome::Canceled, EndCause::Deadline, "deadline"))
     } else {
-        agent::observed_outcome(&observed, StepLifecycle::Until, false)
+        agent::observed_outcome(&observed, false)
             .map(|outcome| (outcome, EndCause::Lifecycle, outcome_reason(outcome)))
     };
     if let Some((outcome, cause, reason)) = ending {
@@ -229,7 +231,7 @@ pub(super) fn prepare(
     if t.spec
         .step(&held.attempt.node)
         .expect("held step")
-        .then()
+        .rest_check()
         .contains(&target)
     {
         if eligible(&observed).is_none() {

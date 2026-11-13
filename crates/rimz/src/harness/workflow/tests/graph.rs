@@ -1,7 +1,8 @@
 use super::*;
 use serde_json::{Value, json};
 
-/// A `gate` check and a `work` step, each in the kind table its body's runner names.
+/// A `gate` check and a `work` step, each in the kind table its body's runner names; an agent
+/// step that names no lifecycle is a turn.
 fn spec(check: &str, step: &str) -> Definition {
     let has = |body: &str, key: &str| {
         body.lines()
@@ -20,8 +21,13 @@ fn spec(check: &str, step: &str) -> Definition {
         .into_iter()
         .find(|(key, _)| has(step, key))
         .map_or("command", |(_, kind)| kind);
+    let lifecycle = if step_kind == "agent" && !has(step, "lifecycle") {
+        "lifecycle='turn'\n"
+    } else {
+        ""
+    };
     toml::from_str(&format!(
-        "[workflow]\nscope='worktree'\nstart='gate'\n[{check_kind}.gate]\n{check}\n[{step_kind}.work]\n{step}\n"
+        "[workflow]\nscope='worktree'\nstart='gate'\n[{check_kind}.gate]\n{check}\n[{step_kind}.work]\n{lifecycle}{step}\n"
     ))
     .unwrap()
 }
@@ -59,7 +65,7 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
             ("on-break={agent='claude'}", "@break", "on-break"),
         ] {
             let text = format!(
-                "[workflow]\nscope='worktree'\nstart='gate'\n{on_break}\n[{kind}.gate]\n{check}\n[agent.work]\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
+                "[workflow]\nscope='worktree'\nstart='gate'\n{on_break}\n[{kind}.gate]\n{check}\n[agent.work]\nlifecycle='turn'\nagent='claude'\nprompt-file='work.md'\nthen='@done'\nmax-visits=1\n"
             );
             let spec = super::super::spec::parse(&text).unwrap();
             for (node, outcome) in [
@@ -91,7 +97,7 @@ fn on_break_resolves_failure_edges_and_keeps_explicit_routes() {
             if target == "@break" {
                 assert_eq!(
                     spec.authored().steps["@break"].lifecycle(),
-                    crate::store::workflow::StepLifecycle::Stay
+                    crate::store::workflow::StepLifecycle::Session
                 );
                 assert_eq!(
                     spec.target("@break", "invalid")
@@ -371,13 +377,16 @@ on={rule='triage',none='@done'}
 run='true'
 on={rule='triage',none='@done'}
 [agent.sweep]
+lifecycle='turn'
 agent='claude'
 then='watch'
 [agent.fix]
+lifecycle='turn'
 agent='claude'
 then='watch'
 max-visits=4
 [agent.triage]
+lifecycle='turn'
 agent='claude'
 then='ruled'
 max-visits=2
@@ -399,16 +408,19 @@ on={build='build',plan='plan',report='report',halt='@failed'}
 run='true'
 on={complete='@done',halted='@failed',missing='report'}
 [agent.plan]
+lifecycle='turn'
 agent='claude'
 then='evidence'
 max-visits=20
 on.cap='report'
 [agent.build]
+lifecycle='turn'
 agent='claude'
 then='evidence'
 max-visits=80
 on.cap='report'
 [agent.report]
+lifecycle='turn'
 agent='claude'
 then='reported'
 max-visits=2
@@ -441,7 +453,7 @@ fn walks_match_land_ralph_and_fix_tests_without_hanging_forward_returns() {
             ],
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='tests'\n[script.tests]\nrun='true'\non={pass='@done',fail='fix'}\n[agent.fix]\nagent='claude'\nthen='tests'\nmax-visits=3",
+            "[workflow]\nscope='worktree'\nstart='tests'\n[script.tests]\nrun='true'\non={pass='@done',fail='fix'}\n[agent.fix]\nlifecycle='turn'\nagent='claude'\nthen='tests'\nmax-visits=3",
             vec![("tests", None), ("fix", Some("tests"))],
         ),
     ] {
@@ -479,6 +491,7 @@ run='true'
 [script.orphan]
 run='true'
 [agent.work]
+lifecycle='turn'
 agent='claude'
 then='start'
 on.cap='capped'

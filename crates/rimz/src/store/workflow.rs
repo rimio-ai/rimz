@@ -14,7 +14,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The workflow language version, which is also the run record's: a sealed definition means
 /// what the binary of this version reads it to mean, so a change to what one means raises it,
 /// and `load` refuses a record of any other version before decoding it.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -341,8 +341,7 @@ fn is_zero(value: &u64) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum StepLifecycle {
     Turn,
-    Stay,
-    Until,
+    Session,
 }
 
 fn turn_lifecycle() -> StepLifecycle {
@@ -665,7 +664,7 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
-    /// The agent session still owned by this run, including an until session under a check.
+    /// The agent session still owned by this run, including a session held under its rest check.
     pub fn session_attempt(&self) -> Option<&LiveAttempt> {
         self.held
             .as_ref()
@@ -894,7 +893,7 @@ pub enum JournalEvent {
     Wake {
         signal: String,
     },
-    /// A signal a staying step subscribes to, queued for its leader as `message`.
+    /// A signal a session step subscribes to, queued for its leader as `message`.
     Signal {
         signal: String,
         message: MessageId,

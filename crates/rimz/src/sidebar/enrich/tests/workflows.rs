@@ -235,7 +235,7 @@ fn a_loop_task_runs_step_agent_stays_an_ordinary_card_in_its_lane() {
     let (id, mut record) = live_run(&state, dir.path(), &checkout, now);
     record["node"] = "work".into();
     record["attempt"] = serde_json::json!({
-        "kind":"agent", "lifecycle":"until", "seq":1, "node":"work",
+        "kind":"agent", "lifecycle":"session", "seq":1, "node":"work",
         "started_at":now, "host":{"pid":1, "start":null}
     });
     let mut agent = codex_root("step", &worktree, "terminal_1");

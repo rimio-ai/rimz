@@ -67,7 +67,7 @@ fn notice(room: &Room, id: &str) -> (Value, rimz::store::message::MessageRecord)
 
 #[test]
 fn a_message_step_queues_one_wait_notice_for_a_busy_target_and_moves_on() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     let (agent, ..) = leader(&room, true);
     let id = tell(&room, "@codex");
     let (value, record) = notice(&room, &id);
@@ -111,7 +111,7 @@ fn a_message_step_queues_one_wait_notice_for_a_busy_target_and_moves_on() {
 
 #[test]
 fn a_message_step_to_no_agent_follows_undelivered() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     let id = tell(&room, "@nobody");
     let value = until(&room.env, &id, |value| value["record"]["state"] == "failed");
     let attempts = events(&value, "attempt");
@@ -130,7 +130,7 @@ fn a_message_step_to_no_agent_follows_undelivered() {
 
 #[test]
 fn a_pinned_message_step_delivers_only_to_its_session() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     let (agent, ..) = leader(&room, true);
     let id = tell_with(&room, "@codex", &format!("session='{agent}'\n"));
     let (value, record) = notice(&room, &id);
@@ -152,7 +152,7 @@ fn a_pinned_message_step_delivers_only_to_its_session() {
 
 #[test]
 fn a_message_step_attempts_a_resting_target_now() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     leader(&room, false);
     let id = tell(&room, "@codex");
     let (value, record) = notice(&room, &id);
@@ -284,7 +284,7 @@ fn held(
 fn a_lost_message_host_resends_the_same_notice_once() {
     use std::time::{Duration, Instant};
 
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     let (agent, ..) = leader(&room, true);
     let (mut run, gate, id, queued) = held(&room);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -348,7 +348,7 @@ fn a_lost_message_host_resends_the_same_notice_once() {
 
 #[test]
 fn a_cancel_while_the_host_is_held_retires_the_queued_notice() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     leader(&room, true);
     let (mut run, mut gate, id, queued) = held(&room);
     let host = show(&room.env, &id)["record"]["attempt"]["host"]["pid"]
@@ -385,7 +385,7 @@ fn a_cancel_while_the_host_is_held_retires_the_queued_notice() {
 
 #[test]
 fn node_view_and_definition_rail_name_a_message_step_target() {
-    let room = Room::new("lifecycle='stay'\n");
+    let room = Room::new("lifecycle='session'\n");
     let dir = room.env.rimz_home().join("workflows/tell");
     fs::create_dir_all(&dir).unwrap();
     fs::write(

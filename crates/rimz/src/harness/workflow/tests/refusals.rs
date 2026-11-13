@@ -2,7 +2,7 @@ use super::*;
 
 const SIMPLE: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
 const CONDITION: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='pick'\n[condition.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
-const UNTIL_PICK: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='until'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
+const SESSION_PICK: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nrest-check=['pick']\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
 /// One acyclic graph with a node of every kind, each written in full; `then='after'` on the
 /// agent is where a case adds a field.
 const KINDS: &str = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n\
@@ -179,7 +179,11 @@ fn a_field_of_another_kind_refuses_at_its_path() {
             "prompt-file='prompts/build.md'",
             "command.run.prompt-file",
         ),
-        ("[command.run]", "lifecycle='stay'", "command.run.lifecycle"),
+        (
+            "[command.run]",
+            "lifecycle='session'",
+            "command.run.lifecycle",
+        ),
         ("[command.run]", "keep=true", "command.run.keep"),
         ("[command.run]", "notes=true", "command.run.notes"),
         (
@@ -223,7 +227,7 @@ fn a_field_of_another_kind_refuses_at_its_path() {
         ("[message.tell]", "timeout='1h'", "message.tell.timeout"),
         (
             "[message.tell]",
-            "lifecycle='stay'",
+            "lifecycle='session'",
             "message.tell.lifecycle",
         ),
         ("[message.tell]", "keep=true", "message.tell.keep"),
@@ -277,7 +281,11 @@ fn a_field_of_another_kind_refuses_at_its_path() {
         ("[script.after]", "keep=true", "script.after.keep"),
         ("[script.after]", "when=['pr=merged']", "script.after.when"),
         ("[judge.judge]", "run='true'", "judge.judge.run"),
-        ("[judge.judge]", "lifecycle='stay'", "judge.judge.lifecycle"),
+        (
+            "[judge.judge]",
+            "lifecycle='session'",
+            "judge.judge.lifecycle",
+        ),
         (
             "[judge.judge]",
             "admission={occupancy='share'}",
@@ -538,18 +546,6 @@ fn invalid_optional_values_refuse_at_their_path() {
             "sleep.nap.for",
         ),
     ];
-    for (lifecycle, field, path) in [
-        ("stay", "timeout='1h'", "agent.build.timeout"),
-        ("stay", "on.asked='@done'", "agent.build.on.asked"),
-        ("until", "on.asked='@done'", "agent.build.on.asked"),
-        ("stay", "keep=true", "agent.build.keep"),
-    ] {
-        cases.push((
-            with("[agent.build]", field)
-                .replace("lifecycle='turn'", &format!("lifecycle='{lifecycle}'")),
-            path,
-        ));
-    }
     for wake in [
         "'bad selector'",
         "'ci.finished'",
@@ -566,7 +562,7 @@ fn invalid_optional_values_refuse_at_their_path() {
         }
         cases.push((
             with("[agent.build]", &format!("subscribe=[{wake}]"))
-                .replace("lifecycle='turn'", "lifecycle='stay'"),
+                .replace("lifecycle='turn'", "lifecycle='session'"),
             "agent.build.subscribe.0",
         ));
     }
@@ -630,7 +626,7 @@ fn invalid_optional_values_refuse_at_their_path() {
 #[test]
 fn a_name_two_kinds_share_refuses() {
     let text = format!(
-        "{SIMPLE}[agent.pick]\nagent='claude'\nprompt-file='prompts/build.md'\nthen='@done'\n"
+        "{SIMPLE}[agent.pick]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompts/build.md'\nthen='@done'\n"
     );
     let (_home, dir) = fixture();
     fs::write(dir.join("workflow.toml"), text).unwrap();
@@ -723,7 +719,7 @@ fn only_agents_ask_refuses_human_targets_on_every_route() {
         (
             "agent.work.on.asked",
             format!(
-                "{SIMPLE}[agent.work]\nagent='claude'\nprompt-file='prompts/build.md'\nthen='pick'\non.asked='@user'\n"
+                "{SIMPLE}[agent.work]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompts/build.md'\nthen='pick'\non.asked='@user'\n"
             ),
         ),
         (
@@ -857,60 +853,101 @@ fn judge_summary_is_required_and_one_line() {
 }
 
 #[test]
-fn keep_is_taken_on_turn_and_until_agents() {
-    for (lifecycle, keep) in [("turn", "true"), ("until", "false")] {
-        let text = UNTIL_PICK.replace(
-            "lifecycle='until'",
-            &format!("lifecycle='{lifecycle}'\nkeep={keep}"),
-        );
-        assert_eq!(errors(&text), Vec::<String>::new(), "{lifecycle}");
-        let spec = loaded(&text).unwrap();
-        assert_eq!(spec.authored().steps["build"].keep, Some(keep == "true"));
+fn keep_timeout_and_asked_are_taken_on_both_lifecycles() {
+    let lifecycles = [
+        "lifecycle='turn'",
+        "lifecycle='session'",
+        "lifecycle='session'\nrest-check=['pick']",
+    ];
+    for lifecycle in lifecycles {
+        for keep in ["true", "false"] {
+            let text = SESSION_PICK.replace(
+                "lifecycle='session'\nrest-check=['pick']",
+                &format!("{lifecycle}\nkeep={keep}\ntimeout='1m'\non.asked='pick'"),
+            );
+            assert_eq!(errors(&text), Vec::<String>::new(), "{text}");
+            let spec = loaded(&text).unwrap();
+            assert_eq!(spec.authored().steps["build"].keep, Some(keep == "true"));
+        }
     }
     assert_eq!(
-        refusal(&UNTIL_PICK.replace("lifecycle='until'", "lifecycle='until'\nkeep='yes'")).0,
+        refusal(&SESSION_PICK.replace("then='pick'", "then='pick'\nkeep='yes'")).0,
         "agent.build.keep"
     );
 }
 
 #[test]
-fn omitted_lifecycle_bans_sleep_and_keeps_until_rules() {
-    let text = UNTIL_PICK.replace("lifecycle='until'\n", "");
-    let sleep = text.replace("[script.pick]", "[sleep.pick]").replace(
-        "run='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'",
-        "sleep='1m'\nthen='@done'",
-    );
-    let (_home, dir) = fixture();
-    fs::write(dir.join("workflow.toml"), sleep).unwrap();
-    let report = validate(&dir, &LoadedDefinitions::default(), None);
-    assert!(
-        report.errors.iter().any(|issue| {
-            issue.path == "agent.build.then" && issue.message.contains("lifecycle = \"turn\"")
-        }),
-        "{report:?}"
-    );
+fn an_agent_names_turn_or_session_and_a_session_alone_takes_rest_check_and_subscribe() {
+    let named = SESSION_PICK.replace("lifecycle='session'\n", "");
+    for text in [
+        named.clone(),
+        named.replace("[agent.build]", "[agent.build]\nlifecycle='stay'"),
+        named.replace("[agent.build]", "[agent.build]\nlifecycle='until'"),
+    ] {
+        assert_eq!(refusal(&text).0, "agent.build.lifecycle", "{text}");
+    }
     assert_eq!(
-        errors(&text.replace("max-visits=3", "max-visits=3\ntimeout='1m'")),
-        Vec::<String>::new()
+        refusal(&SESSION_PICK.replace("then='pick'", "then=['pick']")).0,
+        "agent.build.then"
     );
+    let session = KINDS.replace("lifecycle='turn'", "lifecycle='session'");
+    let actual = [
+        with("[agent.build]", "rest-check=['after']"),
+        with("[agent.build]", "subscribe=['review.ready']"),
+        session.replace("then='after'", "then='after'\nrest-check=[]"),
+        session.replace("then='after'", "then='after'\nrest-check=['run']"),
+        session.replace("then='after'", "then='after'\nrest-check=['nap']"),
+        session.replace("then='after'", "then='after'\nrest-check=['@done']"),
+        session.replace("then='after'", "then='after'\nrest-check=['missing']"),
+        session.replace(
+            "then='after'",
+            "then='after'\nrest-check=['run','after','nap']",
+        ),
+        session.replace("then='after'", "then='after'\nrest-check=['after','gate']"),
+        session.replace("then='after'", "then='after'\nsubscribe=['review.ready']"),
+    ]
+    .map(|text| errors(&text));
+    let rest = vec!["agent.build.rest-check".to_owned()];
+    assert_eq!(
+        actual,
+        [
+            rest.clone(),
+            vec!["agent.build.subscribe".to_owned()],
+            rest.clone(),
+            rest.clone(),
+            rest.clone(),
+            rest.clone(),
+            rest.clone(),
+            [rest.clone(), rest].concat(),
+            vec![],
+            vec![],
+        ]
+    );
+}
+
+#[test]
+fn a_rest_check_is_an_edge_the_cycle_bound_and_the_walk_see() {
+    let text = SESSION_PICK.replace("then='pick'\nmax-visits=3", "then='@done'");
     let (_home, dir) = fixture();
-    fs::write(
-        dir.join("workflow.toml"),
-        text.replace("max-visits=3", "max-visits=3\non.asked='pick'"),
-    )
-    .unwrap();
+    fs::write(dir.join("workflow.toml"), &text).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert_eq!(
         report
             .errors
             .iter()
-            .map(|issue| (
-                issue.path.as_str(),
-                issue.message.contains("lifecycle = \"turn\"")
-            ))
+            .map(|issue| (issue.path.as_str(), issue.message.as_str()))
             .collect::<Vec<_>>(),
-        [("agent.build.on.asked", true)],
+        [(
+            "agent.build",
+            "example: agent.build: cycle through steps has no max-visits bound"
+        )],
         "{report:?}"
+    );
+    let bounded = text.replace("then='@done'", "then='@done'\nmax-visits=3");
+    assert_eq!(errors(&bounded), Vec::<String>::new());
+    assert_eq!(
+        loaded(&bounded).unwrap().walk().unreachable,
+        Vec::<String>::new()
     );
 }
 
@@ -922,7 +959,7 @@ fn route_tables_refuse_at_their_route() {
         "{to='@done',default=true}",
     ] {
         let error =
-            loaded(&UNTIL_PICK.replace("on.ok='@done'", &format!("on.ok={route}"))).unwrap_err();
+            loaded(&SESSION_PICK.replace("on.ok='@done'", &format!("on.ok={route}"))).unwrap_err();
         let SpecErr::Toml { path, source } = error else {
             panic!("{error}")
         };
@@ -957,7 +994,7 @@ fn syntax_errors_keep_line_column_and_excerpt() {
 
 #[test]
 fn required_fields_refuse_at_the_exact_dotted_path() {
-    let stay = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='stay'\nthen='@done'\n";
+    let session = "[workflow]\non-break='@failed'\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nthen='@done'\n";
     let actual = [
         (SIMPLE.replace("scope='worktree'\n", ""), "workflow.scope"),
         (SIMPLE.replace("start='pick'\n", ""), "workflow.start"),
@@ -1027,11 +1064,11 @@ fn required_fields_refuse_at_the_exact_dotted_path() {
             "script.pick.wake.1.signal",
         ),
         (
-            format!("{stay}subscribe=[{{match={{path='*'}}}}]\n"),
+            format!("{session}subscribe=[{{match={{path='*'}}}}]\n"),
             "agent.build.subscribe.0.signal",
         ),
         (
-            format!("{stay}subscribe=['review.ready',{{signal=5,match={{path='*'}}}}]\n"),
+            format!("{session}subscribe=['review.ready',{{signal=5,match={{path='*'}}}}]\n"),
             "agent.build.subscribe.1.signal",
         ),
     ]

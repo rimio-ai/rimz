@@ -1454,7 +1454,7 @@ fn rebirth_cancels_an_unregistered_workflow_run_outside_the_roster() {
             .unwrap()
             .status,
         RunStatus::Canceled,
-        "rebirth must end a staying attempt even before its leader registers"
+        "rebirth must end a session attempt even before its leader registers"
     );
 }
 

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn launch_notes_describe_each_check_kind_and_the_until_pushback() {
+fn launch_notes_describe_each_check_kind_and_the_rest_check_pushback() {
     let mut actual = Vec::new();
     for (definition, expected) in [
         ("run='sh check.sh'", "sh check.sh"),
@@ -36,7 +36,7 @@ fn launch_notes_describe_each_check_kind_and_the_until_pushback() {
             "done='@done',pending='build',unknown='build'"
         };
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[{kind}.watch]\non={{{routes}}}\n{definition}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nrest-check=['watch']\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[{kind}.watch]\non={{{routes}}}\n{definition}\n"
         );
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();
@@ -69,8 +69,8 @@ fn launch_notes_describe_each_check_kind_and_the_until_pushback() {
 }
 
 #[test]
-fn sealed_judge_without_summary_uses_a_safe_note_and_lists_stay_ordered() {
-    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen=['cheap','review']\n[script.cheap]\nrun='true'\non.pass='review'\n[judge.review]\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
+fn sealed_judge_without_summary_uses_a_safe_note_and_rest_checks_stay_ordered() {
+    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompt.md'\nrest-check=['cheap','review']\nthen='cheap'\n[script.cheap]\nrun='true'\non.pass='review'\n[judge.review]\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
     let (_dir, state, record) = setup(definition);
     let paths = state.workflow(&record.id);
     let spec = crate::harness::workflow::load(&paths.home).unwrap();
