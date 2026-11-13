@@ -228,14 +228,15 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
             .unwrap();
     };
     lifecycle(LifecycleSignal::Registered);
-    let receipt = success(
-        room.command(&["workflow", "run", "review", "--prompt", "Review this"])
-            .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
-            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "60000")
-            .output()
-            .unwrap(),
-    );
-    let id = receipt.lines().next().unwrap().to_owned();
+    // The receipt waits for the launch, which waits on the stopped occupant.
+    let start = room
+        .command(&["workflow", "run", "review", "--prompt", "Review this"])
+        .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "60000")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
     let log = room.env.project_root.join("spawn.log");
     let deadline = Instant::now() + Duration::from_secs(60);
     while !fs::read_to_string(&log).is_ok_and(|trace| trace.contains("close-pane")) {
@@ -249,6 +250,8 @@ fn takeover_launches_over_an_occupant_that_ends_after_its_close_fails() {
     lifecycle(LifecycleSignal::Ended);
     owner.kill().unwrap();
     owner.wait().unwrap();
+    let receipt = success(start.wait_with_output().unwrap());
+    let id = receipt.lines().next().unwrap().to_owned();
     let run = room.attempt(&id);
     let value = until(&room.env, &id, |v| {
         v["record"]["attempt"]["run"].is_object()

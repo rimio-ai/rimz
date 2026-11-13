@@ -3,8 +3,8 @@
 //! Blocking runs keep a ticket; condition fires try once and leave none when held.
 //! Machine turns release on a provider report or ceiling. A workflow-scoped turn
 //! releases at its launch report, when the run record already counts the attempt,
-//! independently of machine scope. Manual limited starts claim without waiting and
-//! stamp stagger at launch.
+//! independently of machine scope. Skipped starts claim without waiting, carrying each hold
+//! they met, and stamp stagger at launch.
 //! A later scanner releases each scope, so the launching process never lingers.
 //! Admission samples limits under the queue lock; capacity scripts run off-lock.
 //! Inspection reads the same limits without taking a turn.
@@ -335,6 +335,9 @@ pub(in crate::harness) struct Run {
     pub(in crate::harness) gives_up_ms: Option<u64>,
     pub(in crate::harness) machine_gated: bool,
     pub(in crate::harness) limits: Option<WorkflowStart>,
+    /// The start was given `capacity = "skip"`: it launches past every hold it meets and
+    /// carries each one to its attempt.
+    pub(in crate::harness) skip: bool,
 }
 
 impl Run {
@@ -374,15 +377,17 @@ pub(super) fn try_admit_in(
     if !run.machine_gated && !caps(config) && run.limits.is_none() {
         return Ok(Attempt::Open);
     }
+    // A skipped start meets an unreadable reading in its pass, which records it.
     if run.machine_gated
+        && !run.skip
         && let Some(problem) = unreadable(host.as_ref(), config)
     {
         return Err(ThrottleError::Unreadable(problem));
     }
-    let turn = {
+    let (turn, mut passed) = {
         let _lock = WorkspaceLock::acquire_with_timeout(&host.queue_lock(), admission_lock_wait())?;
         let now = host.now_ms();
-        let started_past_limit = match pass(host.as_ref(), config, run, None, now, &mut None)? {
+        let passed = match pass(host.as_ref(), config, run, None, now, &mut None)? {
             Pass::Admitted(note) => note,
             Pass::Held(hold) => return Ok(Attempt::Held(hold)),
         };
@@ -390,14 +395,24 @@ pub(super) fn try_admit_in(
         let mut ticket = Ticket::new(host.as_ref(), run, now);
         ticket.state = TicketState::Admitted;
         write_ticket(&path, &ticket)?;
-        Turn::new(host, path, started_past_limit)
+        (Turn::new(host, path), passed)
     };
-    match check_groups(host.as_ref(), config, run)? {
+    let checked = check_groups(host.as_ref(), config, run);
+    if run.skip {
+        let check = match checked {
+            Ok(hold) => hold.map(|hold| hold.text),
+            Err(error) => Some(error.to_string()),
+        };
+        passed = match (passed, check) {
+            (Some(passed), Some(check)) => Some(format!("{passed}; {check}")),
+            (passed, check) => passed.or(check),
+        };
+        return Ok(Attempt::Turn(turn.past(passed)));
+    }
+    match checked? {
         Some(hold) => Ok(Attempt::Held(hold)),
         // A check cut at the give-up instant answered nothing, so it grants no turn.
-        None if run.limits.as_ref().is_none_or(|start| start.may_wait)
-            && run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) =>
-        {
+        None if run.gives_up_ms.is_some_and(|until| host.now_ms() >= until) => {
             Ok(Attempt::Held(Hold {
                 kind: HoldKind::Capacity,
                 text: "wait deadline reached".to_owned(),
@@ -421,7 +436,7 @@ pub(super) fn try_admit_in(
                     return Ok(Attempt::Held(hold));
                 }
             }
-            Ok(Attempt::Turn(turn))
+            Ok(Attempt::Turn(turn.past(passed)))
         }
     }
 }
@@ -725,13 +740,21 @@ impl Turn {
         self.0.started_past_limit.as_deref()
     }
 
-    fn new(host: &Arc<dyn Host>, ticket: PathBuf, started_past_limit: Option<String>) -> Self {
+    fn new(host: &Arc<dyn Host>, ticket: PathBuf) -> Self {
         Self(Arc::new(TurnInner {
             host: Arc::clone(host),
             ticket,
-            started_past_limit,
+            started_past_limit: None,
             reported: AtomicBool::new(false),
         }))
+    }
+
+    /// The turn carrying the holds its skipped start launched past.
+    fn past(mut self, started_past_limit: Option<String>) -> Self {
+        // Admission built this turn and has not handed out a clone yet.
+        let inner = Arc::get_mut(&mut self.0).expect("an unshared new turn");
+        inner.started_past_limit = started_past_limit;
+        self
     }
 
     /// Stamp the committed launch and machine/workflow/step stagger under the queue lock.
@@ -855,8 +878,8 @@ impl Pass {
     }
 }
 
-/// One pass over the queue, under its lock. A manual admission carries the limit
-/// it skipped. Without `mine`, inspect the tail without changing it.
+/// One pass over the queue, under its lock. A skipped start is admitted carrying every hold
+/// it would have waited at. Without `mine`, inspect the tail without changing it.
 fn pass(
     host: &dyn Host,
     config: &ThrottleConfig,
@@ -865,18 +888,7 @@ fn pass(
     now: u64,
     blocked: &mut Option<(u64, Hold)>,
 ) -> Result<Pass> {
-    let manual = run.limits.as_ref().is_some_and(|start| !start.may_wait);
-    if manual
-        && run
-            .limits
-            .as_ref()
-            .is_some_and(|start| start.workflow_limit.is_none() && start.step_limit.is_none())
-    {
-        return Ok(Pass::Admitted(None));
-    }
-    if !manual {
-        check_group_size(config, run)?;
-    }
+    check_group_size(config, run)?;
     let ceiling = if config.check.is_some() {
         CHECK_CEILING
     } else {
@@ -884,7 +896,7 @@ fn pass(
     };
     let queue = match sweep(host, Some(ceiling), now) {
         Ok(queue) => queue,
-        Err(_) if manual => return Ok(Pass::Admitted(None)),
+        Err(error) if run.skip => return Ok(Pass::Admitted(Some(error.to_string()))),
         Err(error) => return Err(error),
     };
     let position = match mine {
@@ -898,21 +910,41 @@ fn pass(
         Some(_) => queue[position].1.clone(),
         None => Ticket::new(host, run, now),
     };
+    let in_flight = || {
+        queue
+            .iter()
+            .filter(|(path, ticket)| {
+                mine != Some(path.as_path()) && matches!(ticket.state, TicketState::Admitted)
+            })
+            .map(|(_, ticket)| ticket.agents)
+            .sum()
+    };
     // A limit hold is reported before the machine's, an in-flight turn of the
     // limited workflow included, so the waiter keeps its FIFO standing.
     let mut hold = run
         .limits
         .as_ref()
         .and_then(|start| match launching(&queue, &ticket, mine) {
-            0 => match limits::evaluate(host, start) {
-                Ok(hold) => hold,
-                Err(_) if manual => None,
-                Err(error) => Some(store_hold(error)),
-            },
+            0 => limits::evaluate(host, start).unwrap_or_else(|error| Some(store_hold(error))),
             count => Some(limits::launching(start, count)),
         });
-    if manual {
-        return Ok(Pass::Admitted(hold.map(|hold| hold.text)));
+    if run.skip {
+        let queued = queue_hold(&queue, position, &ticket).filter(|_| run.machine_gated);
+        let machine = limit_hold(host, config, run, in_flight()).unwrap_or_else(|error| {
+            Some(Hold {
+                kind: HoldKind::Store,
+                kinds: Vec::new(),
+                text: error.to_string(),
+            })
+        });
+        let passed: Vec<_> = [hold, queued, machine]
+            .into_iter()
+            .flatten()
+            .map(|hold| hold.text)
+            .collect();
+        return Ok(Pass::Admitted(
+            (!passed.is_empty()).then(|| passed.join("; ")),
+        ));
     }
     if hold.is_none() && run.machine_gated {
         hold = queue_hold(&queue, position, &ticket);
@@ -925,15 +957,7 @@ fn pass(
                 Some(hold.clone())
             }
             _ => {
-                let in_flight = queue
-                    .iter()
-                    .filter(|(path, ticket)| {
-                        mine != Some(path.as_path())
-                            && matches!(ticket.state, TicketState::Admitted)
-                    })
-                    .map(|(_, ticket)| ticket.agents)
-                    .sum();
-                let sampled = limit_hold(host, config, run, in_flight)?;
+                let sampled = limit_hold(host, config, run, in_flight())?;
                 *blocked = sampled.clone().map(|hold| (now, hold));
                 sampled
             }
@@ -1429,6 +1453,7 @@ pub fn readings(
         workspace: state.workspace_id,
         groups: Vec::new(),
         gives_up_ms: None,
+        skip: false,
     };
     readings_in(&SystemHost, &config.throttle, &run)
 }

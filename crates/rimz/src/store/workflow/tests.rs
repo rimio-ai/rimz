@@ -339,6 +339,17 @@ fn manual_origin_round_trips_and_stays_absent_unless_set() {
 }
 
 #[test]
+fn start_arguments_round_trip_and_stay_absent_at_their_defaults() {
+    let mut value = serde_json::to_value(record()).unwrap();
+    assert!(value.get("give_up").is_none() && value.get("capacity").is_none());
+    value["give_up"] = json!("2026-01-01T02:00:00Z");
+    value["capacity"] = json!("skip");
+    let started: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(started.capacity, StartCapacity::Skip);
+    assert_eq!(serde_json::to_value(started).unwrap(), value);
+}
+
+#[test]
 fn capacity_wait_round_trips_and_other_waits_omit_its_fields() {
     let wait = json!({
         "node":"build", "outcome":"capacity", "detail":"no capacity for claude",

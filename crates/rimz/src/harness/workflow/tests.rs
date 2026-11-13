@@ -11,6 +11,8 @@ pub(in crate::harness) struct FakeHost {
     pub(in crate::harness) launched: RefCell<Vec<StepLaunch>>,
     pub(in crate::harness) observed: Rc<RefCell<Observed>>,
     pub(in crate::harness) failure: RefCell<Option<LaunchFailure>>,
+    /// The start groups admission sees, in place of resolving the step's agent.
+    pub(super) groups: RefCell<Option<Vec<crate::harness::throttle::StartGroup>>>,
     /// Report the injected failure as one that started nothing.
     unstarted: Cell<bool>,
     /// Fail the launch with a host error after it opened, giving the engine no verdict.
@@ -163,6 +165,7 @@ impl FakeHost {
             on_message: RefCell::new(None),
             retired: RefCell::new(Vec::new()),
             leader_session: RefCell::new(None),
+            groups: RefCell::new(None),
         }
     }
 
@@ -366,7 +369,16 @@ impl AttemptHost for FakeHost {
         agent: &str,
         account: Option<&crate::ids::LoginName>,
     ) -> Result<Vec<crate::harness::throttle::StartGroup>, WorkflowErr> {
-        launch_groups(record, agent, account)
+        match &*self.groups.borrow() {
+            Some(groups) => Ok(groups.clone()),
+            None => launch_groups(record, agent, account),
+        }
+    }
+
+    /// The fake's launches never report to the machine's start queue, which every test
+    /// process shares, so a gated start would queue behind them.
+    fn machine_gated(&self) -> bool {
+        false
     }
 }
 

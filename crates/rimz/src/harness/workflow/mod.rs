@@ -25,8 +25,8 @@ mod validate;
 pub use definition::{Condition, Definition, Invocation, Kind, Limit, Node, Target};
 pub(crate) use engine::hears_lifecycle;
 pub use engine::{
-    DefinitionSource, InlineDefinition, WorkflowErr, advance, cancel, create, launch_groups,
-    restart, resume, wake, wake_run,
+    Advance, DefinitionSource, InlineDefinition, StartArgs, WorkflowErr, advance, cancel, create,
+    launch_groups, restart, resume, wake, wake_run,
 };
 pub(crate) use engine::{reassign_task, unacted_task_runs};
 pub use graph::{Edge, EdgeSource, Fireability, NeverReason, Walk, WalkNode};
@@ -37,7 +37,9 @@ pub use inspect::{
 pub use observe::{Cohort, detach_cohort, leader, observe, orphan, stop_cohort, without_excluded};
 pub use script::{CaseMark, CaseMarks, case_marks, condition_now, unread_reasons};
 pub(crate) use spec::parse;
-pub use spec::{Issue, LaunchOverrides, OccupancyPolicy, ScopeKind, SpecErr, load, schema};
+pub use spec::{
+    Issue, LaunchOverrides, OccupancyPolicy, ScopeKind, SpecErr, load, parse_give_up, schema,
+};
 pub use validate::{NodeRow, Validation, validate};
 
 pub struct ScopeRoots {
@@ -137,6 +139,12 @@ pub trait AttemptHost {
         agent: &str,
         account: Option<&crate::ids::LoginName>,
     ) -> Result<Vec<crate::harness::throttle::StartGroup>, WorkflowErr>;
+    /// Whether this host's starts take a turn at the machine's `[throttle]` gate. A host whose
+    /// launches never report to the machine's start queue answers no, and its starts meet the
+    /// workflow and step limits and the machine caps alone.
+    fn machine_gated(&self) -> bool {
+        true
+    }
 }
 
 pub struct Pushed {

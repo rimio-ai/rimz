@@ -111,10 +111,18 @@ fn wide_step_groups_start_under_a_step_limit_and_fail_only_a_machine_cap() {
 }
 
 #[test]
-fn restart_is_manual_for_window_and_capacity_but_still_refuses_layouts_over_a_machine_cap() {
+fn restart_waits_for_window_and_capacity_and_refuses_layouts_over_a_machine_cap() {
     let mut actual = Vec::new();
-    for (oversized, machine_cap) in [(false, false), (true, false), (true, true)] {
-        let room = Room::new("[agent.build.admission]\nwindow='5h.left>=99'\nmax-parallel=1\n");
+    for (window, oversized, machine_cap) in [
+        (true, false, false),
+        (false, false, false),
+        (false, true, false),
+        (false, true, true),
+    ] {
+        let window = if window { "window='5h.left>=99'\n" } else { "" };
+        let room = Room::new(&format!(
+            "[agent.build.admission]\n{window}max-parallel=1\n"
+        ));
         if machine_cap {
             let core = room.env.rimz_home().join("config.toml");
             let mut config = fs::read_to_string(&core).unwrap_or_default();
@@ -140,12 +148,15 @@ fn restart_is_manual_for_window_and_capacity_but_still_refuses_layouts_over_a_ma
         );
         let value = until(&room.env, record.id.as_str(), |value| {
             value["record"]["attempt"]["run"].is_object()
+                || value["record"]["wait"]["node"] == "build"
                 || value["record"]["state"] == "failed"
                 || value["record"]["state"] == "done"
         });
         actual.push((
             value["record"]["state"].as_str().unwrap().to_owned(),
-            value["record"]["wait"].is_null(),
+            value["record"]["wait"]["outcome"]
+                .as_str()
+                .map(str::to_owned),
             events(&value, "attempt").iter().any(|event| {
                 event["reason"]
                     .as_str()
@@ -156,9 +167,10 @@ fn restart_is_manual_for_window_and_capacity_but_still_refuses_layouts_over_a_ma
     assert_eq!(
         actual,
         [
-            ("active".into(), true, false),
-            ("active".into(), true, false),
-            ("failed".into(), true, true)
+            ("active".into(), Some("window".into()), false),
+            ("active".into(), Some("capacity".into()), false),
+            ("active".into(), Some("capacity".into()), false),
+            ("failed".into(), None, true)
         ]
     );
 }
@@ -238,7 +250,7 @@ fn limited_off_steps_hold_without_machine_config_and_give_up_through_capacity() 
 }
 
 #[test]
-fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
+fn skipped_limited_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
     for task in [None, Some("nightly")] {
         let room = Room::new("[agent.build.admission]\nmax-parallel=1\nstagger='2m'\n");
         let spec = room.env.rimz_home().join("workflows/review/workflow.toml");
@@ -252,7 +264,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
         .unwrap();
         let mut record = pending(&room, task);
         fill_limit(&room, &record);
-        record.manual = task.is_some();
+        record.capacity = records::StartCapacity::Skip;
         save(&room, &serde_json::to_value(&record).unwrap());
         let before = jiff::Timestamp::now().as_millisecond();
         let value = advance(&room, &record);
@@ -267,12 +279,12 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
                 .output()
                 .unwrap(),
         );
-        let notice = format!("{skipped}; started anyway: manual starts do not wait");
+        let notice = format!("{skipped}; started anyway: the run skips capacity");
         assert!(shown.contains(&notice), "{shown}");
         let stagger = room.env.rimz_home().join("loops/start-stamps.json");
         assert!(
             stagger.is_file(),
-            "manual limited launches must restart stagger: {value:#}"
+            "skipped limited launches must restart stagger: {value:#}"
         );
         let stagger: Value = serde_json::from_slice(&fs::read(stagger).unwrap()).unwrap();
         let at = stagger["workflows"]["review"]["last_launch_ms"]
@@ -286,7 +298,7 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
         let queue = tickets(&room);
         assert_eq!(queue.len(), 1, "{queue:#?}");
         assert_eq!(queue[0]["state"], "launched");
-        assert_eq!(queue[0]["machine_gated"], false);
+        assert_eq!(queue[0]["machine_gated"], true);
         let definition = success(
             room.command(&["workflow", "show", "review"])
                 .output()
@@ -324,9 +336,11 @@ fn limited_manual_starts_launch_at_a_full_cap_and_stamp_both_stagger_scopes() {
 }
 
 #[test]
-fn limited_manual_starts_under_a_clear_cap_store_and_print_no_skip() {
+fn skipped_starts_under_a_clear_cap_store_and_print_no_skip() {
     let room = Room::new("[agent.build.admission]\nmax-parallel=1\n");
-    let record = pending(&room, None);
+    let mut record = pending(&room, None);
+    record.capacity = records::StartCapacity::Skip;
+    save(&room, &serde_json::to_value(&record).unwrap());
     let value = advance(&room, &record);
     assert_eq!(value["record"]["visits"]["build"], 1, "{value:#}");
     assert!(

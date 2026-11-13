@@ -1120,6 +1120,7 @@ fn run_receipt_hint_keeps_the_started_runs_room() {
 #[test]
 fn run_receipt_preserves_id_and_directory_then_adds_the_address_hint() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let started = std::time::Instant::now();
     let text = success(
         env.rimz()
             .env("RIMZ_BIN", "/bin/true")
@@ -1127,7 +1128,13 @@ fn run_receipt_preserves_id_and_directory_then_adds_the_address_hint() {
             .output()
             .unwrap(),
     );
+    // An advance that exits without deciding returns the receipt at once, not at its bound.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{text}"
+    );
     let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "{text}");
     assert!(
         lines[0].parse::<rimz::ids::WorkflowRunId>().is_ok(),
         "{text}"
