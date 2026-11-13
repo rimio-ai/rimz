@@ -85,6 +85,7 @@ struct Dashboard<'a> {
     width: usize,
     folded_footer: Option<super::chrome::FooterParts>,
     logo_reserve: Option<crate::sidebar_pane::pixel::logo::LogoReserve>,
+    redeem_breath: Option<f32>,
 }
 
 impl<'a> Dashboard<'a> {
@@ -99,6 +100,7 @@ impl<'a> Dashboard<'a> {
             width: 54,
             folded_footer: None,
             logo_reserve: None,
+            redeem_breath: None,
         }
     }
 
@@ -123,6 +125,11 @@ impl<'a> Dashboard<'a> {
 
     fn width(mut self, width: usize) -> Self {
         self.width = width;
+        self
+    }
+
+    fn redeem_breath(mut self, amount: Option<f32>) -> Self {
+        self.redeem_breath = amount;
         self
     }
 
@@ -170,6 +177,7 @@ impl<'a> Dashboard<'a> {
             width: self.width,
             zones: &crate::config::BudgetBarConfig::default(),
             now: fixed_now(),
+            redeem_breath: self.redeem_breath,
             pixels,
             logo_reserve: self.logo_reserve,
         })

@@ -463,6 +463,9 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) zones: &'a BudgetBarConfig,
     pub(in crate::sidebar_pane::render) now: Timestamp,
+    /// Where the redeem-now breath sits on the calm ramp this frame, or `None`
+    /// while it holds still.
+    pub(in crate::sidebar_pane::render) redeem_breath: Option<f32>,
     /// The frame's meter images: lent, every budget bar draws in pixels.
     pub(in crate::sidebar_pane::render) pixels: Option<&'a mut MeterPixels>,
     /// A frame without image ids on a pane that draws logos once it holds a
@@ -768,14 +771,15 @@ fn provider_block_lines(
         .then(|| block_logo(context, panel, detail_rows))
         .flatten();
     let crest = art_crest_row(panel, rights.len()).filter(|_| show_art && logo.is_none());
+    let marker = reset_header_spans(context.theme, panel, context.now, context.redeem_breath);
     let mut lines = vec![provider_header_line(
         context.theme,
         panel,
+        marker,
         width,
         context.mode.tabbed(),
         layout.inline_art(),
         crest,
-        context.now,
     )];
     if context.mode == DashboardMode::Stacked && layout == ProviderLayout::Wide {
         // Wide stacked blocks keep the historical identity/body breathing room.
@@ -1013,13 +1017,12 @@ const RAIL_STUB: usize = 2;
 fn provider_header_line(
     theme: &Theme,
     panel: &SidebarProviderPanel,
+    ResetMarker { marker, far_expiry }: ResetMarker,
     width: usize,
     tabbed: bool,
     inline_art: bool,
     crest: Option<usize>,
-    now: Timestamp,
 ) -> Line<'static> {
-    let ResetMarker { marker, far_expiry } = reset_header_spans(theme, panel, now);
     let right = |expiry: &[Span<'static>]| {
         let mut right = marker.clone();
         right.extend_from_slice(expiry);
@@ -1107,7 +1110,14 @@ struct ResetMarker {
 /// ticket the user) and its tone and weight say whether now is a good time.
 /// The soonest expiry rides along at any distance, muted from a week out, then
 /// heating while the user has to act and calm while auto-redeem handles it.
-fn reset_header_spans(theme: &Theme, panel: &SidebarProviderPanel, now: Timestamp) -> ResetMarker {
+/// Only `NowWaiting` moves: its glyph alone follows `breath` along the calm
+/// ramp, bold held, so the count and expiry read the state at any instant.
+fn reset_header_spans(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    now: Timestamp,
+    breath: Option<f32>,
+) -> ResetMarker {
     let mut marker = ResetMarker {
         marker: Vec::new(),
         far_expiry: Vec::new(),
@@ -1131,8 +1141,12 @@ fn reset_header_spans(theme: &Theme, panel: &SidebarProviderPanel, now: Timestam
             theme.good(Modifier::empty()),
             theme.body(),
         ),
-        Some(RedeemForecast::Now | RedeemForecast::NowWaiting) => {
-            (GlyphRole::MeterRedeemManual, lit, lit)
+        Some(RedeemForecast::Now) => (GlyphRole::MeterRedeemManual, lit, lit),
+        Some(RedeemForecast::NowWaiting) => {
+            let glyph = breath.map_or(lit, |amount| {
+                theme.style(theme.calm_tone(amount), Modifier::BOLD)
+            });
+            (GlyphRole::MeterRedeemManual, glyph, lit)
         }
         Some(RedeemForecast::Manual) | None => {
             (GlyphRole::MeterRedeemManual, theme.body(), theme.body())

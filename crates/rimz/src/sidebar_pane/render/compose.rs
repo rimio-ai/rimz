@@ -738,6 +738,12 @@ fn dashboard_chrome(
         width: inner,
         zones: &snapshot.theme.display.budget_bar,
         now: snapshot.now,
+        redeem_breath: theme.animations.redeem_breathes().then(|| {
+            super::animation::redeem_breath_amount(
+                view.cosmetic_phase.unwrap_or(view.animation_phase),
+                snapshot.theme.display.resolved_refresh_ms(),
+            )
+        }),
         pixels,
         logo_reserve: ui.logo_reserve,
     });

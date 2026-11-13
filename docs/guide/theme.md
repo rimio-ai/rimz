@@ -202,7 +202,7 @@ unread = "shimmer"   # or "bright", "blink"
 | `bright` | a constant bright, bold crest, no motion |
 | `blink` | a hard two-pole brightness toggle, quickening with age |
 
-The moving signal is reserved for the one row that most needs you, the oldest unanswered `waiting` or `failed`. Every other unread row, an unread `✓` included, settles to the steady `bright` crest, so a single pane is the only thing moving.
+The moving signal is reserved for the one row that most needs you, the oldest unanswered `waiting` or `failed`. Every other unread row, an unread `✓` included, settles to the steady `bright` crest, so a single pane is the only thing moving. The one exception outside the cards is a provider block's reset-credit marker, which breathes while an agent on that account is stopped on a limit and redeeming a credit is worth it ([the sidebar reference](../interface/sidebar.md#the-provider-dashboard)).
 
 An unread card also rests on a soft wash, the selection blue lifted a step, the way a mail inbox shades an unread line. The wash never moves and it survives every color depth, dropping only under `NO_COLOR`. Setting `effect = "static"` on `waiting`, `failed`, or `success` overrides the `unread` choice for that role and holds the row at a constant bold tone.
 

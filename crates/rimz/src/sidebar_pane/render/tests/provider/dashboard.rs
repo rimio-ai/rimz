@@ -857,12 +857,13 @@ fn header_span_style(
         .map(|span| span.style)
 }
 
-/// The marker says who redeems and when it is worth it, and never moves: the
-/// dashboard takes no animation phase, and each forecast keeps one glyph and
-/// one tone for glyph and count, even beside a spent window. A panel with no
-/// forecast draws as the user's at rest.
+/// The marker says who redeems and when it is worth it, one glyph and one tone
+/// for glyph and count per forecast, even beside a spent window. A panel with
+/// no forecast draws as the user's at rest. Only `NowWaiting` moves: its glyph
+/// alone breathes along the calm ramp at the frame's breath amount, bold held,
+/// while every other state and the count ignore it.
 #[test]
-fn codex_reset_marker_reads_the_forecast_without_motion() {
+fn reset_marker_breathes_only_while_an_agent_waits_on_a_limit() {
     use crate::store::snapshot::RedeemForecast;
     let theme = Theme::fixed(false);
     let lit = theme.good(Modifier::BOLD);
@@ -896,16 +897,31 @@ fn codex_reset_marker_reads_the_forecast_without_motion() {
         (Some(RedeemForecast::NowWaiting), "▬", lit, lit),
     ] {
         let panel = codex_credit_panel(forecast, 36);
-        assert_eq!(
-            header_span_style(&theme, &panel, glyph),
-            Some(glyph_style),
-            "{forecast:?} shows a steady {glyph}"
-        );
-        assert_eq!(
-            header_span_style(&theme, &panel, " 2"),
-            Some(count_style),
-            "{forecast:?} count tone"
-        );
+        for breath in [None, Some(1.0), Some(0.25)] {
+            let breathing = breath.filter(|_| forecast == Some(RedeemForecast::NowWaiting));
+            let expected = breathing.map_or(glyph_style, |amount| {
+                theme.style(theme.calm_tone(amount), Modifier::BOLD)
+            });
+            let style = |content| {
+                Dashboard::stacked(&theme, std::slice::from_ref(&panel))
+                    .redeem_breath(breath)
+                    .lines()
+                    .into_iter()
+                    .flat_map(|line| line.spans)
+                    .find(|span| span.content.as_ref() == content)
+                    .map(|span| span.style)
+            };
+            assert_eq!(
+                style(glyph),
+                Some(expected),
+                "{forecast:?} {breath:?} glyph"
+            );
+            assert_eq!(
+                style(" 2"),
+                Some(count_style),
+                "{forecast:?} {breath:?} count"
+            );
+        }
     }
 }
 

@@ -82,7 +82,10 @@ impl Theme {
     fn assemble(no_color: bool, depth: ColorDepth, theme: &ThemeConfig) -> Self {
         let palette = Palette::resolve(theme, depth);
         let glyphs = GlyphSet::resolve(theme);
-        let animations = ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette);
+        let mut animations = ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette);
+        if no_color {
+            animations = animations.without_color();
+        }
         Self {
             no_color,
             depth,

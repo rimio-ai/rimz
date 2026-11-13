@@ -901,6 +901,41 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         AnimationCadence::None,
         "a reset credit beside a spent window is a still marker in a quiet room"
     );
+    {
+        use crate::store::snapshot::RedeemForecast;
+        for forecast in [
+            RedeemForecast::Armed,
+            RedeemForecast::Holding,
+            RedeemForecast::Manual,
+            RedeemForecast::Soon,
+            RedeemForecast::Now,
+        ] {
+            reset_attention.providers[0].redeem_forecast = Some(forecast);
+            assert_eq!(
+                animation_cadence_for_test(&reset_attention),
+                AnimationCadence::None,
+                "{forecast:?} holds still in a quiet room"
+            );
+        }
+        reset_attention.providers[0].redeem_forecast = Some(RedeemForecast::NowWaiting);
+        assert_eq!(
+            animation_cadence_for_test(&reset_attention),
+            AnimationCadence::Breath,
+            "a credit worth redeeming while an agent waits on the limit keeps the pane ticking"
+        );
+        let colorless = Theme::fixed_for_theme(true, &reset_attention.theme);
+        assert_eq!(
+            animation_cadence(&reset_attention, &colorless.animations),
+            AnimationCadence::None,
+            "without colour the marker cannot breathe"
+        );
+        reset_attention.theme.animations.redeem_breath = Some(false);
+        assert_eq!(
+            animation_cadence_for_test(&reset_attention),
+            AnimationCadence::None,
+            "redeem_breath = false holds the marker still"
+        );
+    }
 
     let mut calm = snapshot_with(vec![agent(
         "claude-1",
@@ -1595,4 +1630,73 @@ fn transient_live_heads_replace_the_working_spinner() {
         first.contains('⢁'),
         "the parent shows the delegated-wait wave, not the working spinner:\n{first}"
     );
+}
+
+/// The redeem-now breath rests at full `good` at the cycle's start, eases down
+/// to the body tone and back once every three and a half seconds, and never
+/// leaves the calm ramp.
+#[test]
+fn redeem_breath_swings_from_good_to_body_once_a_cycle() {
+    use crate::sidebar_pane::render::animation::redeem_breath_amount;
+    for refresh_ms in [50, 100, 250] {
+        let period = 3_500 / u64::from(refresh_ms);
+        let samples: Vec<f32> = (0..=period)
+            .map(|phase| redeem_breath_amount(phase, refresh_ms))
+            .collect();
+        assert_eq!(samples[0], 1.0, "{refresh_ms}: starts at good");
+        assert!(
+            (samples[period as usize] - 1.0).abs() < 0.01,
+            "{refresh_ms}: one cycle returns to good"
+        );
+        let low = samples.iter().copied().fold(f32::MAX, f32::min);
+        assert!(low < 0.05, "{refresh_ms}: reaches the body tone, low {low}");
+        assert!(
+            samples.iter().all(|amount| (0.0..=1.0).contains(amount)),
+            "{refresh_ms}: stays on the ramp"
+        );
+    }
+}
+
+/// Across a frame, only a `NowWaiting` marker moves with the phase: a lit
+/// `Now` and a `NowWaiting` under `redeem_breath = false` paint the same bytes
+/// at every phase.
+#[test]
+fn only_a_waiting_redeem_marker_moves_between_frames() {
+    use crate::store::snapshot::RedeemForecast;
+    let base = snapshot_with(Vec::new());
+    let refresh_ms = base.theme.display.resolved_refresh_ms();
+    let half = 3_500 / u64::from(refresh_ms) / 2;
+    let frames = |forecast, breath: Option<bool>| {
+        let mut snapshot = base.clone();
+        let mut codex = provider_panel("codex", "Codex", 33, true, false, Some((100, 20)));
+        codex.reset_credits = Some(crate::ResetCredits {
+            count: 1,
+            soonest_expiry: None,
+            expiries: Vec::new(),
+            effect: crate::agents::RedeemEffect::RestartsWindow,
+            grants: Vec::new(),
+        });
+        codex.redeem_forecast = Some(forecast);
+        snapshot.providers = vec![codex];
+        snapshot.theme.animations.redeem_breath = breath;
+        [0, half].map(|phase| {
+            snapshot_to_bytes_with_alert_and_ui(
+                &snapshot,
+                None,
+                &ui_at_phase(phase),
+                &UiState::default(),
+                54,
+                40,
+            )
+        })
+    };
+    let [rest, deep] = frames(RedeemForecast::NowWaiting, None);
+    assert_ne!(rest, deep, "a waiting redeem marker breathes");
+    let [rest, deep] = frames(RedeemForecast::Now, None);
+    assert_eq!(
+        rest, deep,
+        "a lit marker without a waiting agent holds still"
+    );
+    let [rest, deep] = frames(RedeemForecast::NowWaiting, Some(false));
+    assert_eq!(rest, deep, "redeem_breath = false holds it still");
 }
