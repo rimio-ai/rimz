@@ -426,7 +426,8 @@ fn coalesce_drains_the_latest_fired_signal_when_runners_arrive_backwards() {
     arrive_at(&env, "a", "b", Timestamp::from_second(1).unwrap());
     lock.unlock().unwrap();
     loop_ok(&env, &["loop", "run", "busy", "--drain"]);
-    let record = last_loop_record(&env);
+    // The drained run's report follows its launch row whenever it lands, so read by position.
+    let record = read_loop_run_records(&env).swap_remove(2);
     assert_eq!(record.result, LoopRunResult::Launched);
     assert_eq!(record.absorbed, 1);
     assert_eq!(
