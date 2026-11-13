@@ -832,12 +832,12 @@ fn scoped_empty_directory_does_not_inherit_ancestor_git_protection() {
         .unwrap();
         let mounts = &plan.sandbox.unwrap().plan.mounts;
         assert!(mounts.iter().any(|mount| matches!(mount,
-            sandbox::Mount::RoBind { target, .. } if target == &project.path().join(".codex")
+            sandbox::Mount::RoBindTry { target, .. } if target == &project.path().join(".codex")
         )));
         for entry in [".git/hooks", ".git/config"] {
             assert!(
                 !mounts.iter().any(|mount| matches!(mount,
-                    sandbox::Mount::RoBind { target, .. } if target == &project.path().join(entry)
+                    sandbox::Mount::RoBindTry { target, .. } if target == &project.path().join(entry)
                 )),
                 "empty-dir launch must not protect ancestor {entry}"
             );

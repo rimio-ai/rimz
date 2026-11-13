@@ -229,11 +229,31 @@ enum DirEntryKind {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Mount {
-    Bind { source: PathBuf, target: PathBuf },
-    RoBind { source: PathBuf, target: PathBuf },
-    Tmpfs { target: PathBuf },
-    Symlink { target: PathBuf, path: PathBuf },
-    RemountRo { target: PathBuf },
+    Bind {
+        source: PathBuf,
+        target: PathBuf,
+    },
+    RoBind {
+        source: PathBuf,
+        target: PathBuf,
+    },
+    /// A read-only bind that bubblewrap skips when its source is absent at start: a protected
+    /// entry another process can remove between `plan` and the view's assembly.
+    #[serde(rename = "ro-bind")]
+    RoBindTry {
+        source: PathBuf,
+        target: PathBuf,
+    },
+    Tmpfs {
+        target: PathBuf,
+    },
+    Symlink {
+        target: PathBuf,
+        path: PathBuf,
+    },
+    RemountRo {
+        target: PathBuf,
+    },
 }
 
 pub struct MountPlan {
@@ -245,7 +265,9 @@ impl MountPlan {
         self.mounts
             .iter()
             .filter_map(|mount| match mount {
-                Mount::Bind { source, target } | Mount::RoBind { source, target }
+                Mount::Bind { source, target }
+                | Mount::RoBind { source, target }
+                | Mount::RoBindTry { source, target }
                     if source == target =>
                 {
                     Some(target.clone())
@@ -474,7 +496,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
             });
             read_only_overlays.extend([path, view.root.clone()]);
         } else {
-            mounts.push(Mount::RoBind {
+            mounts.push(Mount::RoBindTry {
                 source: path.clone(),
                 target: path,
             });
@@ -601,12 +623,14 @@ pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) 
     );
     for mount in &plan.mounts {
         match mount {
-            Mount::Bind { source, target } | Mount::RoBind { source, target } => {
+            Mount::Bind { source, target }
+            | Mount::RoBind { source, target }
+            | Mount::RoBindTry { source, target } => {
                 argv.push(
-                    if matches!(mount, Mount::Bind { .. }) {
-                        "--bind"
-                    } else {
-                        "--ro-bind"
+                    match mount {
+                        Mount::Bind { .. } => "--bind",
+                        Mount::RoBindTry { .. } => "--ro-bind-try",
+                        _ => "--ro-bind",
                     }
                     .to_owned(),
                 );
@@ -946,6 +970,10 @@ mod tests {
                     source: "/tmp/runtime".into(),
                     target: "/tmp/runtime".into(),
                 },
+                Mount::RoBindTry {
+                    source: "/project/.mcp.json".into(),
+                    target: "/project/.mcp.json".into(),
+                },
                 Mount::Tmpfs {
                     target: "/home/user/.agents/skills".into(),
                 },
@@ -978,6 +1006,9 @@ mod tests {
             "--bind",
             "/tmp/runtime",
             "/tmp/runtime",
+            "--ro-bind-try",
+            "/project/.mcp.json",
+            "/project/.mcp.json",
             "--tmpfs",
             "/home/user/.agents/skills",
             "--ro-bind",

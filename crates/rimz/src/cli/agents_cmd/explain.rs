@@ -903,7 +903,9 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
         for mount in sandbox.mounts {
             let (kind, source, target) = match mount {
                 Mount::Bind { source, target } => ("bind", Some(source), target),
-                Mount::RoBind { source, target } => ("ro-bind", Some(source), target),
+                Mount::RoBind { source, target } | Mount::RoBindTry { source, target } => {
+                    ("ro-bind", Some(source), target)
+                }
                 Mount::Tmpfs { target } => ("tmpfs", None, target),
                 Mount::Symlink { target, path } => ("symlink", Some(target), path),
                 Mount::RemountRo { target } => ("remount-ro", None, target),
