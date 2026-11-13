@@ -316,6 +316,11 @@ impl<'a> AgentRow<'a> {
         &self.handle
     }
 
+    /// The launched parent's address, as the `parent` column prints it.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
     fn new(
         agent: &'a AgentState,
         source: &'a SidebarSnapshot,
@@ -601,7 +606,12 @@ impl Query {
     pub fn admits(&self, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
         (self.names(Field::Live) || row.live)
             && (self.names(Field::Parent) || row.missing(Field::Parent))
-            && self.terms.iter().all(|term| term.matches(row, reader))
+            && self.matches(row, reader)
+    }
+
+    /// Every term, without the default set: for a caller that chooses its own.
+    pub fn matches(&self, row: &AgentRow<'_>, reader: &AddressContext) -> bool {
+        self.terms.iter().all(|term| term.matches(row, reader))
     }
 }
 

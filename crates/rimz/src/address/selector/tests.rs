@@ -329,6 +329,35 @@ fn defaults_step_aside_only_for_the_field_named() {
 }
 
 #[test]
+fn matches_applies_the_terms_without_the_default_set() {
+    let root = agent("root", "%1");
+    let live_child = child("kid", "root", "%2");
+    let mut ended_child = child("done", "root", "%3");
+    ended_child.ended_at = Some(now());
+    let snapshot = snapshot(
+        vec![root, live_child, ended_child],
+        &["root", "kid", "done"],
+    );
+    let matched = |filters: &[&str]| {
+        let query = query(filters);
+        live_rows(&snapshot, &ParkDemotion::default(), &reader(), now())
+            .iter()
+            .filter(|row| query.matches(row, &reader()))
+            .map(|row| row.agent().agent_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(matched(&[]), ["root", "kid", "done"]);
+    assert_eq!(matched(&["live=no"]), ["done"]);
+    assert_eq!(matched(&["parent=@root"]), ["kid", "done"]);
+    assert_eq!(matched(&["parent=none"]), ["root"]);
+    assert_eq!(
+        selected(&snapshot, &[]),
+        ["root"],
+        "admits keeps the default set"
+    );
+}
+
+#[test]
 fn a_rate_limited_child_keeps_its_error_after_the_park_is_spent() {
     let root = agent("root", "%1");
     let mut parked = child("parked", "root", "%2");
