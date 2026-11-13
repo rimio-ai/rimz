@@ -437,7 +437,7 @@ A run that ended instantly instead never started at all. The usual cause is repo
 
 A card reading `⏸` with `budget: $5.04 of $5.00` or `fleet budget: $50.21 of $50.00/day` is not wedged. A cap stopped that agent's spending, and RimZ pressed Esc in its pane the way you would. Nothing exited, and the session files are where the provider left them. Five things reopen it, the next human prompt and a raised cap among them, and [what resumes a parked agent](./budget.md#what-resumes-a-parked-agent) lists all five.
 
-While the room or account scope has no headroom, automation stays shut: `-p` launches exit `125` and loop fires record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
+While the room or account scope has no headroom, automation stays shut: `-p` launches exit `125`, a blocking launch in a loop task's command among them, so that fire fails, and wake-ups record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
 
 ## A setting did nothing
 

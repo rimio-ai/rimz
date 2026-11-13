@@ -26,7 +26,7 @@ Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the sess
 
 Because it is the same launch, the flags you already use still apply. `--worktree` isolates the run's changes on their own branch, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) or `--model`, `--effort`, and `--system-prompt-file` shape the turn, and [`rimz loop`](./loops.md) fires the same path on a clock.
 
-Ctrl+C on a blocking run cancels it cleanly: exit `130`, the agent stopped, the pane reclaimed. `rimz agents stop <name>` does the same from any other pane. `--keep` leaves the finished pane open for inspection, and the same `rimz agents stop` closes it when you have read enough.
+Ctrl+C on a blocking run cancels it cleanly: exit `130`, the agent stopped, the pane reclaimed. `rimz agents stop <name>` does the same from any other pane. `--keep` leaves the finished pane open for inspection, and the same `rimz agents stop` closes it when you have read enough. A kept run that is canceled still has its agent stopped; only the pane stays, until you press Ctrl-C in it.
 
 ## One run, one exit code
 

@@ -254,13 +254,7 @@ The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. 
 
 A member moved by tier routing adds its tier and every passed entry with a reason after its model. Each fresh move also prints one stderr warning with the role, tier, chosen model and every reason, including full build errors. Unmoved rows stay unchanged. Inspect a member's recorded passes with [`rimz agents show`](./agents.md#show--inspect); resumed sessions print no new routing warning.
 
-The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To block until the board reaches `Done`, run [`rimz teams wait forge#feat-rate-limits`](#wait-for-a-cohort-to-finish); the cohort is resolvable as soon as the launch command returns. To be told when the cohort next goes idle instead, arm a one-shot [signal subscription](./loop.md#signals):
-
-```sh
-rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-rate-limits --once
-```
-
-It fires on the next transition to idle only. Signals never replay, so a cohort that was already idle when you armed it does not wake you; check `show` as well. Idle does not mean the task is done.
+The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To block until the board reaches `Done`, run [`rimz teams wait forge#feat-rate-limits`](#wait-for-a-cohort-to-finish); the cohort is resolvable as soon as the launch command returns.
 
 ### Signal bindings at launch
 

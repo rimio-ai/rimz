@@ -819,7 +819,7 @@ reason = "Fleet joins and runtime parent lookup share the identities accepted by
 [[verdict]]
 kind = "item"
 key = "agents::LaunchDirMode"
-reason = "Supervised CLI launches and headless loop judges require different saved-untrusted verdicts."
+reason = "Supervised CLI launches and headless workflow judges require different saved-untrusted verdicts."
 
 [[verdict]]
 kind = "item"
@@ -1322,7 +1322,7 @@ reason = "Machine task loading, replacement, and doctor share absolute-root admi
 [[verdict]]
 kind = "item"
 key = "config::loop_::CapacityWait"
-reason = "Loop tasks and workflow agent steps share a parsed positive duration or forever capacity policy."
+reason = "Workflow agent steps share a parsed positive duration or forever capacity policy."
 
 [[verdict]]
 kind = "item"

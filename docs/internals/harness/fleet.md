@@ -4,7 +4,7 @@
 
 ## What the harness does
 
-The harness starts, names, drives, and cleans up agents. RimZ drives an interactive agent only through its terminal pane: every such agent is a stock provider CLI in a real pane. So the harness works the way a fast human would. It opens panes, types into them, watches the durable records the agents' hooks write, and closes panes when the work is done. The same machinery serves a human at the keyboard, a shell script, a CI gate, and one agent driving another. Headless loop checks and workflow judges are the one paneless route: they run a provider process directly ([loops.md](./loops.md)).
+The harness starts, names, drives, and cleans up agents. RimZ drives an interactive agent only through its terminal pane: every such agent is a stock provider CLI in a real pane. So the harness works the way a fast human would. It opens panes, types into them, watches the durable records the agents' hooks write, and closes panes when the work is done. The same machinery serves a human at the keyboard, a shell script, a CI gate, and one agent driving another. Workflow judges are the one paneless route: they run a provider process directly ([workflow.md](./workflow.md)).
 
 ## The rules that shape it
 
@@ -92,7 +92,7 @@ Every file below is under `harness/` except the library `launcher/`, the top-lev
 | [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) | The one `<system_reminder>` tag: paragraph order, the model fragment, and the caller's explicit Loop, Judge, or Workflow reminder section. |
 | [`launch_context.rs`](../../../crates/rimz/src/harness/launch_context.rs) | A team member's identity sentence, launch-time run state, and channel rule. |
 | [`runtime_env.rs`](../../../crates/rimz/src/harness/runtime_env.rs) | The Environment block sampled at prompt submit. |
-| [`headless.rs`](../../../crates/rimz/src/harness/headless.rs) | Profile resolution, launch preparation, and execution for headless workflow judges, which a loop task's judges compile to. Its `headless/judge.rs` child is the one judge attempt they run: the answer contract, the failure classes (`died`, `invalid`, `timeout`, `limited`, `canceled`), and the retry rule. See [loops.md § The compiled graph](./loops.md#the-compiled-graph). |
+| [`headless.rs`](../../../crates/rimz/src/harness/headless.rs) | Profile resolution, launch preparation, and execution for headless workflow judges. Its `headless/judge.rs` child is the one judge attempt they run: the answer contract, the failure classes (`died`, `invalid`, `timeout`, `limited`, `canceled`), and the retry rule. |
 | [`hook_drain.rs`](../../../crates/rimz/src/harness/hook_drain.rs) | The elected hook drainer and the socket leases sandboxed wrappers hold. See [adapter.md § The feed](../agents/adapter.md#the-feed). |
 | [`drainer_outage.rs`](../../../crates/rimz/src/harness/drainer_outage.rs) | A parked wrapper's hook-drainer gaps: the diagnostics and the sidebar-readable outage lease ([Resident wrapper](#resident-wrapper)). |
 | [`worktree_entry.rs`](../../../crates/rimz/src/harness/worktree_entry.rs) | Facts about a managed checkout before a launch enters it: landed memo, Git inspection, audit activity, and occupancy ([Cohort relaunch reconciliation](#cohort-relaunch-reconciliation)). |
@@ -247,7 +247,7 @@ Folder trust follows login health at the same launch and relaunch sites, and `cr
 | Subagent resume | refuse | refuse |
 | Fresh child with an explicit Claude or Codex cwd | require a private empty start with file access to the target, not target trust | refuse, including added and displaced target directories |
 
-The directories checked differ by path. A fresh launch checks the pane's directory and its own main-repository root (no repository key outside Git), and a not-yet-created worktree uses its intended main root. Cohort resume checks its planned cwd with the caller's verdict, deduplicating per login and directory. For an agent without a recorded checkout, restart, single and lane resume, fork, and molt check the agent's recorded directory and its main-repository root the same way. Supervised launches use the stricter supervised directory preflight, which also refuses the login's `$HOME` for every kind. The headless loop judge passes Restricted but refuses `$HOME` too.
+The directories checked differ by path. A fresh launch checks the pane's directory and its own main-repository root (no repository key outside Git), and a not-yet-created worktree uses its intended main root. Cohort resume checks its planned cwd with the caller's verdict, deduplicating per login and directory. For an agent without a recorded checkout, restart, single and lane resume, fork, and molt check the agent's recorded directory and its main-repository root the same way. Supervised launches use the stricter supervised directory preflight, which also refuses the login's `$HOME` for every kind. A headless workflow judge passes Restricted but refuses `$HOME` too.
 
 A workflow agent step checks its resolved spec at the target cwd before it opens the agent context or stops a takeover's occupants. Idempotent room preparation may precede that check, but no takeover or agent launch may. A refusal fails the step's launch attempt. `rimz start` prints its Restricted warning separately from its grant offer and decline record.
 
@@ -382,7 +382,7 @@ The environment a RimZ-started process gets depends on its route, so a claim abo
 | --- | --- |
 | Agent pane the harness opens | The multiplexer session's baseline, the room identity pin from `crates/rimz/src/room/mod.rs::pane_identity_env`, and the launch's own variables. Never the calling process's environment. |
 | In-place launch | The calling process's environment, with the launch's variables over it: `crates/rimz/src/launcher/placement.rs::exec_wrapper_in_place` execs the wrapper in the caller's process without clearing it. |
-| Headless loop check or workflow judge | The caller's whole environment minus `RIMZ_AGENT_*` and `RIMZ_CHANNEL`, plus the loop marker and the workspace pin (`crates/rimz/src/harness/headless.rs::AdmittedLaunch::execute_hosted`; per route in [loops.md](./loops.md)). A judge started inside a scoped view therefore carries that view's variables. |
+| Workflow judge | The caller's whole environment minus `RIMZ_AGENT_*` and `RIMZ_CHANNEL`, plus the loop marker and the workspace pin (`crates/rimz/src/harness/headless.rs::AdmittedLaunch::execute_hosted`; per route in [loops.md](./loops.md)). A judge started inside a scoped view therefore carries that view's variables. |
 | Hook apply child of the host drainer | Only the environment recorded in the hook frame, on a cleared environment (`crates/rimz/src/cli/hooks.rs::process_in_child`). |
 
 ### Placement

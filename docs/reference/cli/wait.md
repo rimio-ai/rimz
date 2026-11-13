@@ -2,7 +2,7 @@
 
 `rimz wait` is an alarm an agent sets for itself. The agent arms it and ends its turn. RimZ sends a message back into the same conversation when a delay elapses, a clock time arrives, a usage window resets, a state expression reads true, an existing process goes away, a watched command exits, a polled check meets its condition, or a file changes or gains a matching line. [`rimz agents wait`](./agents.md#list-and-manage-agents) works in the other direction: it blocks a shell until an agent finishes.
 
-Only an agent RimZ can identify (from its launch environment or process ancestry) can arm or cancel a wait, and every wait targets that agent's own live session. To wake another agent, attach a prompt, repeat on a schedule, hold a condition for a duration, or subscribe to a signal, use [`rimz loop add --wait`](./loop.md#waits-and-checks). The [loops guide](../../guide/loops.md#wake-a-running-agent) teaches the workflow.
+Only an agent RimZ can identify (from its launch environment or process ancestry) can arm or cancel a wait, and every wait targets that agent's own live session. A team wakes its members on a signal through [role bindings](./teams.md#signal-bindings-at-launch), and a [loop task](./loop.md#add-a-task) runs a command, such as `rimz message`, on a clock, a signal, or a condition. The [loops guide](../../guide/loops.md#wake-a-running-agent) teaches the workflow.
 
 ```sh
 rimz wait --in 30m                           # timer
@@ -141,7 +141,7 @@ A timer fires once. RimZ adds the delay to the current time and rounds up to the
 
 Bare `pr` reads the pull request of your checkout's branch. In a RimZ worktree it ignores a merged or closed pull request opened before the worktree was created, so a branch name reused from older work does not read as `merged`. `pr[<branch>]` has no such guard: it accepts whatever pull request the forge returns for that branch name, so an older merged pull request from a reused name reads `merged`.
 
-A second `--when` whose expression and checkout match a live self wait of your session arms nothing and names that wait. A self wait matches only another self wait: a `rimz loop add --wait --when` subscription on the same expression neither stops a `--when` arm nor is stopped by one.
+A second `--when` whose expression and checkout match a live self wait of your session arms nothing and names that wait.
 
 ### Existing process: `--pid`
 
@@ -205,7 +205,7 @@ While an agent rests with waits pending, even when its card displays working, Ri
 
 ## The delivered message
 
-A wait arrives as a message from `@rimz` with `Type: WAIT` (see [the message header](./message.md#the-message-header)). It is sent as a steer: it is typed into the live turn at once, unless the agent has a native prompt open. With a prompt open, the wake parks and lands at the next turn boundary after the prompt is answered. A check-in parks the same way. Every wait armed with `rimz wait` is delivered this way, whatever its trigger. When the wait delivers its final outcome, RimZ cancels a check-in still parked. A final outcome that `--on` filters out delivers nothing, so a parked check-in still lands. Clock and signal deliveries from `rimz loop add --wait` park until the turn ends. [`rimz transcript`](./transcript.md) hides wait messages from its rendered view and keeps them in `--json`.
+A wait arrives as a message from `@rimz` with `Type: WAIT` (see [the message header](./message.md#the-message-header)). It is sent as a steer: it is typed into the live turn at once, unless the agent has a native prompt open. With a prompt open, the wake parks and lands at the next turn boundary after the prompt is answered. A check-in parks the same way. Every wait armed with `rimz wait` is delivered this way, whatever its trigger. When the wait delivers its final outcome, RimZ cancels a check-in still parked. A final outcome that `--on` filters out delivers nothing, so a parked check-in still lands. Signal deliveries a team's role bindings arm park until the turn ends. [`rimz transcript`](./transcript.md) hides wait messages from its rendered view and keeps them in `--json`.
 
 The body names what was waited on, the verdict, and any non-empty output file with its estimated tokens and line count, and ends with the wait's name in brackets. A label follows the first line's subject as ` · <label>`. It never inlines command output. A file pattern match inlines its matched-line preview. A timer, a clock time, and a window reset are one line each:
 
@@ -285,7 +285,7 @@ The header is `<handle> · N waits`, or `<handle> · no waits`. Each self wait i
 | Paused | `paused · resumes in 2h`. |
 | Disabled | `disabled`. |
 
-Loop and team subscriptions that target your session are not wait lines. They appear on one line, `also woken by <triggers>[ in <worktree>] (loop <name>)` or `(team <name>)`, one group per owner, joined by ` · `. That line follows your waits, or joins the header when you have none. A plain `loop add --wait` row is a loop subscription named after itself.
+Loop and team subscriptions that target your session are not wait lines. They appear on one line, `also woken by <triggers>[ in <worktree>] (loop <name>)` or `(team <name>)`, one group per owner, joined by ` · `. That line follows your waits, or joins the header when you have none. A delivery row that carries no team, `loop-task` or `wait-meta` is a loop subscription named after itself.
 
 From a user shell, the text view is read-only and starts with `<home-relative project root> · whole room · N waits · M subscriptions`, omitting a zero count. With no rows the header ends in `no waits` and no body follows. Otherwise a blank line separates the header from the same room body as [`loop list --all`'s WAKE-UPS](./loop.md#loop-list): self-wait cards, with children nested under their ancestors and named by petname, followed by team and loop owner summaries. Cards use the same current addressable handles as wait receipts. A target that is no longer addressable, including a session shadowed by the pane's current owner, falls back to the recorded target handle. Hand-written configuration deliveries appear in the room view too.
 
@@ -348,4 +348,4 @@ rimz wait --when pr=merged                                 # PR merged
 rimz wait --when ci=passed                                 # CI passed
 ```
 
-Use `--every 30s` for remote checks. For CI and PR state, wait on `--when` or subscribe to [signals](./loop.md#waits-and-checks) instead of polling forge commands.
+Use `--every 30s` for remote checks. For CI and PR state, wait on `--when` or fire a [loop task on a signal](./loop.md#signals) instead of polling forge commands.

@@ -14,7 +14,7 @@ Enforcement never writes to the store. It runs in the sidebar producer, and the 
 
 ## The scopes
 
-Four scopes live in this module. The sidebar producer evaluates the fleet and account scopes on every heavy-lane pass (`sidebar::refresh::refresh_heavy_lanes`). Per-agent enforcement, including turn and waiver bookkeeping, follows the [hibernated cadence](../sidebar/state.md#cadences): a hibernated agent is checked at most once per `HIBERNATED_CHECK_TTL` (60 seconds). A deferred agent causes no ledger read or write, while shared scope evaluation and park merges continue. A fifth, a loop task's daily cap, belongs to the scheduler.
+Four scopes live in this module. The sidebar producer evaluates the fleet and account scopes on every heavy-lane pass (`sidebar::refresh::refresh_heavy_lanes`). Per-agent enforcement, including turn and waiver bookkeeping, follows the [hibernated cadence](../sidebar/state.md#cadences): a hibernated agent is checked at most once per `HIBERNATED_CHECK_TTL` (60 seconds). A deferred agent causes no ledger read or write, while shared scope evaluation and park merges continue.
 
 | Scope | Caps | Cap comes from | Window | Evaluated by |
 | --- | --- | --- | --- | --- |
@@ -22,7 +22,6 @@ Four scopes live in this module. The sidebar producer evaluates the fleet and ac
 | Turn | every agent turn in one room | machine config `harness.turn_budget` | one turn | `evaluate_turn_scope` |
 | Room fleet | every agent under one project root | machine config `harness.budget`, or `rimz budget` | `/day` only | `evaluate_daily_scope` |
 | Provider account | one history pool, across every room that runs on it | machine config `[accounts.budget].<kind>`, a standalone named account's `budget`, or `rimz budget --account` for one pool | `/day`, or `/month` for API-key billing | `evaluate_daily_scope` |
-| Loop task | one task's runs | the task's `--budget-per-day` | `/day` only | `run_log::reserved_budget_gate`, or `run_log::daily_budget_gate` for an unguarded delivery ([loops.md § One fire](./loops.md#one-fire)) |
 
 A history pool is `default` together with every shared account of a kind, or one standalone account on its own. `DailyBudgetScope::account` maps a login to its pool through `LoginCatalog::pool`, so a cap, a ledger, and the agents it binds always agree on the pool.
 
@@ -180,11 +179,9 @@ Interactive work gets a park and a waiver. Automation gets a refusal before it s
 | --- | --- |
 | Supervised run ([scripting.md](./scripting.md#status-and-exit-codes)) | `SupervisedRunOutcome::BudgetExceeded` and exit `125`, before a run record or agent pane exists |
 | Workflow agent step ([workflow.md](./workflow.md#how-an-attempt-ends)) | the attempt ends `limited`, with the gate's reason |
-| Loop fire ([loops.md](./loops.md#one-fire)) | one `budget skipped` history row, no strike |
+| Loop delivery row ([loops.md](./loops.md#one-fire)) | one `budget skipped` history row, no strike |
 
 The launcher (`launcher/execute.rs::budget_gate`) runs the gate for every launch that opens a leader run, which covers the supervised run and the workflow step. It runs after room birth and before the agent pane opens. Supervised runs launch once per attempt, so a retry ladder stops as soon as a cap closes mid-sequence. Exit `125` has a second source: a non-workflow turn run already under way whose agent is parked by any cap ends as `budget_exceeded` through the helper in [The park](#the-park). Every caller also checks an exact managed-launch provider quota, and that gate belongs to [providers.md](../agents/providers.md).
-
-A loop fire that starts a run checks its task's own daily cap under its admission lease, in `run_log::reserved_budget_gate`; an unguarded delivery checks it first, in `run_log::daily_budget_gate`. The ladder and the reservation rule are [loops.md § One fire](./loops.md#one-fire).
 
 ## The CLI surface
 
