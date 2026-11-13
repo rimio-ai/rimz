@@ -95,16 +95,20 @@ pub(super) fn list_agents(
         }
     }
     if quiet {
-        let mut out = render::out();
-        for agent in group_live_agents_by_worktree(&agents, &snapshot)
+        let handles: Vec<_> = group_live_agents_by_worktree(&agents, &snapshot)
             .into_iter()
             .flat_map(|group| group.agents)
-        {
-            if let Some(row) = rows.iter().find(|row| std::ptr::eq(row.agent(), agent)) {
-                writeln!(out, "{}", row.handle())?;
-            }
-        }
-        return Ok(());
+            .filter_map(|agent| rows.iter().find(|row| std::ptr::eq(row.agent(), agent)))
+            .map(AgentRow::handle)
+            .collect();
+        // A reader that exits before reading (`list -q | rimz message - ...`
+        // refusing) is a normal end, not an error line.
+        let mut out = render::out();
+        return render::finish(
+            handles
+                .iter()
+                .try_for_each(|handle| writeln!(out, "{handle}")),
+        );
     }
     if json {
         let refs = audit.iter().collect::<Vec<_>>();
