@@ -9,7 +9,7 @@ const TURN: &str = "This is one turn. When it ends cleanly with nothing owed, Ri
 const STOPS: &str =
     "Errors, provider limits, interrupts, and budget parks leave you open for a later clean turn.";
 const CHECK: &str = "The check `watch` runs `cat answer.json`. Words containing a `/` must name files inside the definition folder; bare commands use PATH. It runs from the checkout. You may run this command yourself.";
-const EXIT: &str = "When your provider process exits, as when the user closes your pane, RimZ closes every cell and runs the check `watch`.";
+const EXIT: &str = "When your provider process exits, as when the user closes your pane, RimZ closes every cell and runs the check `watch`; an exit mid-turn or before your first turn fails this step instead.";
 const RESTS: &str = "After each of your turns that rests cleanly with nothing owed, RimZ runs the check `watch`. A not-done answer routed back to this step becomes your next prompt in this session. A @wait answer keeps you open while signals and the minute tick recheck it. Other routes close your pane and move the run on. Errors, provider limits, interrupts, and budget parks wait for a later clean turn.";
 const LATER: &str =
     "The user may answer in this pane later; a question goes in your final message.";
@@ -223,7 +223,7 @@ fn total_caps_name_the_actual_destination() {
         ("recover", "sends the run to `recover`"),
     ] {
         let text = format!(
-            "{}on.cap='{destination}'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+            "{}on.visits='{destination}'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
             OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
         );
         let (_dir, state, record) = setup(&text);
@@ -243,17 +243,12 @@ fn total_caps_name_the_actual_destination() {
 
 #[test]
 fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
-    let notes = [false, true].map(|previously_broken| {
-        let (_dir, state, record) = setup(&on_break(
-            &OUTCOME_STEP.replace("max-visits=6", "max-visits=2"),
-        ));
+    let notes = [false, true].map(|previously_extended| {
+        let (_dir, state, record) = setup(&OUTCOME_STEP.replace("max-visits=6", "max-visits=2"));
         let host = FakeHost::new();
-        if previously_broken {
-            for _ in 0..3 {
-                answer(&state, &record, &host, json!({"outcome":"red"}));
-            }
+        if previously_extended {
+            answer(&state, &record, &host, json!({"outcome":"red"}));
             resume(&state, &record.id, None, &["visits=+1".into()]).unwrap();
-            advance_ok(&state, &record.id, &host);
         }
         *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
         let launches = host.launched.borrow().len();
@@ -278,34 +273,28 @@ fn extending_a_waiting_step_keeps_its_routing_check_as_the_sender() {
 }
 
 #[test]
-fn resume_after_a_real_cap_uses_the_granted_limit_and_context_counts() {
-    let (_dir, state, record) = setup(&on_break(
-        &OUTCOME_STEP.replace("max-visits=6", "max-visits=2"),
-    ));
+fn resuming_an_active_step_at_itself_names_the_resume_as_the_sender() {
+    let (_dir, state, record) = setup(OUTCOME_STEP);
     let host = FakeHost::new();
-    for _ in 0..3 {
-        answer(&state, &record, &host, json!({"outcome":"red"}));
-    }
-    assert_eq!(
-        records::load(&state.workflow(&record.id)).unwrap().node,
-        "@break"
-    );
-    resume(&state, &record.id, Some("build"), &["visits=+1".into()]).unwrap();
+    let live = answer(&state, &record, &host, json!({"outcome":"blue"}));
+    assert!(live.attempt.is_some(), "{live:#?}");
+    assert!(note(&host).contains("You were launched because the check `watch` answered `blue`."));
+    resume(&state, &record.id, Some("build"), &[]).unwrap();
     advance_ok(&state, &record.id, &host);
-    let context: Value =
-        serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
-    assert_eq!(
-        (context["visits"].as_u64(), context["visit"].as_u64()),
-        (Some(1), Some(1))
-    );
+    advance_ok(&state, &record.id, &host);
+    assert_eq!(host.launched.borrow().len(), 2);
     let text = note(&host);
-    assert!(text.contains("The user resumed the run at this step after it parked. This is visit 1 of 3 to `build`."), "{text}");
+    assert!(
+        text.contains("The user resumed the run at this step.")
+            && !text.contains("launched because"),
+        "{text}"
+    );
 }
 
 #[test]
 fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     let text = format!(
-        "{}on.cap='recover'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+        "{}on.visits='recover'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
         OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
@@ -315,7 +304,7 @@ fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     }
     let text = note(&host);
     assert!(
-        text.contains("The `cap` route from `build` sent the run here."),
+        text.contains("The `visits` route from `build` sent the run here."),
         "{text}"
     );
     assert!(!text.contains("This is visit"));
@@ -381,7 +370,7 @@ fn engine_invalid_routes_and_previous_deaths_use_plain_words() {
     let text = OUTCOME_STEP.replace(
         "on={red='build',blue='build',queued='@wait'}",
         "on={red='build',blue='build',queued='@wait',invalid='build'}",
-    );
+    ) + "on.died='watch'\n";
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     fs::write(record.spec_dir.join("answer.json"), "not json").unwrap();
@@ -437,7 +426,7 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
             "evidence ⇄ [build], plan → judge → report → reported",
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nlifecycle='turn'\nagent='claude'\nthen='d'\non.cap='c'\n[agent.c]\nlifecycle='turn'\nagent='claude'\nthen='d'\n[test.d]\nshell='true'\non={pass='@done',fail='@failed'}",
+            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nlifecycle='turn'\nagent='claude'\nthen='d'\non.visits='c'\n[agent.c]\nlifecycle='turn'\nagent='claude'\nthen='d'\n[test.d]\nshell='true'\non={pass='@done',fail='@failed'}",
             &["left"][..],
             "a → [b] · c → d",
         ),

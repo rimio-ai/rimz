@@ -88,7 +88,7 @@ fn kept_rest_check_close_and_cap_endings_detach() {
     let mut actual = Vec::new();
     for (outcome, cap, edge) in [
         ("done", 2, ""),
-        ("pending", 1, "on.cap='@done'\n"),
+        ("pending", 1, "on.visits='@done'\n"),
         ("pending", 1, ""),
     ] {
         let definition = rest::SESSION.replace(

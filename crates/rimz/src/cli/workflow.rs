@@ -175,12 +175,12 @@ enum Command {
         #[arg(long, hide = true, allow_hyphen_values = true, value_name = "TEXT")]
         reason: Option<String>,
     },
-    /// Re-enter a parked node or extend a run's bounds.
+    /// Move a live run to a node, re-enter a parked one, or extend a run's bounds.
     Resume {
         /// Run address `<workflow>#<lane>`, workflow name, or run id.
         #[arg(value_name = "RUN")]
         id: String,
-        /// Re-enter this node instead of the parked one. Parked runs only.
+        /// Move the run to this node; a live attempt at its current node ends canceled.
         #[arg(long, value_name = "NODE")]
         at: Option<String>,
         /// Grant this run more bounds: `visits=+N` or `deadline=<WHEN>`. Repeatable; an active run

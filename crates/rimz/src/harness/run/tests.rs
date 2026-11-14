@@ -289,6 +289,266 @@ fn session_exit_settles_once_without_capturing_a_registered_run() {
 }
 
 #[test]
+fn session_exit_fails_a_registered_session_that_was_not_at_rest() {
+    use crate::store::run::RunLifecycle;
+
+    let ended = |parked_on_background| LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background,
+        turn_id: None,
+    };
+    let rested = || vec![LifecycleSignal::Registered, turn_started(), ended(false)];
+    let then = |mut signals: Vec<LifecycleSignal>, more: Vec<LifecycleSignal>| {
+        signals.extend(more);
+        signals
+    };
+    let mut actual = Vec::new();
+    for (case, signals) in [
+        ("before its first turn", vec![LifecycleSignal::Registered]),
+        (
+            "turn open",
+            vec![LifecycleSignal::Registered, turn_started()],
+        ),
+        (
+            "asking",
+            vec![
+                LifecycleSignal::Registered,
+                turn_started(),
+                LifecycleSignal::AwaitingInput {
+                    kind: crate::agents::AskKind::Question,
+                    ask_id: None,
+                    detail: None,
+                    extra_questions: 0,
+                    native_key: None,
+                },
+            ],
+        ),
+        ("clean rest", rested()),
+        (
+            "re-registered at rest",
+            then(rested(), vec![LifecycleSignal::Registered]),
+        ),
+        (
+            "compaction closed at rest",
+            then(
+                rested(),
+                vec![
+                    LifecycleSignal::Compacting,
+                    LifecycleSignal::CompactionEnded {
+                        auto: Some(false),
+                        failed: false,
+                    },
+                ],
+            ),
+        ),
+        (
+            "compaction close with no open bracket",
+            then(
+                rested(),
+                vec![LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                }],
+            ),
+        ),
+        (
+            "parked on background work",
+            vec![LifecycleSignal::Registered, turn_started(), ended(true)],
+        ),
+        (
+            "prompt into a parked row",
+            vec![
+                LifecycleSignal::Registered,
+                turn_started(),
+                ended(true),
+                turn_started(),
+            ],
+        ),
+    ] {
+        let (dir, paths, mut record) = setup();
+        let runtime =
+            RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        record.lifecycle = RunLifecycle::Session;
+        record.status = RunStatus::Running;
+        record.agent_id = Some("leader".into());
+        create(&paths, &record).unwrap();
+        for signal in signals {
+            let observation = AgentLifecycleObservation::new(Some("leader".into()), signal);
+            store
+                .append_event(&crate::EventEnvelope::agent_lifecycle(
+                    paths.workspace_id.clone(),
+                    "exit-test",
+                    "claude",
+                    "test",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        let settled = settle_session_exit_with_spend(
+            &store,
+            &record.run_id,
+            || panic!("registered run capture"),
+            |_| RunSpend::default(),
+        )
+        .unwrap()
+        .unwrap();
+        actual.push((case, settled.status));
+    }
+    use RunStatus::{Completed, Failed};
+    assert_eq!(
+        actual,
+        vec![
+            ("before its first turn", Failed),
+            ("turn open", Failed),
+            ("asking", Failed),
+            ("clean rest", Completed),
+            ("re-registered at rest", Completed),
+            ("compaction closed at rest", Completed),
+            ("compaction close with no open bracket", Completed),
+            ("parked on background work", Failed),
+            ("prompt into a parked row", Failed),
+        ]
+    );
+}
+
+#[test]
+fn session_exit_at_a_clean_rest_ends_cleanly_while_it_owes_a_message() {
+    use crate::store::message::{DeliveryGate, MessageRecord};
+    use crate::store::run::RunLifecycle;
+
+    let (dir, paths, mut record) = setup();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    record.lifecycle = RunLifecycle::Session;
+    record.status = RunStatus::Running;
+    record.agent_id = Some("leader".into());
+    create(&paths, &record).unwrap();
+    let ended = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    for signal in [LifecycleSignal::Registered, turn_started(), ended] {
+        let observation = AgentLifecycleObservation::new(Some("leader".into()), signal);
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                "exit-test",
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let snapshot = store.snapshot_cached().unwrap();
+    let leader = crate::harness::workflow::leader(&snapshot, &record)
+        .unwrap()
+        .clone();
+    let message = MessageRecord::new(
+        paths.workspace_id.clone(),
+        &leader,
+        "rebase first".to_owned(),
+        DeliveryGate::Done,
+    );
+    store.queue_message(&message, "exit-test").unwrap();
+    // The rest check's debt gate would hold this leader; the exit reading leaves it out.
+    let messages = store.list_messages().unwrap();
+    assert!(
+        crate::harness::idle_stop::debt(&store, &messages, &[], &leader)
+            .unwrap()
+            .is_some()
+    );
+    let settled = settle_session_exit_with_spend(
+        &store,
+        &record.run_id,
+        || panic!("registered run capture"),
+        |_| RunSpend::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(settled.status, RunStatus::Completed);
+}
+
+#[test]
+fn session_exit_at_a_clean_rest_ends_cleanly_while_it_owes_a_child_result() {
+    use crate::harness::owed::OwedWake;
+    use crate::store::run::{ReportTo, RunLifecycle};
+
+    let (dir, paths, mut record) = setup();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    record.lifecycle = RunLifecycle::Session;
+    record.status = RunStatus::Running;
+    record.agent_id = Some("leader".into());
+    create(&paths, &record).unwrap();
+    let ended = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    let mut observations: Vec<_> = [LifecycleSignal::Registered, turn_started(), ended]
+        .into_iter()
+        .map(|signal| AgentLifecycleObservation::new(Some("leader".into()), signal))
+        .collect();
+    // A child the leader launched, still running and owing its result to the leader.
+    let mut child =
+        AgentLifecycleObservation::new(Some("child".into()), LifecycleSignal::Registered);
+    child.agent_name = Some("child".to_owned());
+    child.pane_id = Some(crate::ids::PaneId::parse("tmux:%2").unwrap());
+    child.launch.parent_agent_id = Some("leader".into());
+    child.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    child.launch.launch_depth = Some(1);
+    observations.push(child);
+    for observation in &observations {
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                "exit-test",
+                "claude",
+                "test",
+                observation,
+            ))
+            .unwrap();
+    }
+    let mut child_run = RunRecord::new(
+        paths.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "work".to_owned(),
+        dir.path().to_owned(),
+    );
+    child_run.agent_id = Some("child".into());
+    child_run.status = RunStatus::Running;
+    child_run.report_to = ReportTo::Launcher;
+    create(&paths, &child_run).unwrap();
+    // The rest check's debt gate would hold this leader; the exit reading leaves it out.
+    let snapshot = store.snapshot_cached().unwrap();
+    let leader = crate::harness::workflow::leader(&snapshot, &record)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        crate::harness::owed::owed_wake(&store, &leader.kind, &leader.agent_id).unwrap(),
+        Some(OwedWake::Subagents)
+    );
+    let messages = store.list_messages().unwrap();
+    assert!(
+        crate::harness::idle_stop::debt(&store, &messages, &[], &leader)
+            .unwrap()
+            .is_some()
+    );
+    let settled = settle_session_exit_with_spend(
+        &store,
+        &record.run_id,
+        || panic!("registered run capture"),
+        |_| RunSpend::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(settled.status, RunStatus::Completed);
+}
+
+#[test]
 fn session_exit_sums_every_binding_and_falls_back_to_transcript_cost() {
     for keep_context in [true, false] {
         let (dir, paths, mut record) = setup();

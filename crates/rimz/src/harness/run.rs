@@ -1347,8 +1347,10 @@ fn record_lifecycle_at(
     Ok(matches!(transition, LifecycleFold::NewlyTerminal).then_some(record))
 }
 
-/// Settle provider exit and cumulative spend together for a session run.
-/// An existing terminal status wins; a conversation rebind retries the spend read.
+/// Settle provider exit and cumulative spend together for a session run: completed when the
+/// registered session exited at rest, failed when it exited mid-turn, before its first turn,
+/// or before it registered. An existing terminal status wins; a conversation rebind retries
+/// the spend read.
 /// The failure-tail callback runs under the workspace lock only for a Pending run,
 /// so registration cannot race a failed-run-only pane read.
 pub fn settle_session_exit(
@@ -1389,8 +1391,10 @@ fn settle_session_exit_with_spend(
                         .and_then(|tail| capped_failure_tail(&tail));
                 }
                 RunStatus::Failed
-            } else {
+            } else if exited_at_rest(store, record, now) {
                 RunStatus::Completed
+            } else {
+                RunStatus::Failed
             };
             spend.apply(record);
             record.mark_terminal(status, now);
@@ -1404,6 +1408,17 @@ fn settle_session_exit_with_spend(
             return Ok(None);
         }
     }
+}
+
+/// Whether a registered session's provider exited at rest, by the reading that decides its
+/// rest ([`crate::harness::workflow::exited_at_rest`]). An unreadable snapshot warns and
+/// counts as rest, the settlement this exit had before the reading existed.
+fn exited_at_rest(store: &Store, record: &RunRecord, now: Timestamp) -> bool {
+    crate::harness::workflow::exited_at_rest(store, record, now).unwrap_or_else(|err| {
+        tracing::warn!(run_id = %record.run_id, error = %err,
+            "could not read the session's rest at exit; settling it completed");
+        true
+    })
 }
 
 /// Fold a hook lifecycle and settle a newly terminal non-peer run's session spend.

@@ -1,5 +1,5 @@
 use super::*;
-use rimz::store::workflow::RunState;
+use rimz::store::workflow::{EndCause, RunState};
 
 fn select(
     target: &str,
@@ -153,13 +153,15 @@ pub(super) fn resume(
         select(target, "resume", globals, at, extend)?.map_err(|other| refuse(&other, "resume"))?;
     refuse_unwritable_home("resumed")?;
     let spec = workflow::load(&run.paths.home)?;
-    let resumed = run.record.state == RunState::Parked || run.record.node == "@break";
+    let resumed = run.record.state == RunState::Parked || at.is_some();
     let record = workflow::resume(&run.state, &run.record.id, at, extend)?;
+    // A live attempt `--at` moved settles off-lock; its staged route names where the run goes.
     let node = record
         .attempt
         .as_ref()
-        .filter(|attempt| attempt.node == "@break")
-        .and_then(|attempt| attempt.ending.as_ref()?.route.as_ref())
+        .and_then(|attempt| attempt.ending.as_ref())
+        .filter(|ending| ending.cause == EndCause::Resume)
+        .and_then(|ending| ending.route.as_ref())
         .map_or(record.node.as_str(), |verdict| verdict.target.as_str());
     let address = record.address().to_string();
     let now = jiff::Timestamp::now();

@@ -103,7 +103,7 @@ pub(super) fn check_layout(
         } else {
             "shell='true'\non={pass='@done',fail='@failed'}\n"
         };
-        fs::write(dir.join("workflow.toml"), format!("[workflow]\non-break='@failed'\nscope='worktree'\nstart='before'\n[test.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[agent.work]\nagent='claude,editor'\nprompt-file='prompt.md'\nthen='after'\n{lines}[test.after]\n{after}")).unwrap();
+        fs::write(dir.join("workflow.toml"), format!("[workflow]\nscope='worktree'\nstart='before'\n[test.before]\nshell='true'\non={{pass='work',fail='@failed'}}\n[agent.work]\nagent='claude,editor'\nprompt-file='prompt.md'\nthen='after'\n{lines}[test.after]\n{after}")).unwrap();
         let output = command()
             .env("PATH", path_with_front(&bin))
             .env("SHELL", &shell)
@@ -216,6 +216,27 @@ pub(super) fn check_layout(
             );
             let output = command().args(["workflow", "list"]).output().unwrap();
             assert!(String::from_utf8_lossy(&output.stdout).contains("with you"));
+            // A session that exits at rest ended cleanly; one that never took a turn died.
+            for signal in [
+                LifecycleSignal::TurnStarted { turn_id: None },
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ] {
+                let observation =
+                    AgentLifecycleObservation::new(Some(leader.agent_id.clone()), signal);
+                store
+                    .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                        state.workspace_id.clone(),
+                        session,
+                        "claude",
+                        "test",
+                        &observation,
+                    ))
+                    .unwrap();
+            }
             nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(run.provider_pid.unwrap().try_into().unwrap()),
                 nix::sys::signal::Signal::SIGTERM,

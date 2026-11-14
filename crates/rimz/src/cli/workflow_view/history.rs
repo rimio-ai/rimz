@@ -517,7 +517,7 @@ impl History<'_> {
                     digests_out(out, digests)?;
                 }
                 JournalEvent::Route { outcome, input } => {
-                    let mut input = input.clone();
+                    let mut input = failure_members(input);
                     if let Some(at) = input
                         .get("deadline")
                         .and_then(Value::as_str)
@@ -670,6 +670,22 @@ pub(in crate::cli) fn fold_note(count: u64, first: Timestamp, last: Timestamp) -
         note.push_str(&format!(" {span}"));
     }
     note
+}
+
+/// A failure input as its route line prints it: the cause and node are the row's own, so the
+/// reason and the detail's members say the rest. Any other input prints whole.
+fn failure_members(input: &Value) -> Value {
+    let Some(fields) = input.as_object().filter(|_| input["outcome"] == "failed") else {
+        return input.clone();
+    };
+    let mut members = fields.clone();
+    for key in ["outcome", "cause", "node", "detail"] {
+        members.remove(key);
+    }
+    if let Some(detail) = input["detail"].as_object() {
+        members.extend(detail.clone());
+    }
+    Value::Object(members)
 }
 
 pub(in crate::cli) fn value(value: &Value) -> String {

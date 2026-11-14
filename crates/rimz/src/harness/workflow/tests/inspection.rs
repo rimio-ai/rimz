@@ -100,11 +100,11 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
         ("pr", "invalid", "@failed"),
         ("pr", "hold", "@wait"),
         ("build", "ended", "pr"),
-        ("build", "died", "pr"),
-        ("build", "timeout", "pr"),
-        ("build", "canceled", "pr"),
-        ("build", "limited", "pr"),
-        ("build", "cap", "@failed"),
+        ("build", "died", "@failed"),
+        ("build", "timeout", "@failed"),
+        ("build", "canceled", "@failed"),
+        ("build", "limited", "@failed"),
+        ("build", "visits", "@failed"),
         ("build", "capacity", "@failed"),
         ("pr", "deadline", "@failed"),
         ("build", "deadline", "@failed"),
@@ -131,8 +131,8 @@ fn edge_lookup_includes_engine_defaults_and_attempt_outcomes() {
 #[test]
 fn edge_lookup_keeps_explicit_overrides() {
     let mut spec = spec();
-    spec.edit(|spec| spec.workflow.on.deadline = Some("@failed".into()));
-    for outcome in ["timeout", "invalid", "unknown"] {
+    spec.edit(|spec| spec.workflow.on.failed = Some("@failed".into()));
+    for outcome in ["timeout", "died", "unknown"] {
         spec.edit(|spec| {
             spec.checks
                 .get_mut("pr")
@@ -149,14 +149,13 @@ fn edge_lookup_keeps_explicit_overrides() {
     }
     spec.edit(|spec| {
         let step = spec.steps.get_mut("build").unwrap();
-        step.on.asked = Some("pr".into());
-        step.on.cap = Some("@done".into());
-        step.on.capacity = Some("@user".into());
+        step.on.causes.insert("visits".into(), "@done".into());
+        step.on.causes.insert("died".into(), "pr".into());
     });
     for (outcome, target) in [
-        ("asked", "pr"),
-        ("cap", "@done"),
-        ("capacity", "@user"),
+        ("visits", "@done"),
+        ("died", "pr"),
+        ("timeout", "@failed"),
         ("deadline", "@failed"),
     ] {
         assert_eq!(
@@ -281,31 +280,17 @@ fn hops_do_not_route_a_judges_failed_evaluations_before_its_check_park() {
 }
 
 #[test]
-fn hops_keep_engine_caps_and_parks_separate() {
-    use crate::store::workflow::ParkReason;
-    let journal = [
-        entry(
-            "build",
-            json!({"event":"route", "outcome":"cap", "input":{}}),
-        ),
-        entry("build", json!({"event":"park", "reason":"cap"})),
-    ];
+fn hops_name_a_visits_failure_by_its_cause() {
+    let journal = [entry(
+        "build",
+        json!({"event":"route", "outcome":"visits", "input":{"outcome":"failed", "cause":"visits"}}),
+    )];
     assert_eq!(
         hops(&spec(), &journal, None)
             .iter()
             .map(detail)
             .collect::<Vec<_>>(),
-        [
-            route("cap", "@failed", 1),
-            (
-                HopKind::Park {
-                    reason: ParkReason::Cap
-                },
-                None,
-                None,
-                1
-            )
-        ]
+        [route("visits", "@failed", 1)]
     );
 }
 
@@ -380,7 +365,7 @@ fn hops_use_a_held_turn_verdict_instead_of_then_across_visit_resets() {
             } else {
                 "done"
             };
-            t.finish_check(check.seq, Ok(json!({"outcome":outcome})), None)
+            t.finish_check(check.seq, Ok(json!({"outcome":outcome})), json!({}), None)
                 .unwrap();
             let verdict = t.record.held.as_ref().unwrap().verdict.clone().unwrap();
             t.restore_session();

@@ -18,9 +18,7 @@ pub(super) fn compose(
     digests: &mut BTreeMap<String, String>,
 ) -> Result<String> {
     let mut parts = Vec::new();
-    if record.node == "@break" && step.prompt_file().is_none() {
-        parts.push(break_prompt(record, paths)?);
-    } else if let Some(prompt_file) = step.prompt_file() {
+    if let Some(prompt_file) = step.prompt_file() {
         let file = spec::confined_file(&record.spec_dir, prompt_file)?;
         let prompt = std::fs::read_to_string(file)?;
         digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
@@ -53,87 +51,6 @@ pub(super) fn compose(
         parts.push(prompt.clone());
     }
     Ok(parts.join("\n\n"))
-}
-
-fn break_prompt(record: &RunRecord, paths: &WorkflowPaths) -> Result<String> {
-    let spec = spec::load(&paths.home)?;
-    let input = record.input.as_ref();
-    let from = input
-        .and_then(|input| input["from"].as_str())
-        .unwrap_or_default();
-    let journal = workflow::journal(paths)?;
-    let history = journal
-        .iter()
-        .filter(|entry| entry.node == from)
-        .collect::<Vec<_>>();
-    let checks = history
-        .iter()
-        .rev()
-        .filter_map(|entry| match &entry.event {
-            JournalEvent::Evaluation { object, .. } => Some(json!({
-                "answer_or_error": object,
-                "log": entry.seq.and_then(|seq| match spec.check_kind(from)? {
-                    Kind::Judge(_) => Some(paths.check_output(seq)),
-                    Kind::Test(_) | Kind::Script(_) => Some(paths.check_log(seq)),
-                    _ => None,
-                }),
-            })),
-            _ => None,
-        })
-        .take(1)
-        .collect::<Vec<_>>();
-    let invalid = input.is_some_and(|input| input["edge"] == "invalid");
-    let failure = if invalid
-        && spec.step(from).is_some()
-        && input.is_some_and(|input| input["outcome"] == "died")
-    {
-        "launch failure"
-    } else if invalid && matches!(spec.check_kind(from), Some(Kind::Judge(_))) {
-        "judge failure"
-    } else {
-        "workflow failure"
-    };
-    let trace = json!({
-        "run": record.address().to_string(), "id": record.id,
-        "workflow": record.workflow, "definition": record.spec_dir,
-        "failure": failure, "input": input, "visits": record.visits.get(from),
-        "history_entries": history.len(),
-        "evaluations": history
-            .iter()
-            .filter(|entry| matches!(entry.event, JournalEvent::Evaluation { .. }))
-            .count(),
-        "attempt_and_visit_history": &history[history.len().saturating_sub(6)..], "checks": checks,
-        "journal_tail": &journal[journal.len().saturating_sub(8)..],
-        "journal": paths.journal,
-        "context": paths.context,
-    });
-    let mut trace = format!("{trace:#}");
-    let limit = crate::harness::prompt_compose::TEXT_PROMPT_LIMIT / 2;
-    if trace.len() > limit {
-        let mut end = limit;
-        while !trace.is_char_boundary(end) {
-            end -= 1;
-        }
-        trace.truncate(end);
-        trace.push_str("\n[Trace excerpt truncated; read the full evidence below.]");
-    }
-    let root = shlex::try_quote(&record.project_root.to_string_lossy())
-        .map_err(|error| WorkflowErr::Refused(error.to_string()))?
-        .into_owned();
-    let command = format!("rimz --root {root} workflow");
-    Ok(format!(
-        "Investigate this run's {failure}. The failure trace follows:\n\n{trace}\n\n\
-         Full journal: {}\nContext: {}\n\n\
-         You may fix the cause and run `{command} resume {} [--at <node>]`, \
-         cancel with `{command} cancel {}`, or leave the decision to the user. \
-         When the user must act immediately, ask now through your own native question. \
-         Otherwise end your turn and wait for the user's instructions with your pane open. \
-         RimZ never closes this debugger's pane. Closing it ends the run @failed.",
-        paths.journal.display(),
-        paths.context.display(),
-        record.id,
-        record.id,
-    ))
 }
 
 pub(super) fn empty_observation() -> Observed {
@@ -273,10 +190,7 @@ pub(super) fn prepare_end(
         observed.stopped.as_ref(),
         t.now,
     );
-    let ending = if !t.spec.is_break(&t.record.node)
-        && !t.record.deadline_fired
-        && t.record.deadline.is_some_and(|at| at <= t.now)
-    {
+    let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
         Some(Ending {
             outcome: AttemptOutcome::Canceled,
             cause: EndCause::Deadline,
@@ -376,7 +290,7 @@ pub(super) fn launch(
                     _ => unreachable!("agent step layout"),
                 },
                 lifecycle: attempt.lifecycle,
-                keep: spec.is_break(&record.node) || step.keep().unwrap_or(false),
+                keep: step.keep().unwrap_or(false),
                 resume: record
                     .restart
                     .as_ref()
@@ -420,11 +334,7 @@ pub(super) fn launch(
     if moved || !t.current(attempt.seq) {
         drop(guard);
         if let Ok(run) = launched {
-            if spec.is_break(&record.node) {
-                host.detach(&run)?;
-            } else {
-                host.stop(&run)?;
-            }
+            host.stop(&run)?;
         }
         return Ok(false);
     }
@@ -494,18 +404,7 @@ pub(super) fn launch(
                     Ending {
                         outcome: failure.outcome,
                         cause: EndCause::Lifecycle,
-                        route: (failure.outcome == AttemptOutcome::Died).then(|| {
-                            workflow::Verdict {
-                                node: record.node.clone(),
-                                entered_at: record.entered_at,
-                                at: t.now,
-                                target: spec.engine_target(&record.node, "invalid").to_string(),
-                                object: t.engine_object(
-                                    json!({"outcome":"died", "reason":failure.reason}),
-                                ),
-                                reason: workflow::ParkReason::Invalid,
-                            }
-                        }),
+                        route: None,
                         reason: None,
                     },
                     &observed,
@@ -522,9 +421,6 @@ pub(super) fn launch(
 }
 
 fn detaches(spec: &Definition, attempt: &LiveAttempt) -> bool {
-    if spec.is_break(&attempt.node) {
-        return true;
-    }
     let ending = attempt.ending.as_ref().expect("published agent ending");
     let keep = spec.step(&attempt.node).and_then(Node::keep);
     keep.unwrap_or(false)

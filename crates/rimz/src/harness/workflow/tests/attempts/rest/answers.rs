@@ -178,7 +178,7 @@ fn another_advance_between_persist_and_push_enqueues_once() {
 }
 
 #[test]
-fn a_push_over_the_visit_cap_closes_through_the_cap_route() {
+fn a_push_over_the_visit_cap_closes_through_the_visits_route() {
     let (dir, state, mut record) = setup(&SESSION.replace("max-visits=2", "max-visits=1"));
     record.input = Some(json!({"outcome":"pending"}));
     update(&state, &record);
@@ -191,11 +191,11 @@ fn a_push_over_the_visit_cap_closes_through_the_cap_route() {
         (
             capped.state,
             capped.node,
-            capped.input.unwrap()["outcome"].clone(),
+            capped.input.unwrap()["cause"].clone(),
             host.stops.get(),
             host.pushes.borrow().len(),
         ),
-        (RunState::Failed, "build".into(), json!("cap"), 1, 0)
+        (RunState::Failed, "build".into(), json!("visits"), 1, 0)
     );
 }
 
