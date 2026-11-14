@@ -150,7 +150,7 @@ A `SignalSelector` is `Exact(SignalName)` or `Family(String)`, parsed from `a.b`
 
 The clock shapes have their own variants from `parse_schedule`: `NoTime`, `TimeConflict`, `EveryNeedsAt`, `BadEvery`, `BadTime`, `BadOnceAt`, `PastOnceAt`, and the cron errors `BadCron`, `BadCronToken`, `UnsupportedCron`, and `CronNeverFires`.
 
-A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once = true`. `ephemeral_lifetime` names the rows that retire themselves: any row with no repeating trigger, plus any row carrying a `deadline`, `once = true`, a `watch` spec, or a `fire-at` instant.
+A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once = true`. `ephemeral_lifetime` names the rows that retire themselves: any row with no repeating trigger, plus any row carrying a `deadline`, `once = true`, a `watch` spec, or a `fire-at` instant. `TaskCatalog::replace_machine` stores a row that `ephemeral_lifetime` names, or a row with a `wait` target, in the room's instance store and every other machine row in `~/.rimz/loop.toml` ([Where tasks live](#where-tasks-live)), while `TaskCatalog::replace_project` keeps a project row in `<root>/.rimz/config.toml` whatever its lifetime.
 
 `Trigger::resolve` is the whole matching rule, with three outcomes:
 
