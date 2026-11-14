@@ -877,3 +877,107 @@ fn journal_preserves_entries_and_tolerates_torn_or_unknown_rows() {
     write!(file, "{{\"event\":").unwrap();
     assert_eq!(journal(&paths).unwrap(), vec![entry.clone(), entry]);
 }
+
+#[test]
+fn a_moved_home_reads_its_recorded_logs_under_the_home_it_was_read_from() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let mut record = record();
+    let live = state.workflow(&record.id);
+    let finished = state.finished_workflow(&record.id);
+    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    let step = live.step_log(1);
+    let check = live.check_log(2);
+    let outside = std::path::Path::new("/elsewhere/build.log");
+    let failure = json!({"outcome":"failed", "cause":"died", "detail":{"log":step, "code":3}});
+    let events = [
+        json!({"event":"attempt", "outcome":"died", "visit":1, "key":null, "digests":{},
+            "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
+            "log":step}),
+        json!({"event":"evaluation", "outcome":"fail", "object":{"outcome":"fail", "log":check},
+            "digests":{}, "started_at":"2026-01-01T00:00:00Z",
+            "ended_at":"2026-01-01T00:00:01Z"}),
+        json!({"event":"evaluation", "origin":"engine", "outcome":"died", "object":failure,
+            "digests":{}, "started_at":"2026-01-01T00:00:00Z",
+            "ended_at":"2026-01-01T00:00:01Z"}),
+        json!({"event":"route", "outcome":"died", "input":failure}),
+        json!({"event":"attempt", "outcome":"ended", "visit":1, "key":null, "digests":{},
+            "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
+            "log":outside}),
+    ];
+    let entries: Vec<JournalEntry> = events
+        .into_iter()
+        .map(|mut event| {
+            event["seq"] = json!(1);
+            event["at"] = json!("2026-01-01T00:00:00Z");
+            event["node"] = json!("build");
+            serde_json::from_value(event).unwrap()
+        })
+        .collect();
+    for entry in &entries {
+        append(&live, entry, &guard).unwrap();
+    }
+    record.input = Some(failure.clone());
+    record.prev_attempt = Some(
+        serde_json::from_value(json!({"step":"build", "outcome":"died", "seq":1, "visit":1,
+            "key":null, "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:01Z",
+            "handle":null, "run_id":null, "claim_path":live.claim(1), "head_start":null,
+            "head_end":null, "log":step, "children":null}))
+        .unwrap(),
+    );
+    record.attempt = None;
+    record.state = RunState::Failed;
+    write(&live, &record, &guard).unwrap();
+    assert_eq!(
+        journal(&live).unwrap(),
+        entries,
+        "the live home reads as recorded"
+    );
+    assert_eq!(
+        load(&live).unwrap(),
+        record,
+        "the live home reads as recorded"
+    );
+    fs::create_dir_all(finished.home.parent().unwrap()).unwrap();
+    fs::rename(&live.home, &finished.home).unwrap();
+    let raw = fs::read(&finished.journal).unwrap();
+
+    let moved_step = json!(finished.step_log(1));
+    let moved_check = json!(finished.check_log(2));
+    let logs = journal(&finished)
+        .unwrap()
+        .into_iter()
+        .map(|entry| match entry.event {
+            JournalEvent::Attempt { log, .. } => json!(log),
+            JournalEvent::Evaluation { object, .. } => object,
+            JournalEvent::Route { input, .. } => input,
+            event => panic!("unexpected {event:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(logs[0], moved_step);
+    assert_eq!(logs[1]["log"], moved_check);
+    assert_eq!(logs[2]["detail"]["log"], moved_step);
+    assert_eq!(logs[3]["detail"]["log"], moved_step);
+    assert_eq!(logs[3]["detail"]["code"], 3);
+    assert_eq!(
+        logs[4],
+        json!(outside),
+        "a path outside the run's homes reads as recorded"
+    );
+    for read in [
+        load(&finished).unwrap(),
+        match classify(&finished).unwrap() {
+            RunClass::Current(record) => *record,
+            class => panic!("unexpected {class:?}"),
+        },
+    ] {
+        assert_eq!(read.input.as_ref().unwrap()["detail"]["log"], moved_step);
+        assert_eq!(json!(read.prev_attempt.unwrap().log), moved_step);
+    }
+    assert_eq!(
+        fs::read(&finished.journal).unwrap(),
+        raw,
+        "reading writes nothing back"
+    );
+}

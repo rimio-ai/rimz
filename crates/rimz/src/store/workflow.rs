@@ -793,6 +793,58 @@ pub struct JournalEntry {
     pub event: JournalEvent,
 }
 
+impl JournalEntry {
+    /// Point every log this entry names inside its run's home at the same file under `home`:
+    /// a run's home moves to the finished directory with its files in place, while its entries
+    /// keep the paths they were recorded with. A path outside the run's homes stays as recorded.
+    pub fn relocate(&mut self, home: &WorkflowPaths) {
+        match &mut self.event {
+            JournalEvent::Attempt { log: Some(log), .. } => *log = home.relocate(log),
+            JournalEvent::Evaluation { object, .. } => relocate_logs(object, home),
+            JournalEvent::Route { input, .. } => relocate_logs(input, home),
+            _ => {}
+        }
+    }
+}
+
+/// An evaluation's answer or a step's input names its own log, and a failure input its
+/// evidence's in `detail`.
+fn relocate_logs(object: &mut Value, home: &WorkflowPaths) {
+    relocate_log(object.get_mut("log"), home);
+    relocate_log(
+        object
+            .get_mut("detail")
+            .and_then(|detail| detail.get_mut("log")),
+        home,
+    );
+}
+
+fn relocate_log(log: Option<&mut Value>, home: &WorkflowPaths) {
+    let Some(log) = log else {
+        return;
+    };
+    let Some(recorded) = log.as_str() else {
+        return;
+    };
+    let moved = home.relocate(Path::new(recorded));
+    *log = Value::from(moved.to_string_lossy().into_owned());
+}
+
+/// The logs a run record names, read from `home`, as [`JournalEntry::relocate`] reads its
+/// journal's.
+fn relocate_record(record: &mut RunRecord, home: &WorkflowPaths) {
+    if let Some(input) = &mut record.input {
+        relocate_logs(input, home);
+    }
+    if let Some(log) = record
+        .prev_attempt
+        .as_mut()
+        .and_then(|previous| previous.log.as_mut())
+    {
+        *log = home.relocate(log);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationOrigin {
@@ -928,7 +980,8 @@ pub enum JournalEvent {
     },
 }
 
-/// Read a run record, refusing one of any other version before its body is decoded.
+/// Read a run record, refusing one of any other version before its body is decoded. The logs
+/// it names are read under `paths`' home ([`JournalEntry::relocate`]).
 pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
     #[derive(Deserialize)]
     struct Probe {
@@ -950,7 +1003,9 @@ pub fn load(paths: &WorkflowPaths) -> Result<RunRecord> {
             version,
         });
     }
-    serde_json::from_slice(&bytes).map_err(json)
+    let mut record = serde_json::from_slice(&bytes).map_err(json)?;
+    relocate_record(&mut record, paths);
+    Ok(record)
 }
 
 /// Write a definition's text and assets into a definition root: a run's own, sealed before
@@ -1107,6 +1162,7 @@ pub fn append(paths: &WorkflowPaths, entry: &JournalEntry, _guard: &WorkspaceLoc
     Ok(crate::disk::atomic::sync_file_data(&paths.journal)?)
 }
 
+/// Read a run's journal, its logs under `paths`' home ([`JournalEntry::relocate`]).
 pub fn journal(paths: &WorkflowPaths) -> Result<Vec<JournalEntry>> {
     let bytes = match std::fs::read(&paths.journal) {
         Ok(bytes) => bytes,
@@ -1118,7 +1174,11 @@ pub fn journal(paths: &WorkflowPaths) -> Result<Vec<JournalEntry>> {
             });
         }
     };
-    Ok(parse_journal(&bytes, &paths.journal))
+    let mut entries = parse_journal(&bytes, &paths.journal);
+    for entry in &mut entries {
+        entry.relocate(paths);
+    }
+    Ok(entries)
 }
 
 /// Decode readable rows, ignoring torn or unknown entries as the file reader does.
@@ -1411,7 +1471,8 @@ pub fn classify(paths: &WorkflowPaths) -> Result<RunClass> {
     }
     let decoded = (version.and_then(Value::as_u64) == Some(VERSION.into()))
         .then(|| RunRecord::deserialize(&value));
-    if let Some(Ok(decoded)) = decoded {
+    if let Some(Ok(mut decoded)) = decoded {
+        relocate_record(&mut decoded, paths);
         return Ok(RunClass::Current(Box::new(decoded)));
     }
     let header = Box::new(RunHeader::read(record));

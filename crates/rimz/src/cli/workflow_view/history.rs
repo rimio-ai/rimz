@@ -233,7 +233,9 @@ pub(in crate::cli) fn saved(
         .map_err(anyhow::Error::from)
         .and_then(|spec| {
             let mut journal = records::journal(paths)?;
-            relocate(&mut journal, finished);
+            for entry in &mut journal {
+                entry.relocate(finished);
+            }
             let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Never);
             terminal(record, &spec, &journal, render::prose::Prose::Raw, &mut out)?;
             Ok(out.into_inner())
@@ -245,25 +247,6 @@ pub(in crate::cli) fn saved(
             &format!("its steps could not be rendered: {error:#}"),
         )
     })
-}
-
-/// Point the logs a journal names at the home the run is moving to, so that its saved history
-/// names files that exist once it has moved.
-fn relocate(journal: &mut [JournalEntry], home: &rimz::disk::paths::WorkflowPaths) {
-    for entry in journal {
-        match &mut entry.event {
-            records::JournalEvent::Attempt { log: Some(log), .. } => *log = home.relocate(log),
-            records::JournalEvent::Evaluation { object, .. } => {
-                if let Some(log) = object.get_mut("log")
-                    && let Some(recorded) = log.as_str()
-                {
-                    let moved = home.relocate(std::path::Path::new(recorded));
-                    *log = Value::from(moved.to_string_lossy().into_owned());
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 /// A run's history from its record's header alone, for a run whose definition or record this

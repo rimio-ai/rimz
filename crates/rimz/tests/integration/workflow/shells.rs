@@ -73,14 +73,15 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
         let id = start(&env);
         let value = settled(&env, &id, "done");
         let log = Path::new(value["dir"].as_str().unwrap()).join("2.check.log");
-        // The record keeps the path the check wrote, in the live home the run has since left.
-        let recorded = env
+        // The check ran in the live home, which the run has since left; the record names its
+        // log where it is now.
+        let live = env
             .state_path_for(&env.project_root)
             .workflow(&id.parse().unwrap())
             .work
             .join("2.check.log");
         let mut expected = json!({
-            "outcome":if code == 0 {"pass"} else {"fail"}, "code":code, "log":recorded, "key":7
+            "outcome":if code == 0 {"pass"} else {"fail"}, "code":code, "log":log, "key":7
         });
         if let Some(reason) = reason {
             expected["reason"] = json!(reason);
@@ -96,7 +97,7 @@ fn shell_exit_codes_log_both_streams_and_inherit_the_key() {
             "{output}"
         );
         assert!(
-            output.contains(recorded.parent().unwrap().to_str().unwrap()),
+            output.contains(live.parent().unwrap().to_str().unwrap()),
             "{output}"
         );
         assert!(
@@ -132,7 +133,7 @@ fn a_test_killed_by_a_signal_dies_and_never_answers_fail() {
         )
     );
     let recorded = input["detail"]["log"].as_str().unwrap();
-    assert_eq!(moved(recorded), log, "{input:#}");
+    assert_eq!(Path::new(recorded), log, "{input:#}");
     assert_eq!(input["detail"], json!({"log": recorded}));
     assert_eq!(input["key"], 7);
     assert!(fs::read_to_string(log).unwrap().contains("stderr"));
@@ -214,7 +215,7 @@ fn a_shell_spawn_error_dies() {
         assert!(
             input["detail"]["log"]
                 .as_str()
-                .is_some_and(|log| moved(log).is_file()),
+                .is_some_and(|log| Path::new(log).is_file()),
             "{waiting}: {input:#}"
         );
         assert_eq!(

@@ -14122,7 +14122,7 @@ fn read_run_home(paths: &rimz::disk::paths::WorkflowPaths) -> anyhow::Result<Str
             rimz::store::workflow::JournalEvent::Evaluation { object, .. } => object
                 .get("log")
                 .and_then(|log| log.as_str())
-                .map(|log| paths.relocate(Path::new(log))),
+                .map(Path::new),
             _ => None,
         })
         .map(std::fs::read_to_string)

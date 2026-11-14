@@ -309,18 +309,6 @@ fn run_home(env: &Env, id: &str) -> rimz::disk::paths::WorkflowPaths {
 }
 
 /// A path a run recorded under its live home, where it is now: a finished run's home moved.
-fn moved(path: &str) -> PathBuf {
-    let path = PathBuf::from(path);
-    if path.exists() {
-        return path;
-    }
-    PathBuf::from(path.to_str().unwrap().replacen(
-        "/owned/workflows/",
-        "/owned/finished-workflows/",
-        1,
-    ))
-}
-
 fn show(env: &Env, id: &str) -> Value {
     serde_json::from_str(&success(command(env, &["workflow", "show", id, "--json"]))).unwrap()
 }
@@ -387,7 +375,7 @@ fn events(value: &Value, event: &str) -> Vec<Value> {
 
 fn context(value: &Value) -> Value {
     serde_json::from_slice(
-        &fs::read(moved(value["dir"].as_str().unwrap()).join("context.json")).unwrap(),
+        &fs::read(Path::new(value["dir"].as_str().unwrap()).join("context.json")).unwrap(),
     )
     .unwrap()
 }
@@ -1281,11 +1269,12 @@ fn malformed_and_unrouted_objects_are_invalid_and_a_failed_exit_dies() {
         assert_eq!(input["cause"], cause, "{body}");
         let code = if body == "exit 3" { 3 } else { 0 };
         assert_eq!(input["detail"]["code"], code, "{body}: {input:#}");
+        let routed = &events(&value, "route")[0]["input"];
         assert!(
-            input["detail"]["log"]
+            routed["detail"]["log"]
                 .as_str()
-                .is_some_and(|log| moved(log).is_file()),
-            "{body}: {input:#}"
+                .is_some_and(|log| Path::new(log).is_file()),
+            "{body}: {routed:#}"
         );
         assert_eq!(events(&value, "route")[0]["outcome"], cause);
         assert_eq!(events(&value, "evaluation")[0]["outcome"], cause);

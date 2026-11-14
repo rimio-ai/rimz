@@ -772,8 +772,7 @@ fn quiet_check(run: &crate::store::workflow::RunRecord) -> Option<CheckRecord> {
     let state = crate::StatePaths::for_project_root(&run.project_root).ok()?;
     let paths = state.workflow(&run.id);
     let journal = crate::store::workflow::journal(&paths).ok()?;
-    let read =
-        |log: &std::path::Path| std::fs::read_to_string(paths.relocate(log)).unwrap_or_default();
+    let read = |log: &std::path::Path| std::fs::read_to_string(log).unwrap_or_default();
     let mut printed = journal
         .iter()
         .rev()

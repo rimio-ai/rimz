@@ -34,7 +34,7 @@ fn command_step_start_runs_without_an_initial_check() {
     assert_eq!(attempts[0]["node"], "build");
     assert_eq!(attempts[0]["seq"], 1);
     assert_eq!(attempts[0]["outcome"], "ended");
-    let log = fs::read_to_string(moved(attempts[0]["log"].as_str().unwrap())).unwrap();
+    let log = fs::read_to_string(Path::new(attempts[0]["log"].as_str().unwrap())).unwrap();
     assert_eq!(log, "started");
     let history = success(command(&env, &["workflow", "show", &id, "--history"]));
     assert!(
@@ -113,8 +113,10 @@ fn terminal_run_step_outlived_by_its_session_leader_runs_to_completion() {
     output.join().unwrap();
     assert!(leader_alive, "the session leader outlives the run");
     assert_eq!(value["record"]["state"], "done", "{value:#}");
+    // The view above can predate the ended run's move; read the log where the run settled.
+    let value = settled(&env, &id, "done");
     let attempts = events(&value, "attempt");
-    let log = fs::read_to_string(moved(attempts[0]["log"].as_str().unwrap())).unwrap();
+    let log = fs::read_to_string(Path::new(attempts[0]["log"].as_str().unwrap())).unwrap();
     assert!(log.contains("step-ready"), "{log}");
 }
 
@@ -218,6 +220,13 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
     assert_eq!(value["record"]["visits"]["build"], 1);
     assert_eq!(value["record"]["next_seq"], 4);
     let ctx = context(&value);
+    // The command and the report's handler ran in the live home, which the ended run has since
+    // left: the context the handler read names the live log.
+    let live_dir = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap())
+        .work;
+    let live_log = json!(live_dir.join("2.step.log"));
     // A clean end follows `then` with the check's input; a death takes `on.died` with the
     // failure input, which carries the exit code when there is one.
     let input = match (outcome, code.as_u64()) {
@@ -225,23 +234,23 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
         (_, Some(code)) => json!({
             "outcome":"failed", "cause":"died", "node":"build", "key":7,
             "reason":format!("exited {code}"),
-            "detail":{"code":code, "log":attempt["log"]},
+            "detail":{"code":code, "log":live_log},
         }),
         _ => json!({
             "outcome":"failed", "cause":"died", "node":"build", "key":7,
-            "reason":"killed by signal", "detail":{"log":attempt["log"]},
+            "reason":"killed by signal", "detail":{"log":live_log},
         }),
     };
     assert_eq!(ctx["input"], input);
-    assert_eq!(ctx["prev_attempt"], *previous);
+    let mut handed = previous.clone();
+    handed["log"] = live_log;
+    assert_eq!(ctx["prev_attempt"], handed);
     let log_path = Path::new(attempt["log"].as_str().unwrap());
-    assert_eq!(log_path.file_name().unwrap(), "2.step.log");
-    let log = fs::read_to_string(moved(attempt["log"].as_str().unwrap())).unwrap();
-    // The command ran in the live home, which the ended run has since left.
-    let live_dir = env
-        .state_path_for(&env.project_root)
-        .workflow(&id.parse().unwrap())
-        .work;
+    assert_eq!(
+        log_path,
+        Path::new(value["dir"].as_str().unwrap()).join("2.step.log")
+    );
+    let log = fs::read_to_string(log_path).unwrap();
     for expected in [
         env.project_root.to_str().unwrap(),
         live_dir.to_str().unwrap(),
@@ -263,10 +272,7 @@ fn command_exit(ending: &str, outcome: &str, code: Value) {
         "{text}"
     );
     assert!(
-        text.contains(&format!(
-            "log: {}",
-            moved(attempt["log"].as_str().unwrap()).display()
-        )),
+        text.contains(&format!("log: {}", attempt["log"].as_str().unwrap())),
         "{text}"
     );
     let stats = assists_once(&env, "workflow_steps", 1);
@@ -425,7 +431,7 @@ fn command_bound(mode: &str) {
         }
     );
     assert_eq!(
-        moved(attempts[0]["log"].as_str().unwrap()),
+        Path::new(attempts[0]["log"].as_str().unwrap()),
         Path::new(value["dir"].as_str().unwrap()).join("2.step.log")
     );
     if mode.contains("deadline") {
@@ -592,4 +598,80 @@ fn an_interrupted_command_whose_deadline_was_extended_is_canceled_then_checked()
     );
     assert_eq!(value["record"]["deadline_fired"], false);
     assert_eq!(events(&value, "attempt").len(), 1, "{value:#}");
+}
+
+/// Every log a finished run's views name is where the run's home moved: the attempt's, the
+/// failure input its route carries, and the record's.
+#[test]
+fn a_finished_run_names_its_logs_where_its_home_moved() {
+    fn logs(value: &Value, found: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    match value.as_str() {
+                        Some(path) if key == "log" => found.push(path.into()),
+                        _ => logs(value, found),
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| logs(item, found)),
+            _ => {}
+        }
+    }
+    fn printed(text: &str) -> Vec<String> {
+        text.lines()
+            .flat_map(|line| line.split(" · "))
+            .filter_map(|part| {
+                let part = part.trim();
+                part.strip_prefix("log=")
+                    .or_else(|| part.strip_prefix("log: "))
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+    let (env, dir) = command_fixture("shell", "exit 3");
+    let path = dir.join("workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("start = 'pr'", "start = 'build'"),
+    )
+    .unwrap();
+    let id = start(&env);
+    let value = settled(&env, &id, "done");
+    let home = Path::new(value["dir"].as_str().unwrap()).parent().unwrap();
+    assert!(
+        home.to_str()
+            .unwrap()
+            .contains("/owned/finished-workflows/")
+    );
+    let mut found = Vec::new();
+    logs(&value, &mut found);
+    assert_eq!(
+        events(&value, "route")[0]["input"]["detail"]["code"],
+        3,
+        "{value:#}"
+    );
+    // The attempt's, its route's failure input, the report check's evaluation, and the
+    // record's input and previous attempt.
+    assert_eq!(found.len(), 5, "{value:#}");
+    let history = success(command(&env, &["workflow", "show", &id, "--history"]));
+    assert!(
+        history.contains(" · log="),
+        "the route line names its log: {history}"
+    );
+    let saved = fs::read_to_string(home.join("history.txt")).unwrap();
+    let shown = [history.as_str(), &saved, value["history"].as_str().unwrap()]
+        .into_iter()
+        .flat_map(printed)
+        .collect::<Vec<_>>();
+    assert_eq!(shown.len(), 9, "three logs in each history: {history}");
+    for log in found.iter().chain(&shown) {
+        assert!(
+            Path::new(log).is_file(),
+            "{log} names no file:\n{history}{value:#}"
+        );
+        assert!(Path::new(log).starts_with(home), "{log}");
+    }
 }
