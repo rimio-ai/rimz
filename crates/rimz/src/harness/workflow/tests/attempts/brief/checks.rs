@@ -70,7 +70,7 @@ fn launch_notes_describe_each_check_kind_and_the_rest_check_pushback() {
 
 #[test]
 fn sealed_judge_without_summary_uses_a_safe_note_and_rest_checks_stay_ordered() {
-    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompt.md'\nrest-check=['cheap','review']\nthen='cheap'\n[script.cheap]\nrun='true'\non.pass='review'\n[judge.review]\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
+    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompt.md'\nrest-check=['cheap','review']\nthen='cheap'\n[script.cheap]\ntimeout='365d'\nrun='true'\non.pass='review'\n[judge.review]\ntimeout='365d'\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
     let (_dir, state, record) = setup(definition);
     let paths = state.workflow(&record.id);
     let spec = crate::harness::workflow::load(&paths.home).unwrap();

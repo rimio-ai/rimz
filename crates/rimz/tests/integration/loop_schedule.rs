@@ -6369,7 +6369,7 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
                 std::fs::write(
                     dir.join("workflow.toml"),
                     "[workflow]\nscope = 'worktree'\nstart = 'ready'\n\
-                     [script.ready]\nrun = 'true'\non.ok = '@done'\n",
+                     [script.ready]\ntimeout = '365d'\nrun = 'true'\non.ok = '@done'\n",
                 )
                 .unwrap();
                 "workflow = 'review'\n".to_owned()
@@ -10134,11 +10134,11 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
     std::fs::write(
         dir.join("workflow.toml"),
         "[workflow]\nscope = 'project'\nstart = 'ready'\n\
-         [test.ready]\nshell = 'true'\non.pass = 'sweep'\non.fail = '@failed'\n\
+         [test.ready]\ntimeout='365d'\nshell = 'true'\non.pass = 'sweep'\non.fail = '@failed'\n\
          [command.sweep]\nshell = 'printf swept'\ntimeout = '1m'\nthen = 'swept'\n\
-         [test.swept]\nshell = 'true'\non.pass = 'tidy'\non.fail = '@failed'\n\
+         [test.swept]\ntimeout='365d'\nshell = 'true'\non.pass = 'tidy'\non.fail = '@failed'\n\
          [command.tidy]\nshell = 'printf tidied'\ntimeout = '1m'\nthen = 'tidied'\n\
-         [test.tidied]\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
+         [test.tidied]\ntimeout='365d'\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
     )
     .unwrap();
     write_loop_config(
@@ -10260,8 +10260,8 @@ fn judged_runs_are_kept_with_their_spend_beside_quiet_fires_that_cost_nothing() 
         dir.join("workflow.toml"),
         format!(
             "[workflow]\nscope = 'project'\nstart = 'gate'\n\
-             [test.gate]\nshell = 'test ! -e {}'\non.pass = '@done'\non.fail = 'review'\n\
-             [judge.review]\nsummary = 'Review the work'\nagent = 'claude'\n\
+             [test.gate]\ntimeout='365d'\nshell = 'test ! -e {}'\non.pass = '@done'\non.fail = 'review'\n\
+             [judge.review]\ntimeout='365d'\nsummary = 'Review the work'\nagent = 'claude'\n\
              prompt-file = 'prompt.md'\non.done = '@done'\non.invalid = '@done'\non.died = '@done'\n",
             flag.display()
         ),
@@ -10394,7 +10394,7 @@ fn a_structured_script_check_ending_done_is_forgotten_with_its_exit_and_output()
     std::fs::write(
         dir.join("workflow.toml"),
         "[workflow]\nscope = 'project'\nstart = 'scan'\n\
-         [script.scan]\nrun = 'sh checks/scan.sh'\non.clean = '@done'\n",
+         [script.scan]\ntimeout='365d'\nrun = 'sh checks/scan.sh'\non.clean = '@done'\n",
     )
     .unwrap();
     std::fs::write(
@@ -10439,7 +10439,7 @@ fn a_quiet_run_collected_before_its_launch_memory_does_not_hold_the_next_fire() 
     std::fs::write(
         dir.join("workflow.toml"),
         "[workflow]\nscope = 'project'\nstart = 'ready'\n\
-         [test.ready]\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
+         [test.ready]\ntimeout='365d'\nshell = 'true'\non.pass = '@done'\non.fail = '@failed'\n",
     )
     .unwrap();
     write_loop_config(
@@ -10528,7 +10528,7 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         dir.join("workflow.toml"),
         format!(
             "[workflow]\nscope = 'project'\nstart = 'hold'\n\
-             [test.hold]\nshell = 'while [ ! -e {} ]; do sleep 0.05; done'\n\
+             [test.hold]\ntimeout='365d'\nshell = 'while [ ! -e {} ]; do sleep 0.05; done'\n\
              on.pass = '@done'\non.fail = '@failed'\n",
             gate.display()
         ),
@@ -10740,8 +10740,8 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
             dir.join("workflow.toml"),
             format!(
                 "[workflow]\nscope = 'project'\nstart = '{start}'\n\
-                 [test.first]\nshell = 'true'\non.pass = 'hold'\non.fail = '@failed'\n\
-                 [test.hold]\nshell = 'while [ ! -e {} ]; do sleep 0.05; done; printf released'\n\
+                 [test.first]\ntimeout='365d'\nshell = 'true'\non.pass = 'hold'\non.fail = '@failed'\n\
+                 [test.hold]\ntimeout='365d'\nshell = 'while [ ! -e {} ]; do sleep 0.05; done; printf released'\n\
                  on.pass = '@done'\non.fail = '@failed'\n",
                 gate.display()
             ),

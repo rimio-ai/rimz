@@ -2,7 +2,7 @@ use super::*;
 
 const AT: &str = "2000-01-01T12:00:00Z";
 
-const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['gate','later']\nthen='gate'\n[condition.gate]\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\nshell='true'\non={pass='@done',fail='build'}\n";
+const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['gate','later']\nthen='gate'\n[condition.gate]\ntimeout='365d'\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
 fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_writing() {
@@ -324,7 +324,7 @@ fn copied_park_options_accept_a_hyphen_leading_node() {
 fn visits_after_an_engine_route_fails_the_run_and_names_both_hops() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='@done'\non.died='build'\n\
+            "{HEADER}[script.pr]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.ok='@done'\non.died='build'\n\
             [command.build]\nshell='true'\ntimeout='1h'\nthen='pr'\nmax-visits=1\n"
         ),
         "exit 7\n",
@@ -880,9 +880,9 @@ fn holding_check_names_the_case_target_and_completion_clock() {
     fs::write(
         &paths.spec,
         concat!(
-            "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\nelse='pending'\n",
+            "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='365d'\nelse='pending'\n",
             "on={ready='build',pending='@wait',unknown='@wait'}\n[[condition.gate.cases]]\nwhen=['ci=passed']\n",
-            "outcome='ready'\nfor='10m'\n[command.build]\nshell='true'\nthen='gate'\n",
+            "outcome='ready'\nfor='10m'\n[command.build]\ntimeout='365d'\nshell='true'\nthen='gate'\n",
         ),
     )
     .unwrap();
@@ -899,7 +899,7 @@ fn holding_check_names_the_case_target_and_completion_clock() {
     let text = fs::read_to_string(&paths.spec).unwrap();
     fs::write(
         &paths.spec,
-        text.replace("[condition.gate]", "[condition.gate]\ntimeout='5m'")
+        text.replace("timeout='365d'\nelse", "timeout='5m'\nelse")
             .replace(
                 "on={ready='build',pending='@wait',unknown='@wait'}",
                 "on={ready='build',pending='@wait',timeout='@failed'}",
@@ -945,6 +945,7 @@ const CONDITION_RAIL: &str = r#"
 scope = 'worktree'
 start = 'gate'
 [condition.gate]
+timeout = '365d'
 else = 'pending'
 on = { merged = '@done', red = 'build', ready = 'build', pending = '@wait', queued = '@wait', unknown = '@wait' }
 [[condition.gate.cases]]
@@ -964,6 +965,7 @@ outcome = 'pending'
 when = ['pr.queue=queued']
 outcome = 'queued'
 [command.build]
+timeout = '365d'
 shell = 'true'
 then = 'gate'
 max-visits = 2
@@ -998,7 +1000,7 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
         &env,
         &record,
         &SPEC.replace(
-            "[command.build]\nshell='true'",
+            "[command.build]\ntimeout='365d'\nshell='true'",
             "[agent.build]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'",
         ),
     );
@@ -1054,9 +1056,9 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
 fn a_past_steps_visits_survive_a_key_the_run_moved_on_to() {
     let (env, _) = super::super::fixture(
         &format!(
-            "{HEADER}[script.pr]\nrun='sh checks/pr.sh'\non.ok='build'\n\
+            "{HEADER}[script.pr]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.ok='build'\n\
              [command.build]\nshell='true'\ntimeout='1h'\nthen='next'\nmax-visits=2\n\
-             [script.next]\nrun='sh checks/pr.sh'\non.other='finish'\n\
+             [script.next]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.other='finish'\n\
              [command.finish]\nshell='true'\ntimeout='1h'\nthen='waiting'\n\
              [script.waiting]\nrun='sh checks/pr.sh'\non.pending='@wait'\ntimeout='1h'\n"
         ),
@@ -1127,10 +1129,7 @@ fn a_hold_forecasts_its_clock_only_when_it_beats_other_bounds() {
             &env,
             &record,
             &CONDITION_RAIL
-                .replace(
-                    "else = 'pending'",
-                    &format!("timeout = '{timeout}'\nelse = 'pending'"),
-                )
+                .replace("timeout = '365d'", &format!("timeout = '{timeout}'"))
                 .replace("for = '10m'", "for = '30m'"),
         );
         let text = human(&env, &record, false);

@@ -19,15 +19,19 @@ const LAND: &str = r#"
 scope='worktree'
 start='begin'
 [test.begin]
+timeout = '365d'
 shell='true'
 on={pass='sweep',fail='@failed'}
 [script.watch]
+timeout = '365d'
 run='cat answer.json'
 on={merged='clean',red='fix',queued='@wait'}
 [script.notes]
+timeout = '365d'
 run='cat answer.json'
 on={rule='triage',none='@done'}
 [script.ruled]
+timeout = '365d'
 run='cat answer.json'
 on={rule='triage',none='@done'}
 [agent.sweep]
@@ -141,7 +145,7 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
     ];
     for (settings, after, questions) in cases {
         let text = format!(
-            "{}{settings}\n[test.help]\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
+            "{}{settings}\n[test.help]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
             OUTCOME_STEP.replace("lifecycle='turn'\n", ""),
         );
         let (_dir, state, record) = setup(&text);
@@ -310,7 +314,7 @@ fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     assert!(!text.contains("This is visit"));
 
     let text = OUTCOME_STEP.replace("start='watch'", "start='command'");
-    let text = format!("{text}[command.command]\nshell='true'\nthen='watch'\n");
+    let text = format!("{text}[command.command]\ntimeout='365d'\nshell='true'\nthen='watch'\n");
     let (_dir, state, record) = setup(&text);
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red"}));
@@ -426,7 +430,7 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
             "evidence ⇄ [build], plan → judge → report → reported",
         ),
         (
-            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nlifecycle='turn'\nagent='claude'\nthen='d'\non.visits='c'\n[agent.c]\nlifecycle='turn'\nagent='claude'\nthen='d'\n[test.d]\nshell='true'\non={pass='@done',fail='@failed'}",
+            "[workflow]\nscope='worktree'\nstart='a'\n[script.a]\ntimeout='365d'\nrun='cat answer.json'\non={left='b',right='c'}\n[agent.b]\nlifecycle='turn'\nagent='claude'\nthen='d'\non.visits='c'\n[agent.c]\nlifecycle='turn'\nagent='claude'\nthen='d'\n[test.d]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}",
             &["left"][..],
             "a → [b] · c → d",
         ),

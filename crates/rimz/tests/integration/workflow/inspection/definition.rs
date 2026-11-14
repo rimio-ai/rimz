@@ -6,6 +6,7 @@ summary = 'carry the change to green'
 scope = 'worktree'
 start = 'begin'
 [test.begin]
+timeout = '365d'
 shell = 'true'
 on.pass = 'sweep'
 on.fail = '@failed'
@@ -32,6 +33,7 @@ max-visits = 4
 admission.give-up = '6h'
 on.asked = 'watch'
 [test.unused]
+timeout = '365d'
 shell = 'false'
 on.pass = '@done'
 on.fail = '@failed'
@@ -188,7 +190,7 @@ fn definition_hints_parse_hyphen_leading_workflow_and_node_names() {
 fn the_by_hand_hint_starts_in_the_selected_room() {
     let (env, _) = super::super::fixture(
         "[workflow]\nscope='project'\nstart='gate'\n\
-         [test.gate]\nshell='true'\non={pass='@done',fail='@failed'}\n",
+         [test.gate]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n",
         "",
     );
     let other = env.home_root.join("other/project");
@@ -305,6 +307,7 @@ timeout = '8h'
 on.ok = 'fix'
 on.invalid = '@failed'
 [condition.watch]
+timeout = '365d'
 cases = [{ when = ['ci=passed', 'pr=open', 'window.5h.left>=25'], outcome = 'green', for = '3m' }]
 provider = 'claude'
 account = 'default'
@@ -313,10 +316,12 @@ on.green = '@done'
 on.waiting = '@wait'
 on.unknown = '@wait'
 [script.script]
+timeout = '365d'
 run = 'sh checks/pr.sh'
 wake = ['pr.*']
 on.ok = '@done'
 [test.command]
+timeout = '365d'
 shell = "printf 'a\\nb\\n'"
 on.pass = '@done'
 on.fail = '@failed'
@@ -416,7 +421,7 @@ fn node_view_exposes_check_step_condition_and_command_facts() {
                 "green → @done",
                 "none true",
                 "waiting → @wait",
-                "timeout → @failed (default, never: no timeout)",
+                "timeout → @failed (default)",
                 "unknown → @wait (explicit)",
             ],
         ),

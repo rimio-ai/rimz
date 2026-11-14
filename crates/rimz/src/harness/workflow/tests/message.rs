@@ -98,7 +98,7 @@ fn a_message_step_without_prompt_text_sends_its_header_line_alone() {
 fn an_undelivered_message_follows_on_undelivered_never_then() {
     for (routes, entered) in [("", None), ("on.undelivered='retry'\n", Some("retry"))] {
         let text = format!(
-            "{TELL}{routes}[test.retry]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
+            "{TELL}{routes}[test.retry]\ntimeout='365d'\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
         );
         let (_dir, state, record) = super::attempts::setup(&text);
         let paths = state.workflow(&record.id);
@@ -307,7 +307,7 @@ fn a_cancel_deadline_or_resume_at_after_the_host_died_retires_its_queued_notice(
 #[test]
 fn message_step_validation_refuses_non_agent_targets_and_open_then_lists() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[script.done]\nrun='true'\non.ok='@done'\n";
+    let base = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner#feat-x'\nthen='@done'\n[script.done]\ntimeout='365d'\nrun='true'\non.ok='@done'\n";
     fs::write(dir.join("workflow.toml"), base).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);

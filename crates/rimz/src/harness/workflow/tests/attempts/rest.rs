@@ -379,7 +379,7 @@ fn closing_verdicts_stop_once_and_follow_the_saved_route() {
     let mut actual = Vec::new();
     for target in ["@done", "@failed", "next", "other"] {
         let text = format!(
-            "{}\n[agent.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[test.other]\nshell='true'\non.pass='@done'\n",
+            "{}\n[agent.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[test.other]\ntimeout='365d'\nshell='true'\non.pass='@done'\n",
             SESSION.replace("on.done='@done'", &format!("on.done='{target}'"))
         );
         let (dir, state, record) = setup(&text);

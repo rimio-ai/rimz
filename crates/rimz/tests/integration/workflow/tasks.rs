@@ -56,7 +56,7 @@ fn a_name_that_is_both_a_workflow_and_a_task_refuses_and_names_both_selectors() 
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\nrun = 'true'\non.ok = '@done'\non.timeout = '@failed'\non.invalid = '@failed'\n",
+        "[workflow]\nscope = 'worktree'\nstart = 'pr'\n[script.pr]\ntimeout = '365d'\nrun = 'true'\non.ok = '@done'\non.timeout = '@failed'\non.invalid = '@failed'\n",
     )
     .unwrap();
     for verb in ["show", "validate"] {

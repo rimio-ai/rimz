@@ -117,7 +117,7 @@ fn invalid_wakes_refuse_validation_and_run_with_the_same_message() {
 fn subscriptions_of_other_checks_do_not_wake_the_current_node() {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}{WAIT}[script.other]\nrun='true'\non.ok='@done'\nwake=['review.ready']\n"
+            "{HEADER}{WAIT}[script.other]\ntimeout='365d'\nrun='true'\non.ok='@done'\nwake=['review.ready']\n"
         ),
         PENDING,
     );

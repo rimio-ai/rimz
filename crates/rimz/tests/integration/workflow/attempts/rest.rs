@@ -11,10 +11,16 @@ fn room_with(extra: &str) -> Room {
     let path = room.env.rimz_home().join("workflows/review/workflow.toml");
     fs::write(
         &path,
-        fs::read_to_string(&path).unwrap().replace(
-            "on.done = '@done'",
-            "on.done = '@done'\non.pending = 'build'\ntimeout = '1h'",
-        ),
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace(
+                "on.done = '@done'",
+                "on.done = '@done'\non.pending = 'build'",
+            )
+            .replace(
+                "[script.after]\ntimeout='365d'",
+                "[script.after]\ntimeout = '1h'",
+            ),
     )
     .unwrap();
     fs::write(room.env.rimz_home().join("workflows/review/checks/pr.sh"),

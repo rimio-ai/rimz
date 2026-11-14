@@ -68,7 +68,7 @@ fn wait(minute: i64, outcome: &str, first: i64, last: i64, count: u64) -> Journa
 fn history(journal: &[JournalEntry]) -> String {
     history_of(
         "[workflow]\nscope='worktree'\nstart='pr'\n\
-         [script.pr]\nrun='sh checks/pr.sh'\non.pending='@wait'\non.done='@done'\n\
+         [script.pr]\ntimeout='365d'\nrun='sh checks/pr.sh'\non.pending='@wait'\non.done='@done'\n\
          [agent.build]\nlifecycle='session'\nrest-check=['pr']\nagent='codex'\nprompt-file='prompt.md'\nthen='pr'\n",
         journal,
     )
@@ -118,7 +118,7 @@ fn cancellation_history_prints_the_recorded_reason() {
         color: crate::cli::ColorWhen::Never,
     };
     let spec = b"[workflow]\nscope='worktree'\nstart='pr'\n\
-        [test.pr]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+        [test.pr]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n";
     let mut actual = Vec::new();
     for reason in [None, Some("worktree removed")] {
         let mut record = waiting_record(0, 0, 1);

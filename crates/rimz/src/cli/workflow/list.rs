@@ -567,7 +567,7 @@ mod tests {
             "deadline_fired":false, "next_seq":1,
         }))
         .unwrap();
-        let spec: workflow::Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='decision'\n[test.decision]\nshell='true'\non.pass='work'\non.fail='@user'\n[command.work]\nshell='true'\ntimeout='1h'\nthen='decision'\n").unwrap();
+        let spec: workflow::Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='decision'\n[test.decision]\ntimeout='365d'\nshell='true'\non.pass='work'\non.fail='@user'\n[command.work]\nshell='true'\ntimeout='1h'\nthen='decision'\n").unwrap();
         let row = Row {
             record: &record,
             spec: Some(&spec),

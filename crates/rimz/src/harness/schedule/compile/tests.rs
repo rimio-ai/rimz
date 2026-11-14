@@ -967,7 +967,7 @@ fn a_task_run_that_ran_only_a_command_step_reports_that_it_never_acted() {
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     open_room(&state, home.path());
     let text = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\n\
-                timeout='1h'\nthen='done'\n[test.done]\nshell='true'\n\
+                timeout='1h'\nthen='done'\n[test.done]\ntimeout='365d'\nshell='true'\n\
                 on={pass='@done',fail='@failed',died='@failed'}\n";
     let record = create(
         &state,

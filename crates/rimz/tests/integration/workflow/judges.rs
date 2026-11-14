@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 fn failed_judge(body: &str, envelope: &str) -> (Value, String) {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\non.died='recover'\n[test.recover]\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
+            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\non.invalid='recover'\non.died='recover'\n[test.recover]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='@failed'\n"
         ),
         "",
     );
@@ -117,7 +117,7 @@ fn scoped_judge_guard_restores_and_records_replacements() {
     }
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
+            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
         ),
         "",
     );
@@ -188,7 +188,7 @@ fn scoped_judge_guard_arm_refusal_names_the_limit_without_spawning() {
     }
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
+            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
         ),
         "",
     );
@@ -240,7 +240,7 @@ printf '%s\n' '{"structured_output":{"outcome":"done"}}'
 fn judge_refuses_below_version_floor_before_provider_spawn() {
     let (env, _) = fixture(
         &format!(
-            "{HEADER}[judge.pr]\nsummary=\"Review the work\"\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"
+            "{HEADER}[judge.pr]\ntimeout='365d'\nsummary=\"Review the work\"\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"
         ),
         "",
     );

@@ -12,9 +12,11 @@ shell='printf "%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK"'
 timeout='1m'
 then='run'
 [script.run]
+timeout = '365d'
 run='sh checks/env.sh'
 on.ok='shell'
 [test.shell]
+timeout = '365d'
 shell='printf "%s|%s" "$RIMZ_WORKFLOW_DEFINITION" "$RIMZ_LOOP_TASK" > "$RIMZ_WORKFLOW_DIR/shell-definition"'
 on={pass='@done',fail='@failed'}
 "#;
@@ -70,7 +72,7 @@ on={pass='@done',fail='@failed'}
 #[test]
 fn a_run_that_does_not_split_dies_with_the_command_error() {
     let (_dir, state, record) = super::attempts::setup(
-        "[workflow]\nscope='worktree'\nstart='run'\n[script.run]\nrun=\"echo 'open\"\non.ok='@done'\n",
+        "[workflow]\nscope='worktree'\nstart='run'\n[script.run]\ntimeout='365d'\nrun=\"echo 'open\"\non.ok='@done'\n",
     );
     advance(&state, &record.id, &FakeHost::new()).unwrap();
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
@@ -88,7 +90,7 @@ fn command_steps_bypass_every_agent_host_operation_and_prompt() {
     let mut results = Vec::new();
     for runner in ["run", "shell"] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\n{runner}='true'\ntimeout='1h'\nthen='done'\n[test.done]\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\n{runner}='true'\ntimeout='1h'\nthen='done'\n[test.done]\ntimeout='365d'\nshell='true'\non={{pass='@done',fail='@failed'}}\n"
         );
         let (_dir, state, record) = super::attempts::setup(&text);
         let host = FakeHost::new();
@@ -124,7 +126,7 @@ fn command_step_cycles_stop_at_the_cap_without_consuming_a_sequence() {
     let mut results = Vec::new();
     for max in [1, 2] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\ntimeout='1h'\nthen='again'\nmax-visits={max}\n[test.again]\nshell='true'\non={{pass='build',fail='@failed'}}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nshell='true'\ntimeout='1h'\nthen='again'\nmax-visits={max}\n[test.again]\ntimeout='365d'\nshell='true'\non={{pass='build',fail='@failed'}}\n"
         );
         let (_dir, state, record) = super::attempts::setup(&text);
         let host = FakeHost::new();
