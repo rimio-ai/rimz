@@ -24,11 +24,27 @@ fn reap_session_name(paths: &StatePaths) -> String {
         .unwrap_or_else(|_| "rimz-reap".to_owned())
 }
 
-type EndedSession = (
-    crate::ids::AgentKind,
-    crate::ids::AgentSessionId,
-    &'static str,
-);
+/// A derived end, stamped with the launch and epoch observed on its row so a
+/// swap that lands before the append leaves the row alone.
+struct EndedSession {
+    kind: crate::ids::AgentKind,
+    agent_id: crate::ids::AgentSessionId,
+    launch_id: Option<crate::ids::AgentSessionId>,
+    epoch: u32,
+    event_name: &'static str,
+}
+
+impl EndedSession {
+    fn of(agent: &AgentState, event_name: &'static str) -> Self {
+        Self {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            launch_id: agent.launch_id.clone(),
+            epoch: agent.epoch,
+            event_name,
+        }
+    }
+}
 
 impl Store {
     fn append_ended_sessions(&self, victims: &[EndedSession]) -> Result<usize> {
@@ -37,14 +53,18 @@ impl Store {
         }
         let session_name = reap_session_name(&self.inner.paths);
         self.commit(|txn| {
-            for (kind, agent_id, event_name) in victims {
-                let observation =
-                    AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended);
+            for victim in victims {
+                let mut observation = AgentLifecycleObservation::new(
+                    Some(victim.agent_id.clone()),
+                    LifecycleSignal::Ended,
+                );
+                observation.launch_id = victim.launch_id.clone();
+                observation.launch.epoch = (victim.epoch > 0).then_some(victim.epoch);
                 txn.append(&EventEnvelope::agent_lifecycle(
                     txn.paths.workspace_id.clone(),
                     session_name.as_str(),
-                    kind.as_str(),
-                    *event_name,
+                    victim.kind.as_str(),
+                    victim.event_name,
                     &observation,
                 ))?;
             }
@@ -71,13 +91,7 @@ impl Store {
                     .is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
             })
             .filter(|agent| !matches!(runtime::agent_liveness(agent), AgentLiveness::Live { .. }))
-            .map(|agent| {
-                (
-                    agent.kind.clone(),
-                    agent.agent_id.clone(),
-                    "WorktreeRemoved",
-                )
-            })
+            .map(|agent| EndedSession::of(agent, "WorktreeRemoved"))
             .collect::<Vec<_>>();
         self.append_ended_sessions(&victims)
     }
@@ -136,7 +150,7 @@ impl Store {
                 } else {
                     return None;
                 };
-                Some((agent.kind.clone(), agent.agent_id.clone(), event_name))
+                Some(EndedSession::of(agent, event_name))
             })
             .collect::<Vec<_>>();
         self.append_ended_sessions(&victims)

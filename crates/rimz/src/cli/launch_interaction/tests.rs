@@ -704,6 +704,7 @@ fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
 
 fn launch_identity(kind: &str, name: &str) -> AgentLaunchIdentity {
     AgentLaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked(kind),
         agent_id: AgentSessionId::from(format!("launch-{name}")),
         name: name.to_owned(),

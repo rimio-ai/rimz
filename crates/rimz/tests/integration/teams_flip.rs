@@ -1188,6 +1188,7 @@ impl Fixture {
     fn unregistered(&self, ended: bool) {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         let launch = rimz::store::writer::AgentLaunchIdentity {
+            launch_id: None,
             kind: AgentKind::new_unchecked("claude"),
             agent_id: "launch_coder".into(),
             name: "coder".into(),

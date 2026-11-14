@@ -227,6 +227,12 @@ pub struct LaunchParams {
     pub untrusted_checkout: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub molted_from: Option<AgentSessionId>,
+    /// The count of RimZ swaps of this agent the process runs under, passed
+    /// through `RIMZ_AGENT_EPOCH`; absent is 0. A swap's reservation takes
+    /// one past the highest epoch on its launch, and the fold reads it beside
+    /// the observation's `launch_id` to fence a replaced process's late events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<Box<LaunchRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -533,6 +539,13 @@ pub struct AgentLifecycleObservation {
     /// during reduction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// The RimZ launch the observing process ran under, from the hook's
+    /// captured `RIMZ_AGENT_ID`; root sessions only. Read with `launch.epoch`
+    /// as the event's stamp by the fold's fences alone: it never assigns a
+    /// row's launch identity. Older events and hand-launched agents leave it
+    /// unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
     #[serde(flatten)]
     pub launch: LaunchParams,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
@@ -623,6 +636,7 @@ impl AgentLifecycleObservation {
             on_screen: None,
             state_snapshot: None,
             agent_name: None,
+            launch_id: None,
             launch: LaunchParams::default(),
             signal,
             ask_queue: None,

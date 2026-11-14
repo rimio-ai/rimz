@@ -1316,26 +1316,13 @@ fn launch_occupant<'a>(group: &[&'a AgentState]) -> Option<&'a AgentState> {
 }
 
 // `harness::fleet::LaunchRows` mirrors this membership rule as hash keys; a
-// change here changes that index too.
+// change to `agents::state::launch_members` changes that index too.
 fn launch_members<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     kind: &AgentKind,
     id: &AgentSessionId,
 ) -> Vec<&'a AgentState> {
-    let alias = agents
-        .clone()
-        .into_iter()
-        .find(|agent| &agent.kind == kind && &agent.agent_id == id && !agent.is_provider_subagent())
-        .and_then(|agent| agent.launch_id.as_ref());
-    agents
-        .into_iter()
-        .filter(|agent| {
-            &agent.kind == kind
-                && !agent.is_provider_subagent()
-                && (agent.answers_to(id)
-                    || alias.is_some_and(|alias| agent.launch_id.as_ref() == Some(alias)))
-        })
-        .collect()
+    crate::agents::state::launch_members(agents, kind, id)
 }
 
 /// Members of the requested launches, each once even for overlapping aliases.
@@ -1357,7 +1344,9 @@ pub fn launch_rows<'a, 'key>(
 
 /// Current row of a launch, including a legacy session-id alias.
 ///
-/// Accepts a reusable borrowed row view, including a layered rollup.
+/// Accepts a reusable borrowed row view, including a layered rollup. Only
+/// the launch's holder rows ([`crate::agents::state::launch_holder`]) are
+/// candidates, so a session a swap replaced is never the current row.
 ///
 /// - Live rows win by pane-owner order.
 /// - A live row that holds `id` now beats a live row that held it before a
@@ -1372,7 +1361,7 @@ pub fn launch_row<'a>(
     kind: &AgentKind,
     id: &AgentSessionId,
 ) -> Option<&'a AgentState> {
-    let members = launch_members(agents, kind, id);
+    let members = crate::agents::state::launch_holder(&launch_members(agents, kind, id));
     let live_holders: Vec<_> = members
         .iter()
         .copied()

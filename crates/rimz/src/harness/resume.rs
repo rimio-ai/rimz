@@ -1166,6 +1166,7 @@ impl ResumeCandidate {
                 login: observation.login.clone(),
                 session_id: observation.session_id.clone(),
                 launch_id: None,
+                epoch: 0,
                 name: None,
                 name_explicit: false,
                 profile: None,

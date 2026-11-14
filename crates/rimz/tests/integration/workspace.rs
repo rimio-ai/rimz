@@ -544,6 +544,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
 fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        launch_id: None,
         on_screen: None,
         state_snapshot: None,
         ask_queue: None,

@@ -18,6 +18,9 @@ pub(crate) struct AgentIdentityState {
     pub(super) names: BTreeMap<String, (AgentKind, AgentSessionId)>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) next_ordinal: BTreeMap<AgentKind, u32>,
+    /// Provisional launch keys a session took over since the last rotation:
+    /// a later launch event for one is ignored, and its carryover row hidden.
+    /// Rotation staging clears the set with the rows it names.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(super) consumed_launches: BTreeSet<AgentSessionId>,
     /// Ephemeral side-conversation ids, one per `/btw`, kept for the log's life
@@ -41,6 +44,11 @@ impl AgentIdentityState {
 
     pub(crate) fn is_side_session(&self, agent_id: &AgentSessionId) -> bool {
         self.side_sessions.contains(agent_id)
+    }
+
+    /// Whether the fold retired this provisional launch key into a session.
+    pub(crate) fn launch_consumed(&self, agent_id: &AgentSessionId) -> bool {
+        self.consumed_launches.contains(agent_id)
     }
 
     pub(crate) fn without_consumed_launches(mut self) -> Self {
@@ -80,7 +88,11 @@ pub(crate) fn backfill_agent_identities(
         }
         let key = (kind, agent_id);
         let prior = index_by_key.get(&key).map(|&prior| agents[prior].as_ref());
-        let identity = allocator.assign_existing(&key.0, &key.1, prior);
+        let rows = IndexedRows {
+            index_by_key: &index_by_key,
+            agents,
+        };
+        let identity = allocator.assign_existing(&key.0, &key.1, prior, &rows);
         let agent = super::agent_mut(&mut agents[index]);
         agent.name_explicit = identity.name_explicit;
         agent.name = Some(identity.name);
@@ -90,8 +102,59 @@ pub(crate) fn backfill_agent_identities(
     allocator.state()
 }
 
+/// The rows a name claim reads an owner's launch and epoch from.
+pub(super) trait ClaimRows {
+    fn row(&self, key: &(AgentKind, AgentSessionId)) -> Option<&AgentState>;
+}
+
+impl<Row: Borrow<AgentState>> ClaimRows for BTreeMap<(AgentKind, AgentSessionId), Row> {
+    fn row(&self, key: &(AgentKind, AgentSessionId)) -> Option<&AgentState> {
+        self.get(key).map(Borrow::borrow)
+    }
+}
+
+/// Backfill's rows through its key index, borrowed for one claim rather than
+/// collected again for every row it assigns.
+struct IndexedRows<'a> {
+    index_by_key: &'a BTreeMap<(AgentKind, AgentSessionId), usize>,
+    agents: &'a [Arc<AgentState>],
+}
+
+impl ClaimRows for IndexedRows<'_> {
+    fn row(&self, key: &(AgentKind, AgentSessionId)) -> Option<&AgentState> {
+        self.index_by_key
+            .get(key)
+            .map(|&index| self.agents[index].as_ref())
+    }
+}
+
 fn has_card_identity(agent: &AgentState) -> bool {
     agent.name.as_deref().is_some_and(valid_agent_name) && agent.kind_ordinal.is_some()
+}
+
+/// The launch and epoch a name claim speaks for. A row of the launch that
+/// owns a name may use it; it takes the claim only from an owner at its own
+/// epoch or lower, so a replaced session's late event never moves the claim
+/// back from the session that holds the agent.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Claimant<'a> {
+    pub(super) launch: &'a AgentSessionId,
+    pub(super) epoch: u32,
+}
+
+impl<'a> Claimant<'a> {
+    pub(super) fn of(row: &'a AgentState) -> Self {
+        Self {
+            launch: row.launch_key(),
+            epoch: row.epoch,
+        }
+    }
+}
+
+enum NameClaim {
+    Take,
+    Share,
+    Taken,
 }
 
 #[derive(Clone, Debug)]
@@ -161,7 +224,7 @@ impl CardIdentityAllocator {
         AgentIdentityState {
             names: self.names.clone(),
             next_ordinal: self.next_ordinal.clone(),
-            consumed_launches: BTreeSet::new(),
+            consumed_launches: self.consumed_launches.clone(),
             side_sessions: self.side_sessions.clone(),
         }
     }
@@ -207,10 +270,15 @@ impl CardIdentityAllocator {
         kind: &AgentKind,
         pane_id: &PaneId,
         new_key: &(AgentKind, AgentSessionId),
+        takes: impl Fn(&AgentState) -> bool,
     ) -> Option<(AgentKind, AgentSessionId)> {
         map.iter()
             .filter_map(|(owner, state)| {
-                if owner == new_key || owner.0 != *kind || !owner.1.is_provisional() {
+                if owner == new_key
+                    || owner.0 != *kind
+                    || !owner.1.is_provisional()
+                    || !takes(state)
+                {
                     return None;
                 }
                 let pane = state.pane.as_ref()?;
@@ -244,6 +312,7 @@ impl CardIdentityAllocator {
         agent_id: &AgentSessionId,
         observation: &AgentLifecycleObservation,
         prior: Option<&AgentState>,
+        rows: &impl ClaimRows,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let child = observation.parent_agent_id.is_some()
@@ -252,7 +321,7 @@ impl CardIdentityAllocator {
             self.names.retain(|_, owner| owner != &key);
             self.assign_child_name(observation.agent_name.as_deref(), prior, agent_id)
         } else {
-            self.assign_name(&key, observation, prior)
+            self.assign_name(&key, observation, prior, rows)
         };
         let name_explicit = observation.parent_agent_id.is_some()
             && observation.agent_name.as_deref() == Some(name.as_str())
@@ -275,10 +344,24 @@ impl CardIdentityAllocator {
         agent_id: &AgentSessionId,
         payload: &AgentLaunchPayload,
         prior: Option<&AgentState>,
+        rows: &impl ClaimRows,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
-        let name =
-            self.assign_name_candidate(&key, Some(payload.agent_name.as_str()), prior, agent_id);
+        // Only a swap's reservation, the one launch event that carries an
+        // epoch, claims its agent's handle through the launch; any other
+        // launch row takes a name only while no other row owns it.
+        let claimant = payload.launch.epoch.map(|epoch| Claimant {
+            launch: payload.launch_id.as_ref().unwrap_or(agent_id),
+            epoch,
+        });
+        let name = self.assign_name_candidate(
+            &key,
+            Some(payload.agent_name.as_str()),
+            prior,
+            agent_id,
+            claimant,
+            rows,
+        );
         let name_explicit = payload.agent_name_explicit && name == payload.agent_name;
         let candidate = payload
             .launch
@@ -297,12 +380,13 @@ impl CardIdentityAllocator {
         kind: &AgentKind,
         agent_id: &AgentSessionId,
         prior: Option<&AgentState>,
+        rows: &impl ClaimRows,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let name = if prior.is_some_and(AgentState::is_provider_subagent) {
             self.assign_child_name(None, prior, agent_id)
         } else {
-            self.assign_name_candidate(&key, None, prior, agent_id)
+            self.assign_name_candidate(&key, None, prior, agent_id, prior.map(Claimant::of), rows)
         };
         let name_explicit =
             prior
@@ -324,6 +408,7 @@ impl CardIdentityAllocator {
         key: &(AgentKind, AgentSessionId),
         observation: &AgentLifecycleObservation,
         prior: Option<&AgentState>,
+        rows: &impl ClaimRows,
     ) -> String {
         let prior_name = prior
             .and_then(|state| state.name.as_deref())
@@ -339,7 +424,7 @@ impl CardIdentityAllocator {
         } else {
             stamped.or(prior_name)
         };
-        self.assign_name_candidate(key, candidate, prior, &key.1)
+        self.assign_name_candidate(key, candidate, prior, &key.1, prior.map(Claimant::of), rows)
     }
 
     fn assign_child_name(
@@ -366,20 +451,21 @@ impl CardIdentityAllocator {
         candidate: Option<&str>,
         prior: Option<&AgentState>,
         fallback_id: &AgentSessionId,
+        claimant: Option<Claimant<'_>>,
+        rows: &impl ClaimRows,
     ) -> String {
-        if let Some(name) = candidate
-            && self.name_available_for(name, key)
-        {
-            self.names.insert(name.to_owned(), key.clone());
-            return name.to_owned();
-        }
-        if let Some(name) = prior
+        let prior_name = prior
             .and_then(|state| state.name.as_deref())
-            .filter(|name| valid_agent_name(name))
-            && self.name_available_for(name, key)
-        {
-            self.names.insert(name.to_owned(), key.clone());
-            return name.to_owned();
+            .filter(|name| valid_agent_name(name));
+        for name in candidate.into_iter().chain(prior_name) {
+            match self.name_claim(name, key, claimant, rows) {
+                NameClaim::Take => {
+                    self.names.insert(name.to_owned(), key.clone());
+                    return name.to_owned();
+                }
+                NameClaim::Share => return name.to_owned(),
+                NameClaim::Taken => {}
+            }
         }
         let name = crate::agents::petname::mint_for_session(fallback_id, |name| {
             self.names.get(name).is_some_and(|owner| owner != key)
@@ -388,8 +474,29 @@ impl CardIdentityAllocator {
         name
     }
 
-    fn name_available_for(&self, name: &str, key: &(AgentKind, AgentSessionId)) -> bool {
-        self.names.get(name).is_none_or(|owner| owner == key)
+    fn name_claim(
+        &self,
+        name: &str,
+        key: &(AgentKind, AgentSessionId),
+        claimant: Option<Claimant<'_>>,
+        rows: &impl ClaimRows,
+    ) -> NameClaim {
+        let Some(owner) = self.names.get(name).filter(|owner| *owner != key) else {
+            return NameClaim::Take;
+        };
+        let Some(claimant) = claimant else {
+            return NameClaim::Taken;
+        };
+        match rows.row(owner) {
+            Some(row) if row.launch_key() == claimant.launch => {
+                if claimant.epoch >= row.epoch {
+                    NameClaim::Take
+                } else {
+                    NameClaim::Share
+                }
+            }
+            _ => NameClaim::Taken,
+        }
     }
 
     fn assign_ordinal(

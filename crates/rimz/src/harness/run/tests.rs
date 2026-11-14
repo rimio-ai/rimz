@@ -2943,6 +2943,7 @@ fn molt_rekeys_the_leader_run_across_providers_and_again_after_failed_startup() 
     successor.molted_from = predecessor.launch_id.clone();
     successor.name = Some("otter".into());
     let mut identity = crate::store::writer::AgentLaunchIdentity {
+        launch_id: None,
         kind: successor.kind.clone(),
         agent_id: successor.agent_id.clone(),
         name: "otter".into(),

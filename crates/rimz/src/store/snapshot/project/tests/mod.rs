@@ -301,6 +301,7 @@ fn attach_event(
         "session",
         &AgentKind::new_unchecked(kind),
         AgentAttachPayload {
+            epoch: None,
             login: None,
             record: None,
             tier: None,
@@ -389,6 +390,7 @@ mod phase_status;
 mod prompt_task;
 mod soft_compact;
 mod subagents;
+mod swap;
 mod timestamps;
 mod tool_stats;
 mod tune;
@@ -1884,6 +1886,7 @@ fn resumed_fork_events(provider_pane: &str) -> Vec<EventEnvelope> {
             "session",
             &AgentKind::new_unchecked("codex"),
             AgentAttachPayload {
+                epoch: None,
                 login: None,
                 record: None,
                 tier: None,
@@ -2159,6 +2162,7 @@ fn launch_identity_retry_inspects_only_same_instance_candidates() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
+            epoch: None,
             login: None,
             record: None,
             tier: None,

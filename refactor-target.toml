@@ -405,7 +405,11 @@ upward-dependencies = ["address"]
 # RedeemRefusal, RedeemRefusal::of, ResetCredits::refusal and ResetGrant::clears_window are the one
 # claim rule the Claude redemption hold and the harness's redeem marker read (+4).
 # ProviderCapacity::latest_spent_window names the dry window the redeem marker checks a grant clears (+1).
-surface-budget = 1270
+# agents::state::{launch_members, launch_holder, AgentEnd, agent_end, epoch_stood} and
+# LaunchHolders (new, replaced) are the one definition of an agent's members, holder and end
+# that the store, address, fleet and the swap routine read (+8).
+# AgentState::{stands, session_over, launch_key} feed those predicates (+3).
+surface-budget = 1281
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
@@ -4514,7 +4518,9 @@ path = "crates/rimz/src/store"
 # workflow::{end_stranded, mark_header_report_sent} and RunClass::awaits_pass let the workflow pass end a stranded run in place, mark its header report sent, and tell the tick it has work (+3).
 # The agent card's loop booking rows (SidebarBooking and its band, state, wait, fire and PR types) (+11).
 # workflow::JournalEntry::relocate points a journal read from one home at another, for the history a run saves before its home moves (+1).
-surface-budget = 640
+# Store::{begin_agent_swap, abort_agent_swap}, SwapAbort and AgentLaunchIdentity::launch_id
+# reserve, abort and name a swap's reservation for the restart and molt routine (+4).
+surface-budget = 644
 
 [[verdict]]
 kind = "item"

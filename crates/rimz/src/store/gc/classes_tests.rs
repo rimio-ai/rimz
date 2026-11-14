@@ -976,3 +976,43 @@ fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
         );
     }
 }
+
+#[test]
+fn owned_sweep_reads_the_holder_not_a_late_end_of_a_replaced_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    paths.ensure_dirs().unwrap();
+    let unit = paths.agents_dir.join("coder");
+    fs::create_dir_all(unit.join("scratch")).unwrap();
+    let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+    fs::File::open(unit.join("scratch"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    fs::File::open(&unit).unwrap().set_modified(old).unwrap();
+    let now = jiff::Timestamp::now();
+    let mut holder =
+        crate::testkit::agent_state("claude", "s2", now - jiff::SignedDuration::from_hours(1));
+    holder.name = Some("coder".to_owned());
+    holder.launch_id = Some("launch_a".into());
+    holder.epoch = 1;
+    let mut replaced = crate::testkit::agent_state("claude", "s1", now);
+    replaced.name = Some("coder".to_owned());
+    replaced.launch_id = Some("launch_a".into());
+    replaced.ended_at = Some(jiff::Timestamp::try_from(old).unwrap());
+    collect_owned(
+        &paths,
+        &vec![holder, replaced].into(),
+        &mut Sweep::new(false),
+        &mut GcReport::default(),
+    )
+    .unwrap();
+    assert!(
+        unit.join("scratch").exists(),
+        "the live agent keeps its unit"
+    );
+}

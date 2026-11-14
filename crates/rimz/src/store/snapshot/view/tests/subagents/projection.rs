@@ -1054,7 +1054,7 @@ fn mixed_children_attach_to_rendered_successor_not_live_predecessor() {
 }
 
 #[test]
-fn host_pane_reap_drops_launch_linked_children_but_not_other_kinds() {
+fn host_pane_reap_drops_launch_linked_children_but_not_other_launches() {
     let mut parent = agent("claude", "NEW", AgentStatus::Success, 20).in_pane("%host");
     parent.launch_id = Some("L".into());
     let mut child = agent("codex", "launched", AgentStatus::Running, 30);
@@ -1064,7 +1064,7 @@ fn host_pane_reap_drops_launch_linked_children_but_not_other_kinds() {
     let native = child_state("NEW", "native", AgentStatus::Running, 5);
     let mut unrelated = child.clone();
     unrelated.agent_id = "unrelated".into();
-    unrelated.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+    unrelated.parent_agent_id = Some("M".into());
     let mut snapshot = room(vec![parent, child, native, unrelated.clone()]);
     let panes = [pane(
         "%host",
@@ -1085,7 +1085,7 @@ fn host_pane_reap_keeps_children_with_a_live_parent_launch_sibling() {
     for (kind, ended, keeps_child) in [
         ("claude", false, true),
         ("claude", true, false),
-        ("codex", false, false),
+        ("codex", false, true),
     ] {
         let mut parent = agent("claude", "OLD", AgentStatus::Running, 20).in_pane("%host");
         parent.launch_id = Some("L".into());

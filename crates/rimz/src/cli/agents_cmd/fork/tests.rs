@@ -225,6 +225,7 @@ fn fork_tab_names_follow_the_seed_profile_else_kind() {
             seed,
             channel,
             &AgentLaunchIdentity {
+                launch_id: None,
                 kind: seed.kind.clone(),
                 agent_id: "fork".into(),
                 name: "bright-river".into(),

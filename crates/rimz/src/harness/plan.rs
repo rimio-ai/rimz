@@ -295,6 +295,9 @@ pub(super) struct ResumeLaunchIdentity {
     pub login: Option<crate::ids::LoginName>,
     pub session_id: AgentSessionId,
     pub launch_id: Option<AgentSessionId>,
+    /// The row's swap epoch, carried unchanged so the resumed process's
+    /// events are not stale on its own row.
+    pub epoch: u32,
     pub name: Option<String>,
     pub name_explicit: bool,
     pub profile: Option<String>,
@@ -323,6 +326,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             login: agent.login.clone(),
             session_id: agent.agent_id.clone(),
             launch_id: agent.launch_id.clone(),
+            epoch: agent.epoch,
             name: agent.name.clone(),
             name_explicit: agent.name_explicit,
             profile: agent.profile.clone(),
@@ -2074,6 +2078,7 @@ pub(super) fn resume_command(
         budget: posture.budget.clone(),
         tier: posture.tier.clone(),
         record: posture.record.clone(),
+        epoch: (identity.epoch > 0).then_some(identity.epoch),
         ..Default::default()
     };
     crate::harness::launch::exec_argv(

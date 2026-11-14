@@ -601,8 +601,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_card_bookings_contract_is_version_100() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 100);
+fn snapshot_agent_epoch_contract_is_version_101() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 101);
+}
+
+#[test]
+fn pre_101_epochless_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(100);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views whose agent rows carry no swap epoch or replaced mark must refold"
+    );
 }
 
 #[test]
@@ -924,6 +939,7 @@ fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) ->
         ask_queue: None,
         agent_id: Some(AgentSessionId::from(agent_id)),
         agent_name: None,
+        launch_id: None,
         launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid,

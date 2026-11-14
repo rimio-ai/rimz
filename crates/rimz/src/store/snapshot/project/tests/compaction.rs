@@ -159,6 +159,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
+            epoch: None,
             login: None,
             record: None,
             tier: None,

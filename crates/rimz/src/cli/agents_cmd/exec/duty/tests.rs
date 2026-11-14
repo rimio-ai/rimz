@@ -10,6 +10,7 @@ fn card_evidence_stops_after_the_provider_registers() {
     let rt = rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
     let store = rimz::Store::open(paths, rt).unwrap();
     let identity = LaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: "launch_child".into(),
         name: "child".into(),
@@ -491,6 +492,7 @@ fn parent_probe_confirms_ended_launch_but_preserves_live_successor_and_legacy_al
                 "room",
                 &kind,
                 rimz::store::event::AgentAttachPayload {
+                    epoch: None,
                     agent_id: "NEW".into(),
                     launch_id: Some("L".into()),
                     pane_id: PaneId::parse("tmux:%77").unwrap(),

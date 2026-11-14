@@ -309,6 +309,7 @@ fn parent_watchdog_covers_every_subagent_but_not_peers() {
         workspace,
     };
     let identity = LaunchIdentity {
+        launch_id: None,
         kind: request.kind.clone(),
         agent_id: "child-launch".into(),
         name: "child".into(),
@@ -449,6 +450,7 @@ fn picker_binding_evidence_survives_session_end() {
             rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
         let store = rimz::Store::open(paths, runtime).unwrap();
         let identity = LaunchIdentity {
+            launch_id: None,
             kind: AgentKind::new_unchecked("codex"),
             agent_id: "launch_picker".into(),
             name: "picker".into(),

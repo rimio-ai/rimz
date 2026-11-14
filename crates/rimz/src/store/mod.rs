@@ -150,6 +150,18 @@ pub enum StoreErr {
     )]
     MoltSuccessor { successor: String },
     #[error(
+        "swap refused: the session of @{agent} named for the swap is not the one that holds it, or the agent has ended; nothing was changed"
+    )]
+    SwapNotHolder { agent: String },
+    #[error(
+        "swap refused: @{agent} already has a restart or molt starting; wait until it registers or fails, then retry"
+    )]
+    SwapInFlight { agent: String },
+    #[error(
+        "swap refused: @{agent} has been restarted or molted as many times as one launch can carry; launch a new agent instead"
+    )]
+    SwapEpochOverflow { agent: String },
+    #[error(
         "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use {kind} {requested}`"
     )]
     RoomLoginsFrozen {

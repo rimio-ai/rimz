@@ -728,6 +728,9 @@ pub(in crate::cli) fn relaunch_request(
         effort: posture.launch.effort.clone(),
         fast: posture.launch.fast,
         budget: posture.launch.budget.clone(),
+        epoch: fresh_identity.map_or((agent.epoch > 0).then_some(agent.epoch), |identity| {
+            identity.launch.epoch
+        }),
         kind_ordinal: None,
     };
     ExecRequest {

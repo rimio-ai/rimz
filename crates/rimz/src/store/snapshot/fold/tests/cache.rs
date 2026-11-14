@@ -47,6 +47,28 @@ fn pre_loop_section_rollup_cache_is_refolded() {
 }
 
 #[test]
+fn pre_epoch_rollup_cache_is_refolded() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let cache = RollupCache {
+        version: 64,
+        extent: event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        },
+        file_id: None,
+        raw_agents: Vec::new(),
+        resume_outcomes: Vec::new(),
+        agent_identity: AgentIdentityState::default(),
+        saw_session_rebirth: false,
+    };
+    write_rollup_cache(&paths, &cache).unwrap();
+    assert!(read_rollup_cache(&paths.rollup_cache().unwrap()).is_none());
+}
+
+#[test]
 fn rollup_rows_keep_the_plain_row_wire_bytes() {
     use std::borrow::Borrow;
 
@@ -292,6 +314,7 @@ fn materialized_rows_count_flattening_but_not_borrowed_iteration() {
             ..EventCarryover::default()
         })),
         &[agent("codex", "live", AgentStatus::Idle, 2_000).into()],
+        &AgentIdentityState::default(),
     );
     let before = testkit::rollup_rows_materialized();
     assert_eq!(rollup.iter().count(), 2);

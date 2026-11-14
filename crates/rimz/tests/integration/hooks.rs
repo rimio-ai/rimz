@@ -982,6 +982,7 @@ fn first_subagent_hook_records_the_reserved_parent_team_seat() {
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let parent = AgentLaunchIdentity {
+        launch_id: None,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: "launch_parent".into(),
         name: "parent".into(),

@@ -141,6 +141,7 @@ struct FoldCarryover {
     agent_identity: AgentIdentityState,
     resume_outcomes: Vec<ResumeOutcome>,
     reborn: OnceLock<Arc<Self>>,
+    provisionals: OnceLock<Vec<Arc<AgentState>>>,
 }
 
 impl FoldCarryover {
@@ -169,12 +170,26 @@ impl FoldCarryover {
             agent_identity: raw.agent_identity,
             resume_outcomes: raw.resume_outcomes,
             reborn: OnceLock::new(),
+            provisionals: OnceLock::new(),
         }
+    }
+
+    /// The provisional rows: reservations a stamped event can adopt or
+    /// release though no event in the active log names their key.
+    fn provisionals(&self) -> &[Arc<AgentState>] {
+        self.provisionals.get_or_init(|| {
+            self.agents
+                .iter()
+                .filter(|agent| agent.agent_id.is_provisional())
+                .cloned()
+                .collect()
+        })
     }
 
     fn stamp_root_lane(&mut self, project_root: Option<&Path>) {
         self.project_root = project_root.map(Path::to_path_buf);
         self.reborn = OnceLock::new();
+        self.provisionals = OnceLock::new();
         for agent in &mut self.agents {
             stamp_root_lane(agent);
         }
@@ -200,6 +215,7 @@ impl FoldCarryover {
                 agent_identity: self.agent_identity.clone(),
                 resume_outcomes: self.resume_outcomes.clone(),
                 reborn: OnceLock::new(),
+                provisionals: OnceLock::new(),
             })
         }))
     }
@@ -252,10 +268,16 @@ fn workspace_carryover(paths: &StatePaths) -> Result<Arc<FoldCarryover>> {
 pub struct AgentRollup {
     base: Arc<FoldCarryover>,
     live: Arc<[Arc<AgentState>]>,
+    /// Carryover reservations the active log retired into a session.
+    retired: Arc<[Arc<AgentState>]>,
 }
 
 impl AgentRollup {
-    fn layered(base: Arc<FoldCarryover>, raw_agents: &[Arc<AgentState>]) -> Self {
+    fn layered(
+        base: Arc<FoldCarryover>,
+        raw_agents: &[Arc<AgentState>],
+        identity: &AgentIdentityState,
+    ) -> Self {
         let live = raw_agents
             .iter()
             .filter(|live| {
@@ -264,7 +286,17 @@ impl AgentRollup {
             })
             .cloned()
             .collect();
-        Self { base, live }
+        let retired = base
+            .provisionals()
+            .iter()
+            .filter(|carried| identity.launch_consumed(&carried.agent_id))
+            .cloned()
+            .collect();
+        Self {
+            base,
+            live,
+            retired,
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &AgentState> + Clone {
@@ -272,7 +304,13 @@ impl AgentRollup {
     }
 
     fn iter_shared(&self) -> impl Iterator<Item = &Arc<AgentState>> + Clone {
-        let mut base = self.base.agents.iter().peekable();
+        let retired = &self.retired;
+        let mut base = self
+            .base
+            .agents
+            .iter()
+            .filter(move |carried| !retired.iter().any(|row| Arc::ptr_eq(row, carried)))
+            .peekable();
         let mut live = self.live.iter().peekable();
         std::iter::from_fn(move || match (base.peek(), live.peek()) {
             (Some(carried), Some(fresh)) => {
@@ -317,6 +355,7 @@ impl From<Vec<AgentState>> for AgentRollup {
         Self {
             base: Arc::default(),
             live: rows.into_iter().map(Arc::new).collect(),
+            retired: Arc::default(),
         }
     }
 }
@@ -344,7 +383,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`AgentState::normalize_prompt_labels`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 68;
+const ROLLUP_CACHE_VERSION: u32 = 69;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -490,7 +529,8 @@ fn fold_delta(
 
     // Hydrate continuing rows at rebirth, plus observed keys, linked predecessors,
     // and command or soft-compaction receivers. Stamps persist in raw_agents, not
-    // the shared carryover.
+    // the shared carryover. A carried reservation an earlier catch-up retired
+    // into its session never returns.
     let (before_rebirth, after_rebirth) = events.split_at(rebirth.unwrap_or(0));
     for delta in std::iter::once(before_rebirth)
         .filter(|delta| !delta.is_empty())
@@ -501,7 +541,7 @@ fn fold_delta(
             .is_some_and(|event| matches!(event.kind, EventKind::SessionRebirth))
         {
             for carried in &carryover.agents {
-                if carried.ended_at.is_none() {
+                if carried.ended_at.is_none() && !seed.identity.launch_consumed(&carried.agent_id) {
                     seed.agents
                         .entry((carried.kind.clone(), carried.agent_id.clone()))
                         .or_insert_with(|| Arc::clone(carried));
@@ -530,8 +570,24 @@ fn fold_delta(
                     .map(|id| (key.0.clone(), id.clone())),
                 _ => None,
             };
+            let launch = match &event.kind {
+                EventKind::AgentLifecycle(payload) => payload.observation.launch_id.as_ref(),
+                EventKind::AgentAttach(payload) => payload.launch_id.as_ref(),
+                _ => None,
+            };
+            if let Some(launch) = launch {
+                for carried in carryover.provisionals().iter().filter(|carried| {
+                    carried.kind == key.0
+                        && carried.launch_id.as_ref() == Some(launch)
+                        && !seed.identity.launch_consumed(&carried.agent_id)
+                }) {
+                    seed.agents
+                        .entry((carried.kind.clone(), carried.agent_id.clone()))
+                        .or_insert_with(|| Arc::clone(carried));
+                }
+            }
             for key in std::iter::once(key).chain(predecessor) {
-                if seed.agents.contains_key(&key) {
+                if seed.agents.contains_key(&key) || seed.identity.launch_consumed(&key.1) {
                     continue;
                 }
                 if let Some(carried) = carryover.get(&key.0, &key.1) {
@@ -569,7 +625,7 @@ fn fold_delta(
     for agent in &mut raw_agents {
         stamp_root_lane(agent);
     }
-    let merged = AgentRollup::layered(carryover, &raw_agents);
+    let merged = AgentRollup::layered(carryover, &raw_agents, &agent_identity);
 
     // Reducer-unassigned identities belong to the projection, not the next delta's claims.
     for (index, name, name_explicit) in provisional {
@@ -678,6 +734,7 @@ pub(in crate::store) fn catch_up_with_pending(
         agents: AgentRollup {
             base: Arc::default(),
             live: agents.into_values().collect(),
+            retired: Arc::default(),
         },
         resume_outcomes,
     })

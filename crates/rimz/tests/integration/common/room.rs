@@ -262,6 +262,7 @@ pub fn bind_child_panes(
             store
                 .bind_agent_launch(
                     &rimz::store::writer::AgentLaunchIdentity {
+                        launch_id: None,
                         kind: child.kind.clone(),
                         agent_id: child.agent_id.clone(),
                         name: name.clone(),
