@@ -295,6 +295,7 @@ fn agents_restart_keeps_the_pin_of_an_unreadable_run_but_drops_one_whose_run_is_
         let paths = store.paths().workflow(&id.parse().unwrap());
         // The SessionStart hook wakes the run: its advance would end the broken run and release
         // the agent before `agents restart` reads the pin, so let it finish on the valid record.
+        #[cfg(target_os = "linux")]
         super::rest::wait_for_advances_to_exit(&room.env, &id);
         if missing {
             fs::remove_file(&paths.record).unwrap();
