@@ -39,14 +39,14 @@ impl HistoryRow<'_> {
 
     fn target(
         &self,
-        spec: &Definition,
+        spec: Option<&Definition>,
         journal: &[JournalEntry],
         record: &RunRecord,
     ) -> Option<String> {
         match &self.latest.event {
             JournalEvent::Evaluation { .. } | JournalEvent::Route { .. } => {
                 workflow::evaluation_target(
-                    spec,
+                    spec?,
                     self.latest,
                     &journal[self.index + 1..],
                     record.held.as_ref(),
@@ -174,7 +174,8 @@ pub(in crate::cli) fn wait_row_counts<'a>(
 
 struct History<'a> {
     record: &'a RunRecord,
-    spec: &'a Definition,
+    /// `None` when the definition cannot be read: rows then leave out what only it names.
+    spec: Option<&'a Definition>,
     journal: &'a [JournalEntry],
     now: Timestamp,
     prose: render::prose::Prose,
@@ -190,7 +191,7 @@ pub(in crate::cli) fn render(
 ) -> Result<()> {
     History {
         record,
-        spec,
+        spec: Some(spec),
         journal,
         now,
         prose,
@@ -205,7 +206,16 @@ pub(in crate::cli) fn terminal(
     prose: render::prose::Prose,
     out: &mut impl Write,
 ) -> Result<()> {
-    let now = record.terminal_at.unwrap_or(record.entered_at);
+    opening(record, out)?;
+    render(record, spec, journal, terminal_now(record), prose, out)
+}
+
+fn terminal_now(record: &RunRecord) -> Timestamp {
+    record.terminal_at.unwrap_or(record.entered_at)
+}
+
+/// An ended run's address and end state with its time, the lines its history opens with.
+fn opening(record: &RunRecord, out: &mut impl Write) -> Result<()> {
     let glyph = rimz::theme::theme_glyphs(&super::super::machine_config().theme)(
         workflow_view::glyph_role(record),
     );
@@ -215,30 +225,58 @@ pub(in crate::cli) fn terminal(
         "{}",
         render::paint(
             render::status::workflow(record.state, false).bold(),
-            &format!("{glyph} {} {}", record.state.as_str(), dated_clock(now))
+            &format!(
+                "{glyph} {} {}",
+                record.state.as_str(),
+                dated_clock(terminal_now(record))
+            )
         )
     )?;
-    render(record, spec, journal, now, prose, out)
+    Ok(())
 }
 
 /// An ended run's history as plain text, as its home and its notes archive keep it: rendered
-/// from the record, the journal and the definition as it is when the run ends, or from the
-/// record's header alone when the definition cannot be read.
+/// from the record, the journal and the definition as it is when the run ends. When the
+/// definition cannot be read, the rows are rendered without it, after a line naming the load
+/// error, and leave out the route and verdict targets only the definition names. Only a journal
+/// that cannot be read leaves the record's header alone.
 pub(in crate::cli) fn saved(
     paths: &rimz::disk::paths::WorkflowPaths,
     finished: &rimz::disk::paths::WorkflowPaths,
     record: &RunRecord,
 ) -> Vec<u8> {
-    // A definition error's text already names its cause, so it carries no source to repeat.
-    let rendered = workflow::load(&record.definition_dir(paths))
-        .map_err(|error| anyhow::anyhow!("{error}"))
-        .and_then(|spec| {
-            let mut journal = records::journal(paths)?;
+    let spec = workflow::load(&record.definition_dir(paths));
+    let rendered = records::journal(paths)
+        .map_err(anyhow::Error::from)
+        .and_then(|mut journal| {
             for entry in &mut journal {
                 entry.relocate(finished);
             }
             let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Never);
-            terminal(record, &spec, &journal, render::prose::Prose::Raw, &mut out)?;
+            let prose = render::prose::Prose::Raw;
+            match &spec {
+                Ok(spec) => terminal(record, spec, &journal, prose, &mut out)?,
+                Err(error) => {
+                    opening(record, &mut out)?;
+                    // A run the unreadable definition ended already quotes the error in its
+                    // fault row's reason.
+                    let error = error.to_string();
+                    let reason = record.outcome.as_ref().and_then(|o| o.reason.as_deref());
+                    if reason.is_some_and(|reason| reason.contains(&error)) {
+                        writeln!(out, "its definition could not be read")?;
+                    } else {
+                        writeln!(out, "its definition could not be read: {error}")?;
+                    }
+                    History {
+                        record,
+                        spec: None,
+                        journal: &journal,
+                        now: terminal_now(record),
+                        prose,
+                    }
+                    .render(&mut out)?;
+                }
+            }
             Ok(out.into_inner())
         });
     rendered.unwrap_or_else(|error| {
@@ -354,7 +392,10 @@ impl History<'_> {
         let Some(index) = wait.case else {
             return Ok(false);
         };
-        Ok(workflow::hold_until(self.spec, self.record, index, self.now)?.is_some())
+        let Some(spec) = self.spec else {
+            return Ok(false);
+        };
+        Ok(workflow::hold_until(spec, self.record, index, self.now)?.is_some())
     }
 
     fn render(&self, out: &mut impl Write) -> Result<()> {
@@ -364,7 +405,7 @@ impl History<'_> {
         if let Some(wait) = &self.record.wait
             && (workflow_view::asking(self.record).is_some()
                 || (!workflow_view::with_you(self.record) && self.holding()?))
-            && let Some(line) = workflow_view::wait(self.record, Some(self.spec), self.now)
+            && let Some(line) = workflow_view::wait(self.record, self.spec, self.now)
         {
             writeln!(out, "  waiting: {}, {line}", wait.node)?;
         }
@@ -436,7 +477,7 @@ impl History<'_> {
                             ended_at.duration_since(*started_at).as_secs().max(0) as u64
                         )
                     )?;
-                    let step = self.spec.step(&entry.node);
+                    let step = self.spec.and_then(|spec| spec.step(&entry.node));
                     let message =
                         step.is_some_and(|step| matches!(step.kind(), Some(Kind::Message(_))));
                     if message {
@@ -449,7 +490,9 @@ impl History<'_> {
                             }
                             (None, None) => writeln!(out, "    to — · {}", outcome.as_str())?,
                         }
-                    } else if step.is_some_and(|step| matches!(step.kind(), Some(Kind::Agent(_)))) {
+                    } else if step.map_or(handle.is_some(), |step| {
+                        matches!(step.kind(), Some(Kind::Agent(_)))
+                    }) {
                         writeln!(
                             out,
                             "    {} HEAD {} → {} cost {}",
