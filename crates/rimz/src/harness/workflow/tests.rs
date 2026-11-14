@@ -35,6 +35,8 @@ pub(in crate::harness) struct FakeHost {
     pushes: RefCell<std::collections::BTreeMap<crate::ids::MessageId, String>>,
     pub(in crate::harness) push_calls: RefCell<Vec<crate::ids::MessageId>>,
     push_error: Cell<bool>,
+    /// Fail the next stop with a host error, before it stops anything.
+    stop_error: Cell<bool>,
     on_push: RefCell<Option<Box<dyn Fn()>>>,
     forwards: RefCell<Vec<(crate::ids::MessageId, String)>>,
     forward_calls: Cell<usize>,
@@ -82,6 +84,7 @@ impl FakeHost {
             pushes: RefCell::new(std::collections::BTreeMap::new()),
             push_calls: RefCell::new(Vec::new()),
             push_error: Cell::new(false),
+            stop_error: Cell::new(false),
             on_push: RefCell::new(None),
             forwards: RefCell::new(Vec::new()),
             forward_calls: Cell::new(0),
@@ -252,6 +255,9 @@ impl AttemptHost for FakeHost {
     }
 
     fn stop(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {
+        if self.stop_error.replace(false) {
+            return Err(WorkflowErr::Refused("stop interrupted".into()));
+        }
         if let Some(check) = &*self.on_stop.borrow() {
             check();
         }

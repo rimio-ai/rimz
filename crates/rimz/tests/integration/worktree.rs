@@ -874,7 +874,9 @@ fn forced_removal_reports_a_cancel_error_and_still_cancels_other_runs() {
         .success();
     let (broken_id, broken) = waiting_workflow(&env, "demo", "broken");
     let (_, healthy) = waiting_workflow(&env, "demo", "healthy");
-    std::fs::write(&broken.spec, "not valid TOML").unwrap();
+    // Cancel reads no definition, so a journal it cannot append to is what fails it.
+    let _ = std::fs::remove_file(&broken.journal);
+    std::fs::create_dir(&broken.journal).unwrap();
     env.rimz()
         .args(["worktree", "remove", "demo", "--force"])
         .assert()
@@ -885,7 +887,7 @@ fn forced_removal_reports_a_cancel_error_and_still_cancels_other_runs() {
         ))
         .stderr(contains("failed to cancel workflow run broken#demo"))
         .stderr(contains(format!("rimz workflow cancel {broken_id}")))
-        .stderr(contains("TOML"));
+        .stderr(contains("Is a directory"));
     assert!(!env.home_root.join("project-worktrees/demo").exists());
     assert_worktree_canceled_run(&env, &healthy);
     assert_eq!(

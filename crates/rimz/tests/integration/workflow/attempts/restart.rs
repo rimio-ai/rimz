@@ -197,6 +197,14 @@ fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
         records::write(&paths, &record, &guard).unwrap();
         record
     };
+    // The run's definition now makes `build` the judge check the attempt is.
+    fs::write(
+        &paths.spec,
+        format!(
+            "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\ntimeout = '1h'\non.go = 'build'\n[judge.build]\ntimeout = '1h'\nsummary = 'Review the work'\nagent = 'codex'\nprompt-file = 'prompt.md'\non.done = '@done'\n"
+        ),
+    )
+    .unwrap();
     success(
         room.command(&["workflow", "advance", &id])
             .output()

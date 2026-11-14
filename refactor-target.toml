@@ -5815,7 +5815,8 @@ allowed-dependencies = [
 # observe projects an observed agent attempt for the CLI host (+1).
 # Cohort, stop_cohort, detach_cohort and leader pick the agents an attempt's stop, detach, push and forward reach; one fits the slot leader_turn left.
 # AttemptHost::{orphan, leader_session, start_groups}, orphan and launch_groups close the engine's reads around the attempt host (+5).
-surface-budget = 94
+# admit and Inadmissible: run start, every engine read and the workflow CLI's waiting report share one admission (+2).
+surface-budget = 96
 
 [[module]]
 path = "crates/rimz/src/harness/check_run"
@@ -12300,6 +12301,16 @@ reason = "The workflow CLI and engine share a strict spec loader, the editor sch
 kind = "item"
 key = "harness::workflow::Validation"
 reason = "The workflow CLI and engine share a strict spec loader, the editor schema derived from it, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::admit"
+reason = "Run start, every engine read of a run's definition, and the workflow CLI's report of a waiting run admit the definition through one parse-and-validate step."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Inadmissible"
+reason = "Admission says whether a definition is unreadable or refused, so the engine waits on either and the CLI reports which."
 
 [[verdict]]
 kind = "item"

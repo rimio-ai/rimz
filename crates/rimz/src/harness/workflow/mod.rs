@@ -40,7 +40,7 @@ pub(crate) use spec::parse;
 pub use spec::{
     Issue, LaunchOverrides, OccupancyPolicy, ScopeKind, SpecErr, load, parse_give_up, schema,
 };
-pub use validate::{NodeRow, Validation, validate};
+pub use validate::{Inadmissible, NodeRow, Validation, admit, validate};
 
 pub struct ScopeRoots {
     pub checkout: PathBuf,

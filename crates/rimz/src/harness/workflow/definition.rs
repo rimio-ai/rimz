@@ -663,6 +663,22 @@ impl Definition {
         definition
     }
 
+    /// A definition with no nodes, for an ending that reads only the run's record.
+    pub(super) fn empty() -> Self {
+        Self::compile(WorkflowSpec {
+            workflow: spec::Header {
+                summary: None,
+                scope: ScopeKind::Worktree,
+                start: String::new(),
+                deadline: None,
+                limit: None,
+                on: spec::HeaderEdges::default(),
+            },
+            checks: BTreeMap::new(),
+            steps: BTreeMap::new(),
+        })
+    }
+
     pub fn checks(&self) -> impl Iterator<Item = (&String, &Node)> {
         self.checks.iter()
     }

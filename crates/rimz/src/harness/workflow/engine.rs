@@ -21,6 +21,7 @@ use crate::store::workflow::{
 };
 
 mod accounting;
+mod fit;
 mod rest;
 
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +55,15 @@ pub enum WorkflowErr {
 }
 
 type Result<T> = std::result::Result<T, WorkflowErr>;
+
+impl From<super::Inadmissible> for WorkflowErr {
+    fn from(error: super::Inadmissible) -> Self {
+        match error {
+            super::Inadmissible::Unreadable(error) => Self::Spec(error),
+            super::Inadmissible::Refused(errors) => Self::Refused(errors),
+        }
+    }
+}
 
 mod agent;
 
@@ -359,32 +369,13 @@ fn publish(
     let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&start.spec_dir))?;
     let spec =
         spec::parse(std::str::from_utf8(&bytes).map_err(|e| WorkflowErr::Refused(e.to_string()))?)?;
-    let machine = crate::config::MachineConfig::load_lenient();
-    let definitions = crate::config::definitions::load(
-        &crate::disk::paths::agents_home(),
-        crate::config::definitions::SkillCheck::Skip,
-        &machine.agents.commands,
-        &crate::config::MachineConfig::config_path(),
-        &machine.tiers,
-        machine.harness.auto_compact,
-    );
-    let report = super::validate::validate_spec(
+    let spec = super::validate::admit_parsed(
         &start.spec_dir,
         &start.name,
-        &spec,
-        &definitions,
+        spec,
+        &agent_definitions(),
         Some(&roots.project),
-    );
-    if !report.errors.is_empty() {
-        return Err(WorkflowErr::Refused(
-            report
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ));
-    }
+    )?;
     let scope = Scope {
         kind: spec.scope(),
         path: roots.path(spec.scope()).to_path_buf(),
@@ -484,6 +475,19 @@ fn publish(
     }
     workflow::initialize(state, &record, &bytes, &guard)?;
     Ok(record)
+}
+
+/// The machine's agent definitions, as admission reads them.
+fn agent_definitions() -> crate::config::definitions::LoadedDefinitions {
+    let machine = crate::config::MachineConfig::load_lenient();
+    crate::config::definitions::load(
+        &crate::disk::paths::agents_home(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &crate::config::MachineConfig::config_path(),
+        &machine.tiers,
+        machine.harness.auto_compact,
+    )
 }
 
 /// A live run blocks a new one on the same scope when it shares the new run's origin and name,
@@ -663,12 +667,17 @@ pub(super) fn outcome(
 /// Why a failed run failed: its last route was an agent step's expired capacity wait, the
 /// failure that ended it is an attempt that ended at its budget or a judge's `limited`
 /// refusal, or neither. A start that can never fit (`never_fits`) is a configuration refusal,
-/// so it fails like any other failure. A newer route of another cause, or a newer evaluation,
-/// ends the run for its own reason, so the scan stops there.
+/// so it fails like any other failure. A newer route of another cause, a newer attempt, or an
+/// engine fault (a misfit's) ends the run for its own reason, so the scan stops there.
 fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
     let capacity = journal.iter().rev().find_map(|entry| match &entry.event {
         JournalEvent::Route { outcome, input } => Some((outcome == "capacity").then_some(input)),
         JournalEvent::Attempt { .. } => Some(None),
+        JournalEvent::Evaluation {
+            origin: workflow::EvaluationOrigin::Engine,
+            outcome,
+            ..
+        } if outcome == "fault" => Some(None),
         _ => None,
     });
     if let Some(Some(input)) = capacity
@@ -695,16 +704,19 @@ fn failure(journal: &[JournalEntry]) -> workflow::RunEnding {
     }
 }
 
-/// Whether the run entered an agent or message step, read against its sealed graph; a graph
-/// that no longer reads counts any visited step.
+/// Whether the run entered an agent or message step, read against its definition; a
+/// definition that no longer reads counts any visited step.
 fn acted(paths: &WorkflowPaths, record: &RunRecord) -> bool {
-    match spec::load(&paths.home) {
-        Ok(spec) => entered_act(&spec, record),
-        Err(_) => !record.visits.is_empty(),
-    }
+    let spec = spec::load(&paths.home).unwrap_or_else(|_| Definition::empty());
+    entered_act(&spec, record)
 }
 
+/// Whether the run entered an agent or message step of `spec`; a definition without steps,
+/// as an ending that reads only the record has, counts any visited step.
 pub(super) fn entered_act(spec: &Definition, record: &RunRecord) -> bool {
+    if spec.steps().next().is_none() {
+        return !record.visits.is_empty();
+    }
     record.visits.keys().any(|step| {
         matches!(
             spec.step_kind(step),
@@ -871,6 +883,77 @@ fn reload(paths: &WorkflowPaths) -> Result<Option<RunRecord>> {
     }
 }
 
+/// What an engine read of a run's definition found.
+enum Read {
+    Admitted(Box<Definition>),
+    /// An inline definition this RimZ cannot read: no later read can either, so the run ends.
+    Unparsable(String),
+}
+
+/// An advance's reads of its run's definition, admitted against the machine's agent
+/// definitions, which it loads once.
+struct Reader {
+    definitions: crate::config::definitions::LoadedDefinitions,
+}
+
+impl Reader {
+    /// The run's definition as admission reads it now. A definition admission refuses, and a
+    /// deployed one that does not read, is an error: the advance writes nothing, and the run
+    /// waits for the file to be fixed.
+    fn read(&self, paths: &WorkflowPaths, record: &RunRecord) -> Result<Read> {
+        let spec = match spec::load(&paths.home) {
+            Ok(spec) => spec,
+            Err(error) if record.origin == RunOrigin::Inline => {
+                return Ok(Read::Unparsable(format!(
+                    "this RimZ cannot read the definition generated at the fire: {error}"
+                )));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Read::Admitted(Box::new(super::validate::admit_parsed(
+            &record.spec_dir,
+            &record.workflow,
+            spec,
+            &self.definitions,
+            Some(&record.project_root),
+        )?)))
+    }
+
+    /// The definition read again after a hosted child exits, or `None` when that read fails.
+    fn reread(&self, paths: &WorkflowPaths, record: &RunRecord) -> Option<Definition> {
+        match self.read(paths, record) {
+            Ok(Read::Admitted(spec)) => Some(*spec),
+            Ok(Read::Unparsable(_)) | Err(_) => None,
+        }
+    }
+}
+
+/// End a live run whose inline definition this RimZ cannot read.
+fn fail_unreadable(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    host: &dyn AttemptHost,
+    reason: String,
+) -> Result<()> {
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let Some(record) = reload(paths)? else {
+        return Ok(());
+    };
+    if record.state.is_terminal() {
+        return Ok(());
+    }
+    let spec = Definition::empty();
+    let t = Transition {
+        record,
+        spec: &spec,
+        paths,
+        now: Timestamp::now(),
+        entries: Vec::new(),
+    };
+    let closing = fit::Closing::Fail(reason, None);
+    fit::close(state, paths, t, guard, host, closing)
+}
+
 pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<()> {
     let runtime = crate::disk::paths::RuntimePaths::for_state(state)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
@@ -881,10 +964,17 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     if record.state.is_terminal() {
         return Ok(());
     }
-    let spec = spec::load(&paths.home)?;
+    let reader = Reader {
+        definitions: agent_definitions(),
+    };
     let mut seen = BTreeSet::new();
     let mut admission = Admission::default();
     loop {
+        // Each step reads the definition as it is now, admitted as a start admits it.
+        let spec = match reader.read(&paths, &record)? {
+            Read::Admitted(spec) => *spec,
+            Read::Unparsable(reason) => return fail_unreadable(state, &paths, host, reason),
+        };
         let windows = WindowReadings::new(Some(&runtime), Timestamp::now());
         let decision = prepare(
             state,
@@ -946,7 +1036,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_CONTEXT_GATE");
         if spec.step(&record.node).is_some() {
-            if command_step(state, &paths, &spec, &record)? {
+            if command_step(state, &paths, &spec, &record, &reader, host)? {
                 continue;
             }
             return Ok(());
@@ -954,19 +1044,25 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
         let result = script::evaluate(state, &paths, &spec, &record);
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
+        let fresh = reader.reread(&paths, &record);
+        let spec = fresh.as_ref().unwrap_or(&spec);
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         let Some(current) = reload(&paths)? else {
             return Ok(());
         };
         let mut t = Transition {
             record: current,
-            spec: &spec,
+            spec,
             paths: &paths,
             now: Timestamp::now(),
             entries: Vec::new(),
         };
         if !t.current(seq) {
             return Ok(());
+        }
+        if let Some(reason) = fit::misfit(spec, &t.record) {
+            let closing = fit::Closing::Fail(reason, result.cost_usd);
+            return fit::close(state, &paths, t, guard, host, closing);
         }
         let mut recheck_woken = false;
         if !t.bound()? {
@@ -1017,11 +1113,15 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     }
 }
 
+/// Run a command step's child, then settle its result against the definition read after the
+/// child exits, or the one it started under when that read fails.
 fn command_step(
     state: &StatePaths,
     paths: &WorkflowPaths,
     spec: &Definition,
     record: &RunRecord,
+    reader: &Reader,
+    host: &dyn AttemptHost,
 ) -> Result<bool> {
     let result = script::execute_step(state, paths, spec, record, || {
         accounting::step(record, None)
@@ -1029,6 +1129,8 @@ fn command_step(
     let head_end = super::head(&record.scope.path);
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
+    let fresh = reader.reread(paths, record);
+    let spec = fresh.as_ref().unwrap_or(spec);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let Some(current) = reload(paths)? else {
         return Ok(false);
@@ -1043,6 +1145,11 @@ fn command_step(
     // prepare publishes every attempt before command execution.
     let seq = record.attempt.as_ref().expect("prepared command step").seq;
     if !t.current(seq) {
+        return Ok(false);
+    }
+    if let Some(reason) = fit::misfit(spec, &t.record) {
+        let closing = fit::Closing::Fail(reason, None);
+        fit::close(state, paths, t, guard, host, closing)?;
         return Ok(false);
     }
     let (mut outcome, code, reason, interrupted) = match result {
@@ -1244,6 +1351,11 @@ fn prepare(
     if t.record.state != RunState::Active {
         return Ok(Decision::Stop);
     }
+    if let Some(reason) = fit::misfit(spec, &t.record) {
+        let closing = fit::Closing::Fail(reason, None);
+        fit::close(state, paths, t, guard, host, closing)?;
+        return Ok(Decision::Stop);
+    }
     if admission
         .capacity
         .as_ref()
@@ -1425,7 +1537,7 @@ fn prepare(
         }
     } else {
         return Err(WorkflowErr::Refused(format!(
-            "unknown sealed workflow node {}",
+            "unknown workflow node {}",
             t.record.node
         )));
     }
@@ -1805,104 +1917,17 @@ pub fn cancel(
     if record.state.is_terminal() {
         return Ok(false);
     }
-    let spec = spec::load(&paths.home)?;
-    let mut t = Transition {
+    // Cancel reads only the record; the definition, when it still parses, classifies only the
+    // outcome's `acted`.
+    let spec = spec::load(&paths.home).unwrap_or_else(|_| Definition::empty());
+    let t = Transition {
         record,
         spec: &spec,
         paths: &paths,
         now: Timestamp::now(),
         entries: Vec::new(),
     };
-    if t.record.held.is_some() {
-        rest::interrupt(&mut t, "cancel");
-    }
-    t.close_wait();
-    if let Some(attempt) = &t.record.attempt
-        && attempt.kind == AttemptKind::Agent
-    {
-        let busy = (attempt.ending.is_some() || attempt.run.is_none())
-            && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref());
-        if busy
-            && attempt
-                .ending
-                .as_ref()
-                .is_some_and(|ending| ending.cause == workflow::EndCause::Cancel)
-        {
-            return Ok(true);
-        }
-        let observed = match &attempt.run {
-            Some(run) => host.observe(run, Observation::Attempt)?,
-            None => agent::empty_observation(),
-        };
-        if let Some(verdict) = attempt
-            .ending
-            .as_ref()
-            .and_then(|ending| ending.route.as_ref())
-        {
-            let attempt = attempt.clone();
-            let verdict = verdict.clone();
-            t.turn_end(
-                &attempt,
-                workflow::TurnEndAction::Interrupted,
-                Some(&verdict),
-                Some("cancel".into()),
-            );
-        }
-        t.stage_agent_end(
-            workflow::Ending {
-                outcome: AttemptOutcome::Canceled,
-                cause: workflow::EndCause::Cancel,
-                route: None,
-                reason: reason.map(str::to_owned),
-            },
-            &observed,
-        );
-        if !busy {
-            t.record.attempt.as_mut().expect("agent cancel").host = agent::identity();
-        }
-        persist(&mut t, &guard)?;
-        let record = t.record;
-        drop(guard);
-        if !busy {
-            agent::finish(state, &paths, &spec, &record, host, None)?;
-        }
-        return Ok(true);
-    }
-    t.record.restart = None;
-    let orphan = orphaned_notice(&t.record);
-    if t.finish_script(
-        Ending {
-            outcome: AttemptOutcome::Canceled,
-            cause: EndCause::Cancel,
-            route: None,
-            reason: reason.map(str::to_owned),
-        },
-        None,
-        None,
-        None,
-    )? {
-        persist(&mut t, &guard)?;
-        drop(guard);
-        if let Some(message) = orphan {
-            host.retire(&message)?;
-        }
-        return Ok(true);
-    }
-    t.record.state = RunState::Canceled;
-    t.record.terminal_at = Some(t.now);
-    t.push(
-        None,
-        JournalEvent::Cancel {
-            reason: reason.map(str::to_owned),
-        },
-    );
-    t.push(
-        None,
-        JournalEvent::Terminal {
-            state: RunState::Canceled,
-        },
-    );
-    persist(&mut t, &guard)?;
+    fit::close(state, &paths, t, guard, host, fit::Closing::Cancel(reason))?;
     Ok(true)
 }
 
@@ -2098,7 +2123,7 @@ pub fn resume(
             && spec.node(node).is_none()
         {
             return Err(WorkflowErr::Refused(format!(
-                "unknown sealed workflow node {node}"
+                "unknown workflow node {node}"
             )));
         }
         if record.state == RunState::Active && at.is_none() && extend.is_empty() {
@@ -2450,12 +2475,14 @@ pub(crate) fn hears_lifecycle(
         {
             continue;
         }
-        let spec = spec::load(&state.workflow(&record.id).home)?;
-        let Some(step) = spec.step(&attempt.node) else {
+        // A definition that no longer reads hears nothing; the other runs still do.
+        let Ok(spec) = spec::load(&state.workflow(&record.id).home) else {
             continue;
         };
-        if step
-            .subscriptions()?
+        let Some(Ok(subscriptions)) = spec.step(&attempt.node).map(Node::subscriptions) else {
+            continue;
+        };
+        if subscriptions
             .iter()
             .any(|(selector, _)| selector.family() == signal.name.family())
         {

@@ -478,3 +478,52 @@ pub(super) fn workflow_diagnostics(env: &Env, kind: &str) -> Vec<Value> {
         .filter(|record| record["event"]["kind"] == kind)
         .collect()
 }
+
+/// A judge whose definition is edited out from under it while it runs: the run ends as a
+/// misfit, and the judge's cost still counts in its journal and its outcome.
+#[test]
+fn a_judge_settled_by_a_misfit_keeps_its_cost() {
+    let (env, dir) = fixture(
+        &format!(
+            "{HEADER}[judge.pr]\ntimeout='1h'\nsummary=\"Review the work\"\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"
+        ),
+        "",
+    );
+    fs::write(
+        dir.join("edited.toml"),
+        "[workflow]\nscope='worktree'\nstart='other'\n[test.other]\ntimeout='1h'\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
+    )
+    .unwrap();
+    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    write_path_shim(
+        &bin,
+        "claude",
+        &format!(
+            "if [ \"$1\" = --version ]; then echo 'claude 9.0.0'; exit 0; fi\n\
+             cp '{edited}' '{spec}'\n\
+             printf '%s\\n' '{{\"structured_output\":{{\"outcome\":\"done\",\"reason\":\"judge passed\"}},\"total_cost_usd\":0.25}}'\n",
+            edited = dir.join("edited.toml").display(),
+            spec = dir.join("workflow.toml").display(),
+        ),
+    );
+    let id = start_with(|| {
+        let mut command = env.rimz();
+        command
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&bin));
+        command
+    });
+    let value = settled(&env, &id, "failed");
+    let reason =
+        "pr: the workflow definition changed under the run: it is no longer in the definition";
+    let faults: Vec<_> = events(&value, "evaluation")
+        .into_iter()
+        .filter(|row| row["outcome"] == "fault")
+        .collect();
+    assert_eq!(faults.len(), 1, "{value:#}");
+    assert_eq!(faults[0]["object"]["reason"], reason, "{value:#}");
+    assert_eq!(faults[0]["cost_usd"], 0.25, "{value:#}");
+    assert_eq!(value["record"]["outcome"]["cost_usd"], 0.25, "{value:#}");
+    assert_eq!(value["record"]["outcome"]["reason"], reason, "{value:#}");
+}

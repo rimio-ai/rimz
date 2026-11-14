@@ -227,7 +227,7 @@ fn total_caps_name_the_actual_destination() {
         ("recover", "sends the run to `recover`"),
     ] {
         let text = format!(
-            "{}on.visits='{destination}'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+            "{}on.visits='{destination}'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
             OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
         );
         let (_dir, state, record) = setup(&text);
@@ -298,7 +298,7 @@ fn resuming_an_active_step_at_itself_names_the_resume_as_the_sender() {
 #[test]
 fn cap_routes_and_command_previous_attempts_are_not_check_answers() {
     let text = format!(
-        "{}on.visits='recover'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='watch'\n",
+        "{}on.visits='recover'\n[agent.recover]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\n",
         OUTCOME_STEP.replace("max-visits=6", "max-visits=2")
     );
     let (_dir, state, record) = setup(&text);
@@ -440,6 +440,15 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
             .replace("agent='claude'", "agent='claude'\nprompt-file='prompt.md'")
             .replace("run='true'", "run='cat answer.json'")
             .replace(condition, "run='cat answer.json'")
+            .replace(",unknown='@wait'", "")
+            .replace(
+                "[judge.judge]\n",
+                "[judge.judge]\nsummary='the plan holds'\n",
+            )
+            .replace(
+                "then='reported'\nmax-visits=2\n",
+                "then='reported'\nmax-visits=2\non.failed='@failed'\n",
+            )
             .replace("[condition.watch]", "[script.watch]");
         let (_dir, state, record) = setup(&text);
         let host = FakeHost::new();

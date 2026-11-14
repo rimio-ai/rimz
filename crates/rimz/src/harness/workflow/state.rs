@@ -988,7 +988,13 @@ impl Transition<'_> {
         head_end: Option<String>,
         reason: Option<String>,
     ) -> Result<bool, TimeInputErr> {
-        if self.spec.step(&self.record.node).is_none() {
+        // A step attempt counted a visit; a check's evaluation did not.
+        if self
+            .record
+            .attempt
+            .as_ref()
+            .is_none_or(|attempt| attempt.visit.is_none())
+        {
             self.abandon_check(if ending.outcome == AttemptOutcome::Timeout {
                 "timeout"
             } else {
@@ -1154,7 +1160,7 @@ impl Transition<'_> {
         let Some(child) = &attempt.child else {
             return false;
         };
-        self.spec.step(&self.record.node).is_some()
+        attempt.visit.is_some()
             && !crate::proc::process_is_live(child.pid, child.start.as_deref())
             && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref())
     }

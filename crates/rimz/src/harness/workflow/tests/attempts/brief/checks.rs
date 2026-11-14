@@ -14,7 +14,6 @@ fn launch_notes_describe_each_check_kind_and_the_rest_check_pushback() {
             "shell='true'\nsummary='the output exists'",
             "the output exists",
         ),
-        ("agent='claude'\nprompt-file='judge.md'", "agent judge"),
         (
             "agent='claude'\nprompt-file='judge.md'\nsummary='review is clean'",
             "review is clean",
@@ -30,15 +29,16 @@ fn launch_notes_describe_each_check_kind_and_the_rest_check_pushback() {
             Some("agent") => "judge",
             _ => "condition",
         };
-        let routes = if kind == "test" {
-            "pass='@done',fail='build'"
-        } else {
-            "done='@done',pending='build',unknown='build'"
+        let routes = match kind {
+            "test" => "pass='@done',fail='build'",
+            "condition" => "done='@done',pending='build',unknown='build'",
+            _ => "done='@done',pending='build'",
         };
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nrest-check=['watch']\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[{kind}.watch]\non={{{routes}}}\n{definition}\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nrest-check=['watch']\nprompt-file='prompt.md'\nthen='watch'\nmax-visits=3\n[{kind}.watch]\ntimeout='365d'\non={{{routes}}}\n{definition}\n"
         );
-        let (_dir, state, record) = setup(&text);
+        let (dir, state, record) = setup(&text);
+        fs::write(dir.path().join("judge.md"), "Review it").unwrap();
         let host = FakeHost::new();
         advance_ok(&state, &record.id, &host);
         let text = note(&host);
@@ -65,18 +65,21 @@ fn launch_notes_describe_each_check_kind_and_the_rest_check_pushback() {
             facts,
         ));
     }
-    assert_eq!(actual, vec![(true, true, true, true); 7]);
+    assert_eq!(actual, vec![(true, true, true, true); 6]);
 }
 
 #[test]
-fn sealed_judge_without_summary_uses_a_safe_note_and_rest_checks_stay_ordered() {
-    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompt.md'\nrest-check=['cheap','review']\nthen='cheap'\n[script.cheap]\ntimeout='365d'\nrun='true'\non.pass='review'\n[judge.review]\ntimeout='365d'\nagent='claude'\nprompt-file='private-judge.md'\non.pass='@done'\n";
+fn a_judge_note_hides_its_prompt_file_and_rest_checks_stay_ordered() {
+    let definition = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompt.md'\nrest-check=['cheap','review']\nthen='cheap'\n[script.cheap]\ntimeout='365d'\nrun='true'\non.pass='review'\n[judge.review]\ntimeout='365d'\nagent='claude'\nprompt-file='private-judge.md'\nsummary='the diff is clean'\non.pass='@done'\n";
     let (_dir, state, record) = setup(definition);
     let paths = state.workflow(&record.id);
     let spec = crate::harness::workflow::load(&paths.home).unwrap();
     let text = crate::harness::workflow::brief::step(&paths, &spec, &record);
     assert!(!text.contains("private-judge.md"), "{text}");
-    assert!(text.contains("agent judge"), "{text}");
+    assert!(
+        text.contains("The check `review` tests `the diff is clean`."),
+        "{text}"
+    );
     assert!(
         text.find("The check `cheap`") < text.find("The check `review`"),
         "{text}"

@@ -1273,20 +1273,25 @@ fn malformed_and_unrouted_objects_are_invalid_and_a_failed_exit_dies() {
 }
 
 #[test]
-fn a_deleted_script_dies_and_fails_the_run() {
+fn a_deleted_script_makes_the_run_wait_until_it_is_restored() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
-    until(&env, &id, |v| v["record"]["wait"].is_object());
-    fs::remove_file(sealed(&env, &id).join("checks/pr.sh")).unwrap();
-    success(command(&env, &["events", "emit", "review.ready"]));
-    let value = settled(&env, &id, "failed");
-    assert_eq!(events(&value, "route").last().unwrap()["outcome"], "died");
+    let waiting = until(&env, &id, |v| v["record"]["wait"].is_object());
+    let script = sealed(&env, &id).join("checks/pr.sh");
+    let body = fs::read(&script).unwrap();
+    fs::remove_file(&script).unwrap();
+    let refused = command(&env, &["workflow", "advance", &id]);
+    assert!(!refused.status.success(), "{refused:?}");
     assert!(
-        events(&value, "evaluation").last().unwrap()["object"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("pr.sh")
+        String::from_utf8_lossy(&refused.stderr).contains("pr.sh"),
+        "{refused:?}"
     );
+    assert_eq!(show(&env, &id)["record"], waiting["record"]);
+    fs::write(&script, body).unwrap();
+    success(command(&env, &["events", "emit", "review.ready"]));
+    until(&env, &id, |v| {
+        events(v, "evaluation").len() > events(&waiting, "evaluation").len()
+    });
 }
 
 fn failed_script(body: &str) -> Value {
