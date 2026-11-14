@@ -2,7 +2,7 @@
 
 This directory vendors one SVG identity mark for each of RimZ's eighteen built-in agent kinds. The marks are trademarks of their respective owners. The lobe-icons MIT notice is reproduced verbatim in [LICENSE](./LICENSE); the official-site assets listed below have separate upstream provenance.
 
-Every SVG has a square view box, a transparent background, no root width or height, and a small centered margin around the mark. Monochrome geometry uses `currentColor`; branded colours and gradients are retained. Kimi and Qoder retain their tintable geometry alongside their coloured accents. Shared processing removes root layout styles and normalizes the view box without changing path coordinates.
+Every SVG has a square view box, a transparent background, no root width or height, and a small margin around the mark. The sidebar sizes and centres each mark by the part that paints, so the margin's size and centring do not change how a mark draws. Monochrome geometry uses `currentColor`; branded colours and gradients are retained. Kimi and Qoder retain their tintable geometry alongside their coloured accents. Shared processing removes root layout styles and normalizes the view box without changing path coordinates.
 
 | Kind | Source URL | Fetched | Changes | Identity checked against |
 | --- | --- | --- | --- | --- |

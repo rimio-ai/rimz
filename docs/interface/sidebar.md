@@ -872,16 +872,15 @@ Where the context meter paints in pixels ([theming: display](../guide/theme.md#d
 
 ### Provider logos
 
-On the same pixel path, each block draws its provider's logo in the emblem column instead of the text emblem: a square mark four rows tall, centred across the column and on the block's detail lines (the header when it holds the emblem column, the stats, and the budget rows). With an odd number of detail lines the mark sits half a row lower inside a five-row box. Where the box reaches past the details and the block has no blank line there, the block gains one, so a block can be a line taller than its text frame. The logo is the shipped mark, or the SVG `[theme.providers.<kind>] logo` names ([theming: provider logos](../guide/theme.md#provider-logos)); a mark without colors of its own takes the brand color. Below, `▒` marks the logo's image cells, and each `▰` bar stands for the pixel bar painted in its cells:
+On the same pixel path, each block draws its provider's logo in the emblem column instead of the text emblem: a mark three rows tall, centred across the column and on the block's detail lines (the header when it holds the emblem column, the stats, and the budget rows). The size and the centring follow the part of the SVG that paints, not its canvas, so a transparent margin changes neither; a mark wider than the nine columns at three rows is drawn as wide as the column and shorter, its shape kept. With an even number of detail lines the mark sits half a row lower inside a four-row box. Beside one or two detail lines the box reaches a row above them and a row below. Where the block has no blank line there it gains one, so such a block can be up to two lines taller than its text frame; from three detail lines up the box stays within them. The logo is the shipped mark, or the SVG `[theme.providers.<kind>] logo` names ([theming: provider logos](../guide/theme.md#provider-logos)); a mark without colors of its own takes the brand color. Below, `▒` marks the logo's image cells, and each `▰` bar stands for the pixel bar painted in its cells:
 
 ```
 ──────────────────────────────────────────────────────
 Claude v2.1.158 · Claude Max
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ↻  <reset>
 ▒▒▒▒▒▒▒▒▒ 7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ```
 
 Stacked blocks each draw their logo, tabs draw the active block's, and in pet mode the active block draws it beside the pet. A block keeps its text emblem off that path (no kitty graphics client, `pixel = "off"`, or a frame that holds no image slot), when its brand color does not resolve to truecolor (an indexed theme, `NO_COLOR`, or a brand with no truecolor value), when your theme overrides a mana glyph, and also when you set an `ascii_art` override and no `logo`, when the kind has no shipped logo (a plugin), when the pane is too narrow for the emblem column, while the logo is still loading, when your `logo` file cannot be used and there is no shipped one, and when every logo image id is taken. A sidebar drawn while it shows no image (a hidden tab's sidebar, or one the host has not yet seen on a client's screen) still lays out the rows a loaded logo takes and draws the text emblem in them, so the frame it shows matches the frame it draws once the logo appears.

@@ -217,11 +217,11 @@ fn detail_rows(lines: &[Line<'_>], logo: &Logo, end: usize) -> (usize, usize) {
 
 fn assert_centred(name: &str, lines: &[Line<'_>], logo: &Logo, end: usize) {
     let (top, rows) = detail_rows(lines, logo, end);
-    let half_row = logo.rows == 5;
-    assert!(logo.rows == 4 || half_row, "{name}: {} rows", logo.rows);
+    let half_row = logo.rows == 4;
+    assert!(logo.rows == 3 || half_row, "{name}: {} rows", logo.rows);
     let mark_top = 2 * logo.first + usize::from(half_row);
     assert_eq!(
-        mark_top + 4,
+        mark_top + 3,
         2 * top + rows,
         "{name}: the mark's middle, in half rows, meets the middle of {rows} detail rows from \
          row {top}"
@@ -285,7 +285,7 @@ fn logos_centre_on_the_detail_rows_at_every_width_and_budget_shape() {
                 pixels
                     .logos
                     .visible_images()
-                    .map(|(_, image, _)| image.mark().1),
+                    .map(|(_, _, mark)| (mark.width, mark.height)),
             );
             frames.push_str(&format!("── {name}\n{}", frame_text(&lines)));
         }
@@ -443,7 +443,7 @@ fn a_user_logo_outranks_the_shipped_one_and_waits_on_the_next_tier() {
         pixels
             .logos
             .visible_images()
-            .map(|(_, image, _)| image.mark().0.clone())
+            .map(|(_, image, _)| image.source().clone())
             .collect::<Vec<_>>()
     };
 

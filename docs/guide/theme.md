@@ -325,7 +325,7 @@ ascii_art = """
 
 ### Provider logos
 
-Where the dashboard draws pixel budget bars (`pixel = "auto"`, truecolor, a kitty or Ghostty client, and a pane wide enough for the emblem column), each block draws its provider's logo in the emblem's place: a square mark four rows tall, centred on the block's detail lines. RimZ ships a logo for every built-in provider. Point `logo` at your own SVG to replace it:
+Where the dashboard draws pixel budget bars (`pixel = "auto"`, truecolor, a kitty or Ghostty client, and a pane wide enough for the emblem column), each block draws its provider's logo in the emblem's place: a mark three rows tall, centred on the block's detail lines. RimZ measures the part of the SVG that paints, so a transparent margin around your mark changes neither its size nor its centring; a mark wider than the emblem column at three rows is drawn as wide as the column and shorter, and an SVG that paints nothing visible draws as if `logo` were unset. RimZ ships a logo for every built-in provider. Point `logo` at your own SVG to replace it:
 
 ```toml
 [theme.providers.claude]
