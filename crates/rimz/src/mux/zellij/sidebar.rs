@@ -928,6 +928,11 @@ impl ZellijBackend {
         stable_client_present(&probes)
     }
 
+    /// Clients of `session` focused on a terminal pane. A failed `list-clients`
+    /// (a dead session, no header on any retry) reads as no client, which suits
+    /// a caller that only skips its work then. A caller that must tell a dead
+    /// session from a clientless one calls `client_view` and tests
+    /// `terminal_client_ids`, as `show_view` does.
     pub(super) fn focused_terminal_client_ids(&self, session: &str) -> BTreeSet<u32> {
         self.client_view(crate::mux::ClientFocusOptions {
             session_name: Some(session.to_owned()),
