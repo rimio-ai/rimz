@@ -179,6 +179,27 @@ fn a_booking_shows_on_the_nearest_living_link_and_nowhere_when_none_lives() {
 }
 
 #[test]
+fn a_booking_follows_its_booker_across_a_swap_of_either_kind() {
+    // The replaced session's end has not folded yet, so it still has a card to land on.
+    let replaced = agent("booker");
+    for kind in ["claude", "codex"] {
+        let holder = AgentState {
+            kind: AgentKind::new_unchecked(kind),
+            launch_id: Some("booker".into()),
+            epoch: 1,
+            ..agent("swapped")
+        };
+        let mut fold = snapshot(vec![replaced.clone(), holder]);
+        attach(&mut fold, &cache(vec![facts("next", &["booker"])]));
+        assert_eq!(
+            on_cards(&fold).keys().collect::<Vec<_>>(),
+            ["swapped"],
+            "a {kind} holder at the next epoch carries the booking; the replaced row does not"
+        );
+    }
+}
+
+#[test]
 fn bookings_move_no_status_attention_count_sort_or_wait() {
     let waiting = AgentState {
         status: AgentStatus::Waiting,
