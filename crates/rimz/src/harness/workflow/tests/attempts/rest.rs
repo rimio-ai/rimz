@@ -379,7 +379,7 @@ fn closing_verdicts_stop_once_and_follow_the_saved_route() {
     let mut actual = Vec::new();
     for target in ["@done", "@failed", "next", "other"] {
         let text = format!(
-            "{}\n[agent.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[test.other]\ntimeout='365d'\nshell='true'\non.pass='@done'\n",
+            "{}\n[agent.next]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='other'\n[test.other]\ntimeout='365d'\nshell='true'\non.pass='@done'\non.fail='@failed'\n",
             SESSION.replace("on.done='@done'", &format!("on.done='{target}'"))
         );
         let (dir, state, record) = setup(&text);
@@ -540,6 +540,7 @@ fn provider_endings_and_deadlines_interrupt_the_held_check() {
             attempt.kind = records::AttemptKind::Script;
             attempt.lifecycle = StepLifecycle::Turn;
             attempt.node = "pr".into();
+            attempt.visit = None;
             attempt.seq = pending.next_seq;
             pending.next_seq += 1;
             pending.attempt = Some(attempt);

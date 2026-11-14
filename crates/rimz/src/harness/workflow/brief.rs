@@ -294,10 +294,7 @@ fn check_note(spec: &Definition, name: &str) -> Option<String> {
                 span(command)
             )
         }
-        Kind::Judge(_) => summary.map_or_else(
-            || format!("The check {name} is an agent judge."),
-            |summary| format!("The check {name} tests {summary}."),
-        ),
+        Kind::Judge(_) => format!("The check {name} tests {}.", summary?),
         Kind::Sleep(sleep) => format!(
             "The check {name} tests {}.",
             span(node.summary().unwrap_or(sleep.duration().text()))
@@ -343,13 +340,19 @@ pub(super) fn push(
         },
         |(name, _)| name.as_str(),
     );
-    let check = spec.check(name).expect("pushed check");
     let input = record.input.as_ref().expect("published push-back answer");
     let mut text = format!(
         "The workflow check {} answered {}.",
         span(name),
         span(input["outcome"].as_str().unwrap_or_default())
     );
+    // A check the definition no longer has leaves its answer's reason.
+    let Some(check) = spec.check(name) else {
+        if let Some(reason) = input["reason"].as_str() {
+            text.push_str(&format!("\n\n{reason}"));
+        }
+        return Ok(text);
+    };
     if check.cases().is_empty() {
         if let Some(reason) = input["reason"].as_str() {
             text.push_str(&format!("\n\n{reason}"));

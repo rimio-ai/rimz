@@ -113,7 +113,8 @@ fn unsubscribed_turn_ended_and_unlaunched_steps_receive_nothing() {
 
     let (dir, state, record) =
         setup(&SUBSCRIBED.replace("lifecycle='session'", "lifecycle='turn'"));
-    advance_ok(&state, &record.id, &host);
+    // Admission refuses a subscribed turn, so the run waits with no attempt to forward to.
+    assert!(advance(&state, &record.id, &host).is_err());
     wake(&state, &signal("ci.failed", here(&dir)), &host).unwrap();
 
     let (dir, state, record) = setup(&SUBSCRIBED.replace("subscribe=", "notes=false\n#"));
@@ -336,7 +337,15 @@ fn a_session_hears_its_cohorts_and_other_agents_lifecycle_signals() {
         "nothing is live before the leader launches"
     );
     let host = FakeHost::new();
-    advance_ok(&state, &record.id, &host);
+    let live = advance_ok(&state, &record.id, &host);
+    // A live session run whose definition no longer reads hears nothing and hides no other.
+    let broken = RunRecord {
+        id: WorkflowRunId::new(),
+        ..live
+    };
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    records::initialize(&state, &broken, b"[workflow", &guard).unwrap();
+    drop(guard);
     assert!(hears_lifecycle(&state, &idle, &|_| None).unwrap());
     assert!(
         !hears_lifecycle(&state, &lifecycle("worktree.created", json!({})), &|_| None).unwrap()

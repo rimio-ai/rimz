@@ -70,18 +70,26 @@ on={pass='@done',fail='@failed'}
 }
 
 #[test]
-fn a_run_that_does_not_split_dies_with_the_command_error() {
+fn a_run_that_does_not_split_is_refused_and_the_run_waits() {
     let (_dir, state, record) = super::attempts::setup(
         "[workflow]\nscope='worktree'\nstart='run'\n[script.run]\ntimeout='365d'\nrun=\"echo 'open\"\non.ok='@done'\n",
     );
-    advance(&state, &record.id, &FakeHost::new()).unwrap();
-    let journal = records::journal(&state.workflow(&record.id)).unwrap();
-    assert!(
-        journal.iter().any(|row| matches!(&row.event,
-        records::JournalEvent::Evaluation { outcome, object, .. }
-        if outcome == "died"
-            && object["reason"] == "invalid run command: use a nonempty, correctly quoted argv")),
-        "{journal:#?}"
+    let paths = state.workflow(&record.id);
+    let before = (
+        fs::read(&paths.record).unwrap(),
+        fs::read(&paths.journal).ok(),
+    );
+    let refused = advance(&state, &record.id, &FakeHost::new()).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "test: script.run.run: invalid run command: use a nonempty, correctly quoted argv"
+    );
+    assert_eq!(
+        (
+            fs::read(&paths.record).unwrap(),
+            fs::read(&paths.journal).ok()
+        ),
+        before
     );
 }
 

@@ -283,6 +283,7 @@ fn timed_rest(
     running.lifecycle = StepLifecycle::Turn;
     running.judged = None;
     running.run = None;
+    running.visit = None;
     running.seq = pending.next_seq;
     running.host = Host {
         pid: std::process::id(),

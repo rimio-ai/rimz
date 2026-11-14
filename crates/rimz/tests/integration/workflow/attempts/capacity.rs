@@ -217,7 +217,7 @@ fn lock_timeout_gives_up(task: Option<&str>) {
 }
 
 #[test]
-fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
+fn a_missing_profile_waits_and_a_capacity_admission_error_ends_the_attempt_as_died() {
     let mut actual = Vec::new();
     for failure in ["profile", "queue"] {
         let room = Room::new("");
@@ -258,7 +258,7 @@ fn capacity_resolution_and_admission_errors_end_the_attempt_as_died() {
                 .any(|row| row["outcome"] == "died"),
         ));
     }
-    assert_eq!(actual, [(true, true); 2]);
+    assert_eq!(actual, [(false, false), (true, true)]);
 }
 
 #[test]
@@ -437,7 +437,7 @@ fn capacity_deadline_route_cannot_reuse_another_nodes_turn() {
     fs::write(
         &spec,
         format!(
-            "{}\n[agent.fallback]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\n",
+            "{}\n[agent.fallback]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'\nthen='after'\nmax-visits=1\non.failed='@failed'\n",
             fs::read_to_string(&spec)
                 .unwrap()
                 .replace("start = 'pr'", "start = 'pr'\non.failed='fallback'")

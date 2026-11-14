@@ -983,19 +983,34 @@ fn admission_after_occupancy(expires: bool) {
 }
 
 #[test]
-fn invalid_sealed_timeout_refuses_without_panicking() {
+fn an_invalid_timeout_refuses_at_the_read_without_a_write_and_proceeds_once_fixed() {
     let text = "[workflow]\nscope='worktree'\nstart='pr'\n[test.pr]\nshell='true'\ntimeout='tomorrow'\non={pass='@done',fail='@failed'}\n";
     let (_home, state, record, _) = fixture(text);
-    let result = std::panic::catch_unwind(|| {
-        advance(&state, &record.id, &super::super::tests::FakeHost::new())
-    });
-    assert!(
-        matches!(&result, Ok(Err(error)) if error.to_string().contains("tomorrow")),
-        "an invalid sealed timeout refuses the advance: {result:?}"
+    let paths = state.workflow(&record.id);
+    let before = (
+        fs::read(&paths.record).unwrap(),
+        fs::read(&paths.journal).ok(),
     );
-    assert_ne!(
-        workflow::load(&state.workflow(&record.id)).unwrap().state,
-        RunState::Done
+    let host = super::super::tests::FakeHost::new();
+    let refused = advance(&state, &record.id, &host).unwrap_err();
+    assert!(
+        matches!(&refused, WorkflowErr::Refused(error) if error.contains("test.pr.timeout")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        (
+            fs::read(&paths.record).unwrap(),
+            fs::read(&paths.journal).ok()
+        ),
+        before
+    );
+    fs::write(&paths.spec, text.replace("tomorrow", "5m")).unwrap();
+    advance(&state, &record.id, &host).unwrap();
+    // The fixture entered `pr` in 2000, so the fixed timeout has long run out.
+    let ended = workflow::load(&paths).unwrap();
+    assert_eq!(
+        ended.outcome.and_then(|outcome| outcome.reason).as_deref(),
+        Some("pr ran past its timeout 5m")
     );
 }
 

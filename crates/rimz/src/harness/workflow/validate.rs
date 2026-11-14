@@ -65,6 +65,51 @@ pub fn validate(
     validate_spec(dir, name, &spec, definitions, project_root)
 }
 
+/// Why a definition is not admitted: its file does not read or parse, or it parses and
+/// validation refuses it, with every error message, one per line.
+#[derive(Debug, thiserror::Error)]
+pub enum Inadmissible {
+    #[error(transparent)]
+    Unreadable(#[from] super::SpecErr),
+    #[error("{0}")]
+    Refused(String),
+}
+
+/// Admit the definition in `dir` as a start does: read and parse its `workflow.toml`, then
+/// validate it under the workflow's `name` against the loaded agent definitions and the
+/// project root. A start, every engine read of a run, and the run views that report a waiting
+/// run all admit through here, so they refuse the same definitions.
+pub fn admit(
+    dir: &Path,
+    name: &str,
+    definitions: &LoadedDefinitions,
+    project_root: Option<&Path>,
+) -> Result<Definition, Inadmissible> {
+    admit_parsed(dir, name, super::load(dir)?, definitions, project_root)
+}
+
+/// Admit a definition already parsed from `dir`'s text.
+pub(super) fn admit_parsed(
+    dir: &Path,
+    name: &str,
+    spec: Definition,
+    definitions: &LoadedDefinitions,
+    project_root: Option<&Path>,
+) -> Result<Definition, Inadmissible> {
+    let report = validate_spec(dir, name, &spec, definitions, project_root);
+    if report.errors.is_empty() {
+        return Ok(spec);
+    }
+    Err(Inadmissible::Refused(
+        report
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ))
+}
+
 pub(super) fn validate_spec(
     dir: &Path,
     name: &str,

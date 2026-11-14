@@ -103,7 +103,7 @@ fn shell_and_judge_pushbacks_name_the_answering_check_and_its_output() {
 #[test]
 fn condition_pushback_explains_false_or_leaves_and_unread_terms() {
     let definition = SESSION.split("[script.pr]").next().unwrap().to_owned()
-        + "[condition.pr]\ntimeout='365d'\nelse='pending'\non={done='@done',pending='build',unknown='build'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done || team.stage=Review']\noutcome='done'\n[[condition.pr.cases]]\nwhen=['team.stage=Done && pr=merged']\noutcome='done'\n";
+        + "[condition.pr]\ntimeout='365d'\nelse='pending'\non={done='@done',pending='build',unknown='build'}\n[[condition.pr.cases]]\nwhen=['team.stage=Done']\noutcome='done'\n[[condition.pr.cases]]\nwhen=['team.stage=Done && pr=merged']\noutcome='done'\n";
     let (dir, state, record) = setup(&definition);
     fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
     fs::write(
@@ -124,7 +124,6 @@ fn condition_pushback_explains_false_or_leaves_and_unread_terms() {
         .unwrap_or_default();
     assert!(
         text.contains("team.stage=Done: false")
-            && text.contains("team.stage=Review: false")
             && text.contains("team.stage=Implement")
             && text.contains("pr=merged: unread"),
         "{text}"

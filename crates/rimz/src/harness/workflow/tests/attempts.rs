@@ -17,6 +17,7 @@ const OUTCOME_STEP: &str = "[workflow]\nscope='worktree'\nstart='watch'\n\
 
 mod brief;
 mod capabilities;
+mod edits;
 mod keep;
 mod reached;
 mod rest;
@@ -129,19 +130,15 @@ fn a_visit_grant_on_a_live_run_raises_the_bound_its_visits_failure_names() {
 
 #[test]
 fn step_then_forwards_the_routed_outcome_into_the_next_context() {
-    let text = OUTCOME_STEP.replace("then='watch'", "then='finish'");
-    let text = format!(
-        "{text}[agent.finish]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='turn'\nthen='watch'\n"
-    );
-    let (_dir, state, record) = setup(&text);
+    let (_dir, state, record) = setup(&OUTCOME_STEP.replace("then='watch'", "then='judge'"));
     let host = FakeHost::new();
     answer(&state, &record, &host, json!({"outcome":"red", "key":7}));
-    let live = answer(&state, &record, &host, json!({"outcome":"blue"}));
-    assert_eq!(live.node, "finish");
+    let live = answer(&state, &record, &host, json!({"outcome":"queued"}));
+    assert_eq!(live.node, "judge");
     let ctx: Value =
         serde_json::from_slice(&fs::read(state.workflow(&record.id).context).unwrap()).unwrap();
     assert_eq!(ctx["input"], json!({"outcome":"red","key":7}));
-    assert_eq!(live.visits["finish"], 1);
+    assert_eq!(live.visits["build"], 1);
 }
 
 fn cancel_row(state: &StatePaths, id: &WorkflowRunId) -> Value {
@@ -1041,8 +1038,8 @@ fn eviction_failure_retries_once_then_is_a_counted_died_attempt() {
 #[test]
 fn a_retried_eviction_launches_and_a_reentered_step_retries_again() {
     let (_dir, state, record) = setup(&format!(
-        "{}admission.occupancy='takeover'\n",
-        STEP.replace("then='@done'", "then='build'")
+        "{}admission.occupancy='takeover'\n[test.again]\ntimeout='365d'\nshell='true'\non={{pass='build',fail='@failed'}}\n",
+        STEP.replace("then='@done'", "then='again'")
     ));
     let host = FakeHost::new();
     *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);

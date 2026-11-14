@@ -4,7 +4,7 @@ use crate::ids::MessageId;
 use crate::store::workflow::{self as records, AttemptOutcome, JournalEvent, RunState};
 
 const TELL: &str = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
-const TELL_THEN_OTHER: &str = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n[script.other]\nrun='true'\non.ok='@done'\n";
+const TELL_THEN_OTHER: &str = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n[script.other]\ntimeout='365d'\nrun='true'\non.ok='@done'\n";
 
 fn attempt_rows(paths: &WorkflowPaths) -> Vec<(AttemptOutcome, Option<String>, Option<MessageId>)> {
     records::journal(paths)

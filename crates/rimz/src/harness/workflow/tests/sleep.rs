@@ -35,7 +35,7 @@ fn evaluations(state: &StatePaths, record: &RunRecord) -> Vec<Value> {
 
 #[test]
 fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_outcome() {
-    let text = SLEEP.replace("then='@done'", "then='build'\n[agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3");
+    let text = SLEEP.replace("then='@done'", "then='build'\n[agent.build]\nagent='claude'\nlifecycle='turn'\nprompt-file='prompt.md'\nthen='cooldown'\nmax-visits=3\non.failed='@failed'");
     let (_dir, state, mut record) = attempts::setup(&text);
     record.input = Some(json!({"outcome":"repair", "key":"original", "context":42}));
     record.key = Some(Key::String("original".into()));
@@ -252,21 +252,40 @@ fn a_sleep_hold_survives_unknown_and_ends_on_false() {
 }
 
 #[test]
-fn invalid_sleep_fails_without_replacing_the_incoming_input_or_key() {
+fn an_invalid_sleep_edit_refuses_without_a_write_and_the_run_proceeds_once_fixed() {
     let (_dir, state, mut record) = attempts::setup(SLEEP);
     record.input = Some(json!({"outcome":"repair", "key":"kept"}));
     record.key = Some(Key::String("kept".into()));
     update(&state, &record);
-    let waiting = advance_sleep(&state, &record);
+    let mut waiting = advance_sleep(&state, &record);
     let paths = state.workflow(&record.id);
     fs::write(&paths.spec, SLEEP.replace("sleep='30m'", "sleep='soon'")).unwrap();
-    let mut waiting = waiting;
     waiting.recheck_at = None;
     update(&state, &waiting);
-    let failed = advance_sleep(&state, &record);
-    assert_eq!(failed.state, RunState::Failed);
-    assert!(failed.park.is_none());
-    assert_eq!((&failed.input, &failed.key), (&record.input, &record.key));
+    let before = (
+        fs::read(&paths.record).unwrap(),
+        fs::read(&paths.journal).unwrap(),
+    );
+    let refused = advance(&state, &record.id, &FakeHost::new()).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "test: sleep.cooldown.sleep: unknown duration unit `soon`; use s/m/h/d"
+    );
+    assert_eq!(
+        (
+            fs::read(&paths.record).unwrap(),
+            fs::read(&paths.journal).unwrap()
+        ),
+        before
+    );
+    fs::write(&paths.spec, SLEEP).unwrap();
+    let fixed = advance_sleep(&state, &record);
+    assert_eq!(fixed.state, RunState::Active);
+    assert_eq!(
+        fixed.wait.as_ref().map(|wait| wait.outcome.as_str()),
+        Some("sleeping")
+    );
+    assert_eq!((&fixed.input, &fixed.key), (&record.input, &record.key));
 }
 
 #[test]
