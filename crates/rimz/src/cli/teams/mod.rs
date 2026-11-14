@@ -15,6 +15,7 @@ use super::usage::UsageError;
 use super::{GlobalFlags, agents_cmd};
 
 const TEAM_ADDRESS_HELP: &str = "Team, or team#lane for one cohort. Without a lane: the cohort in your current lane, else the team's only live cohort";
+const TEAM_DRIVE_HELP: &str = "Team, team#lane for one cohort, or '#lane' for the one team cohort live there. Without a lane: the cohort in your current lane, else the team's only live cohort";
 const TEAM_RESUME_HELP: &str = "Team, or team#lane for one cohort. Without a lane: the team's newest closed cohort, in your linked worktree when you stand in one, else anywhere in the room";
 
 #[derive(Debug, Args)]
@@ -204,7 +205,7 @@ impl ResumeArgs {
 #[derive(Debug, Args)]
 struct CohortArgs {
     #[arg(
-        help = TEAM_ADDRESS_HELP,
+        help = TEAM_DRIVE_HELP,
         value_name = "TEAM[#LANE]",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
@@ -419,22 +420,9 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             ensure_defined(&args.name, globals)?;
             agents_cmd::run(args.into_agents_args(), globals)
         }
-        Some(TeamsSubcmd::Stop(args)) => {
-            let (name, worktree) = team_lane(args.name, args.worktree)?;
-            ensure_defined(&name, globals)?;
-            cohort::stop(&name, worktree.as_deref(), globals)
-        }
-        Some(TeamsSubcmd::Focus(args)) => {
-            let (name, worktree) = team_lane(args.name, args.worktree)?;
-            let teams = ensure_defined(&name, globals)?;
-            let leader = teams.0.get(&name).and_then(|team| team.leader.as_deref());
-            cohort::focus(&name, worktree.as_deref(), leader, globals)
-        }
-        Some(TeamsSubcmd::Restart(args)) => {
-            let (name, worktree) = team_lane(args.name, args.worktree)?;
-            ensure_defined(&name, globals)?;
-            cohort::restart(&name, worktree.as_deref(), globals)
-        }
+        Some(TeamsSubcmd::Stop(args)) => drive(args, globals, cohort::stop),
+        Some(TeamsSubcmd::Focus(args)) => drive(args, globals, cohort::focus),
+        Some(TeamsSubcmd::Restart(args)) => drive(args, globals, cohort::restart),
         Some(TeamsSubcmd::Flip(args)) => flip::run(args, globals),
         Some(TeamsSubcmd::Record(args)) => record::run(args, globals),
         Some(TeamsSubcmd::Wait(args)) => wait::run(args, globals),
@@ -481,6 +469,28 @@ fn team_lane(name: String, worktree: Option<String>) -> Result<(String, Option<S
         bail!("worktree given twice; use either `team#worktree` or `-w/--worktree`");
     }
     Ok((team.to_owned(), Some(lane.to_owned())))
+}
+
+/// Run a drive verb (`stop`, `focus`, `restart`) on `team`, `team#lane`, or a
+/// bare `#lane`. A named team is checked before the room opens; a lane target
+/// is checked once its cohort names the team.
+fn drive(
+    args: CohortArgs,
+    globals: &GlobalFlags,
+    verb: fn(cohort::Target<'_>, Option<rimz::config::TeamsConfig>, &GlobalFlags) -> Result<()>,
+) -> Result<()> {
+    let (team, lane) = show_target(Some(args.name), args.worktree)?;
+    let teams = team
+        .as_deref()
+        .map(|team| ensure_defined(team, globals))
+        .transpose()?;
+    let target = match (team.as_deref(), lane.as_deref()) {
+        (Some(team), lane) => cohort::Target::Team { team, lane },
+        (None, Some(lane)) => cohort::Target::Lane(lane),
+        // `show_target` returns a team or a lane for any present name.
+        (None, None) => bail!("expected a team name or #lane"),
+    };
+    verb(target, teams, globals)
 }
 
 fn show_target(

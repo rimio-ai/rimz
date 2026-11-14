@@ -121,7 +121,7 @@ The header uses the sidebar's team verdict: one member waiting on you reads `blo
 
 The sidebar draws the same stage as a line under the worktree header, with the current stage, how long the run has been in it, and a click that takes you to the role that owns it ([the agent cards](./sidebar.md#the-agent-cards)). At `Done` its clock switches to the whole run's total and stops.
 
-Four verbs drive a live cohort. Each uses your current channel, or the only live cohort; when several are live elsewhere it stops and lists their channels. Name one with `team#channel` or `-w NAME`:
+Four verbs drive a live cohort. Each uses your current channel, or the only live cohort; when several are live elsewhere it stops and lists their channels. Name one with `team#channel` or `-w NAME`. `focus`, `restart`, and `stop` also take a bare `'#channel'`, quoted for the shell, which picks the one team live there whatever its name:
 
 ```sh
 rimz teams focus forge     # jump to the member that needs attention

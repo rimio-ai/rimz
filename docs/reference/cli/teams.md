@@ -289,6 +289,7 @@ rimz teams focus forge
 rimz teams restart forge
 rimz teams stop forge#feat-rate-limits
 rimz teams stop forge -w feat-rate-limits
+rimz teams restart '#feat-rate-limits'
 ```
 
 | Verb | Does | Prints |
@@ -301,7 +302,7 @@ rimz teams stop forge -w feat-rate-limits
 
 A member whose process survives the stop makes the command fail with exit `1`. After a stop with no failure, a board at a stage other than `Done` keeps the checkout held, and the receipt ends with `board at <stage>; the checkout stays held. Resume: rimz teams resume <team>#<lane> · release: rimz teams flip <team>#<lane> Done '<note>'`. A failed stop prints no board or resume line. Stopping does not finish the board: until it reaches `Done`, agent-exit cleanup, `worktree sweep`, and `gc` keep a RimZ-owned checkout ([worktree sweep](./worktree.md#sweep-landed-worktrees)), while an explicit `worktree remove` still removes it once no agent process is live.
 
-Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#lane` or `-w NAME` selects by the recorded lane, which for a named-worktree cohort is its worktree name and for a root-checkout cohort launched without `--channel` is the team's name with whitespace and `#` turned into `-` (`forge#forge`); `main` does not select such a cohort. Branch-style names such as `feat/rate-limits` also match the dashed lane `feat-rate-limits`. A recorded lane takes precedence over the checkout's name. Each refusal exits 1:
+Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#lane` or `-w NAME` selects by the recorded lane, which for a named-worktree cohort is its worktree name and for a root-checkout cohort launched without `--channel` is the team's name with whitespace and `#` turned into `-` (`forge#forge`); `main` does not select such a cohort. Branch-style names such as `feat/rate-limits` also match the dashed lane `feat-rate-limits`. A recorded lane takes precedence over the checkout's name. A cohort whose members carry no recorded lane (rows written before lanes were typed) is listed as `#external`, and `team#external` selects it. A bare `'#lane'`, quoted so the shell does not read it as a comment, selects the one team cohort live in that lane, whatever its team, and ignores your current lane. Each refusal exits 1:
 
 | Case | Error |
 | --- | --- |
@@ -309,6 +310,8 @@ Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your
 | No cohort matches the lane | `` no live cohort matching `<team>#<lane>` ``, followed by `; live cohorts are in #<a>, #<b>` when other cohorts are live |
 | Several cohorts match the lane | `` `<team>#<lane>` matches live cohorts in #<a>, #<b>; select an exact lane with `<team>#<lane>` `` |
 | Several live cohorts, no lane given, none in your lane | `` team `<team>` has live cohorts in #<a>, #<b>; select one with `<team>#<lane>` `` |
+| No team cohort in a bare `#lane` | `` no live team cohort in #<lane> ``, followed by `; live cohorts: <team>#<a>, <team>#<b>` when any are live |
+| Cohorts of several teams in a bare `#lane` | `` #<lane> holds live cohorts of several teams: <team>#<lane>, <team>#<lane>; select one with `<team>#<lane>` `` |
 
 ## Wait for a cohort to finish
 
