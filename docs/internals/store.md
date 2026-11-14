@@ -143,7 +143,7 @@ cache/skills/<sha256>/                        immutable rewritten skills, shared
 cache/ssh-config/<sha256>/                    shared system SSH Include-graph snapshots
 owned/agents/<handle>/scratch/                per-handle scratch
 owned/runs/<run_id>.json                      supervised-run records
-owned/workflows/<run-id>/                     live workflow record, sealed spec, inline definition root, journal and work directory
+owned/workflows/<run-id>/                     live workflow record, inline definition root, journal and work directory
 owned/finished-workflows/<run-id>/            an ended run's whole home, moved, with its saved history.txt
 tmp/<handle>/, tmp/_unnamed/                  per-agent temp units
 shared/                                       room-wide shared files

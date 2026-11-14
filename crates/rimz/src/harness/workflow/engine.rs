@@ -2343,7 +2343,7 @@ fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &S
 }
 
 /// Whether a live session subscribes to the family of a lifecycle signal, the only
-/// receiver a lifecycle signal has among workflow runs. Reads records and sealed specs, and the
+/// receiver a lifecycle signal has among workflow runs. Reads records and definitions, and the
 /// leader's recorded session through `session` as `from_leader` needs it; it runs where a signal
 /// fires, with no attempt host.
 pub(crate) fn hears_lifecycle(

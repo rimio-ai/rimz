@@ -20,7 +20,7 @@ use crate::utils::time::TimeInputErr;
 
 type Subscription = (SignalSelector, BTreeMap<String, String>);
 
-/// A sealed definition as the engine and its readers consume it. The authored tables it was
+/// A run's definition as the engine and its readers consume it. The authored tables it was
 /// compiled from stay inside the workflow module, for admission validation alone.
 #[derive(Debug)]
 pub struct Definition {
