@@ -10580,10 +10580,18 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
     std::fs::write(&staged, serde_json::to_vec(&record).unwrap()).unwrap();
     std::fs::rename(&staged, &paths.record).unwrap();
     let rows_before = read_loop_run_records(&env).len();
-    // An unrelated supervised-run record that does not decode fails every release.
-    let corrupt = state.runs_dir.join("corrupt.json");
-    std::fs::create_dir_all(&state.runs_dir).unwrap();
-    std::fs::write(&corrupt, "{").unwrap();
+    // A record holding no JSON object, which owes no report, is set aside by the same pass.
+    let aside = rimz::ids::WorkflowRunId::new();
+    std::fs::create_dir_all(state.workflow(&aside).home).unwrap();
+    std::fs::write(state.workflow(&aside).record, "corrupt").unwrap();
+    let diag_log = rimz::diag::DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        "rimz-test",
+        None,
+    )
+    .log_path()
+    .unwrap();
 
     // The loop history cannot be appended: the report stays owed and the run stays live.
     let log = loop_runs_path(&env);
@@ -10598,12 +10606,44 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         (&json!("failed"), &json!(true), &json!("owed")),
         "{live}"
     );
-    // The run stays live, so the pass that moves it tells the user.
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(
-        !notices.exists(),
-        "a run still live is announced by no pass"
+    // The run stays live, so the pass that moves it tells the user; the notice names only the
+    // run the pass moved, which owed no report.
+    let read_notices = |count: usize| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let text = std::fs::read_to_string(&notices).unwrap_or_default();
+            if text.lines().count() >= count {
+                break text;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no workflow_ended notice: {text}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let notice = read_notices(1);
+    assert_eq!(
+        notice,
+        format!(
+            "workflow_ended|1 workflow run this RimZ cannot continue was ended as failed: 1 \
+             whose record holds no JSON object. Inspect with `rimz --root ~/project workflow show {aside}`.\n"
+        )
     );
+    let diag = std::fs::read_to_string(&diag_log).unwrap();
+    let ended: Vec<&str> = diag
+        .lines()
+        .filter(|line| line.contains("\"workflow_runs_ended\""))
+        .collect();
+    assert_eq!(ended.len(), 1, "{diag}");
+    assert!(
+        ended[0].contains(&format!("\"runs\":[\"{aside}\"]")) && !ended[0].contains("unreported"),
+        "{diag}"
+    );
+    // An unrelated supervised-run record that does not decode fails every release.
+    let corrupt = state.runs_dir.join("corrupt.json");
+    std::fs::create_dir_all(&state.runs_dir).unwrap();
+    std::fs::write(&corrupt, "{").unwrap();
 
     // Once the history can be appended, the next pass lands one row and frees the task's launch
     // memory, but the failed release keeps the run live and unannounced.
@@ -10642,8 +10682,9 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
         "{show}"
     );
     std::thread::sleep(Duration::from_millis(200));
-    assert!(
-        !notices.exists(),
+    assert_eq!(
+        std::fs::read_to_string(&notices).unwrap(),
+        notice,
         "a run still live is announced by no pass"
     );
 
@@ -10651,15 +10692,7 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
     std::fs::remove_file(&corrupt).unwrap();
     let (_, stderr) = loop_ok_with_stderr(&env, &["workflow", "reconcile"]);
     assert!(!stderr.contains("warning:"), "{stderr}");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let notice = loop {
-        let text = std::fs::read_to_string(&notices).unwrap_or_default();
-        if !text.is_empty() {
-            break text;
-        }
-        assert!(Instant::now() < deadline, "no workflow_ended notice");
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let notice = read_notices(2).lines().nth(1).unwrap().to_owned();
     assert!(
         notice.starts_with(&format!(
             "workflow_ended|1 workflow run this RimZ cannot continue was ended as failed: 1 \
@@ -10681,8 +10714,8 @@ fn a_stranded_task_run_reports_one_failed_row_without_a_strike_and_retries_a_los
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
         std::fs::read_to_string(&notices).unwrap().lines().count(),
-        1,
-        "one notice in all"
+        2,
+        "one notice for each pass that moved a run"
     );
     assert_eq!(read_loop_run_records(&env).len(), rows_before + 1);
     std::fs::write(&gate, "").unwrap();

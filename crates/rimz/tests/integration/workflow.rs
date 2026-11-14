@@ -178,6 +178,34 @@ fn runs_another_rimz_wrote_stay_out_of_listings_and_end_only_by_cancel_or_advanc
     )
     .unwrap();
     assert_eq!(ended["state"], "failed");
+    // A cancel whose release fails ends the run but leaves it live; a later cancel says the run
+    // was already ended, and moves it once the release succeeds.
+    let id = start(&env);
+    until(&env, &id, |value| value["record"]["wait"].is_object());
+    let paths = state.workflow(&id.parse().unwrap());
+    rewrite(&id, older);
+    let corrupt = state.runs_dir.join("corrupt.json");
+    fs::create_dir_all(&state.runs_dir).unwrap();
+    fs::write(&corrupt, "{").unwrap();
+    let cause = format!(
+        "as failed: this RimZ cannot continue it: an older RimZ wrote it (record version {older})"
+    );
+    let first = command(&env, &["workflow", "cancel", &id]);
+    assert!(
+        String::from_utf8_lossy(&first.stdout).starts_with(&format!("ended {id} {cause}\n")),
+        "{}",
+        String::from_utf8_lossy(&first.stdout)
+    );
+    assert!(paths.home.exists(), "a run whose release failed stays live");
+    fs::remove_file(&corrupt).unwrap();
+    let second = success(command(&env, &["workflow", "cancel", &id]));
+    assert!(
+        second.starts_with(&format!(
+            "{id} was already ended {cause}\nno agent was pinned to it\n"
+        )) && !second.contains(&format!("ended {id}")),
+        "{second}"
+    );
+    assert!(!paths.home.exists(), "the second cancel moved the run");
     // A run this RimZ cannot continue holds no checkout against a new run.
     let again = start(&env);
     let value = until(&env, &again, |value| value["record"]["wait"].is_object());
