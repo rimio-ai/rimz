@@ -154,7 +154,13 @@ pub(super) fn resume(
     refuse_unwritable_home("resumed")?;
     let spec = workflow::load(&run.paths.home)?;
     let resumed = run.record.state == RunState::Parked || at.is_some();
-    let record = workflow::resume(&run.state, &run.record.id, at, extend)?;
+    let record = workflow::resume(
+        &run.state,
+        &run.record.id,
+        &Host::new(&run.state, globals, None),
+        at,
+        extend,
+    )?;
     // A live attempt `--at` moved settles off-lock; its staged route names where the run goes.
     let node = record
         .attempt

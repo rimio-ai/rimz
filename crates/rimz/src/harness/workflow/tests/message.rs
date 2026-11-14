@@ -4,6 +4,7 @@ use crate::ids::MessageId;
 use crate::store::workflow::{self as records, AttemptOutcome, JournalEvent, RunState};
 
 const TELL: &str = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n";
+const TELL_THEN_OTHER: &str = "[workflow]\nscope='worktree'\nstart='tell'\n[message.tell]\nmessage='@planner'\nprompt-file='prompt.md'\nthen='@done'\n[script.other]\nrun='true'\non.ok='@done'\n";
 
 fn attempt_rows(paths: &WorkflowPaths) -> Vec<(AttemptOutcome, Option<String>, Option<MessageId>)> {
     records::journal(paths)
@@ -237,25 +238,43 @@ fn a_lost_message_host_retries_the_same_notice_id() {
 }
 
 #[test]
-fn a_cancel_while_the_notice_is_queued_retires_it() {
-    let (_dir, state, record) = super::attempts::setup(TELL);
-    let host = FakeHost::new();
-    *host.on_message.borrow_mut() = Some(Box::new({
-        let (state, run) = (state.clone(), record.id.clone());
-        move || assert!(cancel(&state, &run, &FakeHost::new(), None).unwrap())
-    }));
-    advance(&state, &record.id, &host).unwrap();
-    let paths = state.workflow(&record.id);
-    assert_eq!(records::load(&paths).unwrap().state, RunState::Canceled);
-    let [(_, id, _)] = host.messages.borrow().clone().try_into().unwrap();
-    assert_eq!(*host.retired.borrow(), vec![id]);
-    assert_eq!(attempt_rows(&paths)[0].0, AttemptOutcome::Canceled);
+fn a_cancel_or_resume_at_while_the_notice_is_queued_retires_it() {
+    for resumed in [false, true] {
+        let (_dir, state, record) = super::attempts::setup(TELL_THEN_OTHER);
+        let host = FakeHost::new();
+        let ender = std::rc::Rc::new(FakeHost::new());
+        *host.on_message.borrow_mut() = Some(Box::new({
+            let (state, run, ender) = (state.clone(), record.id.clone(), ender.clone());
+            move || {
+                if resumed {
+                    resume(&state, &run, &*ender, Some("other"), &[]).unwrap();
+                } else {
+                    assert!(cancel(&state, &run, &*ender, None).unwrap());
+                }
+            }
+        }));
+        advance(&state, &record.id, &host).unwrap();
+        let paths = state.workflow(&record.id);
+        let ended = records::load(&paths).unwrap();
+        if resumed {
+            assert_eq!(
+                (ended.state, ended.node.as_str()),
+                (RunState::Active, "other")
+            );
+        } else {
+            assert_eq!(ended.state, RunState::Canceled);
+        }
+        let [(_, id, _)] = host.messages.borrow().clone().try_into().unwrap();
+        assert!(ender.retired.borrow().is_empty(), "resumed={resumed}");
+        assert_eq!(*host.retired.borrow(), vec![id], "resumed={resumed}");
+        assert_eq!(attempt_rows(&paths)[0].0, AttemptOutcome::Canceled);
+    }
 }
 
 #[test]
-fn a_cancel_or_deadline_after_the_host_died_retires_its_queued_notice() {
-    for deadline in [false, true] {
-        let (_dir, state, record) = super::attempts::setup(TELL);
+fn a_cancel_deadline_or_resume_at_after_the_host_died_retires_its_queued_notice() {
+    for ending in ["cancel", "deadline", "resume"] {
+        let (_dir, state, record) = super::attempts::setup(TELL_THEN_OTHER);
         let paths = state.workflow(&record.id);
         let host = FakeHost::new();
         *host.message_answer.borrow_mut() = Err("store unavailable".into());
@@ -263,18 +282,24 @@ fn a_cancel_or_deadline_after_the_host_died_retires_its_queued_notice() {
         let mut lost = records::load(&paths).unwrap();
         let id = lost.attempt.as_ref().unwrap().message.clone().unwrap();
         lost.attempt.as_mut().unwrap().host.pid = u32::MAX;
-        if deadline {
+        if ending == "deadline" {
             lost.deadline = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
         }
         super::attempts::update(&state, &lost);
         let ender = FakeHost::new();
-        if deadline {
-            advance(&state, &record.id, &ender).unwrap();
-        } else {
-            assert!(cancel(&state, &record.id, &ender, None).unwrap());
+        match ending {
+            "deadline" => advance(&state, &record.id, &ender).map(drop).unwrap(),
+            "cancel" => assert!(cancel(&state, &record.id, &ender, None).unwrap()),
+            _ => {
+                let moved = resume(&state, &record.id, &ender, Some("other"), &[]).unwrap();
+                assert_eq!(moved.node, "other");
+                let next = FakeHost::new();
+                advance(&state, &record.id, &next).unwrap();
+                assert!(next.messages.borrow().is_empty() && next.retired.borrow().is_empty());
+            }
         }
-        assert!(ender.messages.borrow().is_empty(), "deadline={deadline}");
-        assert_eq!(*ender.retired.borrow(), vec![id], "deadline={deadline}");
+        assert!(ender.messages.borrow().is_empty(), "{ending}");
+        assert_eq!(*ender.retired.borrow(), vec![id], "{ending}");
         assert_eq!(attempt_rows(&paths)[0].0, AttemptOutcome::Canceled);
     }
 }

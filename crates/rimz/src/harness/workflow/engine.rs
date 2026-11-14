@@ -2075,6 +2075,7 @@ pub fn restart(
 pub fn resume(
     state: &StatePaths,
     id: &WorkflowRunId,
+    host: &dyn AttemptHost,
     at: Option<&str>,
     extend: &[String],
 ) -> Result<RunRecord> {
@@ -2157,10 +2158,14 @@ pub fn resume(
                 rest::interrupt(&mut t, "resume");
             }
             t.close_wait();
+            let orphan = orphaned_notice(&t.record);
             if move_live_attempt(&mut t, target)? {
                 persist(&mut t, &guard)?;
                 let record = t.record;
                 drop(guard);
+                if let Some(message) = orphan {
+                    host.retire(&message)?;
+                }
                 spawn(&record)?;
                 return Ok(record);
             }
