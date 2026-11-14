@@ -332,12 +332,12 @@ expression: value
           ]
         },
         "timeout": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
+      "required": [
+        "timeout"
+      ],
       "type": "object"
     },
     "ConditionNode": {
@@ -382,14 +382,12 @@ expression: value
           ]
         },
         "timeout": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
-        "cases"
+        "cases",
+        "timeout"
       ],
       "type": "object"
     },
@@ -488,10 +486,7 @@ expression: value
           ]
         },
         "timeout": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "wake": {
           "items": {
@@ -504,7 +499,8 @@ expression: value
         }
       },
       "required": [
-        "agent"
+        "agent",
+        "timeout"
       ],
       "type": "object"
     },
@@ -650,10 +646,7 @@ expression: value
           ]
         },
         "timeout": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "wake": {
           "items": {
@@ -665,6 +658,9 @@ expression: value
           ]
         }
       },
+      "required": [
+        "timeout"
+      ],
       "type": "object"
     },
     "SleepEdges": {
@@ -813,10 +809,7 @@ expression: value
           ]
         },
         "timeout": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "wake": {
           "items": {
@@ -828,6 +821,9 @@ expression: value
           ]
         }
       },
+      "required": [
+        "timeout"
+      ],
       "type": "object"
     },
     "Wake": {
