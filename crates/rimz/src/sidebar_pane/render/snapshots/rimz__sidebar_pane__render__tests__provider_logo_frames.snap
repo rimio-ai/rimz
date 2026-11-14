@@ -6,9 +6,7 @@ expression: screen
 ──────────────────────────────────────────────────────
 Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒
 ── stacked wide / lapsed
 ──────────────────────────────────────────────────────
@@ -34,20 +32,19 @@ Claude v2.1.158 · Claude Max
 ── stacked wide / two bars
 ──────────────────────────────────────────────────────
 Claude v2.1.158 · Claude Max
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
 ▒▒▒▒▒▒▒▒▒ 7d  PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ── stacked wide / many bars
 ──────────────────────────────────────────────────────
 Claude v2.1.158 · Claude Max
 
-▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
+          ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
 ▒▒▒▒▒▒▒▒▒ dep PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
 ▒▒▒▒▒▒▒▒▒ bld PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
 ▒▒▒▒▒▒▒▒▒ run PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒ ci  PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
+          ci  PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
 ── stacked normal / undecided
 ────────────────────────────────────────────
 ▒▒▒▒▒▒▒▒▒
@@ -56,25 +53,19 @@ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒
 ── stacked normal / lapsed
 ────────────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k           $3.50
 ▒▒▒▒▒▒▒▒▒ plan lapsed · no Claude access · s
-▒▒▒▒▒▒▒▒▒
 ── stacked normal / api
 ────────────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k           $3.50
 ▒▒▒▒▒▒▒▒▒ api PPPPPPPPPPPPPPPPPPPPP ∞
-▒▒▒▒▒▒▒▒▒
 ── stacked normal / one bar
 ────────────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k           $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ── stacked normal / two bars
 ────────────────────────────────────────────
 ▒▒▒▒▒▒▒▒▒ Claude v2.1.158 · Claude Max
@@ -97,25 +88,19 @@ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒
 ── stacked narrow / lapsed
 ────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ Claude · Claude Max
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k   $3.50
 ▒▒▒▒▒▒▒▒▒ plan lapsed · no Claude ac
-▒▒▒▒▒▒▒▒▒
 ── stacked narrow / api
 ────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ Claude · Claude Max
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k   $3.50
 ▒▒▒▒▒▒▒▒▒ api PPPPPPPPPPPPP ∞
-▒▒▒▒▒▒▒▒▒
 ── stacked narrow / one bar
 ────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
 ▒▒▒▒▒▒▒▒▒ Claude · Claude Max
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k   $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ── stacked narrow / two bars
 ────────────────────────────────────
 ▒▒▒▒▒▒▒▒▒ Claude · Claude Max
@@ -138,25 +123,22 @@ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒
 ── tabbed wide / lapsed
 ─── Claude ───────────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
 ▒▒▒▒▒▒▒▒▒ plan lapsed · no Claude access · since 2023-
-▒▒▒▒▒▒▒▒▒
 ── tabbed wide / api
 ─── Claude ───────────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
 ▒▒▒▒▒▒▒▒▒ api PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ∞
-▒▒▒▒▒▒▒▒▒
 ── tabbed wide / one bar
 ─── Claude ───────────────────────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k        $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ── tabbed wide / two bars
 ─── Claude ───────────────────────────────────────────
 
@@ -181,25 +163,22 @@ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒
 ── tabbed normal / lapsed
 ─── Claude ─────────────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k           $3.50
 ▒▒▒▒▒▒▒▒▒ plan lapsed · no Claude access · s
-▒▒▒▒▒▒▒▒▒
 ── tabbed normal / api
 ─── Claude ─────────────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k           $3.50
 ▒▒▒▒▒▒▒▒▒ api PPPPPPPPPPPPPPPPPPPPP ∞
-▒▒▒▒▒▒▒▒▒
 ── tabbed normal / one bar
 ─── Claude ─────────────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k           $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ── tabbed normal / two bars
 ─── Claude ─────────────────────────────────
 
@@ -224,25 +203,22 @@ Claude v2.1.158 · Claude Max
 ▒▒▒▒▒▒▒▒▒
 ── tabbed narrow / lapsed
 ─── Claude ─────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k   $3.50
 ▒▒▒▒▒▒▒▒▒ plan lapsed · no Claude ac
-▒▒▒▒▒▒▒▒▒
 ── tabbed narrow / api
 ─── Claude ─────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k   $3.50
 ▒▒▒▒▒▒▒▒▒ api PPPPPPPPPPPPP ∞
-▒▒▒▒▒▒▒▒▒
 ── tabbed narrow / one bar
 ─── Claude ─────────────────────────
-▒▒▒▒▒▒▒▒▒
+
 ▒▒▒▒▒▒▒▒▒ Claude Max · v2.1.158
 ▒▒▒▒▒▒▒▒▒ ◎ 12  ◇ 498k ◌ 68k   $3.50
 ▒▒▒▒▒▒▒▒▒ 5h  PPPPPPPPPPPPP ↻  <reset>
-▒▒▒▒▒▒▒▒▒
 ── tabbed narrow / two bars
 ─── Claude ─────────────────────────
 

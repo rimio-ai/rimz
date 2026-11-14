@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use ratatui::style::Color;
 use ratatui::text::Line;
+use resvg::tiny_skia::NonZeroRect;
 
 use super::{
     ImagePermit, ImageRequest, ImageResidency, LOGO_ID_CAPACITY, RgbaImage, encode_png,
@@ -18,24 +19,27 @@ use crate::theme::ProviderLogo;
 
 /// Synthetic pixels per cell column; the terminal scales the image to its box.
 const CELL_W: u32 = 32;
-/// Rows the square mark spans, whatever its box.
-const MARK_ROWS: u32 = 4;
+/// Rows the mark's visible part spans, unless the column caps its width first.
+const MARK_ROWS: u32 = 3;
 
-/// One rasterized mark: its source, the colour `currentColor` takes, and its
-/// square side in synthetic pixels.
+/// One rasterized mark: its source, the colour `currentColor` takes, and the
+/// cell height and columns its size follows from.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct MarkKey {
     source: ProviderLogo,
     rgb: [u8; 3],
-    side: u32,
+    cell_h: u32,
+    cols: u16,
 }
 
 impl MarkKey {
-    /// The mark drawn `MARK_ROWS` cells tall, or as wide as `cols`, whichever
-    /// is smaller.
     fn sized(source: ProviderLogo, rgb: [u8; 3], cell_h: u32, cols: u16) -> Self {
-        let side = (MARK_ROWS * cell_h).min(u32::from(cols) * CELL_W);
-        Self { source, rgb, side }
+        Self {
+            source,
+            rgb,
+            cell_h,
+            cols,
+        }
     }
 }
 
@@ -81,8 +85,8 @@ impl LogoImage {
     }
 
     #[cfg(test)]
-    pub(in crate::sidebar_pane) fn mark(&self) -> (&ProviderLogo, u32) {
-        (&self.mark.source, self.mark.side)
+    pub(in crate::sidebar_pane) fn source(&self) -> &ProviderLogo {
+        &self.mark.source
     }
 
     /// The mark centred in a transparent image of exactly its box's aspect, so
@@ -204,27 +208,109 @@ impl Drop for MarkJob {
 }
 
 /// Read, parse and draw one mark: worker-only, never under the views lock.
+/// The image is the drawing's visible part alone, `MARK_ROWS` cells tall or
+/// `cols` wide, whichever is reached first; a drawing with no visible part
+/// fails, so the block takes its next tier.
 fn rasterize_mark(key: &MarkKey) -> Result<RgbaImage, String> {
     let bytes = match &key.source {
         ProviderLogo::File(path) => crate::config::read_logo_file(path)?,
         ProviderLogo::Shipped(svg) => svg.as_bytes().to_vec(),
     };
     let tree = crate::config::parse_logo_svg(&bytes, key.rgb)?;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(key.side, key.side)
-        .ok_or_else(|| "logo size is empty".to_owned())?;
-    let size = tree.size();
-    let side = key.side as f32;
-    let scale = (side / size.width()).min(side / size.height());
-    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale).post_translate(
-        (side - size.width() * scale) / 2.0,
-        (side - size.height() * scale) / 2.0,
-    );
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let (max_w, max_h) = (u32::from(key.cols) * CELL_W, MARK_ROWS * key.cell_h);
+    let canvas = tree.size().to_non_zero_rect(0.0, 0.0);
+    let coarse_scale = PROBE_PX / canvas.width().max(canvas.height());
+    let coarse = visible_bounds(&tree, canvas, coarse_scale)?;
+    // A coarse pixel at or under the threshold can still hold a visible sliver.
+    let pad = 1.0 / coarse_scale;
+    let near = NonZeroRect::from_ltrb(
+        (coarse.left() - pad).max(canvas.left()),
+        (coarse.top() - pad).max(canvas.top()),
+        (coarse.right() + pad).min(canvas.right()),
+        (coarse.bottom() + pad).min(canvas.bottom()),
+    )
+    .unwrap_or(coarse);
+    let bounds = visible_bounds(&tree, near, PROBE_ZOOM * fit_scale(coarse, max_w, max_h))?;
+    let scale = fit_scale(bounds, max_w, max_h);
+    let fit = |length: f32, max: u32| ((length * scale).round() as u32).clamp(1, max);
+    let (width, height) = if max_h as f32 / bounds.height() <= max_w as f32 / bounds.width() {
+        (fit(bounds.width(), max_w), max_h)
+    } else {
+        (max_w, fit(bounds.height(), max_h))
+    };
+    let pixmap = draw(&tree, bounds, scale, width, height)?;
     Ok(RgbaImage {
-        width: key.side,
-        height: key.side,
+        width,
+        height,
         data: pixmap.take_demultiplied(),
     })
+}
+
+/// The coarse probe's longer side in pixels.
+const PROBE_PX: f32 = 128.0;
+/// How many probe pixels the fine probe spends per mark pixel. The bounds it
+/// finds sit within half a mark pixel, so an opaque edge keeps its pixel at
+/// least half covered; a filter's cost grows with the probe's area.
+const PROBE_ZOOM: f32 = 2.0;
+/// A pixel is visible above this alpha, so a blur's faint fringe does not
+/// size the mark.
+const VISIBLE_ALPHA: u8 = 8;
+
+/// The scale that fits `bounds` within `max_w` by `max_h`.
+fn fit_scale(bounds: NonZeroRect, max_w: u32, max_h: u32) -> f32 {
+    (max_w as f32 / bounds.width()).min(max_h as f32 / bounds.height())
+}
+
+/// `region` of the drawing at `scale`, its origin at the image's.
+fn draw(
+    tree: &resvg::usvg::Tree,
+    region: NonZeroRect,
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> Result<resvg::tiny_skia::Pixmap, String> {
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| "logo size is empty".to_owned())?;
+    let transform = resvg::tiny_skia::Transform::from_row(
+        scale,
+        0.0,
+        0.0,
+        scale,
+        -region.x() * scale,
+        -region.y() * scale,
+    );
+    resvg::render(tree, transform, &mut pixmap.as_mut());
+    Ok(pixmap)
+}
+
+/// The smallest rectangle of whole pixels holding every visible pixel of
+/// `region` drawn at `scale`.
+fn visible_bounds(
+    tree: &resvg::usvg::Tree,
+    region: NonZeroRect,
+    scale: f32,
+) -> Result<NonZeroRect, String> {
+    let side = |length: f32| (length * scale).ceil().max(1.0) as u32;
+    let (width, height) = (side(region.width()), side(region.height()));
+    let pixmap = draw(tree, region, scale, width, height)?;
+    let mut ink = None::<(u32, u32, u32, u32)>;
+    for (index, pixel) in pixmap.pixels().iter().enumerate() {
+        if pixel.alpha() <= VISIBLE_ALPHA {
+            continue;
+        }
+        let (x, y) = (index as u32 % width, index as u32 / width);
+        let (left, top, right, bottom) = ink.unwrap_or((x, y, x, y));
+        ink = Some((left.min(x), top.min(y), right.max(x), bottom.max(y)));
+    }
+    let (left, top, right, bottom) = ink.ok_or_else(|| "logo paints nothing visible".to_owned())?;
+    let edge = |pixels: u32| pixels as f32 / scale;
+    NonZeroRect::from_ltrb(
+        region.x() + edge(left),
+        region.y() + edge(top),
+        region.x() + edge(right + 1),
+        region.y() + edge(bottom + 1),
+    )
+    .ok_or_else(|| "logo bounds are empty".to_owned())
 }
 
 /// The frame's logo ids, lent with the meter table. A source that is not ready
