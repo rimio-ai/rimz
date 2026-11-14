@@ -223,7 +223,7 @@ pub(super) fn check_layout(
             .unwrap();
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
-                let record = workflow::load(&state.workflow(&id)).unwrap();
+                let (record, _) = load_run(&state, &id);
                 if record.state == RunState::Done {
                     assert_eq!(
                         record.prev_attempt.unwrap().outcome,
@@ -273,8 +273,8 @@ pub(super) fn check_layout(
                     "{}",
                     String::from_utf8_lossy(&output.stderr)
                 );
-                let record = workflow::load(&state.workflow(&id)).unwrap();
-                let decisions: Vec<_> = workflow::journal(&state.workflow(&id))
+                let (record, home) = load_run(&state, &id);
+                let decisions: Vec<_> = workflow::journal(&home)
                     .unwrap()
                     .into_iter()
                     .filter_map(|row| match row.event {
@@ -362,9 +362,22 @@ pub(super) fn check_layout(
             assert!(Instant::now() < deadline, "every workflow cell must close");
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert_eq!(
-            workflow::load(&state.workflow(&id)).unwrap().state,
-            RunState::Done
-        );
+        assert_eq!(load_run(&state, &id).0.state, RunState::Done);
+    }
+}
+
+/// A run's record and the home it was read from. An ended run's home moves by one rename to the
+/// finished directory, so a read that misses the live home finds it there.
+fn load_run(
+    state: &rimz::StatePaths,
+    id: &rimz::ids::WorkflowRunId,
+) -> (workflow::RunRecord, rimz::disk::paths::WorkflowPaths) {
+    let live = state.workflow(id);
+    match workflow::load(&live) {
+        Ok(record) => (record, live),
+        Err(_) => {
+            let finished = state.finished_workflow(id);
+            (workflow::load(&finished).unwrap(), finished)
+        }
     }
 }
