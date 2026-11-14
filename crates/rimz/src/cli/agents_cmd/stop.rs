@@ -455,7 +455,7 @@ pub(in crate::cli) fn stop_resolved(
 #[derive(Default)]
 pub(in crate::cli) struct StopTerms<'a> {
     /// The run this stop settles: cancelled once the first read succeeds, and the agent it
-    /// names then gets the backstop grace to leave before any close.
+    /// names then gets the backstop grace to leave before any close, unless the run is kept.
     pub(in crate::cli) run: Option<&'a RunRecord>,
     /// Re-checked after the first read: `false` stops nothing and returns `None`.
     pub(in crate::cli) still_due: Option<&'a dyn Fn() -> bool>,
@@ -714,7 +714,7 @@ impl Stopper<'_> {
         if let Some(run) = passed {
             ending.run = Some(run.clone());
         }
-        if ending.cancelled {
+        if ending.cancelled && !ending.run.as_ref().is_some_and(|run| run.keep) {
             self.await_departure(&mut ending.key, ending.reservation.as_ref())?;
         }
         self.close(ending)
@@ -755,7 +755,8 @@ impl Stopper<'_> {
         }
     }
 
-    /// A pane whose run this stop cancelled gets the backstop grace to leave on its own.
+    /// A pane whose run this stop cancelled gets the backstop grace to leave on its own; a
+    /// kept run's never leaves on its own, so `act` closes it at once.
     fn await_departure(
         &mut self,
         key: &mut AgentKey,
@@ -775,12 +776,19 @@ impl Stopper<'_> {
     fn close(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
         let mut deadline = Instant::now() + stop_owner_exit_bound();
         let mut last: Option<(PaneId, Instant)> = None;
+        let mut awaited_hold = false;
         loop {
             let Hosting::Pane {
                 pane_id,
                 session_name,
             } = self.hosting(&mut ending.key, ending.reservation.as_ref())
             else {
+                if last.is_none() && !awaited_hold {
+                    awaited_hold = true;
+                    self.await_kept_hold(ending)?;
+                    deadline = Instant::now() + stop_owner_exit_bound();
+                    continue;
+                }
                 return Ok(());
             };
             let now = Instant::now();
@@ -815,6 +823,27 @@ impl Stopper<'_> {
             std::thread::sleep(CLOSE_POLL);
             self.refresh()?;
         }
+    }
+
+    /// A kept run this stop cancelled can read as hosted nowhere for a moment: its wrapper
+    /// ends the provider and then binds the pane again to hold it (`kept_run_stopped` in
+    /// `exec/supervisor.rs`). Wait up to the backstop grace for a read that hosts it again.
+    fn await_kept_hold(&mut self, ending: &mut Ending) -> std::result::Result<(), String> {
+        let kept = ending
+            .run
+            .as_ref()
+            .is_some_and(|run| run.keep && !run.subagent);
+        if !(ending.cancelled && kept) {
+            return Ok(());
+        }
+        let deadline = Instant::now() + supervised::pane::STOP_BACKSTOP_GRACE;
+        while self.hosting(&mut ending.key, ending.reservation.as_ref()) == Hosting::Nowhere
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(CLOSE_POLL);
+            self.refresh()?;
+        }
+        Ok(())
     }
 
     /// Wait once for the batch, signal each closed agent whose process outlived it, wait

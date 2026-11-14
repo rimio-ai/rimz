@@ -1170,11 +1170,14 @@ impl RunMonitor {
 }
 
 /// Whether a run kept by `--keep` was stopped, so its provider ends while the wrapper holds
-/// the pane: `--keep` holds the pane, never the turn. Two cancels leave the provider running:
-/// a workflow attempt's, since its step's `keep` detaches the agent by canceling the run, and
-/// an interrupt hold's expiry, since the person who interrupted the turn in the pane keeps it.
+/// the pane: `--keep` holds the pane, never the turn. Three cancels leave the provider running:
+/// a workflow attempt's, since its step's `keep` detaches the agent by canceling the run, an
+/// interrupt hold's expiry, since the person who interrupted the turn in the pane keeps it, and
+/// a subagent's, since its stop ends it by closing its pane, which an ended provider's held
+/// wrapper would bind again after the stop saw it leave.
 pub(super) fn kept_run_stopped(record: &rimz::store::run::RunRecord) -> bool {
     record.status == rimz::store::run::RunStatus::Canceled
+        && !record.subagent
         && record.workflow.is_none()
         && record.interrupted_at.is_none()
 }
