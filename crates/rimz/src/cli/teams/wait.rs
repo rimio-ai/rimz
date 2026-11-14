@@ -273,8 +273,11 @@ fn resolve_targets(
         .map(|reference| {
             let (team, lane) = super::team_lane(reference, worktree.clone())?;
             super::validate_team_name(&team, &teams, &profiles)?;
-            let cohort =
-                super::cohort::select(&team, lane.as_deref(), ctx.channel(), &snapshot.agents)?;
+            let target = super::cohort::Target::Team {
+                team: &team,
+                lane: lane.as_deref(),
+            };
+            let cohort = super::cohort::select(target, ctx.channel(), &snapshot.agents)?;
             let mut worktrees = cohort.members.iter().map(|agent| {
                 agent
                     .worktree_path
