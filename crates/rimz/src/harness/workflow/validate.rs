@@ -193,24 +193,8 @@ pub(super) fn validate_spec(
             }
         }
         let edges = spec.edges(node);
-        let unknown_waits = condition
-            && edges
-                .iter()
-                .any(|edge| edge.outcome == "unknown" && edge.target == Target::Wait);
-        if edges
-            .iter()
-            .any(|edge| edge.outcome != "deadline" && edge.target == Target::Wait)
-            && check.timeout.is_none()
-            && !sleep
-        {
-            report.error(
-                &format!("{path}.timeout"),
-                if unknown_waits {
-                    "a waiting check requires timeout; set timeout or route on.unknown away from @wait (and any other waiting outcomes)"
-                } else {
-                    "a waiting check requires timeout"
-                },
-            );
+        if !sleep {
+            report.requires_timeout(&path, check.table.word(), check.timeout.as_deref());
         }
         for (outcome, route) in &check.on {
             let path = format!("{path}.on.{outcome}");
@@ -250,7 +234,6 @@ pub(super) fn validate_spec(
             report.error(&path, "set exactly one of run or shell");
         }
         let agent = matches!(step.kind(), Some(StepKind::Agent(_)));
-        let command = matches!(step.kind(), Some(StepKind::Command(_)));
         let message = matches!(step.kind(), Some(StepKind::Message(_)));
         report.step_values(&path, step);
         if let Some(file) = &step.system_prompt_file
@@ -264,11 +247,8 @@ pub(super) fn validate_spec(
                 "an agent step requires prompt-file",
             );
         }
-        if command && step.timeout.is_none() {
-            report.error(
-                &format!("{path}.timeout"),
-                "a run or shell step requires timeout, so a hung command cannot hold the run",
-            );
+        if step.table == spec::StepTable::Command {
+            report.requires_timeout(&path, step.table.word(), step.timeout.as_deref());
         }
         let invoke = match step.kind() {
             Some(StepKind::Command(invoke)) => Some(invoke),
@@ -499,6 +479,16 @@ impl Validation {
                 Ok(())
             }
         });
+    }
+
+    /// A command, test, script, judge or condition bounds how long the run stays at it.
+    fn requires_timeout(&mut self, path: &str, kind: &str, timeout: Option<&str>) {
+        if timeout.is_none() {
+            self.error(
+                &format!("{path}.timeout"),
+                format!("a {kind} requires timeout"),
+            );
+        }
     }
 
     fn duration(&mut self, path: &str, raw: Option<&str>) {

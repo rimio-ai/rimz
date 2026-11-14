@@ -106,7 +106,7 @@ The step leader's Workflow launch note describes its listed checks in order. Scr
 
 Workflow agents, judges, tests, scripts, and commands receive `RIMZ_WORKFLOW_RUN` (run id), `RIMZ_WORKFLOW_DIR` (work directory), and `RIMZ_WORKFLOW_DEFINITION` (the absolute folder of the run's sealed definition, `definition/` in its run home). Every workflow agent gets an Environment `- workflow:` line even with `env_reminder` off. Non-workflow agent launches unset all three variables. If the agent launch cannot read the run record, it warns and omits the definition variable and line.
 
-Every work node requires `then`: for an agent one check, `@done`, or `@failed`, for a command one check, for a message exactly one node, `@done`, or `@failed`. An agent's `then` is where the run goes when the attempt ends on its own; `@done` or `@failed` ends the run there. A list refuses at `agent.<step>.then`. A command requires `timeout`. On a `command`, `test`, or `script`, `run` is a literally passed argv, with slash-containing words confined to the definition directory, and `shell` runs through `sh -c` without path confinement; which one a node sets decides only how its command starts. Each kind takes only the fields its [table](#definition-fields) lists, so a command never waits for checkout occupancy or capacity. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
+Every work node requires `then`: for an agent one check, `@done`, or `@failed`, for a command one check, for a message exactly one node, `@done`, or `@failed`. An agent's `then` is where the run goes when the attempt ends on its own; `@done` or `@failed` ends the run there. A list refuses at `agent.<step>.then`. A command, test, script, judge, or condition requires `timeout`; an agent's is optional, and a message or a sleep takes none. On a `command`, `test`, or `script`, `run` is a literally passed argv, with slash-containing words confined to the definition directory, and `shell` runs through `sh -c` without path confinement; which one a node sets decides only how its command starts. Each kind takes only the fields its [table](#definition-fields) lists, so a command never waits for checkout occupancy or capacity. Their stdin is closed, both streams go to `work/<seq>.step.log`, and they inherit the workspace pin and workflow environment.
 
 A message step's `message` is an agent address, `@<handle>` or `@<handle>#<channel>`; `@user`, `@me`, a bare name, and a pane id refuse at `message.<name>.message`. `prompt-file` is optional and confined. A message never reads occupancy, windows, capacity, or the start throttle. Each visit composes a header line naming the workflow, step, and run, followed by the prompt file, signs, and run prompt, as an agent step's prompt is composed; it resolves the address from the run's checkout among living agents and queues one automated `Type: WAIT` message from `@rimz` at gate `done`, sent at once to a resting agent. It records `ended` with the target's handle and follows `then`. No single match, or a prompt that cannot be composed, records `died` with the reason and fails the step with cause `undelivered`. `session = "<agent session id>"` pins the step to one session: when the address resolves to an agent on another session (a handle since reused), the visit records `died` with `<address> is session <id>, not the pinned session <pin>` and fails with cause `undelivered`. A lost host sends the same message id again on the next advance, and the queue keeps one copy and its first target. A cancel, deadline, bound, or `resume --at` that ends the attempt before it settles retires the message if it is still queued; a resting target may already have received it.
 
@@ -312,14 +312,14 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `run` or `shell` | Required, exactly one. Exit 0 answers `pass`, anything else `fail`. |
 | `on.pass`, `on.fail` | Required. |
 | `on.died`, `on.timeout`, `on.deadline`, `on.failed` | Failure routes. |
-| `timeout` | Required when a route waits. |
+| `timeout` | Required. |
 | `wake` | Signals that re-run the test. |
 
 | `[script.<name>]` | Meaning |
 | --- | --- |
 | `run` or `shell` | Required, exactly one. Stdout is the JSON answer. |
 | `on.<outcome>` | One target per outcome the script answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.deadline`, and `on.failed`. |
-| `timeout` | Required when a route waits. |
+| `timeout` | Required. |
 | `wake` | Signals that re-run the script. |
 
 | `[judge.<name>]` | Meaning |
@@ -328,7 +328,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `prompt-file` | Required. A file confined to the definition directory. |
 | `summary` | Required. |
 | `on.<outcome>` | One target per outcome the judge answers, plus the failure routes `on.died`, `on.invalid`, `on.timeout`, `on.limited`, `on.deadline`, and `on.failed`. |
-| `timeout` | Required when a route waits. |
+| `timeout` | Required. |
 | `wake` | Signals that re-run the judge. |
 | `admission` | `window` only. |
 
@@ -339,7 +339,7 @@ A definition is `workflow.toml`: one `[workflow]` table and any number of nodes,
 | `on.<outcome>` | Required for every case outcome and `else`. |
 | `on.unknown` | Required. |
 | `on.timeout`, `on.deadline`, `on.failed` | Failure routes. |
-| `timeout` | Required when a route waits. |
+| `timeout` | Required. |
 | `provider`, `account` | The window terms' agent kind and login. |
 
 | `[sleep.<name>]` | Meaning |
@@ -364,7 +364,7 @@ Rows follow the graph from `start`, with a returning step immediately below the 
 
 | Mark | Meaning |
 | --- | --- |
-| `never: no timeout` | The check has no timeout clock. |
+| `never: no timeout` | The agent step sets no `timeout`. |
 | `never: no max-visits` | The step has neither visit bound. |
 | `only with a deadline` | No deadline is sealed; a run needs a deadline grant. |
 

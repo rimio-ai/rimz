@@ -55,7 +55,7 @@ for = "2m"
 #[test]
 fn an_explicit_empty_cases_field_is_not_ignored_on_a_run_check() {
     let (_home, dir) = fixture();
-    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='worktree'\nstart='pr'\n[condition.pr]\ntimeout='365d'\nrun='true'\ncases=[]\non.ok='@done'\n").unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(
         report
@@ -78,8 +78,8 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
                 "pending='@wait', unknown='@wait'",
                 "pending='@done', unknown='@failed'",
             ),
-            true,
-            "",
+            false,
+            "timeout",
         ),
         (
             CONDITION.replace("ready='@done', pending='@wait'", "ready='pr', pending='pr'"),
@@ -130,7 +130,7 @@ fn condition_validation_resolves_defaults_waits_and_cycles() {
         .find(|e| e.path == "condition.pr.timeout")
         .unwrap();
     assert!(
-        error.message.contains("timeout") && error.message.contains("on.unknown"),
+        error.message.ends_with("a condition requires timeout"),
         "{}",
         error.message
     );
@@ -399,7 +399,7 @@ fn wake_validation_accepts_selectors_and_strict_match_tables() {
         "agent='claude'\nsummary='Review the work'\nprompt-file='prompts/build.md'\non.ok='@done'",
     ] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='pr'\n[{}.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n",
+            "[workflow]\nscope='worktree'\nstart='pr'\n[{}.pr]\ntimeout='1h'\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n",
             table(runner)
         );
         fs::write(dir.join("workflow.toml"), &text).unwrap();
@@ -470,7 +470,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             ("", false),
         ] {
             let text = format!(
-                "[workflow]\nscope='worktree'\nstart='now'\n[script.now]\nrun='true'\non.ok='@done'\n[{}.later]\n{runner}\n{wake}\n",
+                "[workflow]\nscope='worktree'\nstart='now'\n[script.now]\ntimeout='365d'\nrun='true'\non.ok='@done'\n[{}.later]\n{runner}\n{wake}\n",
                 table(runner)
             );
             let spec: Definition = toml::from_str(&text).unwrap();
@@ -478,7 +478,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
             assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
 
             let spec: Definition = toml::from_str(&format!(
-                "{text}[condition.condition]\nelse='pending'\non={{ready='@done',pending='@wait',unknown='@wait'}}\n[[condition.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
+                "{text}[condition.condition]\ntimeout='365d'\nelse='pending'\non={{ready='@done',pending='@wait',unknown='@wait'}}\n[[condition.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
             ))
             .unwrap();
             assert_eq!(
@@ -497,7 +497,7 @@ fn forge_demand_includes_only_default_scoped_declared_wakes() {
         ("subscribe=['review.ready']", false),
     ] {
         let text = format!(
-            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompts/build.md'\nthen='done'\n{subscribe}\n[script.done]\nrun='true'\non.ok='@done'\n"
+            "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nlifecycle='session'\nprompt-file='prompts/build.md'\nthen='done'\n{subscribe}\n[script.done]\ntimeout='365d'\nrun='true'\non.ok='@done'\n"
         );
         let spec: Definition = toml::from_str(&text).unwrap();
         let expected = demanded.then(std::collections::BTreeSet::new);

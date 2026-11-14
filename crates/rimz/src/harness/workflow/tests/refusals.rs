@@ -1,19 +1,18 @@
 use super::*;
 
-const SIMPLE: &str =
-    "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\nrun='true'\non.ok='@done'\n";
-const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[condition.pick]\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
+const SIMPLE: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='1h'\nrun='true'\non.ok='@done'\n";
+const CONDITION: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[condition.pick]\ntimeout='1h'\nelse='no'\non={yes='@done',no='@done',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n";
 const SESSION_PICK: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='session'\nrest-check=['pick']\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\ntimeout='1h'\non.ok='@done'\non.pending='build'\n";
 /// One acyclic graph with a node of every kind, each written in full; `then='after'` on the
 /// agent is where a case adds a field.
 const KINDS: &str = "[workflow]\nscope='worktree'\nstart='build'\n\
 [agent.build]\nagent='claude'\nprompt-file='prompts/build.md'\nlifecycle='turn'\nthen='after'\n\
-[script.after]\nrun='true'\non.ok='tell'\n\
+[script.after]\ntimeout='1m'\nrun='true'\non.ok='tell'\n\
 [message.tell]\nmessage='@planner'\nthen='run'\n\
-[command.run]\nshell='true'\ntimeout='1m'\nthen='test'\n\
-[test.test]\nshell='true'\non.pass='judge'\non.fail='@failed'\n\
-[judge.judge]\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Reviews it'\non.ok='gate'\n\
-[condition.gate]\nelse='no'\non={yes='nap',no='nap',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n\
+[command.run]\ntimeout='1m'\nshell='true'\nthen='test'\n\
+[test.test]\ntimeout='1m'\nshell='true'\non.pass='judge'\non.fail='@failed'\n\
+[judge.judge]\ntimeout='1m'\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Reviews it'\non.ok='gate'\n\
+[condition.gate]\ntimeout='1m'\nelse='no'\non={yes='nap',no='nap',unknown='@failed'}\ncases=[{when=['pr=merged'],outcome='yes'}]\n\
 [sleep.nap]\nsleep='1m'\nthen='@done'\n";
 
 fn loaded(text: &str) -> Result<Definition, SpecErr> {
@@ -355,7 +354,7 @@ fn wrong_typed_values_refuse_at_their_path() {
             "script.after.wake.0",
         ),
         (
-            format!("{SIMPLE}timeout='1m'\non.pending='@wait'\non.timeout=5\n"),
+            format!("{SIMPLE}on.pending='@wait'\non.timeout=5\n"),
             "script.pick.on.timeout",
         ),
         (
@@ -416,7 +415,10 @@ fn invalid_optional_values_refuse_at_their_path() {
             "workflow.limit.max-parallel",
         ),
         (format!("{SIMPLE}summary='  '\n"), "script.pick.summary"),
-        (format!("{SIMPLE}timeout='soon'\n"), "script.pick.timeout"),
+        (
+            SIMPLE.replace("timeout='1h'", "timeout='soon'"),
+            "script.pick.timeout",
+        ),
         (format!("{SIMPLE}on.hold='@done'\n"), "script.pick.on.hold"),
         (
             format!("{SIMPLE}wake=[{{signal='review.ready',prompt='look'}}]\n"),
@@ -461,7 +463,10 @@ fn invalid_optional_values_refuse_at_their_path() {
             "command.run.max-visits",
         ),
         (
-            KINDS.replace("timeout='1m'\nthen='test'", "timeout='soon'\nthen='test'"),
+            KINDS.replace(
+                "[command.run]\ntimeout='1m'",
+                "[command.run]\ntimeout='soon'",
+            ),
             "command.run.timeout",
         ),
         (
@@ -472,7 +477,10 @@ fn invalid_optional_values_refuse_at_their_path() {
             with("[message.tell]", "max-visits=0"),
             "message.tell.max-visits",
         ),
-        (with("[test.test]", "timeout='soon'"), "test.test.timeout"),
+        (
+            KINDS.replace("[test.test]\ntimeout='1m'", "[test.test]\ntimeout='soon'"),
+            "test.test.timeout",
+        ),
         (
             with("[judge.judge]", "admission.window='ci=passed'"),
             "judge.judge.admission.window",
@@ -492,7 +500,6 @@ fn invalid_optional_values_refuse_at_their_path() {
         (
             CONDITION
                 .replace("yes='@done'", "yes='@wait'")
-                .replace("else='no'", "timeout='1h'\nelse='no'")
                 .replace("outcome='yes'", "outcome='yes',for='1m'"),
             "condition.pick.cases.0.for",
         ),
@@ -546,7 +553,10 @@ fn invalid_optional_values_refuse_at_their_path() {
     }
     for raw in ["366d", "8761h"] {
         for (text, path) in [
-            (format!("{SIMPLE}timeout='{raw}'\n"), "script.pick.timeout"),
+            (
+                SIMPLE.replace("timeout='1h'", &format!("timeout='{raw}'")),
+                "script.pick.timeout",
+            ),
             (
                 CONDITION.replace(
                     "when=['pr=merged']",
@@ -589,7 +599,7 @@ fn invalid_optional_values_refuse_at_their_path() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        format!("{SIMPLE}timeout='366d'\n"),
+        SIMPLE.replace("timeout='1h'", "timeout='366d'"),
     )
     .unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
@@ -638,7 +648,6 @@ fn fireable_failures_need_no_route_and_take_written_ones() {
         );
     let unfireable = explicit
         .replace("deadline='2099-01-01T00:00:00Z'\n", "")
-        .replace("timeout='1h'\n", "")
         .replace("on.timeout='@failed'\n", "")
         .replace("max-visits=2\n", "")
         .replace("on.visits='@failed'\n", "")
@@ -668,9 +677,10 @@ fn only_agents_ask_refuses_human_targets_on_every_route() {
         ),
         (
             "sleep.pick.then",
-            SIMPLE
-                .replace("[script.pick]", "[sleep.pick]")
-                .replace("run='true'\non.ok='@done'", "sleep='1m'\nthen='@user'"),
+            SIMPLE.replace("[script.pick]", "[sleep.pick]").replace(
+                "timeout='1h'\nrun='true'\non.ok='@done'",
+                "sleep='1m'\nthen='@user'",
+            ),
         ),
         (
             "agent.work.on.asked",
@@ -721,7 +731,7 @@ fn at_break_is_neither_a_route_target_nor_a_node_name() {
         ),
         (
             "script.@break",
-            format!("{base}[script.'@break']\nrun='true'\non.ok='@done'\n"),
+            format!("{base}[script.'@break']\ntimeout='1h'\nrun='true'\non.ok='@done'\n"),
         ),
         (
             "sleep.@break",
@@ -939,7 +949,10 @@ fn required_fields_refuse_at_the_exact_dotted_path() {
             "agent.build.agent",
         ),
         (
-            with("[judge.judge]", "").replace("[judge.judge]\n\nagent='claude'", "[judge.judge]\n"),
+            with("[judge.judge]", "").replace(
+                "[judge.judge]\n\ntimeout='1m'\nagent='claude'",
+                "[judge.judge]\ntimeout='1m'\n",
+            ),
             "judge.judge.agent",
         ),
         (
@@ -1012,13 +1025,13 @@ fn run_and_shell_each_need_exactly_one() {
     ] {
         let name = header.trim_matches(['[', ']']);
         let neither = KINDS.replacen(
-            &format!("{header}\n{invocation}"),
-            &format!("{header}\n"),
+            &format!("{header}\ntimeout='1m'\n{invocation}"),
+            &format!("{header}\ntimeout='1m'\n"),
             1,
         );
         let both = KINDS.replacen(
-            &format!("{header}\n{invocation}"),
-            &format!("{header}\nrun='true'\nshell='true'\n"),
+            &format!("{header}\ntimeout='1m'\n{invocation}"),
+            &format!("{header}\ntimeout='1m'\nrun='true'\nshell='true'\n"),
             1,
         );
         for text in [neither, both] {
@@ -1027,50 +1040,93 @@ fn run_and_shell_each_need_exactly_one() {
     }
 }
 
+/// Validate `text` as a deployed definition, then create a run from it, in one fixture.
+fn validate_and_create(
+    text: &str,
+) -> (
+    Validation,
+    std::result::Result<(crate::store::workflow::RunRecord, Advance), WorkflowErr>,
+) {
+    let (_home, dir) = fixture();
+    fs::write(dir.join("workflow.toml"), text).unwrap();
+    let state = crate::disk::paths::StatePaths::for_project_root_under(&dir, &dir).unwrap();
+    let room = serde_json::from_value(serde_json::json!({
+        "layout": crate::disk::paths::WORKSPACE_LAYOUT,
+        "workspace_id": state.workspace_id, "project_root": dir,
+        "session_name": "test", "updated_at": jiff::Timestamp::now(),
+    }))
+    .unwrap();
+    crate::workspace::record::write(&state, &room).unwrap();
+    let report = validate(&dir, &LoadedDefinitions::default(), Some(&dir));
+    let result = create(
+        &state,
+        DefinitionSource::Deployed {
+            dir: &dir,
+            task: None,
+            surplus: None,
+            surplus_after: None,
+            fire: None,
+            fire_facts: None,
+        },
+        ScopeRoots {
+            checkout: dir.clone(),
+            project: dir.clone(),
+        },
+        || Ok(None),
+        false,
+        Default::default(),
+    );
+    (report, result)
+}
+
+#[test]
+fn every_kind_with_a_clock_but_agent_requires_timeout_at_create_and_validate() {
+    for (header, node) in [
+        ("[command.run]", "command.run"),
+        ("[script.after]", "script.after"),
+        ("[test.test]", "test.test"),
+        ("[judge.judge]", "judge.judge"),
+        ("[condition.gate]", "condition.gate"),
+    ] {
+        let text = KINDS.replace(&format!("{header}\ntimeout='1m'\n"), &format!("{header}\n"));
+        assert_ne!(text, KINDS, "{header}");
+        let kind = header.trim_start_matches('[').split('.').next().unwrap();
+        let message = format!("example: {node}.timeout: a {kind} requires timeout");
+        let (report, created) = validate_and_create(&text);
+        assert_eq!(
+            report
+                .errors
+                .iter()
+                .map(|issue| (issue.path.as_str(), issue.message.as_str()))
+                .collect::<Vec<_>>(),
+            [(format!("{node}.timeout").as_str(), message.as_str())],
+            "{text}"
+        );
+        match created {
+            Err(WorkflowErr::Refused(refused)) => assert_eq!(refused, message, "{text}"),
+            other => panic!("{text}: {other:?}"),
+        }
+    }
+    assert_eq!(errors(KINDS), Vec::<String>::new());
+    assert!(!KINDS.contains("[agent.build]\ntimeout"));
+}
+
 #[test]
 fn create_and_validate_agree_on_refusals() {
     let mut actual = Vec::new();
     for text in [
         SIMPLE.to_owned(),
         format!("{SIMPLE}future=true\n"),
-        format!("{SIMPLE}timeout='soon'\n"),
+        SIMPLE.replace("timeout='1h'", "timeout='soon'"),
         SIMPLE.replace("on.ok='@done'", "on.ok='missing'"),
         SIMPLE.replace(
-            "[script.pick]\nrun='true'",
-            "[judge.pick]\nagent='claude'\nprompt-file=5",
+            "[script.pick]\ntimeout='1h'\nrun='true'",
+            "[judge.pick]\ntimeout='1h'\nagent='claude'\nprompt-file=5",
         ),
         SIMPLE.replace("[workflow]", "[workflow]\non-break='@failed'"),
         SIMPLE.replace("on.ok='@done'", "on.ok='@user'"),
     ] {
-        let (_home, dir) = fixture();
-        fs::write(dir.join("workflow.toml"), text).unwrap();
-        let state = crate::disk::paths::StatePaths::for_project_root_under(&dir, &dir).unwrap();
-        let room = serde_json::from_value(serde_json::json!({
-            "layout": crate::disk::paths::WORKSPACE_LAYOUT,
-            "workspace_id": state.workspace_id, "project_root": dir,
-            "session_name": "test", "updated_at": jiff::Timestamp::now(),
-        }))
-        .unwrap();
-        crate::workspace::record::write(&state, &room).unwrap();
-        let report = validate(&dir, &LoadedDefinitions::default(), Some(&dir));
-        let result = create(
-            &state,
-            DefinitionSource::Deployed {
-                dir: &dir,
-                task: None,
-                surplus: None,
-                surplus_after: None,
-                fire: None,
-                fire_facts: None,
-            },
-            ScopeRoots {
-                checkout: dir.clone(),
-                project: dir.clone(),
-            },
-            || Ok(None),
-            false,
-            Default::default(),
-        );
+        let (report, result) = validate_and_create(&text);
         actual.push((
             report.errors.is_empty(),
             result.is_ok(),

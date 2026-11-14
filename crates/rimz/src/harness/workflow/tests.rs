@@ -456,7 +456,7 @@ fn rest_check_lists_validate_every_entry_and_then_names_one_target() {
             "lifecycle = 'session'\nrest-check = ['pick', 'review']",
         )
         .replace("done = \"@done\"", "done = 'review'")
-        + "[script.review]\nrun='true'\non.ok='@done'\non.no='build'\n";
+        + "[script.review]\ntimeout='365d'\nrun='true'\non.ok='@done'\non.no='build'\n";
     for (text, path, error) in [
         (base.clone(), "", None),
         (base.replace("done = 'review'", "done = '@done'"), "", None),
@@ -467,7 +467,7 @@ fn rest_check_lists_validate_every_entry_and_then_names_one_target() {
         ),
         (
             base.replace(
-                "[script.review]\nrun='true'\non.ok='@done'\non.no='build'",
+                "[script.review]\ntimeout='365d'\nrun='true'\non.ok='@done'\non.no='build'",
                 "[sleep.review]\nsleep='1m'\nthen='@done'",
             ),
             "agent.build.rest-check",
@@ -777,7 +777,7 @@ fn validation_accepts_check_or_step_starts_and_reports_invalid_targets() {
 
 #[test]
 fn validation_rejects_each_invalid_spec() {
-    let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='true'\non={pass='@done',fail='@failed'}\n";
+    let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[test.pick]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='@failed'}\n";
     let cases = [
         (
             "shell requires pass",
@@ -821,7 +821,7 @@ fn validation_rejects_each_invalid_spec() {
         ),
         (
             "duplicate node",
-            format!("{VALID}\n[script.build]\nrun = 'true'\non.ok = '@done'\n"),
+            format!("{VALID}\n[script.build]\ntimeout='365d'\nrun = 'true'\non.ok = '@done'\n"),
             "build",
         ),
         (
@@ -895,7 +895,7 @@ fn validation_rejects_each_invalid_spec() {
         (
             "unbounded capacity cycle",
             format!(
-                "{}\n[script.after]\nrun='true'\non.done='@done'\n",
+                "{}\n[script.after]\ntimeout='365d'\nrun='true'\non.done='@done'\n",
                 VALID
                     .replace("max-visits = 3", "")
                     .replace("then = \"pick\"", "then = 'after'\non.capacity = 'pick'")
@@ -991,13 +991,13 @@ fn validation_rejects_each_invalid_spec() {
             "shell timeout required",
             command.replace("timeout = '1m'", ""),
             "command.build.timeout",
-            "a run or shell step requires timeout",
+            "a command requires timeout",
         ),
         (
             "run timeout required",
             command.replace("shell = 'true'\ntimeout = '1m'", "run = 'true'"),
             "command.build.timeout",
-            "a run or shell step requires timeout",
+            "a command requires timeout",
         ),
         (
             "run argv",
@@ -1047,23 +1047,23 @@ fn validation_rejects_each_invalid_spec() {
 #[test]
 fn bounded_command_cycles_validate_without_a_never_waits_warning() {
     let (_home, dir) = fixture();
-    let base = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[script.pick]\nrun='true'\non.fail='build'\n";
+    let base = "[workflow]\nscope='worktree'\nstart='build'\n[command.build]\nrun='true'\ntimeout='1m'\nthen='pick'\nmax-visits=3\n[script.pick]\ntimeout='365d'\nrun='true'\non.fail='build'\n";
     let two = base.replace("on.fail='build'", "on.fail='pack'")
-        + "[command.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[script.back]\nrun='true'\non.fail='build'\n";
-    let route = "[script.pick]\nrun='true'\non.fail='build'";
+        + "[command.pack]\nshell='true'\ntimeout='1m'\nthen='back'\nmax-visits=7\n[script.back]\ntimeout='365d'\nrun='true'\non.fail='build'\n";
+    let route = "[script.pick]\ntimeout='365d'\nrun='true'\non.fail='build'";
     let condition = "[condition.pick]\ncases=[{when=['pr=merged'],outcome='yes'}]\nelse='no'\n\
                      on={yes='@done',no='build',unknown='@wait'}\ntimeout='1m'";
-    let held_condition = "[condition.pick]\ncases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
+    let held_condition = "[condition.pick]\ntimeout='365d'\ncases=[{when=['pr=merged'],outcome='yes',for='1m'}]\nelse='no'\n\
                           on={yes='build',no='@done',unknown='@failed'}";
     let helper = "[agent.helper]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompts/build.md'\n\
-                  then='back'\nmax-visits=4\n[script.back]\nrun='true'\non.fail='build'\n";
-    let judge = "[judge.pick]\nagent='claude'\nprompt-file='prompts/build.md'\n\
+                  then='back'\nmax-visits=4\n[script.back]\ntimeout='365d'\nrun='true'\non.fail='build'\n";
+    let judge = "[judge.pick]\ntimeout='365d'\nagent='claude'\nprompt-file='prompts/build.md'\n\
                  summary='Review the work'\non.fail='build'";
     let cases = [
         base.to_owned(),
         base.replace("[command.build]\nrun=", "[command.build]\nshell="),
         two,
-        base.to_owned() + "on.pending='@wait'\ntimeout='1m'\n",
+        base.to_owned() + "on.pending='@wait'\n",
         base.replace(route, "[sleep.pick]\nsleep='1m'\nthen='build'"),
         base.replace(route, condition),
         base.replace(route, held_condition),
@@ -1088,10 +1088,10 @@ fn bounded_command_cycles_validate_without_a_never_waits_warning() {
 fn validation_refuses_script_and_judge_checks_without_an_on_table() {
     let head = "[workflow]\nscope='worktree'\nstart='pick'\n";
     let cases = [
-        ("script", "[script.pick]\nrun='true'\n"),
+        ("script", "[script.pick]\ntimeout='365d'\nrun='true'\n"),
         (
             "judge",
-            "[judge.pick]\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Review the work'\n",
+            "[judge.pick]\ntimeout='365d'\nagent='claude'\nprompt-file='prompts/build.md'\nsummary='Review the work'\n",
         ),
     ];
     let results: Vec<_> = cases
@@ -1169,7 +1169,7 @@ fn validation_accepts_shell_checks_without_confining_the_command() {
     let (_home, dir) = fixture();
     fs::write(
         dir.join("workflow.toml"),
-        "[workflow]\nscope='worktree'\nstart='pick'\n[test.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',died='@done',timeout='@failed'}\n",
+        "[workflow]\nscope='worktree'\nstart='pick'\n[test.pick]\ntimeout='1h'\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@failed',died='@done',timeout='@failed'}\n",
     ).unwrap();
     let report = validate(&dir, &LoadedDefinitions::default(), None);
     assert!(

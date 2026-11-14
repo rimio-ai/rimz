@@ -361,7 +361,8 @@ impl Definition {
     fn fireability(&self, node: &str, cause: Cause) -> (Fireability, Option<NeverReason>) {
         let authored = self.authored();
         let (timeout, max_visits) = match (authored.checks.get(node), authored.steps.get(node)) {
-            (Some(check), _) => (check.timeout.is_some(), false),
+            // Every check with a timeout edge requires its timeout.
+            (Some(_), _) => (true, false),
             (None, Some(step)) => (step.timeout.is_some(), step.max_visits.is_some()),
             (None, None) => (true, true),
         };

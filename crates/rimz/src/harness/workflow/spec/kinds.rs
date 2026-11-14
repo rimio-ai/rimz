@@ -127,6 +127,7 @@ struct CommandNode {
     summary: Option<String>,
     run: Option<String>,
     shell: Option<String>,
+    #[schemars(required)]
     timeout: Option<String>,
     then: Option<String>,
     #[serde(default)]
@@ -179,6 +180,7 @@ struct TestNode {
     summary: Option<String>,
     run: Option<String>,
     shell: Option<String>,
+    #[schemars(required)]
     timeout: Option<String>,
     wake: Option<Vec<Wake>>,
     #[serde(default)]
@@ -204,6 +206,7 @@ struct ScriptNode {
     summary: Option<String>,
     run: Option<String>,
     shell: Option<String>,
+    #[schemars(required)]
     timeout: Option<String>,
     wake: Option<Vec<Wake>>,
     #[serde(default)]
@@ -217,6 +220,7 @@ struct JudgeNode {
     summary: Option<String>,
     agent: String,
     prompt_file: Option<String>,
+    #[schemars(required)]
     timeout: Option<String>,
     wake: Option<Vec<Wake>>,
     #[serde(default)]
@@ -235,6 +239,7 @@ struct ConditionNode {
     cases: Vec<Case>,
     #[serde(rename = "else")]
     else_outcome: Option<String>,
+    #[schemars(required)]
     timeout: Option<String>,
     #[serde(default)]
     on: BTreeMap<String, String>,
