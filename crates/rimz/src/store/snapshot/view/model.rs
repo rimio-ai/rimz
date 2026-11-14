@@ -468,7 +468,7 @@ pub struct SidebarWorkflow {
     pub capped: bool,
     pub word: String,
     pub since: jiff::Timestamp,
-    /// A `hold` outcome's configured limit, `?` when the sealed spec gives none.
+    /// A `hold` outcome's configured limit, `?` when the definition gives none.
     pub hold_limit: Option<String>,
     pub entered_at: jiff::Timestamp,
     pub created_at: jiff::Timestamp,

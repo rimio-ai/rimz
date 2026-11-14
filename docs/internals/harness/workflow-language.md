@@ -16,7 +16,7 @@ The goal is a language whose every rule fits in one sentence without "except", a
 - R8. An unknown field refuses, an invalid value refuses, and a field belongs to the tables the field table lists it under.
 - R9. Every cycle is bounded: a cycle that contains a work node contains a work node with `max-visits`, a cycle that contains none contains a sleep or a check with a `@wait` route, and failure routes count as edges.
 - R10. A `visits` or `capacity` failure is raised before its node acts and counts no visit, so its route (after the fallback chain) must lead where that node cannot be reached again.
-- R11. A run seals its definition and every file the definition names at its start, stamped with the binary's language version; a binary with another language version refuses the run, and a build link that changes what a sealed definition means raises the version.
+- R11. A run reads its definition live, revalidated at every engine read: a definition that does not admit leaves the run waiting, and one the run no longer fits ends it failed. No language version exists; a change to what a field means reaches in-flight runs at their next read, and the record version tracks only the record's own shape.
 - R12. A start that names a worktree for a workflow with `scope = "project"` refuses.
 
 The field table. A `*` marks a required field. Every node also takes `summary`, `on.failed`, and `on.<cause>` for each cause R14 lists for its kind.
@@ -362,7 +362,7 @@ Each link and the rules it owns:
 - Conditions (`language-conditions`): R28 to R34, and R6's required `on.unknown`.
 - Capacity (`language-capacity`): R35 to R39, `--give-up` and `--skip-capacity` on `rimz workflow run`, and a run of any origin accepting a give-up instant.
 - Loop (`loop-triggers`): R41 to R45, with the compiler, `rimz loop eject` and `TaskFire::supersede_held_decline` removed; R46 to R49 are withdrawn.
-- The compatibility removal and the typed pipeline need nothing from this page; the compatibility removal owns the one refusal R11's version rule reuses.
+- The compatibility removal and the typed pipeline need nothing from this page.
 
 Meeting points, each stated whole:
 
@@ -391,7 +391,7 @@ Meeting points, each stated whole:
 - `none`, the refusal of `=unknown`, no veto, a hold surviving unknown, and the reader table (R28, R29, R31, R33).
 - `else` and `on.unknown` required on a condition (R6, the field table).
 - The admission fields, `give-up`, `--skip-capacity`, and `rimz workflow run` waiting (R35 to R38).
-- Sealing whole with a language version (R11).
+- Reading the definition live, with no language version (R11).
 - Withdrawn with no new owner, each awaiting a ruling on whether another link takes it: an agent node's optional `prompt-file` and the refusal of an empty prompt (R46), `--fresh-worktree` on `rimz workflow run`, a start argument the page first proposed, and the loop's give-up instant (R47).
 - `failed` reserved (R7).
 - The validation of `visits` and `capacity` routes (R10).

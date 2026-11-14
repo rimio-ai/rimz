@@ -1244,7 +1244,7 @@ pub(super) struct WorkflowRunRow {
     pub(super) evidence: Option<Box<RunEvidence>>,
 }
 
-/// A run's sealed graph and journal, read for the loop views' per-fire forensics.
+/// A run's graph and journal, read for the loop views' per-fire forensics.
 pub(super) struct RunEvidence {
     /// The run's definition, when it still reads: a finished run's evidence outlives it.
     pub(super) spec: Option<rimz::harness::workflow::Definition>,

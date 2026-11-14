@@ -302,7 +302,7 @@ fn run_homes<'a>(
     homes
 }
 
-/// The launch each candidate's command typed, read back from its sealed spec, for the
+/// The launch each candidate's command typed, read back from its generated definition, for the
 /// candidates whose run is a scheduled fire an agent booked of a loop row's command; and the
 /// candidates found to be no booking.
 fn booked_commands(
@@ -474,7 +474,7 @@ pub(super) fn branch_pr(source: &CiSource, branch: &str, root: &Path) -> Booking
 
 /// A consumed one-shot's fired entry: each ledger task with no catalog row whose newest
 /// launch is a scheduled fire an agent booked, rebuilt from that run's record and the launch
-/// its sealed command types, while it is in its lifetime (`in_lifetime`); and the fires
+/// its generated definition's command types, while it is in its lifetime (`in_lifetime`); and the fires
 /// found past it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn consumed(

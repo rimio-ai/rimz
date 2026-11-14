@@ -528,7 +528,7 @@ pub enum LoopReport {
 }
 
 /// How a run ended, in the engine's terms: written in the record write that makes the run
-/// terminal, so a reader of the record learns the end without the journal or the sealed graph.
+/// terminal, so a reader of the record learns the end without the journal or the definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunOutcome {
     pub ending: RunEnding,

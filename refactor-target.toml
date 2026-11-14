@@ -2261,7 +2261,7 @@ path = "crates/rimz/src/harness"
 # condition_stages and unread_reason share admission and prose with the loop CLI (+2).
 # WatchDeadline, run_command and CheckOutcome::{code,interrupted} share hosted shell execution (+4).
 # WhenExpr::forge_branches shares parsed selectors with workflow demand (+1).
-# Definition::forge_branches exposes read-only sealed-spec demand to the sidebar.
+# Definition::forge_branches exposes read-only definition demand to the sidebar.
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
 # resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
 # WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
@@ -2306,11 +2306,11 @@ path = "crates/rimz/src/harness"
 # ReminderSection shares explicit launch-reminder headings across callers (+1).
 # workflow::routing_hop shares arrival selection between park views and launch briefs (+1).
 # CiSource::pr_number shares cached checkout PR numbers with workflow inspection (+1).
-# workflow::parse shares the sealed-spec parser with cached sidebar projection.
+# workflow::parse shares the definition parser with cached sidebar projection.
 # auto_continue::CardStatus shares lazy spent-pause status with message and takeover readers (+1).
 # workflow::reached shares the reached rule between CLI rails and the sidebar strip (+1).
 # Node::lifecycle shares the agent definition's lifecycle with CLI readers.
-# workflow::load serves sealed-spec readers, which carry no frozen default.
+# workflow::load serves parse-only definition readers, which carry no frozen default.
 # workflow::{Stopped, StopKind} carry current non-clean turn evidence across the host seam (+2).
 # budget::project_parks shares the existing park projection with the workflow attempt host (+1).
 # workflow::Pushed reports durable enqueue progress across the attempt-host seam (+1).
@@ -12036,7 +12036,7 @@ reason = "A run record carries whether it still owes its loop task the outcome r
 [[verdict]]
 kind = "item"
 key = "store::workflow::RunOutcome"
-reason = "The engine writes how a run ended, and whether it was quiet, in its terminal record write, so the scheduler's collector reports or forgets it from the record alone, without the journal or the sealed graph."
+reason = "The engine writes how a run ended, and whether it was quiet, in its terminal record write, so the scheduler's collector reports or forgets it from the record alone, without the journal or the definition."
 
 [[verdict]]
 kind = "item"
@@ -12191,7 +12191,7 @@ reason = "Loop and workflow demand share the parser's forge selector extraction.
 [[verdict]]
 kind = "item"
 key = "harness::workflow::Definition::forge_branches"
-reason = "The sidebar reads sealed workflow demand without reaching transition or execution code."
+reason = "The sidebar reads workflow definition demand without reaching transition or execution code."
 
 [[verdict]]
 kind = "item"
@@ -12321,7 +12321,7 @@ reason = "The workflow CLI and engine share a strict spec loader, the editor sch
 [[verdict]]
 kind = "item"
 key = "harness::workflow::validate::validate_spec"
-reason = "Run admission validates the same parsed specification bytes it seals, reusing the CLI validator without re-reading the definition."
+reason = "Run admission at the start and at every engine read validates the parsed definition it holds, reusing the CLI validator without re-reading the definition."
 
 [[verdict]]
 kind = "item"
@@ -12651,7 +12651,7 @@ reason = "The host receives the complete admitted supervised-attempt request."
 [[verdict]]
 kind = "item"
 key = "harness::workflow::LaunchOverrides"
-reason = "The host maps an agent step's sealed launch settings onto the launcher's overrides and cohort."
+reason = "The host maps an agent step's launch settings, read from the run's definition, onto the launcher's overrides and cohort."
 
 [[verdict]]
 kind = "item"
