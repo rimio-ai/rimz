@@ -515,7 +515,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | What | Cap |
 | --- | --- |
 | `--check` | `--check-timeout`, else the task's `--timeout`, else 5 minutes. A killed check counts as a failure. |
-| Each judge | Its own `--judge-timeout` or table `timeout`, else 5 minutes, independent of `--timeout`: one deadline that also covers the retry, and a timeout is not retried. No answer continues the chain. |
+| Each judge | Its own `--judge-timeout` or table `timeout`, else 5 minutes, independent of `--timeout`: one deadline that also covers the retry and pauses while the judge waits for a provider limit's reset, and a timeout is not retried. No answer continues the chain. |
 | `--agent` turn and each verify command, scheduled or under `loop fire` | The task's `--timeout`, else `loop.default-timeout` (default `2h`, set with `rimz config set loop.default-timeout 3h`) for the turn and 5 minutes for a verify command. |
 | `--stay` launch | None. |
 

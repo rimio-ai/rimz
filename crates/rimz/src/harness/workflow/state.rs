@@ -123,6 +123,8 @@ impl Transition<'_> {
         }
         match disposition {
             JudgeFailure::Limited => {
+                // A limit stops the judge's clock until it starts again after the reset.
+                self.record.paused_since = Some(self.now);
                 self.record.recheck_at =
                     self.bounded_recheck(result.limited.and_then(|limited| limited.reset_at))?;
                 Ok(false)
@@ -304,6 +306,8 @@ impl Transition<'_> {
         self.record.attempt = Some(held.attempt);
         self.record.check_retry = 0;
         self.record.check_retry_context = None;
+        self.record.paused_since = None;
+        self.record.paused_ms = 0;
         self.record.launch_retry = false;
         self.record.recheck_at = None;
     }
@@ -515,7 +519,17 @@ impl Transition<'_> {
         self.record.entered_at = self.now;
         self.record.check_retry = 0;
         self.record.check_retry_context = None;
+        self.record.paused_since = None;
+        self.record.paused_ms = 0;
         self.record.launch_retry = false;
+    }
+
+    /// Run a paused judge's clock again from now, counting the pause to this entry.
+    pub(super) fn unpause(&mut self) {
+        if let Some(since) = self.record.paused_since.take() {
+            let paused = u64::try_from(self.now.duration_since(since).as_millis()).unwrap_or(0);
+            self.record.paused_ms = self.record.paused_ms.saturating_add(paused);
+        }
     }
 
     /// Hand a route's `object` to the next node as its input and key. A failure always does;
@@ -955,13 +969,9 @@ impl Transition<'_> {
     pub(super) fn restart_step(&mut self, step: &str, continued: bool) {
         self.close_wait();
         self.reset_visits(step, "restart");
-        self.record.node = step.into();
-        self.record.entered_at = self.now;
+        self.enter(step.into());
         self.record.park = None;
         self.record.state = RunState::Active;
-        self.record.check_retry = 0;
-        self.record.check_retry_context = None;
-        self.record.launch_retry = false;
         self.push(
             None,
             JournalEvent::Restart {
@@ -1052,8 +1062,8 @@ impl Transition<'_> {
     }
 
     fn bounded_recheck(&self, at: Option<Timestamp>) -> Result<Option<Timestamp>, TimeInputErr> {
-        let limit =
-            super::inspect::first_bound(self.spec, &self.record, None, self.now)?.map(|(at, _)| at);
+        let limit = super::inspect::first_bound(self.spec, &self.record, None, self.now)?
+            .map(|(at, ..)| at);
         Ok(at.map(|at| limit.map_or(at, |limit| at.min(limit))))
     }
 

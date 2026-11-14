@@ -345,6 +345,12 @@ impl View<'_> {
                 }
             )?;
         }
+        if record.state == RunState::Active && record.paused_since.is_some() {
+            writeln!(
+                out,
+                "the judge waits for its window or a limit's reset · the judge timeout is paused"
+            )?;
+        }
         Ok(())
     }
 
@@ -886,6 +892,51 @@ mod tests {
             String::from_utf8(headline).unwrap(),
             String::from_utf8(rail).unwrap(),
         )
+    }
+
+    #[test]
+    fn a_paused_judge_says_its_timeout_is_paused() {
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_mins(2);
+        let spec = toml::from_str("[workflow]\nscope='worktree'\nstart='pr'\n[judge.pr]\nagent='claude'\nprompt-file='p.md'\ntimeout='1h'\non.ok='@done'\n").unwrap();
+        let globals = crate::cli::GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let mut lines = Vec::new();
+        for (state, paused) in [("active", false), ("active", true), ("failed", true)] {
+            let record: RunRecord = serde_json::from_value(serde_json::json!({
+                "version":rimz::store::workflow::VERSION,"id":WorkflowRunId::new(),
+                "workflow":"review","spec_dir":"/spec","spec_digest":"digest",
+                "project_root":"/repo","scope":{"kind":"worktree","path":"/repo"},
+                "created_at":Timestamp::UNIX_EPOCH,"entered_at":Timestamp::UNIX_EPOCH,
+                "state":state,"node":"pr","visits":{},"visit_grant":0,
+                "deadline_fired":false,"next_seq":2,
+                "paused_since":paused.then_some(Timestamp::UNIX_EPOCH),
+            }))
+            .unwrap();
+            let paths = paths::StatePaths::for_project_root(&record.project_root)
+                .unwrap()
+                .workflow(&record.id);
+            let view = View {
+                record: &record,
+                paths: &paths,
+                spec: &spec,
+                journal: &[],
+                now,
+                commands: resolve::RunCommands::new(&record, &globals),
+            };
+            let mut headline = Vec::new();
+            view.headline(&mut headline, None, None).unwrap();
+            lines.push(
+                String::from_utf8(headline)
+                    .unwrap()
+                    .contains("the judge timeout is paused"),
+            );
+        }
+        assert_eq!(lines, [false, true, false]);
     }
 
     #[test]

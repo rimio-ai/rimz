@@ -291,3 +291,54 @@ fn restart_during_cancel_stop_cannot_replace_the_cancel() {
     assert_eq!(final_record.state, RunState::Canceled);
     assert_eq!(host.launched.borrow().len(), 1);
 }
+
+#[test]
+fn a_restarted_step_counts_its_timeout_from_the_restart() {
+    for parked in [false, true] {
+        let (_dir, state, record) = setup(&format!("{STEP}timeout='1h'\n"));
+        let host = FakeHost::new();
+        let mut live = advance_ok(&state, &record.id, &host);
+        let long_ago = Timestamp::now() - std::time::Duration::from_secs(7200);
+        let attempt = live.attempt.as_mut().unwrap();
+        attempt.started_at = long_ago;
+        attempt.asked_ms = 600_000;
+        let seq = attempt.seq;
+        if parked {
+            let attempt = live.attempt.take().unwrap();
+            let run = attempt.run.unwrap();
+            live.prev_attempt = Some(
+                serde_json::from_value(json!({
+                "step":"build","outcome":"asked","seq":seq,"visit":1,"key":null,
+                "started_at":long_ago,"ended_at":long_ago,"handle":run.handle,
+                "run_id":run.run_id,"claim_path":"/claim","head_start":null,"head_end":null,
+                "children":null}))
+                .unwrap(),
+            );
+            live.state = RunState::Parked;
+            live.park = Some(Park {
+                reason: ParkReason::Asked,
+                at: long_ago,
+                text: None,
+            });
+        }
+        update(&state, &live);
+        let restarted_at = Timestamp::now();
+        restart(
+            &state,
+            &record.id,
+            Some((seq, "conversation".into())),
+            &host,
+        )
+        .unwrap();
+        let relaunched = advance_ok(&state, &record.id, &host);
+        let attempt = relaunched.attempt.as_ref().unwrap();
+        assert!(attempt.started_at >= restarted_at, "parked={parked}");
+        assert_eq!(attempt.asked_ms, 0, "parked={parked}");
+        let still = advance_ok(&state, &record.id, &host);
+        assert_eq!(
+            (still.state, still.attempt.is_some()),
+            (RunState::Active, true),
+            "parked={parked}: the restart's clock has an hour left"
+        );
+    }
+}

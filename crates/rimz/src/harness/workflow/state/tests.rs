@@ -283,3 +283,48 @@ fn deadline_wins_at_ties_and_fires_only_once() {
         1
     );
 }
+
+#[test]
+fn a_held_sessions_clock_bounds_its_waiting_rest_check() {
+    let spec: Definition = toml::from_str("[workflow]\nscope='worktree'\nstart='build'\n\
+        [agent.build]\nagent='claude'\nprompt-file='p.md'\nlifecycle='session'\nrest-check=['pr']\ntimeout='1h'\nthen='pr'\non.timeout='@done'\n\
+        [script.pr]\nrun='true'\ntimeout='2h'\non={pending='@wait',ok='build'}\n").unwrap();
+    let paths = paths();
+    let mut record = record();
+    let now = record.entered_at;
+    record.held = serde_json::from_value(json!({"entered_at":now - jiff::SignedDuration::from_mins(30),
+        "attempt":{"kind":"agent","lifecycle":"session","seq":0,"node":"build",
+            "started_at":now - jiff::SignedDuration::from_mins(30),"host":{"pid":123,"start":null}}}))
+    .unwrap();
+    let session = now + jiff::SignedDuration::from_mins(30);
+    let mut t = Transition {
+        now,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: vec![],
+    };
+    t.merge_wait(
+        &json!({"outcome":"pending","recheck_at":"2099-01-01T00:00:00Z"}),
+        now,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        t.record.recheck_at,
+        Some(session),
+        "the session's clock is the earlier one"
+    );
+    assert_eq!(
+        super::super::next_bound(&spec, &t.record, None, now).unwrap(),
+        Some((session, "@done".into())),
+        "the session's own timeout route"
+    );
+    // A pause on the session's agent leaves the check's clock the only one running.
+    let attempt = &mut t.record.held.as_mut().unwrap().attempt;
+    attempt.held_since = Some(now);
+    assert_eq!(
+        super::super::next_bound(&spec, &t.record, None, now).unwrap(),
+        Some((now + jiff::SignedDuration::from_hours(2), "@failed".into()))
+    );
+}
