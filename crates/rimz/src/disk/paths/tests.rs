@@ -1516,7 +1516,7 @@ fn workflow_paths_and_cross_room_discovery() {
     );
     assert_eq!(paths.record, paths.home.join("record.json"));
     assert_eq!(paths.journal, paths.home.join("journal.jsonl"));
-    assert_eq!(paths.spec, paths.home.join("workflow.toml"));
+    assert_eq!(paths.definition, paths.home.join("definition"));
     assert_eq!(paths.work, paths.home.join("work"));
     assert_eq!(paths.context, paths.work.join("context.json"));
     assert_eq!(

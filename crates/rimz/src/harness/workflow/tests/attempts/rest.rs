@@ -171,7 +171,7 @@ fn reread_rest_check_type_error_returns_an_error_without_panicking() {
     advance_ok(&state, &record.id, &host);
     let paths = state.workflow(&record.id);
     fs::write(
-        &paths.spec,
+        definition_file(&record),
         SESSION.replace("rest-check=['pr']", "rest-check=5"),
     )
     .unwrap();
@@ -226,7 +226,7 @@ fn same_step_pushes_once_updates_input_and_counts_the_push_as_a_visit() {
     assert_eq!(rows[0]["visit"], 1);
     assert_eq!(advance_ok(&state, &record.id, &host), pushed);
     assert_eq!(host.push_calls.borrow().len(), 1);
-    let spec = load(&state.workflow(&record.id).home).unwrap();
+    let spec = load(&record.definition_dir(&state.workflow(&record.id))).unwrap();
     let journal = records::journal(&state.workflow(&record.id)).unwrap();
     assert_eq!(reached(&hops(&spec, &journal, None), &journal)["build"], 2);
     check(dir.path(), json!({"outcome":"done"}));

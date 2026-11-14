@@ -51,7 +51,7 @@ fn attempt(root: &str, node: &str, lifecycle: StepLifecycle) -> workflow::RunRec
     let id = WorkflowRunId::new();
     serde_json::from_value(json!({
         "version":crate::store::workflow::VERSION, "id":id, "workflow":"review", "task":"nightly", "spec_dir":"/defs",
-        "spec_digest":"test", "scope":{"kind":"worktree", "path":root},
+        "scope":{"kind":"worktree", "path":root},
         "project_root":root, "created_at":Timestamp::UNIX_EPOCH,
         "entered_at":Timestamp::UNIX_EPOCH, "node":node, "state":"active",
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":2,
@@ -810,13 +810,13 @@ fn system_census_skips_a_stranded_or_broken_run_home_but_not_an_unreadable_one()
     live.project_root = root.path().to_owned();
     std::fs::create_dir_all(&state.root).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    workflow::initialize(&state, &live, b"[workflow]", &guard).unwrap();
+    workflow::initialize(&state, &live, &guard).unwrap();
     let old = attempt(
         root.path().to_str().unwrap(),
         "build",
         StepLifecycle::Session,
     );
-    workflow::initialize(&state, &old, b"[workflow]", &guard).unwrap();
+    workflow::initialize(&state, &old, &guard).unwrap();
     let mut value = serde_json::to_value(&old).unwrap();
     value["version"] = json!(3);
     std::fs::write(state.workflow(&old.id).record, value.to_string()).unwrap();

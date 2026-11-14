@@ -5,7 +5,7 @@ use std::fs;
 fn record() -> RunRecord {
     serde_json::from_value(json!({
         "version":VERSION, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",
-        "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":"Review this PR",
+        "spec_dir":"/definitions/review", "prompt":"Review this PR",
         "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
@@ -35,7 +35,7 @@ fn notes_round_trip_and_initialize_links_kept_memory() {
     value["notes"] = json!(relative);
     let record: RunRecord = serde_json::from_value(value).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     let paths = state.workflow(&record.id);
     let kept = state.notes_run(crate::disk::paths::Class::AutomationNotes, &relative);
     assert_eq!(
@@ -60,7 +60,7 @@ fn record_version_fence_refuses_every_other_version_before_decoding() {
     let record = record();
     let paths = state.workflow(&record.id);
     assert_eq!(record.header().node.as_deref(), Some("pr"));
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     assert_eq!(load(&paths).unwrap(), record);
     let id = record.id.as_str();
     let fix = format!("this RimZ reads only version {VERSION}");
@@ -110,7 +110,7 @@ fn classification_reads_newer_versions_no_further_and_strands_unfinished_old_run
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     let record = record();
     let paths = state.workflow(&record.id);
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     assert_eq!(
         classify(&paths).unwrap(),
         RunClass::Current(Box::new(record.clone()))
@@ -201,7 +201,7 @@ fn finish_moves_only_an_ended_run_and_never_replaces_a_finished_home() {
     let mut record = record();
     let live = state.workflow(&record.id);
     let finished = state.finished_workflow(&record.id);
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     assert_eq!(
         finish(&state, &record.id, Some(b"h"), &guard).unwrap(),
         Finished::Kept,
@@ -287,7 +287,7 @@ fn finish_keeps_the_live_home_when_its_history_cannot_be_written() {
     let mut record = record();
     record.state = RunState::Canceled;
     let live = state.workflow(&record.id);
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     // A directory at the destination fails the atomic write for any uid.
     fs::create_dir_all(live.history().join("blocker")).unwrap();
     assert!(finish(&state, &record.id, Some(b"history"), &guard).is_err());
@@ -363,7 +363,7 @@ fn pin_record(
     run.project_root = root.clone();
     run.scope.path = root.join("tree");
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    initialize(&state, &run, b"[workflow]", &guard).unwrap();
+    initialize(&state, &run, &guard).unwrap();
     (state, run)
 }
 
@@ -607,7 +607,7 @@ fn a_held_session_round_trips_with_its_verdict() {
     let state =
         StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    initialize(&state, &decoded, b"[workflow]", &guard).unwrap();
+    initialize(&state, &decoded, &guard).unwrap();
     assert_eq!(load(&state.workflow(&decoded.id)).unwrap(), decoded);
 }
 
@@ -786,13 +786,16 @@ fn durable_record_round_trip_and_json_shape() {
     );
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     assert!(
         paths.record.is_file(),
         "initialization must publish the record"
     );
     assert_eq!(load(&paths).unwrap(), record);
-    assert_eq!(fs::read(&paths.spec).unwrap(), b"[workflow]");
+    assert!(
+        !crate::disk::paths::workflow_spec_file(&paths.home).exists(),
+        "a run home holds no copy of its definition"
+    );
     assert!(paths.work.is_dir());
     let children: Vec<_> = fs::read_dir(&paths.work)
         .unwrap()
@@ -822,7 +825,7 @@ fn listing_skips_unreadable_records_but_named_loads_fail() {
         StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path()).unwrap();
     let record = record();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     let mut future = record.clone();
     future.version = VERSION + 1;
     for contents in [
@@ -886,7 +889,7 @@ fn a_moved_home_reads_its_recorded_logs_under_the_home_it_was_read_from() {
     let mut record = record();
     let live = state.workflow(&record.id);
     let finished = state.finished_workflow(&record.id);
-    initialize(&state, &record, b"[workflow]", &guard).unwrap();
+    initialize(&state, &record, &guard).unwrap();
     let step = live.step_log(1);
     let check = live.check_log(2);
     let outside = std::path::Path::new("/elsewhere/build.log");

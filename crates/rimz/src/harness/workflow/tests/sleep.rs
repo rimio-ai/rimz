@@ -71,7 +71,7 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
             json!({"outcome":"then", "key":"original", "reason":"slept 30m"}),
         ]
     );
-    let spec = load(&state.workflow(&record.id).home).unwrap();
+    let spec = load(&record.definition_dir(&state.workflow(&record.id))).unwrap();
     assert!(
         spec.check("cooldown")
             .unwrap()
@@ -99,7 +99,7 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
     );
     let text = text.replace("start='cooldown'", "start='cooldown'\non.failed='build'");
     let (_dir, state, record) = attempts::setup(&text);
-    let spec = load(&state.workflow(&record.id).home).unwrap();
+    let spec = load(&record.definition_dir(&state.workflow(&record.id))).unwrap();
     let mut waiting = advance_sleep(&state, &record);
     waiting.deadline = Some(Timestamp::UNIX_EPOCH);
     waiting.recheck_at = None;
@@ -259,7 +259,8 @@ fn an_invalid_sleep_edit_refuses_without_a_write_and_the_run_proceeds_once_fixed
     update(&state, &record);
     let mut waiting = advance_sleep(&state, &record);
     let paths = state.workflow(&record.id);
-    fs::write(&paths.spec, SLEEP.replace("sleep='30m'", "sleep='soon'")).unwrap();
+    let definition = attempts::definition_file(&record);
+    fs::write(&definition, SLEEP.replace("sleep='30m'", "sleep='soon'")).unwrap();
     waiting.recheck_at = None;
     update(&state, &waiting);
     let before = (
@@ -278,7 +279,7 @@ fn an_invalid_sleep_edit_refuses_without_a_write_and_the_run_proceeds_once_fixed
         ),
         before
     );
-    fs::write(&paths.spec, SLEEP).unwrap();
+    fs::write(&definition, SLEEP).unwrap();
     let fixed = advance_sleep(&state, &record);
     assert_eq!(fixed.state, RunState::Active);
     assert_eq!(

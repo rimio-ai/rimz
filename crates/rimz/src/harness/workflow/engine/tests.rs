@@ -261,7 +261,7 @@ fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, Definition)
     let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
     let record: RunRecord = serde_json::from_value(json!({
         "version":crate::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
-        "spec_dir":home.path(), "spec_digest":"abc", "prompt":null,
+        "spec_dir":home.path(), "prompt":null,
         "scope":{"kind":"worktree","path":home.path()}, "project_root":home.path(),
         "created_at":"2000-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2000-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
@@ -271,7 +271,8 @@ fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, Definition)
     }))
     .unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    workflow::initialize(&state, &record, text.as_bytes(), &guard).unwrap();
+    workflow::initialize(&state, &record, &guard).unwrap();
+    fs::write(crate::disk::paths::workflow_spec_file(home.path()), text).unwrap();
     let spec = toml::from_str(text).unwrap();
     (home, state, record, spec)
 }
@@ -460,7 +461,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
     let (home, state, mut record, _) = fixture(text);
     let dir = home.path().join("review");
     fs::create_dir(&dir).unwrap();
-    record.spec_dir = dir.clone();
+    record.spec_dir = Some(dir.clone());
     fs::write(crate::disk::paths::workflow_spec_file(&dir), text).unwrap();
     fs::write(&state.workspace_record, serde_json::to_vec(&json!({
         "layout":crate::disk::paths::WORKSPACE_LAYOUT, "workspace_id":crate::ids::WorkspaceId::from_project_root(home.path()),
@@ -666,7 +667,11 @@ fn a_continued_restart_that_gives_up_on_capacity_leaves_no_session_to_the_routed
         resume: Some("conversation".into()),
         settled: None,
     });
-    fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+    fs::write(
+        record.spec_dir.as_deref().unwrap().join("prompt.md"),
+        "Build",
+    )
+    .unwrap();
     let paths = state.workflow(&record.id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
     workflow::write(&paths, &record, &guard).unwrap();
@@ -748,7 +753,11 @@ fn every_origin_waits_at_a_hold_and_only_the_stored_skip_launches_past_admission
                     settled: None,
                 });
                 record.capacity = capacity;
-                fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+                fs::write(
+                    record.spec_dir.as_deref().unwrap().join("prompt.md"),
+                    "Build",
+                )
+                .unwrap();
                 let paths = state.workflow(&record.id);
                 let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
                 workflow::write(&paths, &record, &guard).unwrap();
@@ -1004,7 +1013,11 @@ fn an_invalid_timeout_refuses_at_the_read_without_a_write_and_proceeds_once_fixe
         ),
         before
     );
-    fs::write(&paths.spec, text.replace("tomorrow", "5m")).unwrap();
+    fs::write(
+        crate::disk::paths::workflow_spec_file(&record.definition_dir(&paths)),
+        text.replace("tomorrow", "5m"),
+    )
+    .unwrap();
     advance(&state, &record.id, &host).unwrap();
     // The fixture entered `pr` in 2000, so the fixed timeout has long run out.
     let ended = workflow::load(&paths).unwrap();
@@ -1022,7 +1035,11 @@ fn step_window_waits_for_a_closed_companion_provider() {
     let (_home, state, record, spec) = fixture(
         "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude,codex,term'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left>=20'\n[script.after]\ntimeout='365d'\nrun='true'\non.ok='@done'\n",
     );
-    fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+    fs::write(
+        record.spec_dir.as_deref().unwrap().join("prompt.md"),
+        "Build",
+    )
+    .unwrap();
     let windows = WindowReadings::fixed(
         now,
         [("claude", 10), ("codex", 100)]
@@ -1098,7 +1115,11 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
     let (_home, state, mut record, spec) = fixture(
         "[workflow]\nscope='worktree'\nstart='pr'\n[agent.pr]\nlifecycle='turn'\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\nadmission.window='5h.left >= 20'\n[script.after]\ntimeout='365d'\nrun='true'\non.ok='@done'\n",
     );
-    fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+    fs::write(
+        record.spec_dir.as_deref().unwrap().join("prompt.md"),
+        "Build",
+    )
+    .unwrap();
     record.key = Some(workflow::Key::Integer(7));
     record.input = Some(json!({"outcome":"work", "key":7}));
     {
@@ -1363,6 +1384,7 @@ fn a_limited_judge_waits_for_its_reset_on_a_paused_clock() {
                 }),
                 cost_usd: None,
                 detail: json!({}),
+                interrupt: None,
             },
         )
         .unwrap();
@@ -1458,6 +1480,7 @@ fn a_judges_rerun_after_a_failure_stays_inside_its_one_clock() {
                 limited: None,
                 cost_usd: None,
                 detail: json!({}),
+                interrupt: None,
             },
         )
         .unwrap();
@@ -1541,15 +1564,20 @@ fn an_inline_run_seals_its_assets_and_reads_prompts_from_its_own_root() {
         ),
         (RunOrigin::Inline, "nightly", Some("nightly"))
     );
-    assert_eq!(record.spec_dir, paths.definition.canonicalize().unwrap());
-    assert_eq!(fs::read(&paths.spec).unwrap(), ONE_TURN.as_bytes());
+    assert_eq!(record.spec_dir, None);
+    assert_eq!(record.definition_dir(&paths), paths.definition);
+    assert_eq!(
+        fs::read(crate::disk::paths::workflow_spec_file(&paths.definition)).unwrap(),
+        ONE_TURN.as_bytes()
+    );
+    assert!(!crate::disk::paths::workflow_spec_file(&paths.home).exists());
     assert!(
         record.notes.is_some(),
         "an agent run keeps its notes folder"
     );
     let asset = paths.definition.join("prompts/fix.md");
     fs::write(&asset, "fix the build, sealed copy").unwrap();
-    let spec = spec::load(&paths.home).unwrap();
+    let spec = spec::load(&record.definition_dir(&paths)).unwrap();
     assert_eq!(
         agent::compose(
             &record,
@@ -1574,32 +1602,29 @@ fn deployed(dir: &Path) -> DefinitionSource<'_> {
     }
 }
 
+/// A deployed run copies nothing: it records its directory canonical and every read takes the
+/// directory as it is, so an entry the definition never names, even one that resolves outside
+/// it or nowhere, no longer stops the start.
 #[test]
-fn a_deployed_run_seals_its_whole_directory_and_ignores_later_source_edits() {
+fn a_deployed_run_reads_its_directory_live_and_keeps_no_copy() {
     let (home, state) = bare_room();
     open_room(&state, home.path());
+    fs::write(home.path().join("secret.md"), "outside").unwrap();
     let dir = home.path().join("nightly");
-    fs::create_dir_all(dir.join("prompts/lib")).unwrap();
+    fs::create_dir_all(dir.join("prompts")).unwrap();
     fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
     fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
-    fs::write(
-        dir.join("prompts/lib/helper.py"),
-        "a sibling the TOML never names",
-    )
-    .unwrap();
-    std::os::unix::fs::symlink("fix.md", dir.join("prompts/alias.md")).unwrap();
+    std::os::unix::fs::symlink(home.path().join("secret.md"), dir.join("prompts/leak.md")).unwrap();
+    std::os::unix::fs::symlink(home.path().join("missing.md"), dir.join("prompts/gone.md"))
+        .unwrap();
     let record = start_at(&state, home.path(), deployed(&dir)).unwrap();
     let paths = state.workflow(&record.id);
     assert_eq!(record.origin, RunOrigin::Deployed);
-    assert_eq!(record.spec_dir, paths.definition.canonicalize().unwrap());
-    assert_eq!(
-        ["workflow.toml", "prompts/lib/helper.py", "prompts/alias.md"]
-            .map(|name| fs::read_to_string(paths.definition.join(name)).unwrap()),
-        [ONE_TURN, "a sibling the TOML never names", "fix the build"]
-    );
+    assert_eq!(record.spec_dir, Some(dir.canonicalize().unwrap()));
+    assert!(!paths.definition.exists());
+    assert!(!crate::disk::paths::workflow_spec_file(&paths.home).exists());
     fs::write(dir.join("prompts/fix.md"), "an edit after start").unwrap();
-    fs::remove_dir_all(&dir).unwrap();
-    let spec = spec::load(&paths.home).unwrap();
+    let spec = spec::load(&record.definition_dir(&paths)).unwrap();
     assert_eq!(
         agent::compose(
             &record,
@@ -1608,80 +1633,9 @@ fn a_deployed_run_seals_its_whole_directory_and_ignores_later_source_edits() {
             &mut BTreeMap::new()
         )
         .unwrap(),
-        "fix the build",
-        "a deployed run reads its prompt from the copy sealed at start"
+        "an edit after start",
+        "a deployed run reads its prompt from the directory as it is"
     );
-}
-
-#[test]
-fn a_deployed_run_seals_internal_links_as_links_and_keeps_empty_directories() {
-    let (home, state) = bare_room();
-    open_room(&state, home.path());
-    let dir = home.path().join("nightly");
-    fs::create_dir_all(dir.join("prompts")).unwrap();
-    fs::create_dir_all(dir.join("lib")).unwrap();
-    fs::create_dir_all(dir.join("out/empty")).unwrap();
-    fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
-    fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
-    fs::write(dir.join("lib/main.py"), "the library").unwrap();
-    std::os::unix::fs::symlink("../lib/main.py", dir.join("prompts/link.py")).unwrap();
-    std::os::unix::fs::symlink("../lib", dir.join("prompts/lib")).unwrap();
-    std::os::unix::fs::symlink(dir.join("lib/main.py"), dir.join("absolute.py")).unwrap();
-    let record = start_at(&state, home.path(), deployed(&dir)).unwrap();
-    let sealed = state.workflow(&record.id).definition;
-    for (link, target) in [
-        ("prompts/link.py", "../lib/main.py"),
-        ("prompts/lib", "../lib"),
-        ("absolute.py", "lib/main.py"),
-    ] {
-        assert_eq!(
-            fs::read_link(sealed.join(link)).unwrap(),
-            std::path::Path::new(target),
-            "{link}"
-        );
-    }
-    assert!(
-        fs::symlink_metadata(sealed.join("prompts/lib"))
-            .unwrap()
-            .is_symlink()
-    );
-    assert!(
-        sealed.join("out/empty").is_dir(),
-        "an empty directory is sealed"
-    );
-    fs::write(dir.join("lib/main.py"), "an edit after start").unwrap();
-    for link in ["prompts/link.py", "prompts/lib/main.py", "absolute.py"] {
-        assert_eq!(
-            fs::read_to_string(sealed.join(link)).unwrap(),
-            "the library",
-            "{link} reads the sealed target"
-        );
-    }
-}
-
-#[test]
-fn a_deployed_run_refuses_a_file_it_cannot_seal_with_its_path() {
-    let (home, state) = bare_room();
-    open_room(&state, home.path());
-    fs::write(home.path().join("secret.md"), "outside").unwrap();
-    for (link, target) in [
-        ("prompts/leak.md", home.path().join("secret.md")),
-        ("prompts/gone.md", home.path().join("missing.md")),
-    ] {
-        let dir = home.path().join("nightly");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("prompts")).unwrap();
-        fs::write(crate::disk::paths::workflow_spec_file(&dir), ONE_TURN).unwrap();
-        fs::write(dir.join("prompts/fix.md"), "fix the build").unwrap();
-        std::os::unix::fs::symlink(&target, dir.join(link)).unwrap();
-        let error = start_at(&state, home.path(), deployed(&dir)).unwrap_err();
-        let shown = dir.canonicalize().unwrap().join(link);
-        assert!(
-            error.to_string().contains(&shown.display().to_string()),
-            "{link}: {error}"
-        );
-        assert!(workflow::live_runs(&state).unwrap().is_empty(), "{link}");
-    }
 }
 
 #[test]

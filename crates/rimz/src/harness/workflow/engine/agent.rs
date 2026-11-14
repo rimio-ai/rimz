@@ -19,7 +19,7 @@ pub(super) fn compose(
 ) -> Result<String> {
     let mut parts = Vec::new();
     if let Some(prompt_file) = step.prompt_file() {
-        let file = spec::confined_file(&record.spec_dir, prompt_file)?;
+        let file = spec::confined_file(&record.definition_dir(paths), prompt_file)?;
         let prompt = std::fs::read_to_string(file)?;
         digests.insert(prompt_file.into(), script::digest(prompt.as_bytes()));
         parts.push(prompt);
@@ -268,7 +268,7 @@ pub(super) fn launch(
     let step = spec.step(&record.node).expect("prepared agent step");
     let prepared = prompt.and_then(|prompt| {
         let overrides = step
-            .launch_overrides(&record.spec_dir)
+            .launch_overrides(&record.definition_dir(paths))
             .map_err(|error| error.to_string())?;
         Ok((prompt, overrides))
     });

@@ -2,7 +2,7 @@ use super::*;
 use crate::store::workflow::{Park, ParkReason};
 
 #[test]
-fn continued_restart_failure_uses_the_sealed_failure_policy() {
+fn continued_restart_failure_uses_the_definitions_failure_policy() {
     for explicit in [false, true] {
         let text = STEP.to_owned()
             + if explicit {

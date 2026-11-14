@@ -745,7 +745,7 @@ mod agent_ref {
             let seq = if case == "newer" { 8 } else { 7 };
             let mut record: RunRecord = serde_json::from_value(serde_json::json!({
                 "version":rimz::store::workflow::VERSION, "id":pin.run, "workflow":"review", "spec_dir":fixture.cwd,
-                "spec_digest":"test", "project_root":fixture.env.project_root,
+                "project_root":fixture.env.project_root,
                 "scope":{"kind":"worktree","path":fixture.cwd},
                 "created_at":"2026-01-01T00:00:00Z", "state":state,
                 "node":"build", "entered_at":"2026-01-01T00:00:00Z", "deadline_fired":false,
@@ -765,7 +765,7 @@ mod agent_ref {
                 record.node = "check".into();
             }
             let guard = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
-            records::initialize(store.paths(), &record, b"", &guard).unwrap();
+            records::initialize(store.paths(), &record, &guard).unwrap();
             drop(guard);
             if case == "unreadable" {
                 std::fs::write(&paths.record, "not json").unwrap();

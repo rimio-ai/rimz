@@ -49,14 +49,14 @@ fn automation_notes_follow_workflow_cells_descendants_and_replayed_records() {
     std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
     let record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
         "version":crate::store::workflow::VERSION,"id":id,"workflow":"review","spec_dir":project.path(),
-        "spec_digest":"test","project_root":project.path(),"notes":relative,
+        "project_root":project.path(),"notes":relative,
         "scope":{"kind":"worktree","path":project.path()},"state":"active","node":"build",
         "created_at":stamp,"entered_at":stamp,"deadline_fired":false,
         "next_seq":1,"visits":{},"visit_grant":0,
     }))
     .unwrap();
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    crate::store::workflow::initialize(&state, &record, b"spec", &guard).unwrap();
+    crate::store::workflow::initialize(&state, &record, &guard).unwrap();
     drop(guard);
     let mut parent = crate::testkit::agent_state("claude", "parent", stamp);
     parent.record = Some(Box::new(

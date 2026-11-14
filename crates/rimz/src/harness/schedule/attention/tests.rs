@@ -363,7 +363,7 @@ fn run_record(task: &str, project_root: &Path, state: &str, created_at: Timestam
     serde_json::from_value(serde_json::json!({
         "version": crate::store::workflow::VERSION, "id": crate::ids::WorkflowRunId::new(),
         "workflow": "review", "task": task, "spec_dir": "/definitions/review",
-        "spec_digest": "abc", "scope": {"kind": "worktree", "path": project_root},
+        "scope": {"kind": "worktree", "path": project_root},
         "project_root": project_root, "created_at": created_at, "entered_at": created_at,
         "state": state, "node": "check", "visits": {}, "visit_grant": 0,
         "deadline_fired": false, "next_seq": 1,
@@ -385,7 +385,7 @@ fn sleeping(mut run: RunRecord) -> RunRecord {
 
 fn seed_run(room: &Room, run: RunRecord) {
     let guard = crate::disk::lock::WorkspaceLock::acquire(&room.1.workspace_lock).unwrap();
-    crate::store::workflow::initialize(&room.1, &run, b"spec", &guard).unwrap();
+    crate::store::workflow::initialize(&room.1, &run, &guard).unwrap();
 }
 
 #[test]

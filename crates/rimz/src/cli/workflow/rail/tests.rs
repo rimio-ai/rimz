@@ -103,7 +103,7 @@ fn rail_rows_draw_a_capacity_edge_only_when_the_step_routes_it() {
 fn record(node: &str) -> RunRecord {
     serde_json::from_value(serde_json::json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
-        "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+        "spec_dir":"/spec", "project_root":"/repo",
         "scope":{"kind":"worktree", "path":"/repo/lane"},
         "created_at":jiff::Timestamp::UNIX_EPOCH, "entered_at":jiff::Timestamp::UNIX_EPOCH,
         "state":"active", "node":node, "visits":{}, "visit_grant":0,

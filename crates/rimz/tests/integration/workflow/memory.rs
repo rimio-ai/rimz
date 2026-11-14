@@ -40,7 +40,7 @@ fn terminal_runs_keep_history_and_overwrite_an_existing_copy() {
         let path = history_path(&env, &id);
         fs::write(&path, "previous end").unwrap();
         fs::write(
-            super::sealed(&env, &id).join("checks/pr.sh"),
+            super::definition(&env, &id).join("checks/pr.sh"),
             "printf '%s\\n' '{\"outcome\":\"ok\"}'\n",
         )
         .unwrap();
@@ -92,7 +92,7 @@ fn history_copy_failures_warn_without_failing_committed_transitions() {
         fs::create_dir(&history).unwrap();
         if verb == "advance" {
             fs::write(
-                super::sealed(&env, &id).join("checks/pr.sh"),
+                super::definition(&env, &id).join("checks/pr.sh"),
                 "printf '%s\\n' '{\"outcome\":\"done\"}'\n",
             )
             .unwrap();

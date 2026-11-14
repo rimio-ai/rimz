@@ -222,15 +222,16 @@ pub(in crate::cli) fn terminal(
 }
 
 /// An ended run's history as plain text, as its home and its notes archive keep it: rendered
-/// from the record, the journal and the sealed definition, or from the record's header alone
-/// when the definition cannot be read.
+/// from the record, the journal and the definition as it is when the run ends, or from the
+/// record's header alone when the definition cannot be read.
 pub(in crate::cli) fn saved(
     paths: &rimz::disk::paths::WorkflowPaths,
     finished: &rimz::disk::paths::WorkflowPaths,
     record: &RunRecord,
 ) -> Vec<u8> {
-    let rendered = workflow::load(&paths.home)
-        .map_err(anyhow::Error::from)
+    // A definition error's text already names its cause, so it carries no source to repeat.
+    let rendered = workflow::load(&record.definition_dir(paths))
+        .map_err(|error| anyhow::anyhow!("{error}"))
         .and_then(|spec| {
             let mut journal = records::journal(paths)?;
             for entry in &mut journal {

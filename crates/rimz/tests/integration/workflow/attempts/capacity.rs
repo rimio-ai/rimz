@@ -25,7 +25,7 @@ fn pending(room: &Room, task: Option<&str>) -> records::RunRecord {
     let now = jiff::Timestamp::now();
     let record = serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review", "task":task,
-        "spec_dir":dir, "spec_digest":"test", "prompt":"Build it",
+        "spec_dir":dir, "prompt":"Build it",
         "scope":{"kind":"worktree", "path":room.env.project_root},
         "project_root":room.env.project_root, "created_at":now, "state":"active",
         "node":"build", "entered_at":now, "input":{"outcome":"go", "key":7},
@@ -33,13 +33,7 @@ fn pending(room: &Room, task: Option<&str>) -> records::RunRecord {
     }))
     .unwrap();
     let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    records::initialize(
-        &state,
-        &record,
-        &fs::read(dir.join("workflow.toml")).unwrap(),
-        &guard,
-    )
-    .unwrap();
+    records::initialize(&state, &record, &guard).unwrap();
     record
 }
 

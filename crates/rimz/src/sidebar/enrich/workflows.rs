@@ -10,7 +10,8 @@ use crate::store::snapshot::{
 use crate::store::workflow::{JournalEntry, RunOrigin, RunRecord, RunState};
 
 thread_local! {
-    // Sealed specs are immutable; the shared cache bounds retained paths to 1,024.
+    // Keyed on each definition file's stat, so an edit shows on the next frame and every run of
+    // one deployed workflow shares one entry; the shared cache bounds retained paths to 1,024.
     static SPECS: KeyedParseCache<Definition> = KeyedParseCache::default();
     // Apply the current held verdict after reading the cached journal.
     static JOURNALS: KeyedParseCache<Vec<JournalEntry>> = KeyedParseCache::default();
@@ -23,9 +24,10 @@ pub(super) fn seeds(records: &[RunRecord], state: &StatePaths) -> Vec<SidebarWor
         .filter(|record| !record.state.is_terminal() && record.origin == RunOrigin::Deployed)
         .filter_map(|record| {
             let paths = state.workflow(&record.id);
+            let file = crate::disk::paths::workflow_spec_file(&record.definition_dir(&paths));
             let spec = SPECS.with(|cache| {
                 cache
-                    .read_with(&paths.spec, |bytes| {
+                    .read_with(&file, |bytes| {
                         crate::harness::workflow::parse(std::str::from_utf8(bytes).ok()?).ok()
                     })
                     .ok()
@@ -203,7 +205,7 @@ mod tests {
     fn record() -> RunRecord {
         serde_json::from_value(json!({
             "version": crate::store::workflow::VERSION, "id": crate::ids::WorkflowRunId::new(), "workflow": "land",
-            "spec_dir": "/spec", "spec_digest": "digest", "project_root": "/repo",
+            "spec_dir": "/spec", "project_root": "/repo",
             "scope": {"kind": "worktree", "path": "/trees/lane"},
             "created_at": Timestamp::UNIX_EPOCH, "entered_at": "2026-01-01T00:00:00Z",
             "state": "active", "node": "watch", "visits": {}, "visit_grant": 0,

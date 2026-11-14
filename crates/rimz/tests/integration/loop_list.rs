@@ -51,13 +51,13 @@ fn seed_task_run(
     let now = Timestamp::now();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
-        "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
+        "task":task, "spec_dir":"/definitions/review",
         "scope":{"kind":"worktree","path":checkout}, "project_root":env.project_root,
         "created_at":now, "entered_at":now, "state":"active", "node":"agent", "wait":wait,
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
     }))
     .unwrap();
-    rimz::store::workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+    rimz::store::workflow::initialize(&paths, &record, &guard).unwrap();
     paths.workflow(&record.id).record
 }
 
@@ -2164,7 +2164,7 @@ fn seed_room_run_at(
     let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
     let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
         "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
-        "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
+        "task":task, "spec_dir":"/definitions/review",
         "scope":{"kind":"worktree","path":root}, "project_root":root,
         "created_at":created_at, "entered_at":created_at, "node":"agent", "wait":wait,
         "state":state,
@@ -2172,7 +2172,7 @@ fn seed_room_run_at(
         "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1,
     }))
     .unwrap();
-    rimz::store::workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+    rimz::store::workflow::initialize(&paths, &record, &guard).unwrap();
     paths.workflow(&record.id).record
 }
 

@@ -182,6 +182,10 @@ fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
             &observation,
         ))
         .unwrap();
+    // An advance the hook woke reads the definition: let it finish before the attempt and the
+    // definition change, or it can read one without the other and end the run as a misfit.
+    #[cfg(target_os = "linux")]
+    super::rest::wait_for_advances_to_exit(&room.env, &id);
     let state = store.paths();
     let paths = state.workflow(&id.parse().unwrap());
     let record = {
@@ -199,7 +203,7 @@ fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
     };
     // The run's definition now makes `build` the judge check the attempt is.
     fs::write(
-        &paths.spec,
+        room.env.rimz_home().join("workflows/review/workflow.toml"),
         format!(
             "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\ntimeout = '1h'\non.go = 'build'\n[judge.build]\ntimeout = '1h'\nsummary = 'Review the work'\nagent = 'codex'\nprompt-file = 'prompt.md'\non.done = '@done'\n"
         ),

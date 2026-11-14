@@ -72,7 +72,21 @@ pub(super) fn deployed_definition(
     Ok(dir)
 }
 
-pub(super) fn sealed_specs(
+/// The first error admission reports for a live run's definition, the one `workflow advance`
+/// refuses with while the run waits on it; none once the definition is admitted.
+pub(super) fn definition_refusal(
+    record: &RunRecord,
+    dir: &std::path::Path,
+    loaded: &rimz::config::definitions::LoadedDefinitions,
+) -> Option<String> {
+    let error =
+        rimz::harness::workflow::admit(dir, &record.workflow, loaded, Some(&record.project_root))
+            .err()?;
+    let text = error.to_string();
+    Some(render::one_line(text.lines().next().unwrap_or_default()))
+}
+
+pub(super) fn live_specs(
     state: &rimz::StatePaths,
     records: &[RunRecord],
 ) -> std::collections::BTreeMap<rimz::ids::WorkflowRunId, Definition> {
@@ -80,7 +94,7 @@ pub(super) fn sealed_specs(
         .iter()
         .filter(|record| !record.state.is_terminal())
         .filter_map(|record| {
-            rimz::harness::workflow::load(&state.workflow(&record.id).home)
+            rimz::harness::workflow::load(&record.definition_dir(&state.workflow(&record.id)))
                 .ok()
                 .map(|spec| (record.id.clone(), spec))
         })
@@ -310,7 +324,7 @@ mod tests {
     fn record() -> RunRecord {
         serde_json::from_value(json!({
             "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"land",
-            "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+            "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/lane"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
             "state":"active", "node":"triage", "visits":{}, "visit_grant":0,

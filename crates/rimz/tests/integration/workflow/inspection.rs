@@ -10,8 +10,9 @@ fn seed(env: &Env, root: &Path, checkout: &Path, state: &str) -> RunRecord {
     let id = rimz::ids::WorkflowRunId::new();
     let now = jiff::Timestamp::now();
     let record = serde_json::from_value(json!({
-        "version":rimz::store::workflow::VERSION, "id":id, "workflow":"review", "spec_dir":"/spec",
-        "spec_digest":"digest", "project_root":root,
+        "version":rimz::store::workflow::VERSION, "id":id, "workflow":"review",
+        "spec_dir":env.home_root.join("definitions").join(id.as_str()),
+        "project_root":root,
         "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":state, "node":"gate",
         "park":(state == "parked").then(|| json!({"reason":"user", "at":now})),
@@ -28,8 +29,15 @@ fn save(env: &Env, record: &RunRecord) {
         .state_path_for(&record.project_root)
         .workflow(&record.id);
     fs::create_dir_all(&paths.home).unwrap();
-    fs::write(&paths.spec, SPEC).unwrap();
+    write_definition(record, SPEC);
     fs::write(&paths.record, serde_json::to_vec(record).unwrap()).unwrap();
+}
+
+fn write_definition(record: &RunRecord, spec: &str) {
+    let dir = record.spec_dir.as_ref().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("workflow.toml"), spec).unwrap();
+    fs::write(dir.join("prompt.md"), "Build it").unwrap();
 }
 
 fn setup() -> Env {
@@ -726,8 +734,7 @@ fn receipts_report_pre_spawn_visits_extensions_and_immediate_bounds() {
     success(output);
     assert!(!stderr.contains("has used"), "{stderr}");
     save(&env, &record);
-    let paths = env.state_path_for(&env.project_root).workflow(&record.id);
-    fs::write(paths.spec, format!("{SPEC}on.visits='gate'\n")).unwrap();
+    write_definition(&record, &format!("{SPEC}on.visits='gate'\n"));
     let output = env
         .rimz()
         .env("RIMZ_BIN", "/bin/true")
@@ -951,7 +958,7 @@ fn empty_list_gives_the_start_command() {
 }
 
 #[test]
-fn list_derives_bound_phrases_from_the_sealed_spec_and_ignores_stale_parks() {
+fn list_derives_bound_phrases_from_the_definition_and_ignores_stale_parks() {
     let env = setup();
     let mut records = Vec::new();
     for reason in ["cap", "timeout", "deadline"] {

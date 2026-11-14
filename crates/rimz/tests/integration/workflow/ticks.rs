@@ -20,7 +20,7 @@ fn tick_discovers_a_manual_run_and_drives_its_recheck() {
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     fs::write(
-        super::sealed(&env, &id).join("checks/pr.sh"),
+        super::definition(&env, &id).join("checks/pr.sh"),
         evaluation_script("done"),
     )
     .unwrap();

@@ -41,7 +41,7 @@ fn child_start_mismatch_or_missing_token_never_kills_a_group() {
 fn record() -> RunRecord {
     serde_json::from_value(json!({
         "version":crate::store::workflow::VERSION, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",
-        "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":null,
+        "spec_dir":"/definitions/review", "prompt":null,
         "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
         "created_at":"2026-01-01T00:00:00Z", "state":"active", "park":null, "node":"pr",
         "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
@@ -179,7 +179,6 @@ fn paths() -> WorkflowPaths {
         home: "/run".into(),
         record: "/run/record.json".into(),
         journal: "/run/journal.jsonl".into(),
-        spec: "/run/workflow.toml".into(),
         definition: "/run/definition".into(),
         work: "/run/work".into(),
         context: "/run/work/context.json".into(),

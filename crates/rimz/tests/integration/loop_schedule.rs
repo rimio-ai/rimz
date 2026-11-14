@@ -5031,7 +5031,7 @@ fn loop_rename_moves_live_workflow_runs() {
         .map(|(index, (state, task))| {
             let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
                 "version":rimz::store::workflow::VERSION, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
-                "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
+                "task":task, "spec_dir":"/definitions/review",
                 "prompt":null, "scope":{"kind":"worktree","path":env.project_root.join(index.to_string())},
                 "project_root":env.project_root, "created_at":"2026-01-01T00:00:00Z",
                 "state":state, "park":if state == "parked" {
@@ -5044,7 +5044,7 @@ fn loop_rename_moves_live_workflow_runs() {
                     json!("2026-01-01T00:00:00Z")
                 } else { json!(null) }
             })).unwrap();
-            rimz::store::workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+            rimz::store::workflow::initialize(&paths, &record, &guard).unwrap();
             let bytes = std::fs::read(paths.workflow(&record.id).record).unwrap();
             (record, bytes)
         })
@@ -6153,6 +6153,7 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
             "{task}: {report:?}"
         );
         wait_until_finished(&env, &report);
+        assert_definition_in_home(&env, &report, true);
         assert!(quiet_fires(&env, task).is_none(), "{task}");
         let rows = read_loop_run_records(&env)
             .into_iter()
@@ -7794,6 +7795,25 @@ fn run_paths(
     rimz::store::workflow::find(&state, id)
         .unwrap()
         .map_or_else(|| state.workflow(id), |found| found.paths)
+}
+
+/// A finished run's home holds no copy of a deployed definition; an inline run keeps the one
+/// generated at its fire under `definition/`.
+fn assert_definition_in_home(env: &Env, record: &LoopRunRecord, inline: bool) {
+    let state = env.state_path_for(&env.project_root);
+    let id = record.run_id.as_deref().expect("run id").parse().unwrap();
+    let home = state.finished_workflow(&id);
+    assert!(
+        !home.home.join("workflow.toml").exists(),
+        "{}",
+        home.home.display()
+    );
+    assert_eq!(
+        home.definition.join("workflow.toml").is_file(),
+        inline,
+        "{}",
+        home.home.display()
+    );
 }
 
 /// Wait until the run a report names has moved to the finished directory: a view that reads its

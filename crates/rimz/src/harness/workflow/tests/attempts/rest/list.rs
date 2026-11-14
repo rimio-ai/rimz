@@ -15,7 +15,7 @@ fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
         setup(&text.replace("rest-check=['pr','review']", "rest-check=['pr']"));
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
-    fs::write(&state.workflow(&record.id).spec, text).unwrap();
+    fs::write(definition_file(&record), text).unwrap();
     check(
         dir.path(),
         json!({"outcome":"done","key":"must not replace input"}),
@@ -25,10 +25,10 @@ fn launched() -> (tempfile::TempDir, StatePaths, RunRecord, FakeHost) {
 }
 
 #[test]
-fn a_sealed_rest_check_keeps_its_order_beside_one_then_target() {
+fn a_rest_check_keeps_its_order_beside_one_then_target() {
     let (_dir, state, record) = setup(&definition());
     let paths = state.workflow(&record.id);
-    let listed = crate::harness::workflow::load(&paths.home).unwrap();
+    let listed = crate::harness::workflow::load(&record.definition_dir(&paths)).unwrap();
     assert_eq!(
         (
             listed
@@ -70,7 +70,7 @@ fn listed_checks_keep_the_session_and_input_then_push_and_restart_at_the_first()
         (&rows[1]["action"], &rows[1]["check"]),
         (&json!("pushed"), &json!("review"))
     );
-    let spec = load(&state.workflow(&live.id).home).unwrap();
+    let spec = load(&live.definition_dir(&state.workflow(&live.id))).unwrap();
     let journal = records::journal(&state.workflow(&live.id)).unwrap();
     assert!(
         hops(&spec, &journal, None)
@@ -111,7 +111,7 @@ fn a_failure_between_listed_checks_hands_the_next_check_its_input() {
     let (dir, state, record) = setup(&text.replace("then=['pr','review']", "then='pr'"));
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
-    fs::write(&state.workflow(&record.id).spec, text).unwrap();
+    fs::write(definition_file(&record), text).unwrap();
     check(dir.path(), json!([]));
     fs::write(
         dir.path().join("review.sh"),
@@ -251,7 +251,7 @@ fn a_listed_check_reached_without_a_held_session_routes_normally() {
         + "[command.command]\nshell='true'\ntimeout='1m'\nthen='review'\n";
     let (dir, state, record) =
         setup(&text.replace("rest-check=['pr','review']", "rest-check=['pr']"));
-    fs::write(&state.workflow(&record.id).spec, text).unwrap();
+    fs::write(definition_file(&record), text).unwrap();
     fs::write(dir.path().join("review.json"), r#"{"outcome":"done"}"#).unwrap();
     let host = FakeHost::new();
     let ended = advance_ok(&state, &record.id, &host);

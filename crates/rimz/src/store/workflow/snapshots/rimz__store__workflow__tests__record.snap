@@ -62,12 +62,11 @@ expression: value
     "kind": "worktree",
     "path": "/project"
   },
-  "spec_digest": "abc",
   "spec_dir": "/definitions/review",
   "state": "active",
   "task": null,
   "terminal_at": null,
-  "version": 10,
+  "version": 11,
   "visit_grant": 0,
   "visits": {
     "build": 2

@@ -7,15 +7,23 @@ const ORDINARY: &str = include_str!("fixtures/reached-ordinary.jsonl");
 const SKIPPED: &str = include_str!("fixtures/reached-skipped.jsonl");
 const LOOPED: &str = include_str!("fixtures/reached-looped.jsonl");
 
+/// A deployed definition directory holding `text`, outside every run home.
+fn deployed(state: &StatePaths, id: &crate::ids::WorkflowRunId, text: &str) -> std::path::PathBuf {
+    let dir = state.root.join("deployed").join(id.as_str());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(crate::disk::paths::workflow_spec_file(&dir), text).unwrap();
+    dir
+}
+
 fn history_run(state: &StatePaths, journal: &str) -> RunRecord {
     let id = crate::ids::WorkflowRunId::new();
     let paths = state.workflow(&id);
     std::fs::create_dir_all(&paths.home).unwrap();
-    std::fs::write(&paths.spec, RAIL).unwrap();
     std::fs::write(&paths.journal, journal).unwrap();
     serde_json::from_value(serde_json::json!({
-        "version":crate::store::workflow::VERSION, "id":id, "workflow":"test", "spec_dir":"/unused-definition",
-        "spec_digest":"test", "project_root":"/repo",
+        "version":crate::store::workflow::VERSION, "id":id, "workflow":"test",
+        "spec_dir":deployed(state, &id, RAIL),
+        "project_root":"/repo",
         "scope":{"kind":"worktree", "path":"/repo/lane"},
         "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
         "state":"active", "node":"finish", "visits":{}, "visit_grant":0,
@@ -131,7 +139,7 @@ fn seeds_skips_the_journal_when_the_spec_is_missing_or_unparseable() {
     let (_dir, runtime, _) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
     let record = history_run(&state, SKIPPED);
-    let spec = state.workflow(&record.id).spec;
+    let spec = crate::disk::paths::workflow_spec_file(record.spec_dir.as_deref().unwrap());
     std::fs::write(&spec, "not TOML").unwrap();
     for missing in [false, true] {
         if missing {
@@ -157,19 +165,19 @@ fn live_run(
     let id = crate::ids::WorkflowRunId::new();
     let paths = state.workflow(&id);
     std::fs::create_dir_all(&paths.home).unwrap();
-    std::fs::write(
-        &paths.spec,
+    let definition = deployed(
+        state,
+        &id,
         "[workflow]\n\
          scope='worktree'\n\
          start='watch'\n\
          [script.watch]\ntimeout='365d'\n\
          shell='true'\n\
          on.queued='@wait'\n",
-    )
-    .unwrap();
+    );
     let record = serde_json::json!({
-        "version":crate::store::workflow::VERSION, "id":id, "workflow":"land", "spec_dir":"/unused-definition",
-        "spec_digest":"digest", "project_root":root,
+        "version":crate::store::workflow::VERSION, "id":id, "workflow":"land", "spec_dir":definition,
+        "project_root":root,
         "scope":{"kind":"worktree", "path":checkout},
         "created_at":now, "entered_at":now, "state":"active",
         "node":"watch", "visits":{}, "visit_grant":0, "deadline_fired":false, "next_seq":1
@@ -206,7 +214,7 @@ fn every_frame_fold_seeds_live_deployed_runs_and_clears_terminal_and_loop_task_r
                     let workflow = projected.worktree_groups[0].workflow.as_ref().unwrap();
                     assert_eq!(
                         workflow.track[0].name, "watch",
-                        "read the sealed run spec, not spec_dir"
+                        "read the deployed definition the record names"
                     );
                     assert_eq!(workflow.run, id);
                     assert!(

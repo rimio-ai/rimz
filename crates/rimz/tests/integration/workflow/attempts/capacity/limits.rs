@@ -18,13 +18,7 @@ fn fill_limit(room: &Room, source: &records::RunRecord) {
     let record: records::RunRecord = serde_json::from_value(record).unwrap();
     {
         let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-        records::initialize(
-            &state,
-            &record,
-            &fs::read(source.spec_dir.join("workflow.toml")).unwrap(),
-            &guard,
-        )
-        .unwrap();
+        records::initialize(&state, &record, &guard).unwrap();
     }
     let workspace = room.env.resolve_workspace(&room.env.project_root);
     for signal in [

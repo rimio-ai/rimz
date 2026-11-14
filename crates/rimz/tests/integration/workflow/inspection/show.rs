@@ -2,7 +2,7 @@ use super::*;
 
 const AT: &str = "2000-01-01T12:00:00Z";
 
-const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['gate','later']\nthen='gate'\n[condition.gate]\ntimeout='365d'\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='build'}\n";
+const NOW_SPEC: &str = "[workflow]\nscope='worktree'\nstart='build'\n[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nlifecycle='session'\nrest-check=['gate','later']\nthen='gate'\nmax-visits=2\n[condition.gate]\ntimeout='365d'\nelse='pending'\non={ready='later',pending='build',unknown='build'}\ncases=[{when=['team.stage=Done'],outcome='ready',for='2m'}]\n[test.later]\ntimeout='365d'\nshell='true'\non={pass='@done',fail='build'}\n";
 
 #[test]
 fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_writing() {
@@ -10,7 +10,7 @@ fn show_now_reads_the_first_condition_on_active_steps_and_parked_runs_without_wr
         let (env, mut record) = fixture(state, (state == "parked").then_some("user"), vec![]);
         record.node = node.into();
         save(&env, &record);
-        sealed_spec(&env, &record, NOW_SPEC);
+        write_definition(&record, NOW_SPEC);
         conditions::board(&env, "Done");
         let paths = env
             .state_path_for(&record.project_root)
@@ -68,11 +68,7 @@ fn show_now_treats_pre_entry_forge_probes_as_unread_and_shows_the_probe_time() {
     let (env, mut record) = fixture("active", None, vec![]);
     record.node = "build".into();
     save(&env, &record);
-    sealed_spec(
-        &env,
-        &record,
-        &NOW_SPEC.replace("team.stage=Done", "pr=merged"),
-    );
+    write_definition(&record, &NOW_SPEC.replace("team.stage=Done", "pr=merged"));
     conditions::forge(
         &env,
         record.entered_at - jiff::SignedDuration::from_secs(1),
@@ -116,7 +112,7 @@ fn show_now_skips_child_checks_and_plain_sleeps_but_reads_conditional_sleeps() {
                 _ => "test",
             }
         );
-        sealed_spec(&env, &record, &text);
+        write_definition(&record, &text);
         let output = human(&env, &record, false);
         assert_eq!(
             output
@@ -297,7 +293,7 @@ fn copied_park_options_accept_a_hyphen_leading_node() {
         let (env, mut record) = fixture("parked", Some("user"), vec![]);
         record.workflow = name.into();
         save(&env, &record);
-        sealed_spec(&env, &record, &SPEC.replace("build", "-build"));
+        write_definition(&record, &SPEC.replace("build", "-build"));
         let text = human(&env, &record, false);
         let hint = text
             .lines()
@@ -357,17 +353,13 @@ fn timeout_shows_the_flushed_wait_and_shell_log() {
             "last":"2000-01-01T13:00:00Z", "count":7, "recheck_at":null}),
         ],
     );
-    let paths = env
-        .state_path_for(&record.project_root)
-        .workflow(&record.id);
-    fs::write(
-        paths.spec,
-        SPEC.replacen("run='true'", "shell='true'", 1).replace(
+    write_definition(
+        &record,
+        &SPEC.replacen("run='true'", "shell='true'", 1).replace(
             "on.ok='build'",
-            "on.pass='@done'\non.fail='@wait'\non.invalid='@wait'",
+            "on.pass='@done'\non.fail='@wait'\non.invalid='@failed'",
         ),
-    )
-    .unwrap();
+    );
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -702,14 +694,10 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
         "first":AT,"last":AT,"count":2,"recheck_at":"2000-01-01T12:01:00Z"}))
     .unwrap();
     save(&env, &record);
-    let paths = env
-        .state_path_for(&record.project_root)
-        .workflow(&record.id);
-    fs::write(
-        &paths.spec,
-        SPEC.replace("on.ok='build'", "on={ok='build',pending='@wait'}"),
-    )
-    .unwrap();
+    write_definition(
+        &record,
+        &SPEC.replace("on.ok='build'", "on={ok='build',pending='@wait'}"),
+    );
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -745,12 +733,12 @@ fn waiting_check_shows_readings_timeout_target_and_folded_trail() {
 
     record.deadline = Some("2000-01-01T12:05:00Z".parse().unwrap());
     save(&env, &record);
-    fs::write(
-        &paths.spec,
-        SPEC.replace("start='gate'", "start='gate'\non.failed='@failed'")
+    write_definition(
+        &record,
+        &SPEC
+            .replace("start='gate'", "start='gate'\non.failed='@failed'")
             .replace("on.ok='build'", "on={ok='build',pending='@wait'}"),
-    )
-    .unwrap();
+    );
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -874,18 +862,14 @@ fn holding_check_names_the_case_target_and_completion_clock() {
         "detail":"ready", "first":AT,"last":AT,"count":3,"recheck_at":null}))
     .unwrap();
     save(&env, &record);
-    let paths = env
-        .state_path_for(&record.project_root)
-        .workflow(&record.id);
-    fs::write(
-        &paths.spec,
+    write_definition(
+        &record,
         concat!(
             "[workflow]\nscope='worktree'\nstart='gate'\n[condition.gate]\ntimeout='365d'\nelse='pending'\n",
             "on={ready='build',pending='@wait',unknown='@wait'}\n[[condition.gate.cases]]\nwhen=['ci=passed']\n",
-            "outcome='ready'\nfor='10m'\n[command.build]\ntimeout='365d'\nshell='true'\nthen='gate'\n",
+            "outcome='ready'\nfor='10m'\n[command.build]\ntimeout='365d'\nshell='true'\nthen='gate'\nmax-visits=2\n",
         ),
-    )
-    .unwrap();
+    );
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -896,16 +880,16 @@ fn holding_check_names_the_case_target_and_completion_clock() {
         ],
     );
     assert_eq!(text.matches("holding ready at gate").count(), 1, "{text}");
-    let text = fs::read_to_string(&paths.spec).unwrap();
-    fs::write(
-        &paths.spec,
-        text.replace("timeout='365d'\nelse", "timeout='5m'\nelse")
+    let text = fs::read_to_string(record.spec_dir.as_ref().unwrap().join("workflow.toml")).unwrap();
+    write_definition(
+        &record,
+        &text
+            .replace("timeout='365d'\nelse", "timeout='5m'\nelse")
             .replace(
                 "on={ready='build',pending='@wait',unknown='@wait'}",
-                "on={ready='build',pending='@wait',timeout='@failed'}",
+                "on={ready='build',pending='@wait',unknown='@wait',timeout='@failed'}",
             ),
-    )
-    .unwrap();
+    );
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -971,15 +955,8 @@ then = 'gate'
 max-visits = 2
 "#;
 
-fn sealed_spec(env: &Env, record: &RunRecord, spec: &str) {
-    let paths = env
-        .state_path_for(&record.project_root)
-        .workflow(&record.id);
-    fs::write(paths.spec, spec).unwrap();
-}
-
 #[test]
-fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
+fn active_rail_uses_the_live_graph_and_last_attempt_with_reentry_counts() {
     let mut step = attempt(2, Value::Null);
     step["handle"] = json!("@builder");
     step["head_start"] = json!("123456789abcdef");
@@ -996,21 +973,13 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
     );
     record.visits = serde_json::from_value(json!({"build":2})).unwrap();
     save(&env, &record);
-    sealed_spec(
-        &env,
+    write_definition(
         &record,
         &SPEC.replace(
             "[command.build]\ntimeout='365d'\nshell='true'",
             "[agent.build]\nlifecycle='turn'\nagent='codex'\nprompt-file='prompt.md'",
         ),
     );
-    let dir = env.rimz_home().join("workflows/review");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join("workflow.toml"),
-        SPEC.replace("build", "replacement"),
-    )
-    .unwrap();
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -1024,7 +993,6 @@ fn active_rail_uses_the_sealed_graph_and_last_attempt_with_reentry_counts() {
             "visit 2 of 2",
         ],
     );
-    assert!(!text.contains("replacement"), "{text}");
     assert!(!text.contains("@builder"), "{text}");
     let rail = text
         .split_once("● build")
@@ -1125,8 +1093,7 @@ fn a_hold_forecasts_its_clock_only_when_it_beats_other_bounds() {
     .unwrap();
     let results = ["10m", "30m", "40m"].map(|timeout| {
         save(&env, &record);
-        sealed_spec(
-            &env,
+        write_definition(
             &record,
             &CONDITION_RAIL
                 .replace("timeout = '365d'", &format!("timeout = '{timeout}'"))
@@ -1176,7 +1143,7 @@ fn current_rail_glyph_matches_the_headline_in_every_live_state() {
             );
         }
         save(&env, &record);
-        sealed_spec(&env, &record, CONDITION_RAIL);
+        write_definition(&record, CONDITION_RAIL);
         let text = human(&env, &record, false);
         let glyph = text
             .lines()
@@ -1207,7 +1174,7 @@ fn condition_rail_marks_the_winner_and_summarizes_all_readings_once_without_colo
             }),
         )],
     );
-    sealed_spec(&env, &record, CONDITION_RAIL);
+    write_definition(&record, CONDITION_RAIL);
     let text = success(
         env.rimz()
             .env("NO_COLOR", "1")
@@ -1259,7 +1226,7 @@ fn condition_rail_marks_unread_instead_of_a_later_winner() {
             }),
         )],
     );
-    sealed_spec(&env, &record, CONDITION_RAIL);
+    write_definition(&record, CONDITION_RAIL);
     let text = human(&env, &record, false);
     contains(
         &text,
@@ -1279,7 +1246,7 @@ fn condition_rail_paints_a_held_case_even_without_a_new_evaluation() {
         "first":AT,"last":AT,"count":3,"recheck_at":null}))
     .unwrap();
     save(&env, &record);
-    sealed_spec(&env, &record, CONDITION_RAIL);
+    write_definition(&record, CONDITION_RAIL);
     let text = human(&env, &record, false);
     contains(
         &text,

@@ -57,7 +57,7 @@ pub(super) fn render(
         .collect::<Vec<_>>();
     let specs = live
         .iter()
-        .map(|run| workflow::load(&run.paths.home).ok())
+        .map(|run| workflow::load(&run.record.definition_dir(&run.paths)).ok())
         .collect::<Vec<_>>();
     if json {
         let rows = live
@@ -87,6 +87,7 @@ pub(super) fn render(
     let mut views = BTreeMap::new();
     let machine = super::super::machine_config();
     let glyph = rimz::theme::theme_glyphs(&machine.theme);
+    let loaded = workflow_view::definitions();
     for (run, spec) in live.into_iter().zip(&specs) {
         let record = &run.record;
         let view = views
@@ -99,15 +100,18 @@ pub(super) fn render(
         let agent = (workflow_view::with_you(record) && !asking)
             .then(|| view.agent(&run.state, record, false))
             .flatten();
-        let mut detail = capacity.map_or_else(
-            || workflow_view::detail(record, spec.as_ref(), now, agent.as_deref()),
-            |wait| {
-                format!(
-                    "held · {}",
-                    render::one_line(wait.detail.as_deref().unwrap_or("waiting for its turn"))
-                )
-            },
-        );
+        let refusal =
+            workflow_view::definition_refusal(record, &record.definition_dir(&run.paths), &loaded);
+        // The run cannot leave a refused definition until the file is fixed, so that cause
+        // comes before a capacity wait still recorded.
+        let mut detail = match (&refusal, capacity) {
+            (Some(error), _) => format!("waits on its definition: {error}"),
+            (None, Some(wait)) => format!(
+                "held · {}",
+                render::one_line(wait.detail.as_deref().unwrap_or("waiting for its turn"))
+            ),
+            (None, None) => workflow_view::detail(record, spec.as_ref(), now, agent.as_deref()),
+        };
         if let Some(number) = view.pr_number(&record.scope.path) {
             detail.push_str(&format!(" · PR #{number}"));
         }
@@ -319,7 +323,7 @@ mod tests {
     fn record(lane: &str, task: Option<&str>, manual: bool, held: bool) -> RunRecord {
         serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
-            "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+            "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":format!("/repo/{lane}")},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
             "state":"active", "node":"gate", "visits":{}, "visit_grant":0,
@@ -526,7 +530,7 @@ mod tests {
     fn json_adds_only_known_capacity_causes_and_keeps_the_detail() {
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
-            "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+            "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/feature"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
             "state":"active", "node":"build", "visits":{}, "visit_grant":0,
@@ -560,7 +564,7 @@ mod tests {
     fn narrow_rows_clip_detail_before_age() {
         let record = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION, "id":WorkflowRunId::new(), "workflow":"review",
-            "spec_dir":"/spec", "spec_digest":"digest", "project_root":"/repo",
+            "spec_dir":"/spec", "project_root":"/repo",
             "scope":{"kind":"worktree", "path":"/repo/feature"},
             "created_at":Timestamp::UNIX_EPOCH, "entered_at":Timestamp::UNIX_EPOCH,
             "state":"parked", "node":"decision", "visits":{}, "visit_grant":0,

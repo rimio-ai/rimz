@@ -152,7 +152,7 @@ pub(super) fn resume(
     let run =
         select(target, "resume", globals, at, extend)?.map_err(|other| refuse(&other, "resume"))?;
     refuse_unwritable_home("resumed")?;
-    let spec = workflow::load(&run.paths.home)?;
+    let spec = workflow::load(&run.record.definition_dir(&run.paths))?;
     let resumed = run.record.state == RunState::Parked || at.is_some();
     let record = workflow::resume(
         &run.state,
@@ -357,7 +357,7 @@ pub(in crate::cli) fn write_held(
     }) else {
         return Ok(());
     };
-    let spec = workflow::load(&paths.home).ok();
+    let spec = workflow::load(&record.definition_dir(paths)).ok();
     if let Some(text) = workflow_view::wait(record, spec.as_ref(), jiff::Timestamp::now()) {
         writeln!(render::out(), "{indent}{} {text}", wait.node)?;
     }
@@ -400,7 +400,7 @@ fn continue_session(
                 })
         });
     let (seq, step, run_id) = candidate.with_context(|| {
-        let spec = workflow::load(&run.paths.home).ok();
+        let spec = workflow::load(&run.record.definition_dir(&run.paths)).ok();
         let kind = if spec
             .as_ref()
             .is_some_and(|spec| spec.check(&run.record.node).is_some())
@@ -465,7 +465,7 @@ mod tests {
         let now = jiff::Timestamp::now();
         let mut record: RunRecord = serde_json::from_value(serde_json::json!({
             "version":rimz::store::workflow::VERSION,"id":rimz::ids::WorkflowRunId::new(),
-            "workflow":"review","spec_dir":dir.path(),"spec_digest":"digest",
+            "workflow":"review","spec_dir":dir.path(),
             "project_root":dir.path(),"scope":{"kind":"worktree","path":dir.path()},
             "state":"active","node":"build","created_at":now,"entered_at":now,"visits":{},
             "visit_grant":0,"deadline_fired":false,"next_seq":2,
@@ -474,7 +474,7 @@ mod tests {
         }))
         .unwrap();
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-        records::initialize(&state, &record, b"", &guard).unwrap();
+        records::initialize(&state, &record, &guard).unwrap();
         drop(guard);
         let paths = state.workflow(&record.id);
         let writer = {

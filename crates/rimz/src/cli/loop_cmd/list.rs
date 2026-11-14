@@ -595,7 +595,7 @@ fn load(
             .and_then(|paths| rimz::store::workflow::live_runs(&paths).ok())
             .unwrap_or_default();
         let workflow_specs = StatePaths::for_project_root(&root)
-            .map(|state| crate::cli::workflow_view::sealed_specs(&state, &workflows))
+            .map(|state| crate::cli::workflow_view::live_specs(&state, &workflows))
             .unwrap_or_default();
         let mut tasks = Vec::new();
         for (name, task) in catalog.visible() {
@@ -1246,7 +1246,8 @@ pub(super) struct WorkflowRunRow {
 
 /// A run's sealed graph and journal, read for the loop views' per-fire forensics.
 pub(super) struct RunEvidence {
-    pub(super) spec: rimz::harness::workflow::Definition,
+    /// The run's definition, when it still reads: a finished run's evidence outlives it.
+    pub(super) spec: Option<rimz::harness::workflow::Definition>,
     pub(super) journal: Vec<rimz::store::workflow::JournalEntry>,
 }
 
@@ -1396,7 +1397,7 @@ impl WorkflowRunRow {
         }
     }
 
-    /// Reads the run's sealed graph and journal from its live or finished home; a run whose home
+    /// Reads the run's definition and journal from its live or finished home; a run whose home
     /// is gone or unreadable keeps none. A live home that moves while it is read is read again in
     /// its finished home, so the graph and the journal come from one home.
     pub(super) fn read_evidence(
@@ -1409,7 +1410,7 @@ impl WorkflowRunRow {
             _ => state.workflow(&record.id),
         };
         let evidence = |paths: rimz::disk::paths::WorkflowPaths| {
-            let spec = rimz::harness::workflow::load(&paths.home)?;
+            let spec = rimz::harness::workflow::load(&record.definition_dir(&paths)).ok();
             let journal = rimz::store::workflow::journal(&paths)?;
             anyhow::Ok(RunEvidence { spec, journal })
         };

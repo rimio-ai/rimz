@@ -567,6 +567,38 @@ fn exited_command(deadline: bool, contender: bool) {
 }
 
 #[test]
+fn a_then_edited_while_the_command_runs_routes_its_result_in_the_same_advance() {
+    let (env, dir) = command_fixture("shell", "exit 0");
+    let id = ready_step(&env, &dir);
+    let socket = env.runtime_root.join("command-then.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut advance = env
+        .rimz()
+        .args(["workflow", "advance", &id])
+        .env("RIMZ_TEST_WORKFLOW_RESULT_GATE", &socket)
+        .spawn()
+        .unwrap();
+    let mut gate = accept_gate(&listener);
+    let path = dir.join("workflow.toml");
+    let text = fs::read_to_string(&path)
+        .unwrap()
+        .replace("then='report'", "then='other'")
+        + "[test.other]\ntimeout='365d'\nshell='true'\non={pass='@failed',fail='@failed'}\n";
+    fs::write(&path, text).unwrap();
+    gate.write_all(&[1]).unwrap();
+    accept_gate(&listener).write_all(&[1]).unwrap();
+    assert!(advance.wait().unwrap().success());
+    let value = settled(&env, &id, "failed");
+    let nodes = events(&value, "evaluation")
+        .iter()
+        .map(|row| row["node"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(nodes.last().map(String::as_str), Some("other"), "{value:#}");
+    assert!(!nodes.iter().any(|node| node == "report"), "{value:#}");
+}
+
+#[test]
 fn an_interrupted_command_whose_deadline_was_extended_is_canceled_then_checked() {
     let (env, dir) = command_fixture("shell", LIVE);
     let id = ready_step(&env, &dir);

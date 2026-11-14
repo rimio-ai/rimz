@@ -19,9 +19,12 @@ mod tasks;
 mod ticks;
 mod wakes;
 
-/// A run's sealed definition root: an edit there, unlike one to the source, reaches the run.
-fn sealed(env: &Env, id: &str) -> PathBuf {
-    run_home(env, id).definition
+/// The definition directory a run reads: an edit there reaches the run at its next engine read.
+fn definition(env: &Env, id: &str) -> PathBuf {
+    let paths = run_home(env, id);
+    rimz::store::workflow::load(&paths)
+        .unwrap()
+        .definition_dir(&paths)
 }
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
@@ -40,7 +43,7 @@ const WAIT: &str = "[script.pr]\nrun = 'sh checks/pr.sh'\non = { pending = '@wai
 const PENDING: &str = "printf '%s\\n' '{\"outcome\":\"pending\",\"reason\":\"CI pending\",\"recheck_at\":\"2099-01-01T00:00:00Z\"}'\n";
 
 #[test]
-fn new_runs_seal_definitions_at_the_current_record_version() {
+fn new_runs_read_their_deployed_definition_at_the_current_record_version() {
     let actual: Vec<_> = [
         String::new(),
         "[agent.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nlifecycle='session'\nrest-check=['pr']\n".into(),
@@ -50,7 +53,7 @@ fn new_runs_seal_definitions_at_the_current_record_version() {
     .into_iter()
     .map(|step| {
         let spec = format!("{HEADER}{WAIT}{step}");
-        let (env, _) = fixture(&spec, PENDING);
+        let (env, dir) = fixture(&spec, PENDING);
         let id = start(&env);
         let value = until(&env, &id, |value| value["record"]["wait"].is_object());
         let paths = env
@@ -58,13 +61,14 @@ fn new_runs_seal_definitions_at_the_current_record_version() {
             .workflow(&id.parse().unwrap());
         (
             value["record"]["version"].as_u64().unwrap(),
-            fs::read_to_string(paths.spec).unwrap() == spec,
+            value["record"]["spec_dir"] == json!(dir.canonicalize().unwrap()),
+            paths.home.join("workflow.toml").exists() || paths.definition.exists(),
         )
     })
     .collect();
     assert_eq!(
         actual,
-        [(u64::from(rimz::store::workflow::VERSION), true); 3]
+        [(u64::from(rimz::store::workflow::VERSION), true, false); 3]
     );
 }
 
@@ -635,7 +639,6 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
         let id = rimz::ids::WorkflowRunId::new();
         let paths = state.workflow(&id);
         fs::create_dir_all(&paths.home).unwrap();
-        fs::write(&paths.spec, format!("{HEADER}{WAIT}")).unwrap();
         if let Some(contents) = contents {
             fs::write(&paths.record, contents).unwrap();
         }
@@ -683,7 +686,7 @@ fn wait_is_merged_clamped_and_cleared_by_signal() {
         "early advance must not run the script"
     );
     fs::write(
-        sealed(&env, &id).join("checks/pr.sh"),
+        definition(&env, &id).join("checks/pr.sh"),
         evaluation_script("done"),
     )
     .unwrap();
@@ -820,7 +823,7 @@ exit "$advance_rc""#,
 }
 
 #[test]
-fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
+fn signal_wake_skips_a_bad_definition_and_continues() {
     let spec = format!("{HEADER}{WAIT}wake=['review.ready']\n");
     let (env, first_dir) = fixture(&spec, PENDING);
     let second_dir = first_dir.with_file_name("another");
@@ -832,28 +835,19 @@ fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
     let second = receipt.lines().next().unwrap();
     let first_value = until(&env, &first, |v| v["record"]["wait"].is_object());
     until(&env, second, |v| v["record"]["wait"].is_object());
-    let state =
-        rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
-    let first_id = rimz::ids::WorkflowRunId::parse(&first).unwrap();
-    fs::write(state.workflow(&first_id).spec, "bad sealed spec").unwrap();
-    // A run reads only the copy sealed at its start; an edit to the source changes nothing.
-    let second_id = rimz::ids::WorkflowRunId::parse(second).unwrap();
-    fs::write(second_dir.join("checks/pr.sh"), "exit 3\n").unwrap();
-    fs::write(
-        state.workflow(&second_id).definition.join("checks/pr.sh"),
-        evaluation_script("done"),
-    )
-    .unwrap();
+    fs::write(first_dir.join("workflow.toml"), "bad spec").unwrap();
+    fs::write(second_dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     let deadline = Instant::now() + Duration::from_secs(30);
     while show(&env, second)["record"]["state"] != "done" {
         assert!(
             Instant::now() < deadline,
-            "a bad sealed spec must not block later runs' wakes"
+            "a bad definition must not block later runs' wakes"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(Path::new(first_value["dir"].as_str().unwrap()).is_dir());
+    assert_eq!(show(&env, &first)["record"], first_value["record"]);
 }
 
 #[test]
@@ -866,7 +860,7 @@ fn signal_wake_survives_the_emitters_process_group_exiting() {
     until(&env, &id, |v| v["record"]["wait"].is_object());
     // The woken advance is still evaluating when the emitter's group is killed.
     let script = format!("sleep 1\n{}", evaluation_script("done"));
-    fs::write(sealed(&env, &id).join("checks/pr.sh"), script).unwrap();
+    fs::write(definition(&env, &id).join("checks/pr.sh"), script).unwrap();
     let emitter = env
         .rimz()
         .args(["events", "emit", "review.ready"])
@@ -950,7 +944,7 @@ fn a_finished_header_only_history_shows_its_headline_once() {
 
 #[test]
 fn a_finished_run_shows_its_saved_history_from_any_room_without_its_definition() {
-    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     success(command(&env, &["workflow", "cancel", &id]));
@@ -971,14 +965,14 @@ fn a_finished_run_shows_its_saved_history_from_any_room_without_its_definition()
     );
     let saved = fs::read_to_string(home.history()).unwrap();
     assert!(saved.contains("pr cancel canceled"), "{saved}");
-    fs::write(&home.spec, "not a valid spec").unwrap();
+    fs::write(dir.join("workflow.toml"), "not a valid spec").unwrap();
     let broken = show(&env, &id);
     assert!(broken["record"].is_object() && broken["journal"].is_array());
     assert!(broken.get("warnings").is_none(), "{broken:#}");
     let text = success(command(&env, &["workflow", "show", &id]));
     assert!(text.starts_with("review#main\ncanceled "), "{text}");
     assert_shows_saved_once(&text, &saved);
-    fs::remove_file(&home.spec).unwrap();
+    fs::remove_file(dir.join("workflow.toml")).unwrap();
     let other = env.home_root.join("other");
     fs::create_dir_all(&other).unwrap();
     env.record(&other);
@@ -1164,7 +1158,7 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
         until(&env, id, |v| v["record"]["wait"].is_object());
     }
     for id in [first.as_str(), second] {
-        fs::write(sealed(&env, id).join("checks/pr.sh"), "exec sleep 60").unwrap();
+        fs::write(definition(&env, id).join("checks/pr.sh"), "exec sleep 60").unwrap();
     }
     success(command(&env, &["events", "emit", "review.ready"]));
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1190,7 +1184,20 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
 }
 
 #[test]
-fn sealed_definition_ignores_source_edits_and_hot_loop_guard() {
+fn a_route_edited_under_a_waiting_check_is_taken_at_the_next_advance() {
+    let wake = "wake=['review.ready']\n";
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}{wake}"), PENDING);
+    let id = start(&env);
+    until(&env, &id, |v| v["record"]["wait"].is_object());
+    let edited = WAIT.replace("done = '@done'", "done = '@failed'");
+    fs::write(dir.join("workflow.toml"), format!("{HEADER}{edited}{wake}")).unwrap();
+    fs::write(dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
+    success(command(&env, &["events", "emit", "review.ready"]));
+    settled(&env, &id, "failed");
+}
+
+#[test]
+fn source_edits_reach_the_run_after_the_hot_loop_guard_and_a_broken_one_waits() {
     let spec = format!(
         "{HEADER}[script.pr]\nrun = 'sh checks/pr.sh'\non = {{ again = 'next', pause = '@wait' }}\ntimeout = '1h'\n[script.next]\ntimeout='365d'\nrun = 'sh checks/pr.sh'\non.again = 'pr'\n"
     );
@@ -1202,37 +1209,23 @@ fn sealed_definition_ignores_source_edits_and_hot_loop_guard() {
     assert_eq!(value["record"]["state"], "active");
     assert_eq!(value["record"]["node"], "pr");
     fs::write(dir.join("workflow.toml"), "not valid TOML").unwrap();
-    fs::write(dir.join("checks/pr.sh"), "exit 3\n").unwrap();
-    let sealed = env
-        .state_path_for(&env.project_root)
-        .workflow(&id.parse().unwrap())
-        .definition;
-    fs::write(sealed.join("checks/pr.sh"), evaluation_script("pause")).unwrap();
+    fs::write(dir.join("checks/pr.sh"), evaluation_script("pause")).unwrap();
+    let refused = command(&env, &["workflow", "advance", &id]);
+    assert!(!refused.status.success());
+    assert_eq!(show(&env, &id)["record"], value["record"]);
+    fs::write(dir.join("workflow.toml"), &spec).unwrap();
     success(command(&env, &["workflow", "advance", &id]));
     let value = show(&env, &id);
     let rows = events(&value, "evaluation");
     assert_eq!(rows.len(), 3);
     assert_ne!(rows[0]["digests"], rows[2]["digests"]);
     assert_eq!(value["record"]["wait"]["outcome"], "pause");
-}
-
-#[test]
-fn sealed_scripts_keep_their_executable_bit() {
-    use std::os::unix::fs::PermissionsExt;
-    let spec = format!(
-        "{HEADER}[command.pr]\nrun = 'checks/ok.sh'\nthen = 'check'\ntimeout = '1h'\n[test.check]\ntimeout='365d'\nrun = 'checks/ok.sh'\non = {{ pass = '@done', fail = '@failed' }}\n"
-    );
-    let (env, dir) = fixture(&spec, "");
-    let script = dir.join("checks/ok.sh");
-    fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let id = start(&env);
-    settled(&env, &id, "done");
-    let mode = fs::metadata(sealed(&env, &id).join("checks/ok.sh"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o755);
+    // Cancel needs no definition, and the history it saves names the parse error once.
+    fs::write(dir.join("workflow.toml"), "not valid TOML").unwrap();
+    success(command(&env, &["workflow", "cancel", &id]));
+    settled(&env, &id, "canceled");
+    let saved = fs::read_to_string(run_home(&env, &id).history()).unwrap();
+    assert_eq!(saved.matches("TOML parse error").count(), 1, "{saved}");
 }
 
 #[test]
@@ -1277,7 +1270,7 @@ fn a_deleted_script_makes_the_run_wait_until_it_is_restored() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
     let waiting = until(&env, &id, |v| v["record"]["wait"].is_object());
-    let script = sealed(&env, &id).join("checks/pr.sh");
+    let script = definition(&env, &id).join("checks/pr.sh");
     let body = fs::read(&script).unwrap();
     fs::remove_file(&script).unwrap();
     let refused = command(&env, &["workflow", "advance", &id]);
@@ -1398,7 +1391,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
     assert_eq!(events(&value, "route").len(), 2);
     assert_eq!(value["record"]["deadline_fired"], true);
     fs::write(
-        sealed(&env, &id).join("checks/pr.sh"),
+        definition(&env, &id).join("checks/pr.sh"),
         evaluation_script("done"),
     )
     .unwrap();
@@ -1940,7 +1933,11 @@ fn human_show_wait_and_journal_are_readable() {
         waiting.lines().any(|line| line.contains(": pending")),
         "{waiting}"
     );
-    fs::write(sealed(&env, &id).join("checks/pr.sh"), "printf 'not-json'").unwrap();
+    fs::write(
+        definition(&env, &id).join("checks/pr.sh"),
+        "printf 'not-json'",
+    )
+    .unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
     settled(&env, &id, "failed");
     let failed = success(command(&env, &["workflow", "show", &id]));
@@ -1984,7 +1981,7 @@ fn human_show_folds_repeated_checks_without_changing_the_json_journal() {
     let text = success(command(&env, &["workflow", "show", &id, "--history"]));
 
     fs::write(
-        sealed(&env, &id).join("checks/pr.sh"),
+        definition(&env, &id).join("checks/pr.sh"),
         evaluation_script("done"),
     )
     .unwrap();

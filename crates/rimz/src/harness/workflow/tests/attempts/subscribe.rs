@@ -322,7 +322,7 @@ fn a_session_never_hears_lifecycle_signals_from_its_leaders_session() {
 
 #[test]
 fn a_session_hears_its_cohorts_and_other_agents_lifecycle_signals() {
-    let (_dir, state, record) = setup(&SUBSCRIBED.replace(
+    let (dir, state, record) = setup(&SUBSCRIBED.replace(
         "subscribe=['ci.failed',",
         "subscribe=['team.idle', {signal='agent.done', match={handle='@other'}}, ",
     ));
@@ -339,12 +339,16 @@ fn a_session_hears_its_cohorts_and_other_agents_lifecycle_signals() {
     let host = FakeHost::new();
     let live = advance_ok(&state, &record.id, &host);
     // A live session run whose definition no longer reads hears nothing and hides no other.
+    let deployed = dir.path().join("broken");
+    fs::create_dir_all(&deployed).unwrap();
+    fs::write(deployed.join("workflow.toml"), "[workflow").unwrap();
     let broken = RunRecord {
         id: WorkflowRunId::new(),
+        spec_dir: Some(deployed),
         ..live
     };
     let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
-    records::initialize(&state, &broken, b"[workflow", &guard).unwrap();
+    records::initialize(&state, &broken, &guard).unwrap();
     drop(guard);
     assert!(hears_lifecycle(&state, &idle, &|_| None).unwrap());
     assert!(

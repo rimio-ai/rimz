@@ -1,13 +1,15 @@
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Definition, Invocation, Kind, Node, SpecErr, spec, state::Transition};
+use super::{Definition, Invocation, Kind, Node, SpecErr, spec};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::harness::check_run::{self, CheckEcho, WatchDeadline};
 use crate::harness::headless::exit_failure;
@@ -28,6 +30,60 @@ pub(super) enum ChildError {
     Failed(String),
 }
 
+/// Why a hosted child's poll interrupted it, decided once where the child is killed, so that
+/// settlement classifies the interruption by the reading that caused it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Interrupt {
+    /// The run's deadline passed.
+    Deadline,
+    /// The node's timeout, as the definition read then had it, passed.
+    Timeout,
+    /// The run or its attempt moved on, or a read failed.
+    Ended,
+}
+
+/// How often a hosted child's poll reads its run's definition again for its timeout; the
+/// polls between reuse the last reading, since a read costs a parse and an admission.
+const LIVE_READ_EVERY: Duration = Duration::from_secs(1);
+
+/// The definition a hosted child's poll reads its timeout from: the one the attempt started
+/// under, read again every [`LIVE_READ_EVERY`] and before the timeout is applied, and the
+/// started one again when a read fails.
+pub(super) struct Live<'a> {
+    started: &'a Definition,
+    read: &'a dyn Fn() -> Option<Definition>,
+    last: RefCell<(Instant, Option<Definition>)>,
+}
+
+impl<'a> Live<'a> {
+    pub(super) fn new(started: &'a Definition, read: &'a dyn Fn() -> Option<Definition>) -> Self {
+        Self {
+            started,
+            read,
+            last: RefCell::new((Instant::now(), None)),
+        }
+    }
+
+    /// Whether `record`'s timeout has passed at `now`. A reading that finds it passed is
+    /// taken again first, so a timeout is never applied from a stale reading.
+    fn timed_out(
+        &self,
+        record: &RunRecord,
+        now: Timestamp,
+    ) -> Result<bool, crate::utils::time::TimeInputErr> {
+        let passed = |reading: &Option<Definition>| {
+            super::timeout_at(reading.as_ref().unwrap_or(self.started), record)
+                .map(|at| at.is_some_and(|at| at <= now))
+        };
+        let mut last = self.last.borrow_mut();
+        if last.0.elapsed() < LIVE_READ_EVERY && !passed(&last.1)? {
+            return Ok(false);
+        }
+        *last = (Instant::now(), (self.read)());
+        passed(&last.1)
+    }
+}
+
 pub(super) struct Evaluation {
     pub object: Result<Value, String>,
     pub stderr_tail: Option<String>,
@@ -36,6 +92,8 @@ pub(super) struct Evaluation {
     pub detail: Value,
     pub limited: Option<workflow::Limited>,
     pub cost_usd: Option<f64>,
+    /// Why the poll interrupted the child, when it did.
+    pub interrupt: Option<Interrupt>,
 }
 
 impl Evaluation {
@@ -47,6 +105,7 @@ impl Evaluation {
             detail: json!({}),
             limited: None,
             cost_usd: None,
+            interrupt: None,
         }
     }
 }
@@ -56,7 +115,7 @@ pub(super) fn digest(bytes: &[u8]) -> String {
 }
 
 fn command_words(
-    record: &RunRecord,
+    dir: &Path,
     run: &super::definition::Command,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<Vec<std::ffi::OsString>, String> {
@@ -64,7 +123,7 @@ fn command_words(
         .words()
         .ok_or(SpecErr::Command)
         .map_err(|e| e.to_string())?;
-    let argv = spec::resolve_words(&record.spec_dir, words).map_err(|e| e.to_string())?;
+    let argv = spec::resolve_words(dir, words).map_err(|e| e.to_string())?;
     for (word, path) in words.iter().zip(&argv) {
         if word.contains('/') {
             let bytes =
@@ -78,16 +137,17 @@ fn command_words(
 pub(super) fn evaluate(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &Definition,
+    live: &Live<'_>,
     record: &RunRecord,
 ) -> Evaluation {
+    let spec = live.started;
     let Some(check) = spec.check(&record.node) else {
         return Evaluation::failed("invalid", "check needs exactly one runner");
     };
     let run = match check.kind() {
-        Some(Kind::Judge(_)) => return judge::evaluate(state, paths, spec, record),
+        Some(Kind::Judge(_)) => return judge::evaluate(state, paths, live, record),
         Some(Kind::Test(invocation)) => {
-            return evaluate_test(state, paths, spec, record, invocation);
+            return evaluate_test(state, paths, live, record, invocation);
         }
         Some(Kind::Condition(_)) => {
             let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
@@ -118,17 +178,19 @@ pub(super) fn evaluate(
     result.detail = json!({"log": log});
     let mut digests = BTreeMap::new();
     let (argv, label) = match run {
-        Invocation::Run(run) => match command_words(record, run, &mut digests) {
-            // command_words resolved this exact, nonempty argv successfully.
-            Ok(argv) => (
-                argv,
-                script_label(run.words().expect("resolved workflow argv")),
-            ),
-            Err(err) => {
-                result.object = Err(err);
-                return result;
+        Invocation::Run(run) => {
+            match command_words(&record.definition_dir(paths), run, &mut digests) {
+                // command_words resolved this exact, nonempty argv successfully.
+                Ok(argv) => (
+                    argv,
+                    script_label(run.words().expect("resolved workflow argv")),
+                ),
+                Err(err) => {
+                    result.object = Err(err);
+                    return result;
+                }
             }
-        },
+        }
         Invocation::Shell(shell) => (vec!["sh".into(), "-c".into(), shell.into()], "sh"),
     };
     let mut command = Command::new(&argv[0]);
@@ -137,17 +199,17 @@ pub(super) fn evaluate(
         .current_dir(&record.scope.path)
         .stdin(Stdio::null())
         .env("RIMZ_WORKFLOW_DIR", &paths.work)
-        .env("RIMZ_WORKFLOW_DEFINITION", &record.spec_dir)
+        .env("RIMZ_WORKFLOW_DEFINITION", record.definition_dir(paths))
         .env("RIMZ_WORKFLOW_RUN", record.id.as_str())
         .envs(crate::workspace::pin_env(
             &state.workspace_id,
             &record.project_root,
         ))
         .envs(loop_task_env(record));
-    let output = with_child(
+    let (output, interrupt) = with_child(
         state,
         paths,
-        spec,
+        live,
         record,
         digests,
         |interrupted, spawned| {
@@ -160,6 +222,7 @@ pub(super) fn evaluate(
             .map_err(|error| error.to_string())
         },
     );
+    result.interrupt = interrupt;
     match output {
         Ok(output) => {
             result.stderr_tail = Some(
@@ -223,15 +286,15 @@ fn script_label(words: &[String]) -> &str {
         .unwrap_or(&words[0])
 }
 
-/// The command text and, for `run`, the argv resolved against the sealed definition, recording
-/// a digest for each path word.
+/// The command text and, for `run`, the argv resolved against the definition directory `dir`,
+/// recording a digest for each path word.
 fn invoked<'a>(
-    record: &RunRecord,
+    dir: &Path,
     invocation: &'a Invocation,
     digests: &mut BTreeMap<String, String>,
 ) -> Result<(&'a str, Option<Vec<std::ffi::OsString>>), String> {
     Ok(match invocation {
-        Invocation::Run(run) => (run.text(), Some(command_words(record, run, digests)?)),
+        Invocation::Run(run) => (run.text(), Some(command_words(dir, run, digests)?)),
         Invocation::Shell(shell) => (shell.as_str(), None),
     })
 }
@@ -239,7 +302,7 @@ fn invoked<'a>(
 fn evaluate_test(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &Definition,
+    live: &Live<'_>,
     record: &RunRecord,
     invocation: &Invocation,
 ) -> Evaluation {
@@ -247,7 +310,7 @@ fn evaluate_test(
     let mut logged = None;
     result.object = (|| {
         let mut digests = BTreeMap::new();
-        let (command, argv) = invoked(record, invocation, &mut digests)?;
+        let (command, argv) = invoked(&record.definition_dir(paths), invocation, &mut digests)?;
         // Evaluation follows a recorded live attempt.
         let attempt = record
             .attempt
@@ -257,10 +320,10 @@ fn evaluate_test(
         let file = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
         logged = Some(log.clone());
         let env = child_env(state, paths, record);
-        let output = with_child(
+        let (output, interrupt) = with_child(
             state,
             paths,
-            spec,
+            live,
             record,
             digests,
             |interrupted, spawned| {
@@ -279,8 +342,9 @@ fn evaluate_test(
                 )
                 .map_err(|error| format!("{error:#}"))
             },
-        )
-        .map_err(|error| error.to_string())?;
+        );
+        result.interrupt = interrupt;
+        let output = output.map_err(|error| error.to_string())?;
         if output.interrupted() {
             return Err("test evaluation interrupted".into());
         }
@@ -310,30 +374,45 @@ fn evaluate_test(
     result
 }
 
+/// Run a command step's child: its outcome, and why the poll interrupted it, when it did.
 pub(super) fn execute_step(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &Definition,
+    live: &Live<'_>,
     record: &RunRecord,
     on_spawn: impl Fn(),
-) -> Result<check_run::CheckOutcome, ChildError> {
+) -> (
+    Result<check_run::CheckOutcome, ChildError>,
+    Option<Interrupt>,
+) {
+    let spec = live.started;
     let mut digests = BTreeMap::new();
     // Only validated command steps enter this hosting path.
     let Kind::Command(invocation) = spec.step_kind(&record.node).expect("command step runner")
     else {
         unreachable!("advance sends agent and message steps to the attempt host")
     };
-    let (command, argv) = invoked(record, invocation, &mut digests).map_err(ChildError::Failed)?;
+    let (command, argv) = match invoked(&record.definition_dir(paths), invocation, &mut digests) {
+        Ok(invoked) => invoked,
+        Err(error) => return (Err(ChildError::Failed(error)), None),
+    };
     // prepare publishes the live attempt before dispatching the command.
     let seq = record.attempt.as_ref().expect("prepared command step").seq;
     let log = paths.step_log(seq);
-    let file = std::fs::File::create(&log)
-        .map_err(|error| ChildError::Failed(format!("{}: {error}", log.display())))?;
+    let file = match std::fs::File::create(&log) {
+        Ok(file) => file,
+        Err(error) => {
+            return (
+                Err(ChildError::Failed(format!("{}: {error}", log.display()))),
+                None,
+            );
+        }
+    };
     let env = child_env(state, paths, record);
     with_child(
         state,
         paths,
-        spec,
+        live,
         record,
         digests,
         |interrupted, spawned| {
@@ -360,22 +439,25 @@ pub(super) fn execute_step(
     )
 }
 
+/// Run a hosted child under the run's bounds, polled against the record and `live`: its result,
+/// and why the poll interrupted it, when it did.
 fn with_child<T>(
     state: &StatePaths,
     paths: &WorkflowPaths,
-    spec: &Definition,
+    live: &Live<'_>,
     record: &RunRecord,
     digests: BTreeMap<String, String>,
     execute: impl FnOnce(
         &dyn Fn() -> bool,
         &mut dyn FnMut(u32) -> std::io::Result<()>,
     ) -> Result<T, String>,
-) -> Result<T, ChildError> {
+) -> (Result<T, ChildError>, Option<Interrupt>) {
     // Evaluation follows a recorded live attempt.
     let attempt = record.attempt.as_ref().expect("prepared hosted evaluation");
-    let interrupted = || {
+    let decided = Cell::new(None);
+    let reading = || {
         let Ok(current) = workflow::load(paths) else {
-            return true;
+            return Some(Interrupt::Ended);
         };
         if current.state != RunState::Active
             || !current
@@ -383,34 +465,39 @@ fn with_child<T>(
                 .as_ref()
                 .is_some_and(|a| a.seq == attempt.seq)
         {
-            return true;
+            return Some(Interrupt::Ended);
         }
-        let t = Transition {
-            record: current,
-            spec,
-            paths,
-            now: Timestamp::now(),
-            entries: Vec::new(),
-        };
-        t.timeout_at()
-            .map_or(true, |at| at.is_some_and(|at| at <= t.now))
-            || (!t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now))
+        let now = Timestamp::now();
+        if !current.deadline_fired && current.deadline.is_some_and(|at| at <= now) {
+            return Some(Interrupt::Deadline);
+        }
+        match live.timed_out(&current, now) {
+            Ok(true) => Some(Interrupt::Timeout),
+            Ok(false) => None,
+            Err(_) => Some(Interrupt::Ended),
+        }
+    };
+    let interrupted = || {
+        if decided.get().is_none() {
+            decided.set(reading());
+        }
+        decided.get().is_some()
     };
     // Re-read after path resolution and context publication, immediately before spawn.
     if interrupted() {
-        return Err(ChildError::Interrupted);
+        return (Err(ChildError::Interrupted), decided.get());
     }
     let mut guard = match crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock) {
         Ok(guard) => Some(guard),
         Err(error) => {
-            return Err(ChildError::Failed(error.to_string()));
+            return (Err(ChildError::Failed(error.to_string())), None);
         }
     };
     // Admission, spawn, and child publication share the lock with cancel and bounds.
     if interrupted() {
-        return Err(ChildError::Interrupted);
+        return (Err(ChildError::Interrupted), decided.get());
     }
-    execute(&interrupted, &mut |pid| {
+    let result = execute(&interrupted, &mut |pid| {
         let mut current = workflow::load(paths).map_err(std::io::Error::other)?;
         // The lock prevents another transition between admission and publication.
         let attempt = current.attempt.as_mut().expect("admitted live attempt");
@@ -424,7 +511,8 @@ fn with_child<T>(
         guard.take();
         Ok(())
     })
-    .map_err(ChildError::Failed)
+    .map_err(ChildError::Failed);
+    (result, decided.get())
 }
 
 /// The environment of a shell check or command step: the room pin, the run's directories and
@@ -438,7 +526,7 @@ fn child_env(
     env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
     env.insert(
         "RIMZ_WORKFLOW_DEFINITION".into(),
-        record.spec_dir.display().to_string(),
+        record.definition_dir(paths).display().to_string(),
     );
     env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
     env.extend(loop_task_env(record));
