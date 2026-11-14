@@ -161,9 +161,13 @@ pub(super) fn render_other(other: &resolve::Other, json: bool, history: bool) ->
         Err(error) => return Err(error.into()),
     };
     if json {
-        let record = std::fs::read(&paths.record)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        // A record this RimZ decodes names its logs where they are now; any other, as written.
+        let record = match &other.found.class {
+            records::RunClass::Current(record) => serde_json::to_value(record).ok(),
+            _ => std::fs::read(&paths.record)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok()),
+        };
         let mut value = serde_json::json!({
             "address": header
                 .as_deref()

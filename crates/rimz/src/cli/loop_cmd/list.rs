@@ -1268,8 +1268,6 @@ pub(super) struct WorkflowRunRow {
 pub(super) struct RunEvidence {
     pub(super) spec: rimz::harness::workflow::Definition,
     pub(super) journal: Vec<rimz::store::workflow::JournalEntry>,
-    /// The run's home where it is now, which the journal's recorded paths are relocated into.
-    pub(super) paths: rimz::disk::paths::WorkflowPaths,
 }
 
 impl WorkflowRunRow {
@@ -1433,11 +1431,7 @@ impl WorkflowRunRow {
         let evidence = |paths: rimz::disk::paths::WorkflowPaths| {
             let spec = rimz::harness::workflow::load(&paths.home)?;
             let journal = rimz::store::workflow::journal(&paths)?;
-            anyhow::Ok(RunEvidence {
-                spec,
-                journal,
-                paths,
-            })
+            anyhow::Ok(RunEvidence { spec, journal })
         };
         let mut read = evidence(paths.clone());
         if !paths.home.exists() {

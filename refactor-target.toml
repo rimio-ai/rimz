@@ -4513,7 +4513,8 @@ path = "crates/rimz/src/store"
 # workflow::{Finished, finish} move an ended run's home into the finished directory under the caller's workspace lock (+2).
 # workflow::{end_stranded, mark_header_report_sent} and RunClass::awaits_pass let the workflow pass end a stranded run in place, mark its header report sent, and tell the tick it has work (+3).
 # The agent card's loop booking rows (SidebarBooking and its band, state, wait, fire and PR types) (+11).
-surface-budget = 639
+# workflow::JournalEntry::relocate points a journal read from one home at another, for the history a run saves before its home moves (+1).
+surface-budget = 640
 
 [[verdict]]
 kind = "item"
