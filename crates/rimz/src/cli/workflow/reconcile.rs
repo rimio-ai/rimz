@@ -54,6 +54,8 @@ pub(super) struct Settled {
     /// The run, when its record was ended stranded or holds no JSON object; none for a home that
     /// needed only its report or its move.
     pub(super) ended: Option<Ended>,
+    /// This call's ending patched the record; false for a run an earlier call already ended.
+    pub(super) ended_now: bool,
     /// This call moved the home to the finished directory: an ended run is announced by the
     /// call that moves it, so once.
     pub(super) moved: bool,
@@ -85,10 +87,11 @@ pub(super) struct Room<'a> {
 /// A run this RimZ continues, a newer RimZ's run and a home without a record are left alone.
 pub(super) fn settle(room: &Room<'_>, id: &WorkflowRunId) -> Result<Settled> {
     let paths = room.state.workflow(id);
+    let mut ended_now = false;
     match records::classify(&paths)? {
         records::RunClass::Stranded { .. } => {
             let guard = WorkspaceLock::acquire(&room.state.workspace_lock)?;
-            let _ = records::end_stranded(&paths, &guard)?;
+            ended_now = records::end_stranded(&paths, &guard)?.is_some();
         }
         // An owed report of a run this RimZ reads is retried by its paced advance.
         records::RunClass::Current(record)
@@ -120,6 +123,7 @@ pub(super) fn settle(room: &Room<'_>, id: &WorkflowRunId) -> Result<Settled> {
                 task,
                 released: Vec::new(),
             }),
+            ended_now,
             moved: false,
             unreported: true,
             warning: Some(format!(
@@ -156,6 +160,7 @@ pub(super) fn settle(room: &Room<'_>, id: &WorkflowRunId) -> Result<Settled> {
             task,
             released,
         }),
+        ended_now,
         moved,
         unreported: false,
         warning,
@@ -208,7 +213,6 @@ pub(super) fn run(globals: &super::super::GlobalFlags) -> Result<()> {
         session_name: &ctx.workspace.session_name,
     };
     let mut ended = Vec::new();
-    let mut unreported = 0;
     for live in records::live(state)? {
         let Some(id) = live
             .paths
@@ -223,7 +227,6 @@ pub(super) fn run(globals: &super::super::GlobalFlags) -> Result<()> {
                 if let Some(warning) = &settled.warning {
                     writeln!(render::err(), "warning: {warning}")?;
                 }
-                unreported += u64::from(settled.unreported);
                 ended.extend(settled.announced().cloned());
             }
             Err(error) => writeln!(
@@ -232,7 +235,7 @@ pub(super) fn run(globals: &super::super::GlobalFlags) -> Result<()> {
             )?,
         }
     }
-    report(&ctx, &ended, unreported, true);
+    report(&ctx, &ended, true);
     Ok(())
 }
 
@@ -253,18 +256,15 @@ pub(super) fn end_named(
     if let Some(warning) = &settled.warning {
         writeln!(render::err(), "warning: {warning}")?;
     }
-    report(
-        &ctx,
-        settled.announced().cloned().as_slice(),
-        u64::from(settled.unreported),
-        notify,
-    );
+    report(&ctx, settled.announced().cloned().as_slice(), notify);
     Ok(settled)
 }
 
 /// Record the runs a command ended in one diagnostic record and, with `notify`, tell the user
-/// once through one notice naming no agent. Nothing is sent when no run was ended.
-pub(super) fn report(ctx: &super::super::ctx::Ctx, ended: &[Ended], unreported: u64, notify: bool) {
+/// once through one notice naming no agent. Nothing is sent when no run was ended. Each run
+/// reported here has moved, and a home moves only after its loop report landed, so the notice
+/// says nothing about reports.
+pub(super) fn report(ctx: &super::super::ctx::Ctx, ended: &[Ended], notify: bool) {
     if ended.is_empty() {
         return;
     }
@@ -283,7 +283,8 @@ pub(super) fn report(ctx: &super::super::ctx::Ctx, ended: &[Ended], unreported: 
         None => format!("{} loop list", resolve::rimz_prefix(Some(root))),
         Some(run) => resolve::command("show", &[run.id.as_str()], Some(root), None, &[], &[]),
     };
-    let mut body = format!(
+    let agents = ended.iter().map(|run| run.released.len()).sum::<usize>();
+    let body = format!(
         "{count} workflow {runs} this RimZ cannot continue {}: {}.{} Inspect with `{command}`.",
         if count == 1 {
             "was ended as failed"
@@ -295,18 +296,12 @@ pub(super) fn report(ctx: &super::super::ctx::Ctx, ended: &[Ended], unreported: 
             .map(|(group, count)| format!("{count} {group}"))
             .collect::<Vec<_>>()
             .join(", "),
-        if ended.iter().any(|run| !run.released.is_empty()) {
-            " Their agents were left running."
-        } else {
-            ""
+        match agents {
+            0 => String::new(),
+            1 => " 1 agent was left running.".into(),
+            agents => format!(" {agents} agents were left running."),
         }
     );
-    if unreported > 0 {
-        body.push_str(&format!(
-            " {unreported} loop {} did not land yet and will be retried.",
-            if unreported == 1 { "report" } else { "reports" }
-        ));
-    }
     if notify {
         super::super::room_notice::send(
             root,
@@ -330,6 +325,5 @@ pub(super) fn report(ctx: &super::super::ctx::Ctx, ended: &[Ended], unreported: 
             .iter()
             .flat_map(|run| run.released.iter().cloned())
             .collect(),
-        unreported,
     });
 }

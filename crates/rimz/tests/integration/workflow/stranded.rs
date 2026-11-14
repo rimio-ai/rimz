@@ -270,3 +270,86 @@ fn a_home_set_aside_is_announced_by_the_pass_that_moves_it() {
     );
     assert_eq!(lines_with(&diag_log, "workflow_runs_ended").len(), 1);
 }
+
+#[test]
+fn the_notice_says_how_many_agents_a_pass_left_running() {
+    use rimz::agents::{
+        AgentLifecycleObservation, LifecycleSignal, WorkflowAttemptRef, WorkflowAttemptRole,
+    };
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let active = start(&env);
+    until(&env, &active, |value| value["record"]["wait"].is_object());
+    let state = env.state_path_for(&env.project_root);
+    let (notices, _) = logs(&env, &state);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let base: Value =
+        serde_json::from_slice(&fs::read(state.workflow(&active.parse().unwrap()).record).unwrap())
+            .unwrap();
+    let older = u64::from(rimz::store::workflow::VERSION) - 1;
+    // A stranded run holding the named agents, each pinned to it.
+    let strand = |agents: &[&str]| {
+        let id = rimz::ids::WorkflowRunId::new();
+        let paths = state.workflow(&id);
+        fs::create_dir_all(&paths.home).unwrap();
+        let mut record = base.clone();
+        record["version"] = json!(older);
+        record["id"] = json!(id.as_str());
+        fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+        for (seq, agent) in (1..).zip(agents) {
+            let mut observation = AgentLifecycleObservation::new(
+                Some(format!("{agent}-session").into()),
+                LifecycleSignal::Registered,
+            );
+            observation.agent_name = Some((*agent).into());
+            observation.launch.workflow = Some(WorkflowAttemptRef {
+                run: id.clone(),
+                seq,
+                role: WorkflowAttemptRole::Step,
+            });
+            env.store()
+                .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    "codex",
+                    "test",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        id
+    };
+    let pass = |count: usize| {
+        success(command(&env, &["workflow", "reconcile"]));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let found = lines_with(&notices, "workflow_ended|");
+            if found.len() >= count {
+                break found[count - 1].clone();
+            }
+            assert!(Instant::now() < deadline, "no workflow_ended notice");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    let one = strand(&["fox"]);
+    assert_eq!(
+        pass(1),
+        format!(
+            "workflow_ended|RimZ: 1 workflow run ended|1 workflow run this RimZ cannot continue \
+             was ended as failed: 1 written by an older RimZ (record version {older}). 1 agent \
+             was left running. Inspect with `rimz --root ~/project workflow show {one}`."
+        )
+    );
+
+    let first = strand(&["otter", "heron"]);
+    strand(&["wren"]);
+    assert_eq!(
+        pass(2),
+        format!(
+            "workflow_ended|RimZ: 2 workflow runs ended|2 workflow runs this RimZ cannot \
+             continue were ended as failed: 2 written by an older RimZ (record version {older}). \
+             3 agents were left running. Inspect with `rimz --root ~/project workflow show {first}`."
+        )
+    );
+    success(command(&env, &["workflow", "cancel", &active]));
+}

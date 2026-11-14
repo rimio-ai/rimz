@@ -222,7 +222,7 @@ fn workflow_runs_a_pass_ended_are_contained_information() {
     let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
         "kind": "workflow_runs_ended", "runs": ["wf_0190b8172c0070008000000000000001"],
         "causes": ["1 written by an older RimZ (record version 3)"],
-        "released": [], "unreported": 1,
+        "released": [],
     }));
     assert!(
         event.is_ok(),

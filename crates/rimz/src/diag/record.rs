@@ -333,7 +333,6 @@ pub enum DiagEvent {
         runs: Vec<crate::ids::WorkflowRunId>,
         causes: Vec<String>,
         released: Vec<String>,
-        unreported: u64,
     },
     HookDrainLag {
         ingress: EventId,
@@ -1478,10 +1477,8 @@ impl DiagEvent {
                 runs,
                 causes,
                 released,
-                unreported,
             } => format!(
-                "workflow pass ended {} run(s) ({}); released {} agent(s); {unreported} report(s) \
-                 not landed",
+                "workflow pass ended {} run(s) ({}); released {} agent(s)",
                 runs.len(),
                 causes.join(", "),
                 released.len()

@@ -107,9 +107,14 @@ fn cancel_stranded(other: &resolve::Other, globals: &super::super::GlobalFlags) 
         return Ok(());
     };
     match &ended.cause {
-        super::reconcile::Cause::Stranded(cause) => writeln!(
+        super::reconcile::Cause::Stranded(cause) if settled.ended_now => writeln!(
             out,
             "ended {} as failed: this RimZ cannot continue it: {cause}",
+            ended.id
+        )?,
+        super::reconcile::Cause::Stranded(cause) => writeln!(
+            out,
+            "{} was already ended as failed: this RimZ cannot continue it: {cause}",
             ended.id
         )?,
         super::reconcile::Cause::NotObject => writeln!(
