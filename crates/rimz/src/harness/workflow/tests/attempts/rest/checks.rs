@@ -248,3 +248,129 @@ fn judge(limited: bool) {
         assert_eq!(host.stops.get(), usize::from(!limited));
     }
 }
+
+/// A session with a one-hour clock held at its rest check `pr`, whose check runs under this
+/// process: the session started `session` ago and the check entered `check` ago.
+fn timed_rest(
+    routes: &str,
+    session: std::time::Duration,
+    check: std::time::Duration,
+    ask: bool,
+) -> (
+    tempfile::TempDir,
+    StatePaths,
+    FakeHost,
+    RunRecord,
+    Timestamp,
+) {
+    let text = SESSION.replace(
+        "rest-check=['pr']\n",
+        &format!("rest-check=['pr']\ntimeout='1h'\n{routes}"),
+    );
+    let (dir, state, record) = setup(&text);
+    super::check(dir.path(), json!({"outcome":"pending"}));
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    host.observed.borrow_mut().turn = Some(turn());
+    let mut pending = held(&live, false);
+    let now = Timestamp::now();
+    let start = now - session;
+    pending.held.as_mut().unwrap().attempt.started_at = start;
+    pending.entered_at = now - check;
+    let mut running = live.attempt.unwrap();
+    running.node = "pr".into();
+    running.kind = records::AttemptKind::Script;
+    running.lifecycle = StepLifecycle::Turn;
+    running.judged = None;
+    running.run = None;
+    running.seq = pending.next_seq;
+    running.host = Host {
+        pid: std::process::id(),
+        start: crate::proc::process_start_token(std::process::id()),
+    };
+    pending.next_seq += 1;
+    pending.attempt = Some(running);
+    update(&state, &pending);
+    if ask {
+        host.observed.borrow_mut().ask = Some(records::Asking {
+            since: now - std::time::Duration::from_secs(5400),
+            ask: records::Asked {
+                text: "Approve?".into(),
+                kind: "permission".into(),
+                handle: "@child".into(),
+            },
+        });
+    }
+    let after = advance_ok(&state, &record.id, &host);
+    (dir, state, host, after, start)
+}
+
+#[test]
+fn a_sessions_clock_passing_at_its_running_rest_check_fails_the_session() {
+    let hour = std::time::Duration::from_secs(3600);
+    let minute = std::time::Duration::from_secs(60);
+    for (routes, check, ending) in [
+        ("keep=true\n", minute, RunState::Failed),
+        ("keep=true\non.timeout='@done'\n", minute, RunState::Done),
+        ("keep=true\n", 2 * hour, RunState::Failed),
+    ] {
+        let (_dir, state, host, ended, _) = timed_rest(routes, 2 * hour, check, false);
+        let case = format!("{routes:?} check entered {check:?} ago");
+        assert_eq!(ended.state, ending, "{case}");
+        assert_eq!(
+            host.stops.get(),
+            1,
+            "keep does not hold a timed-out session: {case}"
+        );
+        let previous = ended.prev_attempt.unwrap();
+        assert_eq!(
+            (previous.step.as_str(), previous.outcome),
+            ("build", AttemptOutcome::Timeout),
+            "{case}"
+        );
+        let journal = records::journal(&state.workflow(&ended.id)).unwrap();
+        assert!(
+            journal.iter().any(|entry| entry.node == "pr"
+                && matches!(&entry.event, JournalEvent::Evaluation { outcome, .. } if outcome == "canceled")),
+            "the running check is abandoned: {case}"
+        );
+        assert!(
+            journal.iter().any(|entry| entry.node == "build"
+                && matches!(&entry.event, JournalEvent::Route { outcome, .. } if outcome == "timeout")),
+            "the session's timeout routes: {case}"
+        );
+    }
+}
+
+#[test]
+fn a_rest_checks_own_timeout_passing_first_fails_the_check_and_leaves_the_session_clock() {
+    let hour = std::time::Duration::from_secs(3600);
+    let (_dir, state, host, ended, _) =
+        timed_rest("", std::time::Duration::from_secs(60), 2 * hour, false);
+    assert_eq!(ended.state, RunState::Failed);
+    assert_eq!(host.stops.get(), 1);
+    assert_eq!(
+        ended.prev_attempt.as_ref().unwrap().outcome,
+        AttemptOutcome::Ended
+    );
+    let rows = decisions(&state, &ended);
+    assert_eq!(
+        (rows.len(), &rows[0]["action"], &rows[0]["outcome"]),
+        (1, &json!("closed"), &json!("timeout"))
+    );
+}
+
+#[test]
+fn a_paused_sessions_clock_does_not_pass_while_its_rest_check_runs() {
+    let hour = std::time::Duration::from_secs(3600);
+    let minute = std::time::Duration::from_secs(60);
+    // An open question pauses the session's clock.
+    let (_dir, _state, host, after, start) = timed_rest("", 2 * hour, minute, true);
+    assert_eq!(after.state, RunState::Active);
+    assert_eq!(host.stops.get(), 0);
+    assert!(after.prev_attempt.is_none());
+    // The session keeps its clock from its admission when it comes back from the rest.
+    let session = after.session_attempt().unwrap();
+    assert_eq!(session.started_at, start);
+    assert!(session.held_since.is_some());
+}

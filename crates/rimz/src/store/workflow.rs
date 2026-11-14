@@ -14,7 +14,7 @@ use crate::ids::{AgentKind, AgentSessionId, HoldKind, LaneName, MessageId, RunId
 /// The workflow language version, which is also the run record's: a sealed definition means
 /// what the binary of this version reads it to mean, so a change to what one means raises it,
 /// and `load` refuses a record of any other version before decoding it.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -676,6 +676,14 @@ pub struct RunRecord {
     pub check_retry: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_retry_context: Option<Value>,
+    /// The current judge's clock is paused from this instant, while the judge waits for its
+    /// usage window or a provider limit's reset; the judge's next start folds it into
+    /// `paused_ms`, and every fresh entry clears both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_since: Option<Timestamp>,
+    /// Milliseconds the current judge's clock has spent paused on this entry.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub paused_ms: u64,
     /// The current step entry spent its one retry of a launch whose eviction failed before it
     /// started anything; cleared wherever the run enters a step afresh.
     #[serde(default)]

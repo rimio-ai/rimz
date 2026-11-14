@@ -455,6 +455,8 @@ fn publish(
         outcome: None,
         check_retry: 0,
         check_retry_context: None,
+        paused_since: None,
+        paused_ms: 0,
         launch_retry: false,
         engaged: Some(false),
         fire_facts: start.fire_facts,
@@ -1404,6 +1406,8 @@ fn prepare(
         if let (Some(window), Some(Kind::Judge(profile))) = (node.window(), node.kind())
             && let Some(detail) = window_wait_for_launch(&t.record, profile, window, windows, host)?
         {
+            // A judge's clock waits with it: the clock starts when the window admits it.
+            t.record.paused_since.get_or_insert(t.now);
             t.step_wait("window", Some(detail));
             persist(&mut t, &guard)?;
             return Ok(Decision::Stop);
@@ -1463,6 +1467,7 @@ fn prepare(
         *t.record.visits.entry(t.record.node.clone()).or_default() += 1;
         t.record.entered_at = t.now;
     }
+    t.unpause();
     let seq = t.record.next_seq;
     t.record.next_seq += 1;
     if let Some(held) = &mut t.record.held {
@@ -2169,21 +2174,11 @@ pub fn resume(
                 spawn(&record)?;
                 return Ok(record);
             }
-            t.record.node = target.into();
-            t.record.entered_at = t.now;
-            t.record.check_retry = 0;
-            t.record.check_retry_context = None;
-            t.record.launch_retry = false;
+            t.enter(target.into());
         }
         if t.record.state == RunState::Parked {
             t.close_wait();
-            if let Some(node) = at {
-                t.record.node = node.into();
-            }
-            t.record.entered_at = t.now;
-            t.record.check_retry = 0;
-            t.record.check_retry_context = None;
-            t.record.launch_retry = false;
+            t.enter(at.map_or_else(|| t.record.node.clone(), Into::into));
             t.record.park = None;
             t.record.state = RunState::Active;
         }

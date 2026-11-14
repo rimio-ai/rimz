@@ -1,5 +1,6 @@
 use super::super::ScopeKind;
 use super::*;
+use crate::harness::workflow::timeout_at;
 use std::fs;
 
 #[test]
@@ -1225,6 +1226,235 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
         serde_json::from_slice(&fs::read(&paths.context).unwrap()).unwrap();
     assert_eq!(ctx["seq"], 2);
     assert_eq!(ctx["retry"], record.check_retry_context.unwrap());
+}
+
+/// A judge with a one-hour clock behind a usage window, entered now.
+fn timed_judge(window: bool) -> (tempfile::TempDir, StatePaths, RunRecord, Definition) {
+    let (home, state, mut record, spec) = fixture(&format!(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[judge.pr]\ntimeout='1h'\nagent='claude'\nprompt-file='prompt.md'\non.ok='@done'\n{}",
+        if window {
+            "admission.window='5h.left >= 20'\n"
+        } else {
+            ""
+        }
+    ));
+    fs::write(home.path().join("prompt.md"), "Judge").unwrap();
+    record.entered_at = Timestamp::now();
+    rewrite(&state, &record);
+    (home, state, record, spec)
+}
+
+fn rewrite(state: &StatePaths, record: &RunRecord) {
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    workflow::write(&state.workflow(&record.id), record, &guard).unwrap();
+}
+
+/// Move every stamp of a paused judge `by` into the past, as if that time had passed.
+fn age_pause(state: &StatePaths, record: &RunRecord, by: jiff::SignedDuration) -> RunRecord {
+    let mut current = workflow::load(&state.workflow(&record.id)).unwrap();
+    current.entered_at -= by;
+    current.paused_since = current.paused_since.map(|since| since - by);
+    current.recheck_at = current.recheck_at.map(|at| at - by);
+    rewrite(state, &current);
+    current
+}
+
+fn prepare_judge(
+    state: &StatePaths,
+    record: &RunRecord,
+    spec: &Definition,
+    windows: &WindowReadings<'_>,
+) -> Decision {
+    prepare(
+        state,
+        &state.workflow(&record.id),
+        spec,
+        &mut BTreeSet::new(),
+        &super::super::tests::FakeHost::new(),
+        windows,
+        &mut Admission::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_judges_clock_waits_out_its_window_and_counts_from_the_admission() {
+    use crate::agents::{ProviderCapacity, RateLimitWindow};
+    let (_home, state, record, spec) = timed_judge(true);
+    let now = Timestamp::now();
+    let windows = |used| {
+        WindowReadings::fixed(
+            now,
+            BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+                ProviderCapacity::from_windows(vec![RateLimitWindow {
+                    used_percentage: Some(used),
+                    resets_at: Some(now + jiff::SignedDuration::from_hours(3)),
+                    duration_mins: Some(300),
+                    ..Default::default()
+                }]),
+            )]),
+        )
+    };
+    assert!(matches!(
+        prepare_judge(&state, &record, &spec, &windows(100)),
+        Decision::Stop
+    ));
+    let waiting = workflow::load(&state.workflow(&record.id)).unwrap();
+    assert_eq!(waiting.wait.as_ref().unwrap().outcome, "window");
+    assert!(waiting.paused_since.is_some());
+    assert_eq!(timeout_at(&spec, &waiting).unwrap(), None);
+    age_pause(&state, &record, jiff::SignedDuration::from_hours(2));
+    assert!(
+        matches!(
+            prepare_judge(&state, &record, &spec, &windows(10)),
+            Decision::Evaluate(_)
+        ),
+        "two hours in the window wait do not time out a one-hour judge"
+    );
+    let running = workflow::load(&state.workflow(&record.id)).unwrap();
+    assert!(running.attempt.is_some() && running.paused_since.is_none());
+    assert!(running.paused_ms >= 2 * 3_600_000);
+    let timeout = timeout_at(&spec, &running).unwrap().unwrap();
+    let from_admission = running.attempt.unwrap().started_at + jiff::SignedDuration::from_hours(1);
+    assert!(
+        timeout <= from_admission
+            && from_admission.duration_since(timeout) < jiff::SignedDuration::from_secs(5),
+        "the clock counts from the admission: {timeout} vs {from_admission}"
+    );
+}
+
+#[test]
+fn a_limited_judge_waits_for_its_reset_on_a_paused_clock() {
+    let (_home, state, record, spec) = timed_judge(false);
+    let windows = WindowReadings::fixed(Timestamp::now(), BTreeMap::new());
+    let paths = state.workflow(&record.id);
+    let limit = |record: RunRecord, reset: Timestamp| {
+        let mut t = Transition {
+            now: Timestamp::now(),
+            record,
+            spec: &spec,
+            paths: &paths,
+            entries: Vec::new(),
+        };
+        t.finish_judge(
+            1,
+            super::super::script::Evaluation {
+                object: Err("usage limit".into()),
+                failure: "limited",
+                stderr_tail: None,
+                limited: Some(workflow::Limited {
+                    reset_at: Some(reset),
+                }),
+                cost_usd: None,
+                detail: json!({}),
+            },
+        )
+        .unwrap();
+        t
+    };
+    assert!(matches!(
+        prepare_judge(&state, &record, &spec, &windows),
+        Decision::Evaluate(_)
+    ));
+    // Thirty minutes of work, then a limit that resets three hours later.
+    let mut judging = workflow::load(&paths).unwrap();
+    judging.entered_at -= jiff::SignedDuration::from_mins(30);
+    let reset = Timestamp::now() + jiff::SignedDuration::from_hours(3);
+    let t = limit(judging, reset);
+    assert_eq!(
+        (t.record.recheck_at, t.timeout_at().unwrap()),
+        (Some(reset), None),
+        "the wake waits for the reset and the clock is paused"
+    );
+    let paused = t.record;
+    // The run's deadline still fires during the wait.
+    let mut late = paused.clone();
+    late.deadline = Some(Timestamp::now());
+    let mut t = Transition {
+        now: Timestamp::now(),
+        record: late,
+        spec: &spec,
+        paths: &paths,
+        entries: Vec::new(),
+    };
+    assert!(t.bound().unwrap());
+    assert_eq!(t.record.state, RunState::Failed);
+    assert!(t.entries.iter().any(|entry| matches!(
+        &entry.event,
+        JournalEvent::Route { outcome, .. } if outcome == "deadline"
+    )));
+    // Three hours later the reset passes and the judge runs again with its remaining half hour.
+    rewrite(&state, &paused);
+    age_pause(&state, &record, jiff::SignedDuration::from_hours(3));
+    assert!(matches!(
+        prepare_judge(&state, &record, &spec, &windows),
+        Decision::Evaluate(_)
+    ));
+    let rerun = workflow::load(&paths).unwrap();
+    let timeout = timeout_at(&spec, &rerun).unwrap().unwrap();
+    let remaining = timeout.duration_since(Timestamp::now());
+    assert!(
+        remaining > jiff::SignedDuration::from_mins(29)
+            && remaining <= jiff::SignedDuration::from_mins(30),
+        "{remaining}"
+    );
+    // Once that remaining time is worked, the judge times out.
+    let mut t = Transition {
+        now: timeout,
+        record: rerun,
+        spec: &spec,
+        paths: &paths,
+        entries: Vec::new(),
+    };
+    assert!(t.bound().unwrap());
+    assert_eq!(t.record.state, RunState::Failed);
+    assert!(t.entries.iter().any(|entry| matches!(
+        &entry.event,
+        JournalEvent::Route { outcome, .. } if outcome == "timeout"
+    )));
+}
+
+#[test]
+fn a_judges_rerun_after_a_failure_stays_inside_its_one_clock() {
+    let (_home, state, record, spec) = timed_judge(false);
+    let windows = WindowReadings::fixed(Timestamp::now(), BTreeMap::new());
+    let paths = state.workflow(&record.id);
+    assert!(matches!(
+        prepare_judge(&state, &record, &spec, &windows),
+        Decision::Evaluate(_)
+    ));
+    let judging = workflow::load(&paths).unwrap();
+    let before = timeout_at(&spec, &judging).unwrap();
+    let mut t = Transition {
+        now: Timestamp::now(),
+        record: judging,
+        spec: &spec,
+        paths: &paths,
+        entries: Vec::new(),
+    };
+    let retry = t
+        .finish_judge(
+            1,
+            super::super::script::Evaluation {
+                object: Err("no object".into()),
+                failure: "died",
+                stderr_tail: None,
+                limited: None,
+                cost_usd: None,
+                detail: json!({}),
+            },
+        )
+        .unwrap();
+    assert!(retry);
+    rewrite(&state, &t.record);
+    assert!(matches!(
+        prepare_judge(&state, &record, &spec, &windows),
+        Decision::Evaluate(_)
+    ));
+    let rerun = workflow::load(&paths).unwrap();
+    assert_eq!(rerun.check_retry, 1);
+    assert_eq!(timeout_at(&spec, &rerun).unwrap(), before);
 }
 
 const CHECK_ONLY: &str = "[workflow]\nscope='worktree'\nstart='pick'\n[script.pick]\ntimeout='365d'\nrun='true'\non.ok='@done'\n";

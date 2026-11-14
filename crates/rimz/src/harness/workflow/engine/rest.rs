@@ -44,11 +44,7 @@ pub(super) fn begin(t: &mut Transition<'_>, observed: &Observed) -> Result<bool>
         entered_at: t.record.entered_at,
         verdict: None,
     });
-    t.record.node = check;
-    t.record.entered_at = t.now;
-    t.record.check_retry = 0;
-    t.record.check_retry_context = None;
-    t.record.launch_retry = false;
+    t.enter(check);
     Ok(true)
 }
 
@@ -102,8 +98,13 @@ pub(super) fn prepare(
         observed.stopped.as_ref(),
         t.now,
     );
+    // The session's clock runs beside its check's, and passing it fails the session.
     let ending = if !t.record.deadline_fired && t.record.deadline.is_some_and(|at| at <= t.now) {
         Some((AttemptOutcome::Canceled, EndCause::Deadline, "deadline"))
+    } else if super::super::inspect::session_timeout_at(t.spec, &t.record)?
+        .is_some_and(|at| at <= t.now)
+    {
+        Some((AttemptOutcome::Timeout, EndCause::Timeout, "timeout"))
     } else {
         agent::observed_outcome(&observed, false)
             .map(|outcome| (outcome, EndCause::Lifecycle, outcome_reason(outcome)))

@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 
 use super::Definition;
-use super::definition::Target;
+use super::definition::{Parsed, Target};
 use super::spec::Cause;
 use crate::store::workflow::{
-    AttemptOutcome, EvaluationOrigin, HeldSession, JournalEntry, JournalEvent, ParkReason,
-    RunRecord, RunState, TurnEndAction,
+    AttemptOutcome, EvaluationOrigin, HeldSession, JournalEntry, JournalEvent, LiveAttempt,
+    ParkReason, RunRecord, RunState, TurnEndAction,
 };
 use crate::utils::time::TimeInputErr;
 
@@ -432,27 +432,28 @@ pub fn next_bound(
     hold: Option<u32>,
     now: Timestamp,
 ) -> Result<Option<(Timestamp, Target)>, TimeInputErr> {
-    Ok(
-        first_bound(spec, record, hold, now)?.and_then(|(at, outcome)| {
-            spec.target(&record.node, &outcome)
-                .map(|target| (at, target))
-        }),
-    )
+    Ok(first_bound(spec, record, hold, now)?
+        .and_then(|(at, node, outcome)| spec.target(&node, &outcome).map(|target| (at, target))))
 }
 
-/// Earliest unfired deadline, timeout or supplied hold case, in that order on ties, with the
-/// outcome it settles. Engine rechecks take the instant alone, so timing never waits on routing.
+/// Earliest unfired deadline, held session's timeout, timeout or supplied hold case, in that
+/// order on ties, with the node and the outcome it settles. Engine rechecks take the instant
+/// alone, so timing never waits on routing.
 pub(super) fn first_bound(
     spec: &Definition,
     record: &RunRecord,
     hold: Option<u32>,
     now: Timestamp,
-) -> Result<Option<(Timestamp, String)>, TimeInputErr> {
+) -> Result<Option<(Timestamp, String, String)>, TimeInputErr> {
+    let at_node = |at: Timestamp, outcome: &str| (at, record.node.clone(), outcome.to_owned());
     let deadline = record
         .deadline
         .filter(|_| !record.deadline_fired)
-        .map(|at| (at, "deadline".into()));
-    let timeout = timeout_at(spec, record)?.map(|at| (at, "timeout".into()));
+        .map(|at| at_node(at, "deadline"));
+    let session = session_timeout_at(spec, record)?
+        .zip(record.held.as_ref())
+        .map(|(at, held)| (at, held.attempt.node.clone(), "timeout".to_owned()));
+    let timeout = timeout_at(spec, record)?.map(|at| at_node(at, "timeout"));
     let hold = match hold {
         Some(index) => {
             hold_until(spec, record, index, now)?.zip(spec.check(&record.node).and_then(|check| {
@@ -463,40 +464,67 @@ pub(super) fn first_bound(
             }))
         }
         None => None,
-    };
-    Ok([deadline, timeout, hold]
+    }
+    .map(|(at, outcome)| at_node(at, &outcome));
+    Ok([deadline, session, timeout, hold]
         .into_iter()
         .flatten()
-        .min_by_key(|(at, _)| *at))
+        .min_by_key(|(at, _, _)| *at))
 }
 
-/// The check's entry-based timeout or an agent step's timeout, excluding held time.
+/// The current node's timeout: a check's from its entry, less a judge's paused time, and an
+/// agent step's from its launch, less its held time; none while either clock is paused.
 pub fn timeout_at(
     spec: &Definition,
     record: &RunRecord,
 ) -> Result<Option<Timestamp>, TimeInputErr> {
-    let (timeout, start) = if let Some(check) = spec.check(&record.node) {
-        (check.timeout(), record.entered_at)
-    } else {
-        let Some(attempt) = record.attempt.as_ref() else {
-            return Ok(None);
+    let Some(check) = spec.check(&record.node) else {
+        return match &record.attempt {
+            Some(attempt) => step_timeout_at(spec, attempt),
+            None => Ok(None),
         };
-        // A step's bound runs from its launch; a held attempt has none while it is held.
-        if attempt.held_since.is_some() {
-            return Ok(None);
-        }
-        let Ok(start) = attempt
-            .started_at
-            .checked_add(std::time::Duration::from_millis(attempt.asked_ms))
-        else {
-            return Ok(None);
-        };
-        (
-            spec.step(&record.node).and_then(|step| step.timeout()),
-            start,
-        )
     };
-    let Some(timeout) = timeout else {
+    if record.paused_since.is_some() {
+        return Ok(None);
+    }
+    clock(check.timeout(), record.entered_at, record.paused_ms)
+}
+
+/// The timeout of a session held at its rest check, which runs beside the check's own.
+pub(super) fn session_timeout_at(
+    spec: &Definition,
+    record: &RunRecord,
+) -> Result<Option<Timestamp>, TimeInputErr> {
+    match &record.held {
+        Some(held) => step_timeout_at(spec, &held.attempt),
+        None => Ok(None),
+    }
+}
+
+/// An agent step's bound runs from its launch; a held attempt has none while it is held.
+fn step_timeout_at(
+    spec: &Definition,
+    attempt: &LiveAttempt,
+) -> Result<Option<Timestamp>, TimeInputErr> {
+    if attempt.held_since.is_some() {
+        return Ok(None);
+    }
+    clock(
+        spec.step(&attempt.node).and_then(|step| step.timeout()),
+        attempt.started_at,
+        attempt.asked_ms,
+    )
+}
+
+fn clock(
+    timeout: Option<&Parsed<std::time::Duration, TimeInputErr>>,
+    start: Timestamp,
+    paused_ms: u64,
+) -> Result<Option<Timestamp>, TimeInputErr> {
+    let (Some(timeout), Ok(start)) = (
+        timeout,
+        start.checked_add(std::time::Duration::from_millis(paused_ms)),
+    ) else {
         return Ok(None);
     };
     Ok(start

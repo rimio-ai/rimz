@@ -404,10 +404,16 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                     .unwrap()
                     .parse()
                     .unwrap();
-                assert_eq!(
-                    value["record"]["recheck_at"],
-                    (entered + jiff::SignedDuration::from_hours(1)).to_string(),
-                    "provider backoff must not hide the check timeout from the ticker"
+                let recheck: jiff::Timestamp = value["record"]["recheck_at"]
+                    .as_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!(
+                    value["record"]["paused_since"].is_string()
+                        && recheck > entered + jiff::SignedDuration::from_hours(1),
+                    "a limited judge's clock pauses, so the reset is not clamped to its timeout: {}",
+                    value["record"]
                 );
                 assert_eq!(value["record"]["check_retry"], 0);
                 let count = events(&value, "evaluation").len();
