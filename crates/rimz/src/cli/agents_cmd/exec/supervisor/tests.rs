@@ -209,7 +209,8 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
 }
 
 /// `--keep` holds the pane and not the turn: a kept run's provider ends when the run is
-/// canceled, except by a workflow step's detach or an interrupt hold's expiry.
+/// canceled, except by a workflow step's detach or an interrupt hold's expiry, and except a
+/// subagent's, whose stop ends it by closing its pane.
 #[test]
 fn a_kept_run_ends_its_provider_only_when_stopped() {
     use rimz::store::run::RunStatus;
@@ -231,6 +232,12 @@ fn a_kept_run_ends_its_provider_only_when_stopped() {
     let mut held = record.clone();
     held.interrupted_at = Some(jiff::Timestamp::UNIX_EPOCH);
     assert!(!kept_run_stopped(&held), "an expired interrupt hold");
+    let mut subagent = record.clone();
+    subagent.subagent = true;
+    assert!(
+        !kept_run_stopped(&subagent),
+        "a subagent, whose stop closes its pane"
+    );
     record.workflow = Some(rimz::agents::WorkflowAttemptRef {
         run: rimz::ids::WorkflowRunId::new(),
         seq: 1,

@@ -979,7 +979,8 @@ fn stamp_own_end_if_deliberate(
 /// Whether the wrapper holds a `--keep` pane once its provider has exited: a
 /// subagent's until its parent ends, and another run's when it was stopped
 /// (`supervisor::kept_run_stopped`), since `--keep` holds the pane and not the
-/// turn. A closed pane, an ended parent, or a Ctrl-C holds nothing.
+/// turn. A stopped subagent's stop closes its pane itself. A closed pane, an
+/// ended parent, or a Ctrl-C holds nothing.
 fn should_hold_kept_pane(
     subagent: bool,
     keep: bool,
