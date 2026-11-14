@@ -20,6 +20,7 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 - **A per-key slow cadence rides its lane's gate.** A key held to a longer interval, such as a hibernated agent's checks through `hibernated_check_due` in [`cache.rs`](./cache.rs), is checked when its lane's gate opens for its own reasons. Its deadline never opens a shared gate, or N keys on staggered stamps open it every pass. A held item skips only its own probes: it stays in every cross-item count of its pass, such as the pane repair's start census or a fleet budget, with its retained values.
 - A record reconciled only on final folds is reconciled inside `engine::reconcile_final_fold` in [`engine.rs`](./engine.rs), the one route the host and testkit playback have to those reconcilers, so a new record is added there. It is still read by every fold, interim folds and published-cache readers included, since an interim fold publishes without reaching the entry. When the record orders rows (attention stamps), enrichment derives the value the next reconcile would record, not the stored one.
 - A rule keyed on a pane's tenant or row shape lists every row a pane can show between its shell row and its bound card (the pulled process row, launch plumbing, a `CommandChanged` overlay rebuilt from the event's command alone, Zellij's unbound agent row keyed by pane id) and tests each.
+- A liveness test over `snapshot.agents` asks for a card as well as no `ended_at`: a stopped agent's row stays unended.
 
 ## Lanes
 
