@@ -53,7 +53,7 @@ fn a_pending_restarts_session_resumes_only_at_its_own_step() {
             &host,
         )
         .unwrap();
-        resume(&state, &record.id, Some(target), &[]).unwrap();
+        resume(&state, &record.id, &FakeHost::new(), Some(target), &[]).unwrap();
         let relaunched = advance_ok(&state, &record.id, &host);
         let launches = host.launched.borrow();
         actual.push((

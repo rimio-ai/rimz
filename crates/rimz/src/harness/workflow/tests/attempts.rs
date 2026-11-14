@@ -113,7 +113,7 @@ fn a_visit_grant_on_a_live_run_raises_the_bound_its_visits_failure_names() {
     answer(&state, &record, &host, json!({"outcome":"queued"}));
     answer(&state, &record, &host, json!({"outcome":"red"}));
     answer(&state, &record, &host, json!({"outcome":"red"}));
-    let extended = resume(&state, &record.id, None, &["visits=+2".into()]).unwrap();
+    let extended = resume(&state, &record.id, &host, None, &["visits=+2".into()]).unwrap();
     assert_eq!(extended.visit_grant, 2);
     for _ in 0..2 {
         let live = answer(&state, &record, &host, json!({"outcome":"red"}));
